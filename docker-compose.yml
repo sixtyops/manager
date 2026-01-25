@@ -1,0 +1,10 @@
+services:
+  tachyon-mgmt:
+    build: .
+    container_name: tachyon-management
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist firmware files
+      - ./firmware:/app/firmware
+    restart: unless-stopped

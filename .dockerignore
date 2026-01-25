@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Local firmware files (users will mount their own)
+firmware/*.bin
+firmware/*.img
+firmware/*.npk
+firmware/*.tar
+firmware/*.gz
+
+# Misc
+.DS_Store
+*.log
+.env
