@@ -1,0 +1,28 @@
+# Standalone overlay: adds port mappings for nginx + Let's Encrypt certbot
+# Usage: docker compose -f docker-compose.yml -f docker-compose.standalone.yml up -d --build
+services:
+  nginx:
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./certbot/www:/var/www/certbot:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+
+  certbot:
+    image: certbot/certbot
+    container_name: sixtyops-certbot
+    volumes:
+      - ./certbot/www:/var/www/certbot
+      - ./certbot/conf:/etc/letsencrypt
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --quiet; sleep 12h & wait $${!}; done;'"
+    restart: unless-stopped
+
+  sixtyops-mgmt:
+    volumes:
+      # Let's Encrypt certificates (for status checking)
+      - ./certbot/conf:/etc/letsencrypt:ro
+      # Nginx config (for SSL manager to write new configs)
+      - ./nginx/conf.d:/app/nginx-conf
+      # Mount standalone overlay for self-update (read-only)
+      - ./docker-compose.standalone.yml:/app/docker-compose.standalone.yml:ro

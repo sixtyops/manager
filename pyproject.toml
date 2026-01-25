@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "firmware-updater"
+version = "1.0.5"
+description = "Web-based firmware update tool for Tachyon devices"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "python-multipart>=0.0.6",
+    "aiofiles>=23.2.1",
+    "jinja2>=3.1.2",
+    "websockets>=12.0",
+    "pydantic>=2.5.0",
+]
+
+[project.scripts]
+firmware-updater = "updater.app:main"
+
+[tool.pytest.ini_options]
+timeout = 60
+timeout_method = "thread"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["updater*"]

@@ -1,0 +1,87 @@
+name: Installer Smoke
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/install.sh'
+      - 'docker-compose.yml'
+      - 'docker-compose.standalone.yml'
+      - 'Dockerfile'
+      - 'entrypoint.sh'
+      - 'nginx/**'
+      - '.github/workflows/install-smoke.yml'
+
+concurrency:
+  group: install-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install-smoke:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare local git remote for installer
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git init --bare /tmp/sixtyops-origin.git
+          git push --force /tmp/sixtyops-origin.git HEAD:refs/heads/main
+
+      - name: Fresh install via install.sh
+        run: |
+          sudo env \
+            SIXTYOPS_REPO_URL="file:///tmp/sixtyops-origin.git" \
+            SIXTYOPS_BRANCH="main" \
+            SIXTYOPS_INSTALL_DIR="/opt/sixtyops-ci" \
+            bash scripts/install.sh
+
+      - name: Validate app is reachable after install
+        run: |
+          sudo docker compose \
+            -f /opt/sixtyops-ci/docker-compose.yml \
+            -f /opt/sixtyops-ci/docker-compose.standalone.yml \
+            ps
+
+          code=$(curl -sk -o /dev/null -w "%{http_code}" https://localhost/login)
+          if [ "$code" != "200" ] && [ "$code" != "302" ]; then
+            echo "Unexpected /login status: $code"
+            exit 1
+          fi
+
+      - name: Re-run installer (upgrade/idempotency path)
+        run: |
+          sudo git config --global --add safe.directory /opt/sixtyops-ci
+          sudo env \
+            SIXTYOPS_REPO_URL="file:///tmp/sixtyops-origin.git" \
+            SIXTYOPS_BRANCH="main" \
+            SIXTYOPS_INSTALL_DIR="/opt/sixtyops-ci" \
+            bash scripts/install.sh
+
+      - name: Validate app is reachable after re-run
+        run: |
+          code=$(curl -sk -o /dev/null -w "%{http_code}" https://localhost/login)
+          if [ "$code" != "200" ] && [ "$code" != "302" ]; then
+            echo "Unexpected /login status after re-run: $code"
+            exit 1
+          fi
+
+      - name: Teardown
+        if: always()
+        run: |
+          if [ -d /opt/sixtyops-ci ]; then
+            sudo docker compose \
+              -f /opt/sixtyops-ci/docker-compose.yml \
+              -f /opt/sixtyops-ci/docker-compose.standalone.yml \
+              down -v --remove-orphans || true
+            sudo rm -rf /opt/sixtyops-ci
+          fi
+          sudo rm -f /etc/systemd/system/sixtyops.service
+          sudo rm -rf /tmp/sixtyops-origin.git
+          git config --global --unset user.email || true
+          git config --global --unset user.name || true
+          sudo git config --global --remove-section safe 2>/dev/null || true

@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+# Populate /etc/network/interfaces from /data/network/network.conf
+# Runs early in boot (before networking) since /etc/network is a tmpfs
+
+name="init-network"
+description="Generate /etc/network/interfaces from saved config"
+
+depend() {
+    before networking
+    after localmount
+}
+
+start() {
+    ebegin "Generating network interfaces config"
+    # Ensure resolv.conf symlink target exists (symlink is /etc/resolv.conf -> /tmp/resolv.conf)
+    touch /tmp/resolv.conf
+    /usr/local/bin/apply-network.sh --no-restart
+    eend $?
+}

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - SixtyOps</title>
+    <link rel="icon" type="image/png" href="/static/favicon.png">
+    <link rel="stylesheet" href="/static/common.css">
+</head>
+<body>
+    <div class="auth-card">
+        <h1>SixtyOps</h1>
+        <p class="subtitle">Sign in to continue</p>
+
+        {% if error == "oidc_denied" %}
+        <div class="error-message visible">SSO authentication was denied.</div>
+        {% elif error == "oidc_unauthorized" %}
+        <div class="error-message visible">Your account is not authorized for this application.</div>
+        {% elif error == "invalid_state" %}
+        <div class="error-message visible">SSO session expired. Please try again.</div>
+        {% elif error == "oidc_discovery_failed" %}
+        <div class="error-message visible">Could not reach SSO provider. Please try again later.</div>
+        {% elif error == "rate_limited" %}
+        <div class="error-message visible">Too many sign-in attempts. Please wait and try again.</div>
+        {% elif error %}
+        <div class="error-message visible">Invalid username or password.</div>
+        {% endif %}
+
+        {% if oidc_enabled %}
+        <a href="/auth/oidc/login" class="btn-primary sso-btn">Sign in with SSO</a>
+        <div class="login-divider">
+            <span>or sign in with credentials</span>
+        </div>
+        {% endif %}
+
+        <form method="POST" action="/login">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" autocomplete="username" required {% if not oidc_enabled %}autofocus{% endif %}>
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" autocomplete="current-password" required>
+            </div>
+            <button type="submit" class="btn-primary">Sign In</button>
+        </form>
+    </div>
+</body>
+</html>

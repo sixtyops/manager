@@ -1,0 +1,147 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*-dev*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v1.2.0). Must already exist."
+        required: true
+        type: string
+      confirm:
+        description: "Type RELEASE to confirm stable release"
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 5
+    steps:
+      - name: Validate confirmation
+        run: |
+          if [ "${{ inputs.confirm }}" != "RELEASE" ]; then
+            echo "::error::You must type RELEASE to confirm. Got: '${{ inputs.confirm }}'"
+            exit 1
+          fi
+
+      - name: Reject dev tags
+        run: |
+          TAG="${{ inputs.tag }}"
+          if echo "$TAG" | grep -q -- "-dev"; then
+            echo "::error::Use tag push for dev releases, not workflow_dispatch"
+            exit 1
+          fi
+
+  test:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 10
+    if: always() && (needs.validate-dispatch.result == 'success' || needs.validate-dispatch.result == 'skipped')
+    needs: [validate-dispatch]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install -r requirements.txt
+          pytest -v --timeout=60
+
+  release:
+    needs: [test]
+    if: always() && needs.test.result == 'success'
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Determine release type
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "name=$TAG" >> "$GITHUB_OUTPUT"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "name=$TAG (dev)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate dev release notes
+        if: steps.meta.outputs.is_prerelease == 'true'
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          PREV_TAG=$(git tag --sort=-v:refname | grep -A1 "^${TAG}$" | tail -1)
+          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "$TAG" ]; then
+            PREV_TAG=$(git tag --sort=-v:refname | head -2 | tail -1)
+          fi
+          COMMITS=$(git log --pretty=format:"- %s" "${PREV_TAG}..${TAG}" -- . ':!website' 2>/dev/null || echo "- No changes")
+          {
+            echo "## Changes since ${PREV_TAG}"
+            echo ""
+            echo "$COMMITS"
+            echo ""
+            echo "---"
+            echo "**Docker image:** \`ghcr.io/sixtyops/manager:${TAG}\`"
+          } > /tmp/release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          prerelease: ${{ steps.meta.outputs.is_prerelease }}
+          generate_release_notes: ${{ steps.meta.outputs.is_prerelease == 'false' }}
+          body_path: ${{ steps.meta.outputs.is_prerelease == 'true' && '/tmp/release-notes.md' || '' }}
+
+  docker-push:
+    needs: [release]
+    if: always() && needs.release.result == 'success'
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine image tags
+        id: tags
+        run: |
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          TAGS="ghcr.io/sixtyops/manager:${TAG}"
+          # Add :latest tag only for stable releases (workflow_dispatch)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAGS="${TAGS},ghcr.io/sixtyops/manager:latest"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}

@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SixtyOps — Hands-Off Tachyon Network Management</title>
+  <meta name="description" content="SixtyOps keeps your Tachyon wireless devices auto-updated, configs backed up, and maintenance running on schedule. Hands-off ISP network management.">
+  <meta property="og:title" content="SixtyOps — Hands-Off Tachyon Network Management">
+  <meta property="og:description" content="Auto-update firmware, back up configs, and schedule maintenance windows for your entire Tachyon network.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://sixtyops.net">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230D9488'/><svg x='2' y='2' width='28' height='28' viewBox='0 0 28 28' fill='none'><rect x='3' y='8' width='2.5' height='12' rx='1' fill='white' opacity='0.9'/><rect x='7.5' y='6' width='2.5' height='16' rx='1' fill='white'/><rect x='12' y='4' width='2.5' height='20' rx='1' fill='white'/><path d='M17 10 L25 6' stroke='white' stroke-width='1.5' stroke-linecap='round' opacity='0.5'/><path d='M17 14 L26 14' stroke='white' stroke-width='1.5' stroke-linecap='round' opacity='0.8'/><path d='M17 18 L25 22' stroke='white' stroke-width='1.5' stroke-linecap='round' opacity='0.5'/></svg></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'Monaco', 'Menlo', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#CCFBF1', 100: '#99F6E4', 500: '#14B8A6',
+              600: '#0D9488', 700: '#0F766E', 800: '#115E59', 900: '#134E4A',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="assets/css/custom.css">
+</head>
+<body class="font-sans text-slate-900 bg-white antialiased">
+
+  <!-- ════════ NAV ════════ -->
+  <nav class="sticky top-0 z-50 bg-white border-b border-slate-200" x-data="{ open: false }">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-12">
+        <a href="#" class="flex items-center gap-2">
+          <div class="w-6 h-6 bg-brand-600 rounded flex items-center justify-center">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 28 28" fill="none"><rect x="3" y="8" width="2.5" height="12" rx="1" fill="white" opacity="0.9"/><rect x="7.5" y="6" width="2.5" height="16" rx="1" fill="white"/><rect x="12" y="4" width="2.5" height="20" rx="1" fill="white"/><path d="M17 10 L25 6" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><path d="M17 14 L26 14" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/><path d="M17 18 L25 22" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg>
+          </div>
+          <span class="text-base font-bold tracking-tight text-slate-900">Sixty<span class="text-brand-600">Ops</span></span>
+        </a>
+        <div class="hidden md:flex items-center gap-8">
+          <a href="#features" class="text-sm text-slate-500 hover:text-slate-900 transition-colors">Features</a>
+          <a href="#download" class="text-sm text-slate-500 hover:text-slate-900 transition-colors">Download</a>
+          <a href="https://github.com/sixtyops/manager" class="text-sm text-brand-600 hover:text-brand-700 font-medium transition-colors">GitHub</a>
+        </div>
+        <button @click="open = !open" class="md:hidden p-1.5 text-slate-400 hover:text-slate-900" aria-label="Menu">
+          <svg x-show="!open" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/></svg>
+          <svg x-show="open" x-cloak class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div x-show="open" x-cloak x-transition class="md:hidden pb-4 border-t border-slate-100 mt-1 pt-3 space-y-2">
+        <a href="#features" @click="open=false" class="block text-sm text-slate-500 hover:text-slate-900">Features</a>
+        <a href="#download" @click="open=false" class="block text-sm text-slate-500 hover:text-slate-900">Download</a>
+        <a href="https://github.com/sixtyops/manager" @click="open=false" class="block text-sm text-brand-600 font-medium">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ════════ HERO ════════ -->
+  <section class="py-20 sm:py-28">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mx-auto mb-16">
+        <p class="font-mono text-sm text-slate-400 mb-4 tracking-wide">// automated firmware management</p>
+        <h1 class="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-slate-900 leading-[1.1]">
+          Your Tachyon Network, On Autopilot
+        </h1>
+        <p class="mt-6 text-lg text-slate-500 leading-relaxed max-w-2xl">
+          SixtyOps keeps your wireless devices updated, configs backed up, and maintenance running on schedule&mdash;so you can focus on growing your ISP.
+        </p>
+        <div class="mt-8 flex items-center gap-6">
+          <a href="mailto:hello@sixtyops.net" class="text-brand-600 hover:text-brand-700 font-medium text-sm transition-colors">Request Alpha Access</a>
+          <a href="#features" class="text-slate-500 hover:text-slate-700 font-medium text-sm transition-colors">See How It Works &darr;</a>
+        </div>
+      </div>
+
+      <!-- Hero: Full Dashboard Mockup -->
+      <div class="app-frame max-w-4xl mx-auto" data-animate>
+        <div class="app-frame-bar">
+          <div class="app-frame-dot" style="background:#ef4444"></div>
+          <div class="app-frame-dot" style="background:#f59e0b"></div>
+          <div class="app-frame-dot" style="background:#22c55e"></div>
+          <div class="app-frame-url">sixtyops.local</div>
+          <div class="ml-auto text-xs text-slate-400" style="font-size:10px">12:03 PM CST &middot; Feb 18 &middot; 29&deg;F</div>
+        </div>
+        <div class="app-frame-body">
+          <!-- Top row: Device add + Signal chart -->
+          <div class="flex gap-3" style="min-height:180px">
+            <!-- Left: Add devices card -->
+            <div class="mock-card p-3 hidden sm:block" style="width:200px; flex-shrink:0">
+              <div class="font-semibold text-xs text-slate-800 mb-1">Add APs &amp; Switches</div>
+              <div class="text-xs text-slate-400 mb-2" style="font-size:9px; line-height:1.3">Devices are auto-classified as APs or switches based on model.</div>
+              <div class="bg-slate-50 border border-slate-200 rounded p-2 mb-2" style="font-size:10px; font-family:monospace; color:#9ca3af; line-height:1.5">
+                Device IPs (one per line)<br>192.168.1.1<br>192.168.1.2
+              </div>
+              <div class="flex gap-1 mb-2">
+                <div class="bg-slate-50 border border-slate-200 rounded px-2 py-1 flex-1" style="font-size:10px; color:#6b7280">root</div>
+                <div class="bg-slate-50 border border-slate-200 rounded px-2 py-1 flex-1" style="font-size:10px; color:#9ca3af">Password</div>
+              </div>
+              <div class="bg-red-500 text-white text-center rounded py-1.5" style="font-size:10px; font-weight:600">Add APs &amp; Switches</div>
+            </div>
+            <!-- Right: Signal chart -->
+            <div class="mock-card p-3 flex-1">
+              <div class="font-semibold text-xs text-slate-800 mb-2">Signal vs Distance &mdash; All Devices</div>
+              <div class="relative flex">
+                <!-- Y-axis labels -->
+                <div class="flex flex-col justify-between py-0 pr-1 shrink-0" style="width:28px; font-size:8px; color:#9ca3af; text-align:right">
+                  <span>-35</span><span>-45</span><span>-55</span><span>-65</span><span>-75</span>
+                </div>
+                <div class="scatter-area rounded flex-1">
+                <div class="scatter-dot" style="background:#10b981; left:8%; top:40%"></div>
+                <div class="scatter-dot" style="background:#10b981; left:12%; top:35%"></div>
+                <div class="scatter-dot" style="background:#10b981; left:5%; top:50%"></div>
+                <div class="scatter-dot" style="background:#f59e0b; left:6%; top:78%"></div>
+                <div class="scatter-dot" style="background:#10b981; left:90%; top:32%"></div>
+                <div class="scatter-dot" style="background:#f59e0b; left:88%; top:82%"></div>
+                </div>
+              </div>
+              <div class="flex gap-4 mt-2 justify-center" style="font-size:9px; color:#6b7280">
+                <span><span class="inline-block w-2 h-2 rounded-full mr-1" style="background:#10b981"></span>Strong (&gt; -65 dBm)</span>
+                <span><span class="inline-block w-2 h-2 rounded-full mr-1" style="background:#f59e0b"></span>Low (-65 to -75)</span>
+                <span><span class="inline-block w-2 h-2 rounded-full mr-1" style="background:#dc2626"></span>Critical</span>
+                <span class="hidden sm:inline"><span class="inline-block w-2 h-2 rounded-full mr-1" style="background:#d1d5db"></span>Offline</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Device count badges -->
+          <div class="flex items-center gap-3 mt-3 mb-2 px-1" style="font-size:11px">
+            <span class="flex items-center gap-1"><span class="status-dot status-online"></span> <strong>1</strong> APs</span>
+            <span class="flex items-center gap-1"><span class="inline-block w-2 h-2 rounded-full" style="background:#10b981"></span> <strong>3</strong></span>
+            <span class="flex items-center gap-1"><span class="inline-block w-2 h-2 rounded-full" style="background:#dc2626"></span> <strong>0</strong></span>
+            <span class="flex items-center gap-1"><span class="inline-block w-2 h-2 rounded-full" style="background:#d1d5db"></span> <strong>0</strong></span>
+          </div>
+
+          <!-- Mini device table -->
+          <div class="mock-card">
+            <table class="mock-table">
+              <thead>
+                <tr>
+                  <th>Name / IP</th>
+                  <th class="hidden sm:table-cell">Model</th>
+                  <th class="hidden sm:table-cell">Version</th>
+                  <th>Signal</th>
+                  <th class="hidden sm:table-cell">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="site-row">
+                  <td><span style="font-size:9px; margin-right:4px">&#9654;</span> <span class="device-badge site">S</span>tw35 <span style="font-size:9px; color:#9ca3af">1 AP, 3 CPEs</span></td>
+                  <td class="hidden sm:table-cell"></td>
+                  <td class="hidden sm:table-cell"></td>
+                  <td></td>
+                  <td class="hidden sm:table-cell"></td>
+                </tr>
+                <tr class="ap-row">
+                  <td><span class="device-badge ap">A</span>tw35-ap-test</td>
+                  <td class="hidden sm:table-cell">TNA-301</td>
+                  <td class="hidden sm:table-cell version-cell">1.12.3.54970</td>
+                  <td></td>
+                  <td class="hidden sm:table-cell"><span class="status-dot status-online"></span></td>
+                </tr>
+                <tr class="cpe-row">
+                  <td><span class="device-badge cpe-low">C</span>NewCustomer</td>
+                  <td class="hidden sm:table-cell">TNA-303L-65</td>
+                  <td class="hidden sm:table-cell version-cell">1.12.4.7782</td>
+                  <td class="signal-low">-57.0 dBm</td>
+                  <td class="hidden sm:table-cell"><span class="status-dot status-online"></span></td>
+                </tr>
+                <tr class="cpe-row">
+                  <td><span class="device-badge cpe-good">C</span>NewCustomer</td>
+                  <td class="hidden sm:table-cell">TNA-301</td>
+                  <td class="hidden sm:table-cell version-cell">1.12.3.54970</td>
+                  <td class="signal-low">-53.0 dBm</td>
+                  <td class="hidden sm:table-cell"><span class="status-dot status-online"></span></td>
+                </tr>
+                <tr class="cpe-row">
+                  <td><span class="device-badge cpe-low">C</span>NewCustomer</td>
+                  <td class="hidden sm:table-cell">TNA-303X</td>
+                  <td class="hidden sm:table-cell version-cell">1.12.2.54944</td>
+                  <td class="signal-low">-57.0 dBm</td>
+                  <td class="hidden sm:table-cell"><span class="status-dot status-online"></span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Auto-update status bar -->
+          <div class="autoupdate-bar mt-0 rounded-b-lg">
+            <span class="autoupdate-toggle on"></span>
+            <span style="font-size:12px; font-weight:600">Auto-Update</span>
+            <span class="status-badge idle">Idle</span>
+            <span style="font-size:11px; color:#10b981; flex:1">3 pending &middot; 3:00&ndash;4:00 on tue,wed,thu</span>
+            <div class="phase-track hidden sm:flex" style="gap:0; max-width:200px">
+              <div class="phase-dot completed" style="width:32px; height:32px; font-size:8px"><span>Canary</span></div>
+              <div class="phase-line completed"></div>
+              <div class="phase-dot active" style="width:32px; height:32px; font-size:8px">10%</div>
+              <div class="phase-line pending"></div>
+              <div class="phase-dot pending" style="width:32px; height:32px; font-size:8px">50%</div>
+              <div class="phase-line pending"></div>
+              <div class="phase-dot pending" style="width:32px; height:32px; font-size:8px">100%</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ════════ FEATURE 1: Fleet Visibility ════════ -->
+  <section id="features" class="section-rule py-20">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <div data-animate>
+          <p class="font-mono text-xs text-slate-400 tracking-wide mb-3">01 &mdash; fleet visibility</p>
+          <h2 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight mb-4">Every Device, One Dashboard</h2>
+          <p class="text-slate-500 mb-6 leading-relaxed">
+            See your entire Tachyon fleet at a glance. Devices auto-classify by type&mdash;APs, CPEs, switches&mdash;and group into sites with signal health, firmware versions, and status in real time.
+          </p>
+          <ul class="space-y-2 text-sm text-slate-600">
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Hierarchical site &rarr; AP &rarr; CPE tree view
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Signal vs distance scatter chart across all devices
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Dual-bank firmware version tracking
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Add devices by IP&mdash;auto-discovery handles the rest
+            </li>
+          </ul>
+        </div>
+
+        <!-- Mockup: Expanded device table -->
+        <div class="app-frame" data-animate>
+          <div class="app-frame-bar">
+            <div class="app-frame-dot" style="background:#ef4444"></div>
+            <div class="app-frame-dot" style="background:#f59e0b"></div>
+            <div class="app-frame-dot" style="background:#22c55e"></div>
+          </div>
+          <div class="app-frame-body p-0">
+            <table class="mock-table" style="font-size:11px">
+              <thead>
+                <tr>
+                  <th style="padding-left:12px">Name / IP</th>
+                  <th>Model</th>
+                  <th>Version</th>
+                  <th>Signal</th>
+                  <th>Dist</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="site-row">
+                  <td style="padding-left:12px"><span style="font-size:9px; margin-right:3px">&#9660;</span> <span class="device-badge site">S</span>tw35 <span style="font-size:9px; color:#9ca3af">1 AP, 3 CPEs</span></td>
+                  <td></td><td></td><td></td><td></td><td></td><td></td>
+                </tr>
+                <tr class="ap-row">
+                  <td><span class="device-badge ap">A</span>tw35-ap-test</td>
+                  <td>TNA-301</td>
+                  <td class="version-cell">1.12.3.54970</td>
+                  <td></td>
+                  <td></td>
+                  <td><span class="status-dot status-online"></span></td>
+                  <td><span class="mock-action update">&#8593;</span> &nbsp;<span class="mock-action refresh">Refresh</span> &nbsp;<span class="mock-action danger">Delete</span></td>
+                </tr>
+                <tr class="cpe-row">
+                  <td><span class="device-badge cpe-low">C</span>NewCustomer</td>
+                  <td>TNA-303L-65</td>
+                  <td class="version-cell">1.12.4.7782</td>
+                  <td class="signal-low">-57.0 dBm</td>
+                  <td style="color:#6b7280">0 m</td>
+                  <td><span class="status-dot status-online"></span></td>
+                  <td><span class="mock-action refresh">Refresh</span> &nbsp;<span class="mock-action danger">Delete</span></td>
+                </tr>
+                <tr class="cpe-row">
+                  <td><span class="device-badge cpe-good">C</span>NewCustomer</td>
+                  <td>TNA-301</td>
+                  <td class="version-cell">1.12.3.54970</td>
+                  <td class="signal-low">-53.0 dBm</td>
+                  <td style="color:#6b7280">1 m</td>
+                  <td><span class="status-dot status-online"></span></td>
+                  <td><span class="mock-action refresh">Refresh</span> &nbsp;<span class="mock-action danger">Delete</span></td>
+                </tr>
+                <tr class="cpe-row">
+                  <td><span class="device-badge cpe-low">C</span>NewCustomer</td>
+                  <td>TNA-303X</td>
+                  <td class="version-cell">1.12.2.54944</td>
+                  <td class="signal-low">-57.0 dBm</td>
+                  <td style="color:#6b7280">1 m</td>
+                  <td><span class="status-dot status-online"></span></td>
+                  <td><span class="mock-action refresh">Refresh</span> &nbsp;<span class="mock-action danger">Delete</span></td>
+                </tr>
+                <tr class="site-row">
+                  <td style="padding-left:12px"><span style="font-size:9px; margin-right:3px">&#9654;</span> <span class="device-badge site">S</span>north-ridge <span style="font-size:9px; color:#9ca3af">2 APs, 8 CPEs</span></td>
+                  <td></td><td></td><td></td><td></td><td></td><td></td>
+                </tr>
+                <tr class="site-row">
+                  <td style="padding-left:12px"><span style="font-size:9px; margin-right:3px">&#9654;</span> <span class="device-badge site">S</span>main-tower <span style="font-size:9px; color:#9ca3af">4 APs, 22 CPEs</span></td>
+                  <td></td><td></td><td></td><td></td><td></td><td></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ════════ FEATURE 2: Auto-Update Scheduling ════════ -->
+  <section class="section-rule py-20">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <!-- Mockup: Schedule panel -->
+        <div class="app-frame order-2 lg:order-1" data-animate>
+          <div class="app-frame-bar">
+            <div class="app-frame-dot" style="background:#ef4444"></div>
+            <div class="app-frame-dot" style="background:#f59e0b"></div>
+            <div class="app-frame-dot" style="background:#22c55e"></div>
+          </div>
+          <div class="app-frame-body">
+            <div class="mock-card p-4 space-y-4">
+              <div>
+                <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Schedule</div>
+                <div class="flex items-center gap-1 flex-wrap">
+                  <span class="day-btn">Mon</span>
+                  <span class="day-btn active">Tue</span>
+                  <span class="day-btn active">Wed</span>
+                  <span class="day-btn active">Thu</span>
+                  <span class="day-btn">Fri</span>
+                  <span class="day-btn">Sat</span>
+                  <span class="day-btn">Sun</span>
+                </div>
+              </div>
+
+              <div class="flex flex-wrap gap-x-6 gap-y-3">
+                <div>
+                  <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Window</div>
+                  <div class="flex items-center gap-1">
+                    <span class="mock-select">3 AM</span>
+                    <span style="font-size:11px; color:#9ca3af">&rarr;</span>
+                    <span class="mock-select">4 AM</span>
+                  </div>
+                </div>
+                <div>
+                  <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Update Mode</div>
+                  <span class="mock-select">Single Bank (recommended)</span>
+                </div>
+                <div>
+                  <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Parallel</div>
+                  <span class="mock-input">2</span>
+                </div>
+              </div>
+
+              <div>
+                <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Options</div>
+                <div class="flex flex-wrap items-center gap-x-5 gap-y-2" style="font-size:11px; color:#374151">
+                  <span class="flex items-center gap-1.5"><span class="mock-toggle off"></span> Beta Firmware</span>
+                  <span class="flex items-center gap-1.5"><span class="mock-toggle on"></span> Allow Downgrade</span>
+                  <span class="flex items-center gap-1.5"><span class="mock-toggle on"></span> Disable below <strong>14</strong> &deg;F</span>
+                </div>
+              </div>
+
+              <div>
+                <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Firmware</div>
+                <div class="flex flex-wrap gap-2">
+                  <span class="fw-chip"><span class="fw-label">303X</span> 1.12.2 r54944</span>
+                  <span class="fw-chip"><span class="fw-label">303L</span> 1.12.4 r7782</span>
+                  <span class="fw-chip"><span class="fw-label">TNS100</span> 1.12.8 r54729</span>
+                </div>
+                <div class="mt-2 text-xs text-slate-400">Checked today &middot; <span style="color:#0D9488; cursor:default">Check Now</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Text -->
+        <div class="order-1 lg:order-2" data-animate>
+          <p class="font-mono text-xs text-slate-400 tracking-wide mb-3">02 &mdash; hands-off scheduling</p>
+          <h2 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight mb-4">Set It Once. Updates Run While You Sleep.</h2>
+          <p class="text-slate-500 mb-6 leading-relaxed">
+            Pick your maintenance window, set your safety thresholds, and SixtyOps takes care of the rest. Updates only run during approved hours and pause if conditions aren't right.
+          </p>
+          <ul class="space-y-2 text-sm text-slate-600">
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Day-of-week and time-range scheduling
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Temperature-based hold &mdash; no updates in extreme weather
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Per-model firmware targeting with version pinning
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Configurable parallelism and single/dual-bank modes
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ════════ FEATURE 3: Gradual Rollout ════════ -->
+  <section class="section-rule py-20">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <div data-animate>
+          <p class="font-mono text-xs text-slate-400 tracking-wide mb-3">03 &mdash; safe by default</p>
+          <h2 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight mb-4">Gradual Rollouts That Protect Your Network</h2>
+          <p class="text-slate-500 mb-6 leading-relaxed">
+            Firmware doesn't go to every device at once. A staged rollout&mdash;canary first, then 10%, 50%, 100%&mdash;with automatic pause if anything goes wrong.
+          </p>
+          <ul class="space-y-2 text-sm text-slate-600">
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Health checks pass at each stage before advancing
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Automatic pause on failure detection
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Resume or cancel mid-rollout with one click
+            </li>
+          </ul>
+        </div>
+
+        <!-- Mockup: Rollout phase panel -->
+        <div class="app-frame" data-animate>
+          <div class="app-frame-bar">
+            <div class="app-frame-dot" style="background:#ef4444"></div>
+            <div class="app-frame-dot" style="background:#f59e0b"></div>
+            <div class="app-frame-dot" style="background:#22c55e"></div>
+          </div>
+          <div class="app-frame-body">
+            <div class="mock-card p-5">
+              <div class="flex items-center gap-3 mb-5">
+                <span class="autoupdate-toggle on" style="width:36px; height:20px"></span>
+                <span style="font-size:13px; font-weight:700">Auto-Update</span>
+                <span class="status-badge active">Running</span>
+                <span style="font-size:11px; color:#10b981">3 pending</span>
+              </div>
+
+              <!-- Large phase indicator -->
+              <div class="phase-track mb-4 justify-center" style="gap:0">
+                <div class="phase-dot completed"><span style="font-size:9px">Canary</span></div>
+                <div class="phase-line completed" style="min-width:40px"></div>
+                <div class="phase-dot active"><span>10%</span></div>
+                <div class="phase-line pending" style="min-width:40px"></div>
+                <div class="phase-dot pending"><span>50%</span></div>
+                <div class="phase-line pending" style="min-width:40px"></div>
+                <div class="phase-dot pending"><span>100%</span></div>
+              </div>
+
+              <!-- Phase labels -->
+              <div class="flex justify-between px-2 mb-6" style="font-size:9px; color:#9ca3af">
+                <span>1 device &middot; Feb 18</span>
+                <span>2 of 5</span>
+                <span></span>
+                <span></span>
+              </div>
+
+              <!-- Live device update list -->
+              <div class="space-y-2">
+                <div class="flex items-center gap-3 bg-green-50 rounded-lg p-2.5 border border-green-100">
+                  <span class="status-dot status-online"></span>
+                  <span style="font-size:11px; font-weight:500; flex:1">TNA-303X-AP01</span>
+                  <span style="font-size:10px; background:#d1fae5; color:#065f46; padding:2px 8px; border-radius:10px">Updated</span>
+                </div>
+                <div class="flex items-center gap-3 bg-teal-50 rounded-lg p-2.5 border border-teal-100">
+                  <span class="inline-block w-2 h-2 rounded-full bg-teal-500" style="animation: phasePulse 2s infinite"></span>
+                  <span style="font-size:11px; font-weight:500; flex:1">TNA-301-AP02</span>
+                  <span style="font-size:10px; background:#CCFBF1; color:#0F766E; padding:2px 8px; border-radius:10px">Updating...</span>
+                </div>
+                <div class="flex items-center gap-3 bg-slate-50 rounded-lg p-2.5 border border-slate-100">
+                  <span class="status-dot" style="background:#d1d5db"></span>
+                  <span style="font-size:11px; font-weight:500; flex:1; color:#6b7280">TNA-302-AP03</span>
+                  <span style="font-size:10px; background:#f1f5f9; color:#64748b; padding:2px 8px; border-radius:10px">Queued</span>
+                </div>
+              </div>
+
+              <!-- Controls -->
+              <div class="flex items-center justify-between mt-4 pt-3 border-t border-slate-100">
+                <span style="font-size:11px; color:#6b7280">Stage 2 of 4 &mdash; est. &lt; 1 min remaining</span>
+                <div class="flex gap-2">
+                  <span style="font-size:10px; background:#fef3c7; color:#92400e; padding:3px 10px; border-radius:6px; font-weight:500; cursor:default">Pause</span>
+                  <span style="font-size:10px; background:#fee2e2; color:#991b1b; padding:3px 10px; border-radius:6px; font-weight:500; cursor:default">Cancel</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ════════ FEATURE 4: Config Backup ════════ -->
+  <section class="section-rule py-20">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <!-- Mockup -->
+        <div class="app-frame order-2 lg:order-1" data-animate>
+          <div class="app-frame-bar">
+            <div class="app-frame-dot" style="background:#ef4444"></div>
+            <div class="app-frame-dot" style="background:#f59e0b"></div>
+            <div class="app-frame-dot" style="background:#22c55e"></div>
+          </div>
+          <div class="app-frame-body">
+            <div class="mock-card p-4">
+              <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Config Backups &mdash; tw35-ap-test (TNA-301)</div>
+              <div class="space-y-1.5">
+                <div class="backup-row">
+                  <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+                    <span style="font-size:11px; font-weight:500">Pre-update snapshot</span>
+                    <span style="font-size:10px; background:#dbeafe; color:#1e40af; padding:1px 6px; border-radius:8px">auto</span>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <span style="font-size:10px; color:#9ca3af">Feb 18, 3:01 AM</span>
+                    <span style="font-size:10px; color:#0D9488; font-weight:500; cursor:default">Restore</span>
+                  </div>
+                </div>
+                <div class="backup-row">
+                  <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+                    <span style="font-size:11px; font-weight:500">Post-update config</span>
+                    <span style="font-size:10px; background:#dbeafe; color:#1e40af; padding:1px 6px; border-radius:8px">auto</span>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <span style="font-size:10px; color:#9ca3af">Feb 18, 3:04 AM</span>
+                    <span style="font-size:10px; color:#0D9488; font-weight:500; cursor:default">Restore</span>
+                  </div>
+                </div>
+                <div class="backup-row">
+                  <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+                    <span style="font-size:11px; font-weight:500">Manual backup</span>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <span style="font-size:10px; color:#9ca3af">Feb 15, 2:30 PM</span>
+                    <span style="font-size:10px; color:#0D9488; font-weight:500; cursor:default">Restore</span>
+                  </div>
+                </div>
+                <div class="backup-row">
+                  <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+                    <span style="font-size:11px; font-weight:500">Pre-update snapshot</span>
+                    <span style="font-size:10px; background:#dbeafe; color:#1e40af; padding:1px 6px; border-radius:8px">auto</span>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <span style="font-size:10px; color:#9ca3af">Feb 11, 3:02 AM</span>
+                    <span style="font-size:10px; color:#0D9488; font-weight:500; cursor:default">Restore</span>
+                  </div>
+                </div>
+              </div>
+              <div class="mt-3 pt-3 border-t border-slate-100 flex items-center gap-2" style="font-size:11px; color:#6b7280">
+                <svg class="w-3.5 h-3.5 text-brand-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                4 versions &middot; Last backup: 2 min ago
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Text -->
+        <div class="order-1 lg:order-2" data-animate>
+          <p class="font-mono text-xs text-slate-400 tracking-wide mb-3">04 &mdash; never lose a config</p>
+          <h2 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight mb-4">Automatic Config Backup &amp; One-Click Restore</h2>
+          <p class="text-slate-500 mb-6 leading-relaxed">
+            Every device config is captured and versioned automatically. Pre-update snapshots are taken before every firmware change, so you can roll back to a known-good state in seconds.
+          </p>
+          <ul class="space-y-2 text-sm text-slate-600">
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Automatic pre- and post-update snapshots
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Full version history with timestamps
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              One-click restore to any previous config
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ════════ FEATURE 5: RADIUS Server ════════ -->
+  <section class="section-rule py-20">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <div data-animate>
+          <p class="font-mono text-xs text-slate-400 tracking-wide mb-3">05 &mdash; centralized authentication</p>
+          <h2 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight mb-4">Centralized Admin Auth Across Your Fleet</h2>
+          <p class="text-slate-500 mb-6 leading-relaxed">
+            Stop managing local credentials on every device. SixtyOps includes a built-in RADIUS server so your named admin accounts authenticate into APs, SMs, and switches from one place.
+          </p>
+          <ul class="space-y-2 text-sm text-slate-600">
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Named admin accounts with centralized login
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              No more shared root passwords across devices
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Runs on the same appliance&mdash;no extra infrastructure
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-brand-600 mt-0.5">&mdash;</span>
+              Works with all Tachyon APs, SMs, and switches
+            </li>
+          </ul>
+        </div>
+
+        <!-- Mockup: RADIUS panel -->
+        <div class="app-frame" data-animate>
+          <div class="app-frame-bar">
+            <div class="app-frame-dot" style="background:#ef4444"></div>
+            <div class="app-frame-dot" style="background:#f59e0b"></div>
+            <div class="app-frame-dot" style="background:#22c55e"></div>
+          </div>
+          <div class="app-frame-body">
+            <div class="mock-card p-4">
+              <div class="flex items-center justify-between mb-3">
+                <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">RADIUS Server</div>
+                <span class="status-badge active">Active</span>
+              </div>
+
+              <!-- Stats row -->
+              <div class="flex gap-4 mb-4">
+                <div class="flex-1 bg-slate-50 rounded p-2.5 text-center">
+                  <div class="font-mono font-bold text-lg text-slate-900">5</div>
+                  <div style="font-size:9px; color:#9ca3af; text-transform:uppercase; letter-spacing:0.05em">Admin Accounts</div>
+                </div>
+                <div class="flex-1 bg-slate-50 rounded p-2.5 text-center">
+                  <div class="font-mono font-bold text-lg text-slate-900">34</div>
+                  <div style="font-size:9px; color:#9ca3af; text-transform:uppercase; letter-spacing:0.05em">Devices</div>
+                </div>
+                <div class="flex-1 bg-slate-50 rounded p-2.5 text-center">
+                  <div class="font-mono font-bold text-lg text-brand-600">100%</div>
+                  <div style="font-size:9px; color:#9ca3af; text-transform:uppercase; letter-spacing:0.05em">Auth Success</div>
+                </div>
+              </div>
+
+              <!-- Recent admin logins -->
+              <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Recent Admin Logins</div>
+              <div class="space-y-1.5">
+                <div class="flex items-center justify-between bg-white rounded border border-slate-100 px-3 py-2">
+                  <div class="flex items-center gap-2">
+                    <span class="status-dot status-online"></span>
+                    <span style="font-size:11px; font-weight:500">jsmith</span>
+                  </div>
+                  <div class="flex items-center gap-3" style="font-size:10px; color:#9ca3af">
+                    <span>tw35-ap-test</span>
+                    <span class="font-mono">TNA-301</span>
+                    <span style="color:#10b981; font-weight:500">Accept</span>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between bg-white rounded border border-slate-100 px-3 py-2">
+                  <div class="flex items-center gap-2">
+                    <span class="status-dot status-online"></span>
+                    <span style="font-size:11px; font-weight:500">dmartinez</span>
+                  </div>
+                  <div class="flex items-center gap-3" style="font-size:10px; color:#9ca3af">
+                    <span>north-ridge-sw1</span>
+                    <span class="font-mono">TNS-100</span>
+                    <span style="color:#10b981; font-weight:500">Accept</span>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between bg-white rounded border border-slate-100 px-3 py-2">
+                  <div class="flex items-center gap-2">
+                    <span class="status-dot" style="background:#dc2626"></span>
+                    <span style="font-size:11px; font-weight:500; color:#6b7280">admin</span>
+                  </div>
+                  <div class="flex items-center gap-3" style="font-size:10px; color:#9ca3af">
+                    <span>main-tower-ap2</span>
+                    <span class="font-mono">TNA-303X</span>
+                    <span style="color:#dc2626; font-weight:500">Reject</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-3 pt-3 border-t border-slate-100 flex items-center gap-2" style="font-size:11px; color:#6b7280">
+                <svg class="w-3.5 h-3.5 text-brand-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Listening on :1812 &middot; 63 admin logins today
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ════════ SUPPORTED DEVICES ════════ -->
+  <section class="section-rule py-10">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-6">
+        <span class="font-mono text-xs text-slate-400 uppercase tracking-wider">Supported</span>
+        <div class="flex flex-wrap justify-center gap-2">
+          <span class="px-3 py-1 border border-slate-200 rounded text-xs font-mono text-slate-600">TNA-301</span>
+          <span class="px-3 py-1 border border-slate-200 rounded text-xs font-mono text-slate-600">TNA-302</span>
+          <span class="px-3 py-1 border border-slate-200 rounded text-xs font-mono text-slate-600">TNA-303X</span>
+          <span class="px-3 py-1 border border-slate-200 rounded text-xs font-mono text-slate-600">TNA-303L</span>
+          <span class="px-3 py-1 border border-slate-200 rounded text-xs font-mono text-slate-600">TNA-303L-65</span>
+          <span class="px-3 py-1 border border-slate-200 rounded text-xs font-mono text-slate-600">TNS-100</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ════════ OPEN SOURCE ════════ -->
+  <section id="open-source" class="section-rule py-20">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mx-auto mb-12">
+        <p class="font-mono text-xs text-slate-400 tracking-wide mb-3">// open source</p>
+        <h2 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">Free &amp; Open Source</h2>
+        <p class="mt-3 text-slate-500">Every feature, unlimited devices, no license keys. Run it on your infrastructure, own your data.</p>
+      </div>
+
+      <div class="max-w-3xl mx-auto">
+        <div class="border border-slate-200 rounded p-6">
+          <div class="grid sm:grid-cols-2 gap-4 text-sm">
+            <div class="flex items-start gap-2 text-slate-600">
+              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
+              Unlimited APs, switches &amp; SMs
+            </div>
+            <div class="flex items-start gap-2 text-slate-600">
+              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
+              Auto &amp; manual firmware updates
+            </div>
+            <div class="flex items-start gap-2 text-slate-600">
+              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
+              Gradual rollout &amp; maintenance windows
+            </div>
+            <div class="flex items-start gap-2 text-slate-600">
+              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
+              Config backup, restore &amp; templates
+            </div>
+            <div class="flex items-start gap-2 text-slate-600">
+              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
+              Slack, SNMP &amp; webhook notifications
+            </div>
+            <div class="flex items-start gap-2 text-slate-600">
+              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
+              RADIUS &amp; SSO/OIDC authentication
+            </div>
+            <div class="flex items-start gap-2 text-slate-600">
+              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
+              Signal &amp; device monitoring
+            </div>
+            <div class="flex items-start gap-2 text-slate-600">
+              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
+              Self-hosted &mdash; your data stays local
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- FAQ -->
+      <div class="max-w-2xl mx-auto mt-16" x-data="{ openFaq: null }">
+        <p class="font-mono text-xs text-slate-400 tracking-wide mb-6">// faq</p>
+        <div class="space-y-0 divide-y divide-slate-200 border-t border-b border-slate-200">
+          <div>
+            <button @click="openFaq = openFaq === 1 ? null : 1" class="w-full flex items-center justify-between py-4 text-left">
+              <span class="font-medium text-slate-900 text-sm">Where does SixtyOps run?</span>
+              <svg class="w-4 h-4 text-slate-400 transition-transform shrink-0 ml-4" :class="openFaq === 1 && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+            </button>
+            <div x-show="openFaq === 1" x-collapse class="pb-4 text-sm text-slate-500">On your infrastructure as a Docker container, pre-built OVA (VMware/ESXi), or QCOW2 (Proxmox) appliance. Your data stays on your network&mdash;we never see your device configs or credentials.</div>
+          </div>
+          <div>
+            <button @click="openFaq = openFaq === 2 ? null : 2" class="w-full flex items-center justify-between py-4 text-left">
+              <span class="font-medium text-slate-900 text-sm">What are "dangerous" features?</span>
+              <svg class="w-4 h-4 text-slate-400 transition-transform shrink-0 ml-4" :class="openFaq === 2 && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+            </button>
+            <div x-show="openFaq === 2" x-collapse class="pb-4 text-sm text-slate-500">Some features (config push, compliance enforcement, backup/restore, RADIUS, SSO) can make sweeping changes across your network. They're fully functional but labeled "dangerous" in the UI so you know to test carefully before relying on them in production.</div>
+          </div>
+          <div>
+            <button @click="openFaq = openFaq === 3 ? null : 3" class="w-full flex items-center justify-between py-4 text-left">
+              <span class="font-medium text-slate-900 text-sm">Is there really no catch?</span>
+              <svg class="w-4 h-4 text-slate-400 transition-transform shrink-0 ml-4" :class="openFaq === 3 && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+            </button>
+            <div x-show="openFaq === 3" x-collapse class="pb-4 text-sm text-slate-500">No catch. SixtyOps is free and open source. Anonymous telemetry (device counts, job stats) is sent by default to help improve the product, but you can disable it with a single environment variable.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ════════ DOWNLOAD / COMING SOON ════════ -->
+  <section id="download" class="section-rule py-20">
+    <div class="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      <p class="font-mono text-xs text-slate-400 tracking-wide mb-3">// coming soon</p>
+      <h2 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight mb-3">Coming Soon &mdash; April 2026</h2>
+      <p class="text-slate-500 mb-8">SixtyOps is currently in alpha. Contact us for early access to the appliance.</p>
+
+      <a href="mailto:hello@sixtyops.net" class="inline-flex items-center justify-center gap-2 px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white font-medium rounded text-sm transition-colors">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"/></svg>
+        Request Alpha Access
+      </a>
+
+      <p class="mt-6 text-xs text-slate-400">Questions? Email <a href="mailto:hello@sixtyops.net" class="text-brand-600 font-medium">hello@sixtyops.net</a></p>
+    </div>
+  </section>
+
+
+  <!-- ════════ FOOTER ════════ -->
+  <footer class="border-t border-slate-200 py-8">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex flex-col md:flex-row items-center justify-between gap-4">
+        <div class="flex items-center gap-2">
+          <div class="w-5 h-5 bg-brand-600 rounded flex items-center justify-center">
+            <svg class="w-3 h-3" viewBox="0 0 28 28" fill="none"><rect x="3" y="8" width="2.5" height="12" rx="1" fill="white" opacity="0.9"/><rect x="7.5" y="6" width="2.5" height="16" rx="1" fill="white"/><rect x="12" y="4" width="2.5" height="20" rx="1" fill="white"/><path d="M17 10 L25 6" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><path d="M17 14 L26 14" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/><path d="M17 18 L25 22" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg>
+          </div>
+          <span class="text-sm font-bold text-slate-900">Sixty<span class="text-brand-600">Ops</span></span>
+        </div>
+        <div class="flex items-center gap-6 text-xs text-slate-500">
+          <a href="#features" class="hover:text-slate-700 transition-colors">Features</a>
+          <a href="#download" class="hover:text-slate-700 transition-colors">Download</a>
+          <a href="https://github.com/sixtyops/manager" class="hover:text-slate-700 transition-colors">GitHub</a>
+          <a href="terms.html" class="hover:text-slate-700 transition-colors">Terms</a>
+          <a href="privacy.html" class="hover:text-slate-700 transition-colors">Privacy</a>
+        </div>
+        <div class="text-xs text-slate-500">&copy; 2026 Isaac Olson</div>
+      </div>
+      <div class="mt-6 pt-4 border-t border-slate-200 text-center text-xs text-slate-500">
+        Made for <a href="https://treehouse.mn" class="text-slate-600 hover:text-slate-800 transition-colors">Treehouse Broadband</a> &amp; all WISPs by <a href="https://olson.io" class="text-slate-600 hover:text-slate-800 transition-colors">Isaac Olson</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="assets/js/main.js"></script>
+</body>
+</html>

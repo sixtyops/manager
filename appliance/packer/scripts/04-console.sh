@@ -1,0 +1,35 @@
+#!/bin/sh
+# 04-console.sh — Install console TUI on tty1
+set -e
+
+echo "[04-console] Installing whiptail..."
+apk add newt
+
+echo "[04-console] Installing console TUI..."
+cp /tmp/appliance-files/console-tui.sh /usr/local/bin/console-tui
+chmod +x /usr/local/bin/console-tui
+
+echo "[04-console] Installing recovery script..."
+cp /tmp/appliance-files/recovery.sh /usr/local/bin/recovery
+chmod +x /usr/local/bin/recovery
+
+echo "[04-console] Writing recovery secret..."
+mkdir -p /etc/sixtyops
+echo "$RECOVERY_SECRET" > /etc/sixtyops/recovery-secret
+chmod 400 /etc/sixtyops/recovery-secret
+
+echo "[04-console] Configuring tty1 for TUI..."
+# Replace tty1 getty with console TUI in inittab
+sed -i 's|^tty1::.*|tty1::respawn:/usr/local/bin/console-tui|' /etc/inittab
+
+echo "[04-console] Adding serial console for headless Proxmox access..."
+# Run TUI on ttyS0 for Proxmox 'qm terminal' access (getty is unusable — all accounts are locked)
+if ! grep -q 'ttyS0' /etc/inittab; then
+    echo 'ttyS0::respawn:/usr/local/bin/console-tui' >> /etc/inittab
+fi
+# Add serial console to kernel cmdline for boot messages on serial port
+if [ -f /boot/extlinux.conf ]; then
+    sed -i '/^APPEND/ s/$/ console=tty0 console=ttyS0,115200/' /boot/extlinux.conf
+fi
+
+echo "[04-console] Done."

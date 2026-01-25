@@ -1,0 +1,140 @@
+#!/bin/bash
+# Remote installer for SixtyOps Manager
+# Usage: curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo bash
+#    or: wget -qO- https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo bash
+
+set -e
+
+REPO_URL="${SIXTYOPS_REPO_URL:-https://github.com/sixtyops/manager.git}"
+INSTALL_DIR="${SIXTYOPS_INSTALL_DIR:-/opt/sixtyops}"
+BRANCH="${SIXTYOPS_BRANCH:-main}"
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.standalone.yml"
+
+echo "=========================================="
+echo "  SixtyOps Manager - Installer"
+echo "=========================================="
+echo
+
+# Check for root/sudo
+if [ "$EUID" -ne 0 ]; then
+    echo "Please run as root or with sudo"
+    exit 1
+fi
+
+# Check for docker
+if ! command -v docker &> /dev/null; then
+    echo "Docker not found. Installing..."
+    curl -fsSL https://get.docker.com | sh
+    systemctl enable docker
+    systemctl start docker
+    echo "Docker installed."
+fi
+
+# Check for docker compose
+if ! docker compose version &> /dev/null; then
+    echo "Error: Docker Compose plugin not found"
+    echo "Try: apt install docker-compose-plugin"
+    exit 1
+fi
+
+# Check for git
+if ! command -v git &> /dev/null; then
+    echo "Installing git..."
+    apt-get update && apt-get install -y git
+fi
+
+# Clone or update repo
+if [ -d "$INSTALL_DIR" ]; then
+    echo "Updating existing installation..."
+    git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+    cd "$INSTALL_DIR"
+    git -c safe.directory="$INSTALL_DIR" fetch origin
+    git -c safe.directory="$INSTALL_DIR" reset --hard "origin/$BRANCH"
+else
+    echo "Cloning repository..."
+    git clone --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
+fi
+
+# Create directories
+mkdir -p firmware data nginx/ssl nginx/conf.d certbot/www certbot/conf backups
+
+# Set ownership to match container's appuser (UID/GID 1500)
+# Docker bind mounts use host-side permissions, so these must be writable by appuser
+chown 1500:1500 data firmware backups nginx/conf.d
+chmod 700 data
+chmod 755 firmware backups nginx/conf.d
+
+# Make repo writable by appuser for self-update (git pull from inside container)
+chown -R 1500:1500 .git
+chmod -R u+w .git
+
+# Build and start
+echo "Building and starting services..."
+$COMPOSE up -d --build
+
+# Wait for services to be healthy
+echo "Waiting for services to start..."
+HEALTHY=false
+for i in $(seq 1 30); do
+    if curl -sk -o /dev/null -w "%{http_code}" https://localhost/login 2>/dev/null | grep -q "200\|302"; then
+        HEALTHY=true
+        break
+    fi
+    sleep 2
+done
+
+if [ "$HEALTHY" != "true" ]; then
+    echo
+    echo "WARNING: Services may not have started correctly."
+    echo "Check container status with: cd $INSTALL_DIR && $COMPOSE ps"
+    echo "Check logs with: cd $INSTALL_DIR && $COMPOSE logs"
+    echo
+fi
+
+# Create systemd service for auto-start when systemd is available
+if command -v systemctl &> /dev/null && [ -d /run/systemd/system ]; then
+    cat > /etc/systemd/system/sixtyops.service << EOF
+[Unit]
+Description=SixtyOps Manager
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=$INSTALL_DIR
+ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.standalone.yml up -d
+ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.standalone.yml down
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable sixtyops.service
+else
+    echo "Systemd not detected; skipping sixtyops.service creation."
+fi
+
+echo
+echo "=========================================="
+echo "  Installation complete!"
+echo "=========================================="
+echo
+echo "Installed to: $INSTALL_DIR"
+echo
+echo "Access: https://$(hostname -I | awk '{print $1}')"
+echo "        (Accept the self-signed certificate warning)"
+echo
+echo "On first run, you'll be prompted to create an admin password."
+echo
+echo "The setup wizard will then guide you through:"
+echo "  1. HTTPS certificate (self-signed by default, optional Let's Encrypt)"
+echo "  2. Setting up automatic backups"
+echo
+echo "Commands:"
+echo "  cd $INSTALL_DIR && $COMPOSE logs -f    # View logs"
+echo "  cd $INSTALL_DIR && $COMPOSE restart    # Restart"
+echo "  systemctl status sixtyops                     # Service status"
+echo

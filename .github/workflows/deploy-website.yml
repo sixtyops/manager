@@ -1,0 +1,53 @@
+name: Deploy Website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - '.github/workflows/deploy-website.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deploy target'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Sync to S3
+        run: |
+          aws s3 sync website/ s3://${{ vars.WEBSITE_S3_BUCKET }}/ \
+            --delete \
+            --exclude "DEPLOY.md" \
+            --exclude "icon-preview.html" \
+            --cache-control "max-age=3600" \
+            --content-type "text/html" \
+            --exclude "*.css" --exclude "*.js" --exclude "*.svg" --exclude "*.png" --exclude "*.jpg" --exclude "*.ico" --exclude "*.woff2"
+
+          # Re-sync assets with longer cache (fonts, css, js, images)
+          aws s3 sync website/assets/ s3://${{ vars.WEBSITE_S3_BUCKET }}/assets/ \
+            --cache-control "max-age=86400"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
