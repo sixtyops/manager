@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firmware Update - Tachyon Management System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 24px;
+            background: #1e293b;
+            border-bottom: 1px solid #334155;
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            font-size: 1.4rem;
+            color: #f1f5f9;
+            margin: 0;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 16px;
+        }
+
+        .nav-links a {
+            color: #94a3b8;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+
+        .nav-links a:hover, .nav-links a.active {
+            color: #f1f5f9;
+            background: #334155;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px 20px 20px;
+        }
+
+        h2.page-title {
+            font-size: 1.4rem;
+            margin-bottom: 24px;
+            color: #f1f5f9;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 400px 1fr;
+            gap: 24px;
+        }
+
+        @media (max-width: 900px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .card h2 {
+            font-size: 1.1rem;
+            margin-bottom: 16px;
+            color: #94a3b8;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        label {
+            display: block;
+            font-size: 0.875rem;
+            color: #94a3b8;
+            margin-bottom: 6px;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            padding: 10px 12px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: #e2e8f0;
+            font-size: 0.95rem;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        textarea {
+            min-height: 150px;
+            font-family: monospace;
+            resize: vertical;
+        }
+
+        .file-upload {
+            border: 2px dashed #334155;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .file-upload:hover {
+            border-color: #3b82f6;
+        }
+
+        .file-upload.dragover {
+            border-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .file-upload input {
+            display: none;
+        }
+
+        .file-info {
+            margin-top: 10px;
+            font-size: 0.875rem;
+            color: #10b981;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            width: 100%;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: #2563eb;
+        }
+
+        .btn:disabled {
+            background: #475569;
+            cursor: not-allowed;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        /* Device list */
+        .device-list {
+            max-height: calc(100vh - 200px);
+            overflow-y: auto;
+        }
+
+        .device-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: #0f172a;
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+
+        .device-ip {
+            font-family: monospace;
+            font-weight: 500;
+        }
+
+        .device-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-badge {
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .status-pending { background: #475569; }
+        .status-connecting { background: #3b82f6; }
+        .status-uploading { background: #8b5cf6; }
+        .status-installing { background: #f59e0b; }
+        .status-rebooting { background: #f97316; }
+        .status-verifying { background: #06b6d4; }
+        .status-success { background: #10b981; }
+        .status-failed { background: #ef4444; }
+
+        .device-message {
+            font-size: 0.8rem;
+            color: #94a3b8;
+            margin-top: 4px;
+        }
+
+        .device-versions {
+            font-size: 0.75rem;
+            color: #64748b;
+        }
+
+        /* Summary */
+        .summary {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .summary-item {
+            flex: 1;
+            text-align: center;
+            padding: 12px;
+            background: #0f172a;
+            border-radius: 8px;
+        }
+
+        .summary-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .summary-label {
+            font-size: 0.75rem;
+            color: #64748b;
+            text-transform: uppercase;
+        }
+
+        .summary-item.success .summary-value { color: #10b981; }
+        .summary-item.failed .summary-value { color: #ef4444; }
+        .summary-item.pending .summary-value { color: #94a3b8; }
+
+        /* Connection status */
+        .connection-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            background: #10b981;
+        }
+
+        .connection-status.disconnected {
+            background: #ef4444;
+        }
+
+        /* Credential inputs row */
+        .cred-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Tachyon Management System</h1>
+        <nav class="nav-links">
+            <a href="/" class="active">Firmware</a>
+            <a href="/topology">Topology</a>
+            <a href="/monitor">Monitor</a>
+        </nav>
+    </div>
+
+    <div class="connection-status" id="connectionStatus">Connected</div>
+
+    <div class="container">
+        <h2 class="page-title">Firmware Update</h2>
+
+        <div class="grid">
+            <!-- Left: Configuration -->
+            <div class="card">
+                <h2>Configuration</h2>
+
+                <div class="form-group">
+                    <label>Device Type</label>
+                    <select id="deviceType">
+                        <option value="tachyon">Tachyon Networks</option>
+                        <option value="mikrotik" disabled>MikroTik (coming soon)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Firmware File</label>
+                    <div class="file-upload" id="fileUpload">
+                        <input type="file" id="firmwareFile" accept=".bin,.img,.npk,.tar,.gz">
+                        <div>Drop firmware file here or click to browse</div>
+                        <div class="file-info" id="fileInfo"></div>
+                    </div>
+                    <select id="existingFirmware" style="margin-top: 8px;">
+                        <option value="">-- Or select existing --</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Credentials</label>
+                    <div class="cred-row">
+                        <input type="text" id="username" placeholder="Username" value="root">
+                        <input type="password" id="password" placeholder="Password">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Device IPs (one per line)</label>
+                    <textarea id="ipList" placeholder="192.168.1.10
+192.168.1.11
+192.168.1.12"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label>Concurrency (parallel updates)</label>
+                    <input type="number" id="concurrency" value="5" min="1" max="20">
+                </div>
+
+                <button class="btn" id="startBtn" onclick="startUpdate()">Start Update</button>
+            </div>
+
+            <!-- Right: Progress -->
+            <div class="card">
+                <h2>Progress</h2>
+
+                <div class="summary">
+                    <div class="summary-item pending">
+                        <div class="summary-value" id="pendingCount">0</div>
+                        <div class="summary-label">Pending</div>
+                    </div>
+                    <div class="summary-item" style="background: #1e40af;">
+                        <div class="summary-value" id="inProgressCount">0</div>
+                        <div class="summary-label">In Progress</div>
+                    </div>
+                    <div class="summary-item success">
+                        <div class="summary-value" id="successCount">0</div>
+                        <div class="summary-label">Success</div>
+                    </div>
+                    <div class="summary-item failed">
+                        <div class="summary-value" id="failedCount">0</div>
+                        <div class="summary-label">Failed</div>
+                    </div>
+                </div>
+
+                <div class="device-list" id="deviceList">
+                    <div style="text-align: center; color: #64748b; padding: 40px;">
+                        Configure settings and click Start Update
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let devices = {};
+        let currentFirmware = null;
+
+        // WebSocket connection
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+            ws.onopen = () => {
+                document.getElementById('connectionStatus').textContent = 'Connected';
+                document.getElementById('connectionStatus').classList.remove('disconnected');
+            };
+
+            ws.onclose = () => {
+                document.getElementById('connectionStatus').textContent = 'Disconnected';
+                document.getElementById('connectionStatus').classList.add('disconnected');
+                // Reconnect after 2 seconds
+                setTimeout(connectWebSocket, 2000);
+            };
+
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                handleMessage(message);
+            };
+        }
+
+        function handleMessage(message) {
+            switch (message.type) {
+                case 'job_started':
+                    console.log('Job started:', message.job_id);
+                    break;
+
+                case 'device_update':
+                    devices[message.ip] = {
+                        ...devices[message.ip],
+                        status: message.status,
+                        message: message.message,
+                        old_version: message.old_version,
+                        new_version: message.new_version,
+                        error: message.error,
+                    };
+                    renderDevices();
+                    break;
+
+                case 'job_completed':
+                    document.getElementById('startBtn').disabled = false;
+                    document.getElementById('startBtn').textContent = 'Start Update';
+                    alert(`Update complete!\n\nSuccess: ${message.success_count}\nFailed: ${message.failed_count}\nDuration: ${Math.round(message.duration)}s`);
+                    break;
+            }
+        }
+
+        function renderDevices() {
+            const list = document.getElementById('deviceList');
+            const ips = Object.keys(devices).sort();
+
+            if (ips.length === 0) {
+                list.innerHTML = '<div style="text-align: center; color: #64748b; padding: 40px;">Configure settings and click Start Update</div>';
+                return;
+            }
+
+            let pending = 0, inProgress = 0, success = 0, failed = 0;
+
+            list.innerHTML = ips.map(ip => {
+                const device = devices[ip];
+                const status = device.status || 'pending';
+
+                if (status === 'pending') pending++;
+                else if (status === 'success') success++;
+                else if (status === 'failed') failed++;
+                else inProgress++;
+
+                let versionInfo = '';
+                if (device.old_version || device.new_version) {
+                    versionInfo = `<div class="device-versions">${device.old_version || '?'} → ${device.new_version || '?'}</div>`;
+                }
+
+                return `
+                    <div class="device-item">
+                        <div>
+                            <div class="device-ip">${ip}</div>
+                            <div class="device-message">${device.message || ''}</div>
+                            ${versionInfo}
+                        </div>
+                        <div class="device-status">
+                            <span class="status-badge status-${status}">${status}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            document.getElementById('pendingCount').textContent = pending;
+            document.getElementById('inProgressCount').textContent = inProgress;
+            document.getElementById('successCount').textContent = success;
+            document.getElementById('failedCount').textContent = failed;
+        }
+
+        // File upload handling
+        const fileUpload = document.getElementById('fileUpload');
+        const fileInput = document.getElementById('firmwareFile');
+        const fileInfo = document.getElementById('fileInfo');
+
+        fileUpload.addEventListener('click', () => fileInput.click());
+
+        fileUpload.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileUpload.classList.add('dragover');
+        });
+
+        fileUpload.addEventListener('dragleave', () => {
+            fileUpload.classList.remove('dragover');
+        });
+
+        fileUpload.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileUpload.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+                fileInput.files = e.dataTransfer.files;
+                handleFileSelect(e.dataTransfer.files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+
+        async function handleFileSelect(file) {
+            fileInfo.textContent = `Uploading ${file.name}...`;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/api/upload-firmware', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const result = await response.json();
+
+                if (response.ok) {
+                    currentFirmware = result.filename;
+                    fileInfo.textContent = `✓ ${result.filename} (${formatSize(result.size)})`;
+                    loadFirmwareList();
+                } else {
+                    fileInfo.textContent = `Error: ${result.detail}`;
+                }
+            } catch (error) {
+                fileInfo.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        async function loadFirmwareList() {
+            try {
+                const response = await fetch('/api/firmware-files');
+                const result = await response.json();
+
+                const select = document.getElementById('existingFirmware');
+                select.innerHTML = '<option value="">-- Or select existing --</option>' +
+                    result.files.map(f => `<option value="${f.name}">${f.name} (${formatSize(f.size)})</option>`).join('');
+            } catch (error) {
+                console.error('Failed to load firmware list:', error);
+            }
+        }
+
+        document.getElementById('existingFirmware').addEventListener('change', (e) => {
+            if (e.target.value) {
+                currentFirmware = e.target.value;
+                fileInfo.textContent = `Selected: ${e.target.value}`;
+            }
+        });
+
+        async function startUpdate() {
+            const firmware = currentFirmware || document.getElementById('existingFirmware').value;
+            const deviceType = document.getElementById('deviceType').value;
+            const ipList = document.getElementById('ipList').value.trim();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const concurrency = document.getElementById('concurrency').value;
+
+            if (!firmware) {
+                alert('Please select or upload a firmware file');
+                return;
+            }
+            if (!ipList) {
+                alert('Please enter device IPs');
+                return;
+            }
+            if (!password) {
+                alert('Please enter password');
+                return;
+            }
+
+            // Initialize device list
+            devices = {};
+            ipList.split('\n').forEach(line => {
+                const ip = line.trim().split(',')[0].trim();
+                if (ip && !ip.startsWith('#')) {
+                    devices[ip] = { status: 'pending', message: 'Waiting...' };
+                }
+            });
+            renderDevices();
+
+            // Disable button
+            const btn = document.getElementById('startBtn');
+            btn.disabled = true;
+            btn.textContent = 'Updating...';
+
+            // Start update
+            const formData = new FormData();
+            formData.append('firmware_file', firmware);
+            formData.append('device_type', deviceType);
+            formData.append('ip_list', ipList);
+            formData.append('username', username);
+            formData.append('password', password);
+            formData.append('concurrency', concurrency);
+
+            try {
+                const response = await fetch('/api/start-update', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const result = await response.json();
+
+                if (!response.ok) {
+                    alert(`Error: ${result.detail}`);
+                    btn.disabled = false;
+                    btn.textContent = 'Start Update';
+                }
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+                btn.disabled = false;
+                btn.textContent = 'Start Update';
+            }
+        }
+
+        // Initialize
+        connectWebSocket();
+        loadFirmwareList();
+    </script>
+</body>
+</html>

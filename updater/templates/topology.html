@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Topology - Tachyon Management System</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 24px;
+            background: #1e293b;
+            border-bottom: 1px solid #334155;
+        }
+
+        .header h1 {
+            font-size: 1.4rem;
+            color: #f1f5f9;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 16px;
+        }
+
+        .nav-links a {
+            color: #94a3b8;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+
+        .nav-links a:hover, .nav-links a.active {
+            color: #f1f5f9;
+            background: #334155;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            height: calc(100vh - 65px);
+        }
+
+        .sidebar {
+            background: #1e293b;
+            padding: 20px;
+            overflow-y: auto;
+            border-right: 1px solid #334155;
+        }
+
+        .sidebar h2 {
+            font-size: 1rem;
+            color: #94a3b8;
+            margin-bottom: 16px;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        label {
+            display: block;
+            font-size: 0.875rem;
+            color: #94a3b8;
+            margin-bottom: 6px;
+        }
+
+        input, textarea {
+            width: 100%;
+            padding: 10px 12px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: #e2e8f0;
+            font-size: 0.95rem;
+        }
+
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        textarea {
+            min-height: 120px;
+            font-family: monospace;
+            resize: vertical;
+        }
+
+        .cred-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            width: 100%;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: #2563eb;
+        }
+
+        .btn:disabled {
+            background: #475569;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #475569;
+            margin-top: 8px;
+        }
+
+        .btn-secondary:hover {
+            background: #64748b;
+        }
+
+        /* Stats */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: #0f172a;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: #64748b;
+            text-transform: uppercase;
+        }
+
+        .stat-card.green .stat-value { color: #10b981; }
+        .stat-card.yellow .stat-value { color: #f59e0b; }
+        .stat-card.red .stat-value { color: #ef4444; }
+
+        /* Tree container */
+        .tree-container {
+            overflow: auto;
+            padding: 20px;
+        }
+
+        .tree-container svg {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        /* Tree nodes */
+        .node circle {
+            stroke-width: 2px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .node circle:hover {
+            stroke-width: 3px;
+        }
+
+        .node text {
+            font-size: 12px;
+            fill: #e2e8f0;
+        }
+
+        .node--ap circle {
+            fill: #3b82f6;
+            stroke: #60a5fa;
+        }
+
+        .node--cpe-green circle {
+            fill: #10b981;
+            stroke: #34d399;
+        }
+
+        .node--cpe-yellow circle {
+            fill: #f59e0b;
+            stroke: #fbbf24;
+        }
+
+        .node--cpe-red circle {
+            fill: #ef4444;
+            stroke: #f87171;
+        }
+
+        .link {
+            fill: none;
+            stroke: #475569;
+            stroke-width: 1.5px;
+        }
+
+        /* Tooltip */
+        .tooltip {
+            position: absolute;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 0.85rem;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            z-index: 1000;
+            max-width: 300px;
+        }
+
+        .tooltip.visible {
+            opacity: 1;
+        }
+
+        .tooltip h4 {
+            margin-bottom: 8px;
+            color: #f1f5f9;
+        }
+
+        .tooltip-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            border-bottom: 1px solid #334155;
+        }
+
+        .tooltip-row:last-child {
+            border-bottom: none;
+        }
+
+        .tooltip-label {
+            color: #94a3b8;
+        }
+
+        .tooltip-value {
+            color: #e2e8f0;
+            font-family: monospace;
+        }
+
+        /* Empty state */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #64748b;
+            text-align: center;
+            padding: 40px;
+        }
+
+        .empty-state svg {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .empty-state h3 {
+            font-size: 1.2rem;
+            margin-bottom: 8px;
+            color: #94a3b8;
+        }
+
+        /* Connection status */
+        .connection-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            background: #10b981;
+            z-index: 100;
+        }
+
+        .connection-status.disconnected {
+            background: #ef4444;
+        }
+
+        /* Legend */
+        .legend {
+            margin-top: 20px;
+            padding-top: 16px;
+            border-top: 1px solid #334155;
+        }
+
+        .legend h3 {
+            font-size: 0.875rem;
+            color: #94a3b8;
+            margin-bottom: 12px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 0;
+            font-size: 0.85rem;
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .legend-dot.ap { background: #3b82f6; }
+        .legend-dot.green { background: #10b981; }
+        .legend-dot.yellow { background: #f59e0b; }
+        .legend-dot.red { background: #ef4444; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Tachyon Management System</h1>
+        <nav class="nav-links">
+            <a href="/">Firmware</a>
+            <a href="/topology" class="active">Topology</a>
+            <a href="/monitor">Monitor</a>
+        </nav>
+    </div>
+
+    <div class="connection-status" id="connectionStatus">Connected</div>
+
+    <div class="container">
+        <div class="sidebar">
+            <h2>Discovery</h2>
+
+            <div class="form-group">
+                <label>Credentials</label>
+                <div class="cred-row">
+                    <input type="text" id="username" placeholder="Username" value="root">
+                    <input type="password" id="password" placeholder="Password">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>AP IPs (one per line)</label>
+                <textarea id="ipList" placeholder="192.168.1.1
+192.168.1.2"></textarea>
+            </div>
+
+            <button class="btn" id="discoverBtn" onclick="runDiscovery()">Discover Network</button>
+            <button class="btn btn-secondary" id="refreshBtn" onclick="refreshTopology()" disabled>Refresh</button>
+
+            <div class="stats" id="stats" style="display: none;">
+                <div class="stat-card">
+                    <div class="stat-value" id="apCount">0</div>
+                    <div class="stat-label">APs</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="cpeCount">0</div>
+                    <div class="stat-label">CPEs</div>
+                </div>
+                <div class="stat-card green">
+                    <div class="stat-value" id="greenCount">0</div>
+                    <div class="stat-label">Strong</div>
+                </div>
+                <div class="stat-card yellow">
+                    <div class="stat-value" id="yellowCount">0</div>
+                    <div class="stat-label">Acceptable</div>
+                </div>
+                <div class="stat-card red">
+                    <div class="stat-value" id="redCount">0</div>
+                    <div class="stat-label">Weak</div>
+                </div>
+            </div>
+
+            <div class="legend">
+                <h3>Legend</h3>
+                <div class="legend-item">
+                    <div class="legend-dot ap"></div>
+                    <span>Access Point</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot green"></div>
+                    <span>CPE Strong (&gt; -65 dBm)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot yellow"></div>
+                    <span>CPE Acceptable (-65 to -75 dBm)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot red"></div>
+                    <span>CPE Weak (&lt; -75 dBm)</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="tree-container" id="treeContainer">
+            <div class="empty-state" id="emptyState">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"/>
+                </svg>
+                <h3>No Topology Data</h3>
+                <p>Enter AP IP addresses and click Discover to build the network topology tree.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="tooltip" id="tooltip"></div>
+
+    <script src="/static/js/topology.js"></script>
+    <script>
+        let ws = null;
+        let topology = null;
+
+        // WebSocket connection
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+            ws.onopen = () => {
+                document.getElementById('connectionStatus').textContent = 'Connected';
+                document.getElementById('connectionStatus').classList.remove('disconnected');
+            };
+
+            ws.onclose = () => {
+                document.getElementById('connectionStatus').textContent = 'Disconnected';
+                document.getElementById('connectionStatus').classList.add('disconnected');
+                setTimeout(connectWebSocket, 2000);
+            };
+
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                if (message.type === 'topology_update') {
+                    topology = message.topology;
+                    updateUI();
+                }
+            };
+        }
+
+        async function runDiscovery() {
+            const ipList = document.getElementById('ipList').value.trim();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            if (!ipList) {
+                alert('Please enter AP IPs');
+                return;
+            }
+            if (!password) {
+                alert('Please enter password');
+                return;
+            }
+
+            const btn = document.getElementById('discoverBtn');
+            btn.disabled = true;
+            btn.textContent = 'Discovering...';
+
+            try {
+                const formData = new FormData();
+                formData.append('ip_list', ipList);
+                formData.append('username', username);
+                formData.append('password', password);
+
+                const response = await fetch('/api/discover', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Discovery failed');
+                }
+
+                topology = await response.json();
+                updateUI();
+                document.getElementById('refreshBtn').disabled = false;
+
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Discover Network';
+            }
+        }
+
+        async function refreshTopology() {
+            const btn = document.getElementById('refreshBtn');
+            btn.disabled = true;
+            btn.textContent = 'Refreshing...';
+
+            try {
+                const response = await fetch('/api/topology/refresh', {
+                    method: 'POST',
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Refresh failed');
+                }
+
+                topology = await response.json();
+                updateUI();
+
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Refresh';
+            }
+        }
+
+        function updateUI() {
+            if (!topology || topology.total_aps === 0) {
+                document.getElementById('emptyState').style.display = 'flex';
+                document.getElementById('stats').style.display = 'none';
+                return;
+            }
+
+            document.getElementById('emptyState').style.display = 'none';
+            document.getElementById('stats').style.display = 'grid';
+
+            // Update stats
+            document.getElementById('apCount').textContent = topology.total_aps;
+            document.getElementById('cpeCount').textContent = topology.total_cpes;
+            document.getElementById('greenCount').textContent = topology.overall_health.green;
+            document.getElementById('yellowCount').textContent = topology.overall_health.yellow;
+            document.getElementById('redCount').textContent = topology.overall_health.red;
+
+            // Render tree
+            renderTopologyTree(topology);
+        }
+
+        // Load existing topology on page load
+        async function loadTopology() {
+            try {
+                const response = await fetch('/api/topology');
+                topology = await response.json();
+                if (topology.total_aps > 0) {
+                    updateUI();
+                    document.getElementById('refreshBtn').disabled = false;
+                }
+            } catch (error) {
+                console.error('Failed to load topology:', error);
+            }
+        }
+
+        // Initialize
+        connectWebSocket();
+        loadTopology();
+    </script>
+</body>
+</html>

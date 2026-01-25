@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Signal Monitor - Tachyon Management System</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 24px;
+            background: #1e293b;
+            border-bottom: 1px solid #334155;
+        }
+
+        .header h1 {
+            font-size: 1.4rem;
+            color: #f1f5f9;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 16px;
+        }
+
+        .nav-links a {
+            color: #94a3b8;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+
+        .nav-links a:hover, .nav-links a.active {
+            color: #f1f5f9;
+            background: #334155;
+        }
+
+        .container {
+            padding: 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 24px;
+        }
+
+        @media (max-width: 1000px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .card h2 {
+            font-size: 1rem;
+            color: #94a3b8;
+            margin-bottom: 16px;
+        }
+
+        /* Chart container */
+        .chart-container {
+            position: relative;
+            height: 500px;
+        }
+
+        /* Stats grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: #0f172a;
+            padding: 16px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.8rem;
+            font-weight: 600;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: #64748b;
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+
+        .stat-card.green .stat-value { color: #10b981; }
+        .stat-card.yellow .stat-value { color: #f59e0b; }
+        .stat-card.red .stat-value { color: #ef4444; }
+
+        /* CPE list */
+        .cpe-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .cpe-item {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border-left: 4px solid transparent;
+        }
+
+        .cpe-item:hover {
+            background: #1e293b;
+        }
+
+        .cpe-item.green { border-left-color: #10b981; }
+        .cpe-item.yellow { border-left-color: #f59e0b; }
+        .cpe-item.red { border-left-color: #ef4444; }
+
+        .cpe-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .cpe-name {
+            font-weight: 500;
+            color: #f1f5f9;
+        }
+
+        .cpe-ip {
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: #94a3b8;
+        }
+
+        .cpe-metrics {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            font-size: 0.8rem;
+        }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .metric-label {
+            color: #64748b;
+        }
+
+        .metric-value {
+            color: #e2e8f0;
+            font-family: monospace;
+        }
+
+        /* Legend */
+        .chart-legend {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #334155;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .legend-dot.green { background: #10b981; }
+        .legend-dot.yellow { background: #f59e0b; }
+        .legend-dot.red { background: #ef4444; }
+
+        /* Threshold lines info */
+        .threshold-info {
+            font-size: 0.8rem;
+            color: #64748b;
+            text-align: center;
+            margin-top: 8px;
+        }
+
+        /* Empty state */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 400px;
+            color: #64748b;
+            text-align: center;
+        }
+
+        .empty-state svg {
+            width: 60px;
+            height: 60px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .empty-state h3 {
+            font-size: 1.1rem;
+            margin-bottom: 8px;
+            color: #94a3b8;
+        }
+
+        /* Connection status */
+        .connection-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            background: #10b981;
+            z-index: 100;
+        }
+
+        .connection-status.disconnected {
+            background: #ef4444;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 10px 20px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: #2563eb;
+        }
+
+        .btn:disabled {
+            background: #475569;
+            cursor: not-allowed;
+        }
+
+        .actions {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Tachyon Management System</h1>
+        <nav class="nav-links">
+            <a href="/">Firmware</a>
+            <a href="/topology">Topology</a>
+            <a href="/monitor" class="active">Monitor</a>
+        </nav>
+    </div>
+
+    <div class="connection-status" id="connectionStatus">Connected</div>
+
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-card green">
+                <div class="stat-value" id="greenCount">0</div>
+                <div class="stat-label">Strong Signal</div>
+            </div>
+            <div class="stat-card yellow">
+                <div class="stat-value" id="yellowCount">0</div>
+                <div class="stat-label">Acceptable</div>
+            </div>
+            <div class="stat-card red">
+                <div class="stat-value" id="redCount">0</div>
+                <div class="stat-label">Weak Signal</div>
+            </div>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <h2>Signal vs Distance</h2>
+                <div class="actions">
+                    <button class="btn" onclick="refreshData()">Refresh Data</button>
+                </div>
+                <div class="chart-container" id="chartContainer">
+                    <canvas id="signalChart"></canvas>
+                </div>
+                <div class="chart-legend">
+                    <div class="legend-item">
+                        <div class="legend-dot green"></div>
+                        <span>Strong (&gt; -65 dBm)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-dot yellow"></div>
+                        <span>Acceptable (-65 to -75 dBm)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-dot red"></div>
+                        <span>Weak (&lt; -75 dBm)</span>
+                    </div>
+                </div>
+                <div class="threshold-info">
+                    Dashed lines show signal health thresholds at -65 dBm and -75 dBm
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>CPE List</h2>
+                <div class="cpe-list" id="cpeList">
+                    <div class="empty-state" id="emptyState">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/>
+                        </svg>
+                        <h3>No CPE Data</h3>
+                        <p>Run network discovery from the Topology page first.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/monitor.js"></script>
+    <script>
+        let ws = null;
+        let chart = null;
+        let cpes = [];
+
+        // WebSocket connection
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+            ws.onopen = () => {
+                document.getElementById('connectionStatus').textContent = 'Connected';
+                document.getElementById('connectionStatus').classList.remove('disconnected');
+            };
+
+            ws.onclose = () => {
+                document.getElementById('connectionStatus').textContent = 'Disconnected';
+                document.getElementById('connectionStatus').classList.add('disconnected');
+                setTimeout(connectWebSocket, 2000);
+            };
+
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                if (message.type === 'topology_update') {
+                    // Extract CPEs from topology
+                    cpes = [];
+                    for (const ap of message.topology.aps) {
+                        cpes.push(...ap.cpes);
+                    }
+                    updateUI();
+                }
+            };
+        }
+
+        async function loadCPEs() {
+            try {
+                const response = await fetch('/api/cpes');
+                const data = await response.json();
+                cpes = data.cpes || [];
+                updateUI();
+            } catch (error) {
+                console.error('Failed to load CPEs:', error);
+            }
+        }
+
+        async function refreshData() {
+            try {
+                const response = await fetch('/api/topology/refresh', {
+                    method: 'POST',
+                });
+
+                if (!response.ok) {
+                    // If refresh fails, just reload current data
+                    await loadCPEs();
+                    return;
+                }
+
+                const topology = await response.json();
+                cpes = [];
+                for (const ap of topology.aps) {
+                    cpes.push(...ap.cpes);
+                }
+                updateUI();
+
+            } catch (error) {
+                console.error('Refresh failed:', error);
+                await loadCPEs();
+            }
+        }
+
+        function updateUI() {
+            if (cpes.length === 0) {
+                document.getElementById('emptyState').style.display = 'flex';
+                if (chart) {
+                    chart.data.datasets[0].data = [];
+                    chart.update();
+                }
+                return;
+            }
+
+            document.getElementById('emptyState').style.display = 'none';
+
+            // Count by health
+            let green = 0, yellow = 0, red = 0;
+            cpes.forEach(cpe => {
+                if (cpe.signal_health === 'green') green++;
+                else if (cpe.signal_health === 'yellow') yellow++;
+                else red++;
+            });
+
+            document.getElementById('greenCount').textContent = green;
+            document.getElementById('yellowCount').textContent = yellow;
+            document.getElementById('redCount').textContent = red;
+
+            // Update chart
+            updateChart();
+
+            // Update CPE list
+            renderCPEList();
+        }
+
+        function updateChart() {
+            const chartData = cpes.map(cpe => ({
+                x: cpe.link_distance || 0,
+                y: cpe.primary_signal || -100,
+                cpe: cpe,
+            }));
+
+            if (chart) {
+                chart.data.datasets[0].data = chartData;
+                chart.update();
+            } else {
+                initChart(chartData);
+            }
+        }
+
+        function initChart(data) {
+            const ctx = document.getElementById('signalChart').getContext('2d');
+
+            chart = new Chart(ctx, {
+                type: 'scatter',
+                data: {
+                    datasets: [{
+                        label: 'CPEs',
+                        data: data,
+                        pointBackgroundColor: (context) => {
+                            const point = context.raw;
+                            if (!point || !point.cpe) return '#64748b';
+                            const health = point.cpe.signal_health;
+                            if (health === 'green') return '#10b981';
+                            if (health === 'yellow') return '#f59e0b';
+                            return '#ef4444';
+                        },
+                        pointBorderColor: (context) => {
+                            const point = context.raw;
+                            if (!point || !point.cpe) return '#94a3b8';
+                            const health = point.cpe.signal_health;
+                            if (health === 'green') return '#34d399';
+                            if (health === 'yellow') return '#fbbf24';
+                            return '#f87171';
+                        },
+                        pointRadius: 8,
+                        pointHoverRadius: 12,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Distance (meters)',
+                                color: '#94a3b8',
+                            },
+                            grid: {
+                                color: '#334155',
+                            },
+                            ticks: {
+                                color: '#94a3b8',
+                            },
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Signal (dBm)',
+                                color: '#94a3b8',
+                            },
+                            grid: {
+                                color: '#334155',
+                            },
+                            ticks: {
+                                color: '#94a3b8',
+                            },
+                            min: -100,
+                            max: -30,
+                        },
+                    },
+                    plugins: {
+                        legend: {
+                            display: false,
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => {
+                                    const cpe = context.raw.cpe;
+                                    if (!cpe) return '';
+                                    return [
+                                        `${cpe.system_name || cpe.ip}`,
+                                        `Signal: ${cpe.primary_signal?.toFixed(1) || 'N/A'} dBm`,
+                                        `Distance: ${cpe.link_distance?.toFixed(0) || 'N/A'} m`,
+                                    ];
+                                },
+                            },
+                            backgroundColor: '#1e293b',
+                            titleColor: '#f1f5f9',
+                            bodyColor: '#e2e8f0',
+                            borderColor: '#334155',
+                            borderWidth: 1,
+                        },
+                        annotation: {
+                            annotations: {
+                                line1: {
+                                    type: 'line',
+                                    yMin: -65,
+                                    yMax: -65,
+                                    borderColor: '#10b981',
+                                    borderWidth: 2,
+                                    borderDash: [5, 5],
+                                },
+                                line2: {
+                                    type: 'line',
+                                    yMin: -75,
+                                    yMax: -75,
+                                    borderColor: '#ef4444',
+                                    borderWidth: 2,
+                                    borderDash: [5, 5],
+                                },
+                            },
+                        },
+                    },
+                },
+            });
+
+            // Add threshold lines as a plugin
+            const thresholdPlugin = {
+                id: 'thresholdLines',
+                afterDraw: (chart) => {
+                    const ctx = chart.ctx;
+                    const yAxis = chart.scales.y;
+                    const xAxis = chart.scales.x;
+
+                    // -65 dBm line (green threshold)
+                    const y65 = yAxis.getPixelForValue(-65);
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.setLineDash([5, 5]);
+                    ctx.strokeStyle = '#10b981';
+                    ctx.lineWidth = 2;
+                    ctx.moveTo(xAxis.left, y65);
+                    ctx.lineTo(xAxis.right, y65);
+                    ctx.stroke();
+                    ctx.restore();
+
+                    // -75 dBm line (red threshold)
+                    const y75 = yAxis.getPixelForValue(-75);
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.setLineDash([5, 5]);
+                    ctx.strokeStyle = '#ef4444';
+                    ctx.lineWidth = 2;
+                    ctx.moveTo(xAxis.left, y75);
+                    ctx.lineTo(xAxis.right, y75);
+                    ctx.stroke();
+                    ctx.restore();
+                },
+            };
+
+            Chart.register(thresholdPlugin);
+        }
+
+        function renderCPEList() {
+            const list = document.getElementById('cpeList');
+
+            // Sort by signal strength (worst first)
+            const sorted = [...cpes].sort((a, b) => {
+                const aSignal = a.primary_signal || -100;
+                const bSignal = b.primary_signal || -100;
+                return aSignal - bSignal;
+            });
+
+            list.innerHTML = sorted.map(cpe => `
+                <div class="cpe-item ${cpe.signal_health}">
+                    <div class="cpe-header">
+                        <span class="cpe-name">${cpe.system_name || 'Unknown'}</span>
+                        <span class="cpe-ip">${cpe.ip}</span>
+                    </div>
+                    <div class="cpe-metrics">
+                        <div class="metric">
+                            <span class="metric-label">Signal</span>
+                            <span class="metric-value">${cpe.primary_signal?.toFixed(1) || 'N/A'} dBm</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Distance</span>
+                            <span class="metric-value">${cpe.link_distance?.toFixed(0) || 'N/A'} m</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">TX Rate</span>
+                            <span class="metric-value">${cpe.tx_rate?.toFixed(0) || 'N/A'} Mbps</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">RX Rate</span>
+                            <span class="metric-value">${cpe.rx_rate?.toFixed(0) || 'N/A'} Mbps</span>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Initialize
+        connectWebSocket();
+        loadCPEs();
+    </script>
+</body>
+</html>

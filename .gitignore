@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Firmware files (too large for git)
+firmware/*.bin
+firmware/*.img
+firmware/*.npk
+firmware/*.tar
+firmware/*.gz
+!firmware/.gitkeep
+
+# Logs
+*.log
