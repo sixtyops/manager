@@ -463,7 +463,7 @@ class TachyonClient:
         return cpes
 
     async def get_ap_info(self) -> Dict[str, Any]:
-        """Get AP information including system name and model.
+        """Get AP information including system name, model, and location.
 
         Returns:
             Dictionary with AP info.
@@ -474,6 +474,10 @@ class TachyonClient:
             "system_name": None,
             "model": None,
             "firmware_version": None,
+            "location": None,
+            "latitude": None,
+            "longitude": None,
+            "zone": None,
         }
 
         # Get system status
@@ -482,11 +486,38 @@ class TachyonClient:
             try:
                 data = json.loads(body)
                 system = data.get("system", data)
+                general = system.get("general", {})
+
+                # Basic info
                 info["model"] = system.get("model")
-                info["system_name"] = system.get("name") or system.get("hostname")
+                info["serial"] = system.get("serial")
+
+                # Name/hostname from general section
+                info["system_name"] = general.get("name") or general.get("hostname") or system.get("name")
+
+                # Firmware version
                 version = system.get("version", {})
                 firmux = version.get("firmux", "")
                 info["firmware_version"] = self._normalize_version(firmux)
+
+                # Location from general section
+                info["location"] = general.get("location") or system.get("location") or system.get("site")
+                info["latitude"] = general.get("latitude") or system.get("latitude")
+                info["longitude"] = general.get("longitude") or system.get("longitude")
+            except json.JSONDecodeError:
+                pass
+
+        # Get zone/location from zones endpoint
+        status, body = await self._curl("GET", "/cgi.lua/status?type=zones")
+        if status == 200:
+            try:
+                data = json.loads(body)
+                zones = data.get("zones", {})
+                # Get the first zone name as the zone identifier
+                if zones:
+                    zone_names = list(zones.keys())
+                    if zone_names:
+                        info["zone"] = zone_names[0]
             except json.JSONDecodeError:
                 pass
 

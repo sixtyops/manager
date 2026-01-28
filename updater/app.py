@@ -1,14 +1,14 @@
 """Tachyon Management System - Web Application."""
 
 import asyncio
-import json
 import logging
 import os
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, Optional, Set
 
 import aiofiles
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException
@@ -18,8 +18,9 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from .tachyon import TachyonClient, UpdateResult
-from .discovery import network_discovery
-from .models import NetworkTopology
+from . import database as db
+from .poller import init_poller, get_poller
+from . import services
 
 # Configure logging
 logging.basicConfig(
@@ -33,24 +34,388 @@ BASE_DIR = Path(__file__).parent
 FIRMWARE_DIR = BASE_DIR.parent / "firmware"
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR.parent / "static"
+DATA_DIR = BASE_DIR.parent / "data"
 
 # Ensure directories exist
 FIRMWARE_DIR.mkdir(exist_ok=True)
 STATIC_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(exist_ok=True)
+
+# Global state
+active_websockets: Set[WebSocket] = set()
+update_jobs: Dict[str, "UpdateJob"] = {}
+
+
+async def broadcast(message: dict):
+    """Broadcast message to all connected WebSocket clients."""
+    disconnected = set()
+    for ws in active_websockets:
+        try:
+            await ws.send_json(message)
+        except Exception:
+            disconnected.add(ws)
+
+    for ws in disconnected:
+        active_websockets.discard(ws)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan - start/stop background tasks."""
+    # Startup
+    poller = init_poller(broadcast, poll_interval=60)
+    await poller.start()
+    logger.info("Application started")
+
+    yield
+
+    # Shutdown
+    await poller.stop()
+    logger.info("Application stopped")
+
 
 # FastAPI app
-app = FastAPI(title="Tachyon Management System")
+app = FastAPI(title="Tachyon Management System", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+# ============================================================================
+# Page Routes
+# ============================================================================
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    """Serve the main page (monitor view)."""
+    return templates.TemplateResponse("monitor.html", {"request": request})
+
+
+@app.get("/firmware", response_class=HTMLResponse)
+async def firmware_page(request: Request):
+    """Serve the firmware update page."""
+    return templates.TemplateResponse("index.html", {"request": request})
+
+
+# ============================================================================
+# WebSocket
+# ============================================================================
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time updates."""
+    await websocket.accept()
+    active_websockets.add(websocket)
+    logger.info(f"WebSocket connected. Total: {len(active_websockets)}")
+
+    # Send current topology on connect
+    poller = get_poller()
+    if poller:
+        topology = poller.get_topology()
+        await websocket.send_json({
+            "type": "topology_update",
+            "topology": topology,
+        })
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        active_websockets.discard(websocket)
+        logger.info(f"WebSocket disconnected. Total: {len(active_websockets)}")
+
+
+# ============================================================================
+# Tower Site API
+# ============================================================================
+
+@app.get("/api/sites")
+async def list_sites():
+    """List all tower sites."""
+    sites = db.get_tower_sites()
+    return {"sites": sites}
+
+
+@app.post("/api/sites")
+async def create_site(
+    name: str = Form(...),
+    location: str = Form(None),
+    latitude: float = Form(None),
+    longitude: float = Form(None),
+):
+    """Create a new tower site."""
+    try:
+        site_id = db.create_tower_site(name, location, latitude, longitude)
+        return {"id": site_id, "name": name}
+    except Exception as e:
+        if "UNIQUE constraint" in str(e):
+            raise HTTPException(400, f"Site '{name}' already exists")
+        raise HTTPException(500, str(e))
+
+
+@app.put("/api/sites/{site_id}")
+async def update_site(
+    site_id: int,
+    name: str = Form(None),
+    location: str = Form(None),
+    latitude: float = Form(None),
+    longitude: float = Form(None),
+):
+    """Update a tower site."""
+    db.update_tower_site(site_id, name=name, location=location, latitude=latitude, longitude=longitude)
+    return {"success": True}
+
+
+@app.delete("/api/sites/{site_id}")
+async def delete_site(site_id: int):
+    """Delete a tower site."""
+    db.delete_tower_site(site_id)
+    return {"success": True}
+
+
+# ============================================================================
+# Access Point API
+# ============================================================================
+
+@app.get("/api/aps")
+async def list_aps(site_id: int = None):
+    """List access points."""
+    aps = db.get_access_points(tower_site_id=site_id, enabled_only=False)
+    return {"aps": aps}
+
+
+@app.post("/api/aps")
+async def add_ap(
+    ip: str = Form(...),
+    username: str = Form(...),
+    password: str = Form(...),
+    tower_site_id: int = Form(None),
+):
+    """Add a new access point."""
+    ap_id = db.upsert_access_point(ip, username, password, tower_site_id)
+
+    # Trigger immediate poll
+    poller = get_poller()
+    if poller:
+        await poller.poll_ap_now(ip)
+
+    return {"id": ap_id, "ip": ip}
+
+
+@app.put("/api/aps/{ip}")
+async def update_ap(
+    ip: str,
+    username: str = Form(None),
+    password: str = Form(None),
+    tower_site_id: int = Form(None),
+    enabled: bool = Form(None),
+):
+    """Update an access point."""
+    ap = db.get_access_point(ip)
+    if not ap:
+        raise HTTPException(404, f"AP not found: {ip}")
+
+    # Use existing values if not provided
+    new_username = username if username else ap["username"]
+    new_password = password if password else ap["password"]
+    new_site_id = tower_site_id if tower_site_id is not None else ap["tower_site_id"]
+
+    db.upsert_access_point(ip, new_username, new_password, new_site_id, enabled=enabled)
+
+    # Invalidate cached client if credentials changed
+    if username or password:
+        poller = get_poller()
+        if poller:
+            poller.invalidate_client(ip)
+
+    return {"success": True}
+
+
+@app.delete("/api/aps/{ip}")
+async def delete_ap(ip: str):
+    """Delete an access point."""
+    poller = get_poller()
+    if poller:
+        poller.invalidate_client(ip)
+
+    db.delete_access_point(ip)
+    return {"success": True}
+
+
+@app.post("/api/aps/{ip}/poll")
+async def poll_ap(ip: str):
+    """Trigger immediate poll of an AP."""
+    poller = get_poller()
+    if not poller:
+        raise HTTPException(500, "Poller not initialized")
+
+    success = await poller.poll_ap_now(ip)
+    if not success:
+        raise HTTPException(404, f"AP not found: {ip}")
+
+    return {"success": True}
+
+
+# ============================================================================
+# Topology API
+# ============================================================================
+
+@app.get("/api/topology")
+async def get_topology():
+    """Get current network topology."""
+    poller = get_poller()
+    if poller:
+        return poller.get_topology()
+
+    return {
+        "sites": [],
+        "total_aps": 0,
+        "total_cpes": 0,
+        "overall_health": {"green": 0, "yellow": 0, "red": 0},
+    }
+
+
+@app.post("/api/topology/refresh")
+async def refresh_topology():
+    """Trigger a full topology refresh."""
+    poller = get_poller()
+    if not poller:
+        raise HTTPException(500, "Poller not initialized")
+
+    await poller._poll_all_aps()
+    return poller.get_topology()
+
+
+@app.get("/api/cpes")
+async def get_all_cpes():
+    """Get all CPEs."""
+    cpes = db.get_all_cpes()
+    return {"cpes": cpes}
+
+
+# ============================================================================
+# Quick Add (combines site + AP creation)
+# ============================================================================
+
+@app.post("/api/quick-add")
+async def quick_add(
+    ip: str = Form(...),
+    username: str = Form(...),
+    password: str = Form(...),
+    site_name: str = Form(None),
+):
+    """Quick add an AP, optionally creating a new site."""
+    site_id = None
+
+    if site_name:
+        # Try to find existing site or create new
+        sites = db.get_tower_sites()
+        existing = next((s for s in sites if s["name"] == site_name), None)
+
+        if existing:
+            site_id = existing["id"]
+        else:
+            site_id = db.create_tower_site(site_name)
+
+    # Add the AP
+    ap_id = db.upsert_access_point(ip, username, password, site_id)
+
+    # Trigger immediate poll
+    poller = get_poller()
+    if poller:
+        await poller.poll_ap_now(ip)
+
+    return {"ap_id": ap_id, "site_id": site_id, "ip": ip}
+
+
+# ============================================================================
+# Settings API
+# ============================================================================
+
+@app.get("/api/settings")
+async def get_settings():
+    """Get all settings."""
+    settings = db.get_all_settings()
+    return {"settings": settings}
+
+
+@app.put("/api/settings")
+async def update_settings(request: Request):
+    """Update settings."""
+    data = await request.json()
+    db.set_settings(data)
+    return {"success": True}
+
+
+@app.get("/api/time")
+async def get_current_time():
+    """Get current time info with timezone."""
+    settings = db.get_all_settings()
+    tz = settings.get("timezone", "auto")
+    zip_code = settings.get("zip_code", "")
+
+    # Get timezone
+    if tz == "auto":
+        tz = await services.get_timezone()
+
+    time_info = services.get_current_time(tz)
+    return time_info
+
+
+@app.get("/api/weather")
+async def get_weather():
+    """Get current weather."""
+    settings = db.get_all_settings()
+    zip_code = settings.get("zip_code", "")
+
+    coords = await services.get_coordinates(zip_code if zip_code else None)
+    if not coords:
+        return {"error": "Could not determine location"}
+
+    weather = await services.get_weather_forecast(coords[0], coords[1])
+    if not weather:
+        return {"error": "Could not fetch weather"}
+
+    return weather
+
+
+@app.get("/api/location")
+async def get_location():
+    """Get detected location info."""
+    settings = db.get_all_settings()
+    zip_code = settings.get("zip_code", "")
+
+    if zip_code:
+        location = await services.get_location_from_zip(zip_code)
+        if location:
+            return {"source": "zip", **location}
+
+    location = await services.get_location_from_ip()
+    if location:
+        return {
+            "source": "ip",
+            "city": location.get("city"),
+            "state": location.get("regionName"),
+            "timezone": location.get("timezone"),
+            "lat": location.get("lat"),
+            "lon": location.get("lon"),
+        }
+
+    return {"error": "Could not determine location"}
+
+
+# ============================================================================
+# Firmware Update API (existing functionality)
+# ============================================================================
+
 @dataclass
 class DeviceStatus:
     """Status of a single device update."""
     ip: str
-    status: str = "pending"  # pending, connecting, uploading, installing, rebooting, verifying, success, failed
+    status: str = "pending"
     old_version: Optional[str] = None
     new_version: Optional[str] = None
     error: Optional[str] = None
@@ -69,50 +434,7 @@ class UpdateJob:
     devices: Dict[str, DeviceStatus] = field(default_factory=dict)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
-    status: str = "pending"  # pending, running, completed
-
-
-# Global state
-update_jobs: Dict[str, UpdateJob] = {}
-active_websockets: Set[WebSocket] = set()
-
-
-async def broadcast(message: dict):
-    """Broadcast message to all connected WebSocket clients."""
-    disconnected = set()
-    for ws in active_websockets:
-        try:
-            await ws.send_json(message)
-        except Exception:
-            disconnected.add(ws)
-
-    for ws in disconnected:
-        active_websockets.discard(ws)
-
-
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    """Serve the main page."""
-    return templates.TemplateResponse("index.html", {"request": request})
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time updates."""
-    await websocket.accept()
-    active_websockets.add(websocket)
-    logger.info(f"WebSocket connected. Total: {len(active_websockets)}")
-
-    try:
-        while True:
-            # Keep connection alive, receive any client messages
-            data = await websocket.receive_text()
-            # Could handle client commands here if needed
-    except WebSocketDisconnect:
-        pass
-    finally:
-        active_websockets.discard(websocket)
-        logger.info(f"WebSocket disconnected. Total: {len(active_websockets)}")
+    status: str = "pending"
 
 
 @app.post("/api/upload-firmware")
@@ -121,7 +443,6 @@ async def upload_firmware(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(400, "No filename provided")
 
-    # Save firmware file
     firmware_path = FIRMWARE_DIR / file.filename
 
     async with aiofiles.open(firmware_path, "wb") as f:
@@ -162,12 +483,10 @@ async def start_update(
     concurrency: int = Form(5),
 ):
     """Start a firmware update job."""
-    # Parse IP list
     ips = []
     for line in ip_list.strip().split("\n"):
         line = line.strip()
         if line and not line.startswith("#"):
-            # Handle CSV format (IP,username,password) or just IP
             ip = line.split(",")[0].strip()
             if ip:
                 ips.append(ip)
@@ -175,12 +494,10 @@ async def start_update(
     if not ips:
         raise HTTPException(400, "No valid IPs provided")
 
-    # Verify firmware file exists
     firmware_path = FIRMWARE_DIR / firmware_file
     if not firmware_path.exists():
         raise HTTPException(400, f"Firmware file not found: {firmware_file}")
 
-    # Create job
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
         job_id=job_id,
@@ -193,13 +510,11 @@ async def start_update(
         status="running",
     )
 
-    # Initialize device statuses
     for ip in ips:
         job.devices[ip] = DeviceStatus(ip=ip)
 
     update_jobs[job_id] = job
 
-    # Broadcast job started
     await broadcast({
         "type": "job_started",
         "job_id": job_id,
@@ -207,7 +522,6 @@ async def start_update(
         "firmware": firmware_file,
     })
 
-    # Start update task in background
     asyncio.create_task(run_update_job(job, concurrency))
 
     return {"job_id": job_id, "device_count": len(ips)}
@@ -232,7 +546,6 @@ async def run_update_job(job: UpdateJob, concurrency: int):
             })
 
             def progress_callback(device_ip: str, message: str):
-                # Map message to status
                 status_map = {
                     "Logging in": "connecting",
                     "Getting device info": "connecting",
@@ -247,7 +560,6 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                         break
                 device_status.progress_message = message
 
-                # Schedule broadcast (can't await in sync callback)
                 asyncio.create_task(broadcast({
                     "type": "device_update",
                     "job_id": job.job_id,
@@ -256,14 +568,12 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                     "message": message,
                 }))
 
-            # Perform update based on device type
             if job.device_type == "tachyon":
                 client = TachyonClient(ip, job.username, job.password)
                 result = await client.update_firmware(job.firmware_file, progress_callback)
             else:
                 result = UpdateResult(ip=ip, success=False, error=f"Unsupported device type: {job.device_type}")
 
-            # Update final status
             device_status.old_version = result.old_version
             device_status.new_version = result.new_version
 
@@ -286,10 +596,8 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                 "error": device_status.error,
             })
 
-    # Run all updates in parallel (limited by semaphore)
     await asyncio.gather(*[update_device(ip) for ip in job.devices.keys()])
 
-    # Mark job complete
     job.completed_at = datetime.now()
     job.status = "completed"
 
@@ -323,130 +631,6 @@ async def get_job_status(job_id: str):
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         "devices": {ip: asdict(status) for ip, status in job.devices.items()},
     }
-
-
-# ============================================================================
-# Discovery & Topology API Endpoints
-# ============================================================================
-
-@app.post("/api/discover")
-async def discover_network(
-    ip_list: str = Form(...),
-    username: str = Form(...),
-    password: str = Form(...),
-    concurrency: int = Form(5),
-):
-    """Discover APs and their connected CPEs.
-
-    Args:
-        ip_list: Newline-separated list of AP IP addresses
-        username: Login username
-        password: Login password
-        concurrency: Max concurrent discoveries
-
-    Returns:
-        NetworkTopology with all discovered APs and CPEs.
-    """
-    # Parse IP list
-    ips = []
-    for line in ip_list.strip().split("\n"):
-        line = line.strip()
-        if line and not line.startswith("#"):
-            ip = line.split(",")[0].strip()
-            if ip:
-                ips.append(ip)
-
-    if not ips:
-        raise HTTPException(400, "No valid IPs provided")
-
-    # Run discovery
-    topology = await network_discovery.discover_network(
-        ips, username, password, concurrency
-    )
-
-    # Broadcast topology update
-    await broadcast({
-        "type": "topology_update",
-        "topology": topology.to_dict(),
-    })
-
-    return topology.to_dict()
-
-
-@app.get("/api/topology")
-async def get_topology():
-    """Get cached network topology.
-
-    Returns:
-        Cached NetworkTopology, or empty topology if not discovered yet.
-    """
-    topology = network_discovery.get_cached_topology()
-    if topology:
-        return topology.to_dict()
-    return {"aps": [], "discovered_at": None, "total_aps": 0, "total_cpes": 0, "overall_health": {"green": 0, "yellow": 0, "red": 0}}
-
-
-@app.post("/api/topology/refresh")
-async def refresh_topology():
-    """Refresh topology using cached AP list.
-
-    Returns:
-        Updated NetworkTopology.
-    """
-    topology = await network_discovery.refresh_topology()
-    if not topology:
-        raise HTTPException(400, "No cached topology to refresh. Run discovery first.")
-
-    # Broadcast topology update
-    await broadcast({
-        "type": "topology_update",
-        "topology": topology.to_dict(),
-    })
-
-    return topology.to_dict()
-
-
-@app.get("/api/cpe/{ip}/metrics")
-async def get_cpe_metrics(ip: str):
-    """Get signal and distance metrics for a specific CPE.
-
-    Args:
-        ip: CPE IP address
-
-    Returns:
-        CPE metrics including signal health.
-    """
-    cpe = network_discovery.get_cpe_by_ip(ip)
-    if not cpe:
-        raise HTTPException(404, f"CPE not found: {ip}")
-    return cpe.to_dict()
-
-
-@app.get("/api/cpes")
-async def get_all_cpes():
-    """Get all CPEs from cached topology.
-
-    Returns:
-        List of all CPEs with their metrics.
-    """
-    cpes = network_discovery.get_all_cpes()
-    return {"cpes": [cpe.to_dict() for cpe in cpes]}
-
-
-# ============================================================================
-# Page Routes
-# ============================================================================
-
-@app.get("/topology", response_class=HTMLResponse)
-async def topology_page(request: Request):
-    """Serve the topology tree view page."""
-    return templates.TemplateResponse("topology.html", {"request": request})
-
-
-@app.get("/monitor", response_class=HTMLResponse)
-async def monitor_page(request: Request):
-    """Serve the signal monitoring page."""
-    return templates.TemplateResponse("monitor.html", {"request": request})
 
 
 def main():

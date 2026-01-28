@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Signal Monitor - Tachyon Management System</title>
+    <title>Tachyon Management System</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         * {
@@ -51,137 +51,270 @@
             background: #334155;
         }
 
-        .container {
-            padding: 24px;
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-
-        .grid {
+        .main-container {
             display: grid;
-            grid-template-columns: 1fr 350px;
-            gap: 24px;
+            grid-template-columns: 320px 1fr;
+            height: calc(100vh - 65px);
         }
 
-        @media (max-width: 1000px) {
-            .grid {
-                grid-template-columns: 1fr;
-            }
+        /* Left sidebar - Tree */
+        .sidebar {
+            background: #1e293b;
+            border-right: 1px solid #334155;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
 
-        .card {
+        .sidebar-header {
+            padding: 16px;
+            border-bottom: 1px solid #334155;
+        }
+
+        .sidebar-header h2 {
+            font-size: 1rem;
+            color: #94a3b8;
+            margin-bottom: 12px;
+        }
+
+        .discovery-form {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .discovery-form input, .discovery-form textarea {
+            width: 100%;
+            padding: 8px 10px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            color: #e2e8f0;
+            font-size: 0.85rem;
+        }
+
+        .discovery-form textarea {
+            min-height: 80px;
+            font-family: monospace;
+            resize: vertical;
+        }
+
+        .tree-item.no-location .tree-label::after {
+            content: ' (no location)';
+            color: #f59e0b;
+            font-size: 0.75rem;
+        }
+
+        .discovery-form input:focus, .discovery-form textarea:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        .cred-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: #2563eb;
+        }
+
+        .btn:disabled {
+            background: #475569;
+            cursor: not-allowed;
+        }
+
+        .btn-danger {
+            background: #dc2626;
+        }
+
+        .btn-danger:hover {
+            background: #b91c1c;
+        }
+
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 0.8rem;
+        }
+
+        /* Tree container */
+        .tree-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+        }
+
+        .tree-node {
+            user-select: none;
+        }
+
+        .tree-item {
+            display: flex;
+            align-items: center;
+            padding: 6px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.15s;
+            gap: 8px;
+        }
+
+        .tree-item:hover {
+            background: #334155;
+        }
+
+        .tree-item.selected {
+            background: #3b82f6;
+        }
+
+        .tree-toggle {
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #64748b;
+            font-size: 10px;
+        }
+
+        .tree-toggle.expanded {
+            transform: rotate(90deg);
+        }
+
+        .tree-icon {
+            width: 18px;
+            height: 18px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .tree-icon.location {
+            background: #6366f1;
+            color: white;
+        }
+
+        .tree-icon.ap {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .tree-icon.cpe {
+            border-radius: 50%;
+        }
+
+        .tree-icon.cpe.green { background: #10b981; }
+        .tree-icon.cpe.yellow { background: #f59e0b; }
+        .tree-icon.cpe.red { background: #ef4444; }
+
+        .tree-label {
+            flex: 1;
+            font-size: 0.85rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .tree-badge {
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            background: #475569;
+            border-radius: 10px;
+            color: #94a3b8;
+        }
+
+        .tree-children {
+            padding-left: 24px;
+        }
+
+        .tree-children.collapsed {
+            display: none;
+        }
+
+        /* Stats bar */
+        .stats-bar {
+            display: flex;
+            gap: 16px;
+            padding: 12px 16px;
+            background: #0f172a;
+            border-bottom: 1px solid #334155;
+        }
+
+        .stat {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85rem;
+        }
+
+        .stat-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .stat-dot.green { background: #10b981; }
+        .stat-dot.yellow { background: #f59e0b; }
+        .stat-dot.red { background: #ef4444; }
+        .stat-dot.ap { background: #3b82f6; }
+
+        .stat-value {
+            font-weight: 600;
+            color: #f1f5f9;
+        }
+
+        .stat-label {
+            color: #64748b;
+        }
+
+        /* Main content */
+        .content {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .content-body {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .chart-card {
             background: #1e293b;
             border-radius: 12px;
             padding: 20px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
         }
 
-        .card h2 {
+        .chart-card h3 {
             font-size: 1rem;
             color: #94a3b8;
             margin-bottom: 16px;
         }
 
-        /* Chart container */
         .chart-container {
+            flex: 1;
             position: relative;
-            height: 500px;
+            min-height: 400px;
         }
 
-        /* Stats grid */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 12px;
-            margin-bottom: 20px;
-        }
-
-        .stat-card {
-            background: #0f172a;
-            padding: 16px;
-            border-radius: 8px;
-            text-align: center;
-        }
-
-        .stat-value {
-            font-size: 1.8rem;
-            font-weight: 600;
-        }
-
-        .stat-label {
-            font-size: 0.75rem;
-            color: #64748b;
-            text-transform: uppercase;
-            margin-top: 4px;
-        }
-
-        .stat-card.green .stat-value { color: #10b981; }
-        .stat-card.yellow .stat-value { color: #f59e0b; }
-        .stat-card.red .stat-value { color: #ef4444; }
-
-        /* CPE list */
-        .cpe-list {
-            max-height: 400px;
-            overflow-y: auto;
-        }
-
-        .cpe-item {
-            background: #0f172a;
-            border-radius: 8px;
-            padding: 12px;
-            margin-bottom: 8px;
-            cursor: pointer;
-            transition: all 0.2s;
-            border-left: 4px solid transparent;
-        }
-
-        .cpe-item:hover {
-            background: #1e293b;
-        }
-
-        .cpe-item.green { border-left-color: #10b981; }
-        .cpe-item.yellow { border-left-color: #f59e0b; }
-        .cpe-item.red { border-left-color: #ef4444; }
-
-        .cpe-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 8px;
-        }
-
-        .cpe-name {
-            font-weight: 500;
-            color: #f1f5f9;
-        }
-
-        .cpe-ip {
-            font-family: monospace;
-            font-size: 0.85rem;
-            color: #94a3b8;
-        }
-
-        .cpe-metrics {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 8px;
-            font-size: 0.8rem;
-        }
-
-        .metric {
-            display: flex;
-            justify-content: space-between;
-        }
-
-        .metric-label {
-            color: #64748b;
-        }
-
-        .metric-value {
-            color: #e2e8f0;
-            font-family: monospace;
-        }
-
-        /* Legend */
         .chart-legend {
             display: flex;
             justify-content: center;
@@ -195,12 +328,13 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
+            color: #94a3b8;
         }
 
         .legend-dot {
-            width: 12px;
-            height: 12px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
         }
 
@@ -208,23 +342,16 @@
         .legend-dot.yellow { background: #f59e0b; }
         .legend-dot.red { background: #ef4444; }
 
-        /* Threshold lines info */
-        .threshold-info {
-            font-size: 0.8rem;
-            color: #64748b;
-            text-align: center;
-            margin-top: 8px;
-        }
-
         /* Empty state */
         .empty-state {
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 400px;
+            height: 100%;
             color: #64748b;
             text-align: center;
+            padding: 40px;
         }
 
         .empty-state svg {
@@ -240,12 +367,13 @@
             color: #94a3b8;
         }
 
-        /* Connection status */
+        /* Connection status - hidden by default, shown only when disconnected */
         .connection-status {
+            display: none;
             position: fixed;
-            top: 10px;
-            right: 10px;
-            padding: 6px 12px;
+            bottom: 20px;
+            right: 20px;
+            padding: 8px 16px;
             border-radius: 20px;
             font-size: 0.75rem;
             background: #10b981;
@@ -253,113 +381,147 @@
         }
 
         .connection-status.disconnected {
+            display: block;
             background: #ef4444;
         }
 
-        /* Buttons */
-        .btn {
-            padding: 10px 20px;
-            background: #3b82f6;
-            color: white;
-            border: none;
-            border-radius: 8px;
+        /* CPE detail panel */
+        .detail-panel {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 16px;
+            margin-top: 16px;
+        }
+
+        .detail-panel h4 {
             font-size: 0.9rem;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-
-        .btn:hover {
-            background: #2563eb;
-        }
-
-        .btn:disabled {
-            background: #475569;
-            cursor: not-allowed;
-        }
-
-        .actions {
+            color: #f1f5f9;
+            margin-bottom: 12px;
             display: flex;
-            gap: 12px;
-            margin-bottom: 20px;
+            align-items: center;
+            gap: 8px;
         }
+
+        .detail-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+        }
+
+        .detail-item {
+            background: #0f172a;
+            padding: 10px;
+            border-radius: 6px;
+        }
+
+        .detail-label {
+            font-size: 0.7rem;
+            color: #64748b;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .detail-value {
+            font-size: 0.95rem;
+            color: #f1f5f9;
+            font-family: monospace;
+        }
+
+        .detail-value.green { color: #10b981; }
+        .detail-value.yellow { color: #f59e0b; }
+        .detail-value.red { color: #ef4444; }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>Tachyon Management System</h1>
         <nav class="nav-links">
-            <a href="/">Firmware</a>
-            <a href="/topology">Topology</a>
-            <a href="/monitor" class="active">Monitor</a>
+            <a href="/" class="active">Monitor</a>
+            <a href="/firmware">Firmware</a>
         </nav>
     </div>
 
     <div class="connection-status" id="connectionStatus">Connected</div>
 
-    <div class="container">
-        <div class="stats-grid">
-            <div class="stat-card green">
-                <div class="stat-value" id="greenCount">0</div>
-                <div class="stat-label">Strong Signal</div>
+    <div class="main-container">
+        <!-- Left Sidebar - Tree -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h2>Add Access Points</h2>
+                <div class="discovery-form">
+                    <textarea id="apIps" placeholder="AP IPs (one per line)&#10;192.168.1.1&#10;192.168.1.2"></textarea>
+                    <div class="cred-row">
+                        <input type="text" id="username" placeholder="Username" value="root">
+                        <input type="password" id="password" placeholder="Password">
+                    </div>
+                    <button class="btn" id="addApBtn" onclick="addAPs()">Add APs</button>
+                </div>
             </div>
-            <div class="stat-card yellow">
-                <div class="stat-value" id="yellowCount">0</div>
-                <div class="stat-label">Acceptable</div>
+
+            <div class="stats-bar">
+                <div class="stat">
+                    <div class="stat-dot ap"></div>
+                    <span class="stat-value" id="apCount">0</span>
+                    <span class="stat-label">APs</span>
+                </div>
+                <div class="stat">
+                    <div class="stat-dot green"></div>
+                    <span class="stat-value" id="greenCount">0</span>
+                </div>
+                <div class="stat">
+                    <div class="stat-dot yellow"></div>
+                    <span class="stat-value" id="yellowCount">0</span>
+                </div>
+                <div class="stat">
+                    <div class="stat-dot red"></div>
+                    <span class="stat-value" id="redCount">0</span>
+                </div>
             </div>
-            <div class="stat-card red">
-                <div class="stat-value" id="redCount">0</div>
-                <div class="stat-label">Weak Signal</div>
+
+            <div class="tree-container" id="treeContainer">
+                <div class="empty-state" id="treeEmpty">
+                    <p>Enter AP IPs and click Discover</p>
+                </div>
             </div>
         </div>
 
-        <div class="grid">
-            <div class="card">
-                <h2>Signal vs Distance</h2>
-                <div class="actions">
-                    <button class="btn" onclick="refreshData()">Refresh Data</button>
-                </div>
-                <div class="chart-container" id="chartContainer">
-                    <canvas id="signalChart"></canvas>
-                </div>
-                <div class="chart-legend">
-                    <div class="legend-item">
-                        <div class="legend-dot green"></div>
-                        <span>Strong (&gt; -65 dBm)</span>
+        <!-- Main Content -->
+        <div class="content">
+            <div class="content-body">
+                <div class="chart-card">
+                    <h3 id="chartTitle">Signal vs Distance - All Devices</h3>
+                    <div class="chart-container">
+                        <canvas id="signalChart"></canvas>
                     </div>
-                    <div class="legend-item">
-                        <div class="legend-dot yellow"></div>
-                        <span>Acceptable (-65 to -75 dBm)</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-dot red"></div>
-                        <span>Weak (&lt; -75 dBm)</span>
+                    <div class="chart-legend">
+                        <div class="legend-item">
+                            <div class="legend-dot green"></div>
+                            <span>Strong (&gt; -65 dBm)</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-dot yellow"></div>
+                            <span>Acceptable (-65 to -75 dBm)</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-dot red"></div>
+                            <span>Weak (&lt; -75 dBm)</span>
+                        </div>
                     </div>
                 </div>
-                <div class="threshold-info">
-                    Dashed lines show signal health thresholds at -65 dBm and -75 dBm
-                </div>
-            </div>
 
-            <div class="card">
-                <h2>CPE List</h2>
-                <div class="cpe-list" id="cpeList">
-                    <div class="empty-state" id="emptyState">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <path d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/>
-                        </svg>
-                        <h3>No CPE Data</h3>
-                        <p>Run network discovery from the Topology page first.</p>
-                    </div>
+                <div class="detail-panel" id="detailPanel" style="display: none;">
+                    <h4><span id="detailName">Device Details</span></h4>
+                    <div class="detail-grid" id="detailGrid"></div>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="/static/js/monitor.js"></script>
     <script>
         let ws = null;
         let chart = null;
-        let cpes = [];
+        let topology = null;
+        let selectedNode = { type: 'all' };  // { type: 'all' | 'site' | 'ap' | 'cpe', data: ... }
 
         // WebSocket connection
         function connectWebSocket() {
@@ -380,87 +542,532 @@
             ws.onmessage = (event) => {
                 const message = JSON.parse(event.data);
                 if (message.type === 'topology_update') {
-                    // Extract CPEs from topology
-                    cpes = [];
-                    for (const ap of message.topology.aps) {
-                        cpes.push(...ap.cpes);
-                    }
+                    topology = message.topology;
                     updateUI();
                 }
             };
         }
 
-        async function loadCPEs() {
-            try {
-                const response = await fetch('/api/cpes');
-                const data = await response.json();
-                cpes = data.cpes || [];
-                updateUI();
-            } catch (error) {
-                console.error('Failed to load CPEs:', error);
-            }
+        function extractIP(text) {
+            // Strip http://, https://, trailing slashes, ports
+            let ip = text.trim();
+            ip = ip.replace(/^https?:\/\//, '');
+            ip = ip.replace(/\/.*$/, '');
+            ip = ip.replace(/:\d+$/, '');
+            return ip;
         }
 
-        async function refreshData() {
-            try {
-                const response = await fetch('/api/topology/refresh', {
-                    method: 'POST',
-                });
+        async function addAPs() {
+            const ipText = document.getElementById('apIps').value.trim();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
 
-                if (!response.ok) {
-                    // If refresh fails, just reload current data
-                    await loadCPEs();
-                    return;
+            if (!ipText) {
+                alert('Please enter AP IP addresses');
+                return;
+            }
+            if (!password) {
+                alert('Please enter password');
+                return;
+            }
+
+            // Parse IPs - one per line, strip URLs
+            const ips = ipText.split('\n')
+                .map(line => extractIP(line))
+                .filter(ip => ip && !ip.startsWith('#'));
+
+            if (ips.length === 0) {
+                alert('No valid IP addresses found');
+                return;
+            }
+
+            const btn = document.getElementById('addApBtn');
+            btn.disabled = true;
+            btn.textContent = `Adding ${ips.length}...`;
+
+            let added = 0;
+            let errors = [];
+
+            for (const ip of ips) {
+                try {
+                    const formData = new FormData();
+                    formData.append('ip', ip);
+                    formData.append('username', username);
+                    formData.append('password', password);
+
+                    const response = await fetch('/api/aps', {
+                        method: 'POST',
+                        body: formData,
+                    });
+
+                    if (response.ok) {
+                        added++;
+                    } else {
+                        const error = await response.json();
+                        errors.push(`${ip}: ${error.detail || 'Failed'}`);
+                    }
+                } catch (error) {
+                    errors.push(`${ip}: ${error.message}`);
                 }
+            }
 
-                const topology = await response.json();
-                cpes = [];
-                for (const ap of topology.aps) {
-                    cpes.push(...ap.cpes);
-                }
-                updateUI();
+            // Clear textarea
+            document.getElementById('apIps').value = '';
 
-            } catch (error) {
-                console.error('Refresh failed:', error);
-                await loadCPEs();
+            btn.disabled = false;
+            btn.textContent = 'Add APs';
+
+            if (errors.length > 0) {
+                alert(`Added ${added} AP(s).\n\nErrors:\n${errors.join('\n')}`);
             }
         }
 
         function updateUI() {
-            if (cpes.length === 0) {
-                document.getElementById('emptyState').style.display = 'flex';
-                if (chart) {
-                    chart.data.datasets[0].data = [];
-                    chart.update();
-                }
+            const treeEmpty = document.getElementById('treeEmpty');
+
+            if (!topology || topology.total_aps === 0) {
+                if (treeEmpty) treeEmpty.style.display = 'flex';
                 return;
             }
 
-            document.getElementById('emptyState').style.display = 'none';
+            if (treeEmpty) treeEmpty.style.display = 'none';
 
-            // Count by health
-            let green = 0, yellow = 0, red = 0;
-            cpes.forEach(cpe => {
-                if (cpe.signal_health === 'green') green++;
-                else if (cpe.signal_health === 'yellow') yellow++;
-                else red++;
-            });
+            // Update stats
+            document.getElementById('apCount').textContent = topology.total_aps;
+            document.getElementById('greenCount').textContent = topology.overall_health.green;
+            document.getElementById('yellowCount').textContent = topology.overall_health.yellow;
+            document.getElementById('redCount').textContent = topology.overall_health.red;
 
-            document.getElementById('greenCount').textContent = green;
-            document.getElementById('yellowCount').textContent = yellow;
-            document.getElementById('redCount').textContent = red;
+            // Render tree
+            renderTree();
 
             // Update chart
             updateChart();
+        }
 
-            // Update CPE list
-            renderCPEList();
+        function renderTree() {
+            const container = document.getElementById('treeContainer');
+
+            if (!topology.sites || topology.sites.length === 0) {
+                container.innerHTML = '<div class="empty-state" id="treeEmpty"><p>No devices found</p></div>';
+                return;
+            }
+
+            // "All" option at top - no indent, sits at root of hierarchy
+            const isAllSelected = selectedNode?.type === 'all';
+            let html = `
+                <div class="tree-node">
+                    <div class="tree-item ${isAllSelected ? 'selected' : ''}" onclick="selectAll()" data-type="all" style="padding-left: 8px;">
+                        <span class="tree-icon" style="background: #64748b;">A</span>
+                        <span class="tree-label">All Devices</span>
+                        <span class="tree-badge">${topology.total_cpes} CPEs</span>
+                    </div>
+                </div>
+            `;
+
+            for (const site of topology.sites) {
+                const aps = site.aps || [];
+                const totalCpes = aps.reduce((sum, ap) => sum + (ap.cpes?.length || 0), 0);
+                const isSiteSelected = selectedNode?.type === 'site' && selectedNode?.data?.id === site.id;
+
+                html += `
+                    <div class="tree-node">
+                        <div class="tree-item ${isSiteSelected ? 'selected' : ''}" onclick="selectSite(${site.id !== null ? site.id : 'null'}, event)" data-site-id="${site.id}">
+                            <span class="tree-toggle expanded" onclick="toggleNode(this.parentElement); event.stopPropagation();">&#9654;</span>
+                            <span class="tree-icon location">T</span>
+                            <span class="tree-label">${escapeHtml(site.name)}</span>
+                            <span class="tree-badge">${aps.length} AP${aps.length !== 1 ? 's' : ''}</span>
+                        </div>
+                        <div class="tree-children">
+                `;
+
+                for (const ap of aps) {
+                    const apName = ap.system_name || ap.ip;
+                    const cpes = ap.cpes || [];
+                    const hasError = ap.last_error;
+                    const noLocation = !ap.location && site.name === 'Unassigned';
+
+                    html += `
+                        <div class="tree-node">
+                            <div class="tree-item ${hasError ? 'has-error' : ''} ${noLocation ? 'no-location' : ''}" onclick="selectAP('${ap.ip}')" data-ip="${ap.ip}">
+                                <span class="tree-toggle ${cpes.length > 0 ? 'expanded' : ''}" onclick="toggleNode(this.parentElement); event.stopPropagation();">&#9654;</span>
+                                <span class="tree-icon ap">AP</span>
+                                <span class="tree-label">${escapeHtml(apName)}</span>
+                                <span class="tree-badge" onclick="toggleNode(this.parentElement); event.stopPropagation();">${cpes.length}</span>
+                            </div>
+                            <div class="tree-children">
+                    `;
+
+                    for (const cpe of cpes) {
+                        const cpeName = cpe.system_name || cpe.ip || cpe.mac || 'Unknown';
+                        const health = cpe.signal_health || 'red';
+
+                        html += `
+                            <div class="tree-node">
+                                <div class="tree-item" onclick="selectCPE('${cpe.ip}', event)" data-ip="${cpe.ip}">
+                                    <span class="tree-toggle" style="visibility: hidden;">&#9654;</span>
+                                    <span class="tree-icon cpe ${health}"></span>
+                                    <span class="tree-label">${escapeHtml(cpeName)}</span>
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    html += `
+                            </div>
+                        </div>
+                    `;
+                }
+
+                html += `
+                        </div>
+                    </div>
+                `;
+            }
+
+            container.innerHTML = html;
+        }
+
+        function toggleNode(element) {
+            const toggle = element.querySelector('.tree-toggle');
+            const children = element.nextElementSibling;
+
+            if (children && children.classList.contains('tree-children')) {
+                toggle.classList.toggle('expanded');
+                children.classList.toggle('collapsed');
+            }
+        }
+
+        function findSite(siteId) {
+            for (const site of (topology.sites || [])) {
+                if (site.id === siteId) {
+                    return site;
+                }
+            }
+            return null;
+        }
+
+        function findAP(ip) {
+            for (const site of (topology.sites || [])) {
+                for (const ap of (site.aps || [])) {
+                    if (ap.ip === ip) {
+                        return { ap, site };
+                    }
+                }
+            }
+            return null;
+        }
+
+        function findCPE(ip) {
+            for (const site of (topology.sites || [])) {
+                for (const ap of (site.aps || [])) {
+                    for (const cpe of (ap.cpes || [])) {
+                        if (cpe.ip === ip) {
+                            return { cpe, ap, site };
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        function selectAll() {
+            selectedNode = { type: 'all' };
+            clearHighlights();
+            document.querySelector('.tree-item[data-type="all"]')?.classList.add('selected');
+            hideDetailPanel();
+            updateChart();
+        }
+
+        function selectSite(siteId, event) {
+            event.stopPropagation();
+
+            const site = findSite(siteId);
+            if (!site && siteId !== null) return;
+
+            // For "Unassigned" virtual site
+            const siteData = site || topology.sites.find(s => s.id === null);
+            if (!siteData) return;
+
+            selectedNode = { type: 'site', data: siteData };
+            clearHighlights();
+            document.querySelector(`.tree-item[data-site-id="${siteId}"]`)?.classList.add('selected');
+            showSiteDetails(siteData);
+            updateChart();
+        }
+
+        function showSiteDetails(site) {
+            const panel = document.getElementById('detailPanel');
+            const name = document.getElementById('detailName');
+            const grid = document.getElementById('detailGrid');
+
+            name.textContent = site.name;
+
+            const apCount = site.aps?.length || 0;
+            const cpeCount = site.aps?.reduce((sum, ap) => sum + (ap.cpes?.length || 0), 0) || 0;
+
+            grid.innerHTML = `
+                <div class="detail-item">
+                    <div class="detail-label">Site Name</div>
+                    <div class="detail-value">${escapeHtml(site.name)}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Access Points</div>
+                    <div class="detail-value">${apCount}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Total CPEs</div>
+                    <div class="detail-value">${cpeCount}</div>
+                </div>
+                ${site.location ? `<div class="detail-item">
+                    <div class="detail-label">Location</div>
+                    <div class="detail-value">${escapeHtml(site.location)}</div>
+                </div>` : ''}
+            `;
+
+            // Show delete button only if site has no APs and is not "Unassigned"
+            let actionsDiv = document.getElementById('apActions');
+            if (!actionsDiv) {
+                actionsDiv = document.createElement('div');
+                actionsDiv.id = 'apActions';
+                actionsDiv.style.cssText = 'margin-top: 16px; padding-top: 16px; border-top: 1px solid #334155; display: flex; gap: 8px;';
+                panel.appendChild(actionsDiv);
+            }
+
+            if (apCount === 0 && site.id !== null) {
+                actionsDiv.style.display = 'flex';
+                actionsDiv.innerHTML = `
+                    <button class="btn btn-sm btn-danger" onclick="deleteSite(${site.id})">Delete Site</button>
+                `;
+            } else {
+                actionsDiv.style.display = 'none';
+            }
+
+            panel.style.display = 'block';
+        }
+
+        function clearHighlights() {
+            document.querySelectorAll('.tree-item.selected').forEach(el => el.classList.remove('selected'));
+        }
+
+        function hideDetailPanel() {
+            document.getElementById('detailPanel').style.display = 'none';
+            const actionsDiv = document.getElementById('apActions');
+            if (actionsDiv) actionsDiv.style.display = 'none';
+        }
+
+        function selectAP(ip) {
+            const result = findAP(ip);
+            if (!result) return;
+
+            selectedNode = { type: 'ap', data: result.ap, site: result.site };
+            clearHighlights();
+            document.querySelector(`.tree-item[data-ip="${ip}"]`)?.classList.add('selected');
+            showAPDetails(result.ap, result.site);
+            updateChart();
+        }
+
+        function selectCPE(ip, event) {
+            event.stopPropagation();
+
+            const result = findCPE(ip);
+            if (!result) return;
+
+            selectedNode = { type: 'cpe', data: result.cpe, ap: result.ap };
+            clearHighlights();
+            document.querySelector(`.tree-item[data-ip="${ip}"]`)?.classList.add('selected');
+            showCPEDetails(result.cpe, result.ap);
+            updateChart();
+            highlightChartPoint(ip);
+        }
+
+        async function deleteSite(siteId) {
+            if (!confirm('Delete this site?')) return;
+
+            try {
+                const response = await fetch(`/api/sites/${siteId}`, {
+                    method: 'DELETE',
+                });
+
+                if (response.ok) {
+                    hideDetailPanel();
+                    selectedNode = { type: 'all' };
+
+                    // Refresh topology
+                    const topoResponse = await fetch('/api/topology');
+                    if (topoResponse.ok) {
+                        topology = await topoResponse.json();
+                        updateUI();
+                    }
+                } else {
+                    const error = await response.json();
+                    alert(`Failed to delete site: ${error.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                alert(`Error deleting site: ${error.message}`);
+            }
+        }
+
+        function showAPDetails(ap, site) {
+            const panel = document.getElementById('detailPanel');
+            const name = document.getElementById('detailName');
+            const grid = document.getElementById('detailGrid');
+
+            name.textContent = ap.system_name || ap.ip;
+
+            const lastSeen = ap.last_seen ? new Date(ap.last_seen).toLocaleString() : 'Never';
+
+            grid.innerHTML = `
+                <div class="detail-item">
+                    <div class="detail-label">IP Address</div>
+                    <div class="detail-value">${ap.ip}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Tower Site</div>
+                    <div class="detail-value">${site?.name || 'Unassigned'}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Location (from AP)</div>
+                    <div class="detail-value">${ap.location || 'Not set'}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Model</div>
+                    <div class="detail-value">${ap.model || 'N/A'}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Firmware</div>
+                    <div class="detail-value">${ap.firmware_version || 'N/A'}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Connected CPEs</div>
+                    <div class="detail-value">${ap.cpe_count || 0}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">MAC Address</div>
+                    <div class="detail-value">${ap.mac || 'N/A'}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Last Seen</div>
+                    <div class="detail-value">${lastSeen}</div>
+                </div>
+                ${ap.last_error ? `<div class="detail-item" style="grid-column: span 2;">
+                    <div class="detail-label">Error</div>
+                    <div class="detail-value red">${ap.last_error}</div>
+                </div>` : ''}
+            `;
+
+            showAPActions(ap);
+            panel.style.display = 'block';
+        }
+
+        function showAPActions(ap) {
+            // Show action buttons in a separate row below details
+            const panel = document.getElementById('detailPanel');
+            let actionsDiv = document.getElementById('apActions');
+            if (!actionsDiv) {
+                actionsDiv = document.createElement('div');
+                actionsDiv.id = 'apActions';
+                actionsDiv.style.cssText = 'margin-top: 16px; padding-top: 16px; border-top: 1px solid #334155; display: flex; gap: 8px;';
+                panel.appendChild(actionsDiv);
+            }
+            actionsDiv.style.display = 'flex';
+            actionsDiv.innerHTML = `
+                <button class="btn btn-sm" onclick="pollAPNow('${ap.ip}')">Refresh Now</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteAP('${ap.ip}')">Delete AP</button>
+            `;
+        }
+
+        function showCPEDetails(cpe, ap) {
+            const panel = document.getElementById('detailPanel');
+            const name = document.getElementById('detailName');
+            const grid = document.getElementById('detailGrid');
+
+            // Hide AP actions if showing CPE
+            const actionsDiv = document.getElementById('apActions');
+            if (actionsDiv) actionsDiv.style.display = 'none';
+
+            const signalClass = cpe.signal_health;
+
+            name.textContent = cpe.system_name || cpe.ip;
+
+            grid.innerHTML = `
+                <div class="detail-item">
+                    <div class="detail-label">IP Address</div>
+                    <div class="detail-value">${cpe.ip}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Connected To</div>
+                    <div class="detail-value">${ap.system_name || ap.ip}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Signal</div>
+                    <div class="detail-value ${signalClass}">${cpe.primary_signal?.toFixed(1) || 'N/A'} dBm</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Distance</div>
+                    <div class="detail-value">${cpe.link_distance?.toFixed(0) || 'N/A'} m</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">TX Rate</div>
+                    <div class="detail-value">${cpe.tx_rate?.toFixed(0) || 'N/A'} Mbps</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">RX Rate</div>
+                    <div class="detail-value">${cpe.rx_rate?.toFixed(0) || 'N/A'} Mbps</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">MCS</div>
+                    <div class="detail-value">${cpe.mcs ?? 'N/A'}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Model</div>
+                    <div class="detail-value">${cpe.model || 'N/A'}</div>
+                </div>
+            `;
+
+            panel.style.display = 'block';
         }
 
         function updateChart() {
+            const cpes = [];
+
+            // Update chart title based on selection
+            let titleSuffix = 'All Devices';
+            if (selectedNode?.type === 'site') {
+                titleSuffix = selectedNode.data?.name || 'Site';
+            } else if (selectedNode?.type === 'ap') {
+                titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'AP';
+            } else if (selectedNode?.type === 'cpe') {
+                titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'CPE';
+            }
+            document.getElementById('chartTitle').textContent = `Signal vs Distance - ${titleSuffix}`;
+
+            // Filter based on selection
+            for (const site of (topology.sites || [])) {
+                // Skip if a specific site is selected and this isn't it
+                if (selectedNode?.type === 'site' && site.id !== selectedNode.data?.id) {
+                    continue;
+                }
+
+                for (const ap of (site.aps || [])) {
+                    // Skip if a specific AP is selected and this isn't it
+                    if (selectedNode?.type === 'ap' && ap.ip !== selectedNode.data?.ip) {
+                        continue;
+                    }
+
+                    for (const cpe of (ap.cpes || [])) {
+                        // Skip if a specific CPE is selected and this isn't it
+                        if (selectedNode?.type === 'cpe' && cpe.ip !== selectedNode.data?.ip) {
+                            continue;
+                        }
+                        cpes.push(cpe);
+                    }
+                }
+            }
+
             const chartData = cpes.map(cpe => ({
                 x: cpe.link_distance || 0,
-                y: cpe.primary_signal || -100,
+                y: cpe.primary_signal || cpe.combined_signal || cpe.rx_power || -100,
                 cpe: cpe,
             }));
 
@@ -472,8 +1079,53 @@
             }
         }
 
+        function highlightChartPoint(ip) {
+            if (!chart) return;
+
+            const index = chart.data.datasets[0].data.findIndex(d => d.cpe?.ip === ip);
+            if (index >= 0) {
+                chart.setActiveElements([{ datasetIndex: 0, index: index }]);
+                chart.update();
+            }
+        }
+
         function initChart(data) {
             const ctx = document.getElementById('signalChart').getContext('2d');
+
+            const thresholdPlugin = {
+                id: 'thresholdLines',
+                afterDraw: (chart) => {
+                    const ctx = chart.ctx;
+                    const yAxis = chart.scales.y;
+                    const xAxis = chart.scales.x;
+
+                    // -65 dBm line
+                    const y65 = yAxis.getPixelForValue(-65);
+                    ctx.save();
+                    ctx.setLineDash([6, 4]);
+                    ctx.strokeStyle = '#10b981';
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.moveTo(xAxis.left, y65);
+                    ctx.lineTo(xAxis.right, y65);
+                    ctx.stroke();
+                    ctx.restore();
+
+                    // -75 dBm line
+                    const y75 = yAxis.getPixelForValue(-75);
+                    ctx.save();
+                    ctx.setLineDash([6, 4]);
+                    ctx.strokeStyle = '#ef4444';
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.moveTo(xAxis.left, y75);
+                    ctx.lineTo(xAxis.right, y75);
+                    ctx.stroke();
+                    ctx.restore();
+                },
+            };
+
+            Chart.register(thresholdPlugin);
 
             chart = new Chart(ctx, {
                 type: 'scatter',
@@ -483,7 +1135,7 @@
                         data: data,
                         pointBackgroundColor: (context) => {
                             const point = context.raw;
-                            if (!point || !point.cpe) return '#64748b';
+                            if (!point?.cpe) return '#64748b';
                             const health = point.cpe.signal_health;
                             if (health === 'green') return '#10b981';
                             if (health === 'yellow') return '#f59e0b';
@@ -491,7 +1143,7 @@
                         },
                         pointBorderColor: (context) => {
                             const point = context.raw;
-                            if (!point || !point.cpe) return '#94a3b8';
+                            if (!point?.cpe) return '#94a3b8';
                             const health = point.cpe.signal_health;
                             if (health === 'green') return '#34d399';
                             if (health === 'yellow') return '#fbbf24';
@@ -499,11 +1151,20 @@
                         },
                         pointRadius: 8,
                         pointHoverRadius: 12,
+                        pointBorderWidth: 2,
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    onClick: (event, elements) => {
+                        if (elements.length > 0) {
+                            const point = chart.data.datasets[0].data[elements[0].index];
+                            if (point?.cpe) {
+                                selectCPE(point.cpe.ip, event);
+                            }
+                        }
+                    },
                     scales: {
                         x: {
                             title: {
@@ -511,12 +1172,9 @@
                                 text: 'Distance (meters)',
                                 color: '#94a3b8',
                             },
-                            grid: {
-                                color: '#334155',
-                            },
-                            ticks: {
-                                color: '#94a3b8',
-                            },
+                            grid: { color: '#334155' },
+                            ticks: { color: '#94a3b8' },
+                            beginAtZero: true,
                         },
                         y: {
                             title: {
@@ -524,27 +1182,21 @@
                                 text: 'Signal (dBm)',
                                 color: '#94a3b8',
                             },
-                            grid: {
-                                color: '#334155',
-                            },
-                            ticks: {
-                                color: '#94a3b8',
-                            },
+                            grid: { color: '#334155' },
+                            ticks: { color: '#94a3b8' },
                             min: -100,
                             max: -30,
                         },
                     },
                     plugins: {
-                        legend: {
-                            display: false,
-                        },
+                        legend: { display: false },
                         tooltip: {
                             callbacks: {
                                 label: (context) => {
-                                    const cpe = context.raw.cpe;
+                                    const cpe = context.raw?.cpe;
                                     if (!cpe) return '';
                                     return [
-                                        `${cpe.system_name || cpe.ip}`,
+                                        cpe.system_name || cpe.ip,
                                         `Signal: ${cpe.primary_signal?.toFixed(1) || 'N/A'} dBm`,
                                         `Distance: ${cpe.link_distance?.toFixed(0) || 'N/A'} m`,
                                     ];
@@ -556,108 +1208,64 @@
                             borderColor: '#334155',
                             borderWidth: 1,
                         },
-                        annotation: {
-                            annotations: {
-                                line1: {
-                                    type: 'line',
-                                    yMin: -65,
-                                    yMax: -65,
-                                    borderColor: '#10b981',
-                                    borderWidth: 2,
-                                    borderDash: [5, 5],
-                                },
-                                line2: {
-                                    type: 'line',
-                                    yMin: -75,
-                                    yMax: -75,
-                                    borderColor: '#ef4444',
-                                    borderWidth: 2,
-                                    borderDash: [5, 5],
-                                },
-                            },
-                        },
                     },
                 },
             });
-
-            // Add threshold lines as a plugin
-            const thresholdPlugin = {
-                id: 'thresholdLines',
-                afterDraw: (chart) => {
-                    const ctx = chart.ctx;
-                    const yAxis = chart.scales.y;
-                    const xAxis = chart.scales.x;
-
-                    // -65 dBm line (green threshold)
-                    const y65 = yAxis.getPixelForValue(-65);
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.setLineDash([5, 5]);
-                    ctx.strokeStyle = '#10b981';
-                    ctx.lineWidth = 2;
-                    ctx.moveTo(xAxis.left, y65);
-                    ctx.lineTo(xAxis.right, y65);
-                    ctx.stroke();
-                    ctx.restore();
-
-                    // -75 dBm line (red threshold)
-                    const y75 = yAxis.getPixelForValue(-75);
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.setLineDash([5, 5]);
-                    ctx.strokeStyle = '#ef4444';
-                    ctx.lineWidth = 2;
-                    ctx.moveTo(xAxis.left, y75);
-                    ctx.lineTo(xAxis.right, y75);
-                    ctx.stroke();
-                    ctx.restore();
-                },
-            };
-
-            Chart.register(thresholdPlugin);
         }
 
-        function renderCPEList() {
-            const list = document.getElementById('cpeList');
+        async function pollAPNow(ip) {
+            try {
+                const response = await fetch(`/api/aps/${encodeURIComponent(ip)}/poll`, {
+                    method: 'POST',
+                });
+                if (!response.ok) {
+                    const error = await response.json();
+                    alert(`Failed to poll AP: ${error.detail || 'Unknown error'}`);
+                }
+                // Update will come via WebSocket
+            } catch (error) {
+                alert(`Error polling AP: ${error.message}`);
+            }
+        }
 
-            // Sort by signal strength (worst first)
-            const sorted = [...cpes].sort((a, b) => {
-                const aSignal = a.primary_signal || -100;
-                const bSignal = b.primary_signal || -100;
-                return aSignal - bSignal;
-            });
+        async function deleteAP(ip) {
+            if (!confirm(`Delete AP ${ip}? This will remove all associated CPE data.`)) {
+                return;
+            }
 
-            list.innerHTML = sorted.map(cpe => `
-                <div class="cpe-item ${cpe.signal_health}">
-                    <div class="cpe-header">
-                        <span class="cpe-name">${cpe.system_name || 'Unknown'}</span>
-                        <span class="cpe-ip">${cpe.ip}</span>
-                    </div>
-                    <div class="cpe-metrics">
-                        <div class="metric">
-                            <span class="metric-label">Signal</span>
-                            <span class="metric-value">${cpe.primary_signal?.toFixed(1) || 'N/A'} dBm</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">Distance</span>
-                            <span class="metric-value">${cpe.link_distance?.toFixed(0) || 'N/A'} m</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">TX Rate</span>
-                            <span class="metric-value">${cpe.tx_rate?.toFixed(0) || 'N/A'} Mbps</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">RX Rate</span>
-                            <span class="metric-value">${cpe.rx_rate?.toFixed(0) || 'N/A'} Mbps</span>
-                        </div>
-                    </div>
-                </div>
-            `).join('');
+            try {
+                const response = await fetch(`/api/aps/${encodeURIComponent(ip)}`, {
+                    method: 'DELETE',
+                });
+
+                if (response.ok) {
+                    // Hide detail panel
+                    document.getElementById('detailPanel').style.display = 'none';
+                    selectedNode = null;
+
+                    // Refresh topology will happen via WebSocket, but trigger immediate refresh
+                    const topoResponse = await fetch('/api/topology');
+                    if (topoResponse.ok) {
+                        topology = await topoResponse.json();
+                        updateUI();
+                    }
+                } else {
+                    const error = await response.json();
+                    alert(`Failed to delete AP: ${error.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                alert(`Error deleting AP: ${error.message}`);
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         // Initialize
         connectWebSocket();
-        loadCPEs();
     </script>
 </body>
 </html>

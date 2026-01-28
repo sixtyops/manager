@@ -264,40 +264,196 @@
         .summary-item.failed .summary-value { color: #ef4444; }
         .summary-item.pending .summary-value { color: #94a3b8; }
 
-        /* Connection status */
-        .connection-status {
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 0.75rem;
-            background: #10b981;
-        }
-
-        .connection-status.disconnected {
-            background: #ef4444;
-        }
-
         /* Credential inputs row */
         .cred-row {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 12px;
         }
+
+        /* Time display */
+        .time-display {
+            text-align: right;
+            font-size: 0.9rem;
+            color: #94a3b8;
+        }
+
+        .time-display .time {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #f1f5f9;
+        }
+
+        /* Settings section */
+        .settings-section {
+            margin-bottom: 20px;
+            padding: 16px;
+            background: #0f172a;
+            border-radius: 8px;
+        }
+
+        .settings-section h3 {
+            font-size: 0.9rem;
+            color: #94a3b8;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .settings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+        }
+
+        .settings-grid label {
+            font-size: 0.75rem;
+        }
+
+        .settings-grid input, .settings-grid select {
+            padding: 8px 10px;
+            font-size: 0.85rem;
+        }
+
+        .checkbox-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            background: #1e293b;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+
+        .checkbox-label input {
+            width: auto;
+        }
+
+        .checkbox-label.checked {
+            background: #3b82f6;
+        }
+
+        /* Toggle switch */
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .toggle {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            background: #475569;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .toggle.active {
+            background: #3b82f6;
+        }
+
+        .toggle::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.2s;
+        }
+
+        .toggle.active::after {
+            transform: translateX(20px);
+        }
+
+        /* Weather info */
+        .weather-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            color: #94a3b8;
+        }
+
+        .weather-temp {
+            font-weight: 600;
+        }
+
+        .weather-temp.cold {
+            color: #3b82f6;
+        }
+
+        .weather-temp.danger {
+            color: #ef4444;
+        }
+
+        /* Hierarchy selector */
+        .hierarchy-select {
+            max-height: 200px;
+            overflow-y: auto;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 8px;
+        }
+
+        .hierarchy-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .hierarchy-item:hover {
+            background: #1e293b;
+        }
+
+        .hierarchy-item input {
+            width: auto;
+        }
+
+        .hierarchy-item.site {
+            font-weight: 500;
+        }
+
+        .hierarchy-item.ap {
+            padding-left: 24px;
+            font-size: 0.9rem;
+        }
+
+        .hierarchy-item.cpe {
+            padding-left: 48px;
+            font-size: 0.85rem;
+            color: #94a3b8;
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>Tachyon Management System</h1>
+        <div class="time-display">
+            <div class="time" id="currentTime">--:-- --</div>
+            <div id="currentDate">Loading...</div>
+        </div>
         <nav class="nav-links">
-            <a href="/" class="active">Firmware</a>
-            <a href="/topology">Topology</a>
-            <a href="/monitor">Monitor</a>
+            <a href="/">Monitor</a>
+            <a href="/firmware" class="active">Firmware</a>
         </nav>
     </div>
-
-    <div class="connection-status" id="connectionStatus">Connected</div>
 
     <div class="container">
         <h2 class="page-title">Firmware Update</h2>
@@ -306,6 +462,101 @@
             <!-- Left: Configuration -->
             <div class="card">
                 <h2>Configuration</h2>
+
+                <!-- Schedule Settings -->
+                <div class="settings-section">
+                    <h3>
+                        <span class="toggle" id="scheduleToggle" onclick="toggleSchedule()"></span>
+                        Scheduled Updates
+                    </h3>
+                    <div id="scheduleSettings" style="display: none;">
+                        <div class="settings-grid">
+                            <div class="form-group">
+                                <label>Days</label>
+                                <div class="checkbox-group" id="scheduleDays">
+                                    <label class="checkbox-label" data-day="mon"><input type="checkbox" value="mon"> Mon</label>
+                                    <label class="checkbox-label" data-day="tue"><input type="checkbox" value="tue"> Tue</label>
+                                    <label class="checkbox-label" data-day="wed"><input type="checkbox" value="wed"> Wed</label>
+                                    <label class="checkbox-label" data-day="thu"><input type="checkbox" value="thu"> Thu</label>
+                                    <label class="checkbox-label" data-day="fri"><input type="checkbox" value="fri"> Fri</label>
+                                    <label class="checkbox-label" data-day="sat"><input type="checkbox" value="sat"> Sat</label>
+                                    <label class="checkbox-label" data-day="sun"><input type="checkbox" value="sun"> Sun</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="settings-grid" style="margin-top: 12px;">
+                            <div class="form-group">
+                                <label>Start Hour</label>
+                                <select id="scheduleStartHour">
+                                    <option value="0">12:00 AM</option>
+                                    <option value="1">1:00 AM</option>
+                                    <option value="2">2:00 AM</option>
+                                    <option value="3" selected>3:00 AM</option>
+                                    <option value="4">4:00 AM</option>
+                                    <option value="5">5:00 AM</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>End Hour</label>
+                                <select id="scheduleEndHour">
+                                    <option value="1">1:00 AM</option>
+                                    <option value="2">2:00 AM</option>
+                                    <option value="3">3:00 AM</option>
+                                    <option value="4" selected>4:00 AM</option>
+                                    <option value="5">5:00 AM</option>
+                                    <option value="6">6:00 AM</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Update Settings -->
+                <div class="settings-section">
+                    <h3>Update Settings</h3>
+                    <div class="settings-grid">
+                        <div class="form-group">
+                            <label>Parallel Updates</label>
+                            <input type="number" id="parallelUpdates" value="2" min="1" max="10">
+                        </div>
+                        <div class="form-group">
+                            <label>Bank Mode</label>
+                            <select id="bankMode">
+                                <option value="both">Both Banks</option>
+                                <option value="one">Single Bank</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Weather Settings -->
+                <div class="settings-section">
+                    <h3>
+                        <span class="toggle active" id="weatherToggle" onclick="toggleWeather()"></span>
+                        Weather Check
+                    </h3>
+                    <div id="weatherSettings">
+                        <div class="weather-info" id="weatherInfo">
+                            <span>Loading weather...</span>
+                        </div>
+                        <div class="settings-grid" style="margin-top: 12px;">
+                            <div class="form-group">
+                                <label>Min Temperature (°C)</label>
+                                <input type="number" id="minTempC" value="-10" min="-40" max="10">
+                            </div>
+                            <div class="form-group">
+                                <label>Zip Code (optional)</label>
+                                <input type="text" id="zipCode" placeholder="Auto-detect" maxlength="5">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="btn" onclick="saveSettings()" style="margin-bottom: 16px; background: #475569;">Save Settings</button>
+
+                <hr style="border-color: #334155; margin: 16px 0;">
+
+                <h2>Manual Update</h2>
 
                 <div class="form-group">
                     <label>Device Type</label>
@@ -336,15 +587,10 @@
                 </div>
 
                 <div class="form-group">
-                    <label>Device IPs (one per line)</label>
-                    <textarea id="ipList" placeholder="192.168.1.10
-192.168.1.11
-192.168.1.12"></textarea>
-                </div>
-
-                <div class="form-group">
-                    <label>Concurrency (parallel updates)</label>
-                    <input type="number" id="concurrency" value="5" min="1" max="20">
+                    <label>Select Devices</label>
+                    <div class="hierarchy-select" id="hierarchySelect">
+                        <div style="color: #64748b; padding: 12px; text-align: center;">Loading devices...</div>
+                    </div>
                 </div>
 
                 <button class="btn" id="startBtn" onclick="startUpdate()">Start Update</button>
@@ -386,6 +632,8 @@
         let ws = null;
         let devices = {};
         let currentFirmware = null;
+        let topology = null;
+        let settings = {};
 
         // WebSocket connection
         function connectWebSocket() {
@@ -393,14 +641,11 @@
             ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
 
             ws.onopen = () => {
-                document.getElementById('connectionStatus').textContent = 'Connected';
-                document.getElementById('connectionStatus').classList.remove('disconnected');
+                console.log('WebSocket connected');
             };
 
             ws.onclose = () => {
-                document.getElementById('connectionStatus').textContent = 'Disconnected';
-                document.getElementById('connectionStatus').classList.add('disconnected');
-                // Reconnect after 2 seconds
+                console.log('WebSocket disconnected');
                 setTimeout(connectWebSocket, 2000);
             };
 
@@ -412,6 +657,11 @@
 
         function handleMessage(message) {
             switch (message.type) {
+                case 'topology_update':
+                    topology = message.topology;
+                    renderHierarchy();
+                    break;
+
                 case 'job_started':
                     console.log('Job started:', message.job_id);
                     break;
@@ -564,19 +814,242 @@
         });
 
         async function startUpdate() {
+            // This function is overwritten below with hierarchy-aware version
+        }
+
+        // Settings functions
+        async function loadSettings() {
+            try {
+                const response = await fetch('/api/settings');
+                const result = await response.json();
+                settings = result.settings;
+                applySettings();
+            } catch (error) {
+                console.error('Failed to load settings:', error);
+            }
+        }
+
+        function applySettings() {
+            // Schedule toggle
+            const scheduleEnabled = settings.schedule_enabled === 'true';
+            document.getElementById('scheduleToggle').classList.toggle('active', scheduleEnabled);
+            document.getElementById('scheduleSettings').style.display = scheduleEnabled ? 'block' : 'none';
+
+            // Schedule days
+            const days = (settings.schedule_days || 'tue,wed,thu').split(',');
+            document.querySelectorAll('#scheduleDays .checkbox-label').forEach(label => {
+                const checkbox = label.querySelector('input');
+                const day = label.dataset.day;
+                checkbox.checked = days.includes(day);
+                label.classList.toggle('checked', checkbox.checked);
+            });
+
+            // Hours
+            document.getElementById('scheduleStartHour').value = settings.schedule_start_hour || '3';
+            document.getElementById('scheduleEndHour').value = settings.schedule_end_hour || '4';
+
+            // Update settings
+            document.getElementById('parallelUpdates').value = settings.parallel_updates || '2';
+            document.getElementById('bankMode').value = settings.bank_mode || 'both';
+
+            // Weather toggle
+            const weatherEnabled = settings.weather_check_enabled !== 'false';
+            document.getElementById('weatherToggle').classList.toggle('active', weatherEnabled);
+            document.getElementById('weatherSettings').style.display = weatherEnabled ? 'block' : 'none';
+
+            // Weather settings
+            document.getElementById('minTempC').value = settings.min_temperature_c || '-10';
+            document.getElementById('zipCode').value = settings.zip_code || '';
+        }
+
+        async function saveSettings() {
+            const days = Array.from(document.querySelectorAll('#scheduleDays input:checked'))
+                .map(cb => cb.value).join(',');
+
+            const newSettings = {
+                schedule_enabled: document.getElementById('scheduleToggle').classList.contains('active').toString(),
+                schedule_days: days || 'tue,wed,thu',
+                schedule_start_hour: document.getElementById('scheduleStartHour').value,
+                schedule_end_hour: document.getElementById('scheduleEndHour').value,
+                parallel_updates: document.getElementById('parallelUpdates').value,
+                bank_mode: document.getElementById('bankMode').value,
+                weather_check_enabled: document.getElementById('weatherToggle').classList.contains('active').toString(),
+                min_temperature_c: document.getElementById('minTempC').value,
+                zip_code: document.getElementById('zipCode').value,
+            };
+
+            try {
+                const response = await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newSettings),
+                });
+                if (response.ok) {
+                    settings = newSettings;
+                    alert('Settings saved');
+                    // Refresh weather with new zip
+                    loadWeather();
+                }
+            } catch (error) {
+                alert('Failed to save settings: ' + error.message);
+            }
+        }
+
+        function toggleSchedule() {
+            const toggle = document.getElementById('scheduleToggle');
+            toggle.classList.toggle('active');
+            document.getElementById('scheduleSettings').style.display =
+                toggle.classList.contains('active') ? 'block' : 'none';
+        }
+
+        function toggleWeather() {
+            const toggle = document.getElementById('weatherToggle');
+            toggle.classList.toggle('active');
+            document.getElementById('weatherSettings').style.display =
+                toggle.classList.contains('active') ? 'block' : 'none';
+        }
+
+        // Day checkbox handling
+        document.querySelectorAll('#scheduleDays .checkbox-label').forEach(label => {
+            label.addEventListener('click', (e) => {
+                if (e.target.tagName !== 'INPUT') {
+                    const checkbox = label.querySelector('input');
+                    checkbox.checked = !checkbox.checked;
+                }
+                label.classList.toggle('checked', label.querySelector('input').checked);
+            });
+        });
+
+        // Time functions
+        async function loadTime() {
+            try {
+                const response = await fetch('/api/time');
+                const time = await response.json();
+                document.getElementById('currentTime').textContent = time.time;
+                document.getElementById('currentDate').textContent = `${time.date} (${time.timezone})`;
+            } catch (error) {
+                console.error('Failed to load time:', error);
+            }
+        }
+
+        // Weather functions
+        async function loadWeather() {
+            const info = document.getElementById('weatherInfo');
+            try {
+                const response = await fetch('/api/weather');
+                const weather = await response.json();
+
+                if (weather.error) {
+                    info.innerHTML = `<span style="color: #f59e0b;">⚠ ${weather.error}</span>`;
+                    return;
+                }
+
+                const minTemp = parseInt(settings.min_temperature_c || -10);
+                const tempClass = weather.temperature_c < minTemp ? 'danger' :
+                    weather.temperature_c < 0 ? 'cold' : '';
+
+                info.innerHTML = `
+                    <span class="weather-temp ${tempClass}">${weather.temperature_c}°C / ${weather.temperature_f}°F</span>
+                    <span>• ${weather.description}</span>
+                    ${weather.temperature_c < minTemp ? '<span style="color: #ef4444;">• Updates blocked (too cold)</span>' : ''}
+                `;
+            } catch (error) {
+                info.innerHTML = '<span style="color: #64748b;">Weather unavailable</span>';
+            }
+        }
+
+        // Hierarchy functions
+        async function loadTopology() {
+            try {
+                const response = await fetch('/api/topology');
+                topology = await response.json();
+                renderHierarchy();
+            } catch (error) {
+                console.error('Failed to load topology:', error);
+            }
+        }
+
+        function renderHierarchy() {
+            const container = document.getElementById('hierarchySelect');
+
+            if (!topology || !topology.sites || topology.sites.length === 0) {
+                container.innerHTML = '<div style="color: #64748b; padding: 12px; text-align: center;">No devices found. Add APs in Monitor view.</div>';
+                return;
+            }
+
+            let html = '';
+            for (const site of topology.sites) {
+                const siteId = site.id || 'unassigned';
+                html += `
+                    <div class="hierarchy-item site">
+                        <input type="checkbox" id="site-${siteId}" onchange="toggleSite('${siteId}')">
+                        <label for="site-${siteId}">${escapeHtml(site.name)}</label>
+                    </div>
+                `;
+
+                for (const ap of (site.aps || [])) {
+                    html += `
+                        <div class="hierarchy-item ap">
+                            <input type="checkbox" class="ap-checkbox" data-site="${siteId}" data-ip="${ap.ip}"
+                                   id="ap-${ap.ip}" onchange="toggleAP('${ap.ip}', '${siteId}')">
+                            <label for="ap-${ap.ip}">${escapeHtml(ap.system_name || ap.ip)}</label>
+                            <span style="color: #64748b; font-size: 0.75rem;">(${ap.cpe_count || 0} CPEs)</span>
+                        </div>
+                    `;
+                }
+            }
+
+            container.innerHTML = html;
+        }
+
+        function toggleSite(siteId) {
+            const siteCheckbox = document.getElementById(`site-${siteId}`);
+            const apCheckboxes = document.querySelectorAll(`.ap-checkbox[data-site="${siteId}"]`);
+            apCheckboxes.forEach(cb => cb.checked = siteCheckbox.checked);
+        }
+
+        function toggleAP(ip, siteId) {
+            // Update site checkbox based on AP selections
+            const siteCheckbox = document.getElementById(`site-${siteId}`);
+            const apCheckboxes = document.querySelectorAll(`.ap-checkbox[data-site="${siteId}"]`);
+            const allChecked = Array.from(apCheckboxes).every(cb => cb.checked);
+            const someChecked = Array.from(apCheckboxes).some(cb => cb.checked);
+            siteCheckbox.checked = allChecked;
+            siteCheckbox.indeterminate = someChecked && !allChecked;
+        }
+
+        function getSelectedDevices() {
+            const selected = [];
+            document.querySelectorAll('.ap-checkbox:checked').forEach(cb => {
+                selected.push(cb.dataset.ip);
+            });
+            return selected;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text || '';
+            return div.innerHTML;
+        }
+
+        // Update startUpdate to use hierarchy selection
+        const originalStartUpdate = startUpdate;
+        startUpdate = async function() {
             const firmware = currentFirmware || document.getElementById('existingFirmware').value;
             const deviceType = document.getElementById('deviceType').value;
-            const ipList = document.getElementById('ipList').value.trim();
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
-            const concurrency = document.getElementById('concurrency').value;
+            const concurrency = document.getElementById('parallelUpdates').value;
+
+            // Get selected devices from hierarchy
+            const selectedIPs = getSelectedDevices();
 
             if (!firmware) {
                 alert('Please select or upload a firmware file');
                 return;
             }
-            if (!ipList) {
-                alert('Please enter device IPs');
+            if (selectedIPs.length === 0) {
+                alert('Please select devices to update');
                 return;
             }
             if (!password) {
@@ -586,11 +1059,8 @@
 
             // Initialize device list
             devices = {};
-            ipList.split('\n').forEach(line => {
-                const ip = line.trim().split(',')[0].trim();
-                if (ip && !ip.startsWith('#')) {
-                    devices[ip] = { status: 'pending', message: 'Waiting...' };
-                }
+            selectedIPs.forEach(ip => {
+                devices[ip] = { status: 'pending', message: 'Waiting...' };
             });
             renderDevices();
 
@@ -603,7 +1073,7 @@
             const formData = new FormData();
             formData.append('firmware_file', firmware);
             formData.append('device_type', deviceType);
-            formData.append('ip_list', ipList);
+            formData.append('ip_list', selectedIPs.join('\n'));
             formData.append('username', username);
             formData.append('password', password);
             formData.append('concurrency', concurrency);
@@ -625,11 +1095,20 @@
                 btn.disabled = false;
                 btn.textContent = 'Start Update';
             }
-        }
+        };
 
         // Initialize
         connectWebSocket();
         loadFirmwareList();
+        loadSettings();
+        loadTime();
+        loadWeather();
+        loadTopology();
+
+        // Update time every minute
+        setInterval(loadTime, 60000);
+        // Update weather every 15 minutes
+        setInterval(loadWeather, 900000);
     </script>
 </body>
 </html>

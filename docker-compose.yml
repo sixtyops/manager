@@ -7,4 +7,6 @@ services:
     volumes:
       # Persist firmware files
       - ./firmware:/app/firmware
+      # Persist database
+      - ./data:/app/data
     restart: unless-stopped

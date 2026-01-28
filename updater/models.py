@@ -93,6 +93,12 @@ class APWithCPEs(BaseModel):
     cpes: list[CPEInfo] = Field(default_factory=list)
     error: Optional[str] = None  # If discovery failed
 
+    # Location data
+    location: Optional[str] = Field(None, description="Location/site name")
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    zone: Optional[str] = Field(None, description="Zone or region")
+
     @property
     def cpe_count(self) -> int:
         """Number of connected CPEs."""

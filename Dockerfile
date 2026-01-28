@@ -15,8 +15,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY updater/ ./updater/
 COPY static/ ./static/
 
-# Create firmware directory for uploads
-RUN mkdir -p /app/firmware
+# Create directories for uploads and data
+RUN mkdir -p /app/firmware /app/data
 
 # Expose port
 EXPOSE 8000
