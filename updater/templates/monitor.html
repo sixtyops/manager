@@ -427,6 +427,13 @@
             font-family: monospace;
         }
 
+        .detail-value a {
+            color: #60a5fa;
+            text-decoration: none;
+        }
+        .detail-value a:hover {
+            text-decoration: underline;
+        }
         .detail-value.green { color: #10b981; }
         .detail-value.yellow { color: #f59e0b; }
         .detail-value.red { color: #ef4444; }
@@ -926,7 +933,7 @@
             grid.innerHTML = `
                 <div class="detail-item">
                     <div class="detail-label">IP Address</div>
-                    <div class="detail-value">${ap.ip}</div>
+                    <div class="detail-value"><a href="http://${ap.ip}" target="_blank" rel="noopener noreferrer">${ap.ip}</a></div>
                 </div>
                 <div class="detail-item">
                     <div class="detail-label">Tower Site</div>
@@ -996,7 +1003,7 @@
             grid.innerHTML = `
                 <div class="detail-item">
                     <div class="detail-label">IP Address</div>
-                    <div class="detail-value">${cpe.ip}</div>
+                    <div class="detail-value"><a href="http://${cpe.ip}" target="_blank" rel="noopener noreferrer">${cpe.ip}</a></div>
                 </div>
                 <div class="detail-item">
                     <div class="detail-label">Connected To</div>
