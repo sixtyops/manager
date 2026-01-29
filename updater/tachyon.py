@@ -147,8 +147,9 @@ class TachyonClient:
             stdout, stderr = await proc.communicate()
 
             if proc.returncode != 0:
-                logger.error(f"Login curl failed for {self.ip}: {stderr.decode()}")
-                return False
+                error_msg = stderr.decode().strip()
+                logger.error(f"Login curl failed for {self.ip}: {error_msg}")
+                return "Device not reachable"
 
             response = stdout.decode("utf-8", errors="ignore")
 
@@ -157,7 +158,7 @@ class TachyonClient:
                 data = json.loads(response)
                 if data.get("statusCode") == 401 or data.get("auth") is False:
                     logger.error(f"Login failed for {self.ip}: Invalid credentials")
-                    return False
+                    return "Login failed"
             except json.JSONDecodeError:
                 pass
 
@@ -173,7 +174,7 @@ class TachyonClient:
                             return True
 
             logger.error(f"No token received from {self.ip}")
-            return False
+            return "Login failed: no token received"
 
         finally:
             Path(cookie_path).unlink(missing_ok=True)

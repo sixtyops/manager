@@ -1,0 +1,150 @@
+"""Shared test fixtures."""
+
+import os
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timedelta
+from unittest.mock import patch, AsyncMock, MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
+
+# Set test env vars before any app imports
+os.environ["ADMIN_USERNAME"] = "admin"
+os.environ["ADMIN_PASSWORD"] = "testpass123"
+
+
+@pytest.fixture
+def memory_db():
+    """In-memory SQLite database with full schema."""
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.executescript("""
+        CREATE TABLE tower_sites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            location TEXT,
+            latitude REAL,
+            longitude REAL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE access_points (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL UNIQUE,
+            tower_site_id INTEGER,
+            username TEXT NOT NULL,
+            password TEXT NOT NULL,
+            system_name TEXT,
+            model TEXT,
+            mac TEXT,
+            firmware_version TEXT,
+            location TEXT,
+            last_seen TEXT,
+            last_error TEXT,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
+        );
+        CREATE TABLE cpe_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ap_ip TEXT NOT NULL,
+            ip TEXT NOT NULL,
+            mac TEXT,
+            system_name TEXT,
+            model TEXT,
+            firmware_version TEXT,
+            link_distance REAL,
+            rx_power REAL,
+            combined_signal REAL,
+            last_local_rssi REAL,
+            tx_rate REAL,
+            rx_rate REAL,
+            mcs INTEGER,
+            link_uptime INTEGER,
+            signal_health TEXT,
+            last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(ap_ip, ip)
+        );
+        CREATE INDEX idx_cpe_ap ON cpe_cache(ap_ip);
+        CREATE TABLE sessions (
+            session_id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            ip_address TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            expires_at TEXT NOT NULL
+        );
+        CREATE TABLE settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    # Insert default settings
+    defaults = {
+        "schedule_enabled": "false",
+        "schedule_days": "tue,wed,thu",
+        "schedule_start_hour": "3",
+        "schedule_end_hour": "4",
+        "parallel_updates": "2",
+        "bank_mode": "both",
+        "timezone": "auto",
+        "zip_code": "",
+        "weather_check_enabled": "true",
+        "min_temperature_c": "-10",
+    }
+    for key, value in defaults.items():
+        conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))
+    conn.commit()
+    yield conn
+    conn.close()
+
+
+@pytest.fixture
+def mock_db(memory_db):
+    """Monkeypatch database.get_db to use in-memory DB."""
+    @contextmanager
+    def _get_db():
+        try:
+            yield memory_db
+            memory_db.commit()
+        except Exception:
+            memory_db.rollback()
+            raise
+
+    with patch("updater.database.get_db", _get_db):
+        yield memory_db
+
+
+@pytest.fixture
+def client(mock_db):
+    """FastAPI TestClient with mocked DB and poller."""
+    mock_poller = MagicMock()
+    mock_poller.start = AsyncMock()
+    mock_poller.stop = AsyncMock()
+    mock_poller.get_topology = MagicMock(return_value={
+        "sites": [], "total_aps": 0, "total_cpes": 0,
+        "overall_health": {"green": 0, "yellow": 0, "red": 0},
+    })
+    mock_poller.poll_ap_now = AsyncMock(return_value=True)
+
+    with patch("updater.app.init_poller", return_value=mock_poller), \
+         patch("updater.app.get_poller", return_value=mock_poller), \
+         patch("updater.database.cleanup_expired_sessions"):
+        from updater.app import app
+        with TestClient(app) as tc:
+            yield tc
+
+
+@pytest.fixture
+def authed_client(client, mock_db):
+    """TestClient with a valid session cookie."""
+    from updater import database as db
+    session_id = "test-session-id-1234"
+    expires = (datetime.now() + timedelta(hours=24)).isoformat()
+    mock_db.execute(
+        "INSERT INTO sessions (session_id, username, ip_address, expires_at) VALUES (?, ?, ?, ?)",
+        (session_id, "admin", "127.0.0.1", expires)
+    )
+    mock_db.commit()
+    client.cookies.set("session_id", session_id)
+    return client

@@ -9,4 +9,11 @@ services:
       - ./firmware:/app/firmware
       # Persist database
       - ./data:/app/data
+    environment:
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=changeme
+      # Optional RADIUS settings
+      # - RADIUS_SERVER=
+      # - RADIUS_SECRET=
+      # - RADIUS_PORT=1812
     restart: unless-stopped

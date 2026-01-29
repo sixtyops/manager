@@ -404,7 +404,7 @@
 
         .detail-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
             gap: 12px;
         }
 
@@ -438,6 +438,11 @@
         <nav class="nav-links">
             <a href="/" class="active">Monitor</a>
             <a href="/firmware">Firmware</a>
+            <form method="POST" action="/logout" style="display:inline;margin:0;">
+                <button type="submit" style="background:none;border:none;color:#94a3b8;cursor:pointer;padding:8px 16px;border-radius:6px;font-size:inherit;font-family:inherit;transition:all 0.2s;"
+                    onmouseover="this.style.color='#f1f5f9';this.style.background='#334155';"
+                    onmouseout="this.style.color='#94a3b8';this.style.background='none';">Logout</button>
+            </form>
         </nav>
     </div>
 
@@ -915,7 +920,8 @@
 
             name.textContent = ap.system_name || ap.ip;
 
-            const lastSeen = ap.last_seen ? new Date(ap.last_seen).toLocaleString() : 'Never';
+            // Append 'Z' so the browser knows it's UTC and converts to local time
+            const lastSeen = ap.last_seen ? new Date(ap.last_seen + 'Z').toLocaleString() : 'Never';
 
             grid.innerHTML = `
                 <div class="detail-item">
@@ -925,10 +931,6 @@
                 <div class="detail-item">
                     <div class="detail-label">Tower Site</div>
                     <div class="detail-value">${site?.name || 'Unassigned'}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Location (from AP)</div>
-                    <div class="detail-value">${ap.location || 'Not set'}</div>
                 </div>
                 <div class="detail-item">
                     <div class="detail-label">Model</div>
@@ -972,8 +974,9 @@
             }
             actionsDiv.style.display = 'flex';
             actionsDiv.innerHTML = `
-                <button class="btn btn-sm" onclick="pollAPNow('${ap.ip}')">Refresh Now</button>
+                <button class="btn btn-sm" id="refreshBtn" onclick="pollAPNow('${ap.ip}')">Refresh Now</button>
                 <button class="btn btn-sm btn-danger" onclick="deleteAP('${ap.ip}')">Delete AP</button>
+                <span id="refreshStatus" style="font-size: 0.8rem; align-self: center; margin-left: 4px;"></span>
             `;
         }
 
@@ -1214,17 +1217,25 @@
         }
 
         async function pollAPNow(ip) {
+            const btn = document.getElementById('refreshBtn');
+            const status = document.getElementById('refreshStatus');
+            if (btn) { btn.disabled = true; btn.textContent = 'Refreshing...'; }
+            if (status) { status.textContent = ''; status.style.color = ''; }
+
             try {
                 const response = await fetch(`/api/aps/${encodeURIComponent(ip)}/poll`, {
                     method: 'POST',
                 });
-                if (!response.ok) {
+                if (response.ok) {
+                    if (status) { status.textContent = 'Refreshed'; status.style.color = '#10b981'; }
+                } else {
                     const error = await response.json();
-                    alert(`Failed to poll AP: ${error.detail || 'Unknown error'}`);
+                    if (status) { status.textContent = error.detail || 'Failed'; status.style.color = '#ef4444'; }
                 }
-                // Update will come via WebSocket
             } catch (error) {
-                alert(`Error polling AP: ${error.message}`);
+                if (status) { status.textContent = error.message; status.style.color = '#ef4444'; }
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = 'Refresh Now'; }
             }
         }
 

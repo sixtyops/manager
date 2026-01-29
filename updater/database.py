@@ -67,6 +67,14 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_cpe_ap ON cpe_cache(ap_ip);
 
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                ip_address TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                expires_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
@@ -202,13 +210,15 @@ def upsert_access_point(ip: str, username: str, password: str, tower_site_id: in
             return db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
 
-def update_ap_status(ip: str, last_seen: str = None, last_error: str = None, **kwargs):
+_UNSET = object()
+
+def update_ap_status(ip: str, last_seen: str = None, last_error: str = _UNSET, **kwargs):
     """Update AP status after a poll."""
     with get_db() as db:
         updates = {}
         if last_seen:
             updates["last_seen"] = last_seen
-        if last_error is not None:
+        if last_error is not _UNSET:
             updates["last_error"] = last_error
 
         allowed = {"system_name", "model", "mac", "firmware_version", "location"}
@@ -329,6 +339,38 @@ def set_settings(settings: dict):
                 "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
                 (key, str(value), datetime.now().isoformat())
             )
+
+
+# Session operations
+def create_session(session_id: str, username: str, ip_address: str, expires_at: str):
+    """Create a new session."""
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO sessions (session_id, username, ip_address, expires_at) VALUES (?, ?, ?, ?)",
+            (session_id, username, ip_address, expires_at)
+        )
+
+
+def get_session(session_id: str) -> Optional[dict]:
+    """Get a session by ID, returns None if expired or not found."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM sessions WHERE session_id = ? AND expires_at > ?",
+            (session_id, datetime.now().isoformat())
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def delete_session(session_id: str):
+    """Delete a session."""
+    with get_db() as db:
+        db.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+
+
+def cleanup_expired_sessions():
+    """Remove all expired sessions."""
+    with get_db() as db:
+        db.execute("DELETE FROM sessions WHERE expires_at <= ?", (datetime.now().isoformat(),))
 
 
 # Initialize on import

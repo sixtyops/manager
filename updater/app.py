@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Dict, Optional, Set
 
 import aiofiles
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, Depends
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -21,6 +21,7 @@ from .tachyon import TachyonClient, UpdateResult
 from . import database as db
 from .poller import init_poller, get_poller
 from . import services
+from .auth import require_auth, require_auth_ws, authenticate, create_session, SESSION_COOKIE_NAME
 
 # Configure logging
 logging.basicConfig(
@@ -63,6 +64,7 @@ async def broadcast(message: dict):
 async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
     # Startup
+    db.cleanup_expired_sessions()
     poller = init_poller(broadcast, poll_interval=60)
     await poller.start()
     logger.info("Application started")
@@ -83,17 +85,60 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 # ============================================================================
+# Auth Routes (no auth dependency)
+# ============================================================================
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, error: str = None):
+    """Serve the login page."""
+    return templates.TemplateResponse("login.html", {"request": request, "error": error})
+
+
+@app.post("/login")
+async def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    """Handle login form submission."""
+    user = authenticate(username, password)
+    if not user:
+        return templates.TemplateResponse("login.html", {"request": request, "error": True}, status_code=401)
+
+    ip_address = request.client.host if request.client else "unknown"
+    session_id = create_session(user, ip_address)
+
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session_id,
+        httponly=True,
+        max_age=86400,
+        samesite="lax",
+    )
+    return response
+
+
+@app.post("/logout")
+async def logout(request: Request):
+    """Handle logout."""
+    session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    if session_id:
+        db.delete_session(session_id)
+
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie(SESSION_COOKIE_NAME)
+    return response
+
+
+# ============================================================================
 # Page Routes
 # ============================================================================
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
+async def index(request: Request, session: dict = Depends(require_auth)):
     """Serve the main page (monitor view)."""
     return templates.TemplateResponse("monitor.html", {"request": request})
 
 
 @app.get("/firmware", response_class=HTMLResponse)
-async def firmware_page(request: Request):
+async def firmware_page(request: Request, session: dict = Depends(require_auth)):
     """Serve the firmware update page."""
     return templates.TemplateResponse("index.html", {"request": request})
 
@@ -105,6 +150,11 @@ async def firmware_page(request: Request):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time updates."""
+    session = await require_auth_ws(websocket)
+    if not session:
+        await websocket.close(code=4001, reason="Not authenticated")
+        return
+
     await websocket.accept()
     active_websockets.add(websocket)
     logger.info(f"WebSocket connected. Total: {len(active_websockets)}")
@@ -133,7 +183,7 @@ async def websocket_endpoint(websocket: WebSocket):
 # ============================================================================
 
 @app.get("/api/sites")
-async def list_sites():
+async def list_sites(session: dict = Depends(require_auth)):
     """List all tower sites."""
     sites = db.get_tower_sites()
     return {"sites": sites}
@@ -145,6 +195,7 @@ async def create_site(
     location: str = Form(None),
     latitude: float = Form(None),
     longitude: float = Form(None),
+    session: dict = Depends(require_auth),
 ):
     """Create a new tower site."""
     try:
@@ -163,6 +214,7 @@ async def update_site(
     location: str = Form(None),
     latitude: float = Form(None),
     longitude: float = Form(None),
+    session: dict = Depends(require_auth),
 ):
     """Update a tower site."""
     db.update_tower_site(site_id, name=name, location=location, latitude=latitude, longitude=longitude)
@@ -170,7 +222,7 @@ async def update_site(
 
 
 @app.delete("/api/sites/{site_id}")
-async def delete_site(site_id: int):
+async def delete_site(site_id: int, session: dict = Depends(require_auth)):
     """Delete a tower site."""
     db.delete_tower_site(site_id)
     return {"success": True}
@@ -181,7 +233,7 @@ async def delete_site(site_id: int):
 # ============================================================================
 
 @app.get("/api/aps")
-async def list_aps(site_id: int = None):
+async def list_aps(site_id: int = None, session: dict = Depends(require_auth)):
     """List access points."""
     aps = db.get_access_points(tower_site_id=site_id, enabled_only=False)
     return {"aps": aps}
@@ -193,6 +245,7 @@ async def add_ap(
     username: str = Form(...),
     password: str = Form(...),
     tower_site_id: int = Form(None),
+    session: dict = Depends(require_auth),
 ):
     """Add a new access point."""
     ap_id = db.upsert_access_point(ip, username, password, tower_site_id)
@@ -212,6 +265,7 @@ async def update_ap(
     password: str = Form(None),
     tower_site_id: int = Form(None),
     enabled: bool = Form(None),
+    session: dict = Depends(require_auth),
 ):
     """Update an access point."""
     ap = db.get_access_point(ip)
@@ -235,7 +289,7 @@ async def update_ap(
 
 
 @app.delete("/api/aps/{ip}")
-async def delete_ap(ip: str):
+async def delete_ap(ip: str, session: dict = Depends(require_auth)):
     """Delete an access point."""
     poller = get_poller()
     if poller:
@@ -246,7 +300,7 @@ async def delete_ap(ip: str):
 
 
 @app.post("/api/aps/{ip}/poll")
-async def poll_ap(ip: str):
+async def poll_ap(ip: str, session: dict = Depends(require_auth)):
     """Trigger immediate poll of an AP."""
     poller = get_poller()
     if not poller:
@@ -264,7 +318,7 @@ async def poll_ap(ip: str):
 # ============================================================================
 
 @app.get("/api/topology")
-async def get_topology():
+async def get_topology(session: dict = Depends(require_auth)):
     """Get current network topology."""
     poller = get_poller()
     if poller:
@@ -279,7 +333,7 @@ async def get_topology():
 
 
 @app.post("/api/topology/refresh")
-async def refresh_topology():
+async def refresh_topology(session: dict = Depends(require_auth)):
     """Trigger a full topology refresh."""
     poller = get_poller()
     if not poller:
@@ -290,7 +344,7 @@ async def refresh_topology():
 
 
 @app.get("/api/cpes")
-async def get_all_cpes():
+async def get_all_cpes(session: dict = Depends(require_auth)):
     """Get all CPEs."""
     cpes = db.get_all_cpes()
     return {"cpes": cpes}
@@ -306,6 +360,7 @@ async def quick_add(
     username: str = Form(...),
     password: str = Form(...),
     site_name: str = Form(None),
+    session: dict = Depends(require_auth),
 ):
     """Quick add an AP, optionally creating a new site."""
     site_id = None
@@ -336,14 +391,14 @@ async def quick_add(
 # ============================================================================
 
 @app.get("/api/settings")
-async def get_settings():
+async def get_settings(session: dict = Depends(require_auth)):
     """Get all settings."""
     settings = db.get_all_settings()
     return {"settings": settings}
 
 
 @app.put("/api/settings")
-async def update_settings(request: Request):
+async def update_settings(request: Request, session: dict = Depends(require_auth)):
     """Update settings."""
     data = await request.json()
     db.set_settings(data)
@@ -351,7 +406,7 @@ async def update_settings(request: Request):
 
 
 @app.get("/api/time")
-async def get_current_time():
+async def get_current_time(session: dict = Depends(require_auth)):
     """Get current time info with timezone."""
     settings = db.get_all_settings()
     tz = settings.get("timezone", "auto")
@@ -366,7 +421,7 @@ async def get_current_time():
 
 
 @app.get("/api/weather")
-async def get_weather():
+async def get_weather(session: dict = Depends(require_auth)):
     """Get current weather."""
     settings = db.get_all_settings()
     zip_code = settings.get("zip_code", "")
@@ -383,7 +438,7 @@ async def get_weather():
 
 
 @app.get("/api/location")
-async def get_location():
+async def get_location(session: dict = Depends(require_auth)):
     """Get detected location info."""
     settings = db.get_all_settings()
     zip_code = settings.get("zip_code", "")
@@ -429,8 +484,7 @@ class UpdateJob:
     firmware_file: str
     firmware_name: str
     device_type: str
-    username: str
-    password: str
+    credentials: Dict[str, tuple] = field(default_factory=dict)  # IP -> (username, password)
     devices: Dict[str, DeviceStatus] = field(default_factory=dict)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
@@ -438,7 +492,7 @@ class UpdateJob:
 
 
 @app.post("/api/upload-firmware")
-async def upload_firmware(file: UploadFile = File(...)):
+async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(require_auth)):
     """Upload a firmware file."""
     if not file.filename:
         raise HTTPException(400, "No filename provided")
@@ -460,7 +514,7 @@ async def upload_firmware(file: UploadFile = File(...)):
 
 
 @app.get("/api/firmware-files")
-async def list_firmware_files():
+async def list_firmware_files(session: dict = Depends(require_auth)):
     """List available firmware files."""
     files = []
     for f in FIRMWARE_DIR.iterdir():
@@ -478,9 +532,8 @@ async def start_update(
     firmware_file: str = Form(...),
     device_type: str = Form(...),
     ip_list: str = Form(...),
-    username: str = Form(...),
-    password: str = Form(...),
     concurrency: int = Form(5),
+    session: dict = Depends(require_auth),
 ):
     """Start a firmware update job."""
     ips = []
@@ -498,14 +551,26 @@ async def start_update(
     if not firmware_path.exists():
         raise HTTPException(400, f"Firmware file not found: {firmware_file}")
 
+    # Look up stored credentials for each AP
+    credentials = {}
+    missing_aps = []
+    for ip in ips:
+        ap = db.get_access_point(ip)
+        if ap:
+            credentials[ip] = (ap["username"], ap["password"])
+        else:
+            missing_aps.append(ip)
+
+    if missing_aps:
+        raise HTTPException(400, f"No stored credentials for: {', '.join(missing_aps)}")
+
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
         job_id=job_id,
         firmware_file=str(firmware_path),
         firmware_name=firmware_file,
         device_type=device_type,
-        username=username,
-        password=password,
+        credentials=credentials,
         started_at=datetime.now(),
         status="running",
     )
@@ -569,7 +634,8 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                 }))
 
             if job.device_type == "tachyon":
-                client = TachyonClient(ip, job.username, job.password)
+                username, password = job.credentials[ip]
+                client = TachyonClient(ip, username, password)
                 result = await client.update_firmware(job.firmware_file, progress_callback)
             else:
                 result = UpdateResult(ip=ip, success=False, error=f"Unsupported device type: {job.device_type}")
@@ -616,7 +682,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
 
 
 @app.get("/api/job/{job_id}")
-async def get_job_status(job_id: str):
+async def get_job_status(job_id: str, session: dict = Depends(require_auth)):
     """Get status of an update job."""
     if job_id not in update_jobs:
         raise HTTPException(404, "Job not found")

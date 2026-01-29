@@ -87,10 +87,10 @@ class NetworkPoller:
 
         try:
             # Get or create authenticated client
-            client = await self._get_client(ip, ap["username"], ap["password"])
+            client, error = await self._get_client(ip, ap["username"], ap["password"])
 
             if not client:
-                db.update_ap_status(ip, last_error="Login failed")
+                db.update_ap_status(ip, last_error=error)
                 return
 
             # Get AP info
@@ -158,18 +158,22 @@ class NetworkPoller:
             # Remove cached client on error
             self._clients.pop(ip, None)
 
-    async def _get_client(self, ip: str, username: str, password: str) -> Optional[TachyonClient]:
-        """Get authenticated client, reusing existing session if possible."""
+    async def _get_client(self, ip: str, username: str, password: str) -> tuple:
+        """Get authenticated client, reusing existing session if possible.
+
+        Returns (client, None) on success or (None, error_string) on failure.
+        """
         if ip in self._clients:
-            return self._clients[ip]
+            return self._clients[ip], None
 
         client = TachyonClient(ip, username, password)
 
-        if await client.login():
+        result = await client.login()
+        if result is True:
             self._clients[ip] = client
-            return client
+            return client, None
 
-        return None
+        return None, result if isinstance(result, str) else "Login failed"
 
     def _get_or_create_site(self, location: str) -> Optional[int]:
         """Get or create a tower site by location name."""

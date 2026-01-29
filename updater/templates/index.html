@@ -264,13 +264,6 @@
         .summary-item.failed .summary-value { color: #ef4444; }
         .summary-item.pending .summary-value { color: #94a3b8; }
 
-        /* Credential inputs row */
-        .cred-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-        }
-
         /* Time display */
         .time-display {
             text-align: right;
@@ -452,6 +445,11 @@
         <nav class="nav-links">
             <a href="/">Monitor</a>
             <a href="/firmware" class="active">Firmware</a>
+            <form method="POST" action="/logout" style="display:inline;margin:0;">
+                <button type="submit" style="background:none;border:none;color:#94a3b8;cursor:pointer;padding:8px 16px;border-radius:6px;font-size:inherit;font-family:inherit;transition:all 0.2s;"
+                    onmouseover="this.style.color='#f1f5f9';this.style.background='#334155';"
+                    onmouseout="this.style.color='#94a3b8';this.style.background='none';">Logout</button>
+            </form>
         </nav>
     </div>
 
@@ -464,30 +462,30 @@
                 <h2>Configuration</h2>
 
                 <!-- Schedule Settings -->
-                <div class="settings-section">
+                <div class="settings-section" style="opacity: 0.5;">
                     <h3>
-                        <span class="toggle" id="scheduleToggle" onclick="toggleSchedule()"></span>
-                        Scheduled Updates
+                        <span class="toggle" id="scheduleToggle" style="cursor: not-allowed; pointer-events: none;"></span>
+                        Scheduled Updates <span style="font-size: 0.75rem; color: #f59e0b; margin-left: 6px;">(Coming Soon)</span>
                     </h3>
                     <div id="scheduleSettings" style="display: none;">
                         <div class="settings-grid">
                             <div class="form-group">
                                 <label>Days</label>
                                 <div class="checkbox-group" id="scheduleDays">
-                                    <label class="checkbox-label" data-day="mon"><input type="checkbox" value="mon"> Mon</label>
-                                    <label class="checkbox-label" data-day="tue"><input type="checkbox" value="tue"> Tue</label>
-                                    <label class="checkbox-label" data-day="wed"><input type="checkbox" value="wed"> Wed</label>
-                                    <label class="checkbox-label" data-day="thu"><input type="checkbox" value="thu"> Thu</label>
-                                    <label class="checkbox-label" data-day="fri"><input type="checkbox" value="fri"> Fri</label>
-                                    <label class="checkbox-label" data-day="sat"><input type="checkbox" value="sat"> Sat</label>
-                                    <label class="checkbox-label" data-day="sun"><input type="checkbox" value="sun"> Sun</label>
+                                    <label class="checkbox-label" data-day="mon"><input type="checkbox" value="mon" disabled> Mon</label>
+                                    <label class="checkbox-label" data-day="tue"><input type="checkbox" value="tue" disabled> Tue</label>
+                                    <label class="checkbox-label" data-day="wed"><input type="checkbox" value="wed" disabled> Wed</label>
+                                    <label class="checkbox-label" data-day="thu"><input type="checkbox" value="thu" disabled> Thu</label>
+                                    <label class="checkbox-label" data-day="fri"><input type="checkbox" value="fri" disabled> Fri</label>
+                                    <label class="checkbox-label" data-day="sat"><input type="checkbox" value="sat" disabled> Sat</label>
+                                    <label class="checkbox-label" data-day="sun"><input type="checkbox" value="sun" disabled> Sun</label>
                                 </div>
                             </div>
                         </div>
                         <div class="settings-grid" style="margin-top: 12px;">
                             <div class="form-group">
                                 <label>Start Hour</label>
-                                <select id="scheduleStartHour">
+                                <select id="scheduleStartHour" disabled>
                                     <option value="0">12:00 AM</option>
                                     <option value="1">1:00 AM</option>
                                     <option value="2">2:00 AM</option>
@@ -498,7 +496,7 @@
                             </div>
                             <div class="form-group">
                                 <label>End Hour</label>
-                                <select id="scheduleEndHour">
+                                <select id="scheduleEndHour" disabled>
                                     <option value="1">1:00 AM</option>
                                     <option value="2">2:00 AM</option>
                                     <option value="3">3:00 AM</option>
@@ -576,14 +574,6 @@
                     <select id="existingFirmware" style="margin-top: 8px;">
                         <option value="">-- Or select existing --</option>
                     </select>
-                </div>
-
-                <div class="form-group">
-                    <label>Credentials</label>
-                    <div class="cred-row">
-                        <input type="text" id="username" placeholder="Username" value="root">
-                        <input type="password" id="password" placeholder="Password">
-                    </div>
                 </div>
 
                 <div class="form-group">
@@ -830,23 +820,10 @@
         }
 
         function applySettings() {
-            // Schedule toggle
-            const scheduleEnabled = settings.schedule_enabled === 'true';
-            document.getElementById('scheduleToggle').classList.toggle('active', scheduleEnabled);
-            document.getElementById('scheduleSettings').style.display = scheduleEnabled ? 'block' : 'none';
-
-            // Schedule days
-            const days = (settings.schedule_days || 'tue,wed,thu').split(',');
-            document.querySelectorAll('#scheduleDays .checkbox-label').forEach(label => {
-                const checkbox = label.querySelector('input');
-                const day = label.dataset.day;
-                checkbox.checked = days.includes(day);
-                label.classList.toggle('checked', checkbox.checked);
-            });
-
-            // Hours
-            document.getElementById('scheduleStartHour').value = settings.schedule_start_hour || '3';
-            document.getElementById('scheduleEndHour').value = settings.schedule_end_hour || '4';
+            // Schedule toggle - disabled (coming soon)
+            // Keep settings in sync but don't enable the toggle
+            document.getElementById('scheduleToggle').classList.remove('active');
+            document.getElementById('scheduleSettings').style.display = 'none';
 
             // Update settings
             document.getElementById('parallelUpdates').value = settings.parallel_updates || '2';
@@ -863,14 +840,7 @@
         }
 
         async function saveSettings() {
-            const days = Array.from(document.querySelectorAll('#scheduleDays input:checked'))
-                .map(cb => cb.value).join(',');
-
             const newSettings = {
-                schedule_enabled: document.getElementById('scheduleToggle').classList.contains('active').toString(),
-                schedule_days: days || 'tue,wed,thu',
-                schedule_start_hour: document.getElementById('scheduleStartHour').value,
-                schedule_end_hour: document.getElementById('scheduleEndHour').value,
                 parallel_updates: document.getElementById('parallelUpdates').value,
                 bank_mode: document.getElementById('bankMode').value,
                 weather_check_enabled: document.getElementById('weatherToggle').classList.contains('active').toString(),
@@ -896,10 +866,7 @@
         }
 
         function toggleSchedule() {
-            const toggle = document.getElementById('scheduleToggle');
-            toggle.classList.toggle('active');
-            document.getElementById('scheduleSettings').style.display =
-                toggle.classList.contains('active') ? 'block' : 'none';
+            // Scheduled Updates is coming soon - toggle disabled
         }
 
         function toggleWeather() {
@@ -988,12 +955,14 @@
                 `;
 
                 for (const ap of (site.aps || [])) {
+                    const fwVersion = ap.firmware_version ? escapeHtml(ap.firmware_version) : 'unknown';
+                    const cpeCount = ap.cpe_count || 0;
                     html += `
                         <div class="hierarchy-item ap">
                             <input type="checkbox" class="ap-checkbox" data-site="${siteId}" data-ip="${ap.ip}"
                                    id="ap-${ap.ip}" onchange="toggleAP('${ap.ip}', '${siteId}')">
-                            <label for="ap-${ap.ip}">${escapeHtml(ap.system_name || ap.ip)}</label>
-                            <span style="color: #64748b; font-size: 0.75rem;">(${ap.cpe_count || 0} CPEs)</span>
+                            <label for="ap-${ap.ip}" style="flex: 1;">${escapeHtml(ap.system_name || ap.ip)}</label>
+                            <span style="color: #64748b; font-size: 0.7rem; white-space: nowrap;">v${fwVersion} &middot; ${cpeCount} CPE${cpeCount !== 1 ? 's' : ''}</span>
                         </div>
                     `;
                 }
@@ -1037,8 +1006,6 @@
         startUpdate = async function() {
             const firmware = currentFirmware || document.getElementById('existingFirmware').value;
             const deviceType = document.getElementById('deviceType').value;
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
             const concurrency = document.getElementById('parallelUpdates').value;
 
             // Get selected devices from hierarchy
@@ -1050,10 +1017,6 @@
             }
             if (selectedIPs.length === 0) {
                 alert('Please select devices to update');
-                return;
-            }
-            if (!password) {
-                alert('Please enter password');
                 return;
             }
 
@@ -1074,8 +1037,6 @@
             formData.append('firmware_file', firmware);
             formData.append('device_type', deviceType);
             formData.append('ip_list', selectedIPs.join('\n'));
-            formData.append('username', username);
-            formData.append('password', password);
             formData.append('concurrency', concurrency);
 
             try {
