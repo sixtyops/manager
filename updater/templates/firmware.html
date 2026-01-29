@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firmware - Tachyon Management System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 24px;
+            background: #1e293b;
+            border-bottom: 1px solid #334155;
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            font-size: 1.4rem;
+            color: #f1f5f9;
+            margin: 0;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 16px;
+        }
+
+        .nav-links a {
+            color: #94a3b8;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+
+        .nav-links a:hover, .nav-links a.active {
+            color: #f1f5f9;
+            background: #334155;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .user-menu {
+            position: relative;
+        }
+
+        .user-btn {
+            background: #334155;
+            border: none;
+            color: #94a3b8;
+            cursor: pointer;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .user-btn:hover {
+            color: #f1f5f9;
+            background: #475569;
+        }
+
+        .user-dropdown {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 100%;
+            margin-top: 8px;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            min-width: 140px;
+            z-index: 100;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .user-dropdown.open {
+            display: block;
+        }
+
+        .dropdown-item {
+            display: block;
+            width: 100%;
+            padding: 10px 16px;
+            background: none;
+            border: none;
+            color: #e2e8f0;
+            font-size: 0.875rem;
+            text-align: left;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.15s;
+        }
+
+        .dropdown-item:hover {
+            background: #334155;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 0 20px 20px 20px;
+        }
+
+        h2.page-title {
+            font-size: 1.4rem;
+            margin-bottom: 24px;
+            color: #f1f5f9;
+        }
+
+        .card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .card h2 {
+            font-size: 1.1rem;
+            margin-bottom: 16px;
+            color: #94a3b8;
+        }
+
+        .file-upload {
+            border: 2px dashed #334155;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .file-upload:hover {
+            border-color: #3b82f6;
+        }
+
+        .file-upload.dragover {
+            border-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .file-upload input {
+            display: none;
+        }
+
+        .file-info {
+            margin-top: 10px;
+            font-size: 0.875rem;
+            color: #10b981;
+        }
+
+        /* Firmware table */
+        .firmware-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .firmware-table th {
+            text-align: left;
+            padding: 10px 12px;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: #64748b;
+            border-bottom: 1px solid #334155;
+        }
+
+        .firmware-table td {
+            padding: 10px 12px;
+            font-size: 0.875rem;
+            border-bottom: 1px solid #1e293b;
+        }
+
+        .firmware-table tr:hover td {
+            background: #0f172a;
+        }
+
+        .firmware-table tr.active-row td {
+            background: rgba(59, 130, 246, 0.08);
+        }
+
+        .firmware-table .name-cell {
+            font-family: monospace;
+            word-break: break-all;
+            font-size: 0.8rem;
+        }
+
+        .type-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .type-tna-30x { background: #1e40af; color: #93c5fd; }
+        .type-tna-303l { background: #065f46; color: #6ee7b7; }
+        .type-tns-100 { background: #7c2d12; color: #fed7aa; }
+        .type-unknown { background: #475569; color: #94a3b8; }
+
+        .btn-icon {
+            background: none;
+            border: none;
+            color: #64748b;
+            cursor: pointer;
+            padding: 6px;
+            border-radius: 6px;
+            transition: all 0.2s;
+            font-size: 1rem;
+        }
+
+        .btn-icon:hover {
+            color: #ef4444;
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .btn-use {
+            background: none;
+            border: 1px solid #334155;
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+
+        .btn-use:hover {
+            border-color: #3b82f6;
+            color: #3b82f6;
+        }
+
+        .btn-use.active {
+            background: #3b82f6;
+            border-color: #3b82f6;
+            color: white;
+        }
+
+        .empty-message {
+            text-align: center;
+            color: #64748b;
+            padding: 24px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Tachyon Management System</h1>
+        <div class="header-right">
+            <nav class="nav-links">
+                <a href="/">Monitor</a>
+                <a href="/update">Update</a>
+                <a href="/firmware" class="active">Firmware</a>
+            </nav>
+            <div class="user-menu">
+                <button class="user-btn" onclick="document.getElementById('userDropdown').classList.toggle('open')">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                </button>
+                <div class="user-dropdown" id="userDropdown">
+                    <form method="POST" action="/logout" style="margin:0;">
+                        <button type="submit" class="dropdown-item">Logout</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2 class="page-title">Firmware</h2>
+
+        <div class="card">
+            <h2>Upload</h2>
+            <div class="file-upload" id="fileUpload">
+                <input type="file" id="firmwareFile" accept=".bin,.img,.npk,.tar,.gz">
+                <div>Drop firmware file here or click to browse</div>
+                <div class="file-info" id="fileInfo"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Firmware Files</h2>
+            <div id="firmwareList">
+                <div class="empty-message">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allFiles = [];
+        let selectedFirmware = {}; // e.g. { 'tna-30x': 'filename.bin', 'tna-303l': 'filename.bin' }
+
+        // Auto-detect type from filename
+        function detectType(filename) {
+            const lower = filename.toLowerCase();
+            if (lower.includes('tna-303l') || lower.includes('tna303l')) return 'tna-303l';
+            if (lower.includes('tna-30x') || lower.includes('tna30x')) return 'tna-30x';
+            if (lower.includes('tns-100') || lower.includes('tns100')) return 'tns-100';
+            return 'unknown';
+        }
+
+        // Extract version from filename for comparison
+        function extractVersion(filename) {
+            const match = filename.match(/(?:tna-30x|tna30x|tna-303l|tna303l|tns-100|tns100)-(\d+\.\d+\.\d+)-r(\d+)/i);
+            if (match) return match[1] + '.' + match[2];
+            const match2 = filename.match(/(\d+\.\d+\.\d+)/);
+            if (match2) return match2[1];
+            return '-';
+        }
+
+        // Parse version string into comparable parts
+        function parseVersion(versionStr) {
+            if (!versionStr || versionStr === '-') return [0, 0, 0, 0];
+            const parts = versionStr.split('.').map(Number);
+            while (parts.length < 4) parts.push(0);
+            return parts;
+        }
+
+        function compareVersions(a, b) {
+            const pa = parseVersion(a);
+            const pb = parseVersion(b);
+            for (let i = 0; i < 4; i++) {
+                if (pa[i] !== pb[i]) return pa[i] - pb[i];
+            }
+            return 0;
+        }
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function formatDate(isoString) {
+            return new Date(isoString).toLocaleString();
+        }
+
+        // File upload handling
+        const fileUpload = document.getElementById('fileUpload');
+        const fileInput = document.getElementById('firmwareFile');
+        const fileInfo = document.getElementById('fileInfo');
+
+        fileUpload.addEventListener('click', () => fileInput.click());
+
+        fileUpload.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileUpload.classList.add('dragover');
+        });
+
+        fileUpload.addEventListener('dragleave', () => {
+            fileUpload.classList.remove('dragover');
+        });
+
+        fileUpload.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileUpload.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+                fileInput.files = e.dataTransfer.files;
+                handleFileSelect(e.dataTransfer.files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+
+        async function handleFileSelect(file) {
+            fileInfo.textContent = `Uploading ${file.name}...`;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/api/upload-firmware', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const result = await response.json();
+
+                if (response.ok) {
+                    fileInfo.textContent = `Uploaded ${result.filename} (${formatSize(result.size)})`;
+                    await loadFirmwareList();
+                    // Auto-select if this is a newer version of its type
+                    autoSelectAfterUpload(result.filename);
+                } else {
+                    fileInfo.textContent = `Error: ${result.detail}`;
+                }
+            } catch (error) {
+                fileInfo.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        function autoSelectAfterUpload(uploadedFilename) {
+            const type = detectType(uploadedFilename);
+            if (type === 'unknown') return;
+
+            const settingsKey = type === 'tna-30x' ? 'selected_firmware_30x' :
+                                type === 'tna-303l' ? 'selected_firmware_303l' : null;
+            if (!settingsKey) return;
+
+            const currentSelected = selectedFirmware[type] || '';
+
+            if (!currentSelected) {
+                // Nothing selected for this type — auto-select
+                selectFirmware(type, uploadedFilename);
+                return;
+            }
+
+            // Compare versions — auto-select if newer
+            const currentVersion = extractVersion(currentSelected);
+            const newVersion = extractVersion(uploadedFilename);
+            if (compareVersions(newVersion, currentVersion) > 0) {
+                selectFirmware(type, uploadedFilename);
+            }
+        }
+
+        function autoSelectFromList() {
+            // For each type, if only 1 file exists and nothing is selected, auto-select it
+            const typeGroups = {};
+            for (const f of allFiles) {
+                const type = detectType(f.name);
+                if (type === 'unknown') continue;
+                if (!typeGroups[type]) typeGroups[type] = [];
+                typeGroups[type].push(f);
+            }
+
+            let changed = false;
+            for (const [type, files] of Object.entries(typeGroups)) {
+                if (!selectedFirmware[type] && files.length === 1) {
+                    selectedFirmware[type] = files[0].name;
+                    changed = true;
+                }
+                // If currently selected file no longer exists, clear it
+                if (selectedFirmware[type] && !files.find(f => f.name === selectedFirmware[type])) {
+                    // Auto-pick the newest remaining
+                    const sorted = files.sort((a, b) => {
+                        return compareVersions(extractVersion(b.name), extractVersion(a.name));
+                    });
+                    selectedFirmware[type] = sorted.length > 0 ? sorted[0].name : '';
+                    changed = true;
+                }
+            }
+
+            // Clear selection for types with no files
+            for (const type of Object.keys(selectedFirmware)) {
+                if (!typeGroups[type] || typeGroups[type].length === 0) {
+                    if (selectedFirmware[type]) {
+                        selectedFirmware[type] = '';
+                        changed = true;
+                    }
+                }
+            }
+
+            if (changed) saveSelection();
+        }
+
+        async function selectFirmware(type, filename) {
+            selectedFirmware[type] = filename;
+            await saveSelection();
+            renderFirmwareList();
+        }
+
+        async function saveSelection() {
+            const data = {};
+            if (selectedFirmware['tna-30x'] !== undefined) data.selected_firmware_30x = selectedFirmware['tna-30x'];
+            if (selectedFirmware['tna-303l'] !== undefined) data.selected_firmware_303l = selectedFirmware['tna-303l'];
+
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data),
+                });
+            } catch (error) {
+                console.error('Failed to save firmware selection:', error);
+            }
+        }
+
+        async function loadSettings() {
+            try {
+                const response = await fetch('/api/settings');
+                const result = await response.json();
+                selectedFirmware['tna-30x'] = result.settings.selected_firmware_30x || '';
+                selectedFirmware['tna-303l'] = result.settings.selected_firmware_303l || '';
+            } catch (error) {
+                console.error('Failed to load settings:', error);
+            }
+        }
+
+        async function loadFirmwareList() {
+            try {
+                const response = await fetch('/api/firmware-files');
+                const result = await response.json();
+                allFiles = result.files;
+                autoSelectFromList();
+                renderFirmwareList();
+            } catch (error) {
+                document.getElementById('firmwareList').innerHTML =
+                    '<div class="empty-message">Failed to load firmware files.</div>';
+            }
+        }
+
+        function renderFirmwareList() {
+            const container = document.getElementById('firmwareList');
+
+            if (allFiles.length === 0) {
+                container.innerHTML = '<div class="empty-message">No firmware files uploaded yet.</div>';
+                return;
+            }
+
+            let html = `<table class="firmware-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Version</th>
+                        <th>Size</th>
+                        <th>Date</th>
+                        <th>Active</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+            for (const f of allFiles) {
+                const type = detectType(f.name);
+                const version = extractVersion(f.name);
+                const isSelected = selectedFirmware[type] === f.name;
+                const rowClass = isSelected ? 'active-row' : '';
+                const canSelect = type !== 'unknown';
+
+                let activeCell = '';
+                if (canSelect) {
+                    if (isSelected) {
+                        activeCell = `<button class="btn-use active" disabled>Active</button>`;
+                    } else {
+                        activeCell = `<button class="btn-use" onclick="selectFirmware('${type}', '${escapeAttr(f.name)}')">Use</button>`;
+                    }
+                } else {
+                    activeCell = '<span style="color:#64748b;font-size:0.75rem;">-</span>';
+                }
+
+                html += `<tr class="${rowClass}">
+                    <td class="name-cell">${escapeHtml(f.name)}</td>
+                    <td><span class="type-badge type-${type}">${type}</span></td>
+                    <td>${escapeHtml(version)}</td>
+                    <td>${formatSize(f.size)}</td>
+                    <td>${formatDate(f.modified)}</td>
+                    <td>${activeCell}</td>
+                    <td><button class="btn-icon" onclick="deleteFirmware('${escapeAttr(f.name)}')" title="Delete">&#128465;</button></td>
+                </tr>`;
+            }
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        async function deleteFirmware(filename) {
+            if (!confirm(`Delete firmware file "${filename}"?`)) return;
+
+            try {
+                const response = await fetch(`/api/firmware-files/${encodeURIComponent(filename)}`, {
+                    method: 'DELETE',
+                });
+
+                if (response.ok) {
+                    // Clear selection if this was the active file
+                    for (const type of Object.keys(selectedFirmware)) {
+                        if (selectedFirmware[type] === filename) {
+                            selectedFirmware[type] = '';
+                        }
+                    }
+                    await loadFirmwareList();
+                } else {
+                    const result = await response.json();
+                    alert(`Error: ${result.detail}`);
+                }
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text || '';
+            return div.innerHTML;
+        }
+
+        function escapeAttr(text) {
+            return (text || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        }
+
+        // Close user dropdown on outside click
+        document.addEventListener('click', (e) => {
+            const menu = document.querySelector('.user-menu');
+            if (!menu.contains(e.target)) {
+                document.getElementById('userDropdown').classList.remove('open');
+            }
+        });
+
+        // Initialize
+        (async () => {
+            await loadSettings();
+            await loadFirmwareList();
+        })();
+    </script>
+</body>
+</html>

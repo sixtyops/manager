@@ -139,6 +139,12 @@ async def index(request: Request, session: dict = Depends(require_auth)):
 
 @app.get("/firmware", response_class=HTMLResponse)
 async def firmware_page(request: Request, session: dict = Depends(require_auth)):
+    """Serve the firmware manager page."""
+    return templates.TemplateResponse("firmware.html", {"request": request})
+
+
+@app.get("/update", response_class=HTMLResponse)
+async def update_page(request: Request, session: dict = Depends(require_auth)):
     """Serve the firmware update page."""
     return templates.TemplateResponse("index.html", {"request": request})
 
@@ -475,17 +481,28 @@ class DeviceStatus:
     new_version: Optional[str] = None
     error: Optional[str] = None
     progress_message: str = ""
+    bank1_version: Optional[str] = None
+    bank2_version: Optional[str] = None
+    active_bank: Optional[int] = None
+    role: str = "ap"
+    parent_ap: Optional[str] = None
+    model: Optional[str] = None
 
 
 @dataclass
 class UpdateJob:
     """A firmware update job."""
     job_id: str
-    firmware_file: str
-    firmware_name: str
-    device_type: str
+    firmware_files: Dict[str, str] = field(default_factory=dict)  # pattern key -> path
+    firmware_names: Dict[str, str] = field(default_factory=dict)  # pattern key -> display name
+    device_firmware_map: Dict[str, str] = field(default_factory=dict)  # IP -> firmware path
+    device_type: str = "tachyon"
     credentials: Dict[str, tuple] = field(default_factory=dict)  # IP -> (username, password)
     devices: Dict[str, DeviceStatus] = field(default_factory=dict)
+    update_order: str = "cpe_first"
+    ap_cpe_map: Dict[str, list] = field(default_factory=dict)  # AP IP -> [CPE IPs]
+    device_roles: Dict[str, str] = field(default_factory=dict)  # IP -> "ap"/"cpe"
+    device_parent: Dict[str, str] = field(default_factory=dict)  # CPE IP -> parent AP IP
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     status: str = "pending"
@@ -527,39 +544,136 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
     return {"files": sorted(files, key=lambda x: x["modified"], reverse=True)}
 
 
+@app.delete("/api/firmware-files/{filename}")
+async def delete_firmware_file(filename: str, session: dict = Depends(require_auth)):
+    """Delete a firmware file."""
+    path = FIRMWARE_DIR / filename
+    if not path.exists():
+        raise HTTPException(404, "File not found")
+    path.unlink()
+    return {"success": True}
+
+
+def _select_firmware_for_model(model: Optional[str], firmware_files: Dict[str, str]) -> Optional[str]:
+    """Select the correct firmware path for a device model.
+
+    Args:
+        model: Device model string (e.g. "TNA-303L-65")
+        firmware_files: Dict of pattern key -> firmware path (e.g. {"tna-30x": "/path", "tna-303l": "/path"})
+
+    Returns:
+        Firmware path or None if no match.
+    """
+    if not model:
+        # No model info - use the default "tna-30x" firmware if available
+        return firmware_files.get("tna-30x") or next(iter(firmware_files.values()), None)
+
+    model_lower = model.lower()
+
+    # Check known model patterns
+    for model_key, patterns in TachyonClient.MODEL_FIRMWARE_PATTERNS.items():
+        if model_lower == model_key or model_lower.startswith(model_key):
+            # Found the model - look for matching firmware
+            for pattern in patterns:
+                if pattern in firmware_files:
+                    return firmware_files[pattern]
+            return None  # Model known but no matching firmware provided
+
+    # Unknown model - use default "tna-30x" firmware
+    return firmware_files.get("tna-30x") or next(iter(firmware_files.values()), None)
+
+
+def _is_303l_model(model: Optional[str]) -> bool:
+    """Check if a model is a TNA-303L variant."""
+    if not model:
+        return False
+    model_lower = model.lower()
+    return model_lower.startswith("tna-303l")
+
+
 @app.post("/api/start-update")
 async def start_update(
     firmware_file: str = Form(...),
     device_type: str = Form(...),
     ip_list: str = Form(...),
     concurrency: int = Form(5),
+    firmware_file_303l: str = Form(""),
+    update_order: str = Form("cpe_first"),
     session: dict = Depends(require_auth),
 ):
     """Start a firmware update job."""
-    ips = []
+    ap_ips = []
     for line in ip_list.strip().split("\n"):
         line = line.strip()
         if line and not line.startswith("#"):
             ip = line.split(",")[0].strip()
             if ip:
-                ips.append(ip)
+                ap_ips.append(ip)
 
-    if not ips:
+    if not ap_ips:
         raise HTTPException(400, "No valid IPs provided")
 
+    # Build firmware files dict
     firmware_path = FIRMWARE_DIR / firmware_file
     if not firmware_path.exists():
         raise HTTPException(400, f"Firmware file not found: {firmware_file}")
 
-    # Look up stored credentials for each AP
+    firmware_files = {"tna-30x": str(firmware_path)}
+    firmware_names = {"tna-30x": firmware_file}
+
+    if firmware_file_303l:
+        path_303l = FIRMWARE_DIR / firmware_file_303l
+        if not path_303l.exists():
+            raise HTTPException(400, f"303L firmware file not found: {firmware_file_303l}")
+        firmware_files["tna-303l"] = str(path_303l)
+        firmware_names["tna-303l"] = firmware_file_303l
+
+    # Look up stored credentials for each AP and discover CPEs
     credentials = {}
     missing_aps = []
-    for ip in ips:
+    ap_cpe_map = {}
+    device_roles = {}
+    device_parent = {}
+    device_firmware_map = {}
+
+    for ip in ap_ips:
         ap = db.get_access_point(ip)
-        if ap:
-            credentials[ip] = (ap["username"], ap["password"])
-        else:
+        if not ap:
             missing_aps.append(ip)
+            continue
+
+        credentials[ip] = (ap["username"], ap["password"])
+        device_roles[ip] = "ap"
+        device_firmware_map[ip] = _select_firmware_for_model(ap.get("model"), firmware_files) or str(firmware_path)
+
+        # Get CPEs with auth_status='ok' for this AP
+        cpes = db.get_cpes_for_ap(ip)
+        cpe_ips = []
+        for cpe in cpes:
+            cpe_ip = cpe.get("ip")
+            if not cpe_ip:
+                continue
+            if cpe.get("auth_status") != "ok":
+                continue
+
+            cpe_ips.append(cpe_ip)
+            device_roles[cpe_ip] = "cpe"
+            device_parent[cpe_ip] = ip
+            # CPEs inherit AP credentials
+            credentials[cpe_ip] = (ap["username"], ap["password"])
+
+            # Assign firmware based on CPE model
+            cpe_model = cpe.get("model")
+            cpe_fw = _select_firmware_for_model(cpe_model, firmware_files)
+            if cpe_fw is None and _is_303l_model(cpe_model):
+                # 303L CPE but no 303L firmware provided - will fail with clear error
+                device_firmware_map[cpe_ip] = "__missing_303l__"
+            elif cpe_fw is None:
+                device_firmware_map[cpe_ip] = str(firmware_path)
+            else:
+                device_firmware_map[cpe_ip] = cpe_fw
+
+        ap_cpe_map[ip] = cpe_ips
 
     if missing_aps:
         raise HTTPException(400, f"No stored credentials for: {', '.join(missing_aps)}")
@@ -567,118 +681,197 @@ async def start_update(
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
         job_id=job_id,
-        firmware_file=str(firmware_path),
-        firmware_name=firmware_file,
+        firmware_files=firmware_files,
+        firmware_names=firmware_names,
+        device_firmware_map=device_firmware_map,
         device_type=device_type,
         credentials=credentials,
+        update_order=update_order,
+        ap_cpe_map=ap_cpe_map,
+        device_roles=device_roles,
+        device_parent=device_parent,
         started_at=datetime.now(),
         status="running",
     )
 
-    for ip in ips:
-        job.devices[ip] = DeviceStatus(ip=ip)
+    # Create device statuses for all devices (APs + CPEs)
+    for ip in ap_ips:
+        job.devices[ip] = DeviceStatus(ip=ip, role="ap")
+    for ap_ip, cpe_ips in ap_cpe_map.items():
+        for cpe_ip in cpe_ips:
+            job.devices[cpe_ip] = DeviceStatus(ip=cpe_ip, role="cpe", parent_ap=ap_ip)
 
     update_jobs[job_id] = job
 
     await broadcast({
         "type": "job_started",
         "job_id": job_id,
-        "device_count": len(ips),
+        "device_count": len(job.devices),
         "firmware": firmware_file,
+        "ap_cpe_map": ap_cpe_map,
+        "device_roles": device_roles,
+        "device_parent": device_parent,
+        "update_order": update_order,
     })
 
     asyncio.create_task(run_update_job(job, concurrency))
 
-    return {"job_id": job_id, "device_count": len(ips)}
+    return {"job_id": job_id, "device_count": len(job.devices)}
+
+
+async def _update_single_device(job: "UpdateJob", ip: str):
+    """Update a single device within a job."""
+    device_status = job.devices[ip]
+    device_status.status = "connecting"
+    device_status.progress_message = "Connecting..."
+
+    await broadcast({
+        "type": "device_update",
+        "job_id": job.job_id,
+        "ip": ip,
+        "status": device_status.status,
+        "message": device_status.progress_message,
+        "role": device_status.role,
+        "parent_ap": device_status.parent_ap,
+    })
+
+    # Check for missing 303L firmware
+    fw_path = job.device_firmware_map.get(ip, "")
+    if fw_path == "__missing_303l__":
+        device_status.status = "failed"
+        device_status.error = "TNA-303L device requires 303L firmware, but none was provided"
+        device_status.progress_message = device_status.error
+        await broadcast({
+            "type": "device_update",
+            "job_id": job.job_id,
+            "ip": ip,
+            "status": device_status.status,
+            "message": device_status.progress_message,
+            "error": device_status.error,
+            "role": device_status.role,
+            "parent_ap": device_status.parent_ap,
+        })
+        return
+
+    def progress_callback(device_ip: str, message: str):
+        status_map = {
+            "Logging in": "connecting",
+            "Getting device info": "connecting",
+            "Uploading firmware": "uploading",
+            "Installing firmware": "installing",
+            "Rebooting": "rebooting",
+            "Verifying": "verifying",
+            "Skipped": "skipped",
+        }
+        for key, status in status_map.items():
+            if key in message:
+                device_status.status = status
+                break
+        device_status.progress_message = message
+
+        asyncio.create_task(broadcast({
+            "type": "device_update",
+            "job_id": job.job_id,
+            "ip": device_ip,
+            "status": device_status.status,
+            "message": message,
+            "role": device_status.role,
+            "parent_ap": device_status.parent_ap,
+        }))
+
+    if job.device_type == "tachyon":
+        username, password = job.credentials[ip]
+        client = TachyonClient(ip, username, password)
+        result = await client.update_firmware(fw_path, progress_callback)
+    else:
+        result = UpdateResult(ip=ip, success=False, error=f"Unsupported device type: {job.device_type}")
+
+    device_status.old_version = result.old_version
+    device_status.new_version = result.new_version
+    device_status.bank1_version = result.bank1_version
+    device_status.bank2_version = result.bank2_version
+    device_status.active_bank = result.active_bank
+    device_status.model = result.model
+
+    if result.skipped:
+        device_status.status = "skipped"
+        device_status.progress_message = f"Already on {result.new_version}"
+    elif result.success:
+        device_status.status = "success"
+        device_status.progress_message = f"Updated to {result.new_version}"
+    else:
+        device_status.status = "failed"
+        device_status.error = result.error
+        device_status.progress_message = result.error or "Update failed"
+
+    await broadcast({
+        "type": "device_update",
+        "job_id": job.job_id,
+        "ip": ip,
+        "status": device_status.status,
+        "message": device_status.progress_message,
+        "old_version": device_status.old_version,
+        "new_version": device_status.new_version,
+        "error": device_status.error,
+        "bank1_version": device_status.bank1_version,
+        "bank2_version": device_status.bank2_version,
+        "active_bank": device_status.active_bank,
+        "role": device_status.role,
+        "parent_ap": device_status.parent_ap,
+        "model": device_status.model,
+    })
 
 
 async def run_update_job(job: UpdateJob, concurrency: int):
-    """Run the firmware update job."""
+    """Run the firmware update job with AP/CPE ordering."""
     semaphore = asyncio.Semaphore(concurrency)
 
-    async def update_device(ip: str):
+    async def update_ap_group(ap_ip: str):
+        """Update an AP and its CPEs respecting the configured order."""
         async with semaphore:
-            device_status = job.devices[ip]
-            device_status.status = "connecting"
-            device_status.progress_message = "Connecting..."
+            cpe_ips = job.ap_cpe_map.get(ap_ip, [])
 
-            await broadcast({
-                "type": "device_update",
-                "job_id": job.job_id,
-                "ip": ip,
-                "status": device_status.status,
-                "message": device_status.progress_message,
-            })
-
-            def progress_callback(device_ip: str, message: str):
-                status_map = {
-                    "Logging in": "connecting",
-                    "Getting device info": "connecting",
-                    "Uploading firmware": "uploading",
-                    "Installing firmware": "installing",
-                    "Rebooting": "rebooting",
-                    "Verifying": "verifying",
-                }
-                for key, status in status_map.items():
-                    if key in message:
-                        device_status.status = status
-                        break
-                device_status.progress_message = message
-
-                asyncio.create_task(broadcast({
-                    "type": "device_update",
-                    "job_id": job.job_id,
-                    "ip": device_ip,
-                    "status": device_status.status,
-                    "message": message,
-                }))
-
-            if job.device_type == "tachyon":
-                username, password = job.credentials[ip]
-                client = TachyonClient(ip, username, password)
-                result = await client.update_firmware(job.firmware_file, progress_callback)
+            if job.update_order == "cpe_first":
+                # Update all CPEs concurrently, then the AP
+                if cpe_ips:
+                    await asyncio.gather(
+                        *[_update_single_device(job, cpe_ip) for cpe_ip in cpe_ips],
+                        return_exceptions=True,
+                    )
+                await _update_single_device(job, ap_ip)
             else:
-                result = UpdateResult(ip=ip, success=False, error=f"Unsupported device type: {job.device_type}")
+                # Update the AP first, then all CPEs concurrently
+                await _update_single_device(job, ap_ip)
+                if cpe_ips:
+                    await asyncio.gather(
+                        *[_update_single_device(job, cpe_ip) for cpe_ip in cpe_ips],
+                        return_exceptions=True,
+                    )
 
-            device_status.old_version = result.old_version
-            device_status.new_version = result.new_version
-
-            if result.success:
-                device_status.status = "success"
-                device_status.progress_message = f"Updated to {result.new_version}"
-            else:
-                device_status.status = "failed"
-                device_status.error = result.error
-                device_status.progress_message = result.error or "Update failed"
-
-            await broadcast({
-                "type": "device_update",
-                "job_id": job.job_id,
-                "ip": ip,
-                "status": device_status.status,
-                "message": device_status.progress_message,
-                "old_version": device_status.old_version,
-                "new_version": device_status.new_version,
-                "error": device_status.error,
-            })
-
-    await asyncio.gather(*[update_device(ip) for ip in job.devices.keys()])
+    # Run AP groups in parallel (bounded by semaphore)
+    ap_ips = [ip for ip, role in job.device_roles.items() if role == "ap"]
+    await asyncio.gather(
+        *[update_ap_group(ap_ip) for ap_ip in ap_ips],
+        return_exceptions=True,
+    )
 
     job.completed_at = datetime.now()
     job.status = "completed"
 
     success_count = sum(1 for d in job.devices.values() if d.status == "success")
     failed_count = sum(1 for d in job.devices.values() if d.status == "failed")
+    skipped_count = sum(1 for d in job.devices.values() if d.status == "skipped")
 
     await broadcast({
         "type": "job_completed",
         "job_id": job.job_id,
         "success_count": success_count,
         "failed_count": failed_count,
+        "skipped_count": skipped_count,
         "duration": (job.completed_at - job.started_at).total_seconds(),
     })
 
-    logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed")
+    logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped")
 
 
 @app.get("/api/job/{job_id}")
@@ -691,8 +884,11 @@ async def get_job_status(job_id: str, session: dict = Depends(require_auth)):
     return {
         "job_id": job.job_id,
         "status": job.status,
-        "firmware": job.firmware_name,
+        "firmware_names": job.firmware_names,
         "device_type": job.device_type,
+        "update_order": job.update_order,
+        "ap_cpe_map": job.ap_cpe_map,
+        "device_roles": job.device_roles,
         "started_at": job.started_at.isoformat() if job.started_at else None,
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         "devices": {ip: asdict(status) for ip, status in job.devices.items()},

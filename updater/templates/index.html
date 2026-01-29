@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Firmware Update - Tachyon Management System</title>
+    <title>Update - Tachyon Management System</title>
     <style>
         * {
             margin: 0;
@@ -49,6 +49,72 @@
 
         .nav-links a:hover, .nav-links a.active {
             color: #f1f5f9;
+            background: #334155;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .user-menu {
+            position: relative;
+        }
+
+        .user-btn {
+            background: #334155;
+            border: none;
+            color: #94a3b8;
+            cursor: pointer;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .user-btn:hover {
+            color: #f1f5f9;
+            background: #475569;
+        }
+
+        .user-dropdown {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 100%;
+            margin-top: 8px;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            min-width: 140px;
+            z-index: 100;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .user-dropdown.open {
+            display: block;
+        }
+
+        .dropdown-item {
+            display: block;
+            width: 100%;
+            padding: 10px 16px;
+            background: none;
+            border: none;
+            color: #e2e8f0;
+            font-size: 0.875rem;
+            text-align: left;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.15s;
+        }
+
+        .dropdown-item:hover {
             background: #334155;
         }
 
@@ -118,34 +184,6 @@
             min-height: 150px;
             font-family: monospace;
             resize: vertical;
-        }
-
-        .file-upload {
-            border: 2px dashed #334155;
-            border-radius: 8px;
-            padding: 20px;
-            text-align: center;
-            cursor: pointer;
-            transition: border-color 0.2s;
-        }
-
-        .file-upload:hover {
-            border-color: #3b82f6;
-        }
-
-        .file-upload.dragover {
-            border-color: #3b82f6;
-            background: rgba(59, 130, 246, 0.1);
-        }
-
-        .file-upload input {
-            display: none;
-        }
-
-        .file-info {
-            margin-top: 10px;
-            font-size: 0.875rem;
-            color: #10b981;
         }
 
         .btn {
@@ -221,6 +259,7 @@
         .status-rebooting { background: #f97316; }
         .status-verifying { background: #06b6d4; }
         .status-success { background: #10b981; }
+        .status-skipped { background: #64748b; }
         .status-failed { background: #ef4444; }
 
         .device-message {
@@ -433,6 +472,108 @@
             font-size: 0.85rem;
             color: #94a3b8;
         }
+
+        .cpe-auth-icon {
+            font-size: 0.75rem;
+            margin-left: 4px;
+        }
+
+        .cpe-auth-ok { color: #10b981; }
+        .cpe-auth-failed { color: #ef4444; }
+        .cpe-auth-unknown { color: #64748b; }
+
+        /* Progress tree - AP group */
+        .device-item.device-ap {
+            border-left: 3px solid #3b82f6;
+        }
+
+        .device-item.device-cpe {
+            margin-left: 24px;
+            border-left: 3px solid #334155;
+        }
+
+        .device-role-label {
+            font-size: 0.65rem;
+            font-weight: 600;
+            padding: 2px 5px;
+            border-radius: 3px;
+            margin-right: 6px;
+            text-transform: uppercase;
+        }
+
+        .role-ap {
+            background: #1e40af;
+            color: #93c5fd;
+        }
+
+        .role-cpe {
+            background: #334155;
+            color: #94a3b8;
+        }
+
+        .bank-info {
+            font-size: 0.7rem;
+            color: #64748b;
+            margin-top: 2px;
+        }
+
+        .bank-active {
+            color: #10b981;
+            font-weight: 500;
+        }
+
+        .firmware-info {
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .firmware-info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+        }
+
+        .firmware-info-row + .firmware-info-row {
+            border-top: 1px solid #1e293b;
+        }
+
+        .firmware-info-label {
+            font-size: 0.75rem;
+            color: #64748b;
+            text-transform: uppercase;
+        }
+
+        .firmware-info-value {
+            font-family: monospace;
+            font-size: 0.8rem;
+            color: #e2e8f0;
+            max-width: 250px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .firmware-info-value.none {
+            color: #64748b;
+            font-style: italic;
+            font-family: inherit;
+        }
+
+        .firmware-info-link {
+            display: block;
+            text-align: center;
+            margin-top: 8px;
+            font-size: 0.8rem;
+            color: #3b82f6;
+            text-decoration: none;
+        }
+
+        .firmware-info-link:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
@@ -442,19 +583,30 @@
             <div class="time" id="currentTime">--:-- --</div>
             <div id="currentDate">Loading...</div>
         </div>
-        <nav class="nav-links">
-            <a href="/">Monitor</a>
-            <a href="/firmware" class="active">Firmware</a>
-            <form method="POST" action="/logout" style="display:inline;margin:0;">
-                <button type="submit" style="background:none;border:none;color:#94a3b8;cursor:pointer;padding:8px 16px;border-radius:6px;font-size:inherit;font-family:inherit;transition:all 0.2s;"
-                    onmouseover="this.style.color='#f1f5f9';this.style.background='#334155';"
-                    onmouseout="this.style.color='#94a3b8';this.style.background='none';">Logout</button>
-            </form>
-        </nav>
+        <div class="header-right">
+            <nav class="nav-links">
+                <a href="/">Monitor</a>
+                <a href="/update" class="active">Update</a>
+                <a href="/firmware">Firmware</a>
+            </nav>
+            <div class="user-menu">
+                <button class="user-btn" onclick="document.getElementById('userDropdown').classList.toggle('open')">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                </button>
+                <div class="user-dropdown" id="userDropdown">
+                    <form method="POST" action="/logout" style="margin:0;">
+                        <button type="submit" class="dropdown-item">Logout</button>
+                    </form>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="container">
-        <h2 class="page-title">Firmware Update</h2>
+        <h2 class="page-title">Update</h2>
 
         <div class="grid">
             <!-- Left: Configuration -->
@@ -524,6 +676,13 @@
                                 <option value="one">Single Bank</option>
                             </select>
                         </div>
+                        <div class="form-group">
+                            <label>Update Order</label>
+                            <select id="updateOrder">
+                                <option value="cpe_first">CPE First</option>
+                                <option value="ap_first">AP First</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
 
@@ -565,15 +724,18 @@
                 </div>
 
                 <div class="form-group">
-                    <label>Firmware File</label>
-                    <div class="file-upload" id="fileUpload">
-                        <input type="file" id="firmwareFile" accept=".bin,.img,.npk,.tar,.gz">
-                        <div>Drop firmware file here or click to browse</div>
-                        <div class="file-info" id="fileInfo"></div>
+                    <label>Firmware</label>
+                    <div class="firmware-info">
+                        <div class="firmware-info-row">
+                            <span class="firmware-info-label">tna-30x</span>
+                            <span class="firmware-info-value" id="selectedFw30x"><span class="none">Loading...</span></span>
+                        </div>
+                        <div class="firmware-info-row">
+                            <span class="firmware-info-label">tna-303l</span>
+                            <span class="firmware-info-value" id="selectedFw303l"><span class="none">Loading...</span></span>
+                        </div>
+                        <a href="/firmware" class="firmware-info-link">Manage firmware</a>
                     </div>
-                    <select id="existingFirmware" style="margin-top: 8px;">
-                        <option value="">-- Or select existing --</option>
-                    </select>
                 </div>
 
                 <div class="form-group">
@@ -621,9 +783,11 @@
     <script>
         let ws = null;
         let devices = {};
-        let currentFirmware = null;
         let topology = null;
         let settings = {};
+        let apCpeMap = {};
+        let deviceRoles = {};
+        let deviceParent = {};
 
         // WebSocket connection
         function connectWebSocket() {
@@ -654,6 +818,18 @@
 
                 case 'job_started':
                     console.log('Job started:', message.job_id);
+                    if (message.ap_cpe_map) apCpeMap = message.ap_cpe_map;
+                    if (message.device_roles) deviceRoles = message.device_roles;
+                    if (message.device_parent) deviceParent = message.device_parent;
+                    // Initialize CPE devices in the devices map
+                    for (const [apIp, cpeIps] of Object.entries(apCpeMap)) {
+                        for (const cpeIp of cpeIps) {
+                            if (!devices[cpeIp]) {
+                                devices[cpeIp] = { status: 'pending', message: 'Waiting...', role: 'cpe', parent_ap: apIp };
+                            }
+                        }
+                    }
+                    renderDevices();
                     break;
 
                 case 'device_update':
@@ -664,6 +840,12 @@
                         old_version: message.old_version,
                         new_version: message.new_version,
                         error: message.error,
+                        bank1_version: message.bank1_version,
+                        bank2_version: message.bank2_version,
+                        active_bank: message.active_bank,
+                        role: message.role || devices[message.ip]?.role || 'ap',
+                        parent_ap: message.parent_ap || devices[message.ip]?.parent_ap,
+                        model: message.model,
                     };
                     renderDevices();
                     break;
@@ -671,49 +853,102 @@
                 case 'job_completed':
                     document.getElementById('startBtn').disabled = false;
                     document.getElementById('startBtn').textContent = 'Start Update';
-                    alert(`Update complete!\n\nSuccess: ${message.success_count}\nFailed: ${message.failed_count}\nDuration: ${Math.round(message.duration)}s`);
+                    const parts = [`Success: ${message.success_count}`, `Failed: ${message.failed_count}`];
+                    if (message.skipped_count > 0) parts.push(`Skipped: ${message.skipped_count}`);
+                    parts.push(`Duration: ${Math.round(message.duration)}s`);
+                    alert(`Update complete!\n\n${parts.join('\n')}`);
                     break;
             }
         }
 
         function renderDevices() {
             const list = document.getElementById('deviceList');
-            const ips = Object.keys(devices).sort();
+            const allIps = Object.keys(devices);
 
-            if (ips.length === 0) {
+            if (allIps.length === 0) {
                 list.innerHTML = '<div style="text-align: center; color: #64748b; padding: 40px;">Configure settings and click Start Update</div>';
                 return;
             }
 
             let pending = 0, inProgress = 0, success = 0, failed = 0;
 
-            list.innerHTML = ips.map(ip => {
-                const device = devices[ip];
-                const status = device.status || 'pending';
-
+            function countStatus(status) {
                 if (status === 'pending') pending++;
-                else if (status === 'success') success++;
+                else if (status === 'success' || status === 'skipped') success++;
                 else if (status === 'failed') failed++;
                 else inProgress++;
+            }
+
+            function renderDeviceItem(ip, device, isAp) {
+                const status = device.status || 'pending';
+                countStatus(status);
+                const role = isAp ? 'ap' : 'cpe';
+                const roleClass = isAp ? 'device-ap' : 'device-cpe';
+                const roleLabel = isAp
+                    ? '<span class="device-role-label role-ap">AP</span>'
+                    : '<span class="device-role-label role-cpe">CPE</span>';
 
                 let versionInfo = '';
                 if (device.old_version || device.new_version) {
-                    versionInfo = `<div class="device-versions">${device.old_version || '?'} → ${device.new_version || '?'}</div>`;
+                    versionInfo = `<div class="device-versions">${device.old_version || '?'} &rarr; ${device.new_version || '?'}</div>`;
                 }
 
+                let bankInfo = '';
+                if (device.bank1_version || device.bank2_version) {
+                    const b1 = device.bank1_version || '?';
+                    const b2 = device.bank2_version || '?';
+                    const b1Class = device.active_bank === 1 ? 'bank-active' : '';
+                    const b2Class = device.active_bank === 2 ? 'bank-active' : '';
+                    bankInfo = `<div class="bank-info">Bank 1: <span class="${b1Class}">${escapeHtml(b1)}</span> | Bank 2: <span class="${b2Class}">${escapeHtml(b2)}</span></div>`;
+                }
+
+                const modelInfo = device.model ? `<span style="color:#64748b;font-size:0.7rem;margin-left:6px;">${escapeHtml(device.model)}</span>` : '';
+
                 return `
-                    <div class="device-item">
+                    <div class="device-item ${roleClass}">
                         <div>
-                            <div class="device-ip">${ip}</div>
+                            <div class="device-ip">${roleLabel}${ip}${modelInfo}</div>
                             <div class="device-message">${device.message || ''}</div>
                             ${versionInfo}
+                            ${bankInfo}
                         </div>
                         <div class="device-status">
                             <span class="status-badge status-${status}">${status}</span>
                         </div>
                     </div>
                 `;
-            }).join('');
+            }
+
+            // Render grouped by AP -> CPEs
+            let html = '';
+            const renderedIps = new Set();
+
+            // Get AP IPs in order
+            const apIps = allIps.filter(ip => (devices[ip].role || deviceRoles[ip]) === 'ap').sort();
+
+            for (const apIp of apIps) {
+                html += renderDeviceItem(apIp, devices[apIp], true);
+                renderedIps.add(apIp);
+
+                // Render CPEs under this AP
+                const cpeIps = apCpeMap[apIp] || [];
+                for (const cpeIp of cpeIps) {
+                    if (devices[cpeIp]) {
+                        html += renderDeviceItem(cpeIp, devices[cpeIp], false);
+                        renderedIps.add(cpeIp);
+                    }
+                }
+            }
+
+            // Render any remaining devices not in the AP/CPE tree
+            for (const ip of allIps.sort()) {
+                if (!renderedIps.has(ip)) {
+                    const isAp = (devices[ip].role || deviceRoles[ip] || 'ap') === 'ap';
+                    html += renderDeviceItem(ip, devices[ip], isAp);
+                }
+            }
+
+            list.innerHTML = html;
 
             document.getElementById('pendingCount').textContent = pending;
             document.getElementById('inProgressCount').textContent = inProgress;
@@ -721,87 +956,31 @@
             document.getElementById('failedCount').textContent = failed;
         }
 
-        // File upload handling
-        const fileUpload = document.getElementById('fileUpload');
-        const fileInput = document.getElementById('firmwareFile');
-        const fileInfo = document.getElementById('fileInfo');
+        let selectedFirmware30x = '';
+        let selectedFirmware303l = '';
 
-        fileUpload.addEventListener('click', () => fileInput.click());
-
-        fileUpload.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            fileUpload.classList.add('dragover');
-        });
-
-        fileUpload.addEventListener('dragleave', () => {
-            fileUpload.classList.remove('dragover');
-        });
-
-        fileUpload.addEventListener('drop', (e) => {
-            e.preventDefault();
-            fileUpload.classList.remove('dragover');
-            if (e.dataTransfer.files.length) {
-                fileInput.files = e.dataTransfer.files;
-                handleFileSelect(e.dataTransfer.files[0]);
-            }
-        });
-
-        fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length) {
-                handleFileSelect(e.target.files[0]);
-            }
-        });
-
-        async function handleFileSelect(file) {
-            fileInfo.textContent = `Uploading ${file.name}...`;
-
-            const formData = new FormData();
-            formData.append('file', file);
-
+        async function loadSelectedFirmware() {
             try {
-                const response = await fetch('/api/upload-firmware', {
-                    method: 'POST',
-                    body: formData,
-                });
+                const response = await fetch('/api/settings');
                 const result = await response.json();
-
-                if (response.ok) {
-                    currentFirmware = result.filename;
-                    fileInfo.textContent = `✓ ${result.filename} (${formatSize(result.size)})`;
-                    loadFirmwareList();
-                } else {
-                    fileInfo.textContent = `Error: ${result.detail}`;
-                }
+                selectedFirmware30x = result.settings.selected_firmware_30x || '';
+                selectedFirmware303l = result.settings.selected_firmware_303l || '';
+                renderSelectedFirmware();
             } catch (error) {
-                fileInfo.textContent = `Error: ${error.message}`;
+                console.error('Failed to load selected firmware:', error);
             }
         }
 
-        function formatSize(bytes) {
-            if (bytes < 1024) return bytes + ' B';
-            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        function renderSelectedFirmware() {
+            const el30x = document.getElementById('selectedFw30x');
+            const el303l = document.getElementById('selectedFw303l');
+            el30x.innerHTML = selectedFirmware30x
+                ? `<span title="${escapeHtml(selectedFirmware30x)}">${escapeHtml(selectedFirmware30x)}</span>`
+                : '<span class="none">Not selected</span>';
+            el303l.innerHTML = selectedFirmware303l
+                ? `<span title="${escapeHtml(selectedFirmware303l)}">${escapeHtml(selectedFirmware303l)}</span>`
+                : '<span class="none">Not selected</span>';
         }
-
-        async function loadFirmwareList() {
-            try {
-                const response = await fetch('/api/firmware-files');
-                const result = await response.json();
-
-                const select = document.getElementById('existingFirmware');
-                select.innerHTML = '<option value="">-- Or select existing --</option>' +
-                    result.files.map(f => `<option value="${f.name}">${f.name} (${formatSize(f.size)})</option>`).join('');
-            } catch (error) {
-                console.error('Failed to load firmware list:', error);
-            }
-        }
-
-        document.getElementById('existingFirmware').addEventListener('change', (e) => {
-            if (e.target.value) {
-                currentFirmware = e.target.value;
-                fileInfo.textContent = `Selected: ${e.target.value}`;
-            }
-        });
 
         async function startUpdate() {
             // This function is overwritten below with hierarchy-aware version
@@ -828,6 +1007,7 @@
             // Update settings
             document.getElementById('parallelUpdates').value = settings.parallel_updates || '2';
             document.getElementById('bankMode').value = settings.bank_mode || 'both';
+            document.getElementById('updateOrder').value = settings.update_order || 'cpe_first';
 
             // Weather toggle
             const weatherEnabled = settings.weather_check_enabled !== 'false';
@@ -843,6 +1023,7 @@
             const newSettings = {
                 parallel_updates: document.getElementById('parallelUpdates').value,
                 bank_mode: document.getElementById('bankMode').value,
+                update_order: document.getElementById('updateOrder').value,
                 weather_check_enabled: document.getElementById('weatherToggle').classList.contains('active').toString(),
                 min_temperature_c: document.getElementById('minTempC').value,
                 zip_code: document.getElementById('zipCode').value,
@@ -965,6 +1146,28 @@
                             <span style="color: #64748b; font-size: 0.7rem; white-space: nowrap;">v${fwVersion} &middot; ${cpeCount} CPE${cpeCount !== 1 ? 's' : ''}</span>
                         </div>
                     `;
+
+                    // Show CPEs under this AP (not selectable individually)
+                    for (const cpe of (ap.cpes || [])) {
+                        if (!cpe.ip) continue;
+                        const cpeModel = cpe.model ? escapeHtml(cpe.model) : '';
+                        const cpeFw = cpe.firmware_version ? `v${escapeHtml(cpe.firmware_version)}` : '';
+                        let authIcon = '<span class="cpe-auth-icon cpe-auth-unknown" title="Untested">?</span>';
+                        if (cpe.auth_status === 'ok') {
+                            authIcon = '<span class="cpe-auth-icon cpe-auth-ok" title="Auth OK">&#10003;</span>';
+                        } else if (cpe.auth_status === 'failed') {
+                            authIcon = '<span class="cpe-auth-icon cpe-auth-failed" title="Auth Failed">&#10007;</span>';
+                        } else if (cpe.auth_status === 'unreachable') {
+                            authIcon = '<span class="cpe-auth-icon cpe-auth-failed" title="Unreachable">&#10007;</span>';
+                        }
+                        html += `
+                            <div class="hierarchy-item cpe">
+                                ${authIcon}
+                                <span>${escapeHtml(cpe.system_name || cpe.ip)}</span>
+                                <span style="color: #64748b; font-size: 0.7rem; margin-left: auto; white-space: nowrap;">${cpeModel} ${cpeFw}</span>
+                            </div>
+                        `;
+                    }
                 }
             }
 
@@ -1004,15 +1207,17 @@
         // Update startUpdate to use hierarchy selection
         const originalStartUpdate = startUpdate;
         startUpdate = async function() {
-            const firmware = currentFirmware || document.getElementById('existingFirmware').value;
+            const firmware = selectedFirmware30x;
+            const firmware303l = selectedFirmware303l;
             const deviceType = document.getElementById('deviceType').value;
             const concurrency = document.getElementById('parallelUpdates').value;
+            const updateOrder = document.getElementById('updateOrder').value;
 
             // Get selected devices from hierarchy
             const selectedIPs = getSelectedDevices();
 
             if (!firmware) {
-                alert('Please select or upload a firmware file');
+                alert('No firmware selected. Go to the Firmware page to select firmware.');
                 return;
             }
             if (selectedIPs.length === 0) {
@@ -1020,10 +1225,14 @@
                 return;
             }
 
-            // Initialize device list
+            // Initialize device list with AP devices; CPEs will be added from job_started
             devices = {};
+            apCpeMap = {};
+            deviceRoles = {};
+            deviceParent = {};
             selectedIPs.forEach(ip => {
-                devices[ip] = { status: 'pending', message: 'Waiting...' };
+                devices[ip] = { status: 'pending', message: 'Waiting...', role: 'ap' };
+                deviceRoles[ip] = 'ap';
             });
             renderDevices();
 
@@ -1038,6 +1247,10 @@
             formData.append('device_type', deviceType);
             formData.append('ip_list', selectedIPs.join('\n'));
             formData.append('concurrency', concurrency);
+            formData.append('update_order', updateOrder);
+            if (firmware303l) {
+                formData.append('firmware_file_303l', firmware303l);
+            }
 
             try {
                 const response = await fetch('/api/start-update', {
@@ -1058,9 +1271,17 @@
             }
         };
 
+        // Close user dropdown on outside click
+        document.addEventListener('click', (e) => {
+            const menu = document.querySelector('.user-menu');
+            if (!menu.contains(e.target)) {
+                document.getElementById('userDropdown').classList.remove('open');
+            }
+        });
+
         // Initialize
         connectWebSocket();
-        loadFirmwareList();
+        loadSelectedFirmware();
         loadSettings();
         loadTime();
         loadWeather();
