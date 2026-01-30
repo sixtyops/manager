@@ -126,8 +126,72 @@
 
         h2.page-title {
             font-size: 1.4rem;
-            margin-bottom: 24px;
+            margin-bottom: 16px;
             color: #f1f5f9;
+        }
+
+        .sub-tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 20px;
+            background: #1e293b;
+            padding: 4px;
+            border-radius: 8px;
+            width: fit-content;
+        }
+
+        .sub-tab {
+            padding: 8px 20px;
+            border: none;
+            background: none;
+            color: #94a3b8;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+
+        .sub-tab.active {
+            background: #334155;
+            color: #f1f5f9;
+        }
+
+        .sub-tab:hover:not(.active) {
+            color: #e2e8f0;
+        }
+
+        .coming-soon-card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 40px;
+            max-width: 600px;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .coming-soon-icon {
+            font-size: 2.5rem;
+            margin-bottom: 16px;
+            opacity: 0.6;
+        }
+
+        .coming-soon-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #f1f5f9;
+            margin-bottom: 8px;
+        }
+
+        .coming-soon-desc {
+            color: #94a3b8;
+            font-size: 0.9rem;
+            margin-bottom: 24px;
+        }
+
+        .coming-soon-preview {
+            opacity: 0.4;
+            pointer-events: none;
         }
 
         .grid {
@@ -261,6 +325,7 @@
         .status-success { background: #10b981; }
         .status-skipped { background: #64748b; }
         .status-failed { background: #ef4444; }
+        .status-cancelled { background: #f59e0b; }
 
         .device-message {
             font-size: 0.8rem;
@@ -608,18 +673,123 @@
     <div class="container">
         <h2 class="page-title">Update</h2>
 
-        <div class="grid">
-            <!-- Left: Configuration -->
-            <div class="card">
-                <h2>Configuration</h2>
+        <div class="sub-tabs">
+            <button class="sub-tab active" onclick="switchTab('manual')">Manual</button>
+            <button class="sub-tab" onclick="switchTab('auto')">Auto-Update</button>
+        </div>
 
-                <!-- Schedule Settings -->
-                <div class="settings-section" style="opacity: 0.5;">
-                    <h3>
-                        <span class="toggle" id="scheduleToggle" style="cursor: not-allowed; pointer-events: none;"></span>
-                        Scheduled Updates <span style="font-size: 0.75rem; color: #f59e0b; margin-left: 6px;">(Coming Soon)</span>
-                    </h3>
-                    <div id="scheduleSettings" style="display: none;">
+        <!-- Manual Tab -->
+        <div id="tab-manual" class="tab-content" style="display: grid;">
+            <div class="grid">
+                <!-- Left column -->
+                <div>
+                    <!-- Settings Card -->
+                    <div class="card" style="margin-bottom: 24px;">
+                        <h2>Settings</h2>
+
+                        <!-- Update Settings -->
+                        <div class="settings-section">
+                            <h3>Update Settings</h3>
+                            <div class="settings-grid">
+                                <div class="form-group">
+                                    <label>Parallel Updates</label>
+                                    <input type="number" id="parallelUpdates" value="2" min="1" max="10">
+                                </div>
+                                <div class="form-group">
+                                    <label>Bank Mode</label>
+                                    <select id="bankMode">
+                                        <option value="both">Both Banks</option>
+                                        <option value="one">Single Bank</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button class="btn" onclick="saveSettings()" style="background: #475569;">Save Settings</button>
+                    </div>
+
+                    <!-- Run Update Card -->
+                    <div class="card">
+                        <h2>Run Update</h2>
+
+                        <input type="hidden" id="deviceType" value="tachyon">
+
+                        <div class="form-group">
+                            <label>Firmware</label>
+                            <div class="firmware-info">
+                                <div class="firmware-info-row">
+                                    <span class="firmware-info-label">tna-30x</span>
+                                    <span class="firmware-info-value" id="selectedFw30x"><span class="none">Loading...</span></span>
+                                </div>
+                                <div class="firmware-info-row">
+                                    <span class="firmware-info-label">tna-303l</span>
+                                    <span class="firmware-info-value" id="selectedFw303l"><span class="none">Loading...</span></span>
+                                </div>
+                                <a href="/firmware" class="firmware-info-link">Manage firmware</a>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Select Devices</label>
+                            <div class="hierarchy-select" id="hierarchySelect">
+                                <div style="color: #64748b; padding: 12px; text-align: center;">Loading devices...</div>
+                            </div>
+                        </div>
+
+                        <button class="btn" id="startBtn" onclick="startUpdate()">Start Update</button>
+                    </div>
+                </div>
+
+                <!-- Right: Progress -->
+                <div class="card">
+                    <h2>Progress</h2>
+
+                    <div class="summary">
+                        <div class="summary-item pending">
+                            <div class="summary-value" id="pendingCount">0</div>
+                            <div class="summary-label">Pending</div>
+                        </div>
+                        <div class="summary-item" style="background: #1e40af;">
+                            <div class="summary-value" id="inProgressCount">0</div>
+                            <div class="summary-label">In Progress</div>
+                        </div>
+                        <div class="summary-item success">
+                            <div class="summary-value" id="successCount">0</div>
+                            <div class="summary-label">Success</div>
+                        </div>
+                        <div class="summary-item failed">
+                            <div class="summary-value" id="failedCount">0</div>
+                            <div class="summary-label">Failed</div>
+                        </div>
+                        <div class="summary-item" style="background: #78350f;">
+                            <div class="summary-value" style="color: #f59e0b;" id="cancelledCount">0</div>
+                            <div class="summary-label">Cancelled</div>
+                        </div>
+                    </div>
+
+                    <div class="device-list" id="deviceList">
+                        <div style="text-align: center; color: #64748b; padding: 40px;">
+                            Configure settings and click Start Update
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Auto-Update Tab -->
+        <div id="tab-auto" class="tab-content" style="display: none;">
+            <div class="coming-soon-card">
+                <div class="coming-soon-icon">&#128197;</div>
+                <div class="coming-soon-title">Auto-Update Coming Soon</div>
+                <div class="coming-soon-desc">Configure automatic firmware updates on a recurring schedule with weather-aware safeguards.</div>
+
+                <div class="coming-soon-preview">
+                    <!-- Schedule Settings -->
+                    <div class="settings-section" style="text-align: left;">
+                        <h3>
+                            <span class="toggle" id="scheduleToggle" style="cursor: not-allowed;"></span>
+                            Enable Schedule
+                        </h3>
                         <div class="settings-grid">
                             <div class="form-group">
                                 <label>Days</label>
@@ -659,121 +829,41 @@
                             </div>
                         </div>
                     </div>
-                </div>
 
-                <!-- Update Settings -->
-                <div class="settings-section">
-                    <h3>Update Settings</h3>
-                    <div class="settings-grid">
-                        <div class="form-group">
-                            <label>Parallel Updates</label>
-                            <input type="number" id="parallelUpdates" value="2" min="1" max="10">
-                        </div>
-                        <div class="form-group">
-                            <label>Bank Mode</label>
-                            <select id="bankMode">
-                                <option value="both">Both Banks</option>
-                                <option value="one">Single Bank</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Update Order</label>
-                            <select id="updateOrder">
-                                <option value="cpe_first">CPE First</option>
-                                <option value="ap_first">AP First</option>
-                            </select>
+                    <!-- Update Settings -->
+                    <div class="settings-section" style="text-align: left;">
+                        <h3>Update Settings</h3>
+                        <div class="settings-grid">
+                            <div class="form-group">
+                                <label>Parallel Updates</label>
+                                <input type="number" value="2" min="1" max="10" disabled>
+                            </div>
+                            <div class="form-group">
+                                <label>Bank Mode</label>
+                                <select disabled>
+                                    <option value="both">Both Banks</option>
+                                    <option value="one">Single Bank</option>
+                                </select>
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                <!-- Weather Settings -->
-                <div class="settings-section">
-                    <h3>
-                        <span class="toggle active" id="weatherToggle" onclick="toggleWeather()"></span>
-                        Weather Check
-                    </h3>
-                    <div id="weatherSettings">
-                        <div class="weather-info" id="weatherInfo">
-                            <span>Loading weather...</span>
-                        </div>
+                    <!-- Weather Check -->
+                    <div class="settings-section" style="text-align: left;">
+                        <h3>
+                            <span class="toggle" style="cursor: not-allowed;"></span>
+                            Weather Check
+                        </h3>
                         <div class="settings-grid" style="margin-top: 12px;">
                             <div class="form-group">
                                 <label>Min Temperature (°C)</label>
-                                <input type="number" id="minTempC" value="-10" min="-40" max="10">
+                                <input type="number" value="-10" min="-40" max="10" disabled>
                             </div>
                             <div class="form-group">
                                 <label>Zip Code (optional)</label>
-                                <input type="text" id="zipCode" placeholder="Auto-detect" maxlength="5">
+                                <input type="text" placeholder="Auto-detect" maxlength="5" disabled>
                             </div>
                         </div>
-                    </div>
-                </div>
-
-                <button class="btn" onclick="saveSettings()" style="margin-bottom: 16px; background: #475569;">Save Settings</button>
-
-                <hr style="border-color: #334155; margin: 16px 0;">
-
-                <h2>Manual Update</h2>
-
-                <div class="form-group">
-                    <label>Device Type</label>
-                    <select id="deviceType">
-                        <option value="tachyon">Tachyon Networks</option>
-                        <option value="mikrotik" disabled>MikroTik (coming soon)</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label>Firmware</label>
-                    <div class="firmware-info">
-                        <div class="firmware-info-row">
-                            <span class="firmware-info-label">tna-30x</span>
-                            <span class="firmware-info-value" id="selectedFw30x"><span class="none">Loading...</span></span>
-                        </div>
-                        <div class="firmware-info-row">
-                            <span class="firmware-info-label">tna-303l</span>
-                            <span class="firmware-info-value" id="selectedFw303l"><span class="none">Loading...</span></span>
-                        </div>
-                        <a href="/firmware" class="firmware-info-link">Manage firmware</a>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label>Select Devices</label>
-                    <div class="hierarchy-select" id="hierarchySelect">
-                        <div style="color: #64748b; padding: 12px; text-align: center;">Loading devices...</div>
-                    </div>
-                </div>
-
-                <button class="btn" id="startBtn" onclick="startUpdate()">Start Update</button>
-            </div>
-
-            <!-- Right: Progress -->
-            <div class="card">
-                <h2>Progress</h2>
-
-                <div class="summary">
-                    <div class="summary-item pending">
-                        <div class="summary-value" id="pendingCount">0</div>
-                        <div class="summary-label">Pending</div>
-                    </div>
-                    <div class="summary-item" style="background: #1e40af;">
-                        <div class="summary-value" id="inProgressCount">0</div>
-                        <div class="summary-label">In Progress</div>
-                    </div>
-                    <div class="summary-item success">
-                        <div class="summary-value" id="successCount">0</div>
-                        <div class="summary-label">Success</div>
-                    </div>
-                    <div class="summary-item failed">
-                        <div class="summary-value" id="failedCount">0</div>
-                        <div class="summary-label">Failed</div>
-                    </div>
-                </div>
-
-                <div class="device-list" id="deviceList">
-                    <div style="text-align: center; color: #64748b; padding: 40px;">
-                        Configure settings and click Start Update
                     </div>
                 </div>
             </div>
@@ -781,6 +871,13 @@
     </div>
 
     <script>
+        function switchTab(tab) {
+            document.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+            document.querySelector(`[onclick="switchTab('${tab}')"]`).classList.add('active');
+            document.getElementById(`tab-${tab}`).style.display = tab === 'manual' ? 'grid' : 'block';
+        }
+
         let ws = null;
         let devices = {};
         let topology = null;
@@ -855,6 +952,7 @@
                     document.getElementById('startBtn').textContent = 'Start Update';
                     const parts = [`Success: ${message.success_count}`, `Failed: ${message.failed_count}`];
                     if (message.skipped_count > 0) parts.push(`Skipped: ${message.skipped_count}`);
+                    if (message.cancelled_count > 0) parts.push(`Cancelled: ${message.cancelled_count}`);
                     parts.push(`Duration: ${Math.round(message.duration)}s`);
                     alert(`Update complete!\n\n${parts.join('\n')}`);
                     break;
@@ -870,12 +968,13 @@
                 return;
             }
 
-            let pending = 0, inProgress = 0, success = 0, failed = 0;
+            let pending = 0, inProgress = 0, success = 0, failed = 0, cancelled = 0;
 
             function countStatus(status) {
                 if (status === 'pending') pending++;
                 else if (status === 'success' || status === 'skipped') success++;
                 else if (status === 'failed') failed++;
+                else if (status === 'cancelled') cancelled++;
                 else inProgress++;
             }
 
@@ -954,6 +1053,7 @@
             document.getElementById('inProgressCount').textContent = inProgress;
             document.getElementById('successCount').textContent = success;
             document.getElementById('failedCount').textContent = failed;
+            document.getElementById('cancelledCount').textContent = cancelled;
         }
 
         let selectedFirmware30x = '';
@@ -999,34 +1099,14 @@
         }
 
         function applySettings() {
-            // Schedule toggle - disabled (coming soon)
-            // Keep settings in sync but don't enable the toggle
-            document.getElementById('scheduleToggle').classList.remove('active');
-            document.getElementById('scheduleSettings').style.display = 'none';
-
-            // Update settings
             document.getElementById('parallelUpdates').value = settings.parallel_updates || '2';
             document.getElementById('bankMode').value = settings.bank_mode || 'both';
-            document.getElementById('updateOrder').value = settings.update_order || 'cpe_first';
-
-            // Weather toggle
-            const weatherEnabled = settings.weather_check_enabled !== 'false';
-            document.getElementById('weatherToggle').classList.toggle('active', weatherEnabled);
-            document.getElementById('weatherSettings').style.display = weatherEnabled ? 'block' : 'none';
-
-            // Weather settings
-            document.getElementById('minTempC').value = settings.min_temperature_c || '-10';
-            document.getElementById('zipCode').value = settings.zip_code || '';
         }
 
         async function saveSettings() {
             const newSettings = {
                 parallel_updates: document.getElementById('parallelUpdates').value,
                 bank_mode: document.getElementById('bankMode').value,
-                update_order: document.getElementById('updateOrder').value,
-                weather_check_enabled: document.getElementById('weatherToggle').classList.contains('active').toString(),
-                min_temperature_c: document.getElementById('minTempC').value,
-                zip_code: document.getElementById('zipCode').value,
             };
 
             try {
@@ -1038,23 +1118,10 @@
                 if (response.ok) {
                     settings = newSettings;
                     alert('Settings saved');
-                    // Refresh weather with new zip
-                    loadWeather();
                 }
             } catch (error) {
                 alert('Failed to save settings: ' + error.message);
             }
-        }
-
-        function toggleSchedule() {
-            // Scheduled Updates is coming soon - toggle disabled
-        }
-
-        function toggleWeather() {
-            const toggle = document.getElementById('weatherToggle');
-            toggle.classList.toggle('active');
-            document.getElementById('weatherSettings').style.display =
-                toggle.classList.contains('active') ? 'block' : 'none';
         }
 
         // Day checkbox handling
@@ -1077,32 +1144,6 @@
                 document.getElementById('currentDate').textContent = `${time.date} (${time.timezone})`;
             } catch (error) {
                 console.error('Failed to load time:', error);
-            }
-        }
-
-        // Weather functions
-        async function loadWeather() {
-            const info = document.getElementById('weatherInfo');
-            try {
-                const response = await fetch('/api/weather');
-                const weather = await response.json();
-
-                if (weather.error) {
-                    info.innerHTML = `<span style="color: #f59e0b;">⚠ ${weather.error}</span>`;
-                    return;
-                }
-
-                const minTemp = parseInt(settings.min_temperature_c || -10);
-                const tempClass = weather.temperature_c < minTemp ? 'danger' :
-                    weather.temperature_c < 0 ? 'cold' : '';
-
-                info.innerHTML = `
-                    <span class="weather-temp ${tempClass}">${weather.temperature_c}°C / ${weather.temperature_f}°F</span>
-                    <span>• ${weather.description}</span>
-                    ${weather.temperature_c < minTemp ? '<span style="color: #ef4444;">• Updates blocked (too cold)</span>' : ''}
-                `;
-            } catch (error) {
-                info.innerHTML = '<span style="color: #64748b;">Weather unavailable</span>';
             }
         }
 
@@ -1152,10 +1193,8 @@
                         if (!cpe.ip) continue;
                         const cpeModel = cpe.model ? escapeHtml(cpe.model) : '';
                         const cpeFw = cpe.firmware_version ? `v${escapeHtml(cpe.firmware_version)}` : '';
-                        let authIcon = '<span class="cpe-auth-icon cpe-auth-unknown" title="Untested">?</span>';
-                        if (cpe.auth_status === 'ok') {
-                            authIcon = '<span class="cpe-auth-icon cpe-auth-ok" title="Auth OK">&#10003;</span>';
-                        } else if (cpe.auth_status === 'failed') {
+                        let authIcon = '';
+                        if (cpe.auth_status === 'failed') {
                             authIcon = '<span class="cpe-auth-icon cpe-auth-failed" title="Auth Failed">&#10007;</span>';
                         } else if (cpe.auth_status === 'unreachable') {
                             authIcon = '<span class="cpe-auth-icon cpe-auth-failed" title="Unreachable">&#10007;</span>';
@@ -1211,7 +1250,7 @@
             const firmware303l = selectedFirmware303l;
             const deviceType = document.getElementById('deviceType').value;
             const concurrency = document.getElementById('parallelUpdates').value;
-            const updateOrder = document.getElementById('updateOrder').value;
+            const bankMode = document.getElementById('bankMode').value;
 
             // Get selected devices from hierarchy
             const selectedIPs = getSelectedDevices();
@@ -1247,7 +1286,7 @@
             formData.append('device_type', deviceType);
             formData.append('ip_list', selectedIPs.join('\n'));
             formData.append('concurrency', concurrency);
-            formData.append('update_order', updateOrder);
+            formData.append('bank_mode', bankMode);
             if (firmware303l) {
                 formData.append('firmware_file_303l', firmware303l);
             }
@@ -1284,13 +1323,10 @@
         loadSelectedFirmware();
         loadSettings();
         loadTime();
-        loadWeather();
         loadTopology();
 
         // Update time every minute
         setInterval(loadTime, 60000);
-        // Update weather every 15 minutes
-        setInterval(loadWeather, 900000);
     </script>
 </body>
 </html>

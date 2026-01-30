@@ -41,10 +41,28 @@ class UpdateResult:
     old_version: Optional[str] = None
     new_version: Optional[str] = None
     error: Optional[str] = None
+    skipped: bool = False
+    bank1_version: Optional[str] = None
+    bank2_version: Optional[str] = None
+    active_bank: Optional[int] = None
+    model: Optional[str] = None
 
 
 class TachyonClient:
     """Client for Tachyon device firmware updates."""
+
+    # Firmware pattern mappings for model validation
+    MODEL_FIRMWARE_PATTERNS = {
+        # TNA-30x standard series uses tna-30x firmware
+        "tna-301": ["tna-30x", "tna30x"],
+        "tna-302": ["tna-30x", "tna30x"],
+        "tna-303x": ["tna-30x", "tna30x"],
+        # TNA-303L series uses tna-303l firmware
+        "tna-303l": ["tna-303l", "tna303l"],
+        "tna-303l-65": ["tna-303l", "tna303l"],
+        # TNS-100 series uses tns-100 firmware
+        "tns-100": ["tns-100", "tns100"],
+    }
 
     def __init__(self, ip: str, username: str, password: str, timeout: int = 30):
         self.ip = ip
@@ -156,11 +174,19 @@ class TachyonClient:
             # Check for auth failure
             try:
                 data = json.loads(response)
-                if data.get("statusCode") == 401 or data.get("auth") is False:
+                if data.get("statusCode") == 401 or "Authorization Failed" in str(data):
                     logger.error(f"Login failed for {self.ip}: Invalid credentials")
-                    return "Login failed"
+                    return "Invalid credentials"
+                if data.get("auth") is False:
+                    logger.error(f"Login failed for {self.ip}: auth=false in response")
+                    return "Invalid credentials"
             except json.JSONDecodeError:
                 pass
+
+            # Check raw response for error messages
+            if "Authorization Failed" in response or "Invalid credentials" in response:
+                logger.error(f"Login failed for {self.ip}: {response[:200]}")
+                return "Invalid credentials"
 
             # Extract token from cookie file
             with open(cookie_path, "r") as f:
@@ -242,6 +268,33 @@ class TachyonClient:
             return f"{base}.{rev}" if rev else base
         return version_str.strip()
 
+    def validate_firmware_for_model(self, firmware_path: str, model: str) -> tuple[bool, str]:
+        """Validate that firmware file is compatible with the device model.
+
+        Args:
+            firmware_path: Path to firmware file.
+            model: Device model string (e.g., "TNA-303L-65").
+
+        Returns:
+            Tuple of (is_valid, error_message). error_message is empty if valid.
+        """
+        import os
+        filename = os.path.basename(firmware_path).lower()
+        model_key = model.lower()
+
+        patterns = self.MODEL_FIRMWARE_PATTERNS.get(model_key)
+        if not patterns:
+            logger.debug(f"No firmware pattern defined for model {model}, allowing any firmware")
+            return True, ""
+
+        for pattern in patterns:
+            if pattern in filename:
+                logger.debug(f"Firmware {filename} matches pattern {pattern} for model {model}")
+                return True, ""
+
+        expected = " or ".join(patterns)
+        return False, f"Firmware mismatch: model {model} requires firmware with '{expected}' in filename, but got '{filename}'"
+
     async def upload_firmware(self, firmware_path: str) -> bool:
         """Upload firmware file to device using PUT."""
         logger.info(f"Uploading firmware to {self.ip}")
@@ -276,9 +329,10 @@ class TachyonClient:
         # Check for error in response
         try:
             data = json.loads(response)
-            if data.get("error"):
-                logger.error(f"Upload error from {self.ip}: {data}")
-                return False
+            if isinstance(data, dict):
+                if data.get("error") or data.get("statusCode", 200) >= 400:
+                    logger.error(f"Upload error from {self.ip}: {data}")
+                    return False
         except json.JSONDecodeError:
             pass
 
@@ -289,38 +343,86 @@ class TachyonClient:
         """Trigger firmware installation (device will reboot)."""
         logger.info(f"Triggering firmware update on {self.ip}")
 
-        status, body = await self._curl(
-            "POST",
-            "/cgi.lua/update",
-            data={"reset": False, "force": False}
-        )
+        try:
+            status, body = await self._curl(
+                "POST",
+                "/cgi.lua/update",
+                data={"reset": False, "force": False}
+            )
 
-        # Device may reboot before responding, so empty response is OK
-        logger.info(f"Update triggered on {self.ip}")
-        return True
+            # Check for errors in response (device may reboot before responding)
+            if body:
+                try:
+                    data = json.loads(body)
+                    if isinstance(data, dict):
+                        if data.get("error"):
+                            logger.error(f"Update trigger error from {self.ip}: {data.get('error')}")
+                            return False
+                        if data.get("statusCode", 200) >= 400:
+                            logger.error(f"Update trigger failed with status: {data}")
+                            return False
+                except json.JSONDecodeError:
+                    pass
 
-    async def wait_for_reboot(self, timeout: int = 180) -> bool:
-        """Wait for device to come back online after reboot."""
+            logger.info(f"Update triggered on {self.ip}")
+            return True
+        except Exception:
+            # Connection error expected during reboot
+            logger.info(f"Update triggered on {self.ip} (connection closed)")
+            return True
+
+    async def wait_for_reboot(self, timeout: int = 300) -> bool:
+        """Wait for device to come back online after reboot.
+
+        Two-phase approach:
+        1. Wait for ping response
+        2. Wait for web server to be ready
+        """
         logger.info(f"Waiting for {self.ip} to reboot...")
 
         # Initial wait for device to go down
         await asyncio.sleep(10)
 
         start_time = asyncio.get_event_loop().time()
+        ping_responded = False
 
         while asyncio.get_event_loop().time() - start_time < timeout:
-            # Try to ping
-            proc = await asyncio.create_subprocess_exec(
-                "ping", "-c", "1", "-W", "2", self.ip,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.wait()
+            if not ping_responded:
+                # Phase 1: Wait for device to respond to ping (or curl if ping unavailable)
+                responded = False
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        "ping", "-c", "1", "-W", "2", self.ip,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await proc.wait()
+                    responded = proc.returncode == 0
+                except FileNotFoundError:
+                    # ping not available (e.g., minimal Docker image), use curl instead
+                    check_cmd = [
+                        "curl", "-s", "-k", "-m", "3",
+                        "-o", "/dev/null", "-w", "%{http_code}",
+                        f"https://{self.ip}/"
+                    ]
+                    proc = await asyncio.create_subprocess_exec(
+                        *check_cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    stdout, _ = await proc.communicate()
+                    if proc.returncode == 0:
+                        status = stdout.decode().strip()
+                        responded = status and status.isdigit() and int(status) > 0
 
-            if proc.returncode == 0:
-                # Device responding to ping, check web server
-                await asyncio.sleep(5)
-
+                if responded:
+                    logger.info(f"{self.ip} responding, waiting for web server...")
+                    ping_responded = True
+                    # Wait for web services to initialize
+                    await asyncio.sleep(10)
+                    continue
+            else:
+                # Phase 2: Check if web server is up
                 check_cmd = [
                     "curl", "-s", "-k", "-m", "5",
                     "-o", "/dev/null", "-w", "%{http_code}",
@@ -336,7 +438,7 @@ class TachyonClient:
                 if proc.returncode == 0:
                     status = stdout.decode().strip()
                     if status and status.isdigit() and int(status) > 0:
-                        logger.info(f"{self.ip} is back online")
+                        logger.info(f"{self.ip} web server is up, device ready")
                         return True
 
             await asyncio.sleep(3)
@@ -347,13 +449,16 @@ class TachyonClient:
     async def update_firmware(
         self,
         firmware_path: str,
-        progress_callback: Callable[[str, str], None] = None
+        progress_callback: Callable[[str, str], None] = None,
+        pass_number: int = 1
     ) -> UpdateResult:
         """Perform complete firmware update cycle.
 
         Args:
             firmware_path: Path to firmware file
             progress_callback: Optional callback(ip, status_message)
+            pass_number: Update pass (1 or 2). On pass 2, version unchanged
+                         is treated as success (both banks now match).
 
         Returns:
             UpdateResult with success/failure details
@@ -368,15 +473,28 @@ class TachyonClient:
         try:
             # Login
             progress("Logging in...")
-            if not await self.login():
-                result.error = "Login failed"
+            login_result = await self.login()
+            if login_result is not True:
+                result.error = login_result if isinstance(login_result, str) else "Login failed"
                 return result
 
             # Get current info
             progress("Getting device info...")
             info = await self.get_device_info()
             result.old_version = info.current_version
+            result.model = info.model
+            result.bank1_version = info.bank1_version
+            result.bank2_version = info.bank2_version
+            result.active_bank = info.active_bank
             progress(f"Current version: {info.current_version}")
+
+            # Validate firmware is compatible with device model
+            if info.model:
+                valid, error_msg = self.validate_firmware_for_model(firmware_path, info.model)
+                if not valid:
+                    result.error = error_msg
+                    progress(f"Firmware validation failed: {error_msg}")
+                    return result
 
             # Upload firmware
             progress("Uploading firmware...")
@@ -398,19 +516,28 @@ class TachyonClient:
 
             # Re-login and verify
             progress("Verifying...")
-            if not await self.login():
+            login_result = await self.login()
+            if login_result is not True:
                 result.error = "Failed to reconnect after reboot"
                 return result
 
             new_info = await self.get_device_info()
             result.new_version = new_info.current_version
+            result.bank1_version = new_info.bank1_version
+            result.bank2_version = new_info.bank2_version
+            result.active_bank = new_info.active_bank
 
             if result.new_version and result.new_version != result.old_version:
                 progress(f"Updated: {result.old_version} -> {result.new_version}")
                 result.success = True
+            elif pass_number >= 2:
+                # Pass 2: version unchanged is expected (both banks now match)
+                progress(f"Updated: both banks now on {result.new_version}")
+                result.success = True
             else:
-                progress(f"Version unchanged: {result.new_version}")
-                result.error = "Firmware version did not change"
+                progress(f"Skipped: already on {result.new_version}")
+                result.skipped = True
+                result.success = True
 
         except Exception as e:
             result.error = str(e)

@@ -499,7 +499,8 @@ class UpdateJob:
     device_type: str = "tachyon"
     credentials: Dict[str, tuple] = field(default_factory=dict)  # IP -> (username, password)
     devices: Dict[str, DeviceStatus] = field(default_factory=dict)
-    update_order: str = "cpe_first"
+    bank_mode: str = "both"
+    cancelled: bool = False
     ap_cpe_map: Dict[str, list] = field(default_factory=dict)  # AP IP -> [CPE IPs]
     device_roles: Dict[str, str] = field(default_factory=dict)  # IP -> "ap"/"cpe"
     device_parent: Dict[str, str] = field(default_factory=dict)  # CPE IP -> parent AP IP
@@ -596,9 +597,9 @@ async def start_update(
     firmware_file: str = Form(...),
     device_type: str = Form(...),
     ip_list: str = Form(...),
-    concurrency: int = Form(5),
+    concurrency: int = Form(2),
     firmware_file_303l: str = Form(""),
-    update_order: str = Form("cpe_first"),
+    bank_mode: str = Form("both"),
     session: dict = Depends(require_auth),
 ):
     """Start a firmware update job."""
@@ -686,7 +687,7 @@ async def start_update(
         device_firmware_map=device_firmware_map,
         device_type=device_type,
         credentials=credentials,
-        update_order=update_order,
+        bank_mode=bank_mode,
         ap_cpe_map=ap_cpe_map,
         device_roles=device_roles,
         device_parent=device_parent,
@@ -711,7 +712,7 @@ async def start_update(
         "ap_cpe_map": ap_cpe_map,
         "device_roles": device_roles,
         "device_parent": device_parent,
-        "update_order": update_order,
+        "bank_mode": bank_mode,
     })
 
     asyncio.create_task(run_update_job(job, concurrency))
@@ -719,11 +720,12 @@ async def start_update(
     return {"job_id": job_id, "device_count": len(job.devices)}
 
 
-async def _update_single_device(job: "UpdateJob", ip: str):
+async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1):
     """Update a single device within a job."""
     device_status = job.devices[ip]
+    prefix = f"Pass {pass_number}: " if pass_number > 1 else ""
     device_status.status = "connecting"
-    device_status.progress_message = "Connecting..."
+    device_status.progress_message = f"{prefix}Connecting..."
 
     await broadcast({
         "type": "device_update",
@@ -767,14 +769,14 @@ async def _update_single_device(job: "UpdateJob", ip: str):
             if key in message:
                 device_status.status = status
                 break
-        device_status.progress_message = message
+        device_status.progress_message = f"{prefix}{message}"
 
         asyncio.create_task(broadcast({
             "type": "device_update",
             "job_id": job.job_id,
             "ip": device_ip,
             "status": device_status.status,
-            "message": message,
+            "message": device_status.progress_message,
             "role": device_status.role,
             "parent_ap": device_status.parent_ap,
         }))
@@ -782,7 +784,7 @@ async def _update_single_device(job: "UpdateJob", ip: str):
     if job.device_type == "tachyon":
         username, password = job.credentials[ip]
         client = TachyonClient(ip, username, password)
-        result = await client.update_firmware(fw_path, progress_callback)
+        result = await client.update_firmware(fw_path, progress_callback, pass_number=pass_number)
     else:
         result = UpdateResult(ip=ip, success=False, error=f"Unsupported device type: {job.device_type}")
 
@@ -795,14 +797,18 @@ async def _update_single_device(job: "UpdateJob", ip: str):
 
     if result.skipped:
         device_status.status = "skipped"
-        device_status.progress_message = f"Already on {result.new_version}"
+        device_status.progress_message = f"{prefix}Already on {result.new_version}"
     elif result.success:
         device_status.status = "success"
-        device_status.progress_message = f"Updated to {result.new_version}"
+        device_status.progress_message = f"{prefix}Updated to {result.new_version}"
     else:
         device_status.status = "failed"
         device_status.error = result.error
-        device_status.progress_message = result.error or "Update failed"
+        device_status.progress_message = f"{prefix}{result.error or 'Update failed'}"
+
+        # If device didn't come back online, cancel the job
+        if result.error and "did not come back online" in result.error:
+            job.cancelled = True
 
     await broadcast({
         "type": "device_update",
@@ -823,37 +829,92 @@ async def _update_single_device(job: "UpdateJob", ip: str):
 
 
 async def run_update_job(job: UpdateJob, concurrency: int):
-    """Run the firmware update job with AP/CPE ordering."""
+    """Run the firmware update job with phase-based ordering driven by bank_mode."""
     semaphore = asyncio.Semaphore(concurrency)
 
-    async def update_ap_group(ap_ip: str):
-        """Update an AP and its CPEs respecting the configured order."""
-        async with semaphore:
-            cpe_ips = job.ap_cpe_map.get(ap_ip, [])
-
-            if job.update_order == "cpe_first":
-                # Update all CPEs concurrently, then the AP
-                if cpe_ips:
-                    await asyncio.gather(
-                        *[_update_single_device(job, cpe_ip) for cpe_ip in cpe_ips],
-                        return_exceptions=True,
-                    )
-                await _update_single_device(job, ap_ip)
-            else:
-                # Update the AP first, then all CPEs concurrently
-                await _update_single_device(job, ap_ip)
-                if cpe_ips:
-                    await asyncio.gather(
-                        *[_update_single_device(job, cpe_ip) for cpe_ip in cpe_ips],
-                        return_exceptions=True,
-                    )
-
-    # Run AP groups in parallel (bounded by semaphore)
     ap_ips = [ip for ip, role in job.device_roles.items() if role == "ap"]
-    await asyncio.gather(
-        *[update_ap_group(ap_ip) for ap_ip in ap_ips],
-        return_exceptions=True,
-    )
+    cpe_ips = [ip for ip, role in job.device_roles.items() if role == "cpe"]
+
+    # Build phase list based on bank_mode
+    if job.bank_mode == "both":
+        phases = [
+            (cpe_ips, 1, "CPEs pass 1"),
+            (ap_ips, 1, "APs pass 1"),
+            (ap_ips, 2, "APs pass 2"),
+            (cpe_ips, 2, "CPEs pass 2"),
+        ]
+    else:
+        phases = [
+            (ap_ips, 1, "APs"),
+            (cpe_ips, 1, "CPEs"),
+        ]
+
+    async def _mark_cancelled(ips):
+        """Mark unstarted devices as cancelled."""
+        for ip in ips:
+            ds = job.devices.get(ip)
+            if ds and ds.status == "pending":
+                ds.status = "cancelled"
+                ds.progress_message = "Cancelled: another device failed to reboot"
+                await broadcast({
+                    "type": "device_update",
+                    "job_id": job.job_id,
+                    "ip": ip,
+                    "status": ds.status,
+                    "message": ds.progress_message,
+                    "role": ds.role,
+                    "parent_ap": ds.parent_ap,
+                })
+
+    async def _run_device(ip, pass_number):
+        async with semaphore:
+            if job.cancelled:
+                return
+            await _update_single_device(job, ip, pass_number=pass_number)
+
+    for device_ips, pass_number, phase_label in phases:
+        if job.cancelled:
+            # Mark remaining devices in this and subsequent phases
+            await _mark_cancelled(device_ips)
+            continue
+
+        if not device_ips:
+            continue
+
+        logger.info(f"Job {job.job_id}: starting phase '{phase_label}' ({len(device_ips)} devices)")
+
+        # Reset status for pass 2 devices
+        if pass_number > 1:
+            for ip in device_ips:
+                ds = job.devices.get(ip)
+                if ds:
+                    ds.status = "pending"
+                    ds.progress_message = f"Pass {pass_number}: Waiting..."
+                    await broadcast({
+                        "type": "device_update",
+                        "job_id": job.job_id,
+                        "ip": ip,
+                        "status": ds.status,
+                        "message": ds.progress_message,
+                        "role": ds.role,
+                        "parent_ap": ds.parent_ap,
+                    })
+
+        await asyncio.gather(
+            *[_run_device(ip, pass_number) for ip in device_ips],
+            return_exceptions=True,
+        )
+
+        # Check cancellation after phase completes
+        if job.cancelled:
+            # Mark remaining phases' devices
+            all_remaining = []
+            for future_ips, _, _ in phases:
+                for ip in future_ips:
+                    ds = job.devices.get(ip)
+                    if ds and ds.status == "pending":
+                        all_remaining.append(ip)
+            await _mark_cancelled(all_remaining)
 
     job.completed_at = datetime.now()
     job.status = "completed"
@@ -861,6 +922,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
     success_count = sum(1 for d in job.devices.values() if d.status == "success")
     failed_count = sum(1 for d in job.devices.values() if d.status == "failed")
     skipped_count = sum(1 for d in job.devices.values() if d.status == "skipped")
+    cancelled_count = sum(1 for d in job.devices.values() if d.status == "cancelled")
 
     await broadcast({
         "type": "job_completed",
@@ -868,10 +930,11 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         "success_count": success_count,
         "failed_count": failed_count,
         "skipped_count": skipped_count,
+        "cancelled_count": cancelled_count,
         "duration": (job.completed_at - job.started_at).total_seconds(),
     })
 
-    logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped")
+    logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped, {cancelled_count} cancelled")
 
 
 @app.get("/api/job/{job_id}")
@@ -886,7 +949,7 @@ async def get_job_status(job_id: str, session: dict = Depends(require_auth)):
         "status": job.status,
         "firmware_names": job.firmware_names,
         "device_type": job.device_type,
-        "update_order": job.update_order,
+        "bank_mode": job.bank_mode,
         "ap_cpe_map": job.ap_cpe_map,
         "device_roles": job.device_roles,
         "started_at": job.started_at.isoformat() if job.started_at else None,

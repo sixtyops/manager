@@ -11,6 +11,14 @@ from typing import Optional
 DB_PATH = Path(__file__).parent.parent / "data" / "tachyon.db"
 
 
+def _migrate(db):
+    """Run schema migrations."""
+    # Check if auth_status column exists on cpe_cache
+    columns = [row[1] for row in db.execute("PRAGMA table_info(cpe_cache)").fetchall()]
+    if "auth_status" not in columns:
+        db.execute("ALTER TABLE cpe_cache ADD COLUMN auth_status TEXT DEFAULT NULL")
+
+
 def init_db():
     """Initialize the database schema."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -81,6 +89,9 @@ def init_db():
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
         """)
+
+        # Migrations: add columns if missing
+        _migrate(db)
 
         # Insert default settings if not exists
         defaults = {
@@ -243,8 +254,9 @@ def upsert_cpe(ap_ip: str, cpe_data: dict):
         db.execute("""
             INSERT INTO cpe_cache (ap_ip, ip, mac, system_name, model, firmware_version,
                                    link_distance, rx_power, combined_signal, last_local_rssi,
-                                   tx_rate, rx_rate, mcs, link_uptime, signal_health, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                   tx_rate, rx_rate, mcs, link_uptime, signal_health,
+                                   auth_status, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ap_ip, ip) DO UPDATE SET
                 mac = excluded.mac,
                 system_name = excluded.system_name,
@@ -259,6 +271,7 @@ def upsert_cpe(ap_ip: str, cpe_data: dict):
                 mcs = excluded.mcs,
                 link_uptime = excluded.link_uptime,
                 signal_health = excluded.signal_health,
+                auth_status = excluded.auth_status,
                 last_updated = excluded.last_updated
         """, (
             ap_ip, cpe_data.get("ip"), cpe_data.get("mac"), cpe_data.get("system_name"),
@@ -267,7 +280,8 @@ def upsert_cpe(ap_ip: str, cpe_data: dict):
             cpe_data.get("combined_signal"), cpe_data.get("last_local_rssi"),
             cpe_data.get("tx_rate"), cpe_data.get("rx_rate"),
             cpe_data.get("mcs"), cpe_data.get("link_uptime"),
-            cpe_data.get("signal_health"), datetime.now().isoformat()
+            cpe_data.get("signal_health"), cpe_data.get("auth_status"),
+            datetime.now().isoformat()
         ))
 
 
@@ -283,6 +297,15 @@ def get_all_cpes() -> list[dict]:
     with get_db() as db:
         rows = db.execute("SELECT * FROM cpe_cache ORDER BY ap_ip, ip").fetchall()
         return [dict(row) for row in rows]
+
+
+def update_cpe_auth_status(ap_ip: str, cpe_ip: str, auth_status: str):
+    """Update auth_status for a specific CPE."""
+    with get_db() as db:
+        db.execute(
+            "UPDATE cpe_cache SET auth_status = ? WHERE ap_ip = ? AND ip = ?",
+            (auth_status, ap_ip, cpe_ip)
+        )
 
 
 def clear_cpes_for_ap(ap_ip: str):
