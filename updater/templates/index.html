@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Update - Tachyon Management System</title>
+    <title>Update - Unofficial Tachyon Networks Bulk Updater</title>
     <style>
         * {
             margin: 0;
@@ -159,39 +159,6 @@
 
         .sub-tab:hover:not(.active) {
             color: #e2e8f0;
-        }
-
-        .coming-soon-card {
-            background: #1e293b;
-            border-radius: 12px;
-            padding: 40px;
-            max-width: 600px;
-            margin: 0 auto;
-            text-align: center;
-        }
-
-        .coming-soon-icon {
-            font-size: 2.5rem;
-            margin-bottom: 16px;
-            opacity: 0.6;
-        }
-
-        .coming-soon-title {
-            font-size: 1.2rem;
-            font-weight: 600;
-            color: #f1f5f9;
-            margin-bottom: 8px;
-        }
-
-        .coming-soon-desc {
-            color: #94a3b8;
-            font-size: 0.9rem;
-            margin-bottom: 24px;
-        }
-
-        .coming-soon-preview {
-            opacity: 0.4;
-            pointer-events: none;
         }
 
         .grid {
@@ -639,11 +606,290 @@
         .firmware-info-link:hover {
             text-decoration: underline;
         }
+
+        /* Toast notification */
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 20px 24px;
+            z-index: 1000;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            max-width: 360px;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        .toast-title {
+            font-weight: 600;
+            font-size: 1rem;
+            color: #f1f5f9;
+            margin-bottom: 8px;
+        }
+
+        .toast-body {
+            font-size: 0.85rem;
+            color: #94a3b8;
+            line-height: 1.6;
+        }
+
+        .toast-close {
+            position: absolute;
+            top: 8px;
+            right: 12px;
+            background: none;
+            border: none;
+            color: #64748b;
+            font-size: 1.2rem;
+            cursor: pointer;
+        }
+
+        .toast-close:hover {
+            color: #f1f5f9;
+        }
+
+        /* History */
+        .history-entry {
+            background: #0f172a;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            overflow: hidden;
+        }
+
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 14px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .history-header:hover {
+            background: #1a2436;
+        }
+
+        .history-summary {
+            font-size: 0.8rem;
+            color: #94a3b8;
+        }
+
+        .history-summary .hs-success { color: #10b981; }
+        .history-summary .hs-failed { color: #ef4444; }
+        .history-summary .hs-cancelled { color: #f59e0b; }
+
+        .history-time {
+            font-size: 0.75rem;
+            color: #64748b;
+        }
+
+        .history-devices {
+            display: none;
+            padding: 0 14px 10px;
+        }
+
+        .history-devices.open {
+            display: block;
+        }
+
+        .history-device {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            font-size: 0.8rem;
+            border-top: 1px solid #1e293b;
+        }
+
+        .history-device-ip {
+            font-family: monospace;
+            color: #e2e8f0;
+        }
+
+        .history-device-detail {
+            color: #64748b;
+            font-size: 0.75rem;
+        }
+
+        /* Rollout status */
+        .rollout-card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .rollout-card h3 {
+            font-size: 1rem;
+            color: #f1f5f9;
+            margin-bottom: 16px;
+        }
+
+        .phase-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            margin-bottom: 16px;
+        }
+
+        .phase-step {
+            display: flex;
+            align-items: center;
+            gap: 0;
+        }
+
+        .phase-dot {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.65rem;
+            font-weight: 600;
+            background: #334155;
+            color: #64748b;
+            border: 2px solid #475569;
+            flex-shrink: 0;
+        }
+
+        .phase-dot.active {
+            background: #3b82f6;
+            color: white;
+            border-color: #60a5fa;
+        }
+
+        .phase-dot.completed {
+            background: #10b981;
+            color: white;
+            border-color: #34d399;
+        }
+
+        .phase-dot.paused {
+            background: #f59e0b;
+            color: white;
+            border-color: #fbbf24;
+        }
+
+        .phase-line {
+            width: 40px;
+            height: 2px;
+            background: #334155;
+            flex-shrink: 0;
+        }
+
+        .phase-line.completed {
+            background: #10b981;
+        }
+
+        .phase-label {
+            font-size: 0.65rem;
+            color: #64748b;
+            text-align: center;
+            margin-top: 4px;
+        }
+
+        .phase-label.active {
+            color: #60a5fa;
+        }
+
+        .phase-label.completed {
+            color: #34d399;
+        }
+
+        .rollout-info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            font-size: 0.85rem;
+        }
+
+        .rollout-info-label {
+            color: #94a3b8;
+        }
+
+        .rollout-info-value {
+            color: #e2e8f0;
+            font-weight: 500;
+        }
+
+        .rollout-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .rollout-actions .btn {
+            width: auto;
+            padding: 8px 16px;
+            font-size: 0.85rem;
+        }
+
+        .btn-warning {
+            background: #f59e0b;
+        }
+
+        .btn-warning:hover {
+            background: #d97706;
+        }
+
+        .btn-sm {
+            padding: 6px 14px;
+            font-size: 0.8rem;
+        }
+
+        .rollout-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .rollout-badge-active { background: #1e40af; color: #93c5fd; }
+        .rollout-badge-paused { background: #78350f; color: #fbbf24; }
+        .rollout-badge-completed { background: #064e3b; color: #34d399; }
+        .rollout-badge-cancelled { background: #7f1d1d; color: #fca5a5; }
+
+        .rollout-progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #334155;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .rollout-progress-fill {
+            height: 100%;
+            background: #10b981;
+            border-radius: 3px;
+            transition: width 0.3s;
+        }
+
+        .pause-reason {
+            background: #78350f;
+            border: 1px solid #92400e;
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-top: 12px;
+            font-size: 0.85rem;
+            color: #fbbf24;
+        }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>Tachyon Management System</h1>
+        <h1>Unofficial Tachyon Networks Bulk Updater</h1>
         <div class="time-display">
             <div class="time" id="currentTime">--:-- --</div>
             <div id="currentDate">Loading...</div>
@@ -697,15 +943,15 @@
                                 </div>
                                 <div class="form-group">
                                     <label>Bank Mode</label>
-                                    <select id="bankMode">
-                                        <option value="both">Both Banks</option>
+                                    <select id="bankMode" onchange="updateBankModeDesc()">
+                                        <option value="both">Both Banks (Recommended)</option>
                                         <option value="one">Single Bank</option>
                                     </select>
                                 </div>
                             </div>
+                            <div id="bankModeDesc" style="margin-top: 8px; font-size: 0.8rem; color: #94a3b8; line-height: 1.5;"></div>
                         </div>
 
-                        <button class="btn" onclick="saveSettings()" style="background: #475569;">Save Settings</button>
                     </div>
 
                     <!-- Run Update Card -->
@@ -772,96 +1018,212 @@
                             Configure settings and click Start Update
                         </div>
                     </div>
+
+                    <div id="historySection" style="display: none; margin-top: 24px;">
+                        <h2 style="font-size: 1.1rem; margin-bottom: 12px; color: #94a3b8;">History</h2>
+                        <div id="historyList"></div>
+                    </div>
                 </div>
             </div>
         </div>
 
         <!-- Auto-Update Tab -->
         <div id="tab-auto" class="tab-content" style="display: none;">
-            <div class="coming-soon-card">
-                <div class="coming-soon-icon">&#128197;</div>
-                <div class="coming-soon-title">Auto-Update Coming Soon</div>
-                <div class="coming-soon-desc">Configure automatic firmware updates on a recurring schedule with weather-aware safeguards.</div>
+            <!-- Rollout Status Card -->
+            <div class="rollout-card" id="rolloutCard" style="display: none;">
+                <h3>Gradual Rollout</h3>
+                <div id="rolloutPhaseIndicator" class="phase-indicator"></div>
+                <div id="rolloutDetails">
+                    <div class="rollout-info-row">
+                        <span class="rollout-info-label">Status</span>
+                        <span class="rollout-info-value" id="rolloutStatusBadge"></span>
+                    </div>
+                    <div class="rollout-info-row">
+                        <span class="rollout-info-label">Firmware</span>
+                        <span class="rollout-info-value" id="rolloutFirmware">--</span>
+                    </div>
+                    <div class="rollout-info-row">
+                        <span class="rollout-info-label">Target Version</span>
+                        <span class="rollout-info-value" id="rolloutTargetVersion">Learning...</span>
+                    </div>
+                    <div class="rollout-info-row">
+                        <span class="rollout-info-label">Progress</span>
+                        <span class="rollout-info-value" id="rolloutProgressText">0 / 0 devices</span>
+                    </div>
+                    <div class="rollout-progress-bar">
+                        <div class="rollout-progress-fill" id="rolloutProgressBar" style="width: 0%;"></div>
+                    </div>
+                </div>
+                <div id="rolloutPauseReason" class="pause-reason" style="display: none;"></div>
+                <div class="rollout-actions" id="rolloutActions" style="display: none;">
+                    <button class="btn btn-warning btn-sm" id="rolloutResumeBtn" onclick="resumeRollout()" style="display: none;">Resume</button>
+                    <button class="btn btn-danger btn-sm" id="rolloutCancelBtn" onclick="cancelRollout()">Cancel Rollout</button>
+                </div>
+            </div>
 
-                <div class="coming-soon-preview">
+            <!-- Scheduler Status Bar -->
+            <div class="card" style="margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <span class="status-badge" id="schedulerStateBadge" style="font-size: 0.8rem;">disabled</span>
+                        <span id="schedulerBlockReason" style="font-size: 0.85rem; color: #f59e0b;"></span>
+                    </div>
+                    <div style="display: flex; gap: 20px; font-size: 0.8rem; color: #94a3b8;">
+                        <span id="schedulerNextWindow"></span>
+                        <span id="schedulerLastRun"></span>
+                        <span id="schedulerWeather"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+                <!-- Left Column -->
+                <div>
                     <!-- Schedule Settings -->
-                    <div class="settings-section" style="text-align: left;">
-                        <h3>
-                            <span class="toggle" id="scheduleToggle" style="cursor: not-allowed;"></span>
-                            Enable Schedule
-                        </h3>
-                        <div class="settings-grid">
-                            <div class="form-group">
-                                <label>Days</label>
-                                <div class="checkbox-group" id="scheduleDays">
-                                    <label class="checkbox-label" data-day="mon"><input type="checkbox" value="mon" disabled> Mon</label>
-                                    <label class="checkbox-label" data-day="tue"><input type="checkbox" value="tue" disabled> Tue</label>
-                                    <label class="checkbox-label" data-day="wed"><input type="checkbox" value="wed" disabled> Wed</label>
-                                    <label class="checkbox-label" data-day="thu"><input type="checkbox" value="thu" disabled> Thu</label>
-                                    <label class="checkbox-label" data-day="fri"><input type="checkbox" value="fri" disabled> Fri</label>
-                                    <label class="checkbox-label" data-day="sat"><input type="checkbox" value="sat" disabled> Sat</label>
-                                    <label class="checkbox-label" data-day="sun"><input type="checkbox" value="sun" disabled> Sun</label>
+                    <div class="card" style="margin-bottom: 20px;">
+                        <div class="settings-section">
+                            <h3>
+                                <span class="toggle" id="autoScheduleToggle" onclick="toggleAutoSchedule()"></span>
+                                Enable Schedule
+                            </h3>
+                            <div class="settings-grid">
+                                <div class="form-group" style="grid-column: 1 / -1;">
+                                    <label>Days</label>
+                                    <div class="checkbox-group" id="autoScheduleDays">
+                                        <label class="checkbox-label" data-day="mon"><input type="checkbox" value="mon" onchange="autoSettingChanged()"> Mon</label>
+                                        <label class="checkbox-label" data-day="tue"><input type="checkbox" value="tue" onchange="autoSettingChanged()"> Tue</label>
+                                        <label class="checkbox-label" data-day="wed"><input type="checkbox" value="wed" onchange="autoSettingChanged()"> Wed</label>
+                                        <label class="checkbox-label" data-day="thu"><input type="checkbox" value="thu" onchange="autoSettingChanged()"> Thu</label>
+                                        <label class="checkbox-label" data-day="fri"><input type="checkbox" value="fri" onchange="autoSettingChanged()"> Fri</label>
+                                        <label class="checkbox-label" data-day="sat"><input type="checkbox" value="sat" onchange="autoSettingChanged()"> Sat</label>
+                                        <label class="checkbox-label" data-day="sun"><input type="checkbox" value="sun" onchange="autoSettingChanged()"> Sun</label>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                        <div class="settings-grid" style="margin-top: 12px;">
-                            <div class="form-group">
-                                <label>Start Hour</label>
-                                <select id="scheduleStartHour" disabled>
-                                    <option value="0">12:00 AM</option>
-                                    <option value="1">1:00 AM</option>
-                                    <option value="2">2:00 AM</option>
-                                    <option value="3" selected>3:00 AM</option>
-                                    <option value="4">4:00 AM</option>
-                                    <option value="5">5:00 AM</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>End Hour</label>
-                                <select id="scheduleEndHour" disabled>
-                                    <option value="1">1:00 AM</option>
-                                    <option value="2">2:00 AM</option>
-                                    <option value="3">3:00 AM</option>
-                                    <option value="4" selected>4:00 AM</option>
-                                    <option value="5">5:00 AM</option>
-                                    <option value="6">6:00 AM</option>
-                                </select>
+                            <div class="settings-grid" style="margin-top: 12px;">
+                                <div class="form-group">
+                                    <label>Start Hour</label>
+                                    <select id="autoStartHour" onchange="autoSettingChanged()">
+                                        <option value="0">12:00 AM</option>
+                                        <option value="1">1:00 AM</option>
+                                        <option value="2">2:00 AM</option>
+                                        <option value="3">3:00 AM</option>
+                                        <option value="4">4:00 AM</option>
+                                        <option value="5">5:00 AM</option>
+                                        <option value="6">6:00 AM</option>
+                                        <option value="7">7:00 AM</option>
+                                        <option value="8">8:00 AM</option>
+                                        <option value="9">9:00 AM</option>
+                                        <option value="10">10:00 AM</option>
+                                        <option value="11">11:00 AM</option>
+                                        <option value="12">12:00 PM</option>
+                                        <option value="13">1:00 PM</option>
+                                        <option value="14">2:00 PM</option>
+                                        <option value="15">3:00 PM</option>
+                                        <option value="16">4:00 PM</option>
+                                        <option value="17">5:00 PM</option>
+                                        <option value="18">6:00 PM</option>
+                                        <option value="19">7:00 PM</option>
+                                        <option value="20">8:00 PM</option>
+                                        <option value="21">9:00 PM</option>
+                                        <option value="22">10:00 PM</option>
+                                        <option value="23">11:00 PM</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>End Hour</label>
+                                    <select id="autoEndHour" onchange="autoSettingChanged()">
+                                        <option value="1">1:00 AM</option>
+                                        <option value="2">2:00 AM</option>
+                                        <option value="3">3:00 AM</option>
+                                        <option value="4">4:00 AM</option>
+                                        <option value="5">5:00 AM</option>
+                                        <option value="6">6:00 AM</option>
+                                        <option value="7">7:00 AM</option>
+                                        <option value="8">8:00 AM</option>
+                                        <option value="9">9:00 AM</option>
+                                        <option value="10">10:00 AM</option>
+                                        <option value="11">11:00 AM</option>
+                                        <option value="12">12:00 PM</option>
+                                        <option value="13">1:00 PM</option>
+                                        <option value="14">2:00 PM</option>
+                                        <option value="15">3:00 PM</option>
+                                        <option value="16">4:00 PM</option>
+                                        <option value="17">5:00 PM</option>
+                                        <option value="18">6:00 PM</option>
+                                        <option value="19">7:00 PM</option>
+                                        <option value="20">8:00 PM</option>
+                                        <option value="21">9:00 PM</option>
+                                        <option value="22">10:00 PM</option>
+                                        <option value="23">11:00 PM</option>
+                                    </select>
+                                </div>
                             </div>
                         </div>
                     </div>
 
                     <!-- Update Settings -->
-                    <div class="settings-section" style="text-align: left;">
-                        <h3>Update Settings</h3>
-                        <div class="settings-grid">
-                            <div class="form-group">
-                                <label>Parallel Updates</label>
-                                <input type="number" value="2" min="1" max="10" disabled>
+                    <div class="card" style="margin-bottom: 20px;">
+                        <div class="settings-section">
+                            <h3>Update Settings</h3>
+                            <div class="settings-grid">
+                                <div class="form-group">
+                                    <label>Parallel Updates</label>
+                                    <input type="number" id="autoParallelUpdates" value="2" min="1" max="10" onchange="autoSettingChanged()">
+                                </div>
+                                <div class="form-group">
+                                    <label>Bank Mode</label>
+                                    <select id="autoBankMode" onchange="autoSettingChanged()">
+                                        <option value="both">Both Banks</option>
+                                        <option value="one">Single Bank</option>
+                                    </select>
+                                </div>
                             </div>
-                            <div class="form-group">
-                                <label>Bank Mode</label>
-                                <select disabled>
-                                    <option value="both">Both Banks</option>
-                                    <option value="one">Single Bank</option>
-                                </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column -->
+                <div>
+                    <!-- Device Scope -->
+                    <div class="card" style="margin-bottom: 20px;">
+                        <div class="settings-section">
+                            <h3>Device Scope</h3>
+                            <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;">
+                                <label class="checkbox-label" style="background: none; padding: 4px 0;">
+                                    <input type="radio" name="scheduleScope" value="all" checked onchange="autoScopeChanged()"> All devices
+                                </label>
+                                <label class="checkbox-label" style="background: none; padding: 4px 0;">
+                                    <input type="radio" name="scheduleScope" value="sites" onchange="autoScopeChanged()"> Specific sites
+                                </label>
+                                <label class="checkbox-label" style="background: none; padding: 4px 0;">
+                                    <input type="radio" name="scheduleScope" value="aps" onchange="autoScopeChanged()"> Specific APs
+                                </label>
+                            </div>
+                            <div id="autoScopePicker" style="display: none;">
+                                <div class="hierarchy-select" id="autoHierarchySelect" style="max-height: 250px;">
+                                    <div style="color: #64748b; padding: 12px; text-align: center;">Loading devices...</div>
+                                </div>
                             </div>
                         </div>
                     </div>
 
                     <!-- Weather Check -->
-                    <div class="settings-section" style="text-align: left;">
-                        <h3>
-                            <span class="toggle" style="cursor: not-allowed;"></span>
-                            Weather Check
-                        </h3>
-                        <div class="settings-grid" style="margin-top: 12px;">
-                            <div class="form-group">
-                                <label>Min Temperature (°C)</label>
-                                <input type="number" value="-10" min="-40" max="10" disabled>
-                            </div>
-                            <div class="form-group">
-                                <label>Zip Code (optional)</label>
-                                <input type="text" placeholder="Auto-detect" maxlength="5" disabled>
+                    <div class="card">
+                        <div class="settings-section">
+                            <h3>
+                                <span class="toggle" id="autoWeatherToggle" onclick="toggleAutoWeather()"></span>
+                                Weather Check
+                            </h3>
+                            <div class="settings-grid" style="margin-top: 12px;">
+                                <div class="form-group">
+                                    <label>Min Temperature (C)</label>
+                                    <input type="number" id="autoMinTemp" value="-10" min="-40" max="50" onchange="autoSettingChanged()">
+                                </div>
+                                <div class="form-group">
+                                    <label>Zip Code (optional)</label>
+                                    <input type="text" id="autoZipCode" placeholder="Auto-detect" maxlength="5" onchange="autoSettingChanged()">
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -885,6 +1247,30 @@
         let apCpeMap = {};
         let deviceRoles = {};
         let deviceParent = {};
+        let jobHistory = [];  // Array of completed job snapshots
+        let rebootTimers = {};  // IP -> start timestamp (ms)
+        let rebootTickInterval = null;
+
+        function startRebootTick() {
+            if (rebootTickInterval) return;
+            rebootTickInterval = setInterval(() => {
+                let anyRebooting = false;
+                for (const [ip, startTime] of Object.entries(rebootTimers)) {
+                    if (devices[ip] && devices[ip].status === 'rebooting') {
+                        anyRebooting = true;
+                    }
+                }
+                if (anyRebooting) renderDevices();
+                else stopRebootTick();
+            }, 1000);
+        }
+
+        function stopRebootTick() {
+            if (rebootTickInterval) {
+                clearInterval(rebootTickInterval);
+                rebootTickInterval = null;
+            }
+        }
 
         // WebSocket connection
         function connectWebSocket() {
@@ -911,6 +1297,49 @@
                 case 'topology_update':
                     topology = message.topology;
                     renderHierarchy();
+                    // Refresh auto-update scope picker if visible
+                    if (document.getElementById('autoScopePicker').style.display !== 'none') {
+                        renderAutoHierarchy();
+                    }
+                    break;
+
+                case 'job_history':
+                    // Restore completed job from server (avoid duplicates)
+                    if (!jobHistory.find(j => j.job_id === message.job_id)) {
+                        jobHistory.push({
+                            job_id: message.job_id,
+                            timestamp: message.timestamp ? new Date(message.timestamp) : new Date(),
+                            duration: message.duration,
+                            success_count: message.success_count,
+                            failed_count: message.failed_count,
+                            skipped_count: message.skipped_count || 0,
+                            cancelled_count: message.cancelled_count || 0,
+                            devices: message.devices,
+                            apCpeMap: message.ap_cpe_map || {},
+                            deviceRoles: message.device_roles || {},
+                            timezone: message.timezone || null,
+                        });
+                        // Sort newest first
+                        jobHistory.sort((a, b) => b.timestamp - a.timestamp);
+                        renderHistory();
+                    }
+                    break;
+
+                case 'scheduler_status':
+                    updateSchedulerUI(message);
+                    if (message.rollout) {
+                        updateRolloutUI(message.rollout);
+                    } else {
+                        hideRolloutCard();
+                    }
+                    break;
+
+                case 'rollout_status':
+                    if (message.rollout) {
+                        updateRolloutUI(message.rollout);
+                    } else {
+                        hideRolloutCard();
+                    }
                     break;
 
                 case 'job_started':
@@ -944,17 +1373,52 @@
                         parent_ap: message.parent_ap || devices[message.ip]?.parent_ap,
                         model: message.model,
                     };
+                    // Track reboot timer
+                    if (message.status === 'rebooting' && !rebootTimers[message.ip]) {
+                        rebootTimers[message.ip] = Date.now();
+                        startRebootTick();
+                    } else if (message.status !== 'rebooting') {
+                        delete rebootTimers[message.ip];
+                    }
                     renderDevices();
                     break;
 
                 case 'job_completed':
+                    rebootTimers = {};
+                    stopRebootTick();
+                    // Update devices from authoritative server data before snapshotting
+                    if (message.devices) {
+                        for (const [ip, d] of Object.entries(message.devices)) {
+                            devices[ip] = { ...devices[ip], ...d };
+                        }
+                    }
+                    if (message.ap_cpe_map) apCpeMap = message.ap_cpe_map;
+                    if (message.device_roles) deviceRoles = message.device_roles;
+                    // Snapshot current job into history
+                    jobHistory.unshift({
+                        job_id: message.job_id,
+                        timestamp: new Date(),
+                        duration: Math.round(message.duration),
+                        success_count: message.success_count,
+                        failed_count: message.failed_count,
+                        skipped_count: message.skipped_count || 0,
+                        cancelled_count: message.cancelled_count || 0,
+                        devices: JSON.parse(JSON.stringify(devices)),
+                        apCpeMap: JSON.parse(JSON.stringify(apCpeMap)),
+                        deviceRoles: JSON.parse(JSON.stringify(deviceRoles)),
+                        timezone: message.timezone || null,
+                    });
+                    renderHistory();
+                    // Clear active progress
+                    devices = {};
+                    renderDevices();
                     document.getElementById('startBtn').disabled = false;
                     document.getElementById('startBtn').textContent = 'Start Update';
                     const parts = [`Success: ${message.success_count}`, `Failed: ${message.failed_count}`];
                     if (message.skipped_count > 0) parts.push(`Skipped: ${message.skipped_count}`);
                     if (message.cancelled_count > 0) parts.push(`Cancelled: ${message.cancelled_count}`);
                     parts.push(`Duration: ${Math.round(message.duration)}s`);
-                    alert(`Update complete!\n\n${parts.join('\n')}`);
+                    showToast('Update Complete', parts.join(' &middot; '));
                     break;
             }
         }
@@ -965,6 +1429,11 @@
 
             if (allIps.length === 0) {
                 list.innerHTML = '<div style="text-align: center; color: #64748b; padding: 40px;">Configure settings and click Start Update</div>';
+                document.getElementById('pendingCount').textContent = '0';
+                document.getElementById('inProgressCount').textContent = '0';
+                document.getElementById('successCount').textContent = '0';
+                document.getElementById('failedCount').textContent = '0';
+                document.getElementById('cancelledCount').textContent = '0';
                 return;
             }
 
@@ -1003,11 +1472,17 @@
 
                 const modelInfo = device.model ? `<span style="color:#64748b;font-size:0.7rem;margin-left:6px;">${escapeHtml(device.model)}</span>` : '';
 
+                let displayMessage = device.message || '';
+                if (status === 'rebooting' && rebootTimers[ip]) {
+                    const elapsed = Math.round((Date.now() - rebootTimers[ip]) / 1000);
+                    displayMessage = `Rebooting... (${elapsed}s / 300s)`;
+                }
+
                 return `
                     <div class="device-item ${roleClass}">
                         <div>
                             <div class="device-ip">${roleLabel}${ip}${modelInfo}</div>
-                            <div class="device-message">${device.message || ''}</div>
+                            <div class="device-message">${displayMessage}</div>
                             ${versionInfo}
                             ${bankInfo}
                         </div>
@@ -1054,6 +1529,107 @@
             document.getElementById('successCount').textContent = success;
             document.getElementById('failedCount').textContent = failed;
             document.getElementById('cancelledCount').textContent = cancelled;
+        }
+
+        function renderHistory() {
+            const section = document.getElementById('historySection');
+            const list = document.getElementById('historyList');
+
+            if (jobHistory.length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+
+            section.style.display = 'block';
+            let html = '';
+
+            for (let i = 0; i < jobHistory.length; i++) {
+                const job = jobHistory[i];
+                const timeOpts = { hour: '2-digit', minute: '2-digit' };
+                const dateOpts = { month: 'short', day: 'numeric' };
+                if (job.timezone) {
+                    timeOpts.timeZone = job.timezone;
+                    dateOpts.timeZone = job.timezone;
+                }
+                const time = job.timestamp.toLocaleTimeString([], timeOpts);
+                const date = job.timestamp.toLocaleDateString([], dateOpts);
+                const total = job.success_count + job.failed_count + job.skipped_count + job.cancelled_count;
+
+                let summaryParts = [];
+                if (job.success_count) summaryParts.push(`<span class="hs-success">${job.success_count} success</span>`);
+                if (job.failed_count) summaryParts.push(`<span class="hs-failed">${job.failed_count} failed</span>`);
+                if (job.skipped_count) summaryParts.push(`${job.skipped_count} skipped`);
+                if (job.cancelled_count) summaryParts.push(`<span class="hs-cancelled">${job.cancelled_count} cancelled</span>`);
+
+                // Build device rows
+                let deviceHtml = '';
+                const jobDevices = job.devices;
+                const jobApCpeMap = job.apCpeMap || {};
+                const jobRoles = job.deviceRoles || {};
+                const renderedIps = new Set();
+
+                // APs first, then their CPEs
+                const apIps = Object.keys(jobDevices).filter(ip => (jobDevices[ip].role || jobRoles[ip]) === 'ap').sort();
+                for (const apIp of apIps) {
+                    deviceHtml += renderHistoryDevice(apIp, jobDevices[apIp], true);
+                    renderedIps.add(apIp);
+                    for (const cpeIp of (jobApCpeMap[apIp] || [])) {
+                        if (jobDevices[cpeIp]) {
+                            deviceHtml += renderHistoryDevice(cpeIp, jobDevices[cpeIp], false);
+                            renderedIps.add(cpeIp);
+                        }
+                    }
+                }
+                // Remaining
+                for (const ip of Object.keys(jobDevices).sort()) {
+                    if (!renderedIps.has(ip)) {
+                        deviceHtml += renderHistoryDevice(ip, jobDevices[ip], (jobDevices[ip].role || jobRoles[ip]) === 'ap');
+                    }
+                }
+
+                html += `
+                    <div class="history-entry">
+                        <div class="history-header" onclick="this.nextElementSibling.classList.toggle('open')">
+                            <div>
+                                <div class="history-summary">${total} device${total !== 1 ? 's' : ''} &middot; ${summaryParts.join(' &middot; ')} &middot; ${job.duration}s</div>
+                            </div>
+                            <div class="history-time">${date} ${time}</div>
+                        </div>
+                        <div class="history-devices">${deviceHtml}</div>
+                    </div>
+                `;
+            }
+
+            list.innerHTML = html;
+        }
+
+        function renderHistoryDevice(ip, device, isAp) {
+            const roleLabel = isAp
+                ? '<span class="device-role-label role-ap">AP</span>'
+                : '<span class="device-role-label role-cpe">CPE</span>';
+            const status = device.status || 'unknown';
+            let detail = '';
+            if (device.old_version && device.new_version && device.old_version !== device.new_version) {
+                detail = `${device.old_version} &rarr; ${device.new_version}`;
+            } else if (device.new_version) {
+                detail = device.new_version;
+            }
+            if (device.error) {
+                detail = escapeHtml(device.error);
+            }
+            const modelInfo = device.model ? ` <span style="color:#64748b">${escapeHtml(device.model)}</span>` : '';
+            const indent = isAp ? '' : 'padding-left: 24px;';
+            return `
+                <div class="history-device" style="${indent}">
+                    <div>
+                        <span class="history-device-ip">${roleLabel}${ip}${modelInfo}</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <span class="history-device-detail">${detail}</span>
+                        <span class="status-badge status-${status}" style="font-size:0.65rem;padding:2px 6px;">${status}</span>
+                    </div>
+                </div>
+            `;
         }
 
         let selectedFirmware30x = '';
@@ -1117,23 +1693,350 @@
                 });
                 if (response.ok) {
                     settings = newSettings;
-                    alert('Settings saved');
                 }
             } catch (error) {
-                alert('Failed to save settings: ' + error.message);
+                console.error('Failed to save settings:', error);
             }
         }
 
-        // Day checkbox handling
-        document.querySelectorAll('#scheduleDays .checkbox-label').forEach(label => {
+        // Day checkbox handling for auto-update tab
+        document.querySelectorAll('#autoScheduleDays .checkbox-label').forEach(label => {
             label.addEventListener('click', (e) => {
                 if (e.target.tagName !== 'INPUT') {
                     const checkbox = label.querySelector('input');
                     checkbox.checked = !checkbox.checked;
                 }
                 label.classList.toggle('checked', label.querySelector('input').checked);
+                autoSettingChanged();
             });
         });
+
+        // Auto-Update tab functions
+        let autoSaveTimer = null;
+        let schedulerStatus = {};
+
+        function toggleAutoSchedule() {
+            const toggle = document.getElementById('autoScheduleToggle');
+            toggle.classList.toggle('active');
+            autoSettingChanged();
+        }
+
+        function toggleAutoWeather() {
+            const toggle = document.getElementById('autoWeatherToggle');
+            toggle.classList.toggle('active');
+            autoSettingChanged();
+        }
+
+        function autoSettingChanged() {
+            // Debounce save
+            if (autoSaveTimer) clearTimeout(autoSaveTimer);
+            autoSaveTimer = setTimeout(saveAutoSettings, 500);
+        }
+
+        function autoScopeChanged() {
+            const scope = document.querySelector('input[name="scheduleScope"]:checked').value;
+            const picker = document.getElementById('autoScopePicker');
+            picker.style.display = (scope === 'all') ? 'none' : 'block';
+            renderAutoHierarchy();
+            autoSettingChanged();
+        }
+
+        async function loadAutoSettings() {
+            try {
+                const response = await fetch('/api/settings');
+                const result = await response.json();
+                const s = result.settings;
+
+                // Schedule toggle
+                const schedToggle = document.getElementById('autoScheduleToggle');
+                if (s.schedule_enabled === 'true') schedToggle.classList.add('active');
+                else schedToggle.classList.remove('active');
+
+                // Days
+                const days = (s.schedule_days || '').split(',').map(d => d.trim());
+                document.querySelectorAll('#autoScheduleDays .checkbox-label').forEach(label => {
+                    const cb = label.querySelector('input');
+                    cb.checked = days.includes(cb.value);
+                    label.classList.toggle('checked', cb.checked);
+                });
+
+                // Hours
+                document.getElementById('autoStartHour').value = s.schedule_start_hour || '3';
+                document.getElementById('autoEndHour').value = s.schedule_end_hour || '4';
+
+                // Update settings
+                document.getElementById('autoParallelUpdates').value = s.parallel_updates || '2';
+                document.getElementById('autoBankMode').value = s.bank_mode || 'both';
+
+                // Scope
+                const scope = s.schedule_scope || 'all';
+                document.querySelector(`input[name="scheduleScope"][value="${scope}"]`).checked = true;
+                document.getElementById('autoScopePicker').style.display = (scope === 'all') ? 'none' : 'block';
+
+                // Weather
+                const weatherToggle = document.getElementById('autoWeatherToggle');
+                if (s.weather_check_enabled === 'true') weatherToggle.classList.add('active');
+                else weatherToggle.classList.remove('active');
+                document.getElementById('autoMinTemp').value = s.min_temperature_c || '-10';
+                document.getElementById('autoZipCode').value = s.zip_code || '';
+
+                // Render scope picker if needed
+                if (scope !== 'all') {
+                    renderAutoHierarchy(s.schedule_scope_data || '');
+                }
+            } catch (error) {
+                console.error('Failed to load auto settings:', error);
+            }
+        }
+
+        async function saveAutoSettings() {
+            const days = [];
+            document.querySelectorAll('#autoScheduleDays .checkbox-label input:checked').forEach(cb => {
+                days.push(cb.value);
+            });
+
+            const scope = document.querySelector('input[name="scheduleScope"]:checked').value;
+            let scopeData = '';
+            if (scope === 'sites') {
+                scopeData = Array.from(document.querySelectorAll('#autoHierarchySelect .auto-scope-cb:checked'))
+                    .map(cb => cb.dataset.siteId).join(',');
+            } else if (scope === 'aps') {
+                scopeData = Array.from(document.querySelectorAll('#autoHierarchySelect .auto-scope-cb:checked'))
+                    .map(cb => cb.dataset.ip).join(',');
+            }
+
+            const newSettings = {
+                schedule_enabled: document.getElementById('autoScheduleToggle').classList.contains('active') ? 'true' : 'false',
+                schedule_days: days.join(','),
+                schedule_start_hour: document.getElementById('autoStartHour').value,
+                schedule_end_hour: document.getElementById('autoEndHour').value,
+                parallel_updates: document.getElementById('autoParallelUpdates').value,
+                bank_mode: document.getElementById('autoBankMode').value,
+                schedule_scope: scope,
+                schedule_scope_data: scopeData,
+                weather_check_enabled: document.getElementById('autoWeatherToggle').classList.contains('active') ? 'true' : 'false',
+                min_temperature_c: document.getElementById('autoMinTemp').value,
+                zip_code: document.getElementById('autoZipCode').value,
+            };
+
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newSettings),
+                });
+            } catch (error) {
+                console.error('Failed to save auto settings:', error);
+            }
+        }
+
+        function renderAutoHierarchy(selectedData) {
+            const container = document.getElementById('autoHierarchySelect');
+            const scope = document.querySelector('input[name="scheduleScope"]:checked').value;
+
+            if (!topology || !topology.sites || topology.sites.length === 0) {
+                container.innerHTML = '<div style="color: #64748b; padding: 12px; text-align: center;">No devices found.</div>';
+                return;
+            }
+
+            const selected = selectedData ? selectedData.split(',').map(s => s.trim()) : [];
+            let html = '';
+
+            if (scope === 'sites') {
+                for (const site of topology.sites) {
+                    if (!site.id) continue;
+                    const checked = selected.includes(String(site.id)) ? 'checked' : '';
+                    html += `<div class="hierarchy-item site">
+                        <input type="checkbox" class="auto-scope-cb" data-site-id="${site.id}" ${checked} onchange="autoSettingChanged()">
+                        <label>${escapeHtml(site.name)} (${(site.aps || []).length} APs)</label>
+                    </div>`;
+                }
+            } else if (scope === 'aps') {
+                for (const site of topology.sites) {
+                    html += `<div style="font-size:0.75rem;color:#64748b;padding:6px 8px;font-weight:600;">${escapeHtml(site.name)}</div>`;
+                    for (const ap of (site.aps || [])) {
+                        const checked = selected.includes(ap.ip) ? 'checked' : '';
+                        html += `<div class="hierarchy-item ap">
+                            <input type="checkbox" class="auto-scope-cb" data-ip="${ap.ip}" ${checked} onchange="autoSettingChanged()">
+                            <label>${escapeHtml(ap.system_name || ap.ip)}</label>
+                        </div>`;
+                    }
+                }
+            }
+
+            container.innerHTML = html || '<div style="color: #64748b; padding: 12px; text-align: center;">No items available.</div>';
+        }
+
+        function updateSchedulerUI(status) {
+            schedulerStatus = status;
+            const badge = document.getElementById('schedulerStateBadge');
+            const reason = document.getElementById('schedulerBlockReason');
+            const nextWin = document.getElementById('schedulerNextWindow');
+            const lastRun = document.getElementById('schedulerLastRun');
+            const weather = document.getElementById('schedulerWeather');
+
+            // State badge
+            const state = status.state || 'disabled';
+            badge.textContent = state.replace(/_/g, ' ');
+            badge.className = 'status-badge';
+            const stateColors = {
+                disabled: 'status-pending',
+                idle: 'status-pending',
+                waiting: 'status-verifying',
+                running: 'status-connecting',
+                blocked_weather: 'status-cancelled',
+                blocked_time: 'status-failed',
+                blocked_no_firmware: 'status-failed',
+                blocked_all_current: 'status-success',
+            };
+            badge.classList.add(stateColors[state] || 'status-pending');
+
+            // Block reason
+            reason.textContent = status.block_reason || '';
+
+            // Next window
+            nextWin.textContent = status.next_window ? `Window: ${status.next_window}` : '';
+
+            // Last run
+            if (status.last_run_result) {
+                lastRun.textContent = `Last: ${status.last_run_result}`;
+            } else {
+                lastRun.textContent = '';
+            }
+
+            // Weather
+            if (status.weather) {
+                const w = status.weather;
+                const tempC = w.temperature_c !== null ? `${w.temperature_c}C` : '';
+                weather.textContent = tempC ? `Temp: ${tempC}` : '';
+            } else {
+                weather.textContent = '';
+            }
+        }
+
+        // Rollout UI functions
+        const PHASES = ['canary', 'pct10', 'pct50', 'pct100'];
+        const PHASE_LABELS = {'canary': 'Canary', 'pct10': '10%', 'pct50': '50%', 'pct100': '100%'};
+        let currentRollout = null;
+
+        function updateRolloutUI(rollout) {
+            currentRollout = rollout;
+            const card = document.getElementById('rolloutCard');
+            card.style.display = 'block';
+
+            // Phase indicator
+            const phaseIdx = PHASES.indexOf(rollout.phase);
+            const indicator = document.getElementById('rolloutPhaseIndicator');
+            let phaseHtml = '';
+            for (let i = 0; i < PHASES.length; i++) {
+                const phase = PHASES[i];
+                let dotClass = 'phase-dot';
+                let labelClass = 'phase-label';
+                let lineClass = 'phase-line';
+
+                if (rollout.status === 'completed' || i < phaseIdx) {
+                    dotClass += ' completed';
+                    labelClass += ' completed';
+                    lineClass += ' completed';
+                } else if (i === phaseIdx) {
+                    dotClass += rollout.status === 'paused' ? ' paused' : ' active';
+                    labelClass += ' active';
+                }
+
+                phaseHtml += `<div class="phase-step" style="display:flex;flex-direction:column;align-items:center;">`;
+                phaseHtml += `<div class="${dotClass}">${PHASE_LABELS[phase]}</div>`;
+                phaseHtml += `</div>`;
+
+                if (i < PHASES.length - 1) {
+                    phaseHtml += `<div class="${lineClass}"></div>`;
+                }
+            }
+            indicator.innerHTML = phaseHtml;
+
+            // Status badge
+            const badgeEl = document.getElementById('rolloutStatusBadge');
+            const badgeClass = `rollout-badge rollout-badge-${rollout.status}`;
+            badgeEl.innerHTML = `<span class="${badgeClass}">${rollout.status}</span>`;
+
+            // Firmware
+            document.getElementById('rolloutFirmware').textContent = rollout.firmware_file || '--';
+
+            // Target version
+            document.getElementById('rolloutTargetVersion').textContent =
+                rollout.target_version || 'Learning... (set after canary)';
+
+            // Progress
+            const p = rollout.progress || {};
+            const updated = p.updated || 0;
+            const total = p.total || 0;
+            const failed = p.failed || 0;
+            const pending = p.pending || 0;
+            document.getElementById('rolloutProgressText').textContent =
+                `${updated} / ${total} devices updated` + (failed > 0 ? ` (${failed} failed)` : '');
+
+            const pct = total > 0 ? Math.round((updated / total) * 100) : 0;
+            document.getElementById('rolloutProgressBar').style.width = `${pct}%`;
+
+            // Pause reason
+            const pauseEl = document.getElementById('rolloutPauseReason');
+            if (rollout.status === 'paused' && rollout.pause_reason) {
+                pauseEl.style.display = 'block';
+                pauseEl.textContent = rollout.pause_reason;
+            } else {
+                pauseEl.style.display = 'none';
+            }
+
+            // Actions
+            const actionsEl = document.getElementById('rolloutActions');
+            const resumeBtn = document.getElementById('rolloutResumeBtn');
+            const cancelBtn = document.getElementById('rolloutCancelBtn');
+
+            if (rollout.status === 'paused') {
+                actionsEl.style.display = 'flex';
+                resumeBtn.style.display = 'inline-block';
+                cancelBtn.style.display = 'inline-block';
+            } else if (rollout.status === 'active') {
+                actionsEl.style.display = 'flex';
+                resumeBtn.style.display = 'none';
+                cancelBtn.style.display = 'inline-block';
+            } else {
+                actionsEl.style.display = 'none';
+            }
+        }
+
+        function hideRolloutCard() {
+            currentRollout = null;
+            document.getElementById('rolloutCard').style.display = 'none';
+        }
+
+        async function resumeRollout() {
+            if (!currentRollout) return;
+            try {
+                const resp = await fetch(`/api/rollout/${currentRollout.id}/resume`, { method: 'POST' });
+                if (!resp.ok) {
+                    const data = await resp.json();
+                    alert(data.detail || 'Failed to resume rollout');
+                }
+            } catch (e) {
+                alert('Error resuming rollout: ' + e.message);
+            }
+        }
+
+        async function cancelRollout() {
+            if (!currentRollout) return;
+            if (!confirm('Cancel this rollout? A new one will start from canary on the next schedule run.')) return;
+            try {
+                const resp = await fetch(`/api/rollout/${currentRollout.id}/cancel`, { method: 'POST' });
+                if (!resp.ok) {
+                    const data = await resp.json();
+                    alert(data.detail || 'Failed to cancel rollout');
+                } else {
+                    hideRolloutCard();
+                }
+            } catch (e) {
+                alert('Error cancelling rollout: ' + e.message);
+            }
+        }
 
         // Time functions
         async function loadTime() {
@@ -1243,9 +2146,30 @@
             return div.innerHTML;
         }
 
+        function showToast(title, bodyHtml) {
+            // Remove existing toast
+            const existing = document.querySelector('.toast');
+            if (existing) existing.remove();
+
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerHTML = `
+                <button class="toast-close" onclick="this.parentElement.remove()">&times;</button>
+                <div class="toast-title">${escapeHtml(title)}</div>
+                <div class="toast-body">${bodyHtml}</div>
+            `;
+            document.body.appendChild(toast);
+
+            // Auto-dismiss after 15 seconds
+            setTimeout(() => toast.remove(), 15000);
+        }
+
         // Update startUpdate to use hierarchy selection
         const originalStartUpdate = startUpdate;
         startUpdate = async function() {
+            // Auto-save settings before starting
+            await saveSettings();
+
             const firmware = selectedFirmware30x;
             const firmware303l = selectedFirmware303l;
             const deviceType = document.getElementById('deviceType').value;
@@ -1318,12 +2242,27 @@
             }
         });
 
+        function updateBankModeDesc() {
+            const mode = document.getElementById('bankMode').value;
+            const desc = document.getElementById('bankModeDesc');
+            if (mode === 'both') {
+                desc.innerHTML = '<strong>Both Banks</strong> updates each device twice so both firmware banks match. '
+                    + 'Phases: CPEs (pass 1) &rarr; APs (pass 1) &rarr; APs (pass 2) &rarr; CPEs (pass 2). '
+                    + 'Ends with CPEs rebooting so they reconnect to the strongest AP. Recommended for production.';
+            } else {
+                desc.innerHTML = '<strong>Single Bank</strong> updates each device once (active bank only). '
+                    + 'Phases: APs &rarr; CPEs. Faster, but the inactive bank keeps the old firmware.';
+            }
+        }
+
         // Initialize
         connectWebSocket();
         loadSelectedFirmware();
         loadSettings();
+        loadAutoSettings();
         loadTime();
         loadTopology();
+        updateBankModeDesc();
 
         // Update time every minute
         setInterval(loadTime, 60000);

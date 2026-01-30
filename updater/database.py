@@ -18,6 +18,11 @@ def _migrate(db):
     if "auth_status" not in columns:
         db.execute("ALTER TABLE cpe_cache ADD COLUMN auth_status TEXT DEFAULT NULL")
 
+    # Add timezone column to job_history
+    jh_columns = [row[1] for row in db.execute("PRAGMA table_info(job_history)").fetchall()]
+    if "timezone" not in jh_columns:
+        db.execute("ALTER TABLE job_history ADD COLUMN timezone TEXT DEFAULT NULL")
+
 
 def init_db():
     """Initialize the database schema."""
@@ -88,6 +93,56 @@ def init_db():
                 value TEXT NOT NULL,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS job_history (
+                job_id TEXT PRIMARY KEY,
+                started_at TEXT,
+                completed_at TEXT,
+                duration REAL,
+                bank_mode TEXT,
+                success_count INTEGER DEFAULT 0,
+                failed_count INTEGER DEFAULT 0,
+                skipped_count INTEGER DEFAULT 0,
+                cancelled_count INTEGER DEFAULT 0,
+                devices_json TEXT,
+                ap_cpe_map_json TEXT,
+                device_roles_json TEXT,
+                timezone TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS schedule_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                event TEXT NOT NULL,
+                details TEXT,
+                job_id TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS rollouts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                firmware_file TEXT NOT NULL,
+                firmware_file_303l TEXT,
+                target_version TEXT,
+                phase TEXT NOT NULL DEFAULT 'canary',
+                status TEXT NOT NULL DEFAULT 'active',
+                pause_reason TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_phase_completed_at TEXT,
+                last_job_id TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS rollout_devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rollout_id INTEGER NOT NULL,
+                ip TEXT NOT NULL,
+                device_type TEXT NOT NULL DEFAULT 'ap',
+                phase_assigned TEXT,
+                status TEXT DEFAULT 'pending',
+                updated_at TEXT,
+                FOREIGN KEY (rollout_id) REFERENCES rollouts(id),
+                UNIQUE(rollout_id, ip)
+            );
         """)
 
         # Migrations: add columns if missing
@@ -105,6 +160,8 @@ def init_db():
             "zip_code": "",
             "weather_check_enabled": "true",
             "min_temperature_c": "-10",
+            "schedule_scope": "all",
+            "schedule_scope_data": "",
         }
         for key, value in defaults.items():
             db.execute(
@@ -364,6 +421,64 @@ def set_settings(settings: dict):
             )
 
 
+# Job History operations
+def save_job_history(job_id: str, started_at: str, completed_at: str, duration: float,
+                     bank_mode: str, success_count: int, failed_count: int,
+                     skipped_count: int, cancelled_count: int,
+                     devices: dict, ap_cpe_map: dict, device_roles: dict,
+                     timezone: str = None):
+    """Save a completed job to history."""
+    with get_db() as db:
+        db.execute(
+            """INSERT OR REPLACE INTO job_history
+               (job_id, started_at, completed_at, duration, bank_mode,
+                success_count, failed_count, skipped_count, cancelled_count,
+                devices_json, ap_cpe_map_json, device_roles_json, timezone)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (job_id, started_at, completed_at, duration, bank_mode,
+             success_count, failed_count, skipped_count, cancelled_count,
+             json.dumps(devices), json.dumps(ap_cpe_map), json.dumps(device_roles),
+             timezone)
+        )
+
+
+def get_job_history(limit: int = 20) -> list[dict]:
+    """Get recent job history, newest first."""
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT * FROM job_history ORDER BY completed_at DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+        results = []
+        for row in rows:
+            d = dict(row)
+            d["devices"] = json.loads(d.pop("devices_json"))
+            d["ap_cpe_map"] = json.loads(d.pop("ap_cpe_map_json"))
+            d["device_roles"] = json.loads(d.pop("device_roles_json"))
+            results.append(d)
+        return results
+
+
+# Schedule Log operations
+def log_schedule_event(event: str, details: str = None, job_id: str = None):
+    """Log a scheduler event."""
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO schedule_log (timestamp, event, details, job_id) VALUES (?, ?, ?, ?)",
+            (datetime.now().isoformat(), event, details, job_id)
+        )
+
+
+def get_schedule_log(limit: int = 50) -> list[dict]:
+    """Get recent schedule log entries."""
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT * FROM schedule_log ORDER BY timestamp DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 # Session operations
 def create_session(session_id: str, username: str, ip_address: str, expires_at: str):
     """Create a new session."""
@@ -394,6 +509,193 @@ def cleanup_expired_sessions():
     """Remove all expired sessions."""
     with get_db() as db:
         db.execute("DELETE FROM sessions WHERE expires_at <= ?", (datetime.now().isoformat(),))
+
+
+# Rollout operations
+def get_active_rollout() -> Optional[dict]:
+    """Get the current active or paused rollout."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM rollouts WHERE status IN ('active', 'paused') ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_rollout(rollout_id: int) -> Optional[dict]:
+    """Get a rollout by ID."""
+    with get_db() as db:
+        row = db.execute("SELECT * FROM rollouts WHERE id = ?", (rollout_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def create_rollout(firmware_file: str, firmware_file_303l: str = None) -> int:
+    """Create a new rollout. Returns the rollout ID."""
+    with get_db() as db:
+        cursor = db.execute(
+            "INSERT INTO rollouts (firmware_file, firmware_file_303l) VALUES (?, ?)",
+            (firmware_file, firmware_file_303l)
+        )
+        return cursor.lastrowid
+
+
+def get_last_rollout_for_firmware(firmware_file: str) -> Optional[dict]:
+    """Get the most recent rollout for a given firmware file."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM rollouts WHERE firmware_file = ? ORDER BY id DESC LIMIT 1",
+            (firmware_file,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
+
+
+def advance_rollout_phase(rollout_id: int):
+    """Advance rollout to the next phase. If already at pct100, mark completed."""
+    with get_db() as db:
+        row = db.execute("SELECT phase FROM rollouts WHERE id = ?", (rollout_id,)).fetchone()
+        if not row:
+            return
+        current = row["phase"]
+        now = datetime.now().isoformat()
+        if current in PHASE_ORDER:
+            idx = PHASE_ORDER.index(current)
+            if idx + 1 < len(PHASE_ORDER):
+                next_phase = PHASE_ORDER[idx + 1]
+                db.execute(
+                    "UPDATE rollouts SET phase = ?, updated_at = ? WHERE id = ?",
+                    (next_phase, now, rollout_id)
+                )
+            else:
+                db.execute(
+                    "UPDATE rollouts SET status = 'completed', updated_at = ? WHERE id = ?",
+                    (now, rollout_id)
+                )
+
+
+def complete_rollout_phase(rollout_id: int):
+    """Mark current phase as completed and advance to next."""
+    now = datetime.now().isoformat()
+    with get_db() as db:
+        db.execute(
+            "UPDATE rollouts SET last_phase_completed_at = ?, updated_at = ? WHERE id = ?",
+            (now, now, rollout_id)
+        )
+    advance_rollout_phase(rollout_id)
+
+
+def pause_rollout(rollout_id: int, reason: str):
+    """Pause a rollout with a reason."""
+    now = datetime.now().isoformat()
+    with get_db() as db:
+        db.execute(
+            "UPDATE rollouts SET status = 'paused', pause_reason = ?, updated_at = ? WHERE id = ?",
+            (reason, now, rollout_id)
+        )
+
+
+def resume_rollout(rollout_id: int):
+    """Resume a paused rollout."""
+    now = datetime.now().isoformat()
+    with get_db() as db:
+        db.execute(
+            "UPDATE rollouts SET status = 'active', pause_reason = NULL, updated_at = ? WHERE id = ?",
+            (now, rollout_id)
+        )
+
+
+def cancel_rollout(rollout_id: int):
+    """Cancel a rollout."""
+    now = datetime.now().isoformat()
+    with get_db() as db:
+        db.execute(
+            "UPDATE rollouts SET status = 'cancelled', updated_at = ? WHERE id = ?",
+            (now, rollout_id)
+        )
+
+
+def set_rollout_target_version(rollout_id: int, version: str):
+    """Set the learned target version on a rollout."""
+    now = datetime.now().isoformat()
+    with get_db() as db:
+        db.execute(
+            "UPDATE rollouts SET target_version = ?, updated_at = ? WHERE id = ?",
+            (version, now, rollout_id)
+        )
+
+
+def set_rollout_job_id(rollout_id: int, job_id: str):
+    """Set the current job ID on a rollout."""
+    now = datetime.now().isoformat()
+    with get_db() as db:
+        db.execute(
+            "UPDATE rollouts SET last_job_id = ?, updated_at = ? WHERE id = ?",
+            (job_id, now, rollout_id)
+        )
+
+
+def assign_device_to_rollout(rollout_id: int, ip: str, device_type: str, phase: str):
+    """Assign a device to a rollout phase."""
+    with get_db() as db:
+        db.execute(
+            """INSERT OR IGNORE INTO rollout_devices (rollout_id, ip, device_type, phase_assigned, status)
+               VALUES (?, ?, ?, ?, 'pending')""",
+            (rollout_id, ip, device_type, phase)
+        )
+
+
+def mark_rollout_device(rollout_id: int, ip: str, status: str):
+    """Mark a single rollout device status."""
+    now = datetime.now().isoformat()
+    with get_db() as db:
+        db.execute(
+            "UPDATE rollout_devices SET status = ?, updated_at = ? WHERE rollout_id = ? AND ip = ?",
+            (status, now, rollout_id, ip)
+        )
+
+
+def mark_rollout_phase_devices(rollout_id: int, phase: str, status: str):
+    """Bulk mark all devices in a rollout phase."""
+    now = datetime.now().isoformat()
+    with get_db() as db:
+        db.execute(
+            "UPDATE rollout_devices SET status = ?, updated_at = ? WHERE rollout_id = ? AND phase_assigned = ?",
+            (status, now, rollout_id, phase)
+        )
+
+
+def get_rollout_devices(rollout_id: int, phase: str = None) -> list[dict]:
+    """Get devices for a rollout, optionally filtered by phase."""
+    with get_db() as db:
+        if phase:
+            rows = db.execute(
+                "SELECT * FROM rollout_devices WHERE rollout_id = ? AND phase_assigned = ?",
+                (rollout_id, phase)
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT * FROM rollout_devices WHERE rollout_id = ?",
+                (rollout_id,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_rollout_progress(rollout_id: int) -> dict:
+    """Get rollout progress counts by status."""
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT status, COUNT(*) as count FROM rollout_devices WHERE rollout_id = ? GROUP BY status",
+            (rollout_id,)
+        ).fetchall()
+        result = {"total": 0, "pending": 0, "updated": 0, "failed": 0, "skipped": 0}
+        for row in rows:
+            s = row["status"]
+            c = row["count"]
+            if s in result:
+                result[s] = c
+            result["total"] += c
+        return result
 
 
 # Initialize on import

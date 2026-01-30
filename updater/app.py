@@ -20,6 +20,7 @@ from starlette.requests import Request
 from .tachyon import TachyonClient, UpdateResult
 from . import database as db
 from .poller import init_poller, get_poller
+from .scheduler import init_scheduler, get_scheduler
 from . import services
 from .auth import require_auth, require_auth_ws, authenticate, create_session, SESSION_COOKIE_NAME
 
@@ -67,17 +68,20 @@ async def lifespan(app: FastAPI):
     db.cleanup_expired_sessions()
     poller = init_poller(broadcast, poll_interval=60)
     await poller.start()
+    scheduler = init_scheduler(broadcast, _start_scheduled_update, check_interval=60)
+    await scheduler.start()
     logger.info("Application started")
 
     yield
 
     # Shutdown
+    await scheduler.stop()
     await poller.stop()
     logger.info("Application stopped")
 
 
 # FastAPI app
-app = FastAPI(title="Tachyon Management System", lifespan=lifespan)
+app = FastAPI(title="Unofficial Tachyon Networks Bulk Updater", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # Mount static files
@@ -173,6 +177,69 @@ async def websocket_endpoint(websocket: WebSocket):
             "type": "topology_update",
             "topology": topology,
         })
+
+    # Send active running job state on connect
+    for job in update_jobs.values():
+        if job.status == "running":
+            await websocket.send_json({
+                "type": "job_started",
+                "job_id": job.job_id,
+                "device_count": len(job.devices),
+                "firmware_names": job.firmware_names,
+                "ap_cpe_map": job.ap_cpe_map,
+                "device_roles": job.device_roles,
+                "device_parent": job.device_parent,
+                "bank_mode": job.bank_mode,
+            })
+            for ip, ds in job.devices.items():
+                await websocket.send_json({
+                    "type": "device_update",
+                    "job_id": job.job_id,
+                    "ip": ip,
+                    "status": ds.status,
+                    "message": ds.progress_message,
+                    "old_version": ds.old_version,
+                    "new_version": ds.new_version,
+                    "error": ds.error,
+                    "bank1_version": ds.bank1_version,
+                    "bank2_version": ds.bank2_version,
+                    "active_bank": ds.active_bank,
+                    "role": ds.role,
+                    "parent_ap": ds.parent_ap,
+                    "model": ds.model,
+                })
+
+    # Send completed job history from database
+    for hist in db.get_job_history(limit=20):
+        await websocket.send_json({
+            "type": "job_history",
+            "job_id": hist["job_id"],
+            "timestamp": hist["completed_at"],
+            "duration": round(hist["duration"]),
+            "success_count": hist["success_count"],
+            "failed_count": hist["failed_count"],
+            "skipped_count": hist["skipped_count"],
+            "cancelled_count": hist["cancelled_count"],
+            "ap_cpe_map": hist["ap_cpe_map"],
+            "device_roles": hist["device_roles"],
+            "devices": hist["devices"],
+            "timezone": hist.get("timezone"),
+        })
+
+    # Send scheduler status (includes rollout info)
+    scheduler = get_scheduler()
+    if scheduler:
+        status = scheduler.get_status()
+        await websocket.send_json({
+            "type": "scheduler_status",
+            **status,
+        })
+        # Also send dedicated rollout_status message
+        if status.get("rollout"):
+            await websocket.send_json({
+                "type": "rollout_status",
+                "rollout": status["rollout"],
+            })
 
     try:
         while True:
@@ -443,6 +510,79 @@ async def get_weather(session: dict = Depends(require_auth)):
     return weather
 
 
+@app.get("/api/scheduler/status")
+async def get_scheduler_status(session: dict = Depends(require_auth)):
+    """Get current scheduler status."""
+    scheduler = get_scheduler()
+    if not scheduler:
+        return {"state": "disabled", "block_reason": "Scheduler not initialized"}
+    return scheduler.get_status()
+
+
+@app.get("/api/rollout/current")
+async def get_current_rollout(session: dict = Depends(require_auth)):
+    """Get the current active/paused rollout with progress."""
+    rollout = db.get_active_rollout()
+    if not rollout:
+        return {"rollout": None}
+
+    progress = db.get_rollout_progress(rollout["id"])
+    return {
+        "rollout": {
+            "id": rollout["id"],
+            "phase": rollout["phase"],
+            "status": rollout["status"],
+            "target_version": rollout.get("target_version"),
+            "firmware_file": rollout["firmware_file"],
+            "firmware_file_303l": rollout.get("firmware_file_303l"),
+            "progress": progress,
+            "pause_reason": rollout.get("pause_reason"),
+            "created_at": rollout.get("created_at"),
+            "updated_at": rollout.get("updated_at"),
+        }
+    }
+
+
+@app.post("/api/rollout/{rollout_id}/resume")
+async def resume_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+    """Resume a paused rollout."""
+    rollout = db.get_rollout(rollout_id)
+    if not rollout:
+        raise HTTPException(404, "Rollout not found")
+    if rollout["status"] != "paused":
+        raise HTTPException(400, "Rollout is not paused")
+
+    db.resume_rollout(rollout_id)
+    db.log_schedule_event("rollout_resumed", f"Rollout {rollout_id} resumed by user")
+
+    # Broadcast updated status
+    scheduler = get_scheduler()
+    if scheduler:
+        await scheduler._broadcast_status()
+
+    return {"success": True}
+
+
+@app.post("/api/rollout/{rollout_id}/cancel")
+async def cancel_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+    """Cancel an active/paused rollout."""
+    rollout = db.get_rollout(rollout_id)
+    if not rollout:
+        raise HTTPException(404, "Rollout not found")
+    if rollout["status"] not in ("active", "paused"):
+        raise HTTPException(400, "Rollout cannot be cancelled")
+
+    db.cancel_rollout(rollout_id)
+    db.log_schedule_event("rollout_cancelled", f"Rollout {rollout_id} cancelled by user")
+
+    # Broadcast updated status
+    scheduler = get_scheduler()
+    if scheduler:
+        await scheduler._broadcast_status()
+
+    return {"success": True}
+
+
 @app.get("/api/location")
 async def get_location(session: dict = Depends(require_auth)):
     """Get detected location info."""
@@ -507,6 +647,9 @@ class UpdateJob:
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     status: str = "pending"
+    is_scheduled: bool = False
+    end_hour: Optional[int] = None
+    schedule_timezone: Optional[str] = None
 
 
 @app.post("/api/upload-firmware")
@@ -590,6 +733,110 @@ def _is_303l_model(model: Optional[str]) -> bool:
         return False
     model_lower = model.lower()
     return model_lower.startswith("tna-303l")
+
+
+async def _start_scheduled_update(
+    ap_ips: list[str],
+    firmware_file: str,
+    firmware_file_303l: str = "",
+    bank_mode: str = "both",
+    concurrency: int = 2,
+    end_hour: int = None,
+    schedule_timezone: str = None,
+) -> str:
+    """Start an update job from the scheduler (Python args, not Form data)."""
+    firmware_path = FIRMWARE_DIR / firmware_file
+    if not firmware_path.exists():
+        raise RuntimeError(f"Firmware file not found: {firmware_file}")
+
+    firmware_files = {"tna-30x": str(firmware_path)}
+    firmware_names = {"tna-30x": firmware_file}
+
+    if firmware_file_303l:
+        path_303l = FIRMWARE_DIR / firmware_file_303l
+        if path_303l.exists():
+            firmware_files["tna-303l"] = str(path_303l)
+            firmware_names["tna-303l"] = firmware_file_303l
+
+    credentials = {}
+    ap_cpe_map = {}
+    device_roles = {}
+    device_parent = {}
+    device_firmware_map = {}
+
+    valid_aps = []
+    for ip in ap_ips:
+        ap = db.get_access_point(ip)
+        if not ap:
+            continue
+        valid_aps.append(ip)
+        credentials[ip] = (ap["username"], ap["password"])
+        device_roles[ip] = "ap"
+        device_firmware_map[ip] = _select_firmware_for_model(ap.get("model"), firmware_files) or str(firmware_path)
+
+        cpes = db.get_cpes_for_ap(ip)
+        cpe_ips = []
+        for cpe in cpes:
+            cpe_ip = cpe.get("ip")
+            if not cpe_ip or cpe.get("auth_status") != "ok":
+                continue
+            cpe_ips.append(cpe_ip)
+            device_roles[cpe_ip] = "cpe"
+            device_parent[cpe_ip] = ip
+            credentials[cpe_ip] = (ap["username"], ap["password"])
+            cpe_model = cpe.get("model")
+            cpe_fw = _select_firmware_for_model(cpe_model, firmware_files)
+            if cpe_fw is None and _is_303l_model(cpe_model):
+                device_firmware_map[cpe_ip] = "__missing_303l__"
+            elif cpe_fw is None:
+                device_firmware_map[cpe_ip] = str(firmware_path)
+            else:
+                device_firmware_map[cpe_ip] = cpe_fw
+        ap_cpe_map[ip] = cpe_ips
+
+    if not valid_aps:
+        raise RuntimeError("No valid APs found for scheduled update")
+
+    job_id = str(uuid.uuid4())[:8]
+    job = UpdateJob(
+        job_id=job_id,
+        firmware_files=firmware_files,
+        firmware_names=firmware_names,
+        device_firmware_map=device_firmware_map,
+        device_type="tachyon",
+        credentials=credentials,
+        bank_mode=bank_mode,
+        ap_cpe_map=ap_cpe_map,
+        device_roles=device_roles,
+        device_parent=device_parent,
+        started_at=datetime.now(),
+        status="running",
+        is_scheduled=True,
+        end_hour=end_hour,
+        schedule_timezone=schedule_timezone,
+    )
+
+    for ip in valid_aps:
+        job.devices[ip] = DeviceStatus(ip=ip, role="ap")
+    for ap_ip, cpe_ips in ap_cpe_map.items():
+        for cpe_ip in cpe_ips:
+            job.devices[cpe_ip] = DeviceStatus(ip=cpe_ip, role="cpe", parent_ap=ap_ip)
+
+    update_jobs[job_id] = job
+
+    await broadcast({
+        "type": "job_started",
+        "job_id": job_id,
+        "device_count": len(job.devices),
+        "firmware": firmware_file,
+        "ap_cpe_map": ap_cpe_map,
+        "device_roles": device_roles,
+        "device_parent": device_parent,
+        "bank_mode": bank_mode,
+    })
+
+    asyncio.create_task(run_update_job(job, concurrency))
+    return job_id
 
 
 @app.post("/api/start-update")
@@ -723,6 +970,30 @@ async def start_update(
 async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1):
     """Update a single device within a job."""
     device_status = job.devices[ip]
+
+    # Maintenance window cutoff for scheduled jobs
+    if job.is_scheduled and job.end_hour is not None and job.schedule_timezone:
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(job.schedule_timezone)
+            now = datetime.now(tz)
+            minutes_until_end = (job.end_hour - now.hour) * 60 - now.minute
+            if minutes_until_end < 10:
+                device_status.status = "skipped"
+                device_status.progress_message = "Maintenance window ending"
+                await broadcast({
+                    "type": "device_update",
+                    "job_id": job.job_id,
+                    "ip": ip,
+                    "status": device_status.status,
+                    "message": device_status.progress_message,
+                    "role": device_status.role,
+                    "parent_ap": device_status.parent_ap,
+                })
+                return
+        except Exception as e:
+            logger.warning(f"Maintenance window check failed: {e}")
+
     prefix = f"Pass {pass_number}: " if pass_number > 1 else ""
     device_status.status = "connecting"
     device_status.progress_message = f"{prefix}Connecting..."
@@ -919,10 +1190,23 @@ async def run_update_job(job: UpdateJob, concurrency: int):
     job.completed_at = datetime.now()
     job.status = "completed"
 
+    # Brief pause so final device_update broadcasts reach clients before job_completed
+    await asyncio.sleep(0.5)
+
     success_count = sum(1 for d in job.devices.values() if d.status == "success")
     failed_count = sum(1 for d in job.devices.values() if d.status == "failed")
     skipped_count = sum(1 for d in job.devices.values() if d.status == "skipped")
     cancelled_count = sum(1 for d in job.devices.values() if d.status == "cancelled")
+
+    # Resolve timezone for the completed job
+    resolved_tz = job.schedule_timezone
+    if not resolved_tz:
+        settings = db.get_all_settings()
+        tz_setting = settings.get("timezone", "auto")
+        if tz_setting == "auto":
+            resolved_tz = await services.get_timezone()
+        else:
+            resolved_tz = tz_setting
 
     await broadcast({
         "type": "job_completed",
@@ -932,7 +1216,67 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         "skipped_count": skipped_count,
         "cancelled_count": cancelled_count,
         "duration": (job.completed_at - job.started_at).total_seconds(),
+        "timezone": resolved_tz,
+        "devices": {
+            ip: {
+                "status": ds.status,
+                "message": ds.progress_message,
+                "old_version": ds.old_version,
+                "new_version": ds.new_version,
+                "error": ds.error,
+                "bank1_version": ds.bank1_version,
+                "bank2_version": ds.bank2_version,
+                "active_bank": ds.active_bank,
+                "role": ds.role,
+                "parent_ap": ds.parent_ap,
+                "model": ds.model,
+            }
+            for ip, ds in job.devices.items()
+        },
+        "ap_cpe_map": job.ap_cpe_map,
+        "device_roles": job.device_roles,
     })
+
+    # Persist to database
+    devices_dict = {
+        ip: {
+            "status": ds.status,
+            "old_version": ds.old_version,
+            "new_version": ds.new_version,
+            "error": ds.error,
+            "role": ds.role,
+            "parent_ap": ds.parent_ap,
+            "model": ds.model,
+        }
+        for ip, ds in job.devices.items()
+    }
+    db.save_job_history(
+        job_id=job.job_id,
+        started_at=job.started_at.isoformat() if job.started_at else None,
+        completed_at=job.completed_at.isoformat() if job.completed_at else None,
+        duration=(job.completed_at - job.started_at).total_seconds(),
+        bank_mode=job.bank_mode,
+        success_count=success_count,
+        failed_count=failed_count,
+        skipped_count=skipped_count,
+        cancelled_count=cancelled_count,
+        devices=devices_dict,
+        ap_cpe_map=job.ap_cpe_map,
+        device_roles=job.device_roles,
+        timezone=resolved_tz,
+    )
+
+    # Notify scheduler if this was a scheduled job
+    if job.is_scheduled:
+        scheduler = get_scheduler()
+        if scheduler:
+            learned_version = None
+            for ds in job.devices.values():
+                if ds.status == "success" and ds.new_version:
+                    learned_version = ds.new_version
+                    break
+            scheduler.on_job_completed(job.job_id, success_count, failed_count,
+                                       learned_version=learned_version)
 
     logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped, {cancelled_count} cancelled")
 
