@@ -471,9 +471,21 @@ class TachyonClient:
         result = UpdateResult(ip=self.ip, success=False)
 
         try:
-            # Login
-            progress("Logging in...")
-            login_result = await self.login()
+            # Login (with retries for connectivity errors, e.g. CPE reassociating after AP reboot)
+            login_result = None
+            max_login_retries = 20
+            login_retry_delay = 15  # 20 * 15s = 5 minutes max
+            for attempt in range(1, max_login_retries + 1):
+                progress(f"Logging in...{f' (attempt {attempt}/{max_login_retries})' if attempt > 1 else ''}")
+                login_result = await self.login()
+                if login_result is True:
+                    break
+                # Don't retry auth failures — only connectivity issues
+                if isinstance(login_result, str) and "credentials" in login_result.lower():
+                    break
+                if attempt < max_login_retries:
+                    progress(f"Device not reachable, retrying in {login_retry_delay}s... (attempt {attempt}/{max_login_retries})")
+                    await asyncio.sleep(login_retry_delay)
             if login_result is not True:
                 result.error = login_result if isinstance(login_result, str) else "Login failed"
                 return result

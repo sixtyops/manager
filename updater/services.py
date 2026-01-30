@@ -214,6 +214,67 @@ def is_in_schedule_window(
     return False
 
 
+async def get_external_time(timezone: str) -> Optional[datetime]:
+    """Fetch current time from worldtimeapi.org for the given timezone.
+
+    Returns datetime or None on failure.
+    """
+    try:
+        url = f"http://worldtimeapi.org/api/timezone/{timezone}"
+        proc = await asyncio.create_subprocess_exec(
+            "curl", "-s", "-m", "10", url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+
+        if proc.returncode == 0:
+            data = json.loads(stdout.decode())
+            dt_str = data.get("datetime")
+            if dt_str:
+                return datetime.fromisoformat(dt_str)
+    except Exception as e:
+        logger.error(f"Failed to get external time: {e}")
+
+    return None
+
+
+async def validate_time_sources(timezone: str, max_drift: int = 300) -> Tuple[bool, object]:
+    """Compare system clock vs external time source.
+
+    Args:
+        timezone: IANA timezone string
+        max_drift: Maximum allowed drift in seconds (default 300 = 5 min)
+
+    Returns:
+        (True, system_datetime) if valid or external unavailable (fail-open),
+        (False, error_string) if drift exceeds max_drift.
+    """
+    try:
+        tz = ZoneInfo(timezone)
+    except Exception:
+        tz = ZoneInfo("America/Chicago")
+
+    system_now = datetime.now(tz)
+
+    external_now = await get_external_time(timezone)
+    if external_now is None:
+        logger.warning("External time source unavailable, allowing update (fail-open)")
+        return (True, system_now)
+
+    # Make both offset-aware for comparison
+    if external_now.tzinfo is None:
+        external_now = external_now.replace(tzinfo=tz)
+
+    drift = abs((system_now - external_now).total_seconds())
+    logger.info(f"Time validation: system={system_now.isoformat()}, external={external_now.isoformat()}, drift={drift:.0f}s")
+
+    if drift > max_drift:
+        return (False, f"Clock drift too large: {drift:.0f}s (max {max_drift}s). System: {system_now.strftime('%H:%M')}, External: {external_now.strftime('%H:%M')}")
+
+    return (True, system_now)
+
+
 def clear_location_cache():
     """Clear the location cache."""
     _location_cache.clear()

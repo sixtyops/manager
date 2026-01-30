@@ -152,6 +152,23 @@ class NetworkPoller:
 
             logger.debug(f"Polled {ip}: {len(cpes)} CPEs")
 
+            # Probe CPE auth concurrently (don't block poll cycle)
+            cpe_ips_to_probe = [cpe.ip for cpe in cpes if cpe.ip]
+            if cpe_ips_to_probe:
+                cpe_sem = asyncio.Semaphore(3)
+
+                async def probe_cpe(cpe_ip):
+                    async with cpe_sem:
+                        status = await self._check_cpe_auth(
+                            cpe_ip, ap["username"], ap["password"]
+                        )
+                        db.update_cpe_auth_status(ip, cpe_ip, status)
+
+                await asyncio.gather(
+                    *[probe_cpe(cpe_ip) for cpe_ip in cpe_ips_to_probe],
+                    return_exceptions=True,
+                )
+
         except Exception as e:
             logger.error(f"Error polling {ip}: {e}")
             db.update_ap_status(ip, last_error=str(e))
@@ -194,6 +211,23 @@ class NetworkPoller:
         except Exception as e:
             logger.error(f"Failed to create site {location}: {e}")
             return None
+
+    async def _check_cpe_auth(self, cpe_ip: str, username: str, password: str) -> str:
+        """Check if we can authenticate to a CPE using the parent AP's credentials.
+
+        Returns "ok", "failed", or "unreachable".
+        """
+        try:
+            client = TachyonClient(cpe_ip, username, password, timeout=10)
+            result = await client.login()
+            if result is True:
+                return "ok"
+            if isinstance(result, str) and "not reachable" in result.lower():
+                return "unreachable"
+            return "failed"
+        except Exception as e:
+            logger.debug(f"CPE auth probe failed for {cpe_ip}: {e}")
+            return "unreachable"
 
     def invalidate_client(self, ip: str):
         """Remove cached client (e.g., when credentials change)."""
@@ -264,6 +298,7 @@ class NetworkPoller:
                     "mcs": cpe["mcs"],
                     "link_uptime": cpe["link_uptime"],
                     "signal_health": cpe["signal_health"],
+                    "auth_status": cpe["auth_status"],
                     "primary_signal": cpe["combined_signal"] or cpe["rx_power"] or cpe["last_local_rssi"],
                 }
                 ap_data["cpes"].append(cpe_data)
