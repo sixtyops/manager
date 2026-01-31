@@ -9,7 +9,6 @@ from typing import Optional
 import bcrypt as _bcrypt
 
 from fastapi import Request, WebSocket, HTTPException
-from fastapi.responses import RedirectResponse
 
 from . import database as db
 
@@ -36,7 +35,6 @@ def authenticate_radius(username: str, password: str) -> bool:
     try:
         from pyrad.client import Client
         from pyrad.dictionary import Dictionary
-        from pyrad import packet as pkt
         import pyrad.packet
 
         server = os.environ["RADIUS_SERVER"]

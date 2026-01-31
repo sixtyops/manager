@@ -2,6 +2,7 @@
 
 import asyncio
 import ipaddress
+import json
 import logging
 import os
 import re
@@ -14,7 +15,7 @@ from typing import Dict, Optional, Set
 
 import aiofiles
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, Depends
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -26,6 +27,7 @@ from .scheduler import init_scheduler, get_scheduler
 from .firmware_fetcher import init_fetcher, get_fetcher
 from . import services
 from .auth import require_auth, require_auth_ws, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, complete_setup
+from .backup import build_csv_export, process_csv_import
 
 # Configure logging
 logging.basicConfig(
@@ -231,17 +233,6 @@ async def index(request: Request, session: dict = Depends(require_auth)):
     return templates.TemplateResponse("monitor.html", {"request": request})
 
 
-@app.get("/firmware")
-async def firmware_page(request: Request, session: dict = Depends(require_auth)):
-    """Redirect to monitor (settings now in drawer)."""
-    return RedirectResponse(url="/", status_code=302)
-
-
-@app.get("/update")
-async def update_page(request: Request, session: dict = Depends(require_auth)):
-    """Redirect to monitor (settings now in drawer)."""
-    return RedirectResponse(url="/", status_code=302)
-
 
 # ============================================================================
 # WebSocket
@@ -434,6 +425,11 @@ async def add_ap(
     if poller:
         await poller.poll_ap_now(ip)
 
+    # Broadcast updated scheduler status so predictions reflect the new device
+    scheduler = get_scheduler()
+    if scheduler:
+        await scheduler._broadcast_status()
+
     return {"id": ap_id, "ip": ip}
 
 
@@ -477,6 +473,11 @@ async def add_device(
         if poller:
             await poller.poll_ap_now(ip)
 
+    # Broadcast updated scheduler status so predictions reflect the new device
+    scheduler = get_scheduler()
+    if scheduler:
+        await scheduler._broadcast_status()
+
     return {"id": device_id, "ip": ip, "device_type": device_type, "model": model}
 
 
@@ -518,6 +519,12 @@ async def delete_ap(ip: str, session: dict = Depends(require_auth)):
         poller.invalidate_client(ip)
 
     db.delete_access_point(ip)
+
+    # Broadcast updated scheduler status so predictions reflect the removal
+    scheduler = get_scheduler()
+    if scheduler:
+        await scheduler._broadcast_status()
+
     return {"success": True}
 
 
@@ -562,6 +569,11 @@ async def add_switch(
     if poller:
         await poller.poll_switch_now(ip)
 
+    # Broadcast updated scheduler status so predictions reflect the new device
+    scheduler = get_scheduler()
+    if scheduler:
+        await scheduler._broadcast_status()
+
     return {"id": sw_id, "ip": ip}
 
 
@@ -601,6 +613,12 @@ async def delete_switch(ip: str, session: dict = Depends(require_auth)):
         poller.invalidate_client(ip)
 
     db.delete_switch(ip)
+
+    # Broadcast updated scheduler status so predictions reflect the removal
+    scheduler = get_scheduler()
+    if scheduler:
+        await scheduler._broadcast_status()
+
     return {"success": True}
 
 
@@ -689,6 +707,11 @@ async def quick_add(
     poller = get_poller()
     if poller:
         await poller.poll_ap_now(ip)
+
+    # Broadcast updated scheduler status so predictions reflect the new device
+    scheduler = get_scheduler()
+    if scheduler:
+        await scheduler._broadcast_status()
 
     return {"ap_id": ap_id, "site_id": site_id, "ip": ip}
 
@@ -844,6 +867,67 @@ async def get_location(session: dict = Depends(require_auth)):
 
 
 # ============================================================================
+# Backup API
+# ============================================================================
+
+@app.post("/api/backup/export")
+async def export_backup(request: Request, session: dict = Depends(require_auth)):
+    """Export devices as CSV with encrypted passwords."""
+    data = await request.json()
+    passphrase = data.get("passphrase", "")
+    if not passphrase or len(passphrase) < 8:
+        raise HTTPException(400, "Passphrase must be at least 8 characters")
+
+    try:
+        csv_content, _ = build_csv_export(passphrase)
+    except Exception as e:
+        logger.error(f"Backup export failed: {e}")
+        raise HTTPException(500, f"Export failed: {e}")
+
+    filename = f"tachyon-devices-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv"
+    return StreamingResponse(
+        iter([csv_content]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/backup/import")
+async def import_backup(
+    file: UploadFile = File(...),
+    passphrase: str = Form(...),
+    conflict_mode: str = Form("skip"),
+    session: dict = Depends(require_auth),
+):
+    """Import devices from a CSV with encrypted passwords."""
+    if not passphrase or len(passphrase) < 8:
+        raise HTTPException(400, "Passphrase must be at least 8 characters")
+    if conflict_mode not in ("skip", "update"):
+        raise HTTPException(400, "conflict_mode must be 'skip' or 'update'")
+
+    try:
+        raw = await file.read()
+        csv_content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "File is not valid UTF-8 text")
+
+    try:
+        results = process_csv_import(csv_content, passphrase, conflict_mode)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Backup import failed: {e}")
+        raise HTTPException(500, f"Import failed: {e}")
+
+    # Trigger a poll so new devices appear in the UI
+    poller = get_poller()
+    if poller:
+        asyncio.create_task(poller._poll_all_aps())
+
+    return results
+
+
+# ============================================================================
 # Firmware Update API (existing functionality)
 # ============================================================================
 
@@ -966,6 +1050,13 @@ async def firmware_reselect(session: dict = Depends(require_auth)):
         raise HTTPException(503, "Firmware fetcher not initialized")
     beta_enabled = db.get_setting("firmware_beta_enabled", "false") == "true"
     fetcher.reselect(beta_enabled)
+
+    # Broadcast updated scheduler status immediately so the UI reflects
+    # any firmware selection change (e.g. rollout cancelled due to new firmware)
+    scheduler = get_scheduler()
+    if scheduler:
+        await scheduler._broadcast_status()
+
     return {"success": True}
 
 
@@ -1175,17 +1266,6 @@ def _extract_version_from_filename(filename: str) -> str:
         return match2.group(1)
     return ""
 
-
-def _detect_firmware_type(filename: str) -> str:
-    """Detect firmware type from filename."""
-    lower = filename.lower()
-    if "tna-303l" in lower or "tna303l" in lower:
-        return "tna-303l"
-    if "tna-30x" in lower or "tna30x" in lower:
-        return "tna-30x"
-    if "tns-100" in lower or "tns100" in lower:
-        return "tns-100"
-    return "unknown"
 
 
 def _get_firmware_type_for_model(model: Optional[str]) -> Optional[str]:
