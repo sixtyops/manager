@@ -23,6 +23,24 @@ def _migrate(db):
     if "timezone" not in jh_columns:
         db.execute("ALTER TABLE job_history ADD COLUMN timezone TEXT DEFAULT NULL")
 
+    # Add bank columns to access_points
+    ap_columns = [row[1] for row in db.execute("PRAGMA table_info(access_points)").fetchall()]
+    for col in ("bank1_version", "bank2_version"):
+        if col not in ap_columns:
+            db.execute(f"ALTER TABLE access_points ADD COLUMN {col} TEXT DEFAULT NULL")
+    if "active_bank" not in ap_columns:
+        db.execute("ALTER TABLE access_points ADD COLUMN active_bank INTEGER DEFAULT NULL")
+
+    # Add bank columns to cpe_cache
+    if "bank1_version" not in columns:
+        db.execute("ALTER TABLE cpe_cache ADD COLUMN bank1_version TEXT DEFAULT NULL")
+    if "bank2_version" not in columns:
+        db.execute("ALTER TABLE cpe_cache ADD COLUMN bank2_version TEXT DEFAULT NULL")
+    if "active_bank" not in columns:
+        db.execute("ALTER TABLE cpe_cache ADD COLUMN active_bank INTEGER DEFAULT NULL")
+    if "bank_last_fetched" not in columns:
+        db.execute("ALTER TABLE cpe_cache ADD COLUMN bank_last_fetched TEXT DEFAULT NULL")
+
 
 def init_db():
     """Initialize the database schema."""
@@ -162,6 +180,10 @@ def init_db():
             "min_temperature_c": "-10",
             "schedule_scope": "all",
             "schedule_scope_data": "",
+            "firmware_beta_enabled": "false",
+            "firmware_last_check": "",
+            "firmware_last_check_error": "",
+            "firmware_auto_fetched_files": "",
         }
         for key, value in defaults.items():
             db.execute(
@@ -289,7 +311,8 @@ def update_ap_status(ip: str, last_seen: str = None, last_error: str = _UNSET, *
         if last_error is not _UNSET:
             updates["last_error"] = last_error
 
-        allowed = {"system_name", "model", "mac", "firmware_version", "location"}
+        allowed = {"system_name", "model", "mac", "firmware_version", "location",
+                   "bank1_version", "bank2_version", "active_bank"}
         updates.update({k: v for k, v in kwargs.items() if k in allowed})
 
         if updates:
@@ -363,6 +386,26 @@ def update_cpe_auth_status(ap_ip: str, cpe_ip: str, auth_status: str):
             "UPDATE cpe_cache SET auth_status = ? WHERE ap_ip = ? AND ip = ?",
             (auth_status, ap_ip, cpe_ip)
         )
+
+
+def update_cpe_bank_info(ap_ip: str, cpe_ip: str, bank1: str, bank2: str, active: int):
+    """Update bank info for a specific CPE."""
+    with get_db() as db:
+        db.execute(
+            """UPDATE cpe_cache SET bank1_version = ?, bank2_version = ?, active_bank = ?,
+               bank_last_fetched = ? WHERE ap_ip = ? AND ip = ?""",
+            (bank1, bank2, active, datetime.now().isoformat(), ap_ip, cpe_ip)
+        )
+
+
+def get_cpe_bank_last_fetched(ap_ip: str, cpe_ip: str) -> Optional[str]:
+    """Get when bank info was last fetched for a CPE."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT bank_last_fetched FROM cpe_cache WHERE ap_ip = ? AND ip = ?",
+            (ap_ip, cpe_ip)
+        ).fetchone()
+        return row["bank_last_fetched"] if row else None
 
 
 def clear_cpes_for_ap(ap_ip: str):

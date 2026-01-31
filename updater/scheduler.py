@@ -36,6 +36,8 @@ class AutoUpdateScheduler:
         self._state = "disabled"
         self._block_reason: Optional[str] = None
         self._weather_info: Optional[dict] = None
+        self._weather_checked_today: Optional[str] = None  # date key when weather was last checked
+        self._weather_ok: Optional[bool] = None  # cached result
         self._last_run_result: Optional[str] = None
         self._last_run_time: Optional[str] = None
         self._current_job_id: Optional[str] = None
@@ -122,6 +124,8 @@ class AutoUpdateScheduler:
             if self._state != "idle":
                 self._state = "idle"
                 self._block_reason = None
+                self._weather_checked_today = None
+                self._weather_ok = None
                 await self._broadcast_status()
             return
 
@@ -142,17 +146,26 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
             return
 
-        # 8. Check weather if enabled
+        # 8. Check weather if enabled (once per schedule window)
         if settings.get("weather_check_enabled") == "true":
-            zip_code = settings.get("zip_code", "")
-            min_temp_c = float(settings.get("min_temperature_c", "-10"))
-            weather_ok, weather_data = await services.check_weather_ok(
-                zip_code if zip_code else None, min_temp_c
-            )
-            self._weather_info = weather_data
+            today_key = now.strftime("%Y-%m-%d")
+            if self._weather_checked_today != today_key:
+                # First check this window — fetch fresh weather
+                zip_code = settings.get("zip_code", "")
+                min_temp_c = float(settings.get("min_temperature_c", "-10"))
+                weather_ok, weather_data = await services.check_weather_ok(
+                    zip_code if zip_code else None, min_temp_c
+                )
+                self._weather_info = weather_data
+                self._weather_ok = weather_ok
+                self._weather_checked_today = today_key
+            else:
+                weather_ok = self._weather_ok
+
             if not weather_ok:
                 self._state = "blocked_weather"
-                temp = weather_data.get("temperature_c", "?") if weather_data else "?"
+                temp = self._weather_info.get("temperature_c", "?") if self._weather_info else "?"
+                min_temp_c = float(settings.get("min_temperature_c", "-10"))
                 self._block_reason = f"Temperature {temp}C is below minimum {min_temp_c}C"
                 db.log_schedule_event("blocked_weather", self._block_reason)
                 logger.warning(f"Scheduler blocked by weather: {self._block_reason}")

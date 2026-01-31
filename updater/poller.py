@@ -114,6 +114,18 @@ class NetworkPoller:
                             ip, ap["username"], ap["password"], site_id
                         )
 
+            # Fetch bank info for AP
+            bank_kwargs = {}
+            try:
+                device_info = await client.get_device_info()
+                bank_kwargs = {
+                    "bank1_version": device_info.bank1_version,
+                    "bank2_version": device_info.bank2_version,
+                    "active_bank": device_info.active_bank,
+                }
+            except Exception as e:
+                logger.debug(f"Failed to get bank info for AP {ip}: {e}")
+
             db.update_ap_status(
                 ip,
                 last_seen=datetime.now().isoformat(),
@@ -123,6 +135,7 @@ class NetworkPoller:
                 mac=ap_info.get("mac"),
                 firmware_version=ap_info.get("firmware_version"),
                 location=location,
+                **bank_kwargs,
             )
 
             # Get connected CPEs
@@ -152,7 +165,7 @@ class NetworkPoller:
 
             logger.debug(f"Polled {ip}: {len(cpes)} CPEs")
 
-            # Probe CPE auth concurrently (don't block poll cycle)
+            # Probe CPE auth and fetch bank info concurrently
             cpe_ips_to_probe = [cpe.ip for cpe in cpes if cpe.ip]
             if cpe_ips_to_probe:
                 cpe_sem = asyncio.Semaphore(3)
@@ -163,6 +176,12 @@ class NetworkPoller:
                             cpe_ip, ap["username"], ap["password"]
                         )
                         db.update_cpe_auth_status(ip, cpe_ip, status)
+
+                        # Fetch bank info if auth OK and not fetched recently
+                        if status == "ok":
+                            await self._maybe_fetch_cpe_banks(
+                                ip, cpe_ip, ap["username"], ap["password"]
+                            )
 
                 await asyncio.gather(
                     *[probe_cpe(cpe_ip) for cpe_ip in cpe_ips_to_probe],
@@ -229,6 +248,33 @@ class NetworkPoller:
             logger.debug(f"CPE auth probe failed for {cpe_ip}: {e}")
             return "unreachable"
 
+    async def _maybe_fetch_cpe_banks(self, ap_ip: str, cpe_ip: str,
+                                      username: str, password: str):
+        """Fetch CPE bank info if newly discovered or >24h since last fetch."""
+        try:
+            last_fetched = db.get_cpe_bank_last_fetched(ap_ip, cpe_ip)
+            if last_fetched:
+                age = (datetime.now() - datetime.fromisoformat(last_fetched)).total_seconds()
+                if age < 86400:  # 24 hours
+                    return
+
+            client = TachyonClient(cpe_ip, username, password, timeout=15)
+            result = await client.login()
+            if result is not True:
+                return
+
+            info = await client.get_device_info()
+            if info.bank1_version or info.bank2_version:
+                db.update_cpe_bank_info(
+                    ap_ip, cpe_ip,
+                    info.bank1_version, info.bank2_version, info.active_bank
+                )
+                logger.debug(f"Fetched bank info for CPE {cpe_ip}: "
+                           f"B1={info.bank1_version} B2={info.bank2_version} "
+                           f"active={info.active_bank}")
+        except Exception as e:
+            logger.debug(f"Failed to get bank info for CPE {cpe_ip}: {e}")
+
     def invalidate_client(self, ip: str):
         """Remove cached client (e.g., when credentials change)."""
         self._clients.pop(ip, None)
@@ -271,6 +317,9 @@ class NetworkPoller:
                 "model": ap["model"],
                 "mac": ap["mac"],
                 "firmware_version": ap["firmware_version"],
+                "bank1_version": ap.get("bank1_version"),
+                "bank2_version": ap.get("bank2_version"),
+                "active_bank": ap.get("active_bank"),
                 "location": ap["location"],
                 "last_seen": ap["last_seen"],
                 "last_error": ap["last_error"],
@@ -289,6 +338,9 @@ class NetworkPoller:
                     "system_name": cpe["system_name"],
                     "model": cpe["model"],
                     "firmware_version": cpe["firmware_version"],
+                    "bank1_version": cpe.get("bank1_version"),
+                    "bank2_version": cpe.get("bank2_version"),
+                    "active_bank": cpe.get("active_bank"),
                     "link_distance": cpe["link_distance"],
                     "rx_power": cpe["rx_power"],
                     "combined_signal": cpe["combined_signal"],

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
@@ -21,6 +22,7 @@ from .tachyon import TachyonClient, UpdateResult
 from . import database as db
 from .poller import init_poller, get_poller
 from .scheduler import init_scheduler, get_scheduler
+from .firmware_fetcher import init_fetcher, get_fetcher
 from . import services
 from .auth import require_auth, require_auth_ws, authenticate, create_session, SESSION_COOKIE_NAME
 
@@ -70,11 +72,14 @@ async def lifespan(app: FastAPI):
     await poller.start()
     scheduler = init_scheduler(broadcast, _start_scheduled_update, check_interval=60)
     await scheduler.start()
+    fetcher = init_fetcher(FIRMWARE_DIR, broadcast)
+    await fetcher.start()
     logger.info("Application started")
 
     yield
 
     # Shutdown
+    await fetcher.stop()
     await scheduler.stop()
     await poller.stop()
     logger.info("Application stopped")
@@ -141,16 +146,16 @@ async def index(request: Request, session: dict = Depends(require_auth)):
     return templates.TemplateResponse("monitor.html", {"request": request})
 
 
-@app.get("/firmware", response_class=HTMLResponse)
+@app.get("/firmware")
 async def firmware_page(request: Request, session: dict = Depends(require_auth)):
-    """Serve the firmware manager page."""
-    return templates.TemplateResponse("firmware.html", {"request": request})
+    """Redirect to monitor (settings now in drawer)."""
+    return RedirectResponse(url="/", status_code=302)
 
 
-@app.get("/update", response_class=HTMLResponse)
+@app.get("/update")
 async def update_page(request: Request, session: dict = Depends(require_auth)):
-    """Serve the firmware update page."""
-    return templates.TemplateResponse("index.html", {"request": request})
+    """Redirect to monitor (settings now in drawer)."""
+    return RedirectResponse(url="/", status_code=302)
 
 
 # ============================================================================
@@ -507,6 +512,7 @@ async def get_weather(session: dict = Depends(require_auth)):
     if not weather:
         return {"error": "Could not fetch weather"}
 
+    weather["fetched_at"] = datetime.now().isoformat()
     return weather
 
 
@@ -677,6 +683,13 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
 @app.get("/api/firmware-files")
 async def list_firmware_files(session: dict = Depends(require_auth)):
     """List available firmware files."""
+    import json as _json
+    auto_fetched_raw = db.get_setting("firmware_auto_fetched_files", "")
+    try:
+        auto_fetched = _json.loads(auto_fetched_raw) if auto_fetched_raw else []
+    except (ValueError, TypeError):
+        auto_fetched = []
+
     files = []
     for f in FIRMWARE_DIR.iterdir():
         if f.is_file() and f.suffix in {".bin", ".img", ".npk", ".tar", ".gz"}:
@@ -684,6 +697,7 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
                 "name": f.name,
                 "size": f.stat().st_size,
                 "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+                "source": "auto" if f.name in auto_fetched else "manual",
             })
     return {"files": sorted(files, key=lambda x: x["modified"], reverse=True)}
 
@@ -696,6 +710,129 @@ async def delete_firmware_file(filename: str, session: dict = Depends(require_au
         raise HTTPException(404, "File not found")
     path.unlink()
     return {"success": True}
+
+
+@app.post("/api/firmware-fetch")
+async def trigger_firmware_fetch(session: dict = Depends(require_auth)):
+    """Trigger an on-demand firmware check and download."""
+    fetcher = get_fetcher()
+    if not fetcher:
+        raise HTTPException(503, "Firmware fetcher not initialized")
+    result = await fetcher.check_and_download()
+    return result
+
+
+@app.get("/api/firmware-fetch/status")
+async def firmware_fetch_status(session: dict = Depends(require_auth)):
+    """Get firmware fetch status."""
+    import json as _json
+    last_check = db.get_setting("firmware_last_check", "")
+    last_error = db.get_setting("firmware_last_check_error", "")
+    auto_fetched_raw = db.get_setting("firmware_auto_fetched_files", "")
+    try:
+        auto_fetched = _json.loads(auto_fetched_raw) if auto_fetched_raw else []
+    except (ValueError, TypeError):
+        auto_fetched = []
+    return {
+        "last_check": last_check,
+        "last_error": last_error,
+        "auto_fetched_files": auto_fetched,
+    }
+
+
+@app.get("/api/fleet-status")
+async def get_fleet_status(session: dict = Depends(require_auth)):
+    """Get firmware version status for all devices."""
+    settings = db.get_all_settings()
+
+    # Build target versions from selected firmware filenames
+    targets = {}
+    for setting_key, fw_type in [
+        ("selected_firmware_30x", "tna-30x"),
+        ("selected_firmware_303l", "tna-303l"),
+    ]:
+        filename = settings.get(setting_key, "")
+        if filename:
+            version = _extract_version_from_filename(filename)
+            targets[fw_type] = {"file": filename, "version": version}
+
+    # Build site name lookup
+    sites = db.get_tower_sites()
+    site_names = {s["id"]: s["name"] for s in sites}
+
+    # Collect all devices
+    devices = []
+    aps = db.get_access_points(enabled_only=False)
+    all_cpes = db.get_all_cpes()
+    cpes_by_ap = {}
+    for cpe in all_cpes:
+        cpes_by_ap.setdefault(cpe["ap_ip"], []).append(cpe)
+
+    summary = {"total": 0, "current": 0, "behind": 0, "unknown": 0}
+
+    for ap in aps:
+        fw_type = _get_firmware_type_for_model(ap.get("model"))
+        target = targets.get(fw_type)
+        target_version = target["version"] if target else ""
+        status = _device_version_status(ap.get("firmware_version"), target_version)
+        summary["total"] += 1
+        summary[status] += 1
+
+        devices.append({
+            "ip": ap["ip"],
+            "system_name": ap.get("system_name"),
+            "model": ap.get("model"),
+            "role": "ap",
+            "parent_ap": None,
+            "site_name": site_names.get(ap.get("tower_site_id"), "Unassigned"),
+            "firmware_version": ap.get("firmware_version") or "",
+            "bank1_version": ap.get("bank1_version"),
+            "bank2_version": ap.get("bank2_version"),
+            "active_bank": ap.get("active_bank"),
+            "target_version": target_version,
+            "firmware_type": fw_type,
+            "status": status,
+            "auth_status": None,
+            "enabled": bool(ap.get("enabled", 1)),
+        })
+
+        for cpe in cpes_by_ap.get(ap["ip"], []):
+            cpe_fw_type = _get_firmware_type_for_model(cpe.get("model"))
+            cpe_target = targets.get(cpe_fw_type)
+            cpe_target_version = cpe_target["version"] if cpe_target else ""
+            cpe_status = _device_version_status(cpe.get("firmware_version"), cpe_target_version)
+            summary["total"] += 1
+            summary[cpe_status] += 1
+
+            devices.append({
+                "ip": cpe["ip"],
+                "system_name": cpe.get("system_name"),
+                "model": cpe.get("model"),
+                "role": "cpe",
+                "parent_ap": ap["ip"],
+                "site_name": site_names.get(ap.get("tower_site_id"), "Unassigned"),
+                "firmware_version": cpe.get("firmware_version") or "",
+                "bank1_version": cpe.get("bank1_version"),
+                "bank2_version": cpe.get("bank2_version"),
+                "active_bank": cpe.get("active_bank"),
+                "target_version": cpe_target_version,
+                "firmware_type": cpe_fw_type,
+                "status": cpe_status,
+                "auth_status": cpe.get("auth_status"),
+                "enabled": bool(ap.get("enabled", 1)),
+            })
+
+    return {"devices": devices, "summary": summary, "targets": targets}
+
+
+def _device_version_status(current: Optional[str], target: str) -> str:
+    """Determine version status: 'current', 'behind', or 'unknown'."""
+    if not current or not target:
+        return "unknown"
+    cmp = _compare_versions(current, target)
+    if cmp >= 0:
+        return "current"
+    return "behind"
 
 
 def _select_firmware_for_model(model: Optional[str], firmware_files: Dict[str, str]) -> Optional[str]:
@@ -733,6 +870,73 @@ def _is_303l_model(model: Optional[str]) -> bool:
         return False
     model_lower = model.lower()
     return model_lower.startswith("tna-303l")
+
+
+def _extract_version_from_filename(filename: str) -> str:
+    """Extract normalized version from firmware filename.
+
+    'tna-30x-2.5.1-r54970.bin' -> '2.5.1.54970'
+    """
+    match = re.search(
+        r"(?:tna-30x|tna30x|tna-303l|tna303l|tns-100|tns100)-(\d+\.\d+\.\d+)-r(\d+)",
+        filename,
+        re.IGNORECASE,
+    )
+    if match:
+        return f"{match.group(1)}.{match.group(2)}"
+    match2 = re.search(r"(\d+\.\d+\.\d+)", filename)
+    if match2:
+        return match2.group(1)
+    return ""
+
+
+def _detect_firmware_type(filename: str) -> str:
+    """Detect firmware type from filename."""
+    lower = filename.lower()
+    if "tna-303l" in lower or "tna303l" in lower:
+        return "tna-303l"
+    if "tna-30x" in lower or "tna30x" in lower:
+        return "tna-30x"
+    if "tns-100" in lower or "tns100" in lower:
+        return "tns-100"
+    return "unknown"
+
+
+def _get_firmware_type_for_model(model: Optional[str]) -> Optional[str]:
+    """Get the firmware type key for a device model."""
+    if not model:
+        return "tna-30x"
+    model_lower = model.lower()
+    for model_key, patterns in TachyonClient.MODEL_FIRMWARE_PATTERNS.items():
+        if model_lower == model_key or model_lower.startswith(model_key):
+            return patterns[0] if patterns else None
+    return "tna-30x"
+
+
+def _compare_versions(a: str, b: str) -> int:
+    """Compare two version strings. Returns <0 if a<b, 0 if equal, >0 if a>b."""
+    def parts(v):
+        if not v:
+            return [0]
+        # Normalize: "1.12.2-r54885" -> "1.12.2.54885"
+        v = v.replace("-", ".").lower()
+        result = []
+        for seg in v.split("."):
+            seg = seg.lstrip("r")  # strip revision prefix
+            try:
+                result.append(int(seg))
+            except ValueError:
+                continue  # skip non-numeric segments
+        return result or [0]
+    pa, pb = parts(a), parts(b)
+    while len(pa) < len(pb):
+        pa.append(0)
+    while len(pb) < len(pa):
+        pb.append(0)
+    for x, y in zip(pa, pb):
+        if x != y:
+            return x - y
+    return 0
 
 
 async def _start_scheduled_update(
@@ -965,6 +1169,109 @@ async def start_update(
     asyncio.create_task(run_update_job(job, concurrency))
 
     return {"job_id": job_id, "device_count": len(job.devices)}
+
+
+@app.post("/api/update-device")
+async def update_single_device_endpoint(
+    ip: str = Form(...),
+    firmware_file: str = Form(...),
+    firmware_file_303l: str = Form(""),
+    bank_mode: str = Form("both"),
+    session: dict = Depends(require_auth),
+):
+    """Start a firmware update for a single device (AP or CPE)."""
+    # Check firmware file exists
+    firmware_path = FIRMWARE_DIR / firmware_file
+    if not firmware_path.exists():
+        raise HTTPException(400, f"Firmware file not found: {firmware_file}")
+
+    firmware_files = {"tna-30x": str(firmware_path)}
+    firmware_names = {"tna-30x": firmware_file}
+
+    if firmware_file_303l:
+        path_303l = FIRMWARE_DIR / firmware_file_303l
+        if not path_303l.exists():
+            raise HTTPException(400, f"303L firmware file not found: {firmware_file_303l}")
+        firmware_files["tna-303l"] = str(path_303l)
+        firmware_names["tna-303l"] = firmware_file_303l
+
+    # Look up device - check APs first, then CPEs
+    ap = db.get_access_point(ip)
+    credentials = {}
+    device_roles = {}
+    ap_cpe_map = {}
+    device_parent = {}
+    device_firmware_map = {}
+
+    if ap:
+        # It's an AP - update just this AP (no CPEs)
+        credentials[ip] = (ap["username"], ap["password"])
+        device_roles[ip] = "ap"
+        device_firmware_map[ip] = _select_firmware_for_model(ap.get("model"), firmware_files) or str(firmware_path)
+        ap_cpe_map[ip] = []
+    else:
+        # Check if it's a CPE
+        all_cpes = db.get_all_cpes()
+        cpe = next((c for c in all_cpes if c["ip"] == ip), None)
+        if not cpe:
+            raise HTTPException(404, f"Device not found: {ip}")
+
+        # Get parent AP credentials
+        parent_ap = db.get_access_point(cpe["ap_ip"])
+        if not parent_ap:
+            raise HTTPException(400, f"Parent AP {cpe['ap_ip']} not found for CPE {ip}")
+
+        credentials[ip] = (parent_ap["username"], parent_ap["password"])
+        device_roles[ip] = "cpe"
+        device_parent[ip] = cpe["ap_ip"]
+        cpe_fw = _select_firmware_for_model(cpe.get("model"), firmware_files)
+        if cpe_fw is None and _is_303l_model(cpe.get("model")):
+            device_firmware_map[ip] = "__missing_303l__"
+        elif cpe_fw is None:
+            device_firmware_map[ip] = str(firmware_path)
+        else:
+            device_firmware_map[ip] = cpe_fw
+        # Create a dummy AP entry in ap_cpe_map so the job structure works
+        ap_cpe_map[cpe["ap_ip"]] = [ip]
+
+    job_id = str(uuid.uuid4())[:8]
+    job = UpdateJob(
+        job_id=job_id,
+        firmware_files=firmware_files,
+        firmware_names=firmware_names,
+        device_firmware_map=device_firmware_map,
+        device_type="mixed",
+        credentials=credentials,
+        bank_mode=bank_mode,
+        ap_cpe_map=ap_cpe_map,
+        device_roles=device_roles,
+        device_parent=device_parent,
+        started_at=datetime.now(),
+        status="running",
+    )
+
+    role = device_roles[ip]
+    job.devices[ip] = DeviceStatus(
+        ip=ip, role=role,
+        parent_ap=device_parent.get(ip)
+    )
+
+    update_jobs[job_id] = job
+
+    await broadcast({
+        "type": "job_started",
+        "job_id": job_id,
+        "device_count": 1,
+        "firmware": firmware_file,
+        "ap_cpe_map": ap_cpe_map,
+        "device_roles": device_roles,
+        "device_parent": device_parent,
+        "bank_mode": bank_mode,
+    })
+
+    asyncio.create_task(run_update_job(job, concurrency=1))
+
+    return {"job_id": job_id, "device_count": 1}
 
 
 async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1):
