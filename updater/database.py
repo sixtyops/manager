@@ -23,6 +23,29 @@ def _migrate(db):
     if "timezone" not in jh_columns:
         db.execute("ALTER TABLE job_history ADD COLUMN timezone TEXT DEFAULT NULL")
 
+    # Add bank columns to access_points
+    ap_columns = [row[1] for row in db.execute("PRAGMA table_info(access_points)").fetchall()]
+    for col in ("bank1_version", "bank2_version"):
+        if col not in ap_columns:
+            db.execute(f"ALTER TABLE access_points ADD COLUMN {col} TEXT DEFAULT NULL")
+    if "active_bank" not in ap_columns:
+        db.execute("ALTER TABLE access_points ADD COLUMN active_bank INTEGER DEFAULT NULL")
+
+    # Add bank columns to cpe_cache
+    if "bank1_version" not in columns:
+        db.execute("ALTER TABLE cpe_cache ADD COLUMN bank1_version TEXT DEFAULT NULL")
+    if "bank2_version" not in columns:
+        db.execute("ALTER TABLE cpe_cache ADD COLUMN bank2_version TEXT DEFAULT NULL")
+    if "active_bank" not in columns:
+        db.execute("ALTER TABLE cpe_cache ADD COLUMN active_bank INTEGER DEFAULT NULL")
+    if "bank_last_fetched" not in columns:
+        db.execute("ALTER TABLE cpe_cache ADD COLUMN bank_last_fetched TEXT DEFAULT NULL")
+
+    # Add firmware_file_tns100 column to rollouts
+    rollout_columns = [row[1] for row in db.execute("PRAGMA table_info(rollouts)").fetchall()]
+    if "firmware_file_tns100" not in rollout_columns:
+        db.execute("ALTER TABLE rollouts ADD COLUMN firmware_file_tns100 TEXT DEFAULT NULL")
+
 
 def init_db():
     """Initialize the database schema."""
@@ -53,6 +76,27 @@ def init_db():
                 last_seen TEXT,
                 last_error TEXT,
                 enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS switches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip TEXT NOT NULL UNIQUE,
+                tower_site_id INTEGER,
+                username TEXT NOT NULL,
+                password TEXT NOT NULL,
+                system_name TEXT,
+                model TEXT,
+                mac TEXT,
+                firmware_version TEXT,
+                location TEXT,
+                last_seen TEXT,
+                last_error TEXT,
+                enabled INTEGER DEFAULT 1,
+                bank1_version TEXT,
+                bank2_version TEXT,
+                active_bank INTEGER,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
             );
@@ -143,6 +187,16 @@ def init_db():
                 FOREIGN KEY (rollout_id) REFERENCES rollouts(id),
                 UNIQUE(rollout_id, ip)
             );
+
+            CREATE TABLE IF NOT EXISTS device_durations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                ip TEXT NOT NULL,
+                role TEXT NOT NULL,
+                duration_seconds REAL NOT NULL,
+                bank_mode TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # Migrations: add columns if missing
@@ -162,6 +216,12 @@ def init_db():
             "min_temperature_c": "-10",
             "schedule_scope": "all",
             "schedule_scope_data": "",
+            "firmware_beta_enabled": "false",
+            "firmware_last_check": "",
+            "firmware_last_check_error": "",
+            "firmware_auto_fetched_files": "",
+            "setup_completed": "false",
+            "admin_password_hash": "",
         }
         for key, value in defaults.items():
             db.execute(
@@ -220,9 +280,10 @@ def update_tower_site(site_id: int, **kwargs):
 
 
 def delete_tower_site(site_id: int):
-    """Delete a tower site (APs will have tower_site_id set to NULL)."""
+    """Delete a tower site (APs and switches will have tower_site_id set to NULL)."""
     with get_db() as db:
         db.execute("UPDATE access_points SET tower_site_id = NULL WHERE tower_site_id = ?", (site_id,))
+        db.execute("UPDATE switches SET tower_site_id = NULL WHERE tower_site_id = ?", (site_id,))
         db.execute("DELETE FROM tower_sites WHERE id = ?", (site_id,))
 
 
@@ -289,7 +350,8 @@ def update_ap_status(ip: str, last_seen: str = None, last_error: str = _UNSET, *
         if last_error is not _UNSET:
             updates["last_error"] = last_error
 
-        allowed = {"system_name", "model", "mac", "firmware_version", "location"}
+        allowed = {"system_name", "model", "mac", "firmware_version", "location",
+                   "bank1_version", "bank2_version", "active_bank"}
         updates.update({k: v for k, v in kwargs.items() if k in allowed})
 
         if updates:
@@ -302,6 +364,80 @@ def delete_access_point(ip: str):
     with get_db() as db:
         db.execute("DELETE FROM cpe_cache WHERE ap_ip = ?", (ip,))
         db.execute("DELETE FROM access_points WHERE ip = ?", (ip,))
+
+
+# Switch operations
+def get_switches(tower_site_id: int = None, enabled_only: bool = True) -> list[dict]:
+    """Get switches, optionally filtered by tower site."""
+    with get_db() as db:
+        query = "SELECT * FROM switches WHERE 1=1"
+        params = []
+
+        if tower_site_id is not None:
+            query += " AND tower_site_id = ?"
+            params.append(tower_site_id)
+
+        if enabled_only:
+            query += " AND enabled = 1"
+
+        query += " ORDER BY ip"
+        rows = db.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_switch(ip: str) -> Optional[dict]:
+    """Get a switch by IP."""
+    with get_db() as db:
+        row = db.execute("SELECT * FROM switches WHERE ip = ?", (ip,)).fetchone()
+        return dict(row) if row else None
+
+
+def upsert_switch(ip: str, username: str, password: str, tower_site_id: int = None, **kwargs) -> int:
+    """Create or update a switch."""
+    with get_db() as db:
+        existing = db.execute("SELECT id FROM switches WHERE ip = ?", (ip,)).fetchone()
+
+        if existing:
+            updates = {"username": username, "password": password, "tower_site_id": tower_site_id}
+            allowed = {"system_name", "model", "mac", "firmware_version", "location", "last_seen", "last_error", "enabled"}
+            updates.update({k: v for k, v in kwargs.items() if k in allowed})
+
+            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+            db.execute(f"UPDATE switches SET {set_clause} WHERE ip = ?", (*updates.values(), ip))
+            return existing["id"]
+        else:
+            db.execute(
+                """INSERT INTO switches (ip, username, password, tower_site_id, system_name, model, mac, firmware_version, location)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (ip, username, password, tower_site_id,
+                 kwargs.get("system_name"), kwargs.get("model"), kwargs.get("mac"),
+                 kwargs.get("firmware_version"), kwargs.get("location"))
+            )
+            return db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def update_switch_status(ip: str, last_seen: str = None, last_error: str = _UNSET, **kwargs):
+    """Update switch status after a poll."""
+    with get_db() as db:
+        updates = {}
+        if last_seen:
+            updates["last_seen"] = last_seen
+        if last_error is not _UNSET:
+            updates["last_error"] = last_error
+
+        allowed = {"system_name", "model", "mac", "firmware_version", "location",
+                   "bank1_version", "bank2_version", "active_bank"}
+        updates.update({k: v for k, v in kwargs.items() if k in allowed})
+
+        if updates:
+            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+            db.execute(f"UPDATE switches SET {set_clause} WHERE ip = ?", (*updates.values(), ip))
+
+
+def delete_switch(ip: str):
+    """Delete a switch."""
+    with get_db() as db:
+        db.execute("DELETE FROM switches WHERE ip = ?", (ip,))
 
 
 # CPE Cache operations
@@ -363,6 +499,26 @@ def update_cpe_auth_status(ap_ip: str, cpe_ip: str, auth_status: str):
             "UPDATE cpe_cache SET auth_status = ? WHERE ap_ip = ? AND ip = ?",
             (auth_status, ap_ip, cpe_ip)
         )
+
+
+def update_cpe_bank_info(ap_ip: str, cpe_ip: str, bank1: str, bank2: str, active: int):
+    """Update bank info for a specific CPE."""
+    with get_db() as db:
+        db.execute(
+            """UPDATE cpe_cache SET bank1_version = ?, bank2_version = ?, active_bank = ?,
+               bank_last_fetched = ? WHERE ap_ip = ? AND ip = ?""",
+            (bank1, bank2, active, datetime.now().isoformat(), ap_ip, cpe_ip)
+        )
+
+
+def get_cpe_bank_last_fetched(ap_ip: str, cpe_ip: str) -> Optional[str]:
+    """Get when bank info was last fetched for a CPE."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT bank_last_fetched FROM cpe_cache WHERE ap_ip = ? AND ip = ?",
+            (ap_ip, cpe_ip)
+        ).fetchone()
+        return row["bank_last_fetched"] if row else None
 
 
 def clear_cpes_for_ap(ap_ip: str):
@@ -511,6 +667,44 @@ def cleanup_expired_sessions():
         db.execute("DELETE FROM sessions WHERE expires_at <= ?", (datetime.now().isoformat(),))
 
 
+def cleanup_old_job_history(max_age_days: int = 90):
+    """Remove job history entries older than max_age_days."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as db:
+        db.execute("DELETE FROM job_history WHERE completed_at < ?", (cutoff,))
+
+
+def cleanup_old_schedule_log(max_age_days: int = 90):
+    """Remove schedule log entries older than max_age_days."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as db:
+        db.execute("DELETE FROM schedule_log WHERE timestamp < ?", (cutoff,))
+
+
+def cleanup_old_rollouts(max_age_days: int = 180):
+    """Remove completed/cancelled rollouts and their devices older than max_age_days."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as db:
+        old_ids = db.execute(
+            "SELECT id FROM rollouts WHERE status IN ('completed', 'cancelled') AND updated_at < ?",
+            (cutoff,)
+        ).fetchall()
+        for row in old_ids:
+            db.execute("DELETE FROM rollout_devices WHERE rollout_id = ?", (row["id"],))
+            db.execute("DELETE FROM rollouts WHERE id = ?", (row["id"],))
+
+
+def cleanup_old_device_durations(max_age_days: int = 180):
+    """Remove device duration records older than max_age_days."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as db:
+        db.execute("DELETE FROM device_durations WHERE created_at < ?", (cutoff,))
+
+
 # Rollout operations
 def get_active_rollout() -> Optional[dict]:
     """Get the current active or paused rollout."""
@@ -528,12 +722,12 @@ def get_rollout(rollout_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def create_rollout(firmware_file: str, firmware_file_303l: str = None) -> int:
+def create_rollout(firmware_file: str, firmware_file_303l: str = None, firmware_file_tns100: str = None) -> int:
     """Create a new rollout. Returns the rollout ID."""
     with get_db() as db:
         cursor = db.execute(
-            "INSERT INTO rollouts (firmware_file, firmware_file_303l) VALUES (?, ?)",
-            (firmware_file, firmware_file_303l)
+            "INSERT INTO rollouts (firmware_file, firmware_file_303l, firmware_file_tns100) VALUES (?, ?, ?)",
+            (firmware_file, firmware_file_303l, firmware_file_tns100)
         )
         return cursor.lastrowid
 
@@ -696,6 +890,40 @@ def get_rollout_progress(rollout_id: int) -> dict:
                 result[s] = c
             result["total"] += c
         return result
+
+
+# Device duration tracking
+DEFAULT_DURATIONS = {"ap": 180.0, "cpe": 120.0, "switch": 600.0}
+
+
+def save_device_duration(job_id: str, ip: str, role: str, duration_seconds: float, bank_mode: str = None):
+    """Save a successful device update duration."""
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO device_durations (job_id, ip, role, duration_seconds, bank_mode) VALUES (?, ?, ?, ?, ?)",
+            (job_id, ip, role, duration_seconds, bank_mode)
+        )
+
+
+def get_avg_durations() -> dict:
+    """Get average update duration per device role from recent history.
+
+    Returns dict like {"ap": 180.0, "cpe": 120.0, "switch": 600.0} in seconds.
+    Falls back to defaults if no history for a role.
+    """
+    result = dict(DEFAULT_DURATIONS)
+    with get_db() as db:
+        for role in ("ap", "cpe", "switch"):
+            row = db.execute(
+                """SELECT AVG(duration_seconds) as avg_dur FROM (
+                       SELECT duration_seconds FROM device_durations
+                       WHERE role = ? ORDER BY created_at DESC LIMIT 50
+                   )""",
+                (role,)
+            ).fetchone()
+            if row and row["avg_dur"] is not None:
+                result[role] = round(row["avg_dur"], 1)
+    return result
 
 
 # Initialize on import

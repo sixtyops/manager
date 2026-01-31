@@ -1,90 +1,99 @@
-# Firmware Update Tool
+# Tachyon Management System
 
-Web-based firmware update tool for production network devices. Supports parallel updates with real-time progress monitoring.
+Web-based firmware update tool for production wireless network devices. Supports parallel updates with real-time progress monitoring, automatic scheduling with gradual rollout, and network topology visualization.
 
 ## Supported Devices
 
-- **Tachyon Networks** - TNA-30x series
-- **MikroTik** - Coming soon
+- **Tachyon Networks** - TNA-301, TNA-302, TNA-303x, TNA-303L, TNA-303L-65, TNS-100
+- **MikroTik** - Planned
 
 ## Features
 
-- Web UI for easy operation
-- Upload firmware files or select from existing
-- Paste or upload IP list
-- Parallel updates (configurable concurrency)
-- Real-time progress via WebSocket
-- Per-device status tracking
+- **Web UI** with real-time WebSocket progress updates
+- **Parallel firmware updates** with configurable concurrency
+- **Automatic scheduling** with maintenance windows (day-of-week + time range)
+- **Gradual rollout** - canary → 10% → 50% → 100% across consecutive nights
+- **Network topology monitoring** - background polling of APs and CPEs with signal health
+- **Weather & time safety checks** - blocks updates when temperature is too low or system clock is unreliable
+- **Authentication** - RADIUS with local fallback, session-based
+- **Tower site management** - organize APs by physical location
+- **Docker deployment** with persistent volumes
 
-## Installation
+## Quick Start
+
+### Docker (recommended)
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-org/firmware-updater.git
-cd firmware-updater
+docker compose up -d
+```
 
-# Create virtual environment
+Open http://localhost:8000 and log in with `admin` / `changeme`.
+
+### Local Installation
+
+```bash
 python3 -m venv venv
 source venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Or install as package
 pip install -e .
+
+# Set credentials
+export ADMIN_USERNAME=admin
+export ADMIN_PASSWORD=changeme
+
+# Start server
+firmware-updater
 ```
+
+See [docs/deployment.md](docs/deployment.md) for full configuration options.
 
 ## Usage
 
-### Start the server
+### Manual Update
 
-```bash
-# Using the installed command
-firmware-updater
+1. Go to the **Firmware** tab and upload firmware files
+2. Go to the **Update** tab
+3. Paste IP addresses (one per line), set concurrency and bank mode
+4. Click **Start Update** and monitor real-time progress
 
-# Or run directly
-python -m updater.app
+### Automatic Updates
 
-# Custom port
-PORT=8080 firmware-updater
-```
+1. Go to the **Auto-Update** tab
+2. Enable the schedule and select days/hours for the maintenance window
+3. Select firmware files for your device models
+4. The scheduler runs a gradual rollout: 1 AP on night 1 (canary), then 10%, 50%, and 100% on subsequent nights
+5. Any failure pauses the rollout for manual review
 
-### Access the web UI
+See [docs/gradual-rollout.md](docs/gradual-rollout.md) for rollout details.
 
-Open http://localhost:8000 in your browser.
+### Network Monitoring
 
-### Update workflow
+The **Monitor** page shows a live topology of tower sites, access points, and connected CPEs with signal health indicators (green/yellow/red based on RX power).
 
-1. **Select device type** - Currently Tachyon Networks
-2. **Upload firmware** - Drag & drop or click to browse
-3. **Enter credentials** - Username and password for all devices
-4. **Paste IP list** - One IP per line
-5. **Set concurrency** - Number of parallel updates (default: 5)
-6. **Click Start Update**
+## API
 
-### IP List Format
+See [docs/api.md](docs/api.md) for the full endpoint reference. Key endpoints:
 
-```
-# Comments start with #
-192.168.1.10
-192.168.1.11
-192.168.1.12
-```
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/start-update` | Start a firmware update job |
+| `GET /api/topology` | Get network topology |
+| `GET /api/scheduler/status` | Get scheduler and rollout state |
+| `GET /api/rollout/current` | Get active rollout progress |
+| `WebSocket /ws` | Real-time status updates |
 
-## API Endpoints
+## Architecture
 
-- `GET /` - Web UI
-- `POST /api/upload-firmware` - Upload firmware file
-- `GET /api/firmware-files` - List available firmware files
-- `POST /api/start-update` - Start update job
-- `GET /api/job/{job_id}` - Get job status
-- `WebSocket /ws` - Real-time updates
+See [docs/architecture.md](docs/architecture.md) for system design details.
 
 ## Development
 
 ```bash
 # Run with auto-reload
 uvicorn updater.app:app --reload --port 8000
+
+# Run tests
+pytest -v
 ```
 
 ## License

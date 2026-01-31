@@ -82,21 +82,40 @@ def authenticate_radius(username: str, password: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def authenticate_local(username: str, password: str) -> bool:
-    """Authenticate against ADMIN_USERNAME / ADMIN_PASSWORD env vars."""
+    """Authenticate against DB-stored hash (preferred) or env var fallback."""
     admin_user = os.environ.get("ADMIN_USERNAME")
+    if not admin_user or username != admin_user:
+        return False
+
+    # Prefer DB-stored bcrypt hash (set during initial setup)
+    db_hash = db.get_setting("admin_password_hash", "")
+    if db_hash:
+        try:
+            return _bcrypt.checkpw(password.encode(), db_hash.encode())
+        except Exception:
+            return False
+
+    # Fall back to env var (bootstrap password)
     admin_pass = os.environ.get("ADMIN_PASSWORD")
-
-    if not admin_user or not admin_pass:
+    if not admin_pass:
         return False
 
-    if username != admin_user:
-        return False
-
-    # Support both plain and bcrypt-hashed passwords
     if admin_pass.startswith("$2b$") or admin_pass.startswith("$2a$"):
         return _bcrypt.checkpw(password.encode(), admin_pass.encode())
 
     return password == admin_pass
+
+
+def is_setup_required() -> bool:
+    """Check if the admin needs to change the default password."""
+    return db.get_setting("setup_completed", "false") != "true"
+
+
+def complete_setup(new_password: str):
+    """Hash and store a new admin password, marking setup as complete."""
+    hashed = _bcrypt.hashpw(new_password.encode(), _bcrypt.gensalt()).decode()
+    db.set_setting("admin_password_hash", hashed)
+    db.set_setting("setup_completed", "true")
 
 
 # ---------------------------------------------------------------------------

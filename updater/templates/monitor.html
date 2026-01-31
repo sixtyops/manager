@@ -13,48 +13,67 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #0f172a;
-            color: #e2e8f0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif;
+            background: #f5f5f5;
+            color: #111827;
             min-height: 100vh;
+            padding-bottom: 112px;
         }
 
         .header {
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            padding: 16px 24px;
-            background: #1e293b;
-            border-bottom: 1px solid #334155;
+            padding: 12px 24px;
+            background: #ffffff;
+            border-bottom: 1px solid #e5e7eb;
+            gap: 8px;
         }
 
         .header h1 {
-            font-size: 1.4rem;
-            color: #f1f5f9;
+            font-size: 1.2rem;
+            color: #111827;
+            margin: 0;
+            white-space: nowrap;
         }
 
-        .nav-links {
+        .nav-area {
             display: flex;
-            gap: 16px;
+            align-items: center;
+            gap: 4px;
+            margin-left: 16px;
         }
 
-        .nav-links a {
-            color: #94a3b8;
+        .nav-link {
+            color: #6b7280;
             text-decoration: none;
-            padding: 8px 16px;
+            padding: 6px 12px;
             border-radius: 6px;
+            font-size: 0.9rem;
             transition: all 0.2s;
         }
 
-        .nav-links a:hover, .nav-links a.active {
-            color: #f1f5f9;
-            background: #334155;
+        .nav-link:hover, .nav-link.active {
+            color: #111827;
+            background: #e5e7eb;
+        }
+
+        .nav-separator {
+            color: #d1d5db;
+            font-size: 0.85rem;
+            margin: 0 2px;
         }
 
         .header-right {
+            margin-left: auto;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 12px;
+        }
+
+        .header-clock {
+            font-size: 0.8rem;
+            color: #6b7280;
+            white-space: nowrap;
         }
 
         .user-menu {
@@ -62,9 +81,9 @@
         }
 
         .user-btn {
-            background: #334155;
+            background: #e5e7eb;
             border: none;
-            color: #94a3b8;
+            color: #6b7280;
             cursor: pointer;
             width: 36px;
             height: 36px;
@@ -76,8 +95,8 @@
         }
 
         .user-btn:hover {
-            color: #f1f5f9;
-            background: #475569;
+            color: #111827;
+            background: #d1d5db;
         }
 
         .user-dropdown {
@@ -86,12 +105,12 @@
             right: 0;
             top: 100%;
             margin-top: 8px;
-            background: #1e293b;
-            border: 1px solid #334155;
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
             border-radius: 8px;
             min-width: 140px;
             z-index: 100;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
             overflow: hidden;
         }
 
@@ -105,7 +124,7 @@
             padding: 10px 16px;
             background: none;
             border: none;
-            color: #e2e8f0;
+            color: #111827;
             font-size: 0.875rem;
             text-align: left;
             cursor: pointer;
@@ -114,32 +133,38 @@
         }
 
         .dropdown-item:hover {
-            background: #334155;
+            background: #e5e7eb;
         }
 
-        .main-container {
+        /* Layout */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .top-section {
             display: grid;
             grid-template-columns: 320px 1fr;
-            height: calc(100vh - 65px);
+            gap: 20px;
+            margin-bottom: 20px;
         }
 
-        /* Left sidebar - Tree */
-        .sidebar {
-            background: #1e293b;
-            border-right: 1px solid #334155;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
+        @media (max-width: 900px) {
+            .top-section {
+                grid-template-columns: 1fr;
+            }
         }
 
-        .sidebar-header {
+        .card {
+            background: #ffffff;
+            border-radius: 12px;
             padding: 16px;
-            border-bottom: 1px solid #334155;
         }
 
-        .sidebar-header h2 {
+        .card h2 {
             font-size: 1rem;
-            color: #94a3b8;
+            color: #6b7280;
             margin-bottom: 12px;
         }
 
@@ -152,10 +177,10 @@
         .discovery-form input, .discovery-form textarea {
             width: 100%;
             padding: 8px 10px;
-            background: #0f172a;
-            border: 1px solid #334155;
+            background: #f5f5f5;
+            border: 1px solid #e5e7eb;
             border-radius: 6px;
-            color: #e2e8f0;
+            color: #111827;
             font-size: 0.85rem;
         }
 
@@ -163,12 +188,6 @@
             min-height: 80px;
             font-family: monospace;
             resize: vertical;
-        }
-
-        .tree-item.no-location .tree-label::after {
-            content: ' (no location)';
-            color: #f59e0b;
-            font-size: 0.75rem;
         }
 
         .discovery-form input:focus, .discovery-form textarea:focus {
@@ -184,140 +203,98 @@
 
         .btn {
             padding: 8px 16px;
-            background: #3b82f6;
+            background: #dc2626;
             color: white;
             border: none;
             border-radius: 6px;
             font-size: 0.85rem;
             cursor: pointer;
             transition: background 0.2s;
+            font-family: inherit;
         }
 
         .btn:hover {
-            background: #2563eb;
+            background: #b91c1c;
         }
 
         .btn:disabled {
-            background: #475569;
+            background: #d1d5db;
             cursor: not-allowed;
         }
 
         .btn-danger {
-            background: #dc2626;
+            background: transparent;
+            border: 1px solid #dc2626;
+            color: #dc2626;
         }
 
         .btn-danger:hover {
-            background: #b91c1c;
+            background: #dc2626;
+            color: white;
         }
 
         .btn-sm {
-            padding: 6px 12px;
-            font-size: 0.8rem;
+            padding: 4px 10px;
+            font-size: 0.75rem;
         }
 
-        /* Tree container */
-        .tree-container {
-            flex: 1;
-            overflow-y: auto;
-            padding: 12px;
+        /* Chart */
+        .chart-card {
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
         }
 
-        .tree-node {
-            user-select: none;
+        .chart-card h3 {
+            font-size: 1rem;
+            color: #6b7280;
+            margin-bottom: 16px;
         }
 
-        .tree-item {
+        .chart-container {
+            position: relative;
+            height: 250px;
+        }
+
+        .chart-legend {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #e5e7eb;
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
             display: flex;
             align-items: center;
-            padding: 6px 8px;
-            border-radius: 6px;
-            cursor: pointer;
-            transition: background 0.15s;
             gap: 8px;
+            font-size: 0.8rem;
+            color: #6b7280;
         }
 
-        .tree-item:hover {
-            background: #334155;
-        }
-
-        .tree-item.selected {
-            background: #3b82f6;
-        }
-
-        .tree-toggle {
-            width: 16px;
-            height: 16px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #64748b;
-            font-size: 10px;
-        }
-
-        .tree-toggle.expanded {
-            transform: rotate(90deg);
-        }
-
-        .tree-icon {
-            width: 18px;
-            height: 18px;
-            border-radius: 4px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 10px;
-            font-weight: 600;
-        }
-
-        .tree-icon.location {
-            background: #6366f1;
-            color: white;
-        }
-
-        .tree-icon.ap {
-            background: #3b82f6;
-            color: white;
-        }
-
-        .tree-icon.cpe {
+        .legend-dot {
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
         }
 
-        .tree-icon.cpe.green { background: #10b981; }
-        .tree-icon.cpe.yellow { background: #f59e0b; }
-        .tree-icon.cpe.red { background: #ef4444; }
-
-        .tree-label {
-            flex: 1;
-            font-size: 0.85rem;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .tree-badge {
-            font-size: 0.7rem;
-            padding: 2px 6px;
-            background: #475569;
-            border-radius: 10px;
-            color: #94a3b8;
-        }
-
-        .tree-children {
-            padding-left: 24px;
-        }
-
-        .tree-children.collapsed {
-            display: none;
-        }
+        .legend-dot.green { background: #10b981; }
+        .legend-dot.yellow { background: #f59e0b; }
+        .legend-dot.red { background: #ef4444; }
 
         /* Stats bar */
         .stats-bar {
             display: flex;
             gap: 16px;
             padding: 12px 16px;
-            background: #0f172a;
-            border-bottom: 1px solid #334155;
+            background: #ffffff;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            align-items: center;
         }
 
         .stat {
@@ -340,109 +317,244 @@
 
         .stat-value {
             font-weight: 600;
-            color: #f1f5f9;
+            color: #111827;
         }
 
         .stat-label {
-            color: #64748b;
+            color: #9ca3af;
         }
 
-        /* Main content */
-        .content {
-            display: flex;
-            flex-direction: column;
+        /* Tree Table */
+        .table-card {
+            background: #ffffff;
+            border-radius: 12px;
             overflow: hidden;
         }
 
-        .content-body {
-            flex: 1;
-            padding: 20px;
-            overflow-y: auto;
+        .tree-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
         }
 
-        .chart-card {
-            background: #1e293b;
-            border-radius: 12px;
-            padding: 20px;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
+        .tree-table thead th {
+            background: #f9fafb;
+            border-bottom: 2px solid #e5e7eb;
+            padding: 8px 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #6b7280;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+            font-size: 0.75rem;
+            text-transform: uppercase;
         }
 
-        .chart-card h3 {
-            font-size: 1rem;
-            color: #94a3b8;
-            margin-bottom: 16px;
+        .tree-table thead th:hover {
+            color: #111827;
         }
 
-        .chart-container {
-            flex: 1;
-            position: relative;
-            min-height: 400px;
+        .tree-table thead th .sort-arrow {
+            font-size: 0.65rem;
+            margin-left: 2px;
         }
 
-        .chart-legend {
-            display: flex;
-            justify-content: center;
-            gap: 24px;
-            margin-top: 16px;
-            padding-top: 16px;
-            border-top: 1px solid #334155;
+        .tree-table tbody td {
+            padding: 6px 12px;
+            border-bottom: 1px solid #f3f4f6;
+            vertical-align: middle;
         }
 
-        .legend-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 0.8rem;
-            color: #94a3b8;
+        .tree-table .row-site {
+            background: #f9fafb;
         }
 
-        .legend-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
+        .tree-table .row-site td {
+            font-weight: 600;
+            border-bottom: 1px solid #e5e7eb;
         }
 
-        .legend-dot.green { background: #10b981; }
-        .legend-dot.yellow { background: #f59e0b; }
-        .legend-dot.red { background: #ef4444; }
-
-        /* Empty state */
-        .empty-state {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100%;
-            color: #64748b;
-            text-align: center;
-            padding: 40px;
+        .tree-table .row-ap td {
+            border-bottom: 1px solid #f3f4f6;
         }
 
-        .empty-state svg {
-            width: 60px;
-            height: 60px;
-            margin-bottom: 16px;
+        .tree-table .row-cpe td {
+            color: #374151;
+        }
+
+        .tree-table .row-offline td {
             opacity: 0.5;
         }
 
-        .empty-state h3 {
-            font-size: 1.1rem;
-            margin-bottom: 8px;
-            color: #94a3b8;
+        .tree-table .row-selected td {
+            background: #eff6ff;
         }
 
-        /* Connection status - hidden by default, shown only when disconnected */
+        /* Name cell content */
+        .name-cell {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+        }
+
+        .expand-toggle {
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            height: 16px;
+            color: #9ca3af;
+            font-size: 10px;
+            transition: transform 0.15s;
+            flex-shrink: 0;
+        }
+
+        .expand-toggle.expanded {
+            transform: rotate(90deg);
+        }
+
+        .expand-toggle.hidden {
+            visibility: hidden;
+        }
+
+        .device-icon {
+            width: 18px;
+            height: 18px;
+            border-radius: 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 9px;
+            font-weight: 700;
+            flex-shrink: 0;
+            color: white;
+        }
+
+        .device-icon.site { background: #6366f1; }
+        .device-icon.ap { background: #3b82f6; }
+        .device-icon.cpe {
+            border-radius: 50%;
+            width: 14px;
+            height: 14px;
+        }
+        .device-icon.cpe.green { background: #10b981; }
+        .device-icon.cpe.yellow { background: #f59e0b; }
+        .device-icon.cpe.red { background: #ef4444; }
+
+        .tree-badge {
+            font-size: 0.7rem;
+            padding: 1px 6px;
+            background: #e5e7eb;
+            border-radius: 10px;
+            color: #6b7280;
+            margin-left: 4px;
+        }
+
+        .name-link {
+            color: #3b82f6;
+            text-decoration: none;
+        }
+        .name-link:hover {
+            text-decoration: underline;
+        }
+
+        .no-location-tag {
+            color: #f59e0b;
+            font-size: 0.7rem;
+            font-weight: normal;
+        }
+
+        /* Signal colors */
+        .signal-good { color: #10b981; }
+        .signal-low { color: #f59e0b; }
+        .signal-critical { color: #ef4444; }
+
+        /* Version cell */
+        .version-cell {
+            line-height: 1.4;
+        }
+        .version-main {
+            font-weight: 600;
+            font-size: 0.82rem;
+        }
+        .version-banks {
+            font-size: 0.7rem;
+            color: #9ca3af;
+            font-family: monospace;
+        }
+
+        /* Status column */
+        .status-online { color: #10b981; }
+        .status-offline { color: #ef4444; font-weight: 500; }
+        .status-current { color: #10b981; font-weight: 500; }
+        .status-behind { color: #f59e0b; font-weight: 500; }
+        .status-scheduled { color: #3b82f6; font-weight: 600; font-size: 0.9rem; }
+        .status-label { font-size: 0.78rem; }
+        .status-sep { color: #d1d5db; margin: 0 4px; }
+
+        /* Updating indicator */
+        .updating-text {
+            color: #3b82f6;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        /* Actions cell */
+        .actions-cell {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+            flex-wrap: nowrap;
+        }
+
+        .action-link {
+            font-size: 0.72rem;
+            color: #6b7280;
+            text-decoration: none;
+            cursor: pointer;
+            white-space: nowrap;
+            padding: 2px 6px;
+            border-radius: 4px;
+            transition: all 0.15s;
+        }
+
+        .action-link:hover {
+            background: #e5e7eb;
+            color: #111827;
+        }
+
+        .action-link.update {
+            color: #3b82f6;
+        }
+
+        .action-link.update:hover {
+            background: #dbeafe;
+            color: #1d4ed8;
+        }
+
+        .action-link.danger {
+            color: #dc2626;
+        }
+
+        .action-link.danger:hover {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        /* Connection status */
         .connection-status {
             display: none;
             position: fixed;
-            bottom: 20px;
+            bottom: 100px;
             right: 20px;
             padding: 8px 16px;
             border-radius: 20px;
             font-size: 0.75rem;
             background: #10b981;
+            color: white;
             z-index: 100;
         }
 
@@ -451,69 +563,476 @@
             background: #ef4444;
         }
 
-        /* CPE detail panel */
-        .detail-panel {
-            background: #1e293b;
-            border-radius: 12px;
-            padding: 16px;
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #9ca3af;
+        }
+
+        /* Bottom drawer */
+        .bottom-drawer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            background: #ffffff;
+            border-top: 1px solid #e5e7eb;
+            box-shadow: 0 -2px 8px rgba(0,0,0,0.05);
+            transition: transform 0.3s ease;
+        }
+
+        .bottom-drawer.open {
+            box-shadow: 0 -4px 24px rgba(0,0,0,0.12);
+        }
+
+        .drawer-handle {
+            display: flex;
+            align-items: center;
+            padding: 20px 24px;
+            gap: 16px;
+            font-size: 0.85rem;
+            min-height: 96px;
+            flex-wrap: wrap;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .drawer-chevron {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #9ca3af;
+            transition: transform 0.3s ease;
+            flex-shrink: 0;
+            font-size: 0.7rem;
+        }
+
+        .bottom-drawer.open .drawer-chevron {
+            transform: rotate(180deg);
+        }
+
+        .drawer-panel {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+        }
+
+        .bottom-drawer.open .drawer-panel {
+            max-height: 500px;
+        }
+
+        .drawer-panel-inner {
+            padding: 0 24px 20px;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .drawer-settings-grid {
+            display: grid;
+            grid-template-columns: auto 1fr 1fr 1fr 1fr;
+            gap: 12px 16px;
+            align-items: start;
             margin-top: 16px;
         }
 
-        .detail-panel h4 {
-            font-size: 0.9rem;
-            color: #f1f5f9;
-            margin-bottom: 12px;
+        .drawer-settings-grid label {
+            font-size: 0.75rem;
+            color: #6b7280;
+            margin-bottom: 4px;
+            display: block;
+        }
+
+        .drawer-settings-grid select,
+        .drawer-settings-grid input[type="number"],
+        .drawer-settings-grid input[type="text"] {
+            width: 100%;
+            padding: 6px 8px;
+            background: #f5f5f5;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            color: #111827;
+            font-size: 0.8rem;
+            font-family: inherit;
+        }
+
+        .drawer-settings-grid select:focus,
+        .drawer-settings-grid input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        .drawer-days {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        .drawer-day-btn {
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid #e5e7eb;
+            background: #f9fafb;
+            color: #6b7280;
+            font-size: 0.7rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-family: inherit;
+        }
+
+        .drawer-day-btn.active {
+            background: #dbeafe;
+            color: #1e40af;
+            border-color: #3b82f6;
+        }
+
+        .drawer-toggle-row {
             display: flex;
             align-items: center;
             gap: 8px;
         }
 
-        .detail-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 12px;
+        .drawer-toggle {
+            width: 32px;
+            height: 18px;
+            background: #d1d5db;
+            border-radius: 9px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.2s;
+            flex-shrink: 0;
         }
 
-        .detail-item {
-            background: #0f172a;
-            padding: 10px;
-            border-radius: 6px;
+        .drawer-toggle::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 14px;
+            height: 14px;
+            background: white;
+            border-radius: 50%;
+            transition: left 0.2s;
         }
 
-        .detail-label {
+        .drawer-toggle.active {
+            background: #3b82f6;
+        }
+
+        .drawer-toggle.active::after {
+            left: 16px;
+        }
+
+        .drawer-toggle-label {
+            font-size: 0.78rem;
+            color: #374151;
+            font-weight: 500;
+        }
+
+        .drawer-section-title {
             font-size: 0.7rem;
-            color: #64748b;
+            color: #9ca3af;
             text-transform: uppercase;
-            margin-bottom: 4px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            padding-top: 4px;
         }
 
-        .detail-value {
-            font-size: 0.95rem;
-            color: #f1f5f9;
+        .drawer-firmware {
+            margin-top: 14px;
+            padding-top: 14px;
+            border-top: 1px solid #e5e7eb;
+            display: flex;
+            gap: 16px;
+            align-items: flex-start;
+        }
+
+        .drawer-fw-list {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            font-size: 0.75rem;
+            min-height: 32px;
+        }
+
+        .drawer-fw-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .drawer-fw-type-label {
+            font-size: 0.65rem;
+            color: #9ca3af;
+            text-transform: uppercase;
+            font-weight: 600;
+            min-width: 48px;
+            flex-shrink: 0;
+        }
+
+        .drawer-fw-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            background: #f3f4f6;
+            border-radius: 4px;
+            color: #374151;
             font-family: monospace;
+            font-size: 0.72rem;
+            cursor: pointer;
+            transition: all 0.15s;
         }
 
-        .detail-value a {
-            color: #60a5fa;
-            text-decoration: none;
+        .drawer-fw-chip:hover {
+            background: #e5e7eb;
         }
-        .detail-value a:hover {
+
+        .drawer-fw-chip.active:hover {
+            background: #bfdbfe;
+        }
+
+        .drawer-fw-chip.active {
+            background: #dbeafe;
+            color: #1e40af;
+            font-weight: 600;
+        }
+
+        .drawer-fw-beta-label {
+            font-size: 0.58rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: #b45309;
+            letter-spacing: 0.03em;
+        }
+
+        .drawer-fw-chip.beta {
+            border: 1px dashed #d97706;
+        }
+
+        .drawer-fw-chip.beta.active {
+            border-color: #1e40af;
+        }
+
+        .drawer-fw-empty {
+            color: #9ca3af;
+            font-size: 0.75rem;
+            font-style: italic;
+        }
+
+        .drawer-fw-meta {
+            font-size: 0.68rem;
+            color: #9ca3af;
+            margin-top: 4px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .drawer-fw-meta a {
+            color: #3b82f6;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .drawer-fw-meta a:hover {
             text-decoration: underline;
         }
-        .detail-value.green { color: #10b981; }
-        .detail-value.yellow { color: #f59e0b; }
-        .detail-value.red { color: #ef4444; }
+
+        .drawer-upload {
+            flex-shrink: 0;
+            width: 140px;
+            height: 52px;
+            border: 1.5px dashed #d1d5db;
+            border-radius: 6px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-size: 0.7rem;
+            color: #9ca3af;
+            gap: 2px;
+        }
+
+        .drawer-upload:hover {
+            border-color: #3b82f6;
+            color: #3b82f6;
+            background: #f8faff;
+        }
+
+        .drawer-upload.dragover {
+            border-color: #3b82f6;
+            background: #eff6ff;
+        }
+
+        .drawer-upload-status {
+            font-size: 0.68rem;
+            color: #6b7280;
+        }
+
+        /* Status bar sections (inside drawer handle) */
+        .status-bar-section {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-bar-section + .status-bar-section {
+            padding-left: 16px;
+            border-left: 1px solid #e5e7eb;
+        }
+
+        .status-bar-toggle {
+            width: 36px;
+            height: 20px;
+            background: #d1d5db;
+            border-radius: 10px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.2s;
+            flex-shrink: 0;
+        }
+
+        .status-bar-toggle::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 16px;
+            height: 16px;
+            background: white;
+            border-radius: 50%;
+            transition: left 0.2s;
+        }
+
+        .status-bar-toggle.active {
+            background: #3b82f6;
+        }
+
+        .status-bar-toggle.active::after {
+            left: 18px;
+        }
+
+        .status-bar-label {
+            color: #111827;
+            font-weight: 600;
+            font-size: 0.95rem;
+            white-space: nowrap;
+        }
+
+        .status-bar-badge {
+            padding: 3px 10px;
+            border-radius: 10px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: none;
+            background: #f3f4f6;
+            color: #6b7280;
+        }
+        .status-bar-badge.idle { background: #dbeafe; color: #1e40af; }
+        .status-bar-badge.waiting { background: #fef3c7; color: #92400e; }
+        .status-bar-badge.running { background: #e0e7ff; color: #3730a3; }
+        .status-bar-badge.blocked { background: #fee2e2; color: #991b1b; }
+        .status-bar-badge.current { background: #d1fae5; color: #065f46; }
+
+        .status-bar-reason {
+            color: #9ca3af;
+            font-size: 0.75rem;
+        }
+
+        .status-bar-muted {
+            color: #6b7280;
+            white-space: nowrap;
+        }
+
+        .status-bar-count {
+            color: #fbbf24;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        .status-bar-rollout {
+            margin-left: auto;
+        }
+
+        .status-bar-phases {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .status-bar-phases .bar-phase-dot {
+            padding: 4px 10px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            font-weight: 600;
+            background: #f3f4f6;
+            color: #6b7280;
+            white-space: nowrap;
+        }
+
+        .status-bar-phases .bar-phase-dot.active {
+            background: #3b82f6;
+            color: white;
+            animation: pulse 1.5s infinite;
+        }
+
+        .status-bar-phases .bar-phase-dot.completed {
+            background: #10b981;
+            color: white;
+        }
+
+        .status-bar-phases .bar-phase-dot.paused {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .status-bar-phases .bar-phase-line {
+            width: 12px;
+            height: 2px;
+            background: #d1d5db;
+        }
+
+        .status-bar-phases .bar-phase-line.completed {
+            background: #10b981;
+        }
+
+        .status-bar-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .status-bar-actions .btn {
+            padding: 3px 10px;
+            font-size: 0.75rem;
+        }
+
+        .btn-warning {
+            background: #f59e0b;
+            color: #000;
+        }
+        .btn-warning:hover {
+            background: #d97706;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>Unofficial Tachyon Networks Bulk Updater</h1>
         <div class="header-right">
-            <nav class="nav-links">
-                <a href="/" class="active">Monitor</a>
-                <a href="/update">Update</a>
-                <a href="/firmware">Firmware</a>
-            </nav>
+            <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:#9ca3af;"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:#6b7280;"></span></span>
             <div class="user-menu">
                 <button class="user-btn" onclick="document.getElementById('userDropdown').classList.toggle('open')">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -532,85 +1051,258 @@
 
     <div class="connection-status" id="connectionStatus">Connected</div>
 
-    <div class="main-container">
-        <!-- Left Sidebar - Tree -->
-        <div class="sidebar">
-            <div class="sidebar-header">
-                <h2>Add Access Points</h2>
+    <div class="container">
+        <!-- Top section: Add APs + Chart -->
+        <div class="top-section">
+            <div class="card">
+                <h2>Add Devices</h2>
+                <p style="font-size:0.75rem;color:#9ca3af;margin-bottom:8px;">Devices are auto-classified as APs or switches based on model (TNA&nbsp;=&nbsp;AP, TNS&nbsp;=&nbsp;switch) and assigned to tower sites by their &ldquo;location&rdquo; field.</p>
                 <div class="discovery-form">
-                    <textarea id="apIps" placeholder="AP IPs (one per line)&#10;192.168.1.1&#10;192.168.1.2"></textarea>
+                    <textarea id="deviceIps" placeholder="Device IPs (one per line)&#10;192.168.1.1&#10;192.168.1.2"></textarea>
                     <div class="cred-row">
                         <input type="text" id="username" placeholder="Username" value="root">
                         <input type="password" id="password" placeholder="Password">
                     </div>
-                    <button class="btn" id="addApBtn" onclick="addAPs()">Add APs</button>
+                    <button class="btn" id="addDeviceBtn" onclick="addDevices()">Add Devices</button>
                 </div>
             </div>
 
-            <div class="stats-bar">
-                <div class="stat">
-                    <div class="stat-dot ap"></div>
-                    <span class="stat-value" id="apCount">0</span>
-                    <span class="stat-label">APs</span>
+            <div class="chart-card">
+                <h3 id="chartTitle">Signal vs Distance &mdash; All Devices</h3>
+                <div class="chart-container">
+                    <canvas id="signalChart"></canvas>
                 </div>
-                <div class="stat">
-                    <div class="stat-dot green"></div>
-                    <span class="stat-value" id="greenCount">0</span>
-                </div>
-                <div class="stat">
-                    <div class="stat-dot yellow"></div>
-                    <span class="stat-value" id="yellowCount">0</span>
-                </div>
-                <div class="stat">
-                    <div class="stat-dot red"></div>
-                    <span class="stat-value" id="redCount">0</span>
-                </div>
-            </div>
-
-            <div class="tree-container" id="treeContainer">
-                <div class="empty-state" id="treeEmpty">
-                    <p>Enter AP IPs and click Discover</p>
+                <div class="chart-legend">
+                    <div class="legend-item">
+                        <div class="legend-dot green"></div>
+                        <span>Strong (&gt; &minus;65 dBm)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-dot yellow"></div>
+                        <span>Low (&minus;65 to &minus;75 dBm)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-dot red"></div>
+                        <span>Critical (&lt; &minus;75 dBm)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-dot" style="background:#ef4444;border:2px solid #991b1b;width:10px;height:10px;border-radius:2px;"></div>
+                        <span>Offline</span>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- Main Content -->
-        <div class="content">
-            <div class="content-body">
-                <div class="chart-card">
-                    <h3 id="chartTitle">Signal vs Distance - All Devices</h3>
-                    <div class="chart-container">
-                        <canvas id="signalChart"></canvas>
+        <!-- Stats -->
+        <div class="stats-bar" id="statsBar">
+            <div class="stat">
+                <div class="stat-dot ap"></div>
+                <span class="stat-value" id="apCount">0</span>
+                <span class="stat-label">APs</span>
+            </div>
+            <div class="stat">
+                <div class="stat-dot green"></div>
+                <span class="stat-value" id="greenCount">0</span>
+            </div>
+            <div class="stat">
+                <div class="stat-dot yellow"></div>
+                <span class="stat-value" id="yellowCount">0</span>
+            </div>
+            <div class="stat">
+                <div class="stat-dot red"></div>
+                <span class="stat-value" id="redCount">0</span>
+            </div>
+        </div>
+
+        <!-- Tree Table -->
+        <div class="table-card">
+            <div style="overflow-x:auto;">
+                <table class="tree-table" id="deviceTable">
+                    <thead>
+                        <tr>
+                            <th data-sort="name" onclick="sortTable('name')">Name / IP <span class="sort-arrow"></span></th>
+                            <th data-sort="model" onclick="sortTable('model')">Model <span class="sort-arrow"></span></th>
+                            <th data-sort="firmware" onclick="sortTable('firmware')">Version <span class="sort-arrow"></span></th>
+                            <th data-sort="signal" onclick="sortTable('signal')">Signal <span class="sort-arrow"></span></th>
+                            <th data-sort="distance" onclick="sortTable('distance')">Distance <span class="sort-arrow"></span></th>
+                            <th data-sort="status" onclick="sortTable('status')">Status <span class="sort-arrow"></span></th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="deviceTableBody">
+                        <tr><td colspan="7" class="empty-state">Enter AP IPs above to get started</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom Drawer -->
+    <div class="bottom-drawer" id="bottomDrawer">
+        <div class="drawer-handle" id="drawerHandle" onclick="toggleDrawer(event)">
+            <div class="status-bar-section">
+                <span class="status-bar-toggle" id="barAutoToggle" onclick="toggleAutoSchedule(event)"></span>
+                <span class="status-bar-label">Auto-Update</span>
+                <span class="status-badge status-bar-badge" id="barStateBadge">Off</span>
+                <span class="status-bar-reason" id="barBlockReason"></span>
+            </div>
+            <div class="status-bar-section" id="barDeviceCountSection" style="display: none;">
+                <span class="status-bar-count" id="barBehindCount"></span>
+            </div>
+            <div class="status-bar-section status-bar-rollout" id="barRolloutSection">
+                <div class="status-bar-phases" id="barPhaseIndicator"></div>
+                <span class="status-bar-muted" id="barRolloutProgress"></span>
+                <span class="status-bar-muted" id="barRolloutPrediction" style="opacity:0.7;font-size:0.8em;"></span>
+                <div class="status-bar-actions" id="barRolloutActions">
+                    <button class="btn btn-sm btn-warning" id="barResumeBtn" onclick="resumeRollout();event.stopPropagation();" style="display:none;">Resume</button>
+                    <button class="btn btn-sm btn-danger" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();" style="display:none;">Cancel</button>
+                </div>
+            </div>
+            <div class="drawer-chevron" id="drawerChevron">&#9650;</div>
+        </div>
+        <div class="drawer-panel" id="drawerPanel">
+            <div class="drawer-panel-inner">
+                <div class="drawer-settings-grid">
+                    <div class="drawer-section-title">Schedule</div>
+                    <div style="grid-column: 2 / -1;">
+                        <label>Days</label>
+                        <div class="drawer-days" id="drawerDays">
+                            <button class="drawer-day-btn" data-day="mon" onclick="toggleDrawerDay(this)">Mon</button>
+                            <button class="drawer-day-btn" data-day="tue" onclick="toggleDrawerDay(this)">Tue</button>
+                            <button class="drawer-day-btn" data-day="wed" onclick="toggleDrawerDay(this)">Wed</button>
+                            <button class="drawer-day-btn" data-day="thu" onclick="toggleDrawerDay(this)">Thu</button>
+                            <button class="drawer-day-btn" data-day="fri" onclick="toggleDrawerDay(this)">Fri</button>
+                            <button class="drawer-day-btn" data-day="sat" onclick="toggleDrawerDay(this)">Sat</button>
+                            <button class="drawer-day-btn" data-day="sun" onclick="toggleDrawerDay(this)">Sun</button>
+                        </div>
                     </div>
-                    <div class="chart-legend">
-                        <div class="legend-item">
-                            <div class="legend-dot green"></div>
-                            <span>Strong (&gt; -65 dBm)</span>
+
+                    <div class="drawer-section-title">Window</div>
+                    <div>
+                        <label>Maintenance Start</label>
+                        <select id="drawerStartHour" onchange="drawerSettingChanged()">
+                            <option value="0">12 AM</option>
+                            <option value="1">1 AM</option>
+                            <option value="2">2 AM</option>
+                            <option value="3">3 AM</option>
+                            <option value="4">4 AM</option>
+                            <option value="5">5 AM</option>
+                            <option value="6">6 AM</option>
+                            <option value="7">7 AM</option>
+                            <option value="8">8 AM</option>
+                            <option value="9">9 AM</option>
+                            <option value="10">10 AM</option>
+                            <option value="11">11 AM</option>
+                            <option value="12">12 PM</option>
+                            <option value="13">1 PM</option>
+                            <option value="14">2 PM</option>
+                            <option value="15">3 PM</option>
+                            <option value="16">4 PM</option>
+                            <option value="17">5 PM</option>
+                            <option value="18">6 PM</option>
+                            <option value="19">7 PM</option>
+                            <option value="20">8 PM</option>
+                            <option value="21">9 PM</option>
+                            <option value="22">10 PM</option>
+                            <option value="23">11 PM</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Maintenance End</label>
+                        <select id="drawerEndHour" onchange="drawerSettingChanged()">
+                            <option value="1">1 AM</option>
+                            <option value="2">2 AM</option>
+                            <option value="3">3 AM</option>
+                            <option value="4">4 AM</option>
+                            <option value="5">5 AM</option>
+                            <option value="6">6 AM</option>
+                            <option value="7">7 AM</option>
+                            <option value="8">8 AM</option>
+                            <option value="9">9 AM</option>
+                            <option value="10">10 AM</option>
+                            <option value="11">11 AM</option>
+                            <option value="12">12 PM</option>
+                            <option value="13">1 PM</option>
+                            <option value="14">2 PM</option>
+                            <option value="15">3 PM</option>
+                            <option value="16">4 PM</option>
+                            <option value="17">5 PM</option>
+                            <option value="18">6 PM</option>
+                            <option value="19">7 PM</option>
+                            <option value="20">8 PM</option>
+                            <option value="21">9 PM</option>
+                            <option value="22">10 PM</option>
+                            <option value="23">11 PM</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Update Mode</label>
+                        <select id="drawerBankMode" onchange="drawerSettingChanged()">
+                            <option value="both">Both Banks (recommended)</option>
+                            <option value="one">Single Bank</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Parallel Updates</label>
+                        <input type="number" id="drawerParallel" value="2" min="1" max="10" onchange="drawerSettingChanged()">
+                    </div>
+
+                    <div class="drawer-section-title">Options</div>
+                    <div style="grid-column: 2 / -1; display: flex; gap: 20px; padding-top: 4px; align-items: center; flex-wrap: wrap;">
+                        <div class="drawer-toggle-row">
+                            <span class="drawer-toggle" id="drawerBetaToggle" onclick="toggleDrawerBeta()"></span>
+                            <span class="drawer-toggle-label">Beta Firmware</span>
                         </div>
-                        <div class="legend-item">
-                            <div class="legend-dot yellow"></div>
-                            <span>Acceptable (-65 to -75 dBm)</span>
+                        <div class="drawer-toggle-row">
+                            <span class="drawer-toggle" id="drawerWeatherToggle" onclick="toggleDrawerWeather()"></span>
+                            <span class="drawer-toggle-label">Disable updates below</span>
+                            <input type="number" id="drawerMinTemp" value="14" min="-40" max="120" style="width:48px;" onchange="drawerSettingChanged()">
+                            <span style="font-size:0.75rem;color:#6b7280;">&deg;F</span>
+                            <span id="drawerWeatherTemp" style="font-size:0.72rem;color:#6b7280;"></span>
                         </div>
-                        <div class="legend-item">
-                            <div class="legend-dot red"></div>
-                            <span>Weak (&lt; -75 dBm)</span>
+                        <div class="drawer-toggle-row" style="gap: 4px;">
+                            <label style="font-size:0.68rem;color:#9ca3af;margin:0;">Zip</label>
+                            <input type="text" id="drawerZipCode" placeholder="Auto" maxlength="5" style="width:56px;" onchange="drawerSettingChanged()">
                         </div>
                     </div>
                 </div>
-
-                <div class="detail-panel" id="detailPanel" style="display: none;">
-                    <h4><span id="detailName">Device Details</span></h4>
-                    <div class="detail-grid" id="detailGrid"></div>
+                <div class="drawer-firmware">
+                    <div style="flex:1;min-width:0;">
+                        <div class="drawer-fw-list" id="drawerFwList">
+                            <span class="drawer-fw-empty">No firmware files</span>
+                        </div>
+                        <div class="drawer-fw-meta" id="drawerFwMeta"></div>
+                    </div>
+                    <div class="drawer-upload" id="drawerUpload">
+                        <input type="file" id="drawerFwInput" accept=".bin,.img,.npk,.tar,.gz" style="display:none;">
+                        <span>Drop or browse</span>
+                        <span class="drawer-upload-status" id="drawerUploadStatus"></span>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
+        function cToF(c) { return Math.round(c * 9/5 + 32); }
+        function fToC(f) { return Math.round((f - 32) * 5/9); }
+
         let ws = null;
         let chart = null;
         let topology = null;
-        let selectedNode = { type: 'all' };  // { type: 'all' | 'site' | 'ap' | 'cpe', data: ... }
+        let selectedNode = { type: 'all' };
+        let fleetStatusMap = new Map(); // ip -> { target_version, status }
+        let updatingDevices = new Set(); // IPs currently being updated
+        let autoUpdateEnabled = false; // Whether auto-update scheduler is active
+        let lastSchedulerStatus = null; // Last scheduler_status message
+        let lastNextWindow = '';       // Next maintenance window text
+        let lastBehindCount = 0;       // Devices needing update
+        let lastFleetTotal = 0;        // Total devices
+
+        // Expand/collapse + sort state
+        const expandState = new Map();
+        let sortColumn = 'name';
+        let sortDirection = 'asc';
 
         // WebSocket connection
         function connectWebSocket() {
@@ -632,13 +1324,17 @@
                 const message = JSON.parse(event.data);
                 if (message.type === 'topology_update') {
                     topology = message.topology;
+                    updatingDevices.clear();
                     updateUI();
+                } else if (message.type === 'scheduler_status') {
+                    updateSchedulerUI(message);
+                } else if (message.type === 'rollout_status') {
+                    updateRolloutUI(message);
                 }
             };
         }
 
         function extractIP(text) {
-            // Strip http://, https://, trailing slashes, ports
             let ip = text.trim();
             ip = ip.replace(/^https?:\/\//, '');
             ip = ip.replace(/\/.*$/, '');
@@ -646,35 +1342,25 @@
             return ip;
         }
 
-        async function addAPs() {
-            const ipText = document.getElementById('apIps').value.trim();
+        async function addDevices() {
+            const ipText = document.getElementById('deviceIps').value.trim();
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
 
-            if (!ipText) {
-                alert('Please enter AP IP addresses');
-                return;
-            }
-            if (!password) {
-                alert('Please enter password');
-                return;
-            }
+            if (!ipText) { alert('Please enter device IP addresses'); return; }
+            if (!password) { alert('Please enter password'); return; }
 
-            // Parse IPs - one per line, strip URLs
             const ips = ipText.split('\n')
                 .map(line => extractIP(line))
                 .filter(ip => ip && !ip.startsWith('#'));
 
-            if (ips.length === 0) {
-                alert('No valid IP addresses found');
-                return;
-            }
+            if (ips.length === 0) { alert('No valid IP addresses found'); return; }
 
-            const btn = document.getElementById('addApBtn');
+            const btn = document.getElementById('addDeviceBtn');
             btn.disabled = true;
             btn.textContent = `Adding ${ips.length}...`;
 
-            let added = 0;
+            let addedAps = 0, addedSwitches = 0;
             let errors = [];
 
             for (const ip of ips) {
@@ -684,13 +1370,11 @@
                     formData.append('username', username);
                     formData.append('password', password);
 
-                    const response = await fetch('/api/aps', {
-                        method: 'POST',
-                        body: formData,
-                    });
-
+                    const response = await fetch('/api/devices', { method: 'POST', body: formData });
                     if (response.ok) {
-                        added++;
+                        const data = await response.json();
+                        if (data.device_type === 'switch') addedSwitches++;
+                        else addedAps++;
                     } else {
                         const error = await response.json();
                         errors.push(`${ip}: ${error.detail || 'Failed'}`);
@@ -700,138 +1384,301 @@
                 }
             }
 
-            // Clear textarea
-            document.getElementById('apIps').value = '';
-
+            document.getElementById('deviceIps').value = '';
             btn.disabled = false;
-            btn.textContent = 'Add APs';
+            btn.textContent = 'Add Devices';
+
+            const parts = [];
+            if (addedAps > 0) parts.push(`${addedAps} AP(s)`);
+            if (addedSwitches > 0) parts.push(`${addedSwitches} switch(es)`);
+            const summary = parts.length > 0 ? `Added ${parts.join(', ')}.` : '';
 
             if (errors.length > 0) {
-                alert(`Added ${added} AP(s).\n\nErrors:\n${errors.join('\n')}`);
+                alert(`${summary}\n\nErrors:\n${errors.join('\n')}`);
             }
+
+            loadTopology();
         }
 
+        // ── UI Update ──
+
         function updateUI() {
-            const treeEmpty = document.getElementById('treeEmpty');
+            if (!topology || topology.total_aps === 0) return;
 
-            if (!topology || topology.total_aps === 0) {
-                if (treeEmpty) treeEmpty.style.display = 'flex';
-                return;
-            }
-
-            if (treeEmpty) treeEmpty.style.display = 'none';
-
-            // Update stats
             document.getElementById('apCount').textContent = topology.total_aps;
             document.getElementById('greenCount').textContent = topology.overall_health.green;
             document.getElementById('yellowCount').textContent = topology.overall_health.yellow;
             document.getElementById('redCount').textContent = topology.overall_health.red;
 
-            // Render tree
-            renderTree();
-
-            // Update chart
+            renderTable();
             updateChart();
         }
 
-        function renderTree() {
-            const container = document.getElementById('treeContainer');
+        // ── Tree Table ──
 
-            if (!topology.sites || topology.sites.length === 0) {
-                container.innerHTML = '<div class="empty-state" id="treeEmpty"><p>No devices found</p></div>';
-                return;
+        function versionStatus(ip) {
+            const info = fleetStatusMap.get(ip);
+            if (!info || !info.target_version) return 'unknown';
+            return info.status || 'unknown';
+        }
+
+        function compareVersions(a, b) {
+            const pa = a.split('.').map(Number);
+            const pb = b.split('.').map(Number);
+            for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+                const na = pa[i] || 0, nb = pb[i] || 0;
+                if (na !== nb) return na - nb;
             }
+            return 0;
+        }
 
-            // "All" option at top - no indent, sits at root of hierarchy
-            const isAllSelected = selectedNode?.type === 'all';
-            let html = `
-                <div class="tree-node">
-                    <div class="tree-item ${isAllSelected ? 'selected' : ''}" onclick="selectAll()" data-type="all" style="padding-left: 8px;">
-                        <span class="tree-icon" style="background: #64748b;">A</span>
-                        <span class="tree-label">All Devices</span>
-                        <span class="tree-badge">${topology.total_cpes} CPEs</span>
-                    </div>
-                </div>
-            `;
+        function versionCell(device) {
+            const b1 = device.bank1_version || '';
+            const b2 = device.bank2_version || '';
+            if (!b1 && !b2) return device.firmware_version || '';
+            const [hi, lo] = compareVersions(b1, b2) >= 0 ? [b1, b2] : [b2, b1];
+            return `${hi} / ${lo}`;
+        }
 
-            for (const site of topology.sites) {
+        function statusCell(ip, isOffline, signalHealth) {
+            if (updatingDevices.has(ip)) {
+                return '<span class="updating-text">Updating\u2026</span>';
+            }
+            const vs = versionStatus(ip);
+            const vsBadge = vs === 'current' ? '<span class="status-current">Current</span>'
+                : vs === 'behind' ? (autoUpdateEnabled
+                    ? '<span class="status-scheduled" title="Auto-update scheduled">&#8593;</span>'
+                    : '<span class="status-behind">Update available</span>')
+                : '';
+
+            if (isOffline) {
+                return `<span class="status-offline">Offline</span>${vsBadge ? '<span class="status-sep">\u00b7</span>' + vsBadge : ''}`;
+            }
+            if (signalHealth) {
+                const healthLabel = signalHealth === 'green' ? 'Good' : signalHealth === 'yellow' ? 'Low' : 'Weak';
+                const healthClass = signalHealth === 'green' ? 'status-online' : signalHealth === 'yellow' ? 'signal-low' : 'signal-critical';
+                return `<span class="${healthClass}">${healthLabel}</span>${vsBadge ? '<span class="status-sep">\u00b7</span>' + vsBadge : ''}`;
+            }
+            return `<span class="status-online">Online</span>${vsBadge ? '<span class="status-sep">\u00b7</span>' + vsBadge : ''}`;
+        }
+
+        function actionsCell(type, id, name) {
+            if (updatingDevices.has(id)) {
+                return '<span class="updating-text">Updating\u2026</span>';
+            }
+            if (type === 'site') {
+                return '';
+            }
+            if (type === 'ap') {
+                return `<a class="action-link" onclick="pollAPNow('${id}');event.stopPropagation();">Refresh</a>
+                    <a class="action-link danger" onclick="deleteAP('${id}');event.stopPropagation();">Delete</a>`;
+            }
+            return '';
+        }
+
+        function renderTable() {
+            if (!topology || !topology.sites) return;
+
+            const tbody = document.getElementById('deviceTableBody');
+            let html = '';
+
+            const sortedSites = [...topology.sites].sort(siteComparator());
+
+            for (const site of sortedSites) {
+                const siteKey = `site:${site.id}`;
+                const siteExpanded = expandState.get(siteKey) !== false;
                 const aps = site.aps || [];
-                const totalCpes = aps.reduce((sum, ap) => sum + (ap.cpes?.length || 0), 0);
-                const isSiteSelected = selectedNode?.type === 'site' && selectedNode?.data?.id === site.id;
+                const switches = site.switches || [];
+                const totalCpes = aps.reduce((s, ap) => s + (ap.cpes?.length || 0), 0);
+                const isSelected = selectedNode?.type === 'site' && selectedNode?.data?.id === site.id;
 
-                html += `
-                    <div class="tree-node">
-                        <div class="tree-item ${isSiteSelected ? 'selected' : ''}" onclick="selectSite(${site.id !== null ? site.id : 'null'}, event)" data-site-id="${site.id}">
-                            <span class="tree-toggle expanded" onclick="toggleNode(this.parentElement); event.stopPropagation();">&#9654;</span>
-                            <span class="tree-icon location">T</span>
-                            <span class="tree-label">${escapeHtml(site.name)}</span>
-                            <span class="tree-badge">${aps.length} AP${aps.length !== 1 ? 's' : ''}</span>
+                let badgeParts = [`${aps.length} AP${aps.length!==1?'s':''}`, `${totalCpes} CPE${totalCpes!==1?'s':''}`];
+                if (switches.length > 0) badgeParts.push(`${switches.length} SW`);
+
+                html += `<tr class="row-site ${isSelected ? 'row-selected' : ''}" onclick="selectSite(${site.id !== null ? site.id : 'null'})">
+                    <td>
+                        <div class="name-cell" style="padding-left:4px;">
+                            <span class="expand-toggle ${siteExpanded ? 'expanded' : ''}" onclick="toggleExpand('${siteKey}',event)">&#9654;</span>
+                            <span class="device-icon site">T</span>
+                            ${escapeHtml(site.name)}
+                            <span class="tree-badge">${badgeParts.join(', ')}</span>
                         </div>
-                        <div class="tree-children">
-                `;
+                    </td>
+                    <td></td><td></td><td></td><td></td><td></td>
+                    <td><div class="actions-cell">
+                        ${actionsCell('site', site.id, site.name)}
+                        ${site.id !== null && aps.length === 0 ? `<a class="action-link danger" onclick="deleteSite(${site.id});event.stopPropagation();">Delete</a>` : ''}
+                    </div></td>
+                </tr>`;
 
-                for (const ap of aps) {
-                    const apName = ap.system_name || ap.ip;
+                if (!siteExpanded) continue;
+
+                const sortedAPs = [...aps].sort(deviceComparator());
+
+                for (const ap of sortedAPs) {
+                    const apKey = `ap:${ap.ip}`;
+                    const apExpanded = expandState.get(apKey) !== false;
+                    const isOffline = !!ap.last_error;
                     const cpes = ap.cpes || [];
-                    const hasError = ap.last_error;
+                    const apName = ap.system_name || ap.ip;
                     const noLocation = !ap.location && site.name === 'Unassigned';
+                    const isApSelected = selectedNode?.type === 'ap' && selectedNode?.data?.ip === ap.ip;
 
-                    html += `
-                        <div class="tree-node">
-                            <div class="tree-item ${hasError ? 'has-error' : ''} ${noLocation ? 'no-location' : ''}" onclick="selectAP('${ap.ip}')" data-ip="${ap.ip}">
-                                <span class="tree-toggle ${cpes.length > 0 ? 'expanded' : ''}" onclick="toggleNode(this.parentElement); event.stopPropagation();">&#9654;</span>
-                                <span class="tree-icon ap">AP</span>
-                                <span class="tree-label">${escapeHtml(apName)}</span>
-                                <span class="tree-badge" onclick="toggleNode(this.parentElement); event.stopPropagation();">${cpes.length}</span>
+                    html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isApSelected ? 'row-selected' : ''}" onclick="selectAP('${ap.ip}')">
+                        <td>
+                            <div class="name-cell" style="padding-left:28px;">
+                                <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
+                                <span class="device-icon ap">AP</span>
+                                <a href="http://${ap.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>
+                                ${noLocation ? '<span class="no-location-tag">(no location)</span>' : ''}
                             </div>
-                            <div class="tree-children">
-                    `;
+                        </td>
+                        <td>${ap.model || ''}</td>
+                        <td>${versionCell(ap)}</td>
+                        <td></td>
+                        <td></td>
+                        <td>${statusCell(ap.ip, isOffline, null)}</td>
+                        <td><div class="actions-cell">${actionsCell('ap', ap.ip, apName)}</div></td>
+                    </tr>`;
 
-                    for (const cpe of cpes) {
-                        const cpeName = cpe.system_name || cpe.ip || cpe.mac || 'Unknown';
+                    if (!apExpanded) continue;
+
+                    const sortedCPEs = [...cpes].sort(deviceComparator());
+
+                    for (const cpe of sortedCPEs) {
                         const health = cpe.signal_health || 'red';
+                        const cpeName = cpe.system_name || cpe.ip || cpe.mac || 'Unknown';
+                        const signalVal = cpe.primary_signal;
+                        const signalClass = signalVal != null
+                            ? (signalVal > -65 ? 'signal-good' : (signalVal > -75 ? 'signal-low' : 'signal-critical'))
+                            : '';
+                        const isCpeSelected = selectedNode?.type === 'cpe' && selectedNode?.data?.ip === cpe.ip;
 
-                        html += `
-                            <div class="tree-node">
-                                <div class="tree-item" onclick="selectCPE('${cpe.ip}', event)" data-ip="${cpe.ip}">
-                                    <span class="tree-toggle" style="visibility: hidden;">&#9654;</span>
-                                    <span class="tree-icon cpe ${health}"></span>
-                                    <span class="tree-label">${escapeHtml(cpeName)}</span>
+                        html += `<tr class="row-cpe ${isCpeSelected ? 'row-selected' : ''}" onclick="selectCPE('${cpe.ip}')">
+                            <td>
+                                <div class="name-cell" style="padding-left:52px;">
+                                    <span class="expand-toggle hidden">&#9654;</span>
+                                    <span class="device-icon cpe ${health}"></span>
+                                    ${escapeHtml(cpeName)}
                                 </div>
-                            </div>
-                        `;
+                            </td>
+                            <td>${cpe.model || ''}</td>
+                            <td>${versionCell(cpe)}</td>
+                            <td class="${signalClass}">${signalVal != null ? signalVal.toFixed(1) + ' dBm' : ''}</td>
+                            <td>${cpe.link_distance != null ? cpe.link_distance.toFixed(0) + ' m' : ''}</td>
+                            <td>${statusCell(cpe.ip, false, health)}</td>
+                            <td><div class="actions-cell">${actionsCell('cpe', cpe.ip, cpeName)}</div></td>
+                        </tr>`;
                     }
-
-                    html += `
-                            </div>
-                        </div>
-                    `;
                 }
 
-                html += `
-                        </div>
-                    </div>
-                `;
+                // Render switches within this site
+                for (const sw of switches) {
+                    const isOffline = !!sw.last_error;
+                    const swName = sw.system_name || sw.ip;
+                    const isSwSelected = selectedNode?.type === 'switch' && selectedNode?.data?.ip === sw.ip;
+
+                    html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isSwSelected ? 'row-selected' : ''}" onclick="selectSwitch('${sw.ip}')">
+                        <td>
+                            <div class="name-cell" style="padding-left:28px;">
+                                <span class="expand-toggle hidden">&#9654;</span>
+                                <span class="device-icon ap">SW</span>
+                                <a href="http://${sw.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>
+                            </div>
+                        </td>
+                        <td>${sw.model || ''}</td>
+                        <td>${versionCell(sw)}</td>
+                        <td></td>
+                        <td></td>
+                        <td>${statusCell(sw.ip, isOffline, null)}</td>
+                        <td><div class="actions-cell">
+                            <a class="action-link danger" onclick="deleteSwitch('${sw.ip}');event.stopPropagation();">Delete</a>
+                        </div></td>
+                    </tr>`;
+                }
             }
 
-            container.innerHTML = html;
-        }
-
-        function toggleNode(element) {
-            const toggle = element.querySelector('.tree-toggle');
-            const children = element.nextElementSibling;
-
-            if (children && children.classList.contains('tree-children')) {
-                toggle.classList.toggle('expanded');
-                children.classList.toggle('collapsed');
+            if (!html) {
+                html = '<tr><td colspan="7" class="empty-state">No devices found</td></tr>';
             }
+
+            tbody.innerHTML = html;
         }
+
+        function toggleExpand(key, event) {
+            event.stopPropagation();
+            const current = expandState.get(key);
+            expandState.set(key, current === false ? true : false);
+            renderTable();
+        }
+
+        // Sorting
+        function siteComparator() {
+            // "Unassigned" always last
+            return (a, b) => {
+                if (a.id === null) return 1;
+                if (b.id === null) return -1;
+                const nameA = (a.name || '').toLowerCase();
+                const nameB = (b.name || '').toLowerCase();
+                return sortDirection === 'asc' ? nameA.localeCompare(nameB) : nameB.localeCompare(nameA);
+            };
+        }
+
+        function deviceComparator() {
+            return (a, b) => {
+                let valA, valB;
+                switch (sortColumn) {
+                    case 'name':
+                        valA = (a.system_name || a.name || a.ip || '').toLowerCase();
+                        valB = (b.system_name || b.name || b.ip || '').toLowerCase();
+                        return sortDirection === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                    case 'firmware':
+                        valA = a.firmware_version || '';
+                        valB = b.firmware_version || '';
+                        return sortDirection === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                    case 'model':
+                        valA = (a.model || '').toLowerCase();
+                        valB = (b.model || '').toLowerCase();
+                        return sortDirection === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                    case 'signal':
+                        valA = a.primary_signal ?? -999;
+                        valB = b.primary_signal ?? -999;
+                        break;
+                    case 'distance':
+                        valA = a.link_distance ?? 0;
+                        valB = b.link_distance ?? 0;
+                        break;
+                    case 'status':
+                        valA = a.last_error ? 1 : 0;
+                        valB = b.last_error ? 1 : 0;
+                        break;
+                    default:
+                        return 0;
+                }
+                const diff = valA - valB;
+                return sortDirection === 'asc' ? diff : -diff;
+            };
+        }
+
+        function sortTable(column) {
+            if (sortColumn === column) {
+                sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortColumn = column;
+                sortDirection = 'asc';
+            }
+            // Update header arrows
+            document.querySelectorAll('.tree-table thead th .sort-arrow').forEach(el => el.textContent = '');
+            const th = document.querySelector(`th[data-sort="${column}"] .sort-arrow`);
+            if (th) th.textContent = sortDirection === 'asc' ? ' \u25B2' : ' \u25BC';
+            renderTable();
+        }
+
+        // ── Selection (for chart filtering) ──
 
         function findSite(siteId) {
             for (const site of (topology.sites || [])) {
-                if (site.id === siteId) {
-                    return site;
-                }
+                if (site.id === siteId) return site;
             }
             return null;
         }
@@ -839,9 +1686,7 @@
         function findAP(ip) {
             for (const site of (topology.sites || [])) {
                 for (const ap of (site.aps || [])) {
-                    if (ap.ip === ip) {
-                        return { ap, site };
-                    }
+                    if (ap.ip === ip) return { ap, site };
                 }
             }
             return null;
@@ -851,138 +1696,319 @@
             for (const site of (topology.sites || [])) {
                 for (const ap of (site.aps || [])) {
                     for (const cpe of (ap.cpes || [])) {
-                        if (cpe.ip === ip) {
-                            return { cpe, ap, site };
-                        }
+                        if (cpe.ip === ip) return { cpe, ap, site };
                     }
                 }
             }
             return null;
         }
 
-        function selectAll() {
-            selectedNode = { type: 'all' };
-            clearHighlights();
-            document.querySelector('.tree-item[data-type="all"]')?.classList.add('selected');
-            hideDetailPanel();
+        function selectSite(siteId) {
+            const site = siteId === null
+                ? topology.sites.find(s => s.id === null)
+                : findSite(typeof siteId === 'string' ? parseInt(siteId) : siteId);
+            if (!site) return;
+
+            selectedNode = { type: 'site', data: site };
+            renderTable();
             updateChart();
-        }
-
-        function selectSite(siteId, event) {
-            event.stopPropagation();
-
-            const site = findSite(siteId);
-            if (!site && siteId !== null) return;
-
-            // For "Unassigned" virtual site
-            const siteData = site || topology.sites.find(s => s.id === null);
-            if (!siteData) return;
-
-            selectedNode = { type: 'site', data: siteData };
-            clearHighlights();
-            document.querySelector(`.tree-item[data-site-id="${siteId}"]`)?.classList.add('selected');
-            showSiteDetails(siteData);
-            updateChart();
-        }
-
-        function showSiteDetails(site) {
-            const panel = document.getElementById('detailPanel');
-            const name = document.getElementById('detailName');
-            const grid = document.getElementById('detailGrid');
-
-            name.textContent = site.name;
-
-            const apCount = site.aps?.length || 0;
-            const cpeCount = site.aps?.reduce((sum, ap) => sum + (ap.cpes?.length || 0), 0) || 0;
-
-            grid.innerHTML = `
-                <div class="detail-item">
-                    <div class="detail-label">Site Name</div>
-                    <div class="detail-value">${escapeHtml(site.name)}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Access Points</div>
-                    <div class="detail-value">${apCount}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Total CPEs</div>
-                    <div class="detail-value">${cpeCount}</div>
-                </div>
-                ${site.location ? `<div class="detail-item">
-                    <div class="detail-label">Location</div>
-                    <div class="detail-value">${escapeHtml(site.location)}</div>
-                </div>` : ''}
-            `;
-
-            // Show delete button only if site has no APs and is not "Unassigned"
-            let actionsDiv = document.getElementById('apActions');
-            if (!actionsDiv) {
-                actionsDiv = document.createElement('div');
-                actionsDiv.id = 'apActions';
-                actionsDiv.style.cssText = 'margin-top: 16px; padding-top: 16px; border-top: 1px solid #334155; display: flex; gap: 8px;';
-                panel.appendChild(actionsDiv);
-            }
-
-            if (apCount === 0 && site.id !== null) {
-                actionsDiv.style.display = 'flex';
-                actionsDiv.innerHTML = `
-                    <button class="btn btn-sm btn-danger" onclick="deleteSite(${site.id})">Delete Site</button>
-                `;
-            } else {
-                actionsDiv.style.display = 'none';
-            }
-
-            panel.style.display = 'block';
-        }
-
-        function clearHighlights() {
-            document.querySelectorAll('.tree-item.selected').forEach(el => el.classList.remove('selected'));
-        }
-
-        function hideDetailPanel() {
-            document.getElementById('detailPanel').style.display = 'none';
-            const actionsDiv = document.getElementById('apActions');
-            if (actionsDiv) actionsDiv.style.display = 'none';
         }
 
         function selectAP(ip) {
             const result = findAP(ip);
             if (!result) return;
-
             selectedNode = { type: 'ap', data: result.ap, site: result.site };
-            clearHighlights();
-            document.querySelector(`.tree-item[data-ip="${ip}"]`)?.classList.add('selected');
-            showAPDetails(result.ap, result.site);
+            renderTable();
             updateChart();
         }
 
-        function selectCPE(ip, event) {
-            event.stopPropagation();
-
+        function selectCPE(ip) {
             const result = findCPE(ip);
             if (!result) return;
-
             selectedNode = { type: 'cpe', data: result.cpe, ap: result.ap };
-            clearHighlights();
-            document.querySelector(`.tree-item[data-ip="${ip}"]`)?.classList.add('selected');
-            showCPEDetails(result.cpe, result.ap);
+            renderTable();
             updateChart();
             highlightChartPoint(ip);
         }
 
+        function selectSwitch(ip) {
+            const result = findSwitch(ip);
+            if (!result) return;
+            selectedNode = { type: 'switch', data: result.sw, site: result.site };
+            renderTable();
+            updateChart();
+        }
+
+        function findSwitch(ip) {
+            if (!topology) return null;
+            for (const site of topology.sites) {
+                for (const sw of (site.switches || [])) {
+                    if (sw.ip === ip) return { sw, site };
+                }
+            }
+            return null;
+        }
+
+        async function deleteSwitch(ip) {
+            if (!confirm(`Delete switch ${ip}?`)) return;
+            try {
+                await fetch(`/api/switches/${ip}`, { method: 'DELETE' });
+                loadTopology();
+            } catch (e) {
+                alert('Failed to delete switch: ' + e.message);
+            }
+        }
+
+        // ── Chart ──
+
+        function updateChart() {
+            const cpes = [];
+            const offlineAPs = [];
+
+            let titleSuffix = 'All Devices';
+            if (selectedNode?.type === 'site') {
+                titleSuffix = selectedNode.data?.name || 'Site';
+            } else if (selectedNode?.type === 'ap') {
+                titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'AP';
+            } else if (selectedNode?.type === 'cpe') {
+                titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'CPE';
+            }
+            document.getElementById('chartTitle').textContent = `Signal vs Distance \u2014 ${titleSuffix}`;
+
+            for (const site of (topology.sites || [])) {
+                if (selectedNode?.type === 'site' && site.id !== selectedNode.data?.id) continue;
+
+                for (const ap of (site.aps || [])) {
+                    if (selectedNode?.type === 'ap' && ap.ip !== selectedNode.data?.ip) continue;
+
+                    // Track offline APs
+                    if (ap.last_error) {
+                        offlineAPs.push(ap);
+                    }
+
+                    for (const cpe of (ap.cpes || [])) {
+                        if (selectedNode?.type === 'cpe' && cpe.ip !== selectedNode.data?.ip) continue;
+                        cpes.push(cpe);
+                    }
+                }
+            }
+
+            const cpeData = cpes.map(cpe => ({
+                x: cpe.link_distance || 0,
+                y: cpe.primary_signal || cpe.combined_signal || cpe.rx_power || -100,
+                cpe: cpe,
+            }));
+
+            const offlineData = offlineAPs.map(ap => ({
+                x: 0,
+                y: -74,
+                ap: ap,
+            }));
+
+            if (chart) {
+                chart.data.datasets[0].data = cpeData;
+                chart.data.datasets[1].data = offlineData;
+                chart.update();
+            } else {
+                initChart(cpeData, offlineData);
+            }
+        }
+
+        function highlightChartPoint(ip) {
+            if (!chart) return;
+            const index = chart.data.datasets[0].data.findIndex(d => d.cpe?.ip === ip);
+            if (index >= 0) {
+                chart.setActiveElements([{ datasetIndex: 0, index: index }]);
+                chart.update();
+            }
+        }
+
+        function initChart(cpeData, offlineData) {
+            const ctx = document.getElementById('signalChart').getContext('2d');
+
+            const thresholdPlugin = {
+                id: 'thresholdLines',
+                afterDraw: (chart) => {
+                    const ctx = chart.ctx;
+                    const yAxis = chart.scales.y;
+                    const xAxis = chart.scales.x;
+
+                    // -65 dBm line (primary threshold)
+                    const y65 = yAxis.getPixelForValue(-65);
+                    ctx.save();
+                    ctx.setLineDash([6, 4]);
+                    ctx.strokeStyle = '#10b981';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(xAxis.left, y65);
+                    ctx.lineTo(xAxis.right, y65);
+                    ctx.stroke();
+                    // Label
+                    ctx.fillStyle = '#10b981';
+                    ctx.font = '10px monospace';
+                    ctx.fillText('Low Signal', xAxis.right - 62, y65 - 4);
+                    ctx.restore();
+
+                    // -75 dBm line
+                    const y75 = yAxis.getPixelForValue(-75);
+                    ctx.save();
+                    ctx.setLineDash([6, 4]);
+                    ctx.strokeStyle = '#ef4444';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(xAxis.left, y75);
+                    ctx.lineTo(xAxis.right, y75);
+                    ctx.stroke();
+                    ctx.restore();
+                },
+            };
+
+            Chart.register(thresholdPlugin);
+
+            chart = new Chart(ctx, {
+                type: 'scatter',
+                data: {
+                    datasets: [
+                        {
+                            label: 'CPEs',
+                            data: cpeData,
+                            pointBackgroundColor: (context) => {
+                                const point = context.raw;
+                                if (!point?.cpe) return '#9ca3af';
+                                const health = point.cpe.signal_health;
+                                if (health === 'green') return '#10b981';
+                                if (health === 'yellow') return '#f59e0b';
+                                return '#ef4444';
+                            },
+                            pointBorderColor: (context) => {
+                                const point = context.raw;
+                                if (!point?.cpe) return '#6b7280';
+                                const health = point.cpe.signal_health;
+                                if (health === 'green') return '#34d399';
+                                if (health === 'yellow') return '#fbbf24';
+                                return '#f87171';
+                            },
+                            pointRadius: 8,
+                            pointHoverRadius: 12,
+                            pointBorderWidth: 2,
+                        },
+                        {
+                            label: 'Offline APs',
+                            data: offlineData,
+                            pointBackgroundColor: '#ef4444',
+                            pointBorderColor: '#991b1b',
+                            pointRadius: 7,
+                            pointHoverRadius: 10,
+                            pointBorderWidth: 2,
+                            pointStyle: 'rectRot',
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    onClick: (event, elements) => {
+                        if (elements.length > 0) {
+                            const el = elements[0];
+                            if (el.datasetIndex === 0) {
+                                const point = chart.data.datasets[0].data[el.index];
+                                if (point?.cpe) selectCPE(point.cpe.ip);
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: { display: true, text: 'Distance (meters)', color: '#6b7280' },
+                            grid: { color: '#e5e7eb' },
+                            ticks: { color: '#6b7280' },
+                            beginAtZero: true,
+                        },
+                        y: {
+                            title: { display: true, text: 'Signal (dBm)', color: '#6b7280' },
+                            grid: { color: '#e5e7eb' },
+                            ticks: { color: '#6b7280' },
+                            min: -75,
+                            max: -35,
+                        },
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => {
+                                    if (context.datasetIndex === 1) {
+                                        const ap = context.raw?.ap;
+                                        if (!ap) return '';
+                                        return [ap.system_name || ap.ip, 'Status: Offline', ap.last_error || ''];
+                                    }
+                                    const cpe = context.raw?.cpe;
+                                    if (!cpe) return '';
+                                    return [
+                                        cpe.system_name || cpe.ip,
+                                        `Signal: ${cpe.primary_signal?.toFixed(1) || 'N/A'} dBm`,
+                                        `Distance: ${cpe.link_distance?.toFixed(0) || 'N/A'} m`,
+                                    ];
+                                },
+                            },
+                            backgroundColor: '#ffffff',
+                            titleColor: '#111827',
+                            bodyColor: '#111827',
+                            borderColor: '#e5e7eb',
+                            borderWidth: 1,
+                        },
+                    },
+                },
+            });
+        }
+
+        // ── Device Actions ──
+
+        async function pollAPNow(ip) {
+            try {
+                const response = await fetch(`/api/aps/${encodeURIComponent(ip)}/poll`, { method: 'POST' });
+                if (!response.ok) {
+                    const error = await response.json();
+                    alert('Refresh failed: ' + (error.detail || 'Unknown error'));
+                    return;
+                }
+                // Fetch topology directly as a fallback in case the
+                // WebSocket broadcast didn't reach this client.
+                const topoResponse = await fetch('/api/topology');
+                if (topoResponse.ok) {
+                    topology = await topoResponse.json();
+                    updateUI();
+                }
+            } catch (error) {
+                alert('Refresh error: ' + error.message);
+            }
+        }
+
+        async function deleteAP(ip) {
+            if (!confirm(`Delete AP ${ip}? This will remove all associated CPE data.`)) return;
+            try {
+                const response = await fetch(`/api/aps/${encodeURIComponent(ip)}`, { method: 'DELETE' });
+                if (response.ok) {
+                    selectedNode = { type: 'all' };
+                    const topoResponse = await fetch('/api/topology');
+                    if (topoResponse.ok) {
+                        topology = await topoResponse.json();
+                        updateUI();
+                    }
+                } else {
+                    const error = await response.json();
+                    alert(`Failed to delete AP: ${error.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                alert(`Error deleting AP: ${error.message}`);
+            }
+        }
+
         async function deleteSite(siteId) {
             if (!confirm('Delete this site?')) return;
-
             try {
-                const response = await fetch(`/api/sites/${siteId}`, {
-                    method: 'DELETE',
-                });
-
+                const response = await fetch(`/api/sites/${siteId}`, { method: 'DELETE' });
                 if (response.ok) {
-                    hideDetailPanel();
                     selectedNode = { type: 'all' };
-
-                    // Refresh topology
                     const topoResponse = await fetch('/api/topology');
                     if (topoResponse.ok) {
                         topology = await topoResponse.json();
@@ -997,361 +2023,121 @@
             }
         }
 
-        function showAPDetails(ap, site) {
-            const panel = document.getElementById('detailPanel');
-            const name = document.getElementById('detailName');
-            const grid = document.getElementById('detailGrid');
-
-            name.textContent = ap.system_name || ap.ip;
-
-            // Append 'Z' so the browser knows it's UTC and converts to local time
-            const lastSeen = ap.last_seen ? new Date(ap.last_seen + 'Z').toLocaleString() : 'Never';
-
-            grid.innerHTML = `
-                <div class="detail-item">
-                    <div class="detail-label">IP Address</div>
-                    <div class="detail-value"><a href="http://${ap.ip}" target="_blank" rel="noopener noreferrer">${ap.ip}</a></div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Tower Site</div>
-                    <div class="detail-value">${site?.name || 'Unassigned'}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Model</div>
-                    <div class="detail-value">${ap.model || 'N/A'}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Firmware</div>
-                    <div class="detail-value">${ap.firmware_version || 'N/A'}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Connected CPEs</div>
-                    <div class="detail-value">${ap.cpe_count || 0}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">MAC Address</div>
-                    <div class="detail-value">${ap.mac || 'N/A'}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Last Seen</div>
-                    <div class="detail-value">${lastSeen}</div>
-                </div>
-                ${ap.last_error ? `<div class="detail-item" style="grid-column: span 2;">
-                    <div class="detail-label">Error</div>
-                    <div class="detail-value red">${ap.last_error}</div>
-                </div>` : ''}
-            `;
-
-            showAPActions(ap);
-            panel.style.display = 'block';
-        }
-
-        function showAPActions(ap) {
-            // Show action buttons in a separate row below details
-            const panel = document.getElementById('detailPanel');
-            let actionsDiv = document.getElementById('apActions');
-            if (!actionsDiv) {
-                actionsDiv = document.createElement('div');
-                actionsDiv.id = 'apActions';
-                actionsDiv.style.cssText = 'margin-top: 16px; padding-top: 16px; border-top: 1px solid #334155; display: flex; gap: 8px;';
-                panel.appendChild(actionsDiv);
-            }
-            actionsDiv.style.display = 'flex';
-            actionsDiv.innerHTML = `
-                <button class="btn btn-sm" id="refreshBtn" onclick="pollAPNow('${ap.ip}')">Refresh Now</button>
-                <button class="btn btn-sm btn-danger" onclick="deleteAP('${ap.ip}')">Delete AP</button>
-                <span id="refreshStatus" style="font-size: 0.8rem; align-self: center; margin-left: 4px;"></span>
-            `;
-        }
-
-        function showCPEDetails(cpe, ap) {
-            const panel = document.getElementById('detailPanel');
-            const name = document.getElementById('detailName');
-            const grid = document.getElementById('detailGrid');
-
-            // Hide AP actions if showing CPE
-            const actionsDiv = document.getElementById('apActions');
-            if (actionsDiv) actionsDiv.style.display = 'none';
-
-            const signalClass = cpe.signal_health;
-
-            name.textContent = cpe.system_name || cpe.ip;
-
-            grid.innerHTML = `
-                <div class="detail-item">
-                    <div class="detail-label">IP Address</div>
-                    <div class="detail-value"><a href="http://${cpe.ip}" target="_blank" rel="noopener noreferrer">${cpe.ip}</a></div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Connected To</div>
-                    <div class="detail-value">${ap.system_name || ap.ip}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Signal</div>
-                    <div class="detail-value ${signalClass}">${cpe.primary_signal?.toFixed(1) || 'N/A'} dBm</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Distance</div>
-                    <div class="detail-value">${cpe.link_distance?.toFixed(0) || 'N/A'} m</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">TX Rate</div>
-                    <div class="detail-value">${cpe.tx_rate?.toFixed(0) || 'N/A'} Mbps</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">RX Rate</div>
-                    <div class="detail-value">${cpe.rx_rate?.toFixed(0) || 'N/A'} Mbps</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">MCS</div>
-                    <div class="detail-value">${cpe.mcs ?? 'N/A'}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Model</div>
-                    <div class="detail-value">${cpe.model || 'N/A'}</div>
-                </div>
-            `;
-
-            panel.style.display = 'block';
-        }
-
-        function updateChart() {
-            const cpes = [];
-
-            // Update chart title based on selection
-            let titleSuffix = 'All Devices';
-            if (selectedNode?.type === 'site') {
-                titleSuffix = selectedNode.data?.name || 'Site';
-            } else if (selectedNode?.type === 'ap') {
-                titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'AP';
-            } else if (selectedNode?.type === 'cpe') {
-                titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'CPE';
-            }
-            document.getElementById('chartTitle').textContent = `Signal vs Distance - ${titleSuffix}`;
-
-            // Filter based on selection
-            for (const site of (topology.sites || [])) {
-                // Skip if a specific site is selected and this isn't it
-                if (selectedNode?.type === 'site' && site.id !== selectedNode.data?.id) {
-                    continue;
-                }
-
-                for (const ap of (site.aps || [])) {
-                    // Skip if a specific AP is selected and this isn't it
-                    if (selectedNode?.type === 'ap' && ap.ip !== selectedNode.data?.ip) {
-                        continue;
-                    }
-
-                    for (const cpe of (ap.cpes || [])) {
-                        // Skip if a specific CPE is selected and this isn't it
-                        if (selectedNode?.type === 'cpe' && cpe.ip !== selectedNode.data?.ip) {
-                            continue;
-                        }
-                        cpes.push(cpe);
-                    }
-                }
-            }
-
-            const chartData = cpes.map(cpe => ({
-                x: cpe.link_distance || 0,
-                y: cpe.primary_signal || cpe.combined_signal || cpe.rx_power || -100,
-                cpe: cpe,
-            }));
-
-            if (chart) {
-                chart.data.datasets[0].data = chartData;
-                chart.update();
-            } else {
-                initChart(chartData);
-            }
-        }
-
-        function highlightChartPoint(ip) {
-            if (!chart) return;
-
-            const index = chart.data.datasets[0].data.findIndex(d => d.cpe?.ip === ip);
-            if (index >= 0) {
-                chart.setActiveElements([{ datasetIndex: 0, index: index }]);
-                chart.update();
-            }
-        }
-
-        function initChart(data) {
-            const ctx = document.getElementById('signalChart').getContext('2d');
-
-            const thresholdPlugin = {
-                id: 'thresholdLines',
-                afterDraw: (chart) => {
-                    const ctx = chart.ctx;
-                    const yAxis = chart.scales.y;
-                    const xAxis = chart.scales.x;
-
-                    // -65 dBm line
-                    const y65 = yAxis.getPixelForValue(-65);
-                    ctx.save();
-                    ctx.setLineDash([6, 4]);
-                    ctx.strokeStyle = '#10b981';
-                    ctx.lineWidth = 1.5;
-                    ctx.beginPath();
-                    ctx.moveTo(xAxis.left, y65);
-                    ctx.lineTo(xAxis.right, y65);
-                    ctx.stroke();
-                    ctx.restore();
-
-                    // -75 dBm line
-                    const y75 = yAxis.getPixelForValue(-75);
-                    ctx.save();
-                    ctx.setLineDash([6, 4]);
-                    ctx.strokeStyle = '#ef4444';
-                    ctx.lineWidth = 1.5;
-                    ctx.beginPath();
-                    ctx.moveTo(xAxis.left, y75);
-                    ctx.lineTo(xAxis.right, y75);
-                    ctx.stroke();
-                    ctx.restore();
-                },
-            };
-
-            Chart.register(thresholdPlugin);
-
-            chart = new Chart(ctx, {
-                type: 'scatter',
-                data: {
-                    datasets: [{
-                        label: 'CPEs',
-                        data: data,
-                        pointBackgroundColor: (context) => {
-                            const point = context.raw;
-                            if (!point?.cpe) return '#64748b';
-                            const health = point.cpe.signal_health;
-                            if (health === 'green') return '#10b981';
-                            if (health === 'yellow') return '#f59e0b';
-                            return '#ef4444';
-                        },
-                        pointBorderColor: (context) => {
-                            const point = context.raw;
-                            if (!point?.cpe) return '#94a3b8';
-                            const health = point.cpe.signal_health;
-                            if (health === 'green') return '#34d399';
-                            if (health === 'yellow') return '#fbbf24';
-                            return '#f87171';
-                        },
-                        pointRadius: 8,
-                        pointHoverRadius: 12,
-                        pointBorderWidth: 2,
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    onClick: (event, elements) => {
-                        if (elements.length > 0) {
-                            const point = chart.data.datasets[0].data[elements[0].index];
-                            if (point?.cpe) {
-                                selectCPE(point.cpe.ip, event);
-                            }
-                        }
-                    },
-                    scales: {
-                        x: {
-                            title: {
-                                display: true,
-                                text: 'Distance (meters)',
-                                color: '#94a3b8',
-                            },
-                            grid: { color: '#334155' },
-                            ticks: { color: '#94a3b8' },
-                            beginAtZero: true,
-                        },
-                        y: {
-                            title: {
-                                display: true,
-                                text: 'Signal (dBm)',
-                                color: '#94a3b8',
-                            },
-                            grid: { color: '#334155' },
-                            ticks: { color: '#94a3b8' },
-                            min: -100,
-                            max: -30,
-                        },
-                    },
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                label: (context) => {
-                                    const cpe = context.raw?.cpe;
-                                    if (!cpe) return '';
-                                    return [
-                                        cpe.system_name || cpe.ip,
-                                        `Signal: ${cpe.primary_signal?.toFixed(1) || 'N/A'} dBm`,
-                                        `Distance: ${cpe.link_distance?.toFixed(0) || 'N/A'} m`,
-                                    ];
-                                },
-                            },
-                            backgroundColor: '#1e293b',
-                            titleColor: '#f1f5f9',
-                            bodyColor: '#e2e8f0',
-                            borderColor: '#334155',
-                            borderWidth: 1,
-                        },
-                    },
-                },
-            });
-        }
-
-        async function pollAPNow(ip) {
-            const btn = document.getElementById('refreshBtn');
-            const status = document.getElementById('refreshStatus');
-            if (btn) { btn.disabled = true; btn.textContent = 'Refreshing...'; }
-            if (status) { status.textContent = ''; status.style.color = ''; }
-
+        async function triggerUpdate(type, id, mode) {
+            let settings;
             try {
-                const response = await fetch(`/api/aps/${encodeURIComponent(ip)}/poll`, {
-                    method: 'POST',
-                });
-                if (response.ok) {
-                    if (status) { status.textContent = 'Refreshed'; status.style.color = '#10b981'; }
-                } else {
-                    const error = await response.json();
-                    if (status) { status.textContent = error.detail || 'Failed'; status.style.color = '#ef4444'; }
-                }
-            } catch (error) {
-                if (status) { status.textContent = error.message; status.style.color = '#ef4444'; }
-            } finally {
-                if (btn) { btn.disabled = false; btn.textContent = 'Refresh Now'; }
-            }
-        }
-
-        async function deleteAP(ip) {
-            if (!confirm(`Delete AP ${ip}? This will remove all associated CPE data.`)) {
+                const resp = await fetch('/api/settings');
+                const data = await resp.json();
+                settings = data.settings;
+            } catch (e) {
+                alert('Failed to load settings: ' + e.message);
                 return;
             }
 
-            try {
-                const response = await fetch(`/api/aps/${encodeURIComponent(ip)}`, {
-                    method: 'DELETE',
-                });
-
-                if (response.ok) {
-                    // Hide detail panel
-                    document.getElementById('detailPanel').style.display = 'none';
-                    selectedNode = null;
-
-                    // Refresh topology will happen via WebSocket, but trigger immediate refresh
-                    const topoResponse = await fetch('/api/topology');
-                    if (topoResponse.ok) {
-                        topology = await topoResponse.json();
-                        updateUI();
-                    }
-                } else {
-                    const error = await response.json();
-                    alert(`Failed to delete AP: ${error.detail || 'Unknown error'}`);
-                }
-            } catch (error) {
-                alert(`Error deleting AP: ${error.message}`);
+            const firmware = settings.selected_firmware_30x;
+            if (!firmware) {
+                alert('No firmware selected. Go to Settings and select a firmware file.');
+                return;
             }
+
+            // Build confirmation message
+            let targetName = id;
+            if (type === 'ap') {
+                const r = findAP(id);
+                targetName = r ? (r.ap.system_name || id) : id;
+            } else if (type === 'cpe') {
+                const r = findCPE(id);
+                targetName = r ? (r.cpe.system_name || id) : id;
+            } else if (type === 'site') {
+                const site = findSite(id === 'null' ? null : parseInt(id));
+                targetName = site ? site.name + ' (all APs)' : id;
+            }
+
+            if (!confirm(`Update ${targetName}?\n\nThis will flash firmware and reboot the device(s).`)) {
+                return;
+            }
+
+            const firmware303l = settings.selected_firmware_303l || '';
+            const firmwareTns100 = settings.selected_firmware_tns100 || '';
+            const bankMode = settings.bank_mode || 'both';
+
+            // Mark as updating for visual feedback
+            if (type === 'cpe' || type === 'ap') {
+                updatingDevices.add(id);
+            } else if (type === 'site') {
+                const site = findSite(id === 'null' ? null : parseInt(id));
+                if (site) (site.aps || []).forEach(ap => updatingDevices.add(ap.ip));
+            }
+            renderTable();
+
+            let success = false;
+
+            if (type === 'cpe') {
+                try {
+                    const formData = new FormData();
+                    formData.append('ip', id);
+                    formData.append('firmware_file', firmware);
+                    formData.append('firmware_file_303l', firmware303l);
+                    formData.append('firmware_file_tns100', firmwareTns100);
+                    formData.append('bank_mode', bankMode);
+                    const resp = await fetch('/api/update-device', { method: 'POST', body: formData });
+                    if (resp.ok) { success = true; } else {
+                        const err = await resp.json();
+                        alert('Update failed: ' + (err.detail || 'Unknown error'));
+                    }
+                } catch (e) { alert('Update error: ' + e.message); }
+            } else if (type === 'ap') {
+                try {
+                    const formData = new FormData();
+                    formData.append('firmware_file', firmware);
+                    formData.append('firmware_file_303l', firmware303l);
+                    formData.append('firmware_file_tns100', firmwareTns100);
+                    formData.append('device_type', 'mixed');
+                    formData.append('ip_list', id);
+                    formData.append('concurrency', '2');
+                    formData.append('bank_mode', bankMode);
+                    const resp = await fetch('/api/start-update', { method: 'POST', body: formData });
+                    if (resp.ok) { success = true; } else {
+                        const err = await resp.json();
+                        alert('Update failed: ' + (err.detail || 'Unknown error'));
+                    }
+                } catch (e) { alert('Update error: ' + e.message); }
+            } else if (type === 'site') {
+                const site = findSite(id === 'null' ? null : parseInt(id));
+                if (!site) { alert('Site not found'); return; }
+                const ips = (site.aps || []).map(ap => ap.ip).join('\n');
+                if (!ips) { alert('No APs in this site'); return; }
+                try {
+                    const formData = new FormData();
+                    formData.append('firmware_file', firmware);
+                    formData.append('firmware_file_303l', firmware303l);
+                    formData.append('firmware_file_tns100', firmwareTns100);
+                    formData.append('device_type', 'mixed');
+                    formData.append('ip_list', ips);
+                    formData.append('concurrency', '2');
+                    formData.append('bank_mode', bankMode);
+                    const resp = await fetch('/api/start-update', { method: 'POST', body: formData });
+                    if (resp.ok) { success = true; } else {
+                        const err = await resp.json();
+                        alert('Update failed: ' + (err.detail || 'Unknown error'));
+                    }
+                } catch (e) { alert('Update error: ' + e.message); }
+            }
+
+            // On failure, clear updating state
+            if (!success) {
+                if (type === 'cpe' || type === 'ap') {
+                    updatingDevices.delete(id);
+                } else if (type === 'site') {
+                    const site = findSite(id === 'null' ? null : parseInt(id));
+                    if (site) (site.aps || []).forEach(ap => updatingDevices.delete(ap.ip));
+                }
+                renderTable();
+            }
+            // On success, updating state stays until next topology update clears it
         }
+
+        // ── Helpers ──
 
         function escapeHtml(text) {
             const div = document.createElement('div');
@@ -1367,8 +2153,633 @@
             }
         });
 
+        // ── Status Bar ──
+
+        const PHASES = ['canary', 'pct10', 'pct50', 'pct100'];
+        const PHASE_LABELS = { canary: 'Canary', pct10: '10%', pct50: '50%', pct100: '100%' };
+
+        function updateSchedulerUI(status) {
+            lastSchedulerStatus = status;
+            const state = status.state || 'disabled';
+            const wasEnabled = autoUpdateEnabled;
+            autoUpdateEnabled = state !== 'disabled';
+            const barToggle = document.getElementById('barAutoToggle');
+            const badge = document.getElementById('barStateBadge');
+            const reason = document.getElementById('barBlockReason');
+            const countSection = document.getElementById('barDeviceCountSection');
+            if (!badge) return;
+
+            // Re-render table if auto-update state changed (affects status/actions columns)
+            if (wasEnabled !== autoUpdateEnabled && topology) renderTable();
+
+            if (barToggle) barToggle.classList.toggle('active', autoUpdateEnabled);
+            badge.className = 'status-badge status-bar-badge';
+            reason.textContent = '';
+
+            if (state === 'disabled') {
+                badge.textContent = 'Off';
+                countSection.style.display = 'none';
+                return;
+            }
+
+            const stateLabels = {
+                idle: 'Idle', waiting: 'Waiting', running: 'Running',
+                blocked_weather: 'Blocked', blocked_time: 'Blocked',
+                blocked_no_firmware: 'No firmware', blocked_all_current: 'All current',
+            };
+            badge.textContent = stateLabels[state] || state.replace(/_/g, ' ');
+
+            const stateStyles = {
+                idle: 'idle', waiting: 'waiting', running: 'running',
+                blocked_weather: 'blocked', blocked_time: 'blocked',
+                blocked_no_firmware: 'blocked', blocked_all_current: 'current',
+            };
+            const cls = stateStyles[state];
+            if (cls) badge.classList.add(cls);
+
+            if (status.block_reason) reason.textContent = status.block_reason;
+
+            // Store next window for use in device count text
+            lastNextWindow = status.next_window || '';
+            updateBarDeviceCount();
+
+            countSection.style.display = 'flex';
+
+            // Update weather temp in drawer and header
+            if (status.weather && status.weather.temperature_c !== null) {
+                const tempF = Math.round(status.weather.temperature_c * 9 / 5 + 32);
+                const el = document.getElementById('drawerWeatherTemp');
+                if (el) el.textContent = `(currently ${tempF}\u00B0F)`;
+                const headerTemp = document.getElementById('headerTemp');
+                if (headerTemp) headerTemp.textContent = ` · ${tempF}\u00B0F`;
+            }
+
+            // Refresh idle phase labels with updated next_window (only if no active rollout)
+            if (!currentRolloutId) renderIdlePhases();
+        }
+
+        function renderIdlePhases() {
+            const indicator = document.getElementById('barPhaseIndicator');
+            let html = '';
+            for (let i = 0; i < PHASES.length; i++) {
+                html += `<div class="bar-phase-dot">${PHASE_LABELS[PHASES[i]]}</div>`;
+                if (i < PHASES.length - 1) html += `<div class="bar-phase-line"></div>`;
+            }
+            indicator.innerHTML = html;
+            document.getElementById('barRolloutProgress').textContent = '';
+            const predEl = document.getElementById('barRolloutPrediction');
+            if (predEl) predEl.textContent = '';
+            document.getElementById('barResumeBtn').style.display = 'none';
+            document.getElementById('barCancelBtn').style.display = 'none';
+        }
+
+        function updateRolloutUI(data) {
+            const section = document.getElementById('barRolloutSection');
+            if (!section) return;
+
+            if (!data || !data.rollout) {
+                renderIdlePhases();
+                return;
+            }
+
+            const rollout = data.rollout;
+            currentRolloutId = rollout.id;
+
+            const phaseIdx = PHASES.indexOf(rollout.phase);
+            const indicator = document.getElementById('barPhaseIndicator');
+            let phaseHtml = '';
+            for (let i = 0; i < PHASES.length; i++) {
+                const phase = PHASES[i];
+                let dotClass = 'bar-phase-dot';
+                let lineClass = 'bar-phase-line';
+
+                if (rollout.status === 'completed' || i < phaseIdx) {
+                    dotClass += ' completed';
+                    lineClass += ' completed';
+                } else if (i === phaseIdx) {
+                    dotClass += rollout.status === 'paused' ? ' paused' : ' active';
+                }
+
+                phaseHtml += `<div class="${dotClass}">${PHASE_LABELS[phase]}</div>`;
+                if (i < PHASES.length - 1) phaseHtml += `<div class="${lineClass}"></div>`;
+            }
+            indicator.innerHTML = phaseHtml;
+
+            const p = rollout.progress || {};
+            const updated = p.updated || 0;
+            const total = p.total || 0;
+            const failed = p.failed || 0;
+            let progressText = `${updated}/${total}`;
+            if (failed > 0) progressText += ` (${failed} failed)`;
+            document.getElementById('barRolloutProgress').textContent = progressText;
+
+            // Predictions
+            const predEl = document.getElementById('barRolloutPrediction');
+            const pred = rollout.predictions;
+            if (pred && predEl) {
+                const parts = [];
+                const cp = pred.current_phase;
+                if (cp && cp.device_count > 0) {
+                    let stepText = `~${cp.device_count} devices this step`;
+                    if (cp.devices_that_fit_in_window < cp.device_count) {
+                        stepText += ` (${cp.devices_that_fit_in_window} fit in window)`;
+                    }
+                    const dur = cp.estimated_duration_minutes;
+                    if (dur > 0) stepText += ` · ~${dur < 1 ? '<1' : Math.round(dur)} min`;
+                    parts.push(stepText);
+                }
+                if (pred.estimated_completion_date) {
+                    const d = new Date(pred.estimated_completion_date + 'T00:00:00');
+                    const opts = { month: 'short', day: 'numeric' };
+                    parts.push(`est. done ${d.toLocaleDateString('en-US', opts)}`);
+                }
+                predEl.textContent = parts.length ? parts.join(' · ') : '';
+            } else if (predEl) {
+                predEl.textContent = '';
+            }
+
+            const resumeBtn = document.getElementById('barResumeBtn');
+            const cancelBtn = document.getElementById('barCancelBtn');
+            if (rollout.status === 'paused') {
+                resumeBtn.style.display = 'inline-block';
+                cancelBtn.style.display = 'inline-block';
+            } else if (rollout.status === 'active') {
+                resumeBtn.style.display = 'none';
+                cancelBtn.style.display = 'inline-block';
+            } else {
+                resumeBtn.style.display = 'none';
+                cancelBtn.style.display = 'none';
+            }
+        }
+
+        let currentRolloutId = null;
+
+        async function resumeRollout() {
+            if (!currentRolloutId) return;
+            try { await fetch(`/api/rollout/${currentRolloutId}/resume`, { method: 'POST' }); } catch (e) {}
+        }
+
+        async function cancelRollout() {
+            if (!currentRolloutId) return;
+            try { await fetch(`/api/rollout/${currentRolloutId}/cancel`, { method: 'POST' }); } catch (e) {}
+        }
+
+        async function toggleAutoSchedule(event) {
+            if (event) event.stopPropagation();
+            const toggle = document.getElementById('barAutoToggle');
+            const newState = !toggle.classList.contains('active');
+            toggle.classList.toggle('active', newState);
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ schedule_enabled: newState ? 'true' : 'false' }),
+                });
+            } catch (e) {}
+        }
+
+        // ── Drawer ──
+
+        function toggleDrawer(event) {
+            // Don't toggle if clicking a toggle switch or button inside the handle
+            if (event.target.closest('.status-bar-toggle, .btn, .status-bar-actions')) return;
+            const drawer = document.getElementById('bottomDrawer');
+            const opening = !drawer.classList.contains('open');
+            drawer.classList.toggle('open');
+            if (opening) loadDrawerSettings();
+            // Adjust body padding so content is scrollable behind the drawer
+            requestAnimationFrame(() => {
+                setTimeout(() => {
+                    document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
+                }, 320); // after transition completes
+            });
+        }
+
+        let drawerSettingsLoaded = false;
+
+        async function loadDrawerSettings() {
+            if (drawerSettingsLoaded) return;
+            try {
+                const resp = await fetch('/api/settings');
+                const data = await resp.json();
+                const s = data.settings;
+
+                // Days
+                const days = (s.schedule_days || '').split(',').map(d => d.trim());
+                document.querySelectorAll('#drawerDays .drawer-day-btn').forEach(btn => {
+                    btn.classList.toggle('active', days.includes(btn.dataset.day));
+                });
+
+                // Hours
+                document.getElementById('drawerStartHour').value = s.schedule_start_hour || '3';
+                document.getElementById('drawerEndHour').value = s.schedule_end_hour || '4';
+
+                // Bank mode
+                document.getElementById('drawerBankMode').value = s.bank_mode || 'both';
+
+                // Parallel
+                document.getElementById('drawerParallel').value = s.schedule_concurrency || '2';
+
+                // Beta
+                drawerBetaEnabled = s.firmware_beta_enabled === 'true';
+                const betaToggle = document.getElementById('drawerBetaToggle');
+                betaToggle.classList.toggle('active', drawerBetaEnabled);
+
+                // Weather
+                const weatherToggle = document.getElementById('drawerWeatherToggle');
+                weatherToggle.classList.toggle('active', s.weather_check_enabled === 'true');
+
+                // Min temp (stored Celsius, display Fahrenheit)
+                const storedC = parseFloat(s.min_temperature_c || '-10');
+                document.getElementById('drawerMinTemp').value = cToF(storedC);
+
+                // Zip code
+                document.getElementById('drawerZipCode').value = s.zip_code || '';
+
+                drawerSettingsLoaded = true;
+            } catch (e) {}
+            loadDrawerFirmware();
+        }
+
+        function toggleDrawerDay(btn) {
+            btn.classList.toggle('active');
+            drawerSettingChanged();
+        }
+
+        async function drawerSettingChanged() {
+            const days = [];
+            document.querySelectorAll('#drawerDays .drawer-day-btn.active').forEach(btn => {
+                days.push(btn.dataset.day);
+            });
+
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        schedule_days: days.join(','),
+                        schedule_start_hour: document.getElementById('drawerStartHour').value,
+                        schedule_end_hour: document.getElementById('drawerEndHour').value,
+                        bank_mode: document.getElementById('drawerBankMode').value,
+                        schedule_concurrency: document.getElementById('drawerParallel').value,
+                        schedule_scope: 'all',
+                        min_temperature_c: String(fToC(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
+                        zip_code: document.getElementById('drawerZipCode').value,
+                    }),
+                });
+            } catch (e) {}
+        }
+
+        async function toggleDrawerBeta() {
+            const toggle = document.getElementById('drawerBetaToggle');
+            const enabled = !toggle.classList.contains('active');
+            toggle.classList.toggle('active', enabled);
+            drawerBetaEnabled = enabled;
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ firmware_beta_enabled: enabled ? 'true' : 'false' }),
+                });
+                await fetch('/api/firmware-reselect', { method: 'POST' });
+            } catch (e) {}
+            drawerSettingsLoaded = false;
+            loadDrawerFirmware();
+        }
+
+        async function toggleDrawerWeather() {
+            const toggle = document.getElementById('drawerWeatherToggle');
+            const enabled = !toggle.classList.contains('active');
+            toggle.classList.toggle('active', enabled);
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ weather_check_enabled: enabled ? 'true' : 'false' }),
+                });
+            } catch (e) {}
+        }
+
+        // ── Drawer Firmware ──
+
+        let drawerFwFiles = [];
+        let drawerFwSelected = {}; // { 'tna-30x': 'file.bin', 'tna-303l': 'file.bin' }
+        let drawerBetaEnabled = false;
+
+        function fwExtractVersion(name) {
+            const m = name.match(/(\d+\.\d+\.\d+)/);
+            return m ? m[1] : '';
+        }
+
+        function fwExtractRev(name) {
+            const m = name.match(/-r(\d+)/i);
+            return m ? m[1] : '';
+        }
+
+        function fwVersionLabel(name) {
+            const ver = fwExtractVersion(name);
+            const rev = fwExtractRev(name);
+            if (ver && rev) return ver + ' r' + rev;
+            return ver || name;
+        }
+
+        function fwCompareVersions(a, b) {
+            const va = fwExtractVersion(a).split('.').map(Number);
+            const vb = fwExtractVersion(b).split('.').map(Number);
+            for (let i = 0; i < 3; i++) {
+                if ((va[i] || 0) !== (vb[i] || 0)) return (vb[i] || 0) - (va[i] || 0);
+            }
+            const ra = parseInt(fwExtractRev(a)) || 0;
+            const rb = parseInt(fwExtractRev(b)) || 0;
+            return rb - ra;
+        }
+
+        function fwDetectType(name) {
+            const lower = name.toLowerCase();
+            if (lower.includes('tns-100') || lower.includes('tns100')) return 'tns-100';
+            if (lower.includes('303l')) return 'tna-303l';
+            if (lower.includes('300') || lower.includes('30x') || lower.includes('tna-3')) return 'tna-30x';
+            return 'unknown';
+        }
+
+        async function loadDrawerFirmware() {
+            try {
+                const [fwResp, settResp] = await Promise.all([
+                    fetch('/api/firmware-files'),
+                    fetch('/api/settings'),
+                ]);
+                const fwData = await fwResp.json();
+                const settData = await settResp.json();
+                drawerFwFiles = fwData.files || [];
+                drawerFwSelected = {
+                    'tna-30x': settData.settings.selected_firmware_30x || '',
+                    'tna-303l': settData.settings.selected_firmware_303l || '',
+                    'tns-100': settData.settings.selected_firmware_tns100 || '',
+                };
+                renderDrawerFirmware();
+            } catch (e) {}
+        }
+
+        function renderDrawerFirmware() {
+            const container = document.getElementById('drawerFwList');
+            if (drawerFwFiles.length === 0) {
+                container.innerHTML = '<span class="drawer-fw-empty">No firmware files</span>';
+                renderFwMeta();
+                return;
+            }
+
+            // Filter out beta firmware when beta is disabled
+            const visibleFiles = drawerBetaEnabled
+                ? drawerFwFiles
+                : drawerFwFiles.filter(f => f.channel !== 'beta');
+
+            // Group by type, sort each group newest first
+            const groups = {};
+            for (const f of visibleFiles) {
+                const type = fwDetectType(f.name);
+                if (!groups[type]) groups[type] = [];
+                groups[type].push(f);
+            }
+            // Sort within each group by version descending
+            for (const type in groups) {
+                groups[type].sort((a, b) => fwCompareVersions(a.name, b.name));
+            }
+
+            const typeOrder = ['tna-30x', 'tna-303l', 'tns-100', 'unknown'];
+            const typeLabels = { 'tna-30x': '30x', 'tna-303l': '303L', 'tns-100': 'TNS100', 'unknown': 'Other' };
+
+            let html = '';
+            for (const type of typeOrder) {
+                if (!groups[type] || groups[type].length === 0) continue;
+                html += `<div class="drawer-fw-row">`;
+                html += `<span class="drawer-fw-type-label">${typeLabels[type]}</span>`;
+                for (const f of groups[type]) {
+                    const versionLabel = fwVersionLabel(f.name);
+                    const isBeta = f.channel === 'beta';
+                    const isActive = drawerFwSelected[type] === f.name;
+                    const escapedName = f.name.replace(/'/g, "\\'");
+                    html += `<span class="drawer-fw-chip${isActive ? ' active' : ''}${isBeta ? ' beta' : ''}" onclick="selectDrawerFw('${escapedName}','${type}')">`;
+                    html += `${versionLabel}`;
+                    if (isBeta) html += `<span class="drawer-fw-beta-label">beta</span>`;
+                    html += `</span>`;
+                }
+                html += `</div>`;
+            }
+            container.innerHTML = html;
+            renderFwMeta();
+        }
+
+        async function selectDrawerFw(filename, type) {
+            if (type === 'unknown') return;
+            drawerFwSelected[type] = filename;
+            renderDrawerFirmware();
+            const data = {};
+            if (type === 'tna-30x') data.selected_firmware_30x = filename;
+            if (type === 'tna-303l') data.selected_firmware_303l = filename;
+            if (type === 'tns-100') data.selected_firmware_tns100 = filename;
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data),
+                });
+            } catch (e) {}
+        }
+
+        function renderFwMeta() {
+            const meta = document.getElementById('drawerFwMeta');
+            if (!meta) return;
+            meta.innerHTML = '<span id="drawerFwLastCheck"></span> <a onclick="triggerDrawerFwFetch();return false;">Check Now</a>';
+            loadFwFetchStatus();
+        }
+
+        async function loadFwFetchStatus() {
+            try {
+                const resp = await fetch('/api/firmware-fetch/status');
+                const result = await resp.json();
+                const el = document.getElementById('drawerFwLastCheck');
+                if (el && result.last_check) {
+                    const raw = result.last_check;
+                    const d = new Date(raw.endsWith('Z') ? raw : raw + 'Z');
+                    const timeStr = d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+                    el.textContent = result.last_error
+                        ? 'Checked ' + timeStr + ' \u2014 ' + result.last_error
+                        : 'Checked ' + timeStr;
+                }
+            } catch (e) {}
+        }
+
+        async function triggerDrawerFwFetch() {
+            const el = document.getElementById('drawerFwLastCheck');
+            if (el) el.textContent = 'Checking\u2026';
+            try {
+                const resp = await fetch('/api/firmware-fetch', { method: 'POST' });
+                const result = await resp.json();
+                if (result.downloaded && result.downloaded.length > 0) {
+                    if (el) el.textContent = 'Downloaded ' + result.downloaded.length + ' file(s)';
+                } else {
+                    if (el) el.textContent = 'All up to date';
+                }
+                await loadDrawerFirmware();
+                setTimeout(loadFwFetchStatus, 3000);
+            } catch (e) {
+                if (el) el.textContent = 'Check failed';
+            }
+        }
+
+        // Upload wiring
+        (function initDrawerUpload() {
+            const upload = document.getElementById('drawerUpload');
+            const input = document.getElementById('drawerFwInput');
+
+            upload.addEventListener('click', (e) => {
+                if (e.target === input) return;
+                input.click();
+            });
+
+            upload.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                upload.classList.add('dragover');
+            });
+
+            upload.addEventListener('dragleave', () => {
+                upload.classList.remove('dragover');
+            });
+
+            upload.addEventListener('drop', (e) => {
+                e.preventDefault();
+                upload.classList.remove('dragover');
+                if (e.dataTransfer.files.length) {
+                    drawerHandleUpload(e.dataTransfer.files[0]);
+                }
+            });
+
+            input.addEventListener('change', (e) => {
+                if (e.target.files.length) {
+                    drawerHandleUpload(e.target.files[0]);
+                }
+            });
+        })();
+
+        async function drawerHandleUpload(file) {
+            const status = document.getElementById('drawerUploadStatus');
+            status.textContent = `Uploading ${file.name}...`;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const resp = await fetch('/api/upload-firmware', { method: 'POST', body: formData });
+                const result = await resp.json();
+                if (resp.ok) {
+                    status.textContent = `Uploaded ${result.filename}`;
+                    await loadDrawerFirmware();
+                    setTimeout(() => { status.textContent = ''; }, 3000);
+                } else {
+                    status.textContent = `Error: ${result.detail}`;
+                }
+            } catch (e) {
+                status.textContent = `Error: ${e.message}`;
+            }
+        }
+
+        async function loadFleetStatus() {
+            try {
+                const resp = await fetch('/api/fleet-status');
+                const data = await resp.json();
+
+                // Build lookup map for version status
+                fleetStatusMap.clear();
+                for (const d of (data.devices || [])) {
+                    fleetStatusMap.set(d.ip, {
+                        target_version: d.target_version,
+                        status: d.status,
+                    });
+                }
+
+                // Re-render table with version status
+                if (topology) renderTable();
+
+                lastBehindCount = data.summary?.behind || 0;
+                lastFleetTotal = data.summary?.total || 0;
+                updateBarDeviceCount();
+            } catch (e) {}
+        }
+
+        function updateBarDeviceCount() {
+            const section = document.getElementById('barDeviceCountSection');
+            const count = document.getElementById('barBehindCount');
+            if (!section || !count) return;
+            count.style.color = '';
+            if (lastBehindCount > 0) {
+                section.style.display = '';
+                let text = lastBehindCount + ' device' + (lastBehindCount !== 1 ? 's' : '') + ' will update in next cycle';
+                if (lastNextWindow) text += ': ' + lastNextWindow;
+                count.textContent = text;
+            } else if (lastFleetTotal > 0) {
+                section.style.display = '';
+                count.textContent = 'All devices current';
+                count.style.color = '#10b981';
+            } else {
+                section.style.display = 'none';
+            }
+        }
+
+        async function loadAutoSettings() {
+            try {
+                const resp = await fetch('/api/settings');
+                const data = await resp.json();
+                const s = data.settings;
+                const toggle = document.getElementById('barAutoToggle');
+                toggle.classList.toggle('active', s.schedule_enabled === 'true');
+            } catch (e) {}
+            // Fetch current weather to populate header temp immediately
+            try {
+                const resp = await fetch('/api/weather');
+                const data = await resp.json();
+                if (data.temperature_c !== undefined && data.temperature_c !== null) {
+                    const tempF = Math.round(data.temperature_c * 9 / 5 + 32);
+                    const headerTemp = document.getElementById('headerTemp');
+                    if (headerTemp) headerTemp.textContent = ` \u00B7 ${tempF}\u00B0F`;
+                    const drawerTemp = document.getElementById('drawerWeatherTemp');
+                    if (drawerTemp) drawerTemp.textContent = `(currently ${tempF}\u00B0F)`;
+                }
+            } catch (e) {}
+        }
+
+        // Clock
+        let clockTimezone = 'America/Chicago';
+        async function loadTime() {
+            try {
+                const response = await fetch('/api/time');
+                const time = await response.json();
+                clockTimezone = time.timezone;
+            } catch (e) {}
+        }
+        function tickClock() {
+            const now = new Date();
+            const opts = { timeZone: clockTimezone };
+            document.getElementById('currentTime').textContent =
+                now.toLocaleTimeString('en-US', { ...opts, hour: 'numeric', minute: '2-digit' });
+            document.getElementById('currentDate').textContent =
+                now.toLocaleDateString('en-US', { ...opts, month: 'short', day: 'numeric' });
+            // Show timezone abbreviation
+            const tzEl = document.getElementById('currentTz');
+            if (tzEl) {
+                const tzAbbr = now.toLocaleTimeString('en-US', { ...opts, timeZoneName: 'short' })
+                    .replace(/^[\d\s:APM]+/, '').trim();
+                tzEl.textContent = tzAbbr;
+            }
+        }
+
         // Initialize
         connectWebSocket();
+        loadTime(); tickClock(); setInterval(tickClock, 1000);
+        loadAutoSettings();
+        loadFleetStatus();
+        renderIdlePhases();
+        // Refresh fleet status periodically
+        setInterval(loadFleetStatus, 60000);
     </script>
 </body>
 </html>
