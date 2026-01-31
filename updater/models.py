@@ -30,15 +30,6 @@ class SignalHealth(str, Enum):
         return cls.RED
 
 
-class Device(BaseModel):
-    """Base device information."""
-    ip: str
-    mac: Optional[str] = None
-    system_name: Optional[str] = None
-    model: Optional[str] = None
-    firmware_version: Optional[str] = None
-    device_type: DeviceType = DeviceType.SM
-
 
 class CPEInfo(BaseModel):
     """CPE (SM) with signal and distance data."""

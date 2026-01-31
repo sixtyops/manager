@@ -611,6 +611,7 @@ class AutoUpdateScheduler:
 
         # Include rollout info
         rollout_info = None
+        pre_rollout_predictions = None
         rollout = db.get_active_rollout()
         if rollout:
             progress = db.get_rollout_progress(rollout["id"])
@@ -630,6 +631,14 @@ class AutoUpdateScheduler:
                 "pause_reason": rollout.get("pause_reason"),
                 "predictions": predictions,
             }
+        else:
+            # No active rollout — generate a pre-rollout estimate so the UI
+            # can show how long a full rollout would take if started now
+            try:
+                synthetic_rollout = {"id": 0, "phase": "canary", "target_version": None}
+                pre_rollout_predictions = self._calculate_predictions(synthetic_rollout, settings)
+            except Exception as e:
+                logger.debug(f"Pre-rollout prediction failed: {e}")
 
         return {
             "state": self._state,
@@ -640,6 +649,7 @@ class AutoUpdateScheduler:
             "current_job_id": self._current_job_id,
             "next_window": f"{start_hour}:00-{end_hour}:00 on {schedule_days}",
             "rollout": rollout_info,
+            "predictions": pre_rollout_predictions,
         }
 
     async def _broadcast_status(self):

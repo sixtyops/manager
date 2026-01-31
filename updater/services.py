@@ -298,7 +298,3 @@ async def validate_time_sources(timezone: str, max_drift: int = 300) -> Tuple[bo
     return (True, system_now)
 
 
-def clear_location_cache():
-    """Clear the location cache."""
-    _location_cache.clear()
-    _location_cache_times.clear()

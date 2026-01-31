@@ -136,6 +136,69 @@
             background: #e5e7eb;
         }
 
+        /* Backup Modal */
+        .backup-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.35);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .backup-overlay.open {
+            display: flex;
+        }
+
+        .backup-modal {
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.18);
+            width: 440px;
+            max-width: 92vw;
+            padding: 24px;
+        }
+
+        .backup-modal h3 {
+            margin: 0 0 16px 0;
+            font-size: 1rem;
+            font-weight: 600;
+            color: #111827;
+        }
+
+        .backup-modal label {
+            font-size: 0.75rem;
+            color: #6b7280;
+            display: block;
+            margin-bottom: 4px;
+            font-weight: 500;
+        }
+
+        .backup-modal input[type="password"],
+        .backup-modal select {
+            padding: 6px 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-family: inherit;
+        }
+
+        .backup-modal .backup-btn {
+            padding: 6px 14px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: #fff;
+            font-size: 0.8rem;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.15s;
+        }
+
+        .backup-modal .backup-btn:hover {
+            background: #f3f4f6;
+        }
+
         /* Layout */
         .container {
             max-width: 1400px;
@@ -969,6 +1032,7 @@
             padding: 4px 10px;
             border-radius: 6px;
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
             font-size: 0.7rem;
@@ -976,6 +1040,13 @@
             background: #f3f4f6;
             color: #6b7280;
             white-space: nowrap;
+            gap: 1px;
+        }
+
+        .status-bar-phases .bar-phase-detail {
+            font-size: 0.55rem;
+            font-weight: 400;
+            opacity: 0.8;
         }
 
         .status-bar-phases .bar-phase-dot.active {
@@ -1041,6 +1112,8 @@
                     </svg>
                 </button>
                 <div class="user-dropdown" id="userDropdown">
+                    <button class="dropdown-item" onclick="openBackupModal()">Backup / Restore</button>
+                    <div style="border-top:1px solid #e5e7eb;"></div>
                     <form method="POST" action="/logout" style="margin:0;">
                         <button type="submit" class="dropdown-item">Logout</button>
                     </form>
@@ -1279,7 +1352,49 @@
                         <span class="drawer-upload-status" id="drawerUploadStatus"></span>
                     </div>
                 </div>
+
             </div>
+        </div>
+    </div>
+
+    <!-- Backup / Restore Modal -->
+    <div class="backup-overlay" id="backupOverlay" onclick="if(event.target===this)closeBackupModal()">
+        <div class="backup-modal">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <h3 style="margin:0;">Backup / Restore</h3>
+                <button onclick="closeBackupModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:1.2rem;line-height:1;padding:4px;">&times;</button>
+            </div>
+
+            <!-- Export -->
+            <div style="margin-bottom:16px;">
+                <label>Export Devices (CSV)</label>
+                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 6px 0;">Download all devices as a CSV file. Passwords are encrypted with the passphrase you provide.</p>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <input type="password" id="exportPassphrase" placeholder="Passphrase (min 8 characters)" style="flex:1;">
+                    <button class="backup-btn" onclick="exportBackup()">Download CSV</button>
+                </div>
+            </div>
+
+            <div style="border-top:1px solid #e5e7eb;margin-bottom:16px;"></div>
+
+            <!-- Import -->
+            <div>
+                <label>Import Devices (CSV)</label>
+                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 6px 0;">Import devices from a previously exported CSV. Use the same passphrase to decrypt passwords.</p>
+                <div style="display:flex;flex-direction:column;gap:8px;">
+                    <input type="file" id="importFile" accept=".csv" style="font-size:0.75rem;">
+                    <div style="display:flex;gap:6px;align-items:center;">
+                        <input type="password" id="importPassphrase" placeholder="Passphrase" style="flex:1;">
+                        <select id="importConflictMode">
+                            <option value="skip">Skip existing</option>
+                            <option value="update">Update existing</option>
+                        </select>
+                        <button class="backup-btn" onclick="importBackup()">Import CSV</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="backupStatus" style="font-size:0.75rem;color:#6b7280;margin-top:12px;min-height:1.2em;"></div>
         </div>
     </div>
 
@@ -1298,6 +1413,7 @@
         let lastNextWindow = '';       // Next maintenance window text
         let lastBehindCount = 0;       // Devices needing update
         let lastFleetTotal = 0;        // Total devices
+        let lastPreRolloutPredictions = null; // Pre-rollout estimate
 
         // Expand/collapse + sort state
         const expandState = new Map();
@@ -2153,6 +2269,16 @@
             }
         });
 
+        // Backup modal
+        function openBackupModal() {
+            document.getElementById('userDropdown').classList.remove('open');
+            document.getElementById('backupOverlay').classList.add('open');
+        }
+        function closeBackupModal() {
+            document.getElementById('backupOverlay').classList.remove('open');
+            document.getElementById('backupStatus').textContent = '';
+        }
+
         // ── Status Bar ──
 
         const PHASES = ['canary', 'pct10', 'pct50', 'pct100'];
@@ -2201,6 +2327,7 @@
 
             // Store next window for use in device count text
             lastNextWindow = status.next_window || '';
+            lastPreRolloutPredictions = status.predictions || null;
             updateBarDeviceCount();
 
             countSection.style.display = 'flex';
@@ -2218,11 +2345,59 @@
             if (!currentRolloutId) renderIdlePhases();
         }
 
+        function _phaseDetail(pred, phaseIdx) {
+            if (!pred) return '';
+            // Build a map of phase -> { count, date_idx }
+            const allPhases = [];
+            const cp = pred.current_phase;
+            if (cp) allPhases.push({ phase: 'canary', count: cp.device_count, minutes: cp.estimated_duration_minutes });
+            for (const rp of (pred.remaining_phases || [])) {
+                allPhases.push({ phase: rp.phase, count: rp.estimated_devices, minutes: rp.estimated_duration_minutes });
+            }
+            const info = allPhases.find(p => p.phase === PHASES[phaseIdx]);
+            if (!info || !info.count) return '';
+            // Calculate which scheduled day this phase lands on
+            const dateParts = [];
+            if (info.count > 0) dateParts.push(info.count + (info.count === 1 ? ' device' : ' devices'));
+            // Estimate date: count maintenance windows needed up to this phase
+            const windowIdx = allPhases.filter((p, idx) => {
+                const pi = PHASES.indexOf(p.phase);
+                return pi <= phaseIdx && p.count > 0;
+            }).length;
+            if (pred.estimated_completion_date && windowIdx > 0) {
+                // Walk schedule days to find this phase's window
+                const scheduleDays = (lastNextWindow || '').match(/on\s+(.+)/);
+                if (scheduleDays) {
+                    const dayMap = { mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6, sun: 0 };
+                    const activeDays = scheduleDays[1].split(',').map(d => dayMap[d.trim().toLowerCase()]).filter(d => d !== undefined);
+                    if (activeDays.length) {
+                        const today = new Date();
+                        today.setHours(0, 0, 0, 0);
+                        let counted = 0;
+                        for (let off = 0; off < 90 && counted < windowIdx; off++) {
+                            const check = new Date(today);
+                            check.setDate(check.getDate() + off);
+                            if (activeDays.includes(check.getDay())) {
+                                counted++;
+                                if (counted === windowIdx) {
+                                    dateParts.push(check.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return dateParts.length ? dateParts.join(' · ') : '';
+        }
+
         function renderIdlePhases() {
             const indicator = document.getElementById('barPhaseIndicator');
+            const pred = lastPreRolloutPredictions;
             let html = '';
             for (let i = 0; i < PHASES.length; i++) {
-                html += `<div class="bar-phase-dot">${PHASE_LABELS[PHASES[i]]}</div>`;
+                const detail = _phaseDetail(pred, i);
+                const detailHtml = detail ? `<span class="bar-phase-detail">${detail}</span>` : '';
+                html += `<div class="bar-phase-dot">${PHASE_LABELS[PHASES[i]]}${detailHtml}</div>`;
                 if (i < PHASES.length - 1) html += `<div class="bar-phase-line"></div>`;
             }
             indicator.innerHTML = html;
@@ -2247,6 +2422,7 @@
 
             const phaseIdx = PHASES.indexOf(rollout.phase);
             const indicator = document.getElementById('barPhaseIndicator');
+            const pred = rollout.predictions;
             let phaseHtml = '';
             for (let i = 0; i < PHASES.length; i++) {
                 const phase = PHASES[i];
@@ -2260,7 +2436,9 @@
                     dotClass += rollout.status === 'paused' ? ' paused' : ' active';
                 }
 
-                phaseHtml += `<div class="${dotClass}">${PHASE_LABELS[phase]}</div>`;
+                const detail = _phaseDetail(pred, i);
+                const detailHtml = detail ? `<span class="bar-phase-detail">${detail}</span>` : '';
+                phaseHtml += `<div class="${dotClass}">${PHASE_LABELS[phase]}${detailHtml}</div>`;
                 if (i < PHASES.length - 1) phaseHtml += `<div class="${lineClass}"></div>`;
             }
             indicator.innerHTML = phaseHtml;
@@ -2275,7 +2453,6 @@
 
             // Predictions
             const predEl = document.getElementById('barRolloutPrediction');
-            const pred = rollout.predictions;
             if (pred && predEl) {
                 const parts = [];
                 const cp = pred.current_phase;
@@ -2713,9 +2890,11 @@
             count.style.color = '';
             if (lastBehindCount > 0) {
                 section.style.display = '';
-                let text = lastBehindCount + ' device' + (lastBehindCount !== 1 ? 's' : '') + ' will update in next cycle';
-                if (lastNextWindow) text += ': ' + lastNextWindow;
+                let text = lastBehindCount + ' pending';
+                if (lastNextWindow) text += ' · ' + lastNextWindow;
                 count.textContent = text;
+                // Refresh idle phase indicators with prediction details
+                if (!currentRolloutId) renderIdlePhases();
             } else if (lastFleetTotal > 0) {
                 section.style.display = '';
                 count.textContent = 'All devices current';
@@ -2780,6 +2959,103 @@
         renderIdlePhases();
         // Refresh fleet status periodically
         setInterval(loadFleetStatus, 60000);
+
+        // ── Backup / Restore ──
+
+        async function exportBackup() {
+            const passphrase = document.getElementById('exportPassphrase').value;
+            const status = document.getElementById('backupStatus');
+            if (!passphrase || passphrase.length < 8) {
+                status.textContent = 'Passphrase must be at least 8 characters';
+                status.style.color = '#dc2626';
+                return;
+            }
+            status.textContent = 'Exporting...';
+            status.style.color = '#6b7280';
+            try {
+                const resp = await fetch('/api/backup/export', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ passphrase }),
+                });
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    throw new Error(err.detail || 'Export failed');
+                }
+                const blob = await resp.blob();
+                const disposition = resp.headers.get('Content-Disposition') || '';
+                const match = disposition.match(/filename="(.+)"/);
+                const filename = match ? match[1] : 'tachyon-devices.csv';
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+                status.textContent = 'CSV exported successfully';
+                status.style.color = '#16a34a';
+                document.getElementById('exportPassphrase').value = '';
+            } catch (e) {
+                status.textContent = 'Export error: ' + e.message;
+                status.style.color = '#dc2626';
+            }
+        }
+
+        async function importBackup() {
+            const fileInput = document.getElementById('importFile');
+            const passphrase = document.getElementById('importPassphrase').value;
+            const conflictMode = document.getElementById('importConflictMode').value;
+            const status = document.getElementById('backupStatus');
+
+            if (!fileInput.files.length) {
+                status.textContent = 'Please select a CSV file';
+                status.style.color = '#dc2626';
+                return;
+            }
+            if (!passphrase || passphrase.length < 8) {
+                status.textContent = 'Passphrase must be at least 8 characters';
+                status.style.color = '#dc2626';
+                return;
+            }
+
+            status.textContent = 'Importing...';
+            status.style.color = '#6b7280';
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('passphrase', passphrase);
+            formData.append('conflict_mode', conflictMode);
+
+            try {
+                const resp = await fetch('/api/backup/import', { method: 'POST', body: formData });
+                const result = await resp.json();
+                if (!resp.ok) throw new Error(result.detail || 'Import failed');
+
+                const parts = [];
+                const d = result.devices || {};
+                if (d.added) parts.push(d.added + ' added');
+                if (d.updated) parts.push(d.updated + ' updated');
+                if (d.skipped) parts.push(d.skipped + ' skipped');
+                const failures = d.failed || 0;
+                if (failures) parts.push(failures + ' failed');
+
+                status.textContent = 'Import complete: ' + (parts.join(', ') || 'no changes');
+                status.style.color = failures ? '#dc2626' : '#16a34a';
+
+                document.getElementById('importPassphrase').value = '';
+                fileInput.value = '';
+
+                // Refresh UI data
+                drawerSettingsLoaded = false;
+                loadDrawerSettings();
+                loadFleetStatus();
+            } catch (e) {
+                status.textContent = 'Import error: ' + e.message;
+                status.style.color = '#dc2626';
+            }
+        }
     </script>
 </body>
 </html>
