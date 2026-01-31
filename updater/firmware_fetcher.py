@@ -21,6 +21,7 @@ _fetcher: Optional["FirmwareFetcher"] = None
 FRESHDESK_PAGES = {
     "tna-30x": "https://tachyon-networks.freshdesk.com/support/solutions/articles/67000710575-tna-300-series-firmware-releases",
     "tna-303l": "https://tachyon-networks.freshdesk.com/support/solutions/articles/67000745898-tna-303l-firmware-releases",
+    "tns-100": "https://tachyon-networks.freshdesk.com/support/solutions/articles/67000719270-tns-100-firmware-releases",
 }
 
 # Regex: extract "Latest stable" / "Latest beta" version from the summary table
@@ -133,6 +134,12 @@ class FirmwareFetcher:
             # Auto-select for this platform
             self._auto_select(platform, releases, beta_enabled)
 
+        # Persist channel metadata (filename -> "stable"/"beta")
+        channel_map = self._get_channel_map()
+        for r in all_releases:
+            channel_map[r.filename] = r.channel
+        self._save_channel_map(channel_map)
+
         # Persist state
         self._save_auto_fetched_list(auto_fetched)
         db.set_setting("firmware_last_check", datetime.now().isoformat())
@@ -183,14 +190,24 @@ class FirmwareFetcher:
         link_matches = RE_DOWNLOAD_LINK.findall(html)
 
         releases = []
+        has_version_table = stable_version is not None or beta_version is not None
+
         for download_url, version in link_matches:
-            channel = "unknown"
-            if version == stable_version:
-                channel = "stable"
-            elif version == beta_version:
-                channel = "beta"
+            if has_version_table:
+                # Pages with a summary table: only grab stable/beta
+                if version == stable_version:
+                    channel = "stable"
+                elif version == beta_version:
+                    channel = "beta"
+                else:
+                    continue  # skip older versions
             else:
-                continue  # skip older versions
+                # Pages without a summary table (e.g. TNS-100): treat the
+                # first (newest) link as stable, skip the rest.
+                if not releases:
+                    channel = "stable"
+                else:
+                    break
 
             filename = download_url.rsplit("/", 1)[-1]
             releases.append(FirmwareRelease(
@@ -234,7 +251,14 @@ class FirmwareFetcher:
     def _auto_select(self, platform: str, releases: list[FirmwareRelease],
                      beta_enabled: bool):
         """Auto-select the best firmware for a platform."""
-        setting_key = "selected_firmware_30x" if platform == "tna-30x" else "selected_firmware_303l"
+        setting_keys = {
+            "tna-30x": "selected_firmware_30x",
+            "tna-303l": "selected_firmware_303l",
+            "tns-100": "selected_firmware_tns100",
+        }
+        setting_key = setting_keys.get(platform)
+        if not setting_key:
+            return
 
         # Prefer beta if enabled, otherwise stable
         best = None
@@ -269,6 +293,49 @@ class FirmwareFetcher:
         # Deduplicate
         unique = list(dict.fromkeys(files))
         db.set_setting("firmware_auto_fetched_files", json.dumps(unique))
+
+    def _get_channel_map(self) -> dict[str, str]:
+        raw = db.get_setting("firmware_channels", "")
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def _save_channel_map(self, channel_map: dict[str, str]):
+        db.set_setting("firmware_channels", json.dumps(channel_map))
+
+    def reselect(self, beta_enabled: bool):
+        """Re-run auto-select for all platforms using cached release data."""
+        channel_map = self._get_channel_map()
+        for platform in FRESHDESK_PAGES:
+            # Reconstruct minimal release objects from channel map + local files
+            releases = []
+            for filename, channel in channel_map.items():
+                detected = _detect_platform(filename)
+                if detected == platform:
+                    releases.append(FirmwareRelease(
+                        platform=platform,
+                        version="",
+                        download_url="",
+                        channel=channel,
+                        filename=filename,
+                    ))
+            if releases:
+                self._auto_select(platform, releases, beta_enabled)
+
+
+def _detect_platform(filename: str) -> str:
+    """Detect firmware platform from filename."""
+    lower = filename.lower()
+    if "tna-303l" in lower or "tna303l" in lower:
+        return "tna-303l"
+    if "tna-30x" in lower or "tna30x" in lower:
+        return "tna-30x"
+    if "tns-100" in lower or "tns100" in lower:
+        return "tns-100"
+    return "unknown"
 
 
 def get_fetcher() -> Optional[FirmwareFetcher]:

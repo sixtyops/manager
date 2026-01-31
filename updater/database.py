@@ -41,6 +41,11 @@ def _migrate(db):
     if "bank_last_fetched" not in columns:
         db.execute("ALTER TABLE cpe_cache ADD COLUMN bank_last_fetched TEXT DEFAULT NULL")
 
+    # Add firmware_file_tns100 column to rollouts
+    rollout_columns = [row[1] for row in db.execute("PRAGMA table_info(rollouts)").fetchall()]
+    if "firmware_file_tns100" not in rollout_columns:
+        db.execute("ALTER TABLE rollouts ADD COLUMN firmware_file_tns100 TEXT DEFAULT NULL")
+
 
 def init_db():
     """Initialize the database schema."""
@@ -71,6 +76,27 @@ def init_db():
                 last_seen TEXT,
                 last_error TEXT,
                 enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS switches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip TEXT NOT NULL UNIQUE,
+                tower_site_id INTEGER,
+                username TEXT NOT NULL,
+                password TEXT NOT NULL,
+                system_name TEXT,
+                model TEXT,
+                mac TEXT,
+                firmware_version TEXT,
+                location TEXT,
+                last_seen TEXT,
+                last_error TEXT,
+                enabled INTEGER DEFAULT 1,
+                bank1_version TEXT,
+                bank2_version TEXT,
+                active_bank INTEGER,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
             );
@@ -242,9 +268,10 @@ def update_tower_site(site_id: int, **kwargs):
 
 
 def delete_tower_site(site_id: int):
-    """Delete a tower site (APs will have tower_site_id set to NULL)."""
+    """Delete a tower site (APs and switches will have tower_site_id set to NULL)."""
     with get_db() as db:
         db.execute("UPDATE access_points SET tower_site_id = NULL WHERE tower_site_id = ?", (site_id,))
+        db.execute("UPDATE switches SET tower_site_id = NULL WHERE tower_site_id = ?", (site_id,))
         db.execute("DELETE FROM tower_sites WHERE id = ?", (site_id,))
 
 
@@ -325,6 +352,80 @@ def delete_access_point(ip: str):
     with get_db() as db:
         db.execute("DELETE FROM cpe_cache WHERE ap_ip = ?", (ip,))
         db.execute("DELETE FROM access_points WHERE ip = ?", (ip,))
+
+
+# Switch operations
+def get_switches(tower_site_id: int = None, enabled_only: bool = True) -> list[dict]:
+    """Get switches, optionally filtered by tower site."""
+    with get_db() as db:
+        query = "SELECT * FROM switches WHERE 1=1"
+        params = []
+
+        if tower_site_id is not None:
+            query += " AND tower_site_id = ?"
+            params.append(tower_site_id)
+
+        if enabled_only:
+            query += " AND enabled = 1"
+
+        query += " ORDER BY ip"
+        rows = db.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_switch(ip: str) -> Optional[dict]:
+    """Get a switch by IP."""
+    with get_db() as db:
+        row = db.execute("SELECT * FROM switches WHERE ip = ?", (ip,)).fetchone()
+        return dict(row) if row else None
+
+
+def upsert_switch(ip: str, username: str, password: str, tower_site_id: int = None, **kwargs) -> int:
+    """Create or update a switch."""
+    with get_db() as db:
+        existing = db.execute("SELECT id FROM switches WHERE ip = ?", (ip,)).fetchone()
+
+        if existing:
+            updates = {"username": username, "password": password, "tower_site_id": tower_site_id}
+            allowed = {"system_name", "model", "mac", "firmware_version", "location", "last_seen", "last_error", "enabled"}
+            updates.update({k: v for k, v in kwargs.items() if k in allowed})
+
+            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+            db.execute(f"UPDATE switches SET {set_clause} WHERE ip = ?", (*updates.values(), ip))
+            return existing["id"]
+        else:
+            db.execute(
+                """INSERT INTO switches (ip, username, password, tower_site_id, system_name, model, mac, firmware_version, location)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (ip, username, password, tower_site_id,
+                 kwargs.get("system_name"), kwargs.get("model"), kwargs.get("mac"),
+                 kwargs.get("firmware_version"), kwargs.get("location"))
+            )
+            return db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def update_switch_status(ip: str, last_seen: str = None, last_error: str = _UNSET, **kwargs):
+    """Update switch status after a poll."""
+    with get_db() as db:
+        updates = {}
+        if last_seen:
+            updates["last_seen"] = last_seen
+        if last_error is not _UNSET:
+            updates["last_error"] = last_error
+
+        allowed = {"system_name", "model", "mac", "firmware_version", "location",
+                   "bank1_version", "bank2_version", "active_bank"}
+        updates.update({k: v for k, v in kwargs.items() if k in allowed})
+
+        if updates:
+            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+            db.execute(f"UPDATE switches SET {set_clause} WHERE ip = ?", (*updates.values(), ip))
+
+
+def delete_switch(ip: str):
+    """Delete a switch."""
+    with get_db() as db:
+        db.execute("DELETE FROM switches WHERE ip = ?", (ip,))
 
 
 # CPE Cache operations
@@ -571,12 +672,12 @@ def get_rollout(rollout_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def create_rollout(firmware_file: str, firmware_file_303l: str = None) -> int:
+def create_rollout(firmware_file: str, firmware_file_303l: str = None, firmware_file_tns100: str = None) -> int:
     """Create a new rollout. Returns the rollout ID."""
     with get_db() as db:
         cursor = db.execute(
-            "INSERT INTO rollouts (firmware_file, firmware_file_303l) VALUES (?, ?)",
-            (firmware_file, firmware_file_303l)
+            "INSERT INTO rollouts (firmware_file, firmware_file_303l, firmware_file_tns100) VALUES (?, ?, ?)",
+            (firmware_file, firmware_file_303l, firmware_file_tns100)
         )
         return cursor.lastrowid
 

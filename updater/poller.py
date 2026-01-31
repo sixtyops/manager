@@ -50,6 +50,7 @@ class NetworkPoller:
         while self._running:
             try:
                 await self._poll_all_aps()
+                await self._poll_all_switches()
             except Exception as e:
                 logger.exception(f"Error in poll loop: {e}")
 
@@ -95,6 +96,18 @@ class NetworkPoller:
 
             # Get AP info
             ap_info = await client.get_ap_info()
+
+            # Detect stale session: if login succeeded but API returned no data,
+            # the token likely expired on the device side.  Invalidate the cached
+            # client, re-authenticate, and retry once.
+            if not ap_info.get("model") and not ap_info.get("firmware_version") and not ap_info.get("system_name"):
+                logger.info(f"Stale session detected for {ip}, re-authenticating")
+                self._clients.pop(ip, None)
+                client, error = await self._get_client(ip, ap["username"], ap["password"])
+                if not client:
+                    db.update_ap_status(ip, last_error=error)
+                    return
+                ap_info = await client.get_ap_info()
             location = ap_info.get("location")  # Don't fall back to zone
 
             # Auto-assign to site based on location
@@ -297,6 +310,107 @@ class NetworkPoller:
 
         return True
 
+    async def _poll_all_switches(self):
+        """Poll all enabled switches."""
+        switches = db.get_switches(enabled_only=True)
+        if not switches:
+            return
+
+        logger.debug(f"Polling {len(switches)} switches")
+
+        semaphore = asyncio.Semaphore(5)
+
+        async def poll_with_limit(sw):
+            async with semaphore:
+                await self._poll_switch(sw)
+
+        await asyncio.gather(*[poll_with_limit(sw) for sw in switches], return_exceptions=True)
+
+    async def _poll_switch(self, sw: dict):
+        """Poll a single switch for status info."""
+        ip = sw["ip"]
+
+        try:
+            client, error = await self._get_client(ip, sw["username"], sw["password"])
+
+            if not client:
+                db.update_switch_status(ip, last_error=error)
+                return
+
+            ap_info = await client.get_ap_info()
+
+            # Detect stale session (same logic as _poll_ap)
+            if not ap_info.get("model") and not ap_info.get("firmware_version") and not ap_info.get("system_name"):
+                logger.info(f"Stale session detected for switch {ip}, re-authenticating")
+                self._clients.pop(ip, None)
+                client, error = await self._get_client(ip, sw["username"], sw["password"])
+                if not client:
+                    db.update_switch_status(ip, last_error=error)
+                    return
+                ap_info = await client.get_ap_info()
+
+            location = ap_info.get("location")
+
+            # Auto-assign to site based on location
+            site_id = sw.get("tower_site_id")
+            if location:
+                current_site = None
+                if site_id:
+                    current_site = db.get_tower_site(site_id)
+
+                if not site_id or (current_site and current_site["name"].lower() != location.lower()):
+                    new_site_id = self._get_or_create_site(location)
+                    if new_site_id:
+                        site_id = new_site_id
+                        db.upsert_switch(ip, sw["username"], sw["password"], site_id)
+
+            bank_kwargs = {}
+            try:
+                device_info = await client.get_device_info()
+                bank_kwargs = {
+                    "bank1_version": device_info.bank1_version,
+                    "bank2_version": device_info.bank2_version,
+                    "active_bank": device_info.active_bank,
+                }
+            except Exception as e:
+                logger.debug(f"Failed to get bank info for switch {ip}: {e}")
+
+            db.update_switch_status(
+                ip,
+                last_seen=datetime.now().isoformat(),
+                last_error=None,
+                system_name=ap_info.get("system_name"),
+                model=ap_info.get("model"),
+                mac=ap_info.get("mac"),
+                firmware_version=ap_info.get("firmware_version"),
+                location=location,
+                **bank_kwargs,
+            )
+
+            logger.debug(f"Polled switch {ip}")
+
+        except Exception as e:
+            logger.error(f"Error polling switch {ip}: {e}")
+            db.update_switch_status(ip, last_error=str(e))
+            self._clients.pop(ip, None)
+
+    async def poll_switch_now(self, ip: str) -> bool:
+        """Trigger immediate poll of a specific switch."""
+        sw = db.get_switch(ip)
+        if not sw:
+            return False
+
+        await self._poll_switch(sw)
+
+        if self.broadcast_func:
+            topology = self.get_topology()
+            await self.broadcast_func({
+                "type": "topology_update",
+                "topology": topology,
+            })
+
+        return True
+
     def get_topology(self) -> dict:
         """Build topology dict from database."""
         sites = db.get_tower_sites()
@@ -369,6 +483,35 @@ class NetworkPoller:
             else:
                 unassigned_aps.append(ap_data)
 
+        # Group switches by site
+        switches = db.get_switches(enabled_only=False)
+        site_switches = {}
+        unassigned_switches = []
+
+        for sw in switches:
+            sw_data = {
+                "ip": sw["ip"],
+                "system_name": sw.get("system_name"),
+                "model": sw.get("model"),
+                "mac": sw.get("mac"),
+                "firmware_version": sw.get("firmware_version"),
+                "bank1_version": sw.get("bank1_version"),
+                "bank2_version": sw.get("bank2_version"),
+                "active_bank": sw.get("active_bank"),
+                "location": sw.get("location"),
+                "last_seen": sw.get("last_seen"),
+                "last_error": sw.get("last_error"),
+                "enabled": bool(sw.get("enabled", 1)),
+            }
+
+            if sw.get("tower_site_id"):
+                site_id = sw["tower_site_id"]
+                if site_id not in site_switches:
+                    site_switches[site_id] = []
+                site_switches[site_id].append(sw_data)
+            else:
+                unassigned_switches.append(sw_data)
+
         # Build sites list
         sites_data = []
         for site in sites:
@@ -379,25 +522,29 @@ class NetworkPoller:
                 "latitude": site["latitude"],
                 "longitude": site["longitude"],
                 "aps": site_aps.get(site["id"], []),
+                "switches": site_switches.get(site["id"], []),
             }
             sites_data.append(site_data)
 
         # Add unassigned as a virtual site
-        if unassigned_aps:
+        if unassigned_aps or unassigned_switches:
             sites_data.append({
                 "id": None,
                 "name": "Unassigned",
                 "location": None,
                 "aps": unassigned_aps,
+                "switches": unassigned_switches,
             })
 
         total_aps = len(aps)
         total_cpes = sum(len(db.get_cpes_for_ap(ap["ip"])) for ap in aps)
+        total_switches = len(switches)
 
         return {
             "sites": sites_data,
             "total_aps": total_aps,
             "total_cpes": total_cpes,
+            "total_switches": total_switches,
             "overall_health": health,
             "last_updated": datetime.now().isoformat(),
         }

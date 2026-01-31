@@ -9,6 +9,7 @@ class DeviceType(str, Enum):
     """Type of device in the network."""
     AP = "ap"
     SM = "sm"  # Subscriber Module (CPE)
+    SWITCH = "switch"  # TNS-100 series
 
 
 class SignalHealth(str, Enum):

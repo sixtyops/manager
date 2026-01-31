@@ -336,6 +336,48 @@ async def add_ap(
     return {"id": ap_id, "ip": ip}
 
 
+@app.post("/api/devices")
+async def add_device(
+    ip: str = Form(...),
+    username: str = Form(...),
+    password: str = Form(...),
+    tower_site_id: int = Form(None),
+    session: dict = Depends(require_auth),
+):
+    """Add a device, auto-classifying as AP or switch based on model.
+
+    Probes the device to get its model. TNA models -> access_points table,
+    TNS models -> switches table.
+    """
+    # Probe device to determine type
+    client = TachyonClient(ip, username, password)
+    try:
+        login_result = await client.login()
+        if login_result is not True:
+            raise HTTPException(status_code=400, detail=f"Cannot connect to {ip}: {login_result}")
+        info = await client.get_ap_info()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Cannot connect to {ip}: {e}")
+
+    model = info.get("model", "")
+    poller = get_poller()
+
+    if _is_tns100_model(model):
+        device_id = db.upsert_switch(ip, username, password, tower_site_id)
+        device_type = "switch"
+        if poller:
+            await poller.poll_switch_now(ip)
+    else:
+        device_id = db.upsert_access_point(ip, username, password, tower_site_id)
+        device_type = "ap"
+        if poller:
+            await poller.poll_ap_now(ip)
+
+    return {"id": device_id, "ip": ip, "device_type": device_type, "model": model}
+
+
 @app.put("/api/aps/{ip}")
 async def update_ap(
     ip: str,
@@ -392,6 +434,88 @@ async def poll_ap(ip: str, session: dict = Depends(require_auth)):
 
 
 # ============================================================================
+# Switch API
+# ============================================================================
+
+@app.get("/api/switches")
+async def list_switches(site_id: int = None, session: dict = Depends(require_auth)):
+    """List switches."""
+    switches = db.get_switches(tower_site_id=site_id, enabled_only=False)
+    return {"switches": switches}
+
+
+@app.post("/api/switches")
+async def add_switch(
+    ip: str = Form(...),
+    username: str = Form(...),
+    password: str = Form(...),
+    tower_site_id: int = Form(None),
+    session: dict = Depends(require_auth),
+):
+    """Add a new switch."""
+    sw_id = db.upsert_switch(ip, username, password, tower_site_id)
+
+    poller = get_poller()
+    if poller:
+        await poller.poll_switch_now(ip)
+
+    return {"id": sw_id, "ip": ip}
+
+
+@app.put("/api/switches/{ip}")
+async def update_switch(
+    ip: str,
+    username: str = Form(None),
+    password: str = Form(None),
+    tower_site_id: int = Form(None),
+    enabled: bool = Form(None),
+    session: dict = Depends(require_auth),
+):
+    """Update a switch."""
+    sw = db.get_switch(ip)
+    if not sw:
+        raise HTTPException(404, f"Switch not found: {ip}")
+
+    new_username = username if username else sw["username"]
+    new_password = password if password else sw["password"]
+    new_site_id = tower_site_id if tower_site_id is not None else sw["tower_site_id"]
+
+    db.upsert_switch(ip, new_username, new_password, new_site_id, enabled=enabled)
+
+    if username or password:
+        poller = get_poller()
+        if poller:
+            poller.invalidate_client(ip)
+
+    return {"success": True}
+
+
+@app.delete("/api/switches/{ip}")
+async def delete_switch(ip: str, session: dict = Depends(require_auth)):
+    """Delete a switch."""
+    poller = get_poller()
+    if poller:
+        poller.invalidate_client(ip)
+
+    db.delete_switch(ip)
+    return {"success": True}
+
+
+@app.post("/api/switches/{ip}/poll")
+async def poll_switch(ip: str, session: dict = Depends(require_auth)):
+    """Trigger immediate poll of a switch."""
+    poller = get_poller()
+    if not poller:
+        raise HTTPException(500, "Poller not initialized")
+
+    success = await poller.poll_switch_now(ip)
+    if not success:
+        raise HTTPException(404, f"Switch not found: {ip}")
+
+    return {"success": True}
+
+
+# ============================================================================
 # Topology API
 # ============================================================================
 
@@ -406,6 +530,7 @@ async def get_topology(session: dict = Depends(require_auth)):
         "sites": [],
         "total_aps": 0,
         "total_cpes": 0,
+        "total_switches": 0,
         "overall_health": {"green": 0, "yellow": 0, "red": 0},
     }
 
@@ -690,6 +815,12 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
     except (ValueError, TypeError):
         auto_fetched = []
 
+    channels_raw = db.get_setting("firmware_channels", "")
+    try:
+        channels = _json.loads(channels_raw) if channels_raw else {}
+    except (ValueError, TypeError):
+        channels = {}
+
     files = []
     for f in FIRMWARE_DIR.iterdir():
         if f.is_file() and f.suffix in {".bin", ".img", ".npk", ".tar", ".gz"}:
@@ -698,6 +829,7 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
                 "size": f.stat().st_size,
                 "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
                 "source": "auto" if f.name in auto_fetched else "manual",
+                "channel": channels.get(f.name, ""),
             })
     return {"files": sorted(files, key=lambda x: x["modified"], reverse=True)}
 
@@ -720,6 +852,17 @@ async def trigger_firmware_fetch(session: dict = Depends(require_auth)):
         raise HTTPException(503, "Firmware fetcher not initialized")
     result = await fetcher.check_and_download()
     return result
+
+
+@app.post("/api/firmware-reselect")
+async def firmware_reselect(session: dict = Depends(require_auth)):
+    """Re-run firmware auto-selection (e.g. after toggling beta)."""
+    fetcher = get_fetcher()
+    if not fetcher:
+        raise HTTPException(503, "Firmware fetcher not initialized")
+    beta_enabled = db.get_setting("firmware_beta_enabled", "false") == "true"
+    fetcher.reselect(beta_enabled)
+    return {"success": True}
 
 
 @app.get("/api/firmware-fetch/status")
@@ -750,6 +893,7 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
     for setting_key, fw_type in [
         ("selected_firmware_30x", "tna-30x"),
         ("selected_firmware_303l", "tna-303l"),
+        ("selected_firmware_tns100", "tns-100"),
     ]:
         filename = settings.get(setting_key, "")
         if filename:
@@ -822,6 +966,34 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
                 "enabled": bool(ap.get("enabled", 1)),
             })
 
+    # Include switches
+    switches = db.get_switches(enabled_only=False)
+    for sw in switches:
+        fw_type = _get_firmware_type_for_model(sw.get("model"))
+        target = targets.get(fw_type)
+        target_version = target["version"] if target else ""
+        status = _device_version_status(sw.get("firmware_version"), target_version)
+        summary["total"] += 1
+        summary[status] += 1
+
+        devices.append({
+            "ip": sw["ip"],
+            "system_name": sw.get("system_name"),
+            "model": sw.get("model"),
+            "role": "switch",
+            "parent_ap": None,
+            "site_name": site_names.get(sw.get("tower_site_id"), "Unassigned"),
+            "firmware_version": sw.get("firmware_version") or "",
+            "bank1_version": sw.get("bank1_version"),
+            "bank2_version": sw.get("bank2_version"),
+            "active_bank": sw.get("active_bank"),
+            "target_version": target_version,
+            "firmware_type": fw_type,
+            "status": status,
+            "auth_status": None,
+            "enabled": bool(sw.get("enabled", 1)),
+        })
+
     return {"devices": devices, "summary": summary, "targets": targets}
 
 
@@ -870,6 +1042,16 @@ def _is_303l_model(model: Optional[str]) -> bool:
         return False
     model_lower = model.lower()
     return model_lower.startswith("tna-303l")
+
+
+def _is_tns100_model(model: Optional[str]) -> bool:
+    """Check if a model is a TNS-100 variant."""
+    if not model:
+        return False
+    return model.lower().startswith("tns-100")
+
+
+TNS100_REBOOT_TIMEOUT = 900  # 15 minutes for switches
 
 
 def _extract_version_from_filename(filename: str) -> str:
@@ -943,6 +1125,7 @@ async def _start_scheduled_update(
     ap_ips: list[str],
     firmware_file: str,
     firmware_file_303l: str = "",
+    firmware_file_tns100: str = "",
     bank_mode: str = "both",
     concurrency: int = 2,
     end_hour: int = None,
@@ -961,6 +1144,12 @@ async def _start_scheduled_update(
         if path_303l.exists():
             firmware_files["tna-303l"] = str(path_303l)
             firmware_names["tna-303l"] = firmware_file_303l
+
+    if firmware_file_tns100:
+        path_tns100 = FIRMWARE_DIR / firmware_file_tns100
+        if path_tns100.exists():
+            firmware_files["tns-100"] = str(path_tns100)
+            firmware_names["tns-100"] = firmware_file_tns100
 
     credentials = {}
     ap_cpe_map = {}
@@ -998,8 +1187,22 @@ async def _start_scheduled_update(
                 device_firmware_map[cpe_ip] = cpe_fw
         ap_cpe_map[ip] = cpe_ips
 
-    if not valid_aps:
-        raise RuntimeError("No valid APs found for scheduled update")
+    # Enroll enabled switches
+    switches = db.get_switches(enabled_only=True)
+    for sw in switches:
+        sw_ip = sw["ip"]
+        credentials[sw_ip] = (sw["username"], sw["password"])
+        device_roles[sw_ip] = "switch"
+        sw_fw = _select_firmware_for_model(sw.get("model"), firmware_files)
+        if sw_fw is None and _is_tns100_model(sw.get("model")):
+            device_firmware_map[sw_ip] = "__missing_tns100__"
+        elif sw_fw is None:
+            device_firmware_map[sw_ip] = str(firmware_path)
+        else:
+            device_firmware_map[sw_ip] = sw_fw
+
+    if not valid_aps and not switches:
+        raise RuntimeError("No valid APs or switches found for scheduled update")
 
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
@@ -1025,6 +1228,8 @@ async def _start_scheduled_update(
     for ap_ip, cpe_ips in ap_cpe_map.items():
         for cpe_ip in cpe_ips:
             job.devices[cpe_ip] = DeviceStatus(ip=cpe_ip, role="cpe", parent_ap=ap_ip)
+    for sw in switches:
+        job.devices[sw["ip"]] = DeviceStatus(ip=sw["ip"], role="switch")
 
     update_jobs[job_id] = job
 
@@ -1050,6 +1255,7 @@ async def start_update(
     ip_list: str = Form(...),
     concurrency: int = Form(2),
     firmware_file_303l: str = Form(""),
+    firmware_file_tns100: str = Form(""),
     bank_mode: str = Form("both"),
     session: dict = Depends(require_auth),
 ):
@@ -1079,6 +1285,13 @@ async def start_update(
             raise HTTPException(400, f"303L firmware file not found: {firmware_file_303l}")
         firmware_files["tna-303l"] = str(path_303l)
         firmware_names["tna-303l"] = firmware_file_303l
+
+    if firmware_file_tns100:
+        path_tns100 = FIRMWARE_DIR / firmware_file_tns100
+        if not path_tns100.exists():
+            raise HTTPException(400, f"TNS100 firmware file not found: {firmware_file_tns100}")
+        firmware_files["tns-100"] = str(path_tns100)
+        firmware_names["tns-100"] = firmware_file_tns100
 
     # Look up stored credentials for each AP and discover CPEs
     credentials = {}
@@ -1130,6 +1343,20 @@ async def start_update(
     if missing_aps:
         raise HTTPException(400, f"No stored credentials for: {', '.join(missing_aps)}")
 
+    # Enroll enabled switches
+    switches = db.get_switches(enabled_only=True)
+    for sw in switches:
+        sw_ip = sw["ip"]
+        credentials[sw_ip] = (sw["username"], sw["password"])
+        device_roles[sw_ip] = "switch"
+        sw_fw = _select_firmware_for_model(sw.get("model"), firmware_files)
+        if sw_fw is None and _is_tns100_model(sw.get("model")):
+            device_firmware_map[sw_ip] = "__missing_tns100__"
+        elif sw_fw is None:
+            device_firmware_map[sw_ip] = str(firmware_path)
+        else:
+            device_firmware_map[sw_ip] = sw_fw
+
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
         job_id=job_id,
@@ -1146,12 +1373,15 @@ async def start_update(
         status="running",
     )
 
-    # Create device statuses for all devices (APs + CPEs)
+    # Create device statuses for all devices (APs + CPEs + Switches)
     for ip in ap_ips:
-        job.devices[ip] = DeviceStatus(ip=ip, role="ap")
+        if ip in device_roles and device_roles[ip] == "ap":
+            job.devices[ip] = DeviceStatus(ip=ip, role="ap")
     for ap_ip, cpe_ips in ap_cpe_map.items():
         for cpe_ip in cpe_ips:
             job.devices[cpe_ip] = DeviceStatus(ip=cpe_ip, role="cpe", parent_ap=ap_ip)
+    for sw in switches:
+        job.devices[sw["ip"]] = DeviceStatus(ip=sw["ip"], role="switch")
 
     update_jobs[job_id] = job
 
@@ -1176,10 +1406,11 @@ async def update_single_device_endpoint(
     ip: str = Form(...),
     firmware_file: str = Form(...),
     firmware_file_303l: str = Form(""),
+    firmware_file_tns100: str = Form(""),
     bank_mode: str = Form("both"),
     session: dict = Depends(require_auth),
 ):
-    """Start a firmware update for a single device (AP or CPE)."""
+    """Start a firmware update for a single device (AP, CPE, or switch)."""
     # Check firmware file exists
     firmware_path = FIRMWARE_DIR / firmware_file
     if not firmware_path.exists():
@@ -1195,7 +1426,14 @@ async def update_single_device_endpoint(
         firmware_files["tna-303l"] = str(path_303l)
         firmware_names["tna-303l"] = firmware_file_303l
 
-    # Look up device - check APs first, then CPEs
+    if firmware_file_tns100:
+        path_tns100 = FIRMWARE_DIR / firmware_file_tns100
+        if not path_tns100.exists():
+            raise HTTPException(400, f"TNS100 firmware file not found: {firmware_file_tns100}")
+        firmware_files["tns-100"] = str(path_tns100)
+        firmware_names["tns-100"] = firmware_file_tns100
+
+    # Look up device - check APs first, then switches, then CPEs
     ap = db.get_access_point(ip)
     credentials = {}
     device_roles = {}
@@ -1210,29 +1448,42 @@ async def update_single_device_endpoint(
         device_firmware_map[ip] = _select_firmware_for_model(ap.get("model"), firmware_files) or str(firmware_path)
         ap_cpe_map[ip] = []
     else:
-        # Check if it's a CPE
-        all_cpes = db.get_all_cpes()
-        cpe = next((c for c in all_cpes if c["ip"] == ip), None)
-        if not cpe:
-            raise HTTPException(404, f"Device not found: {ip}")
-
-        # Get parent AP credentials
-        parent_ap = db.get_access_point(cpe["ap_ip"])
-        if not parent_ap:
-            raise HTTPException(400, f"Parent AP {cpe['ap_ip']} not found for CPE {ip}")
-
-        credentials[ip] = (parent_ap["username"], parent_ap["password"])
-        device_roles[ip] = "cpe"
-        device_parent[ip] = cpe["ap_ip"]
-        cpe_fw = _select_firmware_for_model(cpe.get("model"), firmware_files)
-        if cpe_fw is None and _is_303l_model(cpe.get("model")):
-            device_firmware_map[ip] = "__missing_303l__"
-        elif cpe_fw is None:
-            device_firmware_map[ip] = str(firmware_path)
+        # Check if it's a switch
+        sw = db.get_switch(ip)
+        if sw:
+            credentials[ip] = (sw["username"], sw["password"])
+            device_roles[ip] = "switch"
+            sw_fw = _select_firmware_for_model(sw.get("model"), firmware_files)
+            if sw_fw is None and _is_tns100_model(sw.get("model")):
+                device_firmware_map[ip] = "__missing_tns100__"
+            elif sw_fw is None:
+                device_firmware_map[ip] = str(firmware_path)
+            else:
+                device_firmware_map[ip] = sw_fw
         else:
-            device_firmware_map[ip] = cpe_fw
-        # Create a dummy AP entry in ap_cpe_map so the job structure works
-        ap_cpe_map[cpe["ap_ip"]] = [ip]
+            # Check if it's a CPE
+            all_cpes = db.get_all_cpes()
+            cpe = next((c for c in all_cpes if c["ip"] == ip), None)
+            if not cpe:
+                raise HTTPException(404, f"Device not found: {ip}")
+
+            # Get parent AP credentials
+            parent_ap = db.get_access_point(cpe["ap_ip"])
+            if not parent_ap:
+                raise HTTPException(400, f"Parent AP {cpe['ap_ip']} not found for CPE {ip}")
+
+            credentials[ip] = (parent_ap["username"], parent_ap["password"])
+            device_roles[ip] = "cpe"
+            device_parent[ip] = cpe["ap_ip"]
+            cpe_fw = _select_firmware_for_model(cpe.get("model"), firmware_files)
+            if cpe_fw is None and _is_303l_model(cpe.get("model")):
+                device_firmware_map[ip] = "__missing_303l__"
+            elif cpe_fw is None:
+                device_firmware_map[ip] = str(firmware_path)
+            else:
+                device_firmware_map[ip] = cpe_fw
+            # Create a dummy AP entry in ap_cpe_map so the job structure works
+            ap_cpe_map[cpe["ap_ip"]] = [ip]
 
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
@@ -1315,12 +1566,18 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         "parent_ap": device_status.parent_ap,
     })
 
-    # Check for missing 303L firmware
+    # Check for missing firmware
     fw_path = job.device_firmware_map.get(ip, "")
+    missing_fw_error = None
     if fw_path == "__missing_303l__":
+        missing_fw_error = "TNA-303L device requires 303L firmware, but none was provided"
+    elif fw_path == "__missing_tns100__":
+        missing_fw_error = "TNS-100 device requires TNS100 firmware, but none was provided"
+
+    if missing_fw_error:
         device_status.status = "failed"
-        device_status.error = "TNA-303L device requires 303L firmware, but none was provided"
-        device_status.progress_message = device_status.error
+        device_status.error = missing_fw_error
+        device_status.progress_message = missing_fw_error
         await broadcast({
             "type": "device_update",
             "job_id": job.job_id,
@@ -1359,10 +1616,11 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             "parent_ap": device_status.parent_ap,
         }))
 
-    if job.device_type == "tachyon":
+    if job.device_type in ("tachyon", "mixed"):
         username, password = job.credentials[ip]
         client = TachyonClient(ip, username, password)
-        result = await client.update_firmware(fw_path, progress_callback, pass_number=pass_number)
+        reboot_timeout = TNS100_REBOOT_TIMEOUT if device_status.role == "switch" else 300
+        result = await client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout)
     else:
         result = UpdateResult(ip=ip, success=False, error=f"Unsupported device type: {job.device_type}")
 
@@ -1412,19 +1670,24 @@ async def run_update_job(job: UpdateJob, concurrency: int):
 
     ap_ips = [ip for ip, role in job.device_roles.items() if role == "ap"]
     cpe_ips = [ip for ip, role in job.device_roles.items() if role == "cpe"]
+    switch_ips = [ip for ip, role in job.device_roles.items() if role == "switch"]
 
     # Build phase list based on bank_mode
+    # Switches always run last, after all APs and CPEs complete
     if job.bank_mode == "both":
         phases = [
             (cpe_ips, 1, "CPEs pass 1"),
             (ap_ips, 1, "APs pass 1"),
             (ap_ips, 2, "APs pass 2"),
             (cpe_ips, 2, "CPEs pass 2"),
+            (switch_ips, 1, "Switches pass 1"),
+            (switch_ips, 2, "Switches pass 2"),
         ]
     else:
         phases = [
             (ap_ips, 1, "APs"),
             (cpe_ips, 1, "CPEs"),
+            (switch_ips, 1, "Switches"),
         ]
 
     async def _mark_cancelled(ips):

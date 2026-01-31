@@ -768,7 +768,7 @@
             color: #9ca3af;
             text-transform: uppercase;
             font-weight: 600;
-            min-width: 36px;
+            min-width: 48px;
             flex-shrink: 0;
         }
 
@@ -798,6 +798,22 @@
             background: #dbeafe;
             color: #1e40af;
             font-weight: 600;
+        }
+
+        .drawer-fw-beta-label {
+            font-size: 0.58rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: #b45309;
+            letter-spacing: 0.03em;
+        }
+
+        .drawer-fw-chip.beta {
+            border: 1px dashed #d97706;
+        }
+
+        .drawer-fw-chip.beta.active {
+            border-color: #1e40af;
         }
 
         .drawer-fw-empty {
@@ -1039,15 +1055,15 @@
         <!-- Top section: Add APs + Chart -->
         <div class="top-section">
             <div class="card">
-                <h2>Add Access Points</h2>
-                <p style="font-size:0.75rem;color:#9ca3af;margin-bottom:8px;">APs are automatically assigned to tower sites based on the &ldquo;location&rdquo; field in Tachyon&rsquo;s AP configuration.</p>
+                <h2>Add Devices</h2>
+                <p style="font-size:0.75rem;color:#9ca3af;margin-bottom:8px;">Devices are auto-classified as APs or switches based on model (TNA&nbsp;=&nbsp;AP, TNS&nbsp;=&nbsp;switch) and assigned to tower sites by their &ldquo;location&rdquo; field.</p>
                 <div class="discovery-form">
-                    <textarea id="apIps" placeholder="AP IPs (one per line)&#10;192.168.1.1&#10;192.168.1.2"></textarea>
+                    <textarea id="deviceIps" placeholder="Device IPs (one per line)&#10;192.168.1.1&#10;192.168.1.2"></textarea>
                     <div class="cred-row">
                         <input type="text" id="username" placeholder="Username" value="root">
                         <input type="password" id="password" placeholder="Password">
                     </div>
-                    <button class="btn" id="addApBtn" onclick="addAPs()">Add APs</button>
+                    <button class="btn" id="addDeviceBtn" onclick="addDevices()">Add Devices</button>
                 </div>
             </div>
 
@@ -1325,12 +1341,12 @@
             return ip;
         }
 
-        async function addAPs() {
-            const ipText = document.getElementById('apIps').value.trim();
+        async function addDevices() {
+            const ipText = document.getElementById('deviceIps').value.trim();
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
 
-            if (!ipText) { alert('Please enter AP IP addresses'); return; }
+            if (!ipText) { alert('Please enter device IP addresses'); return; }
             if (!password) { alert('Please enter password'); return; }
 
             const ips = ipText.split('\n')
@@ -1339,11 +1355,11 @@
 
             if (ips.length === 0) { alert('No valid IP addresses found'); return; }
 
-            const btn = document.getElementById('addApBtn');
+            const btn = document.getElementById('addDeviceBtn');
             btn.disabled = true;
             btn.textContent = `Adding ${ips.length}...`;
 
-            let added = 0;
+            let addedAps = 0, addedSwitches = 0;
             let errors = [];
 
             for (const ip of ips) {
@@ -1353,9 +1369,11 @@
                     formData.append('username', username);
                     formData.append('password', password);
 
-                    const response = await fetch('/api/aps', { method: 'POST', body: formData });
+                    const response = await fetch('/api/devices', { method: 'POST', body: formData });
                     if (response.ok) {
-                        added++;
+                        const data = await response.json();
+                        if (data.device_type === 'switch') addedSwitches++;
+                        else addedAps++;
                     } else {
                         const error = await response.json();
                         errors.push(`${ip}: ${error.detail || 'Failed'}`);
@@ -1365,13 +1383,20 @@
                 }
             }
 
-            document.getElementById('apIps').value = '';
+            document.getElementById('deviceIps').value = '';
             btn.disabled = false;
-            btn.textContent = 'Add APs';
+            btn.textContent = 'Add Devices';
+
+            const parts = [];
+            if (addedAps > 0) parts.push(`${addedAps} AP(s)`);
+            if (addedSwitches > 0) parts.push(`${addedSwitches} switch(es)`);
+            const summary = parts.length > 0 ? `Added ${parts.join(', ')}.` : '';
 
             if (errors.length > 0) {
-                alert(`Added ${added} AP(s).\n\nErrors:\n${errors.join('\n')}`);
+                alert(`${summary}\n\nErrors:\n${errors.join('\n')}`);
             }
+
+            loadTopology();
         }
 
         // ── UI Update ──
@@ -1462,8 +1487,12 @@
                 const siteKey = `site:${site.id}`;
                 const siteExpanded = expandState.get(siteKey) !== false;
                 const aps = site.aps || [];
+                const switches = site.switches || [];
                 const totalCpes = aps.reduce((s, ap) => s + (ap.cpes?.length || 0), 0);
                 const isSelected = selectedNode?.type === 'site' && selectedNode?.data?.id === site.id;
+
+                let badgeParts = [`${aps.length} AP${aps.length!==1?'s':''}`, `${totalCpes} CPE${totalCpes!==1?'s':''}`];
+                if (switches.length > 0) badgeParts.push(`${switches.length} SW`);
 
                 html += `<tr class="row-site ${isSelected ? 'row-selected' : ''}" onclick="selectSite(${site.id !== null ? site.id : 'null'})">
                     <td>
@@ -1471,7 +1500,7 @@
                             <span class="expand-toggle ${siteExpanded ? 'expanded' : ''}" onclick="toggleExpand('${siteKey}',event)">&#9654;</span>
                             <span class="device-icon site">T</span>
                             ${escapeHtml(site.name)}
-                            <span class="tree-badge">${aps.length} AP${aps.length!==1?'s':''}, ${totalCpes} CPE${totalCpes!==1?'s':''}</span>
+                            <span class="tree-badge">${badgeParts.join(', ')}</span>
                         </div>
                     </td>
                     <td></td><td></td><td></td><td></td><td></td>
@@ -1540,6 +1569,31 @@
                             <td><div class="actions-cell">${actionsCell('cpe', cpe.ip, cpeName)}</div></td>
                         </tr>`;
                     }
+                }
+
+                // Render switches within this site
+                for (const sw of switches) {
+                    const isOffline = !!sw.last_error;
+                    const swName = sw.system_name || sw.ip;
+                    const isSwSelected = selectedNode?.type === 'switch' && selectedNode?.data?.ip === sw.ip;
+
+                    html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isSwSelected ? 'row-selected' : ''}" onclick="selectSwitch('${sw.ip}')">
+                        <td>
+                            <div class="name-cell" style="padding-left:28px;">
+                                <span class="expand-toggle hidden">&#9654;</span>
+                                <span class="device-icon ap">SW</span>
+                                <a href="http://${sw.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>
+                            </div>
+                        </td>
+                        <td>${sw.model || ''}</td>
+                        <td>${versionCell(sw)}</td>
+                        <td></td>
+                        <td></td>
+                        <td>${statusCell(sw.ip, isOffline, null)}</td>
+                        <td><div class="actions-cell">
+                            <a class="action-link danger" onclick="deleteSwitch('${sw.ip}');event.stopPropagation();">Delete</a>
+                        </div></td>
+                    </tr>`;
                 }
             }
 
@@ -1674,6 +1728,34 @@
             renderTable();
             updateChart();
             highlightChartPoint(ip);
+        }
+
+        function selectSwitch(ip) {
+            const result = findSwitch(ip);
+            if (!result) return;
+            selectedNode = { type: 'switch', data: result.sw, site: result.site };
+            renderTable();
+            updateChart();
+        }
+
+        function findSwitch(ip) {
+            if (!topology) return null;
+            for (const site of topology.sites) {
+                for (const sw of (site.switches || [])) {
+                    if (sw.ip === ip) return { sw, site };
+                }
+            }
+            return null;
+        }
+
+        async function deleteSwitch(ip) {
+            if (!confirm(`Delete switch ${ip}?`)) return;
+            try {
+                await fetch(`/api/switches/${ip}`, { method: 'DELETE' });
+                loadTopology();
+            } catch (e) {
+                alert('Failed to delete switch: ' + e.message);
+            }
         }
 
         // ── Chart ──
@@ -1886,6 +1968,14 @@
                 if (!response.ok) {
                     const error = await response.json();
                     alert('Refresh failed: ' + (error.detail || 'Unknown error'));
+                    return;
+                }
+                // Fetch topology directly as a fallback in case the
+                // WebSocket broadcast didn't reach this client.
+                const topoResponse = await fetch('/api/topology');
+                if (topoResponse.ok) {
+                    topology = await topoResponse.json();
+                    updateUI();
                 }
             } catch (error) {
                 alert('Refresh error: ' + error.message);
@@ -1967,6 +2057,7 @@
             }
 
             const firmware303l = settings.selected_firmware_303l || '';
+            const firmwareTns100 = settings.selected_firmware_tns100 || '';
             const bankMode = settings.bank_mode || 'both';
 
             // Mark as updating for visual feedback
@@ -1986,6 +2077,7 @@
                     formData.append('ip', id);
                     formData.append('firmware_file', firmware);
                     formData.append('firmware_file_303l', firmware303l);
+                    formData.append('firmware_file_tns100', firmwareTns100);
                     formData.append('bank_mode', bankMode);
                     const resp = await fetch('/api/update-device', { method: 'POST', body: formData });
                     if (resp.ok) { success = true; } else {
@@ -1998,6 +2090,7 @@
                     const formData = new FormData();
                     formData.append('firmware_file', firmware);
                     formData.append('firmware_file_303l', firmware303l);
+                    formData.append('firmware_file_tns100', firmwareTns100);
                     formData.append('device_type', 'mixed');
                     formData.append('ip_list', id);
                     formData.append('concurrency', '2');
@@ -2017,6 +2110,7 @@
                     const formData = new FormData();
                     formData.append('firmware_file', firmware);
                     formData.append('firmware_file_303l', firmware303l);
+                    formData.append('firmware_file_tns100', firmwareTns100);
                     formData.append('device_type', 'mixed');
                     formData.append('ip_list', ips);
                     formData.append('concurrency', '2');
@@ -2225,6 +2319,12 @@
             const opening = !drawer.classList.contains('open');
             drawer.classList.toggle('open');
             if (opening) loadDrawerSettings();
+            // Adjust body padding so content is scrollable behind the drawer
+            requestAnimationFrame(() => {
+                setTimeout(() => {
+                    document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
+                }, 320); // after transition completes
+            });
         }
 
         let drawerSettingsLoaded = false;
@@ -2253,8 +2353,9 @@
                 document.getElementById('drawerParallel').value = s.schedule_concurrency || '2';
 
                 // Beta
+                drawerBetaEnabled = s.firmware_beta_enabled === 'true';
                 const betaToggle = document.getElementById('drawerBetaToggle');
-                betaToggle.classList.toggle('active', s.firmware_beta_enabled === 'true');
+                betaToggle.classList.toggle('active', drawerBetaEnabled);
 
                 // Weather
                 const weatherToggle = document.getElementById('drawerWeatherToggle');
@@ -2305,13 +2406,17 @@
             const toggle = document.getElementById('drawerBetaToggle');
             const enabled = !toggle.classList.contains('active');
             toggle.classList.toggle('active', enabled);
+            drawerBetaEnabled = enabled;
             try {
                 await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ firmware_beta_enabled: enabled ? 'true' : 'false' }),
                 });
+                await fetch('/api/firmware-reselect', { method: 'POST' });
             } catch (e) {}
+            drawerSettingsLoaded = false;
+            loadDrawerFirmware();
         }
 
         async function toggleDrawerWeather() {
@@ -2331,6 +2436,7 @@
 
         let drawerFwFiles = [];
         let drawerFwSelected = {}; // { 'tna-30x': 'file.bin', 'tna-303l': 'file.bin' }
+        let drawerBetaEnabled = false;
 
         function fwExtractVersion(name) {
             const m = name.match(/(\d+\.\d+\.\d+)/);
@@ -2362,6 +2468,7 @@
 
         function fwDetectType(name) {
             const lower = name.toLowerCase();
+            if (lower.includes('tns-100') || lower.includes('tns100')) return 'tns-100';
             if (lower.includes('303l')) return 'tna-303l';
             if (lower.includes('300') || lower.includes('30x') || lower.includes('tna-3')) return 'tna-30x';
             return 'unknown';
@@ -2379,6 +2486,7 @@
                 drawerFwSelected = {
                     'tna-30x': settData.settings.selected_firmware_30x || '',
                     'tna-303l': settData.settings.selected_firmware_303l || '',
+                    'tns-100': settData.settings.selected_firmware_tns100 || '',
                 };
                 renderDrawerFirmware();
             } catch (e) {}
@@ -2392,9 +2500,14 @@
                 return;
             }
 
+            // Filter out beta firmware when beta is disabled
+            const visibleFiles = drawerBetaEnabled
+                ? drawerFwFiles
+                : drawerFwFiles.filter(f => f.channel !== 'beta');
+
             // Group by type, sort each group newest first
             const groups = {};
-            for (const f of drawerFwFiles) {
+            for (const f of visibleFiles) {
                 const type = fwDetectType(f.name);
                 if (!groups[type]) groups[type] = [];
                 groups[type].push(f);
@@ -2404,8 +2517,8 @@
                 groups[type].sort((a, b) => fwCompareVersions(a.name, b.name));
             }
 
-            const typeOrder = ['tna-30x', 'tna-303l', 'unknown'];
-            const typeLabels = { 'tna-30x': '30x', 'tna-303l': '303L', 'unknown': 'Other' };
+            const typeOrder = ['tna-30x', 'tna-303l', 'tns-100', 'unknown'];
+            const typeLabels = { 'tna-30x': '30x', 'tna-303l': '303L', 'tns-100': 'TNS100', 'unknown': 'Other' };
 
             let html = '';
             for (const type of typeOrder) {
@@ -2414,10 +2527,12 @@
                 html += `<span class="drawer-fw-type-label">${typeLabels[type]}</span>`;
                 for (const f of groups[type]) {
                     const versionLabel = fwVersionLabel(f.name);
+                    const isBeta = f.channel === 'beta';
                     const isActive = drawerFwSelected[type] === f.name;
                     const escapedName = f.name.replace(/'/g, "\\'");
-                    html += `<span class="drawer-fw-chip${isActive ? ' active' : ''}" onclick="selectDrawerFw('${escapedName}','${type}')">`;
+                    html += `<span class="drawer-fw-chip${isActive ? ' active' : ''}${isBeta ? ' beta' : ''}" onclick="selectDrawerFw('${escapedName}','${type}')">`;
                     html += `${versionLabel}`;
+                    if (isBeta) html += `<span class="drawer-fw-beta-label">beta</span>`;
                     html += `</span>`;
                 }
                 html += `</div>`;
@@ -2433,6 +2548,7 @@
             const data = {};
             if (type === 'tna-30x') data.selected_firmware_30x = filename;
             if (type === 'tna-303l') data.selected_firmware_303l = filename;
+            if (type === 'tns-100') data.selected_firmware_tns100 = filename;
             try {
                 await fetch('/api/settings', {
                     method: 'PUT',

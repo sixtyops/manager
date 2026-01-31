@@ -181,6 +181,7 @@ class AutoUpdateScheduler:
             return
 
         fw_303l = settings.get("selected_firmware_303l", "")
+        fw_tns100 = settings.get("selected_firmware_tns100", "")
 
         # 10. Get or create rollout
         rollout = db.get_active_rollout()
@@ -207,7 +208,7 @@ class AutoUpdateScheduler:
                         return
 
             # Create new rollout
-            rollout_id = db.create_rollout(fw_30x, fw_303l if fw_303l else None)
+            rollout_id = db.create_rollout(fw_30x, fw_303l if fw_303l else None, fw_tns100 if fw_tns100 else None)
             rollout = db.get_rollout(rollout_id)
             db.log_schedule_event("rollout_created", f"Rollout {rollout_id} for {fw_30x}")
             logger.info(f"Created rollout {rollout_id} for firmware {fw_30x}")
@@ -278,6 +279,7 @@ class AutoUpdateScheduler:
                 ap_ips=batch_ips,
                 firmware_file=fw_30x,
                 firmware_file_303l=fw_303l,
+                firmware_file_tns100=fw_tns100,
                 bank_mode=bank_mode,
                 concurrency=concurrency,
                 end_hour=end_hour,
@@ -445,6 +447,7 @@ class AutoUpdateScheduler:
                 "status": rollout["status"],
                 "target_version": rollout.get("target_version"),
                 "firmware_file": rollout["firmware_file"],
+                "firmware_file_tns100": rollout.get("firmware_file_tns100"),
                 "progress": progress,
                 "pause_reason": rollout.get("pause_reason"),
             }

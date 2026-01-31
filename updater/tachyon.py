@@ -450,7 +450,8 @@ class TachyonClient:
         self,
         firmware_path: str,
         progress_callback: Callable[[str, str], None] = None,
-        pass_number: int = 1
+        pass_number: int = 1,
+        reboot_timeout: int = 300,
     ) -> UpdateResult:
         """Perform complete firmware update cycle.
 
@@ -522,7 +523,7 @@ class TachyonClient:
 
             # Wait for reboot
             progress("Rebooting...")
-            if not await self.wait_for_reboot():
+            if not await self.wait_for_reboot(timeout=reboot_timeout):
                 result.error = "Device did not come back online"
                 return result
 
