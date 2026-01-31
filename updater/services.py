@@ -3,20 +3,42 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
-# Cache for location/timezone data
+# Cache for location/timezone data with TTL
 _location_cache: dict = {}
+_location_cache_times: dict = {}
+_LOCATION_CACHE_TTL = 3600  # 1 hour
+
+
+def _cache_get(key: str) -> Optional[any]:
+    """Get a value from the location cache if not expired."""
+    if key in _location_cache:
+        cached_at = _location_cache_times.get(key, 0)
+        if time.monotonic() - cached_at < _LOCATION_CACHE_TTL:
+            return _location_cache[key]
+        # Expired - remove
+        _location_cache.pop(key, None)
+        _location_cache_times.pop(key, None)
+    return None
+
+
+def _cache_set(key: str, value):
+    """Set a value in the location cache with current timestamp."""
+    _location_cache[key] = value
+    _location_cache_times[key] = time.monotonic()
 
 
 async def get_location_from_ip() -> Optional[dict]:
     """Get location data from public IP using ip-api.com."""
-    if "ip_location" in _location_cache:
-        return _location_cache["ip_location"]
+    cached = _cache_get("ip_location")
+    if cached is not None:
+        return cached
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -29,7 +51,7 @@ async def get_location_from_ip() -> Optional[dict]:
         if proc.returncode == 0:
             data = json.loads(stdout.decode())
             if data.get("status") == "success":
-                _location_cache["ip_location"] = data
+                _cache_set("ip_location", data)
                 logger.info(f"Detected location: {data.get('city')}, {data.get('regionName')}")
                 return data
     except Exception as e:
@@ -40,8 +62,9 @@ async def get_location_from_ip() -> Optional[dict]:
 
 async def get_location_from_zip(zip_code: str) -> Optional[dict]:
     """Get location data from zip code using zippopotam.us."""
-    if f"zip_{zip_code}" in _location_cache:
-        return _location_cache[f"zip_{zip_code}"]
+    cached = _cache_get(f"zip_{zip_code}")
+    if cached is not None:
+        return cached
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -62,7 +85,7 @@ async def get_location_from_zip(zip_code: str) -> Optional[dict]:
                     "lat": float(place.get("latitude", 0)),
                     "lon": float(place.get("longitude", 0)),
                 }
-                _location_cache[f"zip_{zip_code}"] = result
+                _cache_set(f"zip_{zip_code}", result)
                 logger.info(f"Location from zip {zip_code}: {result['city']}, {result['state']}")
                 return result
     except Exception as e:
@@ -278,3 +301,4 @@ async def validate_time_sources(timezone: str, max_drift: int = 300) -> Tuple[bo
 def clear_location_cache():
     """Clear the location cache."""
     _location_cache.clear()
+    _location_cache_times.clear()

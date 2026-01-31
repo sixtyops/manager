@@ -187,6 +187,16 @@ def init_db():
                 FOREIGN KEY (rollout_id) REFERENCES rollouts(id),
                 UNIQUE(rollout_id, ip)
             );
+
+            CREATE TABLE IF NOT EXISTS device_durations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                ip TEXT NOT NULL,
+                role TEXT NOT NULL,
+                duration_seconds REAL NOT NULL,
+                bank_mode TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # Migrations: add columns if missing
@@ -210,6 +220,8 @@ def init_db():
             "firmware_last_check": "",
             "firmware_last_check_error": "",
             "firmware_auto_fetched_files": "",
+            "setup_completed": "false",
+            "admin_password_hash": "",
         }
         for key, value in defaults.items():
             db.execute(
@@ -655,6 +667,44 @@ def cleanup_expired_sessions():
         db.execute("DELETE FROM sessions WHERE expires_at <= ?", (datetime.now().isoformat(),))
 
 
+def cleanup_old_job_history(max_age_days: int = 90):
+    """Remove job history entries older than max_age_days."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as db:
+        db.execute("DELETE FROM job_history WHERE completed_at < ?", (cutoff,))
+
+
+def cleanup_old_schedule_log(max_age_days: int = 90):
+    """Remove schedule log entries older than max_age_days."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as db:
+        db.execute("DELETE FROM schedule_log WHERE timestamp < ?", (cutoff,))
+
+
+def cleanup_old_rollouts(max_age_days: int = 180):
+    """Remove completed/cancelled rollouts and their devices older than max_age_days."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as db:
+        old_ids = db.execute(
+            "SELECT id FROM rollouts WHERE status IN ('completed', 'cancelled') AND updated_at < ?",
+            (cutoff,)
+        ).fetchall()
+        for row in old_ids:
+            db.execute("DELETE FROM rollout_devices WHERE rollout_id = ?", (row["id"],))
+            db.execute("DELETE FROM rollouts WHERE id = ?", (row["id"],))
+
+
+def cleanup_old_device_durations(max_age_days: int = 180):
+    """Remove device duration records older than max_age_days."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as db:
+        db.execute("DELETE FROM device_durations WHERE created_at < ?", (cutoff,))
+
+
 # Rollout operations
 def get_active_rollout() -> Optional[dict]:
     """Get the current active or paused rollout."""
@@ -840,6 +890,40 @@ def get_rollout_progress(rollout_id: int) -> dict:
                 result[s] = c
             result["total"] += c
         return result
+
+
+# Device duration tracking
+DEFAULT_DURATIONS = {"ap": 180.0, "cpe": 120.0, "switch": 600.0}
+
+
+def save_device_duration(job_id: str, ip: str, role: str, duration_seconds: float, bank_mode: str = None):
+    """Save a successful device update duration."""
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO device_durations (job_id, ip, role, duration_seconds, bank_mode) VALUES (?, ?, ?, ?, ?)",
+            (job_id, ip, role, duration_seconds, bank_mode)
+        )
+
+
+def get_avg_durations() -> dict:
+    """Get average update duration per device role from recent history.
+
+    Returns dict like {"ap": 180.0, "cpe": 120.0, "switch": 600.0} in seconds.
+    Falls back to defaults if no history for a role.
+    """
+    result = dict(DEFAULT_DURATIONS)
+    with get_db() as db:
+        for role in ("ap", "cpe", "switch"):
+            row = db.execute(
+                """SELECT AVG(duration_seconds) as avg_dur FROM (
+                       SELECT duration_seconds FROM device_durations
+                       WHERE role = ? ORDER BY created_at DESC LIMIT 50
+                   )""",
+                (role,)
+            ).fetchone()
+            if row and row["avg_dur"] is not None:
+                result[role] = round(row["avg_dur"], 1)
+    return result
 
 
 # Initialize on import

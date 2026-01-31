@@ -1,6 +1,7 @@
 """Tachyon Management System - Web Application."""
 
 import asyncio
+import ipaddress
 import logging
 import os
 import re
@@ -24,7 +25,7 @@ from .poller import init_poller, get_poller
 from .scheduler import init_scheduler, get_scheduler
 from .firmware_fetcher import init_fetcher, get_fetcher
 from . import services
-from .auth import require_auth, require_auth_ws, authenticate, create_session, SESSION_COOKIE_NAME
+from .auth import require_auth, require_auth_ws, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, complete_setup
 
 # Configure logging
 logging.basicConfig(
@@ -63,6 +64,37 @@ async def broadcast(message: dict):
         active_websockets.discard(ws)
 
 
+async def _periodic_cleanup():
+    """Periodically clean up expired sessions, old job history, and stale in-memory jobs."""
+    while True:
+        await asyncio.sleep(3600)  # Run every hour
+        try:
+            db.cleanup_expired_sessions()
+            db.cleanup_old_job_history(max_age_days=90)
+            db.cleanup_old_schedule_log(max_age_days=90)
+            db.cleanup_old_rollouts(max_age_days=180)
+            db.cleanup_old_device_durations(max_age_days=180)
+            _cleanup_completed_jobs(max_age_seconds=3600)
+            logger.info("Periodic cleanup completed")
+        except Exception as e:
+            logger.error(f"Periodic cleanup error: {e}")
+
+
+def _cleanup_completed_jobs(max_age_seconds: int = 3600):
+    """Remove completed jobs from in-memory dict after they've been persisted."""
+    now = datetime.now()
+    stale_ids = []
+    for job_id, job in update_jobs.items():
+        if job.status == "completed" and job.completed_at:
+            age = (now - job.completed_at).total_seconds()
+            if age > max_age_seconds:
+                stale_ids.append(job_id)
+    for job_id in stale_ids:
+        del update_jobs[job_id]
+    if stale_ids:
+        logger.info(f"Cleaned up {len(stale_ids)} completed jobs from memory")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
@@ -74,11 +106,17 @@ async def lifespan(app: FastAPI):
     await scheduler.start()
     fetcher = init_fetcher(FIRMWARE_DIR, broadcast)
     await fetcher.start()
+    cleanup_task = asyncio.create_task(_periodic_cleanup())
     logger.info("Application started")
 
     yield
 
     # Shutdown
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     await fetcher.stop()
     await scheduler.stop()
     await poller.stop()
@@ -113,7 +151,10 @@ async def login(request: Request, username: str = Form(...), password: str = For
     ip_address = request.client.host if request.client else "unknown"
     session_id = create_session(user, ip_address)
 
-    response = RedirectResponse(url="/", status_code=303)
+    # Redirect to setup if password hasn't been changed from default
+    redirect_url = "/setup" if is_setup_required() else "/"
+
+    response = RedirectResponse(url=redirect_url, status_code=303)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=session_id,
@@ -122,6 +163,48 @@ async def login(request: Request, username: str = Form(...), password: str = For
         samesite="lax",
     )
     return response
+
+
+@app.get("/setup", response_class=HTMLResponse)
+async def setup_page(request: Request, session: dict = Depends(require_auth)):
+    """Serve the initial password setup page."""
+    if not is_setup_required():
+        return RedirectResponse(url="/", status_code=302)
+    return templates.TemplateResponse("setup.html", {"request": request, "error": None})
+
+
+@app.post("/setup")
+async def setup_submit(
+    request: Request,
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    confirm_password: str = Form(...),
+    session: dict = Depends(require_auth),
+):
+    """Handle initial password setup submission."""
+    if not is_setup_required():
+        return RedirectResponse(url="/", status_code=302)
+
+    # Validate current password
+    user = authenticate(session["username"], current_password)
+    if not user:
+        return templates.TemplateResponse("setup.html", {
+            "request": request, "error": "Current password is incorrect.",
+        }, status_code=400)
+
+    if new_password != confirm_password:
+        return templates.TemplateResponse("setup.html", {
+            "request": request, "error": "New passwords do not match.",
+        }, status_code=400)
+
+    if len(new_password) < 8:
+        return templates.TemplateResponse("setup.html", {
+            "request": request, "error": "Password must be at least 8 characters.",
+        }, status_code=400)
+
+    complete_setup(new_password)
+    logger.info(f"Admin password changed by {session['username']} during initial setup")
+    return RedirectResponse(url="/", status_code=303)
 
 
 @app.post("/logout")
@@ -143,6 +226,8 @@ async def logout(request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, session: dict = Depends(require_auth)):
     """Serve the main page (monitor view)."""
+    if is_setup_required():
+        return RedirectResponse(url="/setup", status_code=302)
     return templates.TemplateResponse("monitor.html", {"request": request})
 
 
@@ -248,12 +333,27 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            data = await websocket.receive_text()
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=300)
+            except asyncio.TimeoutError:
+                # Send a ping to check if client is still alive
+                try:
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    break
     except WebSocketDisconnect:
         pass
     finally:
         active_websockets.discard(websocket)
         logger.info(f"WebSocket disconnected. Total: {len(active_websockets)}")
+
+
+def _validate_ip(ip: str):
+    """Validate that a string is a valid IP address, raising HTTPException if not."""
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        raise HTTPException(400, f"Invalid IP address: {ip}")
 
 
 # ============================================================================
@@ -326,6 +426,7 @@ async def add_ap(
     session: dict = Depends(require_auth),
 ):
     """Add a new access point."""
+    _validate_ip(ip)
     ap_id = db.upsert_access_point(ip, username, password, tower_site_id)
 
     # Trigger immediate poll
@@ -349,6 +450,7 @@ async def add_device(
     Probes the device to get its model. TNA models -> access_points table,
     TNS models -> switches table.
     """
+    _validate_ip(ip)
     # Probe device to determine type
     client = TachyonClient(ip, username, password)
     try:
@@ -453,6 +555,7 @@ async def add_switch(
     session: dict = Depends(require_auth),
 ):
     """Add a new switch."""
+    _validate_ip(ip)
     sw_id = db.upsert_switch(ip, username, password, tower_site_id)
 
     poller = get_poller()
@@ -566,6 +669,7 @@ async def quick_add(
     session: dict = Depends(require_auth),
 ):
     """Quick add an AP, optionally creating a new site."""
+    _validate_ip(ip)
     site_id = None
 
     if site_name:
@@ -1552,6 +1656,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         except Exception as e:
             logger.warning(f"Maintenance window check failed: {e}")
 
+    device_start_time = datetime.now()
+
     prefix = f"Pass {pass_number}: " if pass_number > 1 else ""
     device_status.status = "connecting"
     device_status.progress_message = f"{prefix}Connecting..."
@@ -1637,6 +1743,11 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     elif result.success:
         device_status.status = "success"
         device_status.progress_message = f"{prefix}Updated to {result.new_version}"
+        duration_secs = (datetime.now() - device_start_time).total_seconds()
+        try:
+            db.save_device_duration(job.job_id, ip, device_status.role, duration_secs, job.bank_mode)
+        except Exception as e:
+            logger.warning(f"Failed to save device duration for {ip}: {e}")
     else:
         device_status.status = "failed"
         device_status.error = result.error

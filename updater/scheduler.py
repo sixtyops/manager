@@ -402,8 +402,9 @@ class AutoUpdateScheduler:
         self._block_reason = "Already ran today"
         logger.info(f"Scheduler job {job_id} completed: {self._last_run_result}")
 
-        # Fire-and-forget broadcast
-        asyncio.ensure_future(self._broadcast_status())
+        # Broadcast status update
+        task = asyncio.create_task(self._broadcast_status())
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
 
     def _resolve_scope(self, settings: dict) -> list[str]:
         """Resolve which AP IPs to update based on scope settings."""
@@ -429,6 +430,178 @@ class AutoUpdateScheduler:
 
         return []
 
+    def _calculate_predictions(self, rollout: dict, settings: dict) -> dict:
+        """Calculate rollout time predictions based on historical device durations."""
+        from datetime import timedelta
+
+        avg_durations = db.get_avg_durations()
+        concurrency = int(settings.get("parallel_updates", "2"))
+        bank_mode = settings.get("bank_mode", "both")
+        start_hour = int(settings.get("schedule_start_hour", "3"))
+        end_hour = int(settings.get("schedule_end_hour", "4"))
+        schedule_days = settings.get("schedule_days", "")
+        window_minutes = (end_hour - start_hour) * 60
+        if window_minutes <= 0:
+            window_minutes += 24 * 60  # overnight wrap
+
+        scope_ips = self._resolve_scope(settings)
+
+        # Count CPEs per AP and total switches for device estimation
+        total_cpes = 0
+        for ip in scope_ips:
+            cpes = db.get_cpes_for_ap(ip)
+            total_cpes += sum(1 for c in cpes if c.get("auth_status") == "ok")
+        total_switches = len(db.get_switches(enabled_only=True))
+
+        # Get candidates remaining (APs not yet done in this rollout)
+        existing_devices = db.get_rollout_devices(rollout["id"])
+        already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "pending")}
+        target_version = rollout.get("target_version")
+
+        candidates = []
+        for ip in scope_ips:
+            if ip in already_done:
+                continue
+            if target_version:
+                ap = db.get_access_point(ip)
+                if ap and ap.get("firmware_version") == target_version:
+                    continue
+            candidates.append(ip)
+
+        total_candidates = len(candidates)
+
+        def _estimate_phase_duration(ap_count: int) -> float:
+            """Estimate minutes for a phase with given AP count."""
+            # Count CPEs for these APs (use average CPEs per AP)
+            avg_cpes_per_ap = total_cpes / len(scope_ips) if scope_ips else 0
+            cpe_count = round(ap_count * avg_cpes_per_ap)
+
+            passes = 2 if bank_mode == "both" else 1
+
+            # AP phases: ceil(ap_count / concurrency) batches * avg_duration * passes
+            ap_batches = math.ceil(ap_count / concurrency) if ap_count > 0 else 0
+            ap_time = ap_batches * avg_durations["ap"] * passes
+
+            # CPE phases: ceil(cpe_count / concurrency) batches * avg_duration * passes
+            cpe_batches = math.ceil(cpe_count / concurrency) if cpe_count > 0 else 0
+            cpe_time = cpe_batches * avg_durations["cpe"] * passes
+
+            # Switches run once per job (all switches, not per-phase)
+            sw_batches = math.ceil(total_switches / concurrency) if total_switches > 0 else 0
+            sw_time = sw_batches * avg_durations["switch"] * passes
+
+            total_seconds = ap_time + cpe_time + sw_time
+            return total_seconds / 60.0
+
+        # Current phase
+        current_phase = rollout["phase"]
+        phase_idx = db.PHASE_ORDER.index(current_phase) if current_phase in db.PHASE_ORDER else 0
+
+        # Get current phase device count
+        if current_phase == "canary":
+            current_ap_count = min(1, total_candidates)
+        elif current_phase == "pct10":
+            current_ap_count = max(1, math.ceil(total_candidates * 0.1)) if total_candidates else 0
+        elif current_phase == "pct50":
+            current_ap_count = max(1, math.ceil(total_candidates * 0.5)) if total_candidates else 0
+        else:
+            current_ap_count = total_candidates
+
+        current_ap_count = min(current_ap_count, total_candidates)
+        current_duration = _estimate_phase_duration(current_ap_count)
+
+        # How many APs fit in the maintenance window
+        avg_cpes_per_ap = total_cpes / len(scope_ips) if scope_ips else 0
+        passes = 2 if bank_mode == "both" else 1
+        # Time per AP "slot" (AP + its CPEs, sequential within concurrency slot)
+        time_per_ap_slot = (avg_durations["ap"] * passes +
+                            avg_cpes_per_ap * avg_durations["cpe"] * passes)
+        # Account for switch time overhead spread across APs
+        if total_switches > 0 and current_ap_count > 0:
+            sw_overhead = (math.ceil(total_switches / concurrency) *
+                          avg_durations["switch"] * passes) / 60.0
+        else:
+            sw_overhead = 0
+        effective_window = window_minutes - sw_overhead - 10  # 10 min cutoff buffer
+        if time_per_ap_slot > 0 and effective_window > 0:
+            aps_that_fit = int((effective_window * 60 / time_per_ap_slot) * concurrency)
+            aps_that_fit = max(1, aps_that_fit)
+        else:
+            aps_that_fit = current_ap_count
+
+        current_phase_info = {
+            "device_count": current_ap_count,
+            "estimated_duration_minutes": round(current_duration, 1),
+            "devices_that_fit_in_window": min(aps_that_fit, current_ap_count),
+        }
+
+        # Remaining phases
+        remaining_phases = []
+        remaining_candidates = total_candidates
+        for i in range(phase_idx + 1, len(db.PHASE_ORDER)):
+            phase = db.PHASE_ORDER[i]
+            # Subtract current phase devices from remaining
+            remaining_candidates = max(0, remaining_candidates - current_ap_count)
+            if remaining_candidates == 0:
+                remaining_phases.append({
+                    "phase": phase,
+                    "estimated_devices": 0,
+                    "estimated_duration_minutes": 0,
+                })
+                current_ap_count = 0
+                continue
+
+            if phase == "canary":
+                phase_count = min(1, remaining_candidates)
+            elif phase == "pct10":
+                phase_count = max(1, math.ceil(remaining_candidates * 0.1))
+            elif phase == "pct50":
+                phase_count = max(1, math.ceil(remaining_candidates * 0.5))
+            else:
+                phase_count = remaining_candidates
+
+            phase_count = min(phase_count, remaining_candidates)
+            phase_dur = _estimate_phase_duration(phase_count)
+            remaining_phases.append({
+                "phase": phase,
+                "estimated_devices": phase_count,
+                "estimated_duration_minutes": round(phase_dur, 1),
+            })
+            current_ap_count = phase_count  # for next iteration subtraction
+
+        # Estimate completion date based on schedule days
+        # Each phase = one maintenance window (one night)
+        remaining_windows = 1 + len([p for p in remaining_phases if p["estimated_devices"] > 0])
+        day_abbrs = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+        active_days = set()
+        for d in schedule_days.split(","):
+            d = d.strip().lower()
+            if d in day_abbrs:
+                active_days.add(day_abbrs[d])
+
+        estimated_completion = None
+        if active_days:
+            from datetime import date
+            current = date.today()
+            windows_counted = 0
+            # Look ahead up to 60 days
+            for offset in range(60):
+                check = current + timedelta(days=offset)
+                if check.weekday() in active_days:
+                    windows_counted += 1
+                    if windows_counted >= remaining_windows:
+                        estimated_completion = check.isoformat()
+                        break
+
+        return {
+            "current_phase": current_phase_info,
+            "remaining_phases": remaining_phases,
+            "estimated_completion_date": estimated_completion,
+            "avg_durations": avg_durations,
+            "total_candidates": total_candidates,
+            "window_minutes": window_minutes,
+        }
+
     def get_status(self) -> dict:
         """Return current scheduler status for UI."""
         settings = db.get_all_settings()
@@ -441,6 +614,11 @@ class AutoUpdateScheduler:
         rollout = db.get_active_rollout()
         if rollout:
             progress = db.get_rollout_progress(rollout["id"])
+            try:
+                predictions = self._calculate_predictions(rollout, settings)
+            except Exception as e:
+                logger.warning(f"Failed to calculate predictions: {e}")
+                predictions = None
             rollout_info = {
                 "id": rollout["id"],
                 "phase": rollout["phase"],
@@ -450,6 +628,7 @@ class AutoUpdateScheduler:
                 "firmware_file_tns100": rollout.get("firmware_file_tns100"),
                 "progress": progress,
                 "pause_reason": rollout.get("pause_reason"),
+                "predictions": predictions,
             }
 
         return {

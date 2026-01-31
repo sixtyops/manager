@@ -56,8 +56,20 @@ class NetworkPoller:
 
             await asyncio.sleep(self.poll_interval)
 
+    def _evict_stale_clients(self):
+        """Remove cached clients for devices no longer in the database."""
+        ap_ips = {ap["ip"] for ap in db.get_access_points(enabled_only=False)}
+        sw_ips = {sw["ip"] for sw in db.get_switches(enabled_only=False)}
+        known_ips = ap_ips | sw_ips
+        stale = [ip for ip in self._clients if ip not in known_ips]
+        for ip in stale:
+            del self._clients[ip]
+        if stale:
+            logger.info(f"Evicted {len(stale)} stale client(s) from cache")
+
     async def _poll_all_aps(self):
         """Poll all enabled APs."""
+        self._evict_stale_clients()
         aps = db.get_access_points(enabled_only=True)
 
         if not aps:

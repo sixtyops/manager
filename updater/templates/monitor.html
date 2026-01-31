@@ -1152,6 +1152,7 @@
             <div class="status-bar-section status-bar-rollout" id="barRolloutSection">
                 <div class="status-bar-phases" id="barPhaseIndicator"></div>
                 <span class="status-bar-muted" id="barRolloutProgress"></span>
+                <span class="status-bar-muted" id="barRolloutPrediction" style="opacity:0.7;font-size:0.8em;"></span>
                 <div class="status-bar-actions" id="barRolloutActions">
                     <button class="btn btn-sm btn-warning" id="barResumeBtn" onclick="resumeRollout();event.stopPropagation();" style="display:none;">Resume</button>
                     <button class="btn btn-sm btn-danger" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();" style="display:none;">Cancel</button>
@@ -2226,6 +2227,8 @@
             }
             indicator.innerHTML = html;
             document.getElementById('barRolloutProgress').textContent = '';
+            const predEl = document.getElementById('barRolloutPrediction');
+            if (predEl) predEl.textContent = '';
             document.getElementById('barResumeBtn').style.display = 'none';
             document.getElementById('barCancelBtn').style.display = 'none';
         }
@@ -2262,13 +2265,38 @@
             }
             indicator.innerHTML = phaseHtml;
 
-            const p = data.progress || {};
+            const p = rollout.progress || {};
             const updated = p.updated || 0;
             const total = p.total || 0;
             const failed = p.failed || 0;
             let progressText = `${updated}/${total}`;
             if (failed > 0) progressText += ` (${failed} failed)`;
             document.getElementById('barRolloutProgress').textContent = progressText;
+
+            // Predictions
+            const predEl = document.getElementById('barRolloutPrediction');
+            const pred = rollout.predictions;
+            if (pred && predEl) {
+                const parts = [];
+                const cp = pred.current_phase;
+                if (cp && cp.device_count > 0) {
+                    let stepText = `~${cp.device_count} devices this step`;
+                    if (cp.devices_that_fit_in_window < cp.device_count) {
+                        stepText += ` (${cp.devices_that_fit_in_window} fit in window)`;
+                    }
+                    const dur = cp.estimated_duration_minutes;
+                    if (dur > 0) stepText += ` · ~${dur < 1 ? '<1' : Math.round(dur)} min`;
+                    parts.push(stepText);
+                }
+                if (pred.estimated_completion_date) {
+                    const d = new Date(pred.estimated_completion_date + 'T00:00:00');
+                    const opts = { month: 'short', day: 'numeric' };
+                    parts.push(`est. done ${d.toLocaleDateString('en-US', opts)}`);
+                }
+                predEl.textContent = parts.length ? parts.join(' · ') : '';
+            } else if (predEl) {
+                predEl.textContent = '';
+            }
 
             const resumeBtn = document.getElementById('barResumeBtn');
             const cancelBtn = document.getElementById('barCancelBtn');

@@ -137,11 +137,12 @@ class TachyonClient:
 
     async def login(self) -> bool:
         """Authenticate with the device."""
-        cookie_file = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
-        cookie_path = cookie_file.name
-        cookie_file.close()
-
+        cookie_path = None
         try:
+            cookie_file = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
+            cookie_path = cookie_file.name
+            cookie_file.close()
+
             url = f"{self._base_url}/cgi.lua/login"
             payload = json.dumps({
                 "username": self.username,
@@ -203,7 +204,11 @@ class TachyonClient:
             return "Login failed: no token received"
 
         finally:
-            Path(cookie_path).unlink(missing_ok=True)
+            if cookie_path:
+                try:
+                    Path(cookie_path).unlink(missing_ok=True)
+                except OSError as e:
+                    logger.warning(f"Failed to clean up cookie file {cookie_path}: {e}")
 
     async def get_device_info(self) -> DeviceInfo:
         """Get device information."""
@@ -390,6 +395,7 @@ class TachyonClient:
             if not ping_responded:
                 # Phase 1: Wait for device to respond to ping (or curl if ping unavailable)
                 responded = False
+                proc = None
                 try:
                     proc = await asyncio.create_subprocess_exec(
                         "ping", "-c", "1", "-W", "2", self.ip,
@@ -414,6 +420,13 @@ class TachyonClient:
                     if proc.returncode == 0:
                         status = stdout.decode().strip()
                         responded = status and status.isdigit() and int(status) > 0
+                except Exception:
+                    if proc and proc.returncode is None:
+                        try:
+                            proc.kill()
+                            await proc.wait()
+                        except ProcessLookupError:
+                            pass
 
                 if responded:
                     logger.info(f"{self.ip} responding, waiting for web server...")
@@ -428,18 +441,27 @@ class TachyonClient:
                     "-o", "/dev/null", "-w", "%{http_code}",
                     f"https://{self.ip}/"
                 ]
-                proc = await asyncio.create_subprocess_exec(
-                    *check_cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                stdout, _ = await proc.communicate()
+                proc = None
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *check_cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    stdout, _ = await proc.communicate()
 
-                if proc.returncode == 0:
-                    status = stdout.decode().strip()
-                    if status and status.isdigit() and int(status) > 0:
-                        logger.info(f"{self.ip} web server is up, device ready")
-                        return True
+                    if proc.returncode == 0:
+                        status = stdout.decode().strip()
+                        if status and status.isdigit() and int(status) > 0:
+                            logger.info(f"{self.ip} web server is up, device ready")
+                            return True
+                except Exception:
+                    if proc and proc.returncode is None:
+                        try:
+                            proc.kill()
+                            await proc.wait()
+                        except ProcessLookupError:
+                            pass
 
             await asyncio.sleep(3)
 
