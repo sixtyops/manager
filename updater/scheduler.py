@@ -23,7 +23,7 @@ class AutoUpdateScheduler:
     # Possible states
     STATES = ("disabled", "idle", "waiting", "running",
               "blocked_weather", "blocked_time", "blocked_no_firmware",
-              "blocked_all_current")
+              "blocked_all_current", "blocked_quarantine")
 
     def __init__(self, broadcast_func: Callable, start_update_func: Callable,
                  check_interval: int = 60):
@@ -182,6 +182,27 @@ class AutoUpdateScheduler:
 
         fw_303l = settings.get("selected_firmware_303l", "")
         fw_tns100 = settings.get("selected_firmware_tns100", "")
+
+        # 9.5. Check firmware quarantine
+        quarantine_days = int(settings.get("firmware_quarantine_days", "7"))
+        if quarantine_days > 0:
+            # Check all selected firmware files against quarantine
+            for fw_name in (fw_30x, fw_303l, fw_tns100):
+                if not fw_name:
+                    continue
+                q_info = db.get_firmware_quarantine_info(fw_name, quarantine_days)
+                if not q_info["cleared"]:
+                    self._state = "blocked_quarantine"
+                    remaining_h = q_info["remaining_hours"]
+                    if remaining_h > 24:
+                        remaining_str = f"{remaining_h / 24:.1f} days"
+                    else:
+                        remaining_str = f"{remaining_h:.0f} hours"
+                    self._block_reason = f"Firmware {fw_name} in quarantine ({remaining_str} remaining)"
+                    db.log_schedule_event("blocked_quarantine", self._block_reason)
+                    logger.info(f"Scheduler blocked: {self._block_reason}")
+                    await self._broadcast_status()
+                    return
 
         # 10. Get or create rollout
         rollout = db.get_active_rollout()
@@ -583,9 +604,12 @@ class AutoUpdateScheduler:
         if active_days:
             from datetime import date
             current = date.today()
+            now = datetime.now()
+            # If today's maintenance window has already passed, start from tomorrow
+            start_offset = 1 if now.hour >= end_hour else 0
             windows_counted = 0
             # Look ahead up to 60 days
-            for offset in range(60):
+            for offset in range(start_offset, 60):
                 check = current + timedelta(days=offset)
                 if check.weekday() in active_days:
                     windows_counted += 1
@@ -640,6 +664,16 @@ class AutoUpdateScheduler:
             except Exception as e:
                 logger.debug(f"Pre-rollout prediction failed: {e}")
 
+        # Quarantine info for selected firmware
+        quarantine_days = int(settings.get("firmware_quarantine_days", "7"))
+        quarantine = None
+        if quarantine_days > 0:
+            fw_30x = settings.get("selected_firmware_30x", "")
+            if fw_30x:
+                quarantine = db.get_firmware_quarantine_info(fw_30x, quarantine_days)
+                quarantine["firmware"] = fw_30x
+                quarantine["quarantine_days"] = quarantine_days
+
         return {
             "state": self._state,
             "block_reason": self._block_reason,
@@ -650,6 +684,7 @@ class AutoUpdateScheduler:
             "next_window": f"{start_hour}:00-{end_hour}:00 on {schedule_days}",
             "rollout": rollout_info,
             "predictions": pre_rollout_predictions,
+            "quarantine": quarantine,
         }
 
     async def _broadcast_status(self):

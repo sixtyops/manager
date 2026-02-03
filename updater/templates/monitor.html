@@ -6,6 +6,40 @@
     <title>Unofficial Tachyon Networks Bulk Updater</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
+        :root {
+            --bg: #f5f5f5;
+            --bg-card: #ffffff;
+            --text: #111827;
+            --text-muted: #6b7280;
+            --text-dim: #9ca3af;
+            --text-subtle: #374151;
+            --border: #e5e7eb;
+            --border-light: #f3f4f6;
+            --input-bg: #f5f5f5;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --primary-text: #1e40af;
+            --primary-bg: #dbeafe;
+            --success: #10b981;
+            --success-light: #34d399;
+            --success-text: #065f46;
+            --success-bg: #d1fae5;
+            --warning: #f59e0b;
+            --warning-hover: #d97706;
+            --warning-text: #92400e;
+            --warning-bg: #fef3c7;
+            --warning-light: #fbbf24;
+            --danger: #dc2626;
+            --danger-hover: #b91c1c;
+            --danger-text: #991b1b;
+            --danger-bg: #fee2e2;
+            --danger-bright: #ef4444;
+            --indigo: #6366f1;
+            --indigo-text: #3730a3;
+            --indigo-bg: #e0e7ff;
+            --toggle-off: #d1d5db;
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -14,8 +48,8 @@
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif;
-            background: #f5f5f5;
-            color: #111827;
+            background: var(--bg);
+            color: var(--text);
             min-height: 100vh;
             padding-bottom: 112px;
         }
@@ -24,14 +58,14 @@
             display: flex;
             align-items: center;
             padding: 12px 24px;
-            background: #ffffff;
-            border-bottom: 1px solid #e5e7eb;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
             gap: 8px;
         }
 
         .header h1 {
             font-size: 1.2rem;
-            color: #111827;
+            color: var(--text);
             margin: 0;
             white-space: nowrap;
         }
@@ -44,7 +78,7 @@
         }
 
         .nav-link {
-            color: #6b7280;
+            color: var(--text-muted);
             text-decoration: none;
             padding: 6px 12px;
             border-radius: 6px;
@@ -53,12 +87,12 @@
         }
 
         .nav-link:hover, .nav-link.active {
-            color: #111827;
-            background: #e5e7eb;
+            color: var(--text);
+            background: var(--border);
         }
 
         .nav-separator {
-            color: #d1d5db;
+            color: var(--toggle-off);
             font-size: 0.85rem;
             margin: 0 2px;
         }
@@ -72,7 +106,7 @@
 
         .header-clock {
             font-size: 0.8rem;
-            color: #6b7280;
+            color: var(--text-muted);
             white-space: nowrap;
         }
 
@@ -81,9 +115,9 @@
         }
 
         .user-btn {
-            background: #e5e7eb;
+            background: var(--border);
             border: none;
-            color: #6b7280;
+            color: var(--text-muted);
             cursor: pointer;
             width: 36px;
             height: 36px;
@@ -95,8 +129,8 @@
         }
 
         .user-btn:hover {
-            color: #111827;
-            background: #d1d5db;
+            color: var(--text);
+            background: var(--toggle-off);
         }
 
         .user-dropdown {
@@ -105,8 +139,8 @@
             right: 0;
             top: 100%;
             margin-top: 8px;
-            background: #ffffff;
-            border: 1px solid #e5e7eb;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
             border-radius: 8px;
             min-width: 140px;
             z-index: 100;
@@ -124,7 +158,7 @@
             padding: 10px 16px;
             background: none;
             border: none;
-            color: #111827;
+            color: var(--text);
             font-size: 0.875rem;
             text-align: left;
             cursor: pointer;
@@ -133,7 +167,7 @@
         }
 
         .dropdown-item:hover {
-            background: #e5e7eb;
+            background: var(--border);
         }
 
         /* Backup Modal */
@@ -152,7 +186,7 @@
         }
 
         .backup-modal {
-            background: #fff;
+            background: var(--bg-card);
             border-radius: 12px;
             box-shadow: 0 8px 30px rgba(0,0,0,0.18);
             width: 440px;
@@ -164,12 +198,12 @@
             margin: 0 0 16px 0;
             font-size: 1rem;
             font-weight: 600;
-            color: #111827;
+            color: var(--text);
         }
 
         .backup-modal label {
             font-size: 0.75rem;
-            color: #6b7280;
+            color: var(--text-muted);
             display: block;
             margin-bottom: 4px;
             font-weight: 500;
@@ -178,7 +212,7 @@
         .backup-modal input[type="password"],
         .backup-modal select {
             padding: 6px 10px;
-            border: 1px solid #d1d5db;
+            border: 1px solid var(--toggle-off);
             border-radius: 6px;
             font-size: 0.8rem;
             font-family: inherit;
@@ -186,9 +220,9 @@
 
         .backup-modal .backup-btn {
             padding: 6px 14px;
-            border: 1px solid #d1d5db;
+            border: 1px solid var(--toggle-off);
             border-radius: 6px;
-            background: #fff;
+            background: var(--bg-card);
             font-size: 0.8rem;
             cursor: pointer;
             font-family: inherit;
@@ -196,7 +230,7 @@
         }
 
         .backup-modal .backup-btn:hover {
-            background: #f3f4f6;
+            background: var(--border-light);
         }
 
         /* Layout */
@@ -220,14 +254,14 @@
         }
 
         .card {
-            background: #ffffff;
+            background: var(--bg-card);
             border-radius: 12px;
             padding: 16px;
         }
 
         .card h2 {
             font-size: 1rem;
-            color: #6b7280;
+            color: var(--text-muted);
             margin-bottom: 12px;
         }
 
@@ -240,10 +274,10 @@
         .discovery-form input, .discovery-form textarea {
             width: 100%;
             padding: 8px 10px;
-            background: #f5f5f5;
-            border: 1px solid #e5e7eb;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
             border-radius: 6px;
-            color: #111827;
+            color: var(--text);
             font-size: 0.85rem;
         }
 
@@ -255,7 +289,7 @@
 
         .discovery-form input:focus, .discovery-form textarea:focus {
             outline: none;
-            border-color: #3b82f6;
+            border-color: var(--primary);
         }
 
         .cred-row {
@@ -266,7 +300,7 @@
 
         .btn {
             padding: 8px 16px;
-            background: #dc2626;
+            background: var(--danger);
             color: white;
             border: none;
             border-radius: 6px;
@@ -277,22 +311,22 @@
         }
 
         .btn:hover {
-            background: #b91c1c;
+            background: var(--danger-hover);
         }
 
         .btn:disabled {
-            background: #d1d5db;
+            background: var(--toggle-off);
             cursor: not-allowed;
         }
 
         .btn-danger {
             background: transparent;
-            border: 1px solid #dc2626;
-            color: #dc2626;
+            border: 1px solid var(--danger);
+            color: var(--danger);
         }
 
         .btn-danger:hover {
-            background: #dc2626;
+            background: var(--danger);
             color: white;
         }
 
@@ -301,9 +335,21 @@
             font-size: 0.75rem;
         }
 
+        /* Shared color dot */
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .dot.success { background: var(--success); }
+        .dot.warning { background: var(--warning); }
+        .dot.danger { background: var(--danger-bright); }
+        .dot.primary { background: var(--primary); }
+
         /* Chart */
         .chart-card {
-            background: #ffffff;
+            background: var(--bg-card);
             border-radius: 12px;
             padding: 20px;
             display: flex;
@@ -312,7 +358,7 @@
 
         .chart-card h3 {
             font-size: 1rem;
-            color: #6b7280;
+            color: var(--text-muted);
             margin-bottom: 16px;
         }
 
@@ -327,7 +373,7 @@
             gap: 24px;
             margin-top: 16px;
             padding-top: 16px;
-            border-top: 1px solid #e5e7eb;
+            border-top: 1px solid var(--border);
             flex-wrap: wrap;
         }
 
@@ -336,25 +382,15 @@
             align-items: center;
             gap: 8px;
             font-size: 0.8rem;
-            color: #6b7280;
+            color: var(--text-muted);
         }
-
-        .legend-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-        }
-
-        .legend-dot.green { background: #10b981; }
-        .legend-dot.yellow { background: #f59e0b; }
-        .legend-dot.red { background: #ef4444; }
 
         /* Stats bar */
         .stats-bar {
             display: flex;
             gap: 16px;
             padding: 12px 16px;
-            background: #ffffff;
+            background: var(--bg-card);
             border-radius: 12px;
             margin-bottom: 20px;
             align-items: center;
@@ -367,29 +403,18 @@
             font-size: 0.85rem;
         }
 
-        .stat-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-        }
-
-        .stat-dot.green { background: #10b981; }
-        .stat-dot.yellow { background: #f59e0b; }
-        .stat-dot.red { background: #ef4444; }
-        .stat-dot.ap { background: #3b82f6; }
-
         .stat-value {
             font-weight: 600;
-            color: #111827;
+            color: var(--text);
         }
 
         .stat-label {
-            color: #9ca3af;
+            color: var(--text-dim);
         }
 
         /* Tree Table */
         .table-card {
-            background: #ffffff;
+            background: var(--bg-card);
             border-radius: 12px;
             overflow: hidden;
         }
@@ -401,12 +426,12 @@
         }
 
         .tree-table thead th {
-            background: #f9fafb;
-            border-bottom: 2px solid #e5e7eb;
+            background: var(--border-light);
+            border-bottom: 2px solid var(--border);
             padding: 8px 12px;
             text-align: left;
             font-weight: 600;
-            color: #6b7280;
+            color: var(--text-muted);
             cursor: pointer;
             user-select: none;
             white-space: nowrap;
@@ -415,7 +440,7 @@
         }
 
         .tree-table thead th:hover {
-            color: #111827;
+            color: var(--text);
         }
 
         .tree-table thead th .sort-arrow {
@@ -425,25 +450,25 @@
 
         .tree-table tbody td {
             padding: 6px 12px;
-            border-bottom: 1px solid #f3f4f6;
+            border-bottom: 1px solid var(--border-light);
             vertical-align: middle;
         }
 
         .tree-table .row-site {
-            background: #f9fafb;
+            background: var(--border-light);
         }
 
         .tree-table .row-site td {
             font-weight: 600;
-            border-bottom: 1px solid #e5e7eb;
+            border-bottom: 1px solid var(--border);
         }
 
         .tree-table .row-ap td {
-            border-bottom: 1px solid #f3f4f6;
+            border-bottom: 1px solid var(--border-light);
         }
 
         .tree-table .row-cpe td {
-            color: #374151;
+            color: var(--text-subtle);
         }
 
         .tree-table .row-offline td {
@@ -469,7 +494,7 @@
             justify-content: center;
             width: 16px;
             height: 16px;
-            color: #9ca3af;
+            color: var(--text-dim);
             font-size: 10px;
             transition: transform 0.15s;
             flex-shrink: 0;
@@ -496,28 +521,28 @@
             color: white;
         }
 
-        .device-icon.site { background: #6366f1; }
-        .device-icon.ap { background: #3b82f6; }
+        .device-icon.site { background: var(--indigo); }
+        .device-icon.ap { background: var(--primary); }
         .device-icon.cpe {
             border-radius: 50%;
             width: 14px;
             height: 14px;
         }
-        .device-icon.cpe.green { background: #10b981; }
-        .device-icon.cpe.yellow { background: #f59e0b; }
-        .device-icon.cpe.red { background: #ef4444; }
+        .device-icon.cpe.green { background: var(--success); }
+        .device-icon.cpe.yellow { background: var(--warning); }
+        .device-icon.cpe.red { background: var(--danger-bright); }
 
         .tree-badge {
             font-size: 0.7rem;
             padding: 1px 6px;
-            background: #e5e7eb;
+            background: var(--border);
             border-radius: 10px;
-            color: #6b7280;
+            color: var(--text-muted);
             margin-left: 4px;
         }
 
         .name-link {
-            color: #3b82f6;
+            color: var(--primary);
             text-decoration: none;
         }
         .name-link:hover {
@@ -525,15 +550,15 @@
         }
 
         .no-location-tag {
-            color: #f59e0b;
+            color: var(--warning);
             font-size: 0.7rem;
             font-weight: normal;
         }
 
         /* Signal colors */
-        .signal-good { color: #10b981; }
-        .signal-low { color: #f59e0b; }
-        .signal-critical { color: #ef4444; }
+        .signal-good { color: var(--success); }
+        .signal-low { color: var(--warning); }
+        .signal-critical { color: var(--danger-bright); }
 
         /* Version cell */
         .version-cell {
@@ -545,22 +570,22 @@
         }
         .version-banks {
             font-size: 0.7rem;
-            color: #9ca3af;
+            color: var(--text-dim);
             font-family: monospace;
         }
 
         /* Status column */
-        .status-online { color: #10b981; }
-        .status-offline { color: #ef4444; font-weight: 500; }
-        .status-current { color: #10b981; font-weight: 500; }
-        .status-behind { color: #f59e0b; font-weight: 500; }
-        .status-scheduled { color: #3b82f6; font-weight: 600; font-size: 0.9rem; }
+        .status-online { color: var(--success); }
+        .status-offline { color: var(--danger-bright); font-weight: 500; }
+        .status-current { color: var(--success); font-weight: 500; }
+        .status-behind { color: var(--warning); font-weight: 500; }
+        .status-scheduled { color: var(--primary); font-weight: 600; font-size: 0.9rem; }
         .status-label { font-size: 0.78rem; }
-        .status-sep { color: #d1d5db; margin: 0 4px; }
+        .status-sep { color: var(--toggle-off); margin: 0 4px; }
 
         /* Updating indicator */
         .updating-text {
-            color: #3b82f6;
+            color: var(--primary);
             font-size: 0.75rem;
             font-weight: 500;
         }
@@ -575,7 +600,7 @@
 
         .action-link {
             font-size: 0.72rem;
-            color: #6b7280;
+            color: var(--text-muted);
             text-decoration: none;
             cursor: pointer;
             white-space: nowrap;
@@ -585,26 +610,26 @@
         }
 
         .action-link:hover {
-            background: #e5e7eb;
-            color: #111827;
+            background: var(--border);
+            color: var(--text);
         }
 
         .action-link.update {
-            color: #3b82f6;
+            color: var(--primary);
         }
 
         .action-link.update:hover {
-            background: #dbeafe;
-            color: #1d4ed8;
+            background: var(--primary-bg);
+            color: var(--primary-text);
         }
 
         .action-link.danger {
-            color: #dc2626;
+            color: var(--danger);
         }
 
         .action-link.danger:hover {
-            background: #fee2e2;
-            color: #991b1b;
+            background: var(--danger-bg);
+            color: var(--danger-text);
         }
 
         /* Connection status */
@@ -616,21 +641,21 @@
             padding: 8px 16px;
             border-radius: 20px;
             font-size: 0.75rem;
-            background: #10b981;
+            background: var(--success);
             color: white;
             z-index: 100;
         }
 
         .connection-status.disconnected {
             display: block;
-            background: #ef4444;
+            background: var(--danger-bright);
         }
 
         /* Empty state */
         .empty-state {
             text-align: center;
             padding: 40px;
-            color: #9ca3af;
+            color: var(--text-dim);
         }
 
         /* Bottom drawer */
@@ -640,8 +665,8 @@
             left: 0;
             right: 0;
             z-index: 100;
-            background: #ffffff;
-            border-top: 1px solid #e5e7eb;
+            background: var(--bg-card);
+            border-top: 1px solid var(--border);
             box-shadow: 0 -2px 8px rgba(0,0,0,0.05);
             transition: transform 0.3s ease;
         }
@@ -666,7 +691,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            color: #9ca3af;
+            color: var(--text-dim);
             transition: transform 0.3s ease;
             flex-shrink: 0;
             font-size: 0.7rem;
@@ -688,7 +713,7 @@
 
         .drawer-panel-inner {
             padding: 0 24px 20px;
-            border-top: 1px solid #e5e7eb;
+            border-top: 1px solid var(--border);
         }
 
         .drawer-settings-grid {
@@ -701,7 +726,7 @@
 
         .drawer-settings-grid label {
             font-size: 0.75rem;
-            color: #6b7280;
+            color: var(--text-muted);
             margin-bottom: 4px;
             display: block;
         }
@@ -711,10 +736,10 @@
         .drawer-settings-grid input[type="text"] {
             width: 100%;
             padding: 6px 8px;
-            background: #f5f5f5;
-            border: 1px solid #e5e7eb;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
             border-radius: 6px;
-            color: #111827;
+            color: var(--text);
             font-size: 0.8rem;
             font-family: inherit;
         }
@@ -722,7 +747,7 @@
         .drawer-settings-grid select:focus,
         .drawer-settings-grid input:focus {
             outline: none;
-            border-color: #3b82f6;
+            border-color: var(--primary);
         }
 
         .drawer-days {
@@ -734,9 +759,9 @@
         .drawer-day-btn {
             padding: 4px 8px;
             border-radius: 4px;
-            border: 1px solid #e5e7eb;
-            background: #f9fafb;
-            color: #6b7280;
+            border: 1px solid var(--border);
+            background: var(--border-light);
+            color: var(--text-muted);
             font-size: 0.7rem;
             font-weight: 500;
             cursor: pointer;
@@ -745,9 +770,9 @@
         }
 
         .drawer-day-btn.active {
-            background: #dbeafe;
-            color: #1e40af;
-            border-color: #3b82f6;
+            background: var(--primary-bg);
+            color: var(--primary-text);
+            border-color: var(--primary);
         }
 
         .drawer-toggle-row {
@@ -759,7 +784,7 @@
         .drawer-toggle {
             width: 32px;
             height: 18px;
-            background: #d1d5db;
+            background: var(--toggle-off);
             border-radius: 9px;
             position: relative;
             cursor: pointer;
@@ -780,7 +805,7 @@
         }
 
         .drawer-toggle.active {
-            background: #3b82f6;
+            background: var(--primary);
         }
 
         .drawer-toggle.active::after {
@@ -789,13 +814,13 @@
 
         .drawer-toggle-label {
             font-size: 0.78rem;
-            color: #374151;
+            color: var(--text-subtle);
             font-weight: 500;
         }
 
         .drawer-section-title {
             font-size: 0.7rem;
-            color: #9ca3af;
+            color: var(--text-dim);
             text-transform: uppercase;
             font-weight: 600;
             letter-spacing: 0.5px;
@@ -805,7 +830,7 @@
         .drawer-firmware {
             margin-top: 14px;
             padding-top: 14px;
-            border-top: 1px solid #e5e7eb;
+            border-top: 1px solid var(--border);
             display: flex;
             gap: 16px;
             align-items: flex-start;
@@ -828,7 +853,7 @@
 
         .drawer-fw-type-label {
             font-size: 0.65rem;
-            color: #9ca3af;
+            color: var(--text-dim);
             text-transform: uppercase;
             font-weight: 600;
             min-width: 48px;
@@ -840,9 +865,10 @@
             align-items: center;
             gap: 4px;
             padding: 3px 8px;
-            background: #f3f4f6;
+            background: var(--border-light);
+            border: 1px solid transparent;
             border-radius: 4px;
-            color: #374151;
+            color: var(--text-subtle);
             font-family: monospace;
             font-size: 0.72rem;
             cursor: pointer;
@@ -850,7 +876,7 @@
         }
 
         .drawer-fw-chip:hover {
-            background: #e5e7eb;
+            background: var(--border);
         }
 
         .drawer-fw-chip.active:hover {
@@ -858,8 +884,8 @@
         }
 
         .drawer-fw-chip.active {
-            background: #dbeafe;
-            color: #1e40af;
+            background: var(--primary-bg);
+            color: var(--primary-text);
             font-weight: 600;
         }
 
@@ -872,22 +898,38 @@
         }
 
         .drawer-fw-chip.beta {
-            border: 1px dashed #d97706;
+            border: 1px dashed var(--warning-hover);
         }
 
         .drawer-fw-chip.beta.active {
-            border-color: #1e40af;
+            border-color: var(--primary-text);
+        }
+
+        .drawer-fw-chip.quarantine {
+            opacity: 0.65;
+        }
+
+        .drawer-fw-quarantine-label {
+            font-size: 0.55rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--warning-text);
+            letter-spacing: 0.03em;
+        }
+
+        .drawer-fw-chip.quarantine.active .drawer-fw-quarantine-label {
+            color: var(--primary-text);
         }
 
         .drawer-fw-empty {
-            color: #9ca3af;
+            color: var(--text-dim);
             font-size: 0.75rem;
             font-style: italic;
         }
 
         .drawer-fw-meta {
             font-size: 0.68rem;
-            color: #9ca3af;
+            color: var(--text-dim);
             margin-top: 4px;
             display: flex;
             gap: 8px;
@@ -895,7 +937,7 @@
         }
 
         .drawer-fw-meta a {
-            color: #3b82f6;
+            color: var(--primary);
             text-decoration: none;
             cursor: pointer;
         }
@@ -908,7 +950,7 @@
             flex-shrink: 0;
             width: 140px;
             height: 52px;
-            border: 1.5px dashed #d1d5db;
+            border: 1.5px dashed var(--toggle-off);
             border-radius: 6px;
             display: flex;
             flex-direction: column;
@@ -917,24 +959,24 @@
             cursor: pointer;
             transition: all 0.15s;
             font-size: 0.7rem;
-            color: #9ca3af;
+            color: var(--text-dim);
             gap: 2px;
         }
 
         .drawer-upload:hover {
-            border-color: #3b82f6;
-            color: #3b82f6;
+            border-color: var(--primary);
+            color: var(--primary);
             background: #f8faff;
         }
 
         .drawer-upload.dragover {
-            border-color: #3b82f6;
+            border-color: var(--primary);
             background: #eff6ff;
         }
 
         .drawer-upload-status {
             font-size: 0.68rem;
-            color: #6b7280;
+            color: var(--text-muted);
         }
 
         /* Status bar sections (inside drawer handle) */
@@ -946,13 +988,13 @@
 
         .status-bar-section + .status-bar-section {
             padding-left: 16px;
-            border-left: 1px solid #e5e7eb;
+            border-left: 1px solid var(--border);
         }
 
         .status-bar-toggle {
             width: 36px;
             height: 20px;
-            background: #d1d5db;
+            background: var(--toggle-off);
             border-radius: 10px;
             position: relative;
             cursor: pointer;
@@ -973,7 +1015,7 @@
         }
 
         .status-bar-toggle.active {
-            background: #3b82f6;
+            background: var(--primary);
         }
 
         .status-bar-toggle.active::after {
@@ -981,7 +1023,7 @@
         }
 
         .status-bar-label {
-            color: #111827;
+            color: var(--text);
             font-weight: 600;
             font-size: 0.95rem;
             white-space: nowrap;
@@ -993,27 +1035,27 @@
             font-size: 0.75rem;
             font-weight: 600;
             text-transform: none;
-            background: #f3f4f6;
-            color: #6b7280;
+            background: var(--border-light);
+            color: var(--text-muted);
         }
-        .status-bar-badge.idle { background: #dbeafe; color: #1e40af; }
-        .status-bar-badge.waiting { background: #fef3c7; color: #92400e; }
-        .status-bar-badge.running { background: #e0e7ff; color: #3730a3; }
-        .status-bar-badge.blocked { background: #fee2e2; color: #991b1b; }
-        .status-bar-badge.current { background: #d1fae5; color: #065f46; }
+        .status-bar-badge.idle { background: var(--primary-bg); color: var(--primary-text); }
+        .status-bar-badge.waiting { background: var(--warning-bg); color: var(--warning-text); }
+        .status-bar-badge.running { background: var(--indigo-bg); color: var(--indigo-text); }
+        .status-bar-badge.blocked { background: var(--danger-bg); color: var(--danger-text); }
+        .status-bar-badge.current { background: var(--success-bg); color: var(--success-text); }
 
         .status-bar-reason {
-            color: #9ca3af;
+            color: var(--text-dim);
             font-size: 0.75rem;
         }
 
         .status-bar-muted {
-            color: #6b7280;
+            color: var(--text-muted);
             white-space: nowrap;
         }
 
         .status-bar-count {
-            color: #fbbf24;
+            color: var(--warning-light);
             font-weight: 500;
             white-space: nowrap;
         }
@@ -1037,8 +1079,8 @@
             justify-content: center;
             font-size: 0.7rem;
             font-weight: 600;
-            background: #f3f4f6;
-            color: #6b7280;
+            background: var(--border-light);
+            color: var(--text-muted);
             white-space: nowrap;
             gap: 1px;
         }
@@ -1050,29 +1092,29 @@
         }
 
         .status-bar-phases .bar-phase-dot.active {
-            background: #3b82f6;
+            background: var(--primary);
             color: white;
             animation: pulse 1.5s infinite;
         }
 
         .status-bar-phases .bar-phase-dot.completed {
-            background: #10b981;
+            background: var(--success);
             color: white;
         }
 
         .status-bar-phases .bar-phase-dot.paused {
-            background: #f59e0b;
+            background: var(--warning);
             color: white;
         }
 
         .status-bar-phases .bar-phase-line {
             width: 12px;
             height: 2px;
-            background: #d1d5db;
+            background: var(--toggle-off);
         }
 
         .status-bar-phases .bar-phase-line.completed {
-            background: #10b981;
+            background: var(--success);
         }
 
         .status-bar-actions {
@@ -1086,11 +1128,11 @@
         }
 
         .btn-warning {
-            background: #f59e0b;
+            background: var(--warning);
             color: #000;
         }
         .btn-warning:hover {
-            background: #d97706;
+            background: var(--warning-hover);
         }
 
         @keyframes pulse {
@@ -1147,19 +1189,19 @@
                 </div>
                 <div class="chart-legend">
                     <div class="legend-item">
-                        <div class="legend-dot green"></div>
+                        <div class="dot success"></div>
                         <span>Strong (&gt; &minus;65 dBm)</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-dot yellow"></div>
+                        <div class="dot warning"></div>
                         <span>Low (&minus;65 to &minus;75 dBm)</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-dot red"></div>
+                        <div class="dot danger"></div>
                         <span>Critical (&lt; &minus;75 dBm)</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-dot" style="background:#ef4444;border:2px solid #991b1b;width:10px;height:10px;border-radius:2px;"></div>
+                        <div class="dot" style="background:#ef4444;border:2px solid #991b1b;width:10px;height:10px;border-radius:2px;"></div>
                         <span>Offline</span>
                     </div>
                 </div>
@@ -1169,20 +1211,20 @@
         <!-- Stats -->
         <div class="stats-bar" id="statsBar">
             <div class="stat">
-                <div class="stat-dot ap"></div>
+                <div class="dot primary"></div>
                 <span class="stat-value" id="apCount">0</span>
                 <span class="stat-label">APs</span>
             </div>
             <div class="stat">
-                <div class="stat-dot green"></div>
+                <div class="dot success"></div>
                 <span class="stat-value" id="greenCount">0</span>
             </div>
             <div class="stat">
-                <div class="stat-dot yellow"></div>
+                <div class="dot warning"></div>
                 <span class="stat-value" id="yellowCount">0</span>
             </div>
             <div class="stat">
-                <div class="stat-dot red"></div>
+                <div class="dot danger"></div>
                 <span class="stat-value" id="redCount">0</span>
             </div>
         </div>
@@ -1336,6 +1378,11 @@
                         <div class="drawer-toggle-row" style="gap: 4px;">
                             <label style="font-size:0.68rem;color:#9ca3af;margin:0;">Zip</label>
                             <input type="text" id="drawerZipCode" placeholder="Auto" maxlength="5" style="width:56px;" onchange="drawerSettingChanged()">
+                        </div>
+                        <div class="drawer-toggle-row" style="gap: 4px;">
+                            <label style="font-size:0.68rem;color:#9ca3af;margin:0;">Auto-download hold</label>
+                            <input type="number" id="drawerQuarantineDays" value="7" min="0" max="90" style="width:48px;" onchange="drawerSettingChanged()">
+                            <span style="font-size:0.68rem;color:#9ca3af;">days</span>
                         </div>
                     </div>
                 </div>
@@ -2312,6 +2359,7 @@
                 idle: 'Idle', waiting: 'Waiting', running: 'Running',
                 blocked_weather: 'Blocked', blocked_time: 'Blocked',
                 blocked_no_firmware: 'No firmware', blocked_all_current: 'All current',
+                blocked_quarantine: 'On Hold',
             };
             badge.textContent = stateLabels[state] || state.replace(/_/g, ' ');
 
@@ -2319,6 +2367,7 @@
                 idle: 'idle', waiting: 'waiting', running: 'running',
                 blocked_weather: 'blocked', blocked_time: 'blocked',
                 blocked_no_firmware: 'blocked', blocked_all_current: 'current',
+                blocked_quarantine: 'waiting',
             };
             const cls = stateStyles[state];
             if (cls) badge.classList.add(cls);
@@ -2372,9 +2421,12 @@
                     const activeDays = scheduleDays[1].split(',').map(d => dayMap[d.trim().toLowerCase()]).filter(d => d !== undefined);
                     if (activeDays.length) {
                         const today = new Date();
+                        // If today's maintenance window already passed, start from tomorrow
+                        const windowEnd = parseInt((lastNextWindow || '').match(/-(\d+):00/)?.[1] || '0');
+                        const startOff = (new Date()).getHours() >= windowEnd ? 1 : 0;
                         today.setHours(0, 0, 0, 0);
                         let counted = 0;
-                        for (let off = 0; off < 90 && counted < windowIdx; off++) {
+                        for (let off = startOff; off < 90 && counted < windowIdx; off++) {
                             const check = new Date(today);
                             check.setDate(check.getDate() + off);
                             if (activeDays.includes(check.getDay())) {
@@ -2573,6 +2625,9 @@
                 // Zip code
                 document.getElementById('drawerZipCode').value = s.zip_code || '';
 
+                // Quarantine
+                document.getElementById('drawerQuarantineDays').value = s.firmware_quarantine_days || '7';
+
                 drawerSettingsLoaded = true;
             } catch (e) {}
             loadDrawerFirmware();
@@ -2602,6 +2657,7 @@
                         schedule_scope: 'all',
                         min_temperature_c: String(fToC(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
                         zip_code: document.getElementById('drawerZipCode').value,
+                        firmware_quarantine_days: document.getElementById('drawerQuarantineDays').value,
                     }),
                 });
             } catch (e) {}
@@ -2735,9 +2791,21 @@
                     const isBeta = f.channel === 'beta';
                     const isActive = drawerFwSelected[type] === f.name;
                     const escapedName = f.name.replace(/'/g, "\\'");
-                    html += `<span class="drawer-fw-chip${isActive ? ' active' : ''}${isBeta ? ' beta' : ''}" onclick="selectDrawerFw('${escapedName}','${type}')">`;
+                    const inQuarantine = !f.quarantine_cleared && f.quarantine_remaining_hours > 0;
+                    html += `<span class="drawer-fw-chip${isActive ? ' active' : ''}${isBeta ? ' beta' : ''}${inQuarantine ? ' quarantine' : ''}" onclick="selectDrawerFw('${escapedName}','${type}')"`;
+                    if (inQuarantine) {
+                        const h = f.quarantine_remaining_hours;
+                        const qLabel = h > 24 ? `${(h / 24).toFixed(0)}d` : `${h.toFixed(0)}h`;
+                        html += ` title="Available in ${qLabel}"`;
+                    }
+                    html += `>`;
                     html += `${versionLabel}`;
                     if (isBeta) html += `<span class="drawer-fw-beta-label">beta</span>`;
+                    if (inQuarantine) {
+                        const h = f.quarantine_remaining_hours;
+                        const qLabel = h > 24 ? `${(h / 24).toFixed(0)}d` : `${h.toFixed(0)}h`;
+                        html += `<span class="drawer-fw-quarantine-label">${qLabel}</span>`;
+                    }
                     html += `</span>`;
                 }
                 html += `</div>`;
@@ -2777,7 +2845,8 @@
                 const el = document.getElementById('drawerFwLastCheck');
                 if (el && result.last_check) {
                     const raw = result.last_check;
-                    const d = new Date(raw.endsWith('Z') ? raw : raw + 'Z');
+                    // Server stores local time without TZ — parse as-is (no 'Z' suffix)
+                    const d = new Date(raw);
                     const timeStr = d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
                     el.textContent = result.last_error
                         ? 'Checked ' + timeStr + ' \u2014 ' + result.last_error
