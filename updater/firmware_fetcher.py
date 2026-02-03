@@ -122,12 +122,15 @@ class FirmwareFetcher:
                     # Track as auto-fetched even if already present
                     if release.filename not in auto_fetched:
                         auto_fetched.append(release.filename)
+                    # Ensure registered (idempotent)
+                    db.register_firmware(release.filename, source="auto")
                     continue
 
                 success = await self._download_firmware(release)
                 if success:
                     downloaded.append(release.filename)
                     auto_fetched.append(release.filename)
+                    db.register_firmware(release.filename, source="auto")
                 else:
                     errors.append(f"Download failed: {release.filename}")
 

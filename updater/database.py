@@ -3,7 +3,7 @@
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -45,6 +45,19 @@ def _migrate(db):
     rollout_columns = [row[1] for row in db.execute("PRAGMA table_info(rollouts)").fetchall()]
     if "firmware_file_tns100" not in rollout_columns:
         db.execute("ALTER TABLE rollouts ADD COLUMN firmware_file_tns100 TEXT DEFAULT NULL")
+
+    # Backfill firmware_registry for existing firmware files
+    firmware_dir = Path(__file__).parent.parent / "firmware"
+    if firmware_dir.exists():
+        existing_registered = {
+            row[0] for row in db.execute("SELECT filename FROM firmware_registry").fetchall()
+        }
+        for f in firmware_dir.iterdir():
+            if f.is_file() and f.suffix in ('.bin', '.img', '.npk', '.tar', '.gz') and f.name not in existing_registered:
+                db.execute(
+                    "INSERT OR IGNORE INTO firmware_registry (filename, added_at, source) VALUES (?, ?, ?)",
+                    (f.name, "2020-01-01T00:00:00", "legacy")
+                )
 
 
 def init_db():
@@ -197,6 +210,12 @@ def init_db():
                 bank_mode TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS firmware_registry (
+                filename TEXT PRIMARY KEY,
+                added_at TEXT NOT NULL,
+                source TEXT DEFAULT 'manual'
+            );
         """)
 
         # Migrations: add columns if missing
@@ -222,6 +241,7 @@ def init_db():
             "firmware_auto_fetched_files": "",
             "setup_completed": "false",
             "admin_password_hash": "",
+            "firmware_quarantine_days": "7",
         }
         for key, value in defaults.items():
             db.execute(
@@ -575,6 +595,63 @@ def set_settings(settings: dict):
                 "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
                 (key, str(value), datetime.now().isoformat())
             )
+
+
+# Firmware registry operations
+def register_firmware(filename: str, source: str = "manual"):
+    """Register a firmware file with its addition timestamp. No-op if already registered."""
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO firmware_registry (filename, added_at, source) VALUES (?, ?, ?)",
+            (filename, datetime.now().isoformat(), source)
+        )
+
+
+def get_firmware_registry() -> list[dict]:
+    """Get all registered firmware entries."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM firmware_registry ORDER BY added_at DESC").fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_firmware_added_at(filename: str) -> Optional[str]:
+    """Get the added_at timestamp for a firmware file."""
+    with get_db() as conn:
+        row = conn.execute("SELECT added_at FROM firmware_registry WHERE filename = ?", (filename,)).fetchone()
+        return row["added_at"] if row else None
+
+
+def unregister_firmware(filename: str):
+    """Remove a firmware file from the registry."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM firmware_registry WHERE filename = ?", (filename,))
+
+
+def is_firmware_quarantine_cleared(filename: str, quarantine_days: int = 7) -> bool:
+    """Check if firmware has cleared the quarantine period."""
+    added_at = get_firmware_added_at(filename)
+    if added_at is None:
+        return True  # Not registered — treat as cleared (legacy file)
+    added_dt = datetime.fromisoformat(added_at)
+    return datetime.now() >= added_dt + timedelta(days=quarantine_days)
+
+
+def get_firmware_quarantine_info(filename: str, quarantine_days: int = 7) -> dict:
+    """Get quarantine status info for a firmware file."""
+    added_at = get_firmware_added_at(filename)
+    if added_at is None:
+        return {"cleared": True, "added_at": None, "clears_at": None, "remaining_hours": 0}
+    added_dt = datetime.fromisoformat(added_at)
+    clears_at = added_dt + timedelta(days=quarantine_days)
+    now = datetime.now()
+    cleared = now >= clears_at
+    remaining = max(0, (clears_at - now).total_seconds() / 3600) if not cleared else 0
+    return {
+        "cleared": cleared,
+        "added_at": added_at,
+        "clears_at": clears_at.isoformat(),
+        "remaining_hours": round(remaining, 1),
+    }
 
 
 # Job History operations
