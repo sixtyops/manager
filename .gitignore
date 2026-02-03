@@ -25,5 +25,14 @@ Thumbs.db
 firmware/
 data/
 
+# Runtime directories
+backups/
+certbot/
+nginx/ssl/
+
+# Environment
+.env
+.admin_password
+
 # Logs
 *.log
