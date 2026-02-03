@@ -11,6 +11,7 @@ import bcrypt as _bcrypt
 from fastapi import Request, WebSocket, HTTPException
 
 from . import database as db
+from . import radius_config
 
 logger = logging.getLogger(__name__)
 
@@ -23,56 +24,13 @@ SESSION_TTL_HOURS = 24
 # ---------------------------------------------------------------------------
 
 def _radius_configured() -> bool:
-    """Check if RADIUS env vars are set."""
-    return bool(os.environ.get("RADIUS_SERVER") and os.environ.get("RADIUS_SECRET"))
+    """Check if RADIUS is configured (via database settings or env vars)."""
+    return radius_config.is_web_radius_enabled()
 
 
 def authenticate_radius(username: str, password: str) -> bool:
     """Authenticate via RADIUS. Returns False if unconfigured or rejected."""
-    if not _radius_configured():
-        return False
-
-    try:
-        from pyrad.client import Client
-        from pyrad.dictionary import Dictionary
-        import pyrad.packet
-
-        server = os.environ["RADIUS_SERVER"]
-        secret = os.environ["RADIUS_SECRET"].encode()
-        port = int(os.environ.get("RADIUS_PORT", "1812"))
-
-        # pyrad requires a dictionary file; use a minimal inline one
-        import tempfile
-        dict_content = (
-            "ATTRIBUTE\tUser-Name\t1\tstring\n"
-            "ATTRIBUTE\tUser-Password\t2\tstring\n"
-        )
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".dict", delete=False) as f:
-            f.write(dict_content)
-            dict_path = f.name
-
-        try:
-            client = Client(
-                server=server,
-                secret=secret,
-                authport=port,
-                dict=Dictionary(dict_path),
-            )
-            client.timeout = 5
-            client.retries = 1
-
-            req = client.CreateAuthPacket(code=pyrad.packet.AccessRequest)
-            req["User-Name"] = username
-            req["User-Password"] = req.PwCrypt(password)
-
-            reply = client.SendPacket(req)
-            return reply.code == pyrad.packet.AccessAccept
-        finally:
-            os.unlink(dict_path)
-
-    except Exception as e:
-        logger.error(f"RADIUS authentication error: {e}")
-        return False
+    return radius_config.authenticate_via_radius(username, password)
 
 
 # ---------------------------------------------------------------------------
@@ -105,8 +63,19 @@ def authenticate_local(username: str, password: str) -> bool:
 
 
 def is_setup_required() -> bool:
-    """Check if the admin needs to change the default password."""
+    """Check if the admin needs to set or change the default password."""
     return db.get_setting("setup_completed", "false") != "true"
+
+
+def is_first_run() -> bool:
+    """Check if this is a fresh install with no password configured yet.
+
+    Returns True if no password hash in DB and no ADMIN_PASSWORD env var.
+    In this state, the setup page should be accessible without authentication.
+    """
+    has_db_hash = bool(db.get_setting("admin_password_hash", ""))
+    has_env_password = bool(os.environ.get("ADMIN_PASSWORD"))
+    return not has_db_hash and not has_env_password
 
 
 def complete_setup(new_password: str):

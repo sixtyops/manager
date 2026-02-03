@@ -18,11 +18,15 @@
 </head>
 <body>
     <div class="auth-card">
-        <h1>Change Default Password</h1>
-        <p class="subtitle">Please set a new password before continuing</p>
+        <h1>{% if first_run %}Create Admin Password{% else %}Change Default Password{% endif %}</h1>
+        <p class="subtitle">{% if first_run %}Set up your admin account{% else %}Please set a new password before continuing{% endif %}</p>
 
         <div class="info-message">
+            {% if first_run %}
+            Welcome! Create an admin password to get started. Your password must be at least 8 characters.
+            {% else %}
             For security, you must change the default admin password. Your new password must be at least 8 characters.
+            {% endif %}
         </div>
 
         <div class="error-message {{ 'visible' if error else '' }}">
@@ -30,13 +34,15 @@
         </div>
 
         <form method="POST" action="/setup">
+            {% if not first_run %}
             <div class="form-group">
                 <label for="current_password">Current Password</label>
                 <input type="password" id="current_password" name="current_password" autocomplete="current-password" required autofocus>
             </div>
+            {% endif %}
             <div class="form-group">
                 <label for="new_password">New Password</label>
-                <input type="password" id="new_password" name="new_password" autocomplete="new-password" required minlength="8">
+                <input type="password" id="new_password" name="new_password" autocomplete="new-password" required minlength="8" {% if first_run %}autofocus{% endif %}>
             </div>
             <div class="form-group">
                 <label for="confirm_password">Confirm New Password</label>
