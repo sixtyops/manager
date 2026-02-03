@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Callable, Optional
 
 from . import database as db
+from . import radius_config
 from .tachyon import TachyonClient
 from .models import SignalHealth
 
@@ -257,17 +258,35 @@ class NetworkPoller:
             return None
 
     async def _check_cpe_auth(self, cpe_ip: str, username: str, password: str) -> str:
-        """Check if we can authenticate to a CPE using the parent AP's credentials.
+        """Check if we can authenticate to a CPE.
+
+        Tries authentication in order:
+        1. Parent AP's credentials
+        2. Global default device credentials (if enabled)
 
         Returns "ok", "failed", or "unreachable".
         """
+        # Get effective credentials (device-specific or global defaults)
+        effective_user, effective_pass = radius_config.get_device_credentials(username, password)
+
         try:
-            client = TachyonClient(cpe_ip, username, password, timeout=10)
+            client = TachyonClient(cpe_ip, effective_user, effective_pass, timeout=10)
             result = await client.login()
             if result is True:
                 return "ok"
             if isinstance(result, str) and "not reachable" in result.lower():
                 return "unreachable"
+
+            # If AP credentials failed, try global defaults as fallback
+            if effective_user == username and radius_config.is_device_auth_enabled():
+                default_config = radius_config.get_device_auth_config()
+                if default_config.username != username:  # Don't retry same creds
+                    logger.debug(f"Trying global default credentials for CPE {cpe_ip}")
+                    client = TachyonClient(cpe_ip, default_config.username, default_config.password, timeout=10)
+                    result = await client.login()
+                    if result is True:
+                        return "ok"
+
             return "failed"
         except Exception as e:
             logger.debug(f"CPE auth probe failed for {cpe_ip}: {e}")

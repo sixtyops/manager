@@ -242,6 +242,36 @@ def init_db():
             "setup_completed": "false",
             "admin_password_hash": "",
             "firmware_quarantine_days": "7",
+            "slack_webhook_url": "",
+            # RADIUS configuration for web authentication
+            "radius_enabled": "",  # Empty = use env vars, "true"/"false" = explicit
+            "radius_server": "",
+            "radius_secret": "",
+            "radius_port": "1812",
+            "radius_timeout": "5",
+            # Global default device credentials
+            "device_default_auth_enabled": "false",
+            "device_default_username": "",
+            "device_default_password": "",
+            # SSL/HTTPS configuration
+            "ssl_enabled": "false",
+            "ssl_domain": "",
+            "ssl_email": "",
+            "ssl_cert_expires": "",
+            # Git backup configuration
+            "backup_enabled": "false",
+            "backup_repo_url": "",
+            "backup_auth_method": "",
+            "backup_last_run": "",
+            "backup_last_status": "",
+            # Setup wizard tracking
+            "setup_wizard_completed": "false",
+            # Auto-update configuration
+            "autoupdate_enabled": "false",
+            "autoupdate_last_check": "",
+            "autoupdate_available_version": "",
+            "autoupdate_release_url": "",
+            "autoupdate_release_notes": "",
         }
         for key, value in defaults.items():
             db.execute(

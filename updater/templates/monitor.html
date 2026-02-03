@@ -1155,6 +1155,8 @@
                 </button>
                 <div class="user-dropdown" id="userDropdown">
                     <button class="dropdown-item" onclick="openBackupModal()">Backup / Restore</button>
+                    <button class="dropdown-item" onclick="openNotificationsModal()">Notifications</button>
+                    <button class="dropdown-item" onclick="openAuthModal()">Authentication</button>
                     <div style="border-top:1px solid #e5e7eb;"></div>
                     <form method="POST" action="/logout" style="margin:0;">
                         <button type="submit" class="dropdown-item">Logout</button>
@@ -1442,6 +1444,106 @@
             </div>
 
             <div id="backupStatus" style="font-size:0.75rem;color:#6b7280;margin-top:12px;min-height:1.2em;"></div>
+        </div>
+    </div>
+
+    <!-- Notifications Modal -->
+    <div class="backup-overlay" id="notificationsOverlay" onclick="if(event.target===this)closeNotificationsModal()">
+        <div class="backup-modal">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <h3 style="margin:0;">Notifications</h3>
+                <button onclick="closeNotificationsModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:1.2rem;line-height:1;padding:4px;">&times;</button>
+            </div>
+
+            <!-- Slack Webhook -->
+            <div>
+                <label>Slack Webhook</label>
+                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 6px 0;">Get notified in Slack when firmware update jobs complete. Create an <a href="https://api.slack.com/messaging/webhooks" target="_blank" style="color:var(--primary);">Incoming Webhook</a> in your Slack workspace and paste the URL below.</p>
+                <div style="display:flex;flex-direction:column;gap:8px;">
+                    <input type="text" id="notifSlackWebhook" placeholder="https://hooks.slack.com/services/..." style="width:100%;font-size:0.8rem;">
+                    <div style="display:flex;gap:6px;align-items:center;">
+                        <button class="backup-btn" onclick="saveSlackWebhook()">Save</button>
+                        <button class="backup-btn" onclick="testSlackWebhookModal()" style="background:#6b7280;">Test</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="notifStatus" style="font-size:0.75rem;color:#6b7280;margin-top:12px;min-height:1.2em;"></div>
+        </div>
+    </div>
+
+    <!-- Authentication Modal -->
+    <div class="backup-overlay" id="authOverlay" onclick="if(event.target===this)closeAuthModal()">
+        <div class="backup-modal" style="width:520px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <h3 style="margin:0;">Authentication Settings</h3>
+                <button onclick="closeAuthModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:1.2rem;line-height:1;padding:4px;">&times;</button>
+            </div>
+
+            <!-- Web RADIUS Section -->
+            <div style="margin-bottom:20px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                    <h4 style="margin:0;font-size:0.85rem;font-weight:600;">Web RADIUS Authentication</h4>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
+                        <input type="checkbox" id="authRadiusEnabled" onchange="toggleRadiusFields()">
+                        <span style="font-size:0.75rem;color:#6b7280;">Enabled</span>
+                    </label>
+                </div>
+                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 10px 0;">Authenticate admin users via a RADIUS server. Falls back to local authentication if RADIUS is unavailable.</p>
+                <div id="radiusFields" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                    <div style="grid-column:span 2;">
+                        <label style="font-size:0.7rem;color:#6b7280;">RADIUS Server</label>
+                        <input type="text" id="authRadiusServer" placeholder="radius.example.com" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.7rem;color:#6b7280;">Shared Secret</label>
+                        <input type="password" id="authRadiusSecret" placeholder="Enter shared secret" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                        <div>
+                            <label style="font-size:0.7rem;color:#6b7280;">Port</label>
+                            <input type="number" id="authRadiusPort" value="1812" min="1" max="65535" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.7rem;color:#6b7280;">Timeout (s)</label>
+                            <input type="number" id="authRadiusTimeout" value="5" min="1" max="30" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                        </div>
+                    </div>
+                </div>
+                <div style="display:flex;gap:6px;margin-top:10px;">
+                    <button class="backup-btn" onclick="saveRadiusConfig()">Save RADIUS</button>
+                    <button class="backup-btn" onclick="testRadiusConfig()" style="background:#6b7280;color:#fff;">Test</button>
+                </div>
+            </div>
+
+            <div style="border-top:1px solid #e5e7eb;margin:16px 0;"></div>
+
+            <!-- Global Device Credentials Section -->
+            <div>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                    <h4 style="margin:0;font-size:0.85rem;font-weight:600;">Global Device Credentials</h4>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
+                        <input type="checkbox" id="authDeviceEnabled" onchange="toggleDeviceFields()">
+                        <span style="font-size:0.75rem;color:#6b7280;">Enabled</span>
+                    </label>
+                </div>
+                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 10px 0;">Default credentials for connecting to devices (APs/CPEs) when no device-specific credentials are configured. Used as fallback for CPE authentication.</p>
+                <div id="deviceFields" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                    <div>
+                        <label style="font-size:0.7rem;color:#6b7280;">Username</label>
+                        <input type="text" id="authDeviceUsername" placeholder="root" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.7rem;color:#6b7280;">Password</label>
+                        <input type="password" id="authDevicePassword" placeholder="Enter password" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                    </div>
+                </div>
+                <div style="display:flex;gap:6px;margin-top:10px;">
+                    <button class="backup-btn" onclick="saveDeviceConfig()">Save Device Credentials</button>
+                </div>
+            </div>
+
+            <div id="authStatus" style="font-size:0.75rem;color:#6b7280;margin-top:16px;min-height:1.2em;"></div>
         </div>
     </div>
 
@@ -2324,6 +2426,216 @@
         function closeBackupModal() {
             document.getElementById('backupOverlay').classList.remove('open');
             document.getElementById('backupStatus').textContent = '';
+        }
+
+        // Notifications modal
+        async function openNotificationsModal() {
+            document.getElementById('userDropdown').classList.remove('open');
+            document.getElementById('notificationsOverlay').classList.add('open');
+            document.getElementById('notifStatus').textContent = '';
+            // Load current webhook URL
+            try {
+                const resp = await fetch('/api/settings');
+                const data = await resp.json();
+                document.getElementById('notifSlackWebhook').value = data.settings.slack_webhook_url || '';
+            } catch (e) {}
+        }
+        function closeNotificationsModal() {
+            document.getElementById('notificationsOverlay').classList.remove('open');
+            document.getElementById('notifStatus').textContent = '';
+        }
+        async function saveSlackWebhook() {
+            const url = document.getElementById('notifSlackWebhook').value.trim();
+            const statusEl = document.getElementById('notifStatus');
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ slack_webhook_url: url }),
+                });
+                statusEl.textContent = 'Saved!';
+                statusEl.style.color = '#10b981';
+            } catch (e) {
+                statusEl.textContent = 'Failed to save: ' + e.message;
+                statusEl.style.color = '#ef4444';
+            }
+        }
+        async function testSlackWebhookModal() {
+            const url = document.getElementById('notifSlackWebhook').value.trim();
+            const statusEl = document.getElementById('notifStatus');
+            if (!url) {
+                statusEl.textContent = 'Enter a webhook URL first';
+                statusEl.style.color = '#f59e0b';
+                return;
+            }
+            // Save first, then test
+            await saveSlackWebhook();
+            statusEl.textContent = 'Sending test...';
+            statusEl.style.color = '#6b7280';
+            try {
+                const resp = await fetch('/api/slack/test', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    statusEl.textContent = 'Test sent! Check your Slack channel.';
+                    statusEl.style.color = '#10b981';
+                } else {
+                    statusEl.textContent = data.message || 'Failed to send test';
+                    statusEl.style.color = '#ef4444';
+                }
+            } catch (e) {
+                statusEl.textContent = 'Error: ' + e.message;
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        // Authentication modal
+        async function openAuthModal() {
+            document.getElementById('userDropdown').classList.remove('open');
+            document.getElementById('authOverlay').classList.add('open');
+            document.getElementById('authStatus').textContent = '';
+
+            // Load current auth config
+            try {
+                const resp = await fetch('/api/auth/config');
+                const data = await resp.json();
+
+                // Web RADIUS
+                const radiusEnabled = data.web_radius?.enabled || false;
+                document.getElementById('authRadiusEnabled').checked = radiusEnabled;
+                document.getElementById('authRadiusServer').value = data.web_radius?.server || '';
+                document.getElementById('authRadiusPort').value = data.web_radius?.port || 1812;
+                document.getElementById('authRadiusTimeout').value = data.web_radius?.timeout || 5;
+                document.getElementById('authRadiusSecret').value = ''; // Don't show existing secret
+                toggleRadiusFields();
+
+                // Device defaults
+                const deviceEnabled = data.device_defaults?.enabled || false;
+                document.getElementById('authDeviceEnabled').checked = deviceEnabled;
+                document.getElementById('authDeviceUsername').value = data.device_defaults?.username || '';
+                document.getElementById('authDevicePassword').value = ''; // Don't show existing password
+                toggleDeviceFields();
+            } catch (e) {
+                document.getElementById('authStatus').textContent = 'Failed to load config';
+                document.getElementById('authStatus').style.color = '#ef4444';
+            }
+        }
+
+        function closeAuthModal() {
+            document.getElementById('authOverlay').classList.remove('open');
+            document.getElementById('authStatus').textContent = '';
+        }
+
+        function toggleRadiusFields() {
+            const enabled = document.getElementById('authRadiusEnabled').checked;
+            const fields = document.getElementById('radiusFields');
+            fields.style.opacity = enabled ? '1' : '0.5';
+            fields.querySelectorAll('input').forEach(el => el.disabled = !enabled);
+        }
+
+        function toggleDeviceFields() {
+            const enabled = document.getElementById('authDeviceEnabled').checked;
+            const fields = document.getElementById('deviceFields');
+            fields.style.opacity = enabled ? '1' : '0.5';
+            fields.querySelectorAll('input').forEach(el => el.disabled = !enabled);
+        }
+
+        async function saveRadiusConfig() {
+            const statusEl = document.getElementById('authStatus');
+            const enabled = document.getElementById('authRadiusEnabled').checked;
+            const server = document.getElementById('authRadiusServer').value.trim();
+            const secret = document.getElementById('authRadiusSecret').value;
+            const port = parseInt(document.getElementById('authRadiusPort').value) || 1812;
+            const timeout = parseInt(document.getElementById('authRadiusTimeout').value) || 5;
+
+            if (enabled && (!server || !secret)) {
+                statusEl.textContent = 'Server and secret required when enabled';
+                statusEl.style.color = '#f59e0b';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/auth/radius', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled, server, secret, port, timeout }),
+                });
+                if (resp.ok) {
+                    statusEl.textContent = 'RADIUS config saved!';
+                    statusEl.style.color = '#10b981';
+                } else {
+                    throw new Error('Failed to save');
+                }
+            } catch (e) {
+                statusEl.textContent = 'Failed to save RADIUS config';
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function testRadiusConfig() {
+            const statusEl = document.getElementById('authStatus');
+            statusEl.textContent = 'Testing RADIUS...';
+            statusEl.style.color = '#6b7280';
+
+            // Prompt for test credentials
+            const testUser = prompt('Enter username to test RADIUS authentication:');
+            if (!testUser) {
+                statusEl.textContent = '';
+                return;
+            }
+            const testPass = prompt('Enter password:');
+            if (!testPass) {
+                statusEl.textContent = '';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/auth/test-radius', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: testUser, password: testPass }),
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    statusEl.textContent = data.message;
+                    statusEl.style.color = '#10b981';
+                } else {
+                    statusEl.textContent = data.message || 'RADIUS test failed';
+                    statusEl.style.color = '#ef4444';
+                }
+            } catch (e) {
+                statusEl.textContent = 'Error testing RADIUS: ' + e.message;
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function saveDeviceConfig() {
+            const statusEl = document.getElementById('authStatus');
+            const enabled = document.getElementById('authDeviceEnabled').checked;
+            const username = document.getElementById('authDeviceUsername').value.trim();
+            const password = document.getElementById('authDevicePassword').value;
+
+            if (enabled && (!username || !password)) {
+                statusEl.textContent = 'Username and password required when enabled';
+                statusEl.style.color = '#f59e0b';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/auth/device-defaults', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled, username, password }),
+                });
+                if (resp.ok) {
+                    statusEl.textContent = 'Device credentials saved!';
+                    statusEl.style.color = '#10b981';
+                } else {
+                    throw new Error('Failed to save');
+                }
+            } catch (e) {
+                statusEl.textContent = 'Failed to save device credentials';
+                statusEl.style.color = '#ef4444';
+            }
         }
 
         // ── Status Bar ──
