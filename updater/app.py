@@ -986,6 +986,8 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
     file_size = firmware_path.stat().st_size
     logger.info(f"Firmware uploaded: {file.filename} ({file_size:,} bytes)")
 
+    db.register_firmware(file.filename, source="manual")
+
     return {
         "filename": file.filename,
         "size": file_size,
@@ -1009,17 +1011,29 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
     except (ValueError, TypeError):
         channels = {}
 
+    quarantine_days = int(db.get_setting("firmware_quarantine_days", "7"))
+    registry = {r["filename"]: r for r in db.get_firmware_registry()}
+
     files = []
     for f in FIRMWARE_DIR.iterdir():
         if f.is_file() and f.suffix in {".bin", ".img", ".npk", ".tar", ".gz"}:
+            q_info = db.get_firmware_quarantine_info(f.name, quarantine_days)
+            reg = registry.get(f.name)
             files.append({
                 "name": f.name,
                 "size": f.stat().st_size,
                 "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
                 "source": "auto" if f.name in auto_fetched else "manual",
                 "channel": channels.get(f.name, ""),
+                "added_at": reg["added_at"] if reg else None,
+                "quarantine_cleared": q_info["cleared"],
+                "quarantine_clears_at": q_info["clears_at"],
+                "quarantine_remaining_hours": q_info["remaining_hours"],
             })
-    return {"files": sorted(files, key=lambda x: x["modified"], reverse=True)}
+    return {
+        "files": sorted(files, key=lambda x: x["modified"], reverse=True),
+        "quarantine_days": quarantine_days,
+    }
 
 
 @app.delete("/api/firmware-files/{filename}")
@@ -1029,6 +1043,7 @@ async def delete_firmware_file(filename: str, session: dict = Depends(require_au
     if not path.exists():
         raise HTTPException(404, "File not found")
     path.unlink()
+    db.unregister_firmware(filename)
     return {"success": True}
 
 
