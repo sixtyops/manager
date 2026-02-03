@@ -25,9 +25,15 @@ from . import database as db
 from .poller import init_poller, get_poller
 from .scheduler import init_scheduler, get_scheduler
 from .firmware_fetcher import init_fetcher, get_fetcher
+from .release_checker import init_checker, get_checker, apply_update
 from . import services
-from .auth import require_auth, require_auth_ws, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, complete_setup
+from .auth import require_auth, require_auth_ws, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup
 from .backup import build_csv_export, process_csv_import
+from . import telemetry
+from . import slack
+from . import ssl_manager
+from . import git_backup
+from . import radius_config
 
 # Configure logging
 logging.basicConfig(
@@ -42,6 +48,37 @@ FIRMWARE_DIR = BASE_DIR.parent / "firmware"
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR.parent / "static"
 DATA_DIR = BASE_DIR.parent / "data"
+
+# Allowed characters for firmware filenames (security: prevent path traversal)
+SAFE_FILENAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
+
+
+def validate_firmware_filename(filename: str) -> str:
+    """Validate and sanitize firmware filename to prevent path traversal attacks.
+
+    Returns the validated filename or raises HTTPException if invalid.
+    """
+    if not filename:
+        raise HTTPException(400, "Filename is required")
+
+    # Get just the basename to prevent directory traversal
+    basename = Path(filename).name
+
+    # Check for empty or dot-only names
+    if not basename or basename in ('.', '..'):
+        raise HTTPException(400, "Invalid filename")
+
+    # Check filename matches safe pattern
+    if not SAFE_FILENAME_PATTERN.match(basename):
+        raise HTTPException(400, "Filename contains invalid characters")
+
+    # Verify the resolved path stays within FIRMWARE_DIR
+    resolved = (FIRMWARE_DIR / basename).resolve()
+    if not str(resolved).startswith(str(FIRMWARE_DIR.resolve())):
+        raise HTTPException(400, "Invalid filename")
+
+    return basename
+
 
 # Ensure directories exist
 FIRMWARE_DIR.mkdir(exist_ok=True)
@@ -82,6 +119,35 @@ async def _periodic_cleanup():
             logger.error(f"Periodic cleanup error: {e}")
 
 
+async def _backup_scheduler():
+    """Run daily backups at 5 AM if backup is configured."""
+    while True:
+        await asyncio.sleep(300)  # Check every 5 minutes
+        try:
+            settings = db.get_all_settings()
+            if settings.get("backup_enabled") != "true":
+                continue
+
+            # Check if it's 5 AM
+            now = datetime.now()
+            if now.hour != 5:
+                continue
+
+            # Check if we already ran today
+            last_run = settings.get("backup_last_run", "")
+            if last_run and last_run[:10] == now.strftime("%Y-%m-%d"):
+                continue
+
+            logger.info("Running scheduled backup")
+            success, msg = await git_backup.run_backup()
+            if success:
+                logger.info(f"Scheduled backup completed: {msg}")
+            else:
+                logger.error(f"Scheduled backup failed: {msg}")
+        except Exception as e:
+            logger.error(f"Backup scheduler error: {e}")
+
+
 def _cleanup_completed_jobs(max_age_seconds: int = 3600):
     """Remove completed jobs from in-memory dict after they've been persisted."""
     now = datetime.now()
@@ -108,17 +174,22 @@ async def lifespan(app: FastAPI):
     await scheduler.start()
     fetcher = init_fetcher(FIRMWARE_DIR, broadcast)
     await fetcher.start()
+    checker = init_checker(broadcast)
+    await checker.start()
     cleanup_task = asyncio.create_task(_periodic_cleanup())
+    backup_task = asyncio.create_task(_backup_scheduler())
     logger.info("Application started")
 
     yield
 
     # Shutdown
+    backup_task.cancel()
     cleanup_task.cancel()
     try:
         await cleanup_task
     except asyncio.CancelledError:
         pass
+    await checker.stop()
     await fetcher.stop()
     await scheduler.stop()
     await poller.stop()
@@ -140,6 +211,9 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, error: str = None):
     """Serve the login page."""
+    # First run with no password configured - redirect to setup
+    if is_first_run():
+        return RedirectResponse(url="/setup", status_code=302)
     return templates.TemplateResponse("login.html", {"request": request, "error": error})
 
 
@@ -161,6 +235,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
         key=SESSION_COOKIE_NAME,
         value=session_id,
         httponly=True,
+        secure=True,
         max_age=86400,
         samesite="lax",
     )
@@ -168,44 +243,92 @@ async def login(request: Request, username: str = Form(...), password: str = For
 
 
 @app.get("/setup", response_class=HTMLResponse)
-async def setup_page(request: Request, session: dict = Depends(require_auth)):
-    """Serve the initial password setup page."""
+async def setup_page(request: Request):
+    """Serve the initial password setup page.
+
+    Accessible without auth on first run (no password configured yet).
+    """
+    first_run = is_first_run()
+
+    if not first_run:
+        # Not first run - require authentication
+        session_id = request.cookies.get(SESSION_COOKIE_NAME)
+        if not session_id or not db.get_session(session_id):
+            return RedirectResponse(url="/login", status_code=302)
+
     if not is_setup_required():
         return RedirectResponse(url="/", status_code=302)
-    return templates.TemplateResponse("setup.html", {"request": request, "error": None})
+
+    return templates.TemplateResponse("setup.html", {
+        "request": request,
+        "error": None,
+        "first_run": first_run,
+    })
 
 
 @app.post("/setup")
 async def setup_submit(
     request: Request,
-    current_password: str = Form(...),
     new_password: str = Form(...),
     confirm_password: str = Form(...),
-    session: dict = Depends(require_auth),
+    current_password: str = Form(None),
 ):
-    """Handle initial password setup submission."""
+    """Handle initial password setup submission.
+
+    On first run (no password configured), current_password is not required.
+    Otherwise, user must be authenticated and provide current password.
+    """
+    first_run = is_first_run()
+
+    if not first_run:
+        # Not first run - require authentication and current password
+        session_id = request.cookies.get(SESSION_COOKIE_NAME)
+        session = db.get_session(session_id) if session_id else None
+        if not session:
+            return RedirectResponse(url="/login", status_code=302)
+
+        if not current_password:
+            return templates.TemplateResponse("setup.html", {
+                "request": request,
+                "error": "Current password is required.",
+                "first_run": False,
+            }, status_code=400)
+
+        user = authenticate(session["username"], current_password)
+        if not user:
+            return templates.TemplateResponse("setup.html", {
+                "request": request,
+                "error": "Current password is incorrect.",
+                "first_run": False,
+            }, status_code=400)
+        username = session["username"]
+    else:
+        username = "admin"
+
     if not is_setup_required():
         return RedirectResponse(url="/", status_code=302)
 
-    # Validate current password
-    user = authenticate(session["username"], current_password)
-    if not user:
-        return templates.TemplateResponse("setup.html", {
-            "request": request, "error": "Current password is incorrect.",
-        }, status_code=400)
-
     if new_password != confirm_password:
         return templates.TemplateResponse("setup.html", {
-            "request": request, "error": "New passwords do not match.",
+            "request": request,
+            "error": "New passwords do not match.",
+            "first_run": first_run,
         }, status_code=400)
 
     if len(new_password) < 8:
         return templates.TemplateResponse("setup.html", {
-            "request": request, "error": "Password must be at least 8 characters.",
+            "request": request,
+            "error": "Password must be at least 8 characters.",
+            "first_run": first_run,
         }, status_code=400)
 
     complete_setup(new_password)
-    logger.info(f"Admin password changed by {session['username']} during initial setup")
+    logger.info(f"Admin password {'created' if first_run else 'changed'} by {username} during initial setup")
+
+    if first_run:
+        # First run - redirect to login so they can log in with the new password
+        return RedirectResponse(url="/login", status_code=303)
+
     return RedirectResponse(url="/", status_code=303)
 
 
@@ -222,6 +345,143 @@ async def logout(request: Request):
 
 
 # ============================================================================
+# Setup Wizard Routes
+# ============================================================================
+
+def _is_wizard_needed() -> bool:
+    """Check if the setup wizard should be shown."""
+    return db.get_setting("setup_wizard_completed", "false") != "true"
+
+
+@app.get("/setup-wizard", response_class=HTMLResponse)
+async def setup_wizard_page(request: Request, step: int = 1, session: dict = Depends(require_auth)):
+    """Serve the setup wizard page."""
+    if not _is_wizard_needed():
+        return RedirectResponse(url="/", status_code=302)
+    return templates.TemplateResponse("setup_wizard.html", {
+        "request": request, "step": step,
+        "ssl_status": ssl_manager.get_ssl_status(),
+        "backup_status": git_backup.get_backup_status(),
+        "error": None, "success": None,
+    })
+
+
+@app.post("/setup-wizard")
+async def setup_wizard_submit(
+    request: Request, step: int = Form(...), action: str = Form(...),
+    ssl_domain: str = Form(None), ssl_email: str = Form(None),
+    backup_repo: str = Form(None), backup_auth: str = Form(None),
+    backup_token: str = Form(None), backup_ssh_key: str = Form(None),
+    session: dict = Depends(require_auth),
+):
+    """Handle setup wizard form submissions."""
+    ssl_status = ssl_manager.get_ssl_status()
+    backup_status = git_backup.get_backup_status()
+
+    if step == 1:
+        if action == "configure" and ssl_domain and ssl_email:
+            ok, msg = await ssl_manager.obtain_certificate(ssl_domain, ssl_email)
+            if not ok:
+                return templates.TemplateResponse("setup_wizard.html", {
+                    "request": request, "step": 1, "ssl_status": ssl_status,
+                    "backup_status": backup_status, "error": msg, "success": None,
+                })
+        return templates.TemplateResponse("setup_wizard.html", {
+            "request": request, "step": 2,
+            "ssl_status": ssl_manager.get_ssl_status(),
+            "backup_status": backup_status, "error": None, "success": None,
+        })
+    elif step == 2:
+        if action == "configure" and backup_repo and backup_auth:
+            ok, msg = await git_backup.init_backup_repo(
+                repo_url=backup_repo, auth_method=backup_auth,
+                ssh_key=backup_ssh_key, token=backup_token,
+            )
+            if not ok:
+                return templates.TemplateResponse("setup_wizard.html", {
+                    "request": request, "step": 2, "ssl_status": ssl_status,
+                    "backup_status": backup_status, "error": msg, "success": None,
+                })
+        return templates.TemplateResponse("setup_wizard.html", {
+            "request": request, "step": 3,
+            "ssl_status": ssl_manager.get_ssl_status(),
+            "backup_status": git_backup.get_backup_status(),
+            "error": None, "success": None,
+        })
+    elif step == 3:
+        db.set_setting("setup_wizard_completed", "true")
+        return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url="/setup-wizard", status_code=303)
+
+
+@app.get("/ssl-setup", response_class=HTMLResponse)
+async def ssl_setup_page(request: Request, session: dict = Depends(require_auth)):
+    """Serve the SSL setup page."""
+    return templates.TemplateResponse("ssl_setup.html", {
+        "request": request, "ssl_status": ssl_manager.get_ssl_status(),
+        "error": None, "success": None,
+    })
+
+
+@app.post("/ssl-setup")
+async def ssl_setup_submit(
+    request: Request, domain: str = Form(...), email: str = Form(...),
+    session: dict = Depends(require_auth),
+):
+    """Handle SSL certificate request."""
+    success, message = await ssl_manager.obtain_certificate(domain, email)
+    status = ssl_manager.get_ssl_status()
+    return templates.TemplateResponse("ssl_setup.html", {
+        "request": request, "ssl_status": status,
+        "error": None if success else message,
+        "success": message if success else None,
+    }, status_code=200 if success else 400)
+
+
+@app.get("/api/ssl/status")
+async def get_ssl_status_api(session: dict = Depends(require_auth)):
+    return ssl_manager.get_ssl_status()
+
+
+@app.get("/backup-setup", response_class=HTMLResponse)
+async def backup_setup_page(request: Request, session: dict = Depends(require_auth)):
+    """Serve the backup setup page."""
+    return templates.TemplateResponse("backup_setup.html", {
+        "request": request, "backup_status": git_backup.get_backup_status(),
+        "error": None, "success": None,
+    })
+
+
+@app.post("/backup-setup")
+async def backup_setup_submit(
+    request: Request, repo_url: str = Form(...), auth_method: str = Form(...),
+    token: str = Form(None), ssh_key: str = Form(None),
+    session: dict = Depends(require_auth),
+):
+    """Handle backup configuration."""
+    success, message = await git_backup.init_backup_repo(
+        repo_url=repo_url, auth_method=auth_method, ssh_key=ssh_key, token=token,
+    )
+    return templates.TemplateResponse("backup_setup.html", {
+        "request": request, "backup_status": git_backup.get_backup_status(),
+        "error": None if success else message,
+        "success": message if success else None,
+    }, status_code=200 if success else 400)
+
+
+@app.post("/backup-run")
+async def backup_run_now(session: dict = Depends(require_auth)):
+    """Trigger an immediate backup."""
+    await git_backup.run_backup()
+    return RedirectResponse(url="/backup-setup", status_code=303)
+
+
+@app.get("/api/backup/git-status")
+async def get_git_backup_status_api(session: dict = Depends(require_auth)):
+    return git_backup.get_backup_status()
+
+
+# ============================================================================
 # Page Routes
 # ============================================================================
 
@@ -230,6 +490,8 @@ async def index(request: Request, session: dict = Depends(require_auth)):
     """Serve the main page (monitor view)."""
     if is_setup_required():
         return RedirectResponse(url="/setup", status_code=302)
+    if _is_wizard_needed():
+        return RedirectResponse(url="/setup-wizard", status_code=302)
     return templates.TemplateResponse("monitor.html", {"request": request})
 
 
@@ -373,7 +635,8 @@ async def create_site(
     except Exception as e:
         if "UNIQUE constraint" in str(e):
             raise HTTPException(400, f"Site '{name}' already exists")
-        raise HTTPException(500, str(e))
+        logger.error(f"Failed to create site: {e}")
+        raise HTTPException(500, "Failed to create site")
 
 
 @app.put("/api/sites/{site_id}")
@@ -452,12 +715,13 @@ async def add_device(
     try:
         login_result = await client.login()
         if login_result is not True:
-            raise HTTPException(status_code=400, detail=f"Cannot connect to {ip}: {login_result}")
+            raise HTTPException(status_code=400, detail=f"Cannot connect to {ip}")
         info = await client.get_ap_info()
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Cannot connect to {ip}: {e}")
+        logger.error(f"Failed to connect to device {ip}: {e}")
+        raise HTTPException(status_code=400, detail=f"Cannot connect to {ip}")
 
     model = info.get("model", "")
     poller = get_poller()
@@ -735,6 +999,108 @@ async def update_settings(request: Request, session: dict = Depends(require_auth
     return {"success": True}
 
 
+@app.post("/api/slack/test")
+async def test_slack_webhook(session: dict = Depends(require_auth)):
+    """Send a test notification to the configured Slack webhook."""
+    success, message = await slack.send_test_notification()
+    return {"success": success, "message": message}
+
+
+# ============================================================================
+# Auto-Update API
+# ============================================================================
+
+@app.get("/api/updates")
+async def get_update_status(session: dict = Depends(require_auth)):
+    """Get current update status."""
+    checker = get_checker()
+    if checker:
+        return checker.get_update_status()
+    return {"error": "Release checker not initialized"}
+
+
+@app.post("/api/updates/check")
+async def check_for_updates(session: dict = Depends(require_auth)):
+    """Manually trigger a check for updates."""
+    checker = get_checker()
+    if checker:
+        result = await checker.check_for_updates()
+        return result
+    return {"error": "Release checker not initialized"}
+
+
+@app.post("/api/updates/apply")
+async def apply_app_update(session: dict = Depends(require_auth)):
+    """Apply available update by pulling new Docker image and restarting."""
+    result = await apply_update()
+    if result.get("success"):
+        # Broadcast that update is starting
+        await broadcast({"type": "update_started"})
+    return result
+
+
+# ============================================================================
+# Authentication Configuration API
+# ============================================================================
+
+@app.get("/api/auth/config")
+async def get_auth_config(session: dict = Depends(require_auth)):
+    """Get authentication configuration (secrets masked)."""
+    return radius_config.get_auth_config_summary()
+
+
+@app.put("/api/auth/radius")
+async def update_radius_config(request: Request, session: dict = Depends(require_auth)):
+    """Update web RADIUS authentication configuration."""
+    data = await request.json()
+
+    config = radius_config.RadiusConfig(
+        enabled=data.get("enabled", False),
+        server=data.get("server", ""),
+        secret=data.get("secret", ""),
+        port=int(data.get("port", 1812)),
+        timeout=int(data.get("timeout", 5)),
+    )
+
+    radius_config.set_web_radius_config(config)
+    return {"success": True}
+
+
+@app.put("/api/auth/device-defaults")
+async def update_device_auth_config(request: Request, session: dict = Depends(require_auth)):
+    """Update global default device credentials."""
+    data = await request.json()
+
+    config = radius_config.DeviceAuthConfig(
+        enabled=data.get("enabled", False),
+        username=data.get("username", ""),
+        password=data.get("password", ""),
+    )
+
+    radius_config.set_device_auth_config(config)
+    return {"success": True}
+
+
+@app.post("/api/auth/test-radius")
+async def test_radius_connection(request: Request, session: dict = Depends(require_auth)):
+    """Test RADIUS connection with provided credentials."""
+    data = await request.json()
+    username = data.get("username", "")
+    password = data.get("password", "")
+
+    if not username or not password:
+        return {"success": False, "message": "Username and password required"}
+
+    if not radius_config.is_web_radius_enabled():
+        return {"success": False, "message": "RADIUS not configured"}
+
+    success = radius_config.authenticate_via_radius(username, password)
+    if success:
+        return {"success": True, "message": "RADIUS authentication successful"}
+    else:
+        return {"success": False, "message": "RADIUS authentication failed"}
+
+
 @app.get("/api/time")
 async def get_current_time(session: dict = Depends(require_auth)):
     """Get current time info with timezone."""
@@ -882,7 +1248,7 @@ async def export_backup(request: Request, session: dict = Depends(require_auth))
         csv_content, _ = build_csv_export(passphrase)
     except Exception as e:
         logger.error(f"Backup export failed: {e}")
-        raise HTTPException(500, f"Export failed: {e}")
+        raise HTTPException(500, "Export failed")
 
     filename = f"tachyon-devices-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv"
     return StreamingResponse(
@@ -914,10 +1280,11 @@ async def import_backup(
     try:
         results = process_csv_import(csv_content, passphrase, conflict_mode)
     except ValueError as e:
+        # ValueError contains user-friendly messages from process_csv_import
         raise HTTPException(400, str(e))
     except Exception as e:
         logger.error(f"Backup import failed: {e}")
-        raise HTTPException(500, f"Import failed: {e}")
+        raise HTTPException(500, "Import failed")
 
     # Trigger a poll so new devices appear in the UI
     poller = get_poller()
@@ -974,24 +1341,22 @@ class UpdateJob:
 @app.post("/api/upload-firmware")
 async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(require_auth)):
     """Upload a firmware file."""
-    if not file.filename:
-        raise HTTPException(400, "No filename provided")
-
-    firmware_path = FIRMWARE_DIR / file.filename
+    # Validate filename to prevent path traversal attacks
+    safe_filename = validate_firmware_filename(file.filename)
+    firmware_path = FIRMWARE_DIR / safe_filename
 
     async with aiofiles.open(firmware_path, "wb") as f:
         content = await file.read()
         await f.write(content)
 
     file_size = firmware_path.stat().st_size
-    logger.info(f"Firmware uploaded: {file.filename} ({file_size:,} bytes)")
+    logger.info(f"Firmware uploaded: {safe_filename} ({file_size:,} bytes)")
 
-    db.register_firmware(file.filename, source="manual")
+    db.register_firmware(safe_filename, source="manual")
 
     return {
-        "filename": file.filename,
+        "filename": safe_filename,
         "size": file_size,
-        "path": str(firmware_path),
     }
 
 
@@ -1036,14 +1401,16 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
     }
 
 
-@app.delete("/api/firmware-files/{filename}")
+@app.delete("/api/firmware-files/{filename:path}")
 async def delete_firmware_file(filename: str, session: dict = Depends(require_auth)):
     """Delete a firmware file."""
-    path = FIRMWARE_DIR / filename
+    # Validate filename to prevent path traversal attacks
+    safe_filename = validate_firmware_filename(filename)
+    path = FIRMWARE_DIR / safe_filename
     if not path.exists():
         raise HTTPException(404, "File not found")
     path.unlink()
-    db.unregister_firmware(filename)
+    db.unregister_firmware(safe_filename)
     return {"success": True}
 
 
@@ -2040,6 +2407,60 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         ap_cpe_map=job.ap_cpe_map,
         device_roles=job.device_roles,
         timezone=resolved_tz,
+    )
+
+    # Send anonymized telemetry (non-blocking background task)
+    asyncio.create_task(telemetry.send_telemetry_background(
+        job_id=job.job_id,
+        success_count=success_count,
+        failed_count=failed_count,
+        skipped_count=skipped_count,
+        cancelled_count=cancelled_count,
+        duration_seconds=(job.completed_at - job.started_at).total_seconds(),
+        bank_mode=job.bank_mode,
+        is_scheduled=job.is_scheduled,
+        devices=devices_dict,
+    ))
+
+    # Send Slack notification (non-blocking)
+    rollout_info = None
+    next_job_info = None
+    if job.is_scheduled:
+        scheduler = get_scheduler()
+        if scheduler:
+            status = scheduler.get_status()
+            rollout_info = status.get("rollout")
+            if rollout_info:
+                predictions = rollout_info.get("predictions")
+                if predictions:
+                    remaining = predictions.get("remaining_phases", [])
+                    next_phase = None
+                    estimated_devices = 0
+                    for p in remaining:
+                        if p.get("estimated_devices", 0) > 0:
+                            next_phase = p.get("phase")
+                            estimated_devices = p.get("estimated_devices")
+                            break
+                    next_job_info = {
+                        "next_window": status.get("next_window", ""),
+                        "next_phase": next_phase,
+                        "estimated_devices": estimated_devices,
+                        "estimated_completion": predictions.get("estimated_completion_date"),
+                    }
+
+    firmware_name = job.firmware_names.get("30x", "") or list(job.firmware_names.values())[0] if job.firmware_names else "Unknown"
+    await slack.notify_job_completed(
+        job_id=job.job_id,
+        success_count=success_count,
+        failed_count=failed_count,
+        skipped_count=skipped_count,
+        cancelled_count=cancelled_count,
+        duration_seconds=(job.completed_at - job.started_at).total_seconds(),
+        devices=devices_dict,
+        firmware_name=firmware_name,
+        is_scheduled=job.is_scheduled,
+        rollout_info=rollout_info,
+        next_job_info=next_job_info,
     )
 
     # Notify scheduler if this was a scheduled job
