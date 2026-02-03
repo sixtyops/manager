@@ -21,29 +21,26 @@ Web-based firmware update tool for production wireless network devices. Supports
 
 ## Quick Start
 
-### Docker (recommended)
+### Production Server (one command)
 
 ```bash
-docker compose up -d
+curl -sSL https://raw.githubusercontent.com/isolson/firmware-updater/main/scripts/install.sh | sudo bash
 ```
 
-Open http://localhost:8000 and log in with `admin` / `changeme`.
+This installs Docker (if needed), clones the repo to `/opt/tachyon`, generates credentials, and starts everything with HTTPS.
 
-### Local Installation
+### Local Development
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-pip install -e .
-
-# Set credentials
-export ADMIN_USERNAME=admin
-export ADMIN_PASSWORD=changeme
-
-# Start server
-firmware-updater
+git clone https://github.com/isolson/firmware-updater.git
+cd firmware-updater
+./deploy.sh
 ```
+
+Access `https://localhost` (accept self-signed cert), log in with the generated credentials, and the setup wizard will guide you through:
+1. Changing the default password
+2. Configuring HTTPS with Let's Encrypt
+3. Setting up automatic git backups
 
 See [docs/deployment.md](docs/deployment.md) for full configuration options.
 

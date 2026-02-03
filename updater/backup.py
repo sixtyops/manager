@@ -50,7 +50,7 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
     # Write salt as a comment header so import can find it
     buf.write(f"# salt={salt_b64}\n")
 
-    writer = csv.DictWriter(buf, fieldnames=CSV_COLUMNS)
+    writer = csv.DictWriter(buf, fieldnames=EXPORT_COLUMNS)
     writer.writeheader()
 
     for ap in aps:

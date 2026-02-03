@@ -780,6 +780,39 @@
             color: #111827;
         }
 
+        /* App Update Banner */
+        .update-banner {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+            color: white;
+            padding: 12px 20px;
+            z-index: 1001;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        .update-banner-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .update-banner-text {
+            font-size: 0.9rem;
+        }
+
+        .update-banner-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
         /* History */
         .history-entry {
             background: #f5f5f5;
@@ -1516,6 +1549,34 @@
                 <div style="margin-top:16px;padding-top:12px;border-top:1px solid #e5e7eb;font-size:0.7rem;color:#9ca3af;line-height:1.5;">
                     Firmware is fetched daily from Tachyon's release pages. Updates roll out gradually: 1 device (canary), then 10%, 50%, 100% &mdash; one phase per maintenance window. Any failure pauses the rollout. Weather and time-of-day guards prevent updates during unsafe conditions.
                 </div>
+
+                <!-- App Self-Update Section -->
+                <div style="margin-top:16px;padding-top:12px;border-top:1px solid #e5e7eb;">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                        <span class="toggle" id="appAutoUpdateToggle" onclick="toggleAppAutoUpdate()" style="flex-shrink:0;"></span>
+                        <label style="margin:0;font-weight:500;">Check for App Updates</label>
+                        <span id="appVersionDisplay" style="font-size:0.75rem;color:#6b7280;"></span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <button class="btn btn-sm" onclick="checkAppUpdate()">Check Now</button>
+                        <span id="appUpdateStatus" style="font-size:0.75rem;color:#6b7280;"></span>
+                    </div>
+                </div>
+        </div>
+    </div>
+
+    <!-- App Update Banner -->
+    <div id="appUpdateBanner" class="update-banner" style="display:none;">
+        <div class="update-banner-content">
+            <span class="update-banner-text">
+                <strong>Update Available:</strong> Version <span id="updateVersionText"></span>
+                <span id="updateBlockedText" style="display:none;font-size:0.8rem;opacity:0.9;margin-left:8px;"></span>
+            </span>
+            <div class="update-banner-actions">
+                <a id="updateReleaseLink" href="#" target="_blank" class="btn btn-sm" style="background:#fff;color:#1d4ed8;">Release Notes</a>
+                <button id="updateNowBtn" class="btn btn-sm" style="background:#fff;color:#16a34a;" onclick="applyAppUpdate()">Update Now</button>
+                <button class="btn btn-sm" style="background:transparent;color:#fff;border:1px solid rgba(255,255,255,0.5);" onclick="dismissUpdateBanner()">Dismiss</button>
+            </div>
         </div>
     </div>
 
@@ -1667,6 +1728,15 @@
                         const el = document.getElementById('fwFetchStatus');
                         if (el) el.textContent = 'New firmware downloaded: ' + message.downloaded.join(', ');
                     }
+                    break;
+
+                case 'update_available':
+                    showUpdateBanner(message.latest_version, message.release_url);
+                    break;
+
+                case 'update_started':
+                    const statusEl = document.getElementById('appUpdateStatus');
+                    if (statusEl) statusEl.textContent = 'Update in progress...';
                     break;
 
                 case 'job_started':
@@ -2698,6 +2768,204 @@
             }
         }
 
+        // =============================================
+        // App Self-Update Functions
+        // =============================================
+
+        async function loadAppUpdateStatus() {
+            try {
+                const response = await fetch('/api/updates');
+                const result = await response.json();
+
+                // Update version display
+                const versionEl = document.getElementById('appVersionDisplay');
+                if (versionEl) {
+                    versionEl.textContent = 'v' + result.current_version;
+                }
+
+                // Update toggle state
+                const toggle = document.getElementById('appAutoUpdateToggle');
+                if (toggle) {
+                    if (result.enabled) {
+                        toggle.classList.add('active');
+                    } else {
+                        toggle.classList.remove('active');
+                    }
+                }
+
+                // Show update banner if available
+                if (result.update_available && result.available_version) {
+                    showUpdateBanner(result.available_version, result.release_url, !result.can_update, result.blocked_reason);
+                }
+
+                // Update status text
+                const statusEl = document.getElementById('appUpdateStatus');
+                if (statusEl) {
+                    let statusText = '';
+                    if (result.last_check) {
+                        const d = new Date(result.last_check.endsWith('Z') ? result.last_check : result.last_check + 'Z');
+                        statusText = 'Last check: ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                    }
+                    if (!result.can_update && result.blocked_reason) {
+                        statusText += (statusText ? ' · ' : '') + result.blocked_reason;
+                    }
+                    statusEl.textContent = statusText;
+                }
+            } catch (error) {
+                console.error('Failed to load app update status:', error);
+            }
+        }
+
+        function toggleAppAutoUpdate() {
+            const toggle = document.getElementById('appAutoUpdateToggle');
+            toggle.classList.toggle('active');
+            const enabled = toggle.classList.contains('active') ? 'true' : 'false';
+            fetch('/api/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ autoupdate_enabled: enabled }),
+            });
+        }
+
+        async function checkAppUpdate() {
+            const statusEl = document.getElementById('appUpdateStatus');
+            statusEl.textContent = 'Checking...';
+            try {
+                const response = await fetch('/api/updates/check', { method: 'POST' });
+                const result = await response.json();
+                if (result.error) {
+                    statusEl.textContent = 'Error: ' + result.error;
+                } else if (result.update_available) {
+                    statusEl.textContent = 'Update available: v' + result.latest_version;
+                    showUpdateBanner(result.latest_version, result.release_url);
+                } else {
+                    statusEl.textContent = 'Up to date (v' + result.current_version + ')';
+                }
+            } catch (error) {
+                statusEl.textContent = 'Check failed';
+                console.error('Failed to check for updates:', error);
+            }
+        }
+
+        function showUpdateBanner(version, releaseUrl, isBlocked, blockedReason) {
+            const banner = document.getElementById('appUpdateBanner');
+            const versionText = document.getElementById('updateVersionText');
+            const releaseLink = document.getElementById('updateReleaseLink');
+            const updateBtn = document.getElementById('updateNowBtn');
+            const blockedText = document.getElementById('updateBlockedText');
+
+            if (banner && versionText) {
+                versionText.textContent = version;
+                if (releaseLink && releaseUrl) {
+                    releaseLink.href = releaseUrl;
+                }
+                // Handle blocked state
+                if (updateBtn) {
+                    if (isBlocked) {
+                        updateBtn.disabled = true;
+                        updateBtn.style.opacity = '0.5';
+                        updateBtn.style.cursor = 'not-allowed';
+                        updateBtn.title = blockedReason || 'Updates blocked';
+                    } else {
+                        updateBtn.disabled = false;
+                        updateBtn.style.opacity = '1';
+                        updateBtn.style.cursor = 'pointer';
+                        updateBtn.title = '';
+                    }
+                }
+                if (blockedText) {
+                    if (isBlocked && blockedReason) {
+                        blockedText.textContent = '(' + blockedReason + ')';
+                        blockedText.style.display = 'inline';
+                    } else {
+                        blockedText.style.display = 'none';
+                    }
+                }
+                banner.style.display = 'block';
+                // Adjust body padding to account for banner
+                document.body.style.paddingTop = '60px';
+            }
+        }
+
+        function dismissUpdateBanner() {
+            const banner = document.getElementById('appUpdateBanner');
+            if (banner) {
+                banner.style.display = 'none';
+                document.body.style.paddingTop = '0';
+            }
+        }
+
+        async function applyAppUpdate() {
+            // First check if we can update
+            try {
+                const statusResponse = await fetch('/api/updates');
+                const status = await statusResponse.json();
+                if (!status.can_update) {
+                    alert('Cannot update now: ' + status.blocked_reason + '\n\nPlease try again when the maintenance window ends or the rollout completes.');
+                    return;
+                }
+            } catch (e) {
+                // Continue with update attempt
+            }
+
+            if (!confirm('This will restart the application to apply the update. Continue?')) {
+                return;
+            }
+
+            const statusEl = document.getElementById('appUpdateStatus');
+            statusEl.textContent = 'Applying update...';
+
+            try {
+                const response = await fetch('/api/updates/apply', { method: 'POST' });
+                const result = await response.json();
+
+                if (result.blocked_reason) {
+                    // Blocked due to maintenance window or active rollout
+                    alert('Cannot update now: ' + result.blocked_reason);
+                    statusEl.textContent = result.blocked_reason;
+                } else if (result.manual) {
+                    // Docker socket not available - show manual commands
+                    alert('Docker socket not mounted. Run these commands manually:\n\n' + result.commands.join('\n'));
+                    statusEl.textContent = 'Manual update required';
+                } else if (result.success) {
+                    statusEl.textContent = 'Restarting...';
+                    // Show a message and start polling for the app to come back
+                    dismissUpdateBanner();
+                    setTimeout(() => {
+                        statusEl.textContent = 'Waiting for restart...';
+                        pollForRestart();
+                    }, 2000);
+                } else {
+                    statusEl.textContent = 'Update failed: ' + result.message;
+                    alert('Update failed: ' + result.message);
+                }
+            } catch (error) {
+                statusEl.textContent = 'Update failed';
+                console.error('Failed to apply update:', error);
+            }
+        }
+
+        function pollForRestart() {
+            let attempts = 0;
+            const maxAttempts = 30;
+            const interval = setInterval(async () => {
+                attempts++;
+                try {
+                    const response = await fetch('/api/updates', { method: 'GET' });
+                    if (response.ok) {
+                        clearInterval(interval);
+                        window.location.reload();
+                    }
+                } catch (e) {
+                    // Server still down, keep polling
+                }
+                if (attempts >= maxAttempts) {
+                    clearInterval(interval);
+                    document.getElementById('appUpdateStatus').textContent = 'Restart taking longer than expected. Please refresh manually.';
+                }
+            }, 2000);
+        }
+
         function toggleFwBeta() {
             const toggle = document.getElementById('fwBetaToggle');
             toggle.classList.toggle('active');
@@ -2757,6 +3025,7 @@
         loadFirmwareSettings();
         loadFirmwareList();
         loadFwBetaSetting();
+        loadAppUpdateStatus();
         refreshWeatherIfStale();
 
         // Clock: fetch timezone once, then tick locally every second

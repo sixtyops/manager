@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backup Settings - Tachyon Management</title>
+    <link rel="stylesheet" href="/static/common.css">
+    <style>
+        .auth-card {
+            max-width: 500px;
+        }
+
+        .info-message {
+            background: #1e3a5f;
+            color: #93c5fd;
+            padding: 12px 14px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+
+        .success-message {
+            background: #065f46;
+            color: #6ee7b7;
+            padding: 12px 14px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            margin-bottom: 20px;
+        }
+
+        .backup-status {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+
+        .backup-status-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #1e293b;
+        }
+
+        .backup-status-row:last-child {
+            border-bottom: none;
+        }
+
+        .status-label {
+            color: #94a3b8;
+            font-size: 0.85rem;
+        }
+
+        .status-value {
+            color: #e2e8f0;
+            font-size: 0.85rem;
+            text-align: right;
+            max-width: 220px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .status-good { color: #34d399; }
+        .status-error { color: #f87171; }
+
+        .radio-group {
+            display: flex;
+            gap: 20px;
+            margin: 12px 0 16px 0;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+        }
+
+        .radio-option input[type="radio"] {
+            width: 16px;
+            height: 16px;
+            accent-color: #3b82f6;
+        }
+
+        .radio-option label {
+            margin: 0;
+            cursor: pointer;
+            color: #e2e8f0;
+            font-size: 0.9rem;
+        }
+
+        .conditional-field {
+            display: none;
+        }
+
+        .conditional-field.active {
+            display: block;
+        }
+
+        textarea {
+            width: 100%;
+            padding: 10px 12px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: #e2e8f0;
+            font-size: 0.85rem;
+            font-family: 'Monaco', 'Menlo', monospace;
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        .btn-secondary {
+            width: 100%;
+            padding: 12px;
+            background: #334155;
+            color: #e2e8f0;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            cursor: pointer;
+            margin-top: 12px;
+            transition: background 0.2s;
+        }
+
+        .btn-secondary:hover {
+            background: #475569;
+        }
+
+        .back-link {
+            display: block;
+            text-align: center;
+            margin-top: 16px;
+            color: #64748b;
+            font-size: 0.85rem;
+            text-decoration: none;
+        }
+
+        .back-link:hover {
+            color: #94a3b8;
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-card">
+        <h1>Backup Settings</h1>
+        <p class="subtitle">Configure automatic database backups</p>
+
+        {% if backup_status.enabled %}
+        <div class="backup-status">
+            <div class="backup-status-row">
+                <span class="status-label">Repository</span>
+                <span class="status-value">{{ backup_status.repo_url }}</span>
+            </div>
+            <div class="backup-status-row">
+                <span class="status-label">Last Backup</span>
+                <span class="status-value">{{ backup_status.last_run or 'Never' }}</span>
+            </div>
+            <div class="backup-status-row">
+                <span class="status-label">Status</span>
+                <span class="status-value {% if 'success' in (backup_status.last_status or '') %}status-good{% elif backup_status.last_status %}status-error{% endif %}">
+                    {{ backup_status.last_status or 'Unknown' }}
+                </span>
+            </div>
+            <div class="backup-status-row">
+                <span class="status-label">Schedule</span>
+                <span class="status-value">Daily at 5:00 AM</span>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="info-message">
+            Backups include the SQLite database (devices, settings, job history).
+            Firmware files are not backed up due to size. Backups only push when changes exist.
+        </div>
+
+        <div class="error-message {{ 'visible' if error else '' }}">
+            {{ error or '' }}
+        </div>
+
+        {% if success %}
+        <div class="success-message">{{ success }}</div>
+        {% endif %}
+
+        <form method="POST" action="/backup-setup" id="backupForm">
+            <div class="form-group">
+                <label for="repo_url">Git Repository URL</label>
+                <input type="text" id="repo_url" name="repo_url"
+                       value="{{ backup_status.repo_url if backup_status.repo_url and '****' not in backup_status.repo_url else '' }}"
+                       placeholder="https://github.com/user/tachyon-backup.git" required>
+            </div>
+
+            <div class="form-group">
+                <label>Authentication Method</label>
+                <div class="radio-group">
+                    <div class="radio-option">
+                        <input type="radio" id="auth_token" name="auth_method" value="token"
+                               {% if backup_status.auth_method != 'ssh' %}checked{% endif %}>
+                        <label for="auth_token">Access Token</label>
+                    </div>
+                    <div class="radio-option">
+                        <input type="radio" id="auth_ssh" name="auth_method" value="ssh"
+                               {% if backup_status.auth_method == 'ssh' %}checked{% endif %}>
+                        <label for="auth_ssh">SSH Key</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group conditional-field" id="token_field">
+                <label for="token">Personal Access Token</label>
+                <input type="password" id="token" name="token"
+                       placeholder="ghp_xxxx or glpat-xxxx">
+            </div>
+
+            <div class="form-group conditional-field" id="ssh_field">
+                <label for="ssh_key">SSH Private Key</label>
+                <textarea id="ssh_key" name="ssh_key"
+                          placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"></textarea>
+            </div>
+
+            <button type="submit" class="btn-primary">
+                {{ 'Update Configuration' if backup_status.enabled else 'Configure Backup' }}
+            </button>
+        </form>
+
+        {% if backup_status.enabled %}
+        <form method="POST" action="/backup-run">
+            <button type="submit" class="btn-secondary">Run Backup Now</button>
+        </form>
+        {% endif %}
+
+        <a href="/" class="back-link">Back to Dashboard</a>
+    </div>
+
+    <script>
+        document.querySelectorAll('input[name="auth_method"]').forEach(radio => {
+            radio.addEventListener('change', updateFields);
+        });
+
+        function updateFields() {
+            const method = document.querySelector('input[name="auth_method"]:checked').value;
+            document.getElementById('token_field').classList.toggle('active', method === 'token');
+            document.getElementById('ssh_field').classList.toggle('active', method === 'ssh');
+        }
+
+        updateFields();
+    </script>
+</body>
+</html>

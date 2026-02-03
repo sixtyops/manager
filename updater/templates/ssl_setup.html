@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSL Settings - Tachyon Management</title>
+    <link rel="stylesheet" href="/static/common.css">
+    <style>
+        .info-message {
+            background: #1e3a5f;
+            color: #93c5fd;
+            padding: 12px 14px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+
+        .success-message {
+            background: #065f46;
+            color: #6ee7b7;
+            padding: 12px 14px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            margin-bottom: 20px;
+        }
+
+        .cert-status {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+
+        .cert-status-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #1e293b;
+        }
+
+        .cert-status-row:last-child {
+            border-bottom: none;
+        }
+
+        .status-label {
+            color: #94a3b8;
+            font-size: 0.85rem;
+        }
+
+        .status-value {
+            color: #e2e8f0;
+            font-size: 0.85rem;
+        }
+
+        .status-good { color: #34d399; }
+        .status-warning { color: #fbbf24; }
+        .status-error { color: #f87171; }
+
+        .back-link {
+            display: block;
+            text-align: center;
+            margin-top: 16px;
+            color: #64748b;
+            font-size: 0.85rem;
+            text-decoration: none;
+        }
+
+        .back-link:hover {
+            color: #94a3b8;
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-card">
+        <h1>HTTPS Settings</h1>
+        <p class="subtitle">Configure SSL with Let's Encrypt</p>
+
+        {% if ssl_status.enabled and ssl_status.using_letsencrypt %}
+        <div class="cert-status">
+            <div class="cert-status-row">
+                <span class="status-label">Domain</span>
+                <span class="status-value">{{ ssl_status.domain }}</span>
+            </div>
+            <div class="cert-status-row">
+                <span class="status-label">Certificate</span>
+                <span class="status-value {% if ssl_status.days_until_expiry and ssl_status.days_until_expiry > 30 %}status-good{% elif ssl_status.days_until_expiry and ssl_status.days_until_expiry > 7 %}status-warning{% else %}status-error{% endif %}">
+                    {% if ssl_status.days_until_expiry %}
+                        {{ ssl_status.days_until_expiry }} days until expiry
+                    {% else %}
+                        Status unknown
+                    {% endif %}
+                </span>
+            </div>
+            <div class="cert-status-row">
+                <span class="status-label">Auto-renewal</span>
+                <span class="status-value status-good">Enabled (via certbot)</span>
+            </div>
+        </div>
+        {% else %}
+        <div class="info-message">
+            Your server is using a self-signed certificate. Configure Let's Encrypt for a trusted
+            HTTPS certificate. Your server must be accessible from the internet on port 80.
+        </div>
+        {% endif %}
+
+        <div class="error-message {{ 'visible' if error else '' }}">
+            {{ error or '' }}
+        </div>
+
+        {% if success %}
+        <div class="success-message">{{ success }}</div>
+        {% endif %}
+
+        <form method="POST" action="/ssl-setup">
+            <div class="form-group">
+                <label for="domain">Domain Name</label>
+                <input type="text" id="domain" name="domain"
+                       value="{{ ssl_status.domain or '' }}"
+                       placeholder="firmware.example.com" required>
+            </div>
+            <div class="form-group">
+                <label for="email">Email (for renewal notices)</label>
+                <input type="email" id="email" name="email"
+                       value="{{ ssl_status.email or '' }}"
+                       placeholder="admin@example.com" required>
+            </div>
+            <button type="submit" class="btn-primary">
+                {{ 'Renew Certificate' if ssl_status.enabled else 'Get Certificate' }}
+            </button>
+        </form>
+
+        <a href="/" class="back-link">Back to Dashboard</a>
+    </div>
+</body>
+</html>

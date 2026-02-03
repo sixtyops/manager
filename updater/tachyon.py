@@ -7,17 +7,27 @@ API Endpoints:
 - GET /cgi.lua/status?type=wireless,zones - Get connected peers (CPEs)
 - PUT /cgi.lua/update - Upload firmware (multipart: fw=binary, force=false)
 - POST /cgi.lua/update - Trigger firmware install (JSON: {reset:false, force:false})
+
+Security Note:
+    By default, SSL certificate verification is disabled (-k flag) because Tachyon
+    network devices use self-signed certificates. This is standard for network device
+    management software. Set TACHYON_VERIFY_SSL=1 to enable strict verification if
+    your devices have valid certificates from a trusted CA.
 """
 
 import asyncio
 import json
 import logging
+import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable, List
 
 logger = logging.getLogger(__name__)
+
+# SSL verification for device connections (disabled by default for self-signed certs)
+VERIFY_SSL = os.environ.get("TACHYON_VERIFY_SSL", "").lower() in ("1", "true", "yes")
 
 
 @dataclass
@@ -84,7 +94,9 @@ class TachyonClient:
         """Execute curl command and return (status_code, response_body)."""
         url = f"{self._base_url}{endpoint}"
 
-        cmd = ["curl", "-s", "-k", "-m", str(self.timeout)]
+        cmd = ["curl", "-s", "-m", str(self.timeout)]
+        if not VERIFY_SSL:
+            cmd.append("-k")  # Skip certificate verification for self-signed certs
 
         # Method
         cmd.extend(["-X", method])
@@ -149,14 +161,16 @@ class TachyonClient:
                 "password": self.password,
             })
 
-            cmd = [
-                "curl", "-s", "-k", "-m", str(self.timeout),
+            cmd = ["curl", "-s", "-m", str(self.timeout)]
+            if not VERIFY_SSL:
+                cmd.append("-k")
+            cmd.extend([
                 "-X", "POST",
                 "-H", "Content-Type: application/json",
                 "-c", cookie_path,
                 "-d", payload,
                 url,
-            ]
+            ])
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -305,12 +319,14 @@ class TachyonClient:
         logger.info(f"Uploading firmware to {self.ip}")
 
         url = f"{self._base_url}/cgi.lua/update"
-        cmd = [
-            "curl", "-s", "-k", "-m", "300",  # 5 min timeout for upload
+        cmd = ["curl", "-s", "-m", "300"]  # 5 min timeout for upload
+        if not VERIFY_SSL:
+            cmd.append("-k")
+        cmd.extend([
             "-X", "PUT",
             "-F", f"fw=@{firmware_path}",
             "-F", "force=false",
-        ]
+        ])
 
         if self._token:
             cmd.extend(["-H", f"Cookie: token={self._token}"])
@@ -406,11 +422,13 @@ class TachyonClient:
                     responded = proc.returncode == 0
                 except FileNotFoundError:
                     # ping not available (e.g., minimal Docker image), use curl instead
-                    check_cmd = [
-                        "curl", "-s", "-k", "-m", "3",
+                    check_cmd = ["curl", "-s", "-m", "3"]
+                    if not VERIFY_SSL:
+                        check_cmd.append("-k")
+                    check_cmd.extend([
                         "-o", "/dev/null", "-w", "%{http_code}",
                         f"https://{self.ip}/"
-                    ]
+                    ])
                     proc = await asyncio.create_subprocess_exec(
                         *check_cmd,
                         stdout=asyncio.subprocess.PIPE,
@@ -436,11 +454,13 @@ class TachyonClient:
                     continue
             else:
                 # Phase 2: Check if web server is up
-                check_cmd = [
-                    "curl", "-s", "-k", "-m", "5",
+                check_cmd = ["curl", "-s", "-m", "5"]
+                if not VERIFY_SSL:
+                    check_cmd.append("-k")
+                check_cmd.extend([
                     "-o", "/dev/null", "-w", "%{http_code}",
                     f"https://{self.ip}/"
-                ]
+                ])
                 proc = None
                 try:
                     proc = await asyncio.create_subprocess_exec(
