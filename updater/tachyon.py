@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,33 @@ logger = logging.getLogger(__name__)
 
 # SSL verification for device connections (disabled by default for self-signed certs)
 VERIFY_SSL = os.environ.get("TACHYON_VERIFY_SSL", "").lower() in ("1", "true", "yes")
+
+
+def _extract_version_from_firmware(firmware_path: str) -> str:
+    """Extract normalized version from firmware filename.
+
+    'tna-30x-2.5.1-r54970.bin' -> '2.5.1.54970'
+    """
+    filename = Path(firmware_path).name
+    match = re.search(
+        r"(?:tna-30x|tna30x|tna-303l|tna303l|tns-100|tns100)-(\d+\.\d+\.\d+)-r(\d+)",
+        filename,
+        re.IGNORECASE,
+    )
+    if match:
+        return f"{match.group(1)}.{match.group(2)}"
+    match2 = re.search(r"(\d+\.\d+\.\d+)", filename)
+    if match2:
+        return match2.group(1)
+    return ""
+
+
+def _normalize_version(version: str) -> str:
+    """Normalize version string for comparison.
+
+    '1.12.4.r7782' -> '1.12.4.7782'
+    """
+    return version.replace(".r", ".") if version else ""
 
 
 @dataclass
@@ -412,39 +440,48 @@ class TachyonClient:
                 # Phase 1: Wait for device to respond to ping (or curl if ping unavailable)
                 responded = False
                 proc = None
+                use_curl_fallback = False
                 try:
                     proc = await asyncio.create_subprocess_exec(
                         "ping", "-c", "1", "-W", "2", self.ip,
                         stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.PIPE,
                     )
-                    await proc.wait()
-                    responded = proc.returncode == 0
+                    _, stderr = await proc.communicate()
+                    if proc.returncode == 0:
+                        responded = True
+                    elif b"Operation not permitted" in stderr or b"not permitted" in stderr:
+                        # ping failed due to missing capabilities, use curl instead
+                        use_curl_fallback = True
                 except FileNotFoundError:
                     # ping not available (e.g., minimal Docker image), use curl instead
-                    check_cmd = ["curl", "-s", "-m", "3"]
-                    if not VERIFY_SSL:
-                        check_cmd.append("-k")
-                    check_cmd.extend([
-                        "-o", "/dev/null", "-w", "%{http_code}",
-                        f"https://{self.ip}/"
-                    ])
-                    proc = await asyncio.create_subprocess_exec(
-                        *check_cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                    stdout, _ = await proc.communicate()
-                    if proc.returncode == 0:
-                        status = stdout.decode().strip()
-                        responded = status and status.isdigit() and int(status) > 0
-                except Exception:
-                    if proc and proc.returncode is None:
-                        try:
-                            proc.kill()
-                            await proc.wait()
-                        except ProcessLookupError:
-                            pass
+                    use_curl_fallback = True
+
+                if use_curl_fallback:
+                    try:
+                        check_cmd = ["curl", "-s", "-m", "3"]
+                        if not VERIFY_SSL:
+                            check_cmd.append("-k")
+                        check_cmd.extend([
+                            "-o", "/dev/null", "-w", "%{http_code}",
+                            f"https://{self.ip}/"
+                        ])
+                        proc = await asyncio.create_subprocess_exec(
+                            *check_cmd,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.DEVNULL,
+                        )
+                        stdout, _ = await proc.communicate()
+                        if proc.returncode == 0:
+                            status = stdout.decode().strip()
+                            responded = status and status.isdigit() and int(status) > 0
+                    except Exception:
+                        if proc and proc.returncode is None:
+                            try:
+                                proc.kill()
+                                await proc.wait()
+                            except ProcessLookupError:
+                                pass
 
                 if responded:
                     logger.info(f"{self.ip} responding, waiting for web server...")
@@ -582,17 +619,38 @@ class TachyonClient:
             result.bank2_version = new_info.bank2_version
             result.active_bank = new_info.active_bank
 
-            if result.new_version and result.new_version != result.old_version:
-                progress(f"Updated: {result.old_version} -> {result.new_version}")
+            # Extract and normalize versions for comparison
+            target_version = _extract_version_from_firmware(firmware_path)
+            new_version_normalized = _normalize_version(result.new_version or "")
+            old_version_normalized = _normalize_version(result.old_version or "")
+
+            # Verify against target firmware version
+            if target_version and new_version_normalized == target_version:
+                # Device is now running target firmware
+                if old_version_normalized != target_version:
+                    progress(f"Updated: {result.old_version} -> {result.new_version}")
+                elif pass_number >= 2:
+                    progress(f"Updated: both banks now on {result.new_version}")
+                else:
+                    progress(f"Verified: already on {result.new_version}")
+                    result.skipped = True
                 result.success = True
-            elif pass_number >= 2:
-                # Pass 2: version unchanged is expected (both banks now match)
-                progress(f"Updated: both banks now on {result.new_version}")
-                result.success = True
+            elif target_version:
+                # Device is NOT running target firmware - update failed
+                result.error = f"Version mismatch: expected {target_version}, got {result.new_version}"
+                progress(f"Failed: {result.error}")
             else:
-                progress(f"Skipped: already on {result.new_version}")
-                result.skipped = True
-                result.success = True
+                # No target version to compare - fall back to old behavior
+                if result.new_version and result.new_version != result.old_version:
+                    progress(f"Updated: {result.old_version} -> {result.new_version}")
+                    result.success = True
+                elif pass_number >= 2:
+                    progress(f"Updated: both banks now on {result.new_version}")
+                    result.success = True
+                else:
+                    progress(f"Skipped: already on {result.new_version}")
+                    result.skipped = True
+                    result.success = True
 
         except Exception as e:
             result.error = str(e)

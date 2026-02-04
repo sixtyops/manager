@@ -101,10 +101,12 @@ class FirmwareFetcher:
         """
         all_releases = []
         downloaded = []
+        replaced = []  # Track replaced files
         errors = []
 
         beta_enabled = db.get_setting("firmware_beta_enabled", "false") == "true"
         auto_fetched = self._get_auto_fetched_list()
+        channel_map = self._get_channel_map()
 
         for platform, url in FRESHDESK_PAGES.items():
             try:
@@ -131,6 +133,21 @@ class FirmwareFetcher:
                     downloaded.append(release.filename)
                     auto_fetched.append(release.filename)
                     db.register_firmware(release.filename, source="auto")
+
+                    # Replace older auto-fetched firmware of same platform/channel
+                    old_files = self._find_old_firmware(
+                        platform, release.channel, release.filename,
+                        auto_fetched, channel_map
+                    )
+                    for old_file in old_files:
+                        old_path = self.firmware_dir / old_file
+                        if old_path.exists():
+                            old_path.unlink()
+                            logger.info(f"Replaced old firmware: {old_file} -> {release.filename}")
+                        if old_file in auto_fetched:
+                            auto_fetched.remove(old_file)
+                        db.unregister_firmware(old_file)
+                        replaced.append(old_file)
                 else:
                     errors.append(f"Download failed: {release.filename}")
 
@@ -152,10 +169,11 @@ class FirmwareFetcher:
             db.set_setting("firmware_last_check_error", "")
 
         # Broadcast update
-        if self.broadcast_func and downloaded:
+        if self.broadcast_func and (downloaded or replaced):
             await self.broadcast_func({
                 "type": "firmware_fetched",
                 "downloaded": downloaded,
+                "replaced": replaced,
             })
 
         summary = {
@@ -165,10 +183,11 @@ class FirmwareFetcher:
                 for r in all_releases
             ],
             "downloaded": downloaded,
+            "replaced": replaced,
             "errors": errors,
         }
         logger.info(f"Firmware check complete: {len(all_releases)} releases found, "
-                     f"{len(downloaded)} downloaded")
+                     f"{len(downloaded)} downloaded, {len(replaced)} replaced")
         return summary
 
     async def _scrape_page(self, platform: str, url: str) -> list[FirmwareRelease]:
@@ -308,6 +327,24 @@ class FirmwareFetcher:
 
     def _save_channel_map(self, channel_map: dict[str, str]):
         db.set_setting("firmware_channels", json.dumps(channel_map))
+
+    def _find_old_firmware(self, platform: str, channel: str, new_filename: str,
+                           auto_fetched: list[str], channel_map: dict[str, str]) -> list[str]:
+        """Find older auto-fetched firmware files of the same platform/channel to replace."""
+        old_files = []
+        for filename in auto_fetched:
+            if filename == new_filename:
+                continue
+            # Check same platform
+            if _detect_platform(filename) != platform:
+                continue
+            # Check same channel
+            file_channel = channel_map.get(filename, "")
+            if file_channel != channel:
+                continue
+            # This is an older auto-fetched file of the same platform/channel
+            old_files.append(filename)
+        return old_files
 
     def reselect(self, beta_enabled: bool):
         """Re-run auto-select for all platforms using cached release data."""

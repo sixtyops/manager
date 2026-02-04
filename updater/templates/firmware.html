@@ -229,11 +229,19 @@
             border-radius: 6px;
             transition: all 0.2s;
             font-size: 1rem;
+            opacity: 0;
+            visibility: hidden;
         }
 
         .btn-icon:hover {
             color: #ef4444;
             background: rgba(239, 68, 68, 0.1);
+        }
+
+        /* Show delete button on hover only for manual uploads */
+        .firmware-table tr[data-source="manual"]:hover .btn-icon {
+            opacity: 1;
+            visibility: visible;
         }
 
         .btn-use {
@@ -555,6 +563,7 @@
                 const isSelected = selectedFirmware[type] === f.name;
                 const rowClass = isSelected ? 'active-row' : '';
                 const canSelect = type !== 'unknown';
+                const source = f.source || 'manual';
 
                 let activeCell = '';
                 if (canSelect) {
@@ -567,14 +576,19 @@
                     activeCell = '<span style="color:#64748b;font-size:0.75rem;">-</span>';
                 }
 
-                html += `<tr class="${rowClass}">
+                // Only show delete button for manual uploads (shown on hover via CSS)
+                const deleteBtn = source === 'manual'
+                    ? `<button class="btn-icon" onclick="deleteFirmware('${escapeAttr(f.name)}')" title="Delete">&#128465;</button>`
+                    : '';
+
+                html += `<tr class="${rowClass}" data-source="${source}">
                     <td class="name-cell">${escapeHtml(f.name)}</td>
                     <td><span class="type-badge type-${type}">${type}</span></td>
                     <td>${escapeHtml(version)}</td>
                     <td>${formatSize(f.size)}</td>
                     <td>${formatDate(f.modified)}</td>
                     <td>${activeCell}</td>
-                    <td><button class="btn-icon" onclick="deleteFirmware('${escapeAttr(f.name)}')" title="Delete">&#128465;</button></td>
+                    <td>${deleteBtn}</td>
                 </tr>`;
             }
 
