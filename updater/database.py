@@ -243,6 +243,7 @@ def init_db():
             "zip_code": "",
             "weather_check_enabled": "true",
             "min_temperature_c": "-10",
+            "temperature_unit": "auto",  # "auto", "c", or "f"
             "schedule_scope": "all",
             "schedule_scope_data": "",
             "firmware_beta_enabled": "false",
@@ -667,30 +668,91 @@ def unregister_firmware(filename: str):
         conn.execute("DELETE FROM firmware_registry WHERE filename = ?", (filename,))
 
 
-def is_firmware_quarantine_cleared(filename: str, quarantine_days: int = 7) -> bool:
-    """Check if firmware has cleared the quarantine period."""
+def _extract_release_date_from_filename(filename: str) -> Optional[datetime]:
+    """Extract release date from firmware filename (e.g., tna-30x-1.12.2-r54944-20250828-...).
+
+    Returns the release date as datetime, or None if not found.
+    """
+    import re
+    # Look for YYYYMMDD pattern in filename
+    match = re.search(r'-(\d{4})(\d{2})(\d{2})-', filename)
+    if match:
+        try:
+            year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            return datetime(year, month, day)
+        except ValueError:
+            pass
+    return None
+
+
+def is_firmware_hold_cleared(filename: str, hold_days: int = 7) -> bool:
+    """Check if firmware has cleared the auto-download hold period.
+
+    Uses the release date from the filename (preferred) or falls back to download date.
+    """
+    # Try to get release date from filename first
+    release_date = _extract_release_date_from_filename(filename)
+    if release_date:
+        return datetime.now() >= release_date + timedelta(days=hold_days)
+
+    # Fall back to download date
     added_at = get_firmware_added_at(filename)
     if added_at is None:
         return True  # Not registered — treat as cleared (legacy file)
     added_dt = datetime.fromisoformat(added_at)
-    return datetime.now() >= added_dt + timedelta(days=quarantine_days)
+    return datetime.now() >= added_dt + timedelta(days=hold_days)
 
 
-def get_firmware_quarantine_info(filename: str, quarantine_days: int = 7) -> dict:
-    """Get quarantine status info for a firmware file."""
-    added_at = get_firmware_added_at(filename)
-    if added_at is None:
-        return {"cleared": True, "added_at": None, "clears_at": None, "remaining_hours": 0}
-    added_dt = datetime.fromisoformat(added_at)
-    clears_at = added_dt + timedelta(days=quarantine_days)
+# Alias for backwards compatibility
+def is_firmware_quarantine_cleared(filename: str, quarantine_days: int = 7) -> bool:
+    """Alias for is_firmware_hold_cleared (backwards compatibility)."""
+    return is_firmware_hold_cleared(filename, quarantine_days)
+
+
+def get_firmware_hold_info(filename: str, hold_days: int = 7) -> dict:
+    """Get hold period status info for a firmware file.
+
+    Uses release date from filename when available.
+    """
+    # Try to get release date from filename first
+    release_date = _extract_release_date_from_filename(filename)
+
+    if release_date:
+        reference_dt = release_date
+        reference_type = "release_date"
+    else:
+        added_at = get_firmware_added_at(filename)
+        if added_at is None:
+            return {"cleared": True, "reference_date": None, "reference_type": None,
+                    "clears_at": None, "remaining_days": 0}
+        reference_dt = datetime.fromisoformat(added_at)
+        reference_type = "download_date"
+
+    clears_at = reference_dt + timedelta(days=hold_days)
     now = datetime.now()
     cleared = now >= clears_at
-    remaining = max(0, (clears_at - now).total_seconds() / 3600) if not cleared else 0
+    remaining_seconds = max(0, (clears_at - now).total_seconds()) if not cleared else 0
+    remaining_days = remaining_seconds / 86400
+
     return {
         "cleared": cleared,
-        "added_at": added_at,
+        "reference_date": reference_dt.isoformat(),
+        "reference_type": reference_type,
         "clears_at": clears_at.isoformat(),
-        "remaining_hours": round(remaining, 1),
+        "remaining_days": round(remaining_days, 1),
+    }
+
+
+# Alias for backwards compatibility
+def get_firmware_quarantine_info(filename: str, quarantine_days: int = 7) -> dict:
+    """Alias for get_firmware_hold_info (backwards compatibility)."""
+    info = get_firmware_hold_info(filename, quarantine_days)
+    # Map new fields to old field names for compatibility
+    return {
+        "cleared": info["cleared"],
+        "added_at": info.get("reference_date"),
+        "clears_at": info.get("clears_at"),
+        "remaining_hours": round(info.get("remaining_days", 0) * 24, 1),
     }
 
 

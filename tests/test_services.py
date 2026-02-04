@@ -6,7 +6,68 @@ import json
 
 import pytest
 
-from updater.services import get_current_time, is_in_schedule_window
+from updater.services import (
+    get_current_time,
+    is_in_schedule_window,
+    c_to_f,
+    f_to_c,
+    format_temperature,
+    get_temperature_unit_from_location,
+)
+
+
+class TestTemperatureConversions:
+    def test_c_to_f_freezing(self):
+        assert c_to_f(0) == 32.0
+
+    def test_c_to_f_boiling(self):
+        assert c_to_f(100) == 212.0
+
+    def test_c_to_f_negative(self):
+        assert c_to_f(-40) == -40.0  # Same in both scales
+
+    def test_f_to_c_freezing(self):
+        assert f_to_c(32) == 0.0
+
+    def test_f_to_c_boiling(self):
+        assert f_to_c(212) == 100.0
+
+    def test_f_to_c_negative(self):
+        assert f_to_c(-40) == -40.0
+
+
+class TestFormatTemperature:
+    def test_format_celsius(self):
+        assert format_temperature(-10.0, "c") == "-10.0°C"
+
+    def test_format_fahrenheit(self):
+        assert format_temperature(-10.0, "f") == "14.0°F"
+
+    def test_format_zero_celsius(self):
+        assert format_temperature(0.0, "c") == "0.0°C"
+
+    def test_format_zero_fahrenheit(self):
+        assert format_temperature(0.0, "f") == "32.0°F"
+
+
+class TestGetTemperatureUnitFromLocation:
+    def test_us_uses_fahrenheit(self):
+        assert get_temperature_unit_from_location("US") == "f"
+
+    def test_us_lowercase(self):
+        assert get_temperature_unit_from_location("us") == "f"
+
+    def test_canada_uses_celsius(self):
+        assert get_temperature_unit_from_location("CA") == "c"
+
+    def test_uk_uses_celsius(self):
+        assert get_temperature_unit_from_location("GB") == "c"
+
+    def test_empty_defaults_celsius(self):
+        assert get_temperature_unit_from_location("") == "c"
+
+    def test_none_defaults_celsius(self):
+        assert get_temperature_unit_from_location(None) == "c"
 
 
 class TestGetCurrentTime:

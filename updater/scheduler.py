@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from . import database as db
 from . import services
+from .services import format_temperature
 
 logger = logging.getLogger(__name__)
 
@@ -220,9 +221,18 @@ class AutoUpdateScheduler:
 
             if not weather_ok:
                 self._state = "blocked_weather"
-                temp = self._weather_info.get("temperature_c", "?") if self._weather_info else "?"
+                temp_c = self._weather_info.get("temperature_c") if self._weather_info else None
                 min_temp_c = float(settings.get("min_temperature_c", "-10"))
-                self._block_reason = f"Temperature {temp}C is below minimum {min_temp_c}C"
+                # Format temperature in user's preferred unit
+                temp_unit = await services.resolve_temperature_unit(
+                    settings.get("temperature_unit", "auto")
+                )
+                if temp_c is not None:
+                    temp_str = format_temperature(temp_c, temp_unit)
+                else:
+                    temp_str = "?"
+                min_temp_str = format_temperature(min_temp_c, temp_unit)
+                self._block_reason = f"Temperature {temp_str} is below minimum {min_temp_str}"
                 db.log_schedule_event("blocked_weather", self._block_reason)
                 logger.warning(f"Scheduler blocked by weather: {self._block_reason}")
                 await self._broadcast_status()
@@ -239,22 +249,22 @@ class AutoUpdateScheduler:
         fw_303l = settings.get("selected_firmware_303l", "")
         fw_tns100 = settings.get("selected_firmware_tns100", "")
 
-        # 10.5. Check firmware quarantine
-        quarantine_days = int(settings.get("firmware_quarantine_days", "7"))
-        if quarantine_days > 0:
-            # Check all selected firmware files against quarantine
+        # 10.5. Check firmware hold period (protects against bad auto-downloaded releases)
+        hold_days = int(settings.get("firmware_quarantine_days", "7"))
+        if hold_days > 0:
+            # Check all selected firmware files against hold period
             for fw_name in (fw_30x, fw_303l, fw_tns100):
                 if not fw_name:
                     continue
-                q_info = db.get_firmware_quarantine_info(fw_name, quarantine_days)
-                if not q_info["cleared"]:
-                    self._state = "blocked_quarantine"
-                    remaining_h = q_info["remaining_hours"]
-                    if remaining_h > 24:
-                        remaining_str = f"{remaining_h / 24:.1f} days"
+                hold_info = db.get_firmware_hold_info(fw_name, hold_days)
+                if not hold_info["cleared"]:
+                    self._state = "blocked_quarantine"  # Keep state name for UI compatibility
+                    remaining_days = hold_info["remaining_days"]
+                    if remaining_days >= 1:
+                        remaining_str = f"{remaining_days:.1f} days"
                     else:
-                        remaining_str = f"{remaining_h:.0f} hours"
-                    self._block_reason = f"Firmware {fw_name} in quarantine ({remaining_str} remaining)"
+                        remaining_str = f"{remaining_days * 24:.0f} hours"
+                    self._block_reason = f"On hold ({remaining_str}) - new firmware waiting period"
                     db.log_schedule_event("blocked_quarantine", self._block_reason)
                     logger.info(f"Scheduler blocked: {self._block_reason}")
                     await self._broadcast_status()

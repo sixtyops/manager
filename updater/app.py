@@ -988,7 +988,10 @@ async def quick_add(
 async def get_settings(session: dict = Depends(require_auth)):
     """Get all settings."""
     settings = db.get_all_settings()
-    return {"settings": settings}
+    # Resolve temperature unit for UI
+    temp_unit_setting = settings.get("temperature_unit", "auto")
+    resolved_unit = await services.resolve_temperature_unit(temp_unit_setting)
+    return {"settings": settings, "resolved_temperature_unit": resolved_unit}
 
 
 @app.put("/api/settings")
@@ -1484,6 +1487,7 @@ async def firmware_fetch_status(session: dict = Depends(require_auth)):
 async def get_fleet_status(session: dict = Depends(require_auth)):
     """Get firmware version status for all devices."""
     settings = db.get_all_settings()
+    allow_downgrade = settings.get("allow_downgrade", "false") == "true"
 
     # Build target versions from selected firmware filenames
     targets = {}
@@ -1515,7 +1519,7 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
         fw_type = _get_firmware_type_for_model(ap.get("model"))
         target = targets.get(fw_type)
         target_version = target["version"] if target else ""
-        status = _device_version_status(ap.get("firmware_version"), target_version)
+        status = _device_version_status(ap.get("firmware_version"), target_version, allow_downgrade)
         summary["total"] += 1
         summary[status] += 1
 
@@ -1541,7 +1545,7 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             cpe_fw_type = _get_firmware_type_for_model(cpe.get("model"))
             cpe_target = targets.get(cpe_fw_type)
             cpe_target_version = cpe_target["version"] if cpe_target else ""
-            cpe_status = _device_version_status(cpe.get("firmware_version"), cpe_target_version)
+            cpe_status = _device_version_status(cpe.get("firmware_version"), cpe_target_version, allow_downgrade)
             summary["total"] += 1
             summary[cpe_status] += 1
 
@@ -1569,7 +1573,7 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
         fw_type = _get_firmware_type_for_model(sw.get("model"))
         target = targets.get(fw_type)
         target_version = target["version"] if target else ""
-        status = _device_version_status(sw.get("firmware_version"), target_version)
+        status = _device_version_status(sw.get("firmware_version"), target_version, allow_downgrade)
         summary["total"] += 1
         summary[status] += 1
 
@@ -1594,13 +1598,22 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
     return {"devices": devices, "summary": summary, "targets": targets}
 
 
-def _device_version_status(current: Optional[str], target: str) -> str:
-    """Determine version status: 'current', 'behind', or 'unknown'."""
+def _device_version_status(current: Optional[str], target: str, allow_downgrade: bool = False) -> str:
+    """Determine version status: 'current', 'behind', or 'unknown'.
+
+    Args:
+        current: Current firmware version on device
+        target: Target firmware version
+        allow_downgrade: If True, devices with newer firmware than target are 'behind'
+    """
     if not current or not target:
         return "unknown"
     cmp = _compare_versions(current, target)
-    if cmp >= 0:
+    if cmp == 0:
         return "current"
+    if cmp > 0:
+        # Device is newer than target
+        return "behind" if allow_downgrade else "current"
     return "behind"
 
 

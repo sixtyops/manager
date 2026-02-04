@@ -1530,12 +1530,12 @@
                             <span class="drawer-toggle" id="drawerWeatherToggle" onclick="toggleDrawerWeather()"></span>
                             <span class="drawer-toggle-label">Disable updates below</span>
                             <input type="number" id="drawerMinTemp" value="14" min="-40" max="120" style="width:48px;" onchange="drawerSettingChanged()">
-                            <span style="font-size:0.75rem;color:#6b7280;">&deg;F</span>
+                            <span id="drawerTempUnit" style="font-size:0.75rem;color:#6b7280;">&deg;F</span>
                             <span id="drawerWeatherTemp" style="font-size:0.72rem;color:#6b7280;"></span>
                         </div>
                         <div class="drawer-toggle-row" style="gap: 4px;">
-                            <label style="font-size:0.68rem;color:#9ca3af;margin:0;">Zip</label>
-                            <input type="text" id="drawerZipCode" placeholder="Auto" maxlength="5" style="width:56px;" onchange="drawerSettingChanged()">
+                            <label style="font-size:0.68rem;color:#9ca3af;margin:0;">Postal</label>
+                            <input type="text" id="drawerZipCode" placeholder="Auto" maxlength="10" style="width:56px;" onchange="drawerSettingChanged()">
                         </div>
                         <div class="drawer-toggle-row" style="gap: 4px;">
                             <label style="font-size:0.68rem;color:#9ca3af;margin:0;">Auto-download hold</label>
@@ -1721,8 +1721,20 @@
     </div>
 
     <script>
+        let tempUnit = 'f';  // Will be set from settings/location
         function cToF(c) { return Math.round(c * 9/5 + 32); }
         function fToC(f) { return Math.round((f - 32) * 5/9); }
+        function displayTemp(tempC) {
+            return tempUnit === 'f' ? cToF(tempC) : Math.round(tempC);
+        }
+        function storageTemp(displayVal) {
+            return tempUnit === 'f' ? fToC(displayVal) : Math.round(displayVal);
+        }
+        function updateTempUnitLabels() {
+            const symbol = tempUnit === 'f' ? '°F' : '°C';
+            const el = document.getElementById('drawerTempUnit');
+            if (el) el.textContent = symbol;
+        }
 
         let ws = null;
         let chart = null;
@@ -3132,6 +3144,15 @@
             }
 
             const rollout = data.rollout;
+
+            // If rollout is completed but there are pending devices, show idle phases
+            // (a new rollout will be needed for the pending devices)
+            if (rollout.status === 'completed' && lastBehindCount > 0) {
+                currentRolloutId = null;
+                renderIdlePhases();
+                return;
+            }
+
             currentRolloutId = rollout.id;
 
             const phaseIdx = PHASES.indexOf(rollout.phase);
@@ -3295,11 +3316,16 @@
                 const weatherToggle = document.getElementById('drawerWeatherToggle');
                 weatherToggle.classList.toggle('active', s.weather_check_enabled === 'true');
 
-                // Min temp (stored Celsius, display Fahrenheit)
-                const storedC = parseFloat(s.min_temperature_c || '-10');
-                document.getElementById('drawerMinTemp').value = cToF(storedC);
+                // Temperature unit (from resolved_temperature_unit if available)
+                tempUnit = result.resolved_temperature_unit || s.temperature_unit || 'f';
+                if (tempUnit === 'auto') tempUnit = 'f';  // Fallback if not resolved
+                updateTempUnitLabels();
 
-                // Zip code
+                // Min temp (stored Celsius, display in user's unit)
+                const storedC = parseFloat(s.min_temperature_c || '-10');
+                document.getElementById('drawerMinTemp').value = displayTemp(storedC);
+
+                // Postal code
                 document.getElementById('drawerZipCode').value = s.zip_code || '';
 
                 // Quarantine
@@ -3333,7 +3359,7 @@
                         bank_mode: document.getElementById('drawerBankMode').value,
                         schedule_concurrency: document.getElementById('drawerParallel').value,
                         schedule_scope: 'all',
-                        min_temperature_c: String(fToC(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
+                        min_temperature_c: String(storageTemp(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
                         zip_code: document.getElementById('drawerZipCode').value,
                         firmware_quarantine_days: document.getElementById('drawerQuarantineDays').value,
                     }),

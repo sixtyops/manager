@@ -1543,12 +1543,12 @@
                 </div>
                 <div class="settings-grid">
                     <div class="form-group">
-                        <label>Min Temp (&deg;F)</label>
+                        <label>Min Temp (<span id="tempUnitLabel">&deg;F</span>)</label>
                         <input type="number" id="autoMinTemp" value="14" min="-40" max="120" onchange="autoSettingChanged()">
                     </div>
                     <div class="form-group">
-                        <label>Zip Code</label>
-                        <input type="text" id="autoZipCode" placeholder="Auto-detect" maxlength="5" onchange="autoSettingChanged()">
+                        <label>Postal Code</label>
+                        <input type="text" id="autoZipCode" placeholder="Auto-detect" maxlength="10" onchange="autoSettingChanged()">
                     </div>
                 </div>
 
@@ -1625,7 +1625,8 @@
                     weatherLastFetched = now;
                     const el = document.getElementById('weatherCurrentDisplay');
                     if (el && data.temperature_c !== null) {
-                        el.textContent = `(${cToF(data.temperature_c)}\u00B0F now)`;
+                        const symbol = tempUnit === 'f' ? '°F' : '°C';
+                        el.textContent = `(${displayTemp(data.temperature_c)}${symbol} now)`;
                     }
                 }
             } catch (e) { /* ignore */ }
@@ -2113,9 +2114,23 @@
             });
         });
 
-        // Temperature conversion (backend stores C, UI shows F)
+        // Temperature conversion (backend stores C, UI shows user's preferred unit)
+        let tempUnit = 'f';  // Will be set from settings/location
         function cToF(c) { return Math.round(c * 9/5 + 32); }
         function fToC(f) { return Math.round((f - 32) * 5/9); }
+        function displayTemp(tempC) {
+            // Convert from stored Celsius to display unit
+            return tempUnit === 'f' ? cToF(tempC) : Math.round(tempC);
+        }
+        function storageTemp(displayVal) {
+            // Convert from display unit to stored Celsius
+            return tempUnit === 'f' ? fToC(displayVal) : Math.round(displayVal);
+        }
+        function updateTempUnitLabels() {
+            const symbol = tempUnit === 'f' ? '°F' : '°C';
+            const label = document.getElementById('tempUnitLabel');
+            if (label) label.textContent = symbol;
+        }
 
         // Auto-Update tab functions
         let autoSaveTimer = null;
@@ -2173,8 +2188,14 @@
                 const weatherToggle = document.getElementById('autoWeatherToggle');
                 if (s.weather_check_enabled === 'true') weatherToggle.classList.add('active');
                 else weatherToggle.classList.remove('active');
+
+                // Temperature unit (from resolved_temperature_unit if available, else setting)
+                tempUnit = result.resolved_temperature_unit || s.temperature_unit || 'f';
+                if (tempUnit === 'auto') tempUnit = 'f';  // Fallback if not resolved
+                updateTempUnitLabels();
+
                 const storedC = parseFloat(s.min_temperature_c || '-10');
-                document.getElementById('autoMinTemp').value = cToF(storedC);
+                document.getElementById('autoMinTemp').value = displayTemp(storedC);
                 document.getElementById('autoZipCode').value = s.zip_code || '';
             } catch (error) {
                 console.error('Failed to load auto settings:', error);
@@ -2196,7 +2217,7 @@
                 bank_mode: document.getElementById('bankMode').value,
                 schedule_scope: 'all',
                 weather_check_enabled: document.getElementById('autoWeatherToggle').classList.contains('active') ? 'true' : 'false',
-                min_temperature_c: String(fToC(parseFloat(document.getElementById('autoMinTemp').value))),
+                min_temperature_c: String(storageTemp(parseFloat(document.getElementById('autoMinTemp').value))),
                 zip_code: document.getElementById('autoZipCode').value,
             };
 
@@ -2267,8 +2288,8 @@
 
             // Update weather display in Weather Check card
             if (status.weather && status.weather.temperature_c !== null) {
-                const tempF = cToF(status.weather.temperature_c);
-                document.getElementById('weatherCurrentDisplay').textContent = `(${tempF}\u00B0F now)`;
+                const symbol = tempUnit === 'f' ? '°F' : '°C';
+                document.getElementById('weatherCurrentDisplay').textContent = `(${displayTemp(status.weather.temperature_c)}${symbol} now)`;
             }
         }
 
