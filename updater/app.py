@@ -1662,6 +1662,7 @@ def _is_tns100_model(model: Optional[str]) -> bool:
 
 
 TNS100_REBOOT_TIMEOUT = 900  # 15 minutes for switches
+AP_REBOOT_TIMEOUT = 480      # 8 minutes for APs (increased from 5 min due to slower reboots)
 
 
 def _extract_version_from_filename(filename: str) -> str:
@@ -2276,7 +2277,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     if job.device_type in ("tachyon", "mixed"):
         username, password = job.credentials[ip]
         client = TachyonClient(ip, username, password)
-        reboot_timeout = TNS100_REBOOT_TIMEOUT if device_status.role == "switch" else 300
+        reboot_timeout = TNS100_REBOOT_TIMEOUT if device_status.role == "switch" else AP_REBOOT_TIMEOUT
         result = await client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout)
     else:
         result = UpdateResult(ip=ip, success=False, error=f"Unsupported device type: {job.device_type}")
