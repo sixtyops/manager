@@ -30,6 +30,13 @@ def _migrate(db):
             db.execute(f"ALTER TABLE access_points ADD COLUMN {col} TEXT DEFAULT NULL")
     if "active_bank" not in ap_columns:
         db.execute("ALTER TABLE access_points ADD COLUMN active_bank INTEGER DEFAULT NULL")
+    if "last_firmware_update" not in ap_columns:
+        db.execute("ALTER TABLE access_points ADD COLUMN last_firmware_update TEXT DEFAULT NULL")
+
+    # Add last_firmware_update to switches
+    sw_columns = [row[1] for row in db.execute("PRAGMA table_info(switches)").fetchall()]
+    if "last_firmware_update" not in sw_columns:
+        db.execute("ALTER TABLE switches ADD COLUMN last_firmware_update TEXT DEFAULT NULL")
 
     # Add bank columns to cpe_cache
     if "bank1_version" not in columns:
@@ -89,6 +96,7 @@ def init_db():
                 last_seen TEXT,
                 last_error TEXT,
                 enabled INTEGER DEFAULT 1,
+                last_firmware_update TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
             );
@@ -110,6 +118,7 @@ def init_db():
                 bank1_version TEXT,
                 bank2_version TEXT,
                 active_bank INTEGER,
+                last_firmware_update TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
             );
@@ -228,7 +237,7 @@ def init_db():
             "schedule_start_hour": "3",
             "schedule_end_hour": "4",
             "parallel_updates": "2",
-            "bank_mode": "both",
+            "bank_mode": "one",
             "allow_downgrade": "false",
             "timezone": "auto",
             "zip_code": "",
@@ -964,6 +973,17 @@ def mark_rollout_device(rollout_id: int, ip: str, status: str):
             "UPDATE rollout_devices SET status = ?, updated_at = ? WHERE rollout_id = ? AND ip = ?",
             (status, now, rollout_id, ip)
         )
+        # If successfully updated, record the timestamp on the device itself
+        if status == "updated":
+            # Try access_points first, then switches
+            db.execute(
+                "UPDATE access_points SET last_firmware_update = ? WHERE ip = ?",
+                (now, ip)
+            )
+            db.execute(
+                "UPDATE switches SET last_firmware_update = ? WHERE ip = ?",
+                (now, ip)
+            )
 
 
 def mark_rollout_phase_devices(rollout_id: int, phase: str, status: str):
@@ -974,6 +994,23 @@ def mark_rollout_phase_devices(rollout_id: int, phase: str, status: str):
             "UPDATE rollout_devices SET status = ?, updated_at = ? WHERE rollout_id = ? AND phase_assigned = ?",
             (status, now, rollout_id, phase)
         )
+        # If successfully updated, record the timestamp on the devices themselves
+        if status == "updated":
+            # Get the IPs for this phase
+            rows = db.execute(
+                "SELECT ip FROM rollout_devices WHERE rollout_id = ? AND phase_assigned = ?",
+                (rollout_id, phase)
+            ).fetchall()
+            for row in rows:
+                ip = row[0]
+                db.execute(
+                    "UPDATE access_points SET last_firmware_update = ? WHERE ip = ?",
+                    (now, ip)
+                )
+                db.execute(
+                    "UPDATE switches SET last_firmware_update = ? WHERE ip = ?",
+                    (now, ip)
+                )
 
 
 def get_rollout_devices(rollout_id: int, phase: str = None) -> list[dict]:

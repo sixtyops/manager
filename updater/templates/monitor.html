@@ -661,6 +661,14 @@
             font-weight: 500;
         }
 
+        .last-updated-text {
+            font-size: 0.75rem;
+        }
+        .last-updated-text.muted {
+            color: var(--text-muted);
+            font-style: italic;
+        }
+
         .update-spinner {
             display: inline-block;
             width: 14px;
@@ -1379,11 +1387,12 @@
                             <th data-sort="distance" onclick="sortTable('distance')">Distance <span class="sort-arrow"></span></th>
                             <th data-sort="status" onclick="sortTable('status')">Status <span class="sort-arrow"></span></th>
                             <th data-sort="update" onclick="sortTable('update')">Update <span class="sort-arrow"></span></th>
+                            <th data-sort="lastseen" onclick="sortTable('lastseen')">Last Updated <span class="sort-arrow"></span></th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody id="deviceTableBody">
-                        <tr><td colspan="7" class="empty-state">Enter AP IPs above to get started</td></tr>
+                        <tr><td colspan="9" class="empty-state">Enter AP IPs above to get started</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1498,8 +1507,8 @@
                     <div>
                         <label>Update Mode</label>
                         <select id="drawerBankMode" onchange="drawerSettingChanged()">
-                            <option value="both">Both Banks (recommended)</option>
-                            <option value="one">Single Bank</option>
+                            <option value="one">Single Bank (recommended)</option>
+                            <option value="both">Both Banks</option>
                         </select>
                     </div>
                     <div>
@@ -1961,6 +1970,17 @@
             return '';
         }
 
+        function lastUpdatedCell(lastUpdate) {
+            if (!lastUpdate) return '<span class="last-updated-text muted">never</span>';
+            const d = new Date(lastUpdate);
+            if (isNaN(d.getTime())) return '<span class="last-updated-text muted">never</span>';
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            const yy = String(d.getFullYear()).slice(-2);
+            const dateText = `${mm}/${dd}/${yy}`;
+            return `<span class="last-updated-text" title="${d.toLocaleString()}">${dateText}</span>`;
+        }
+
         function renderTable() {
             if (!topology || !topology.sites) return;
 
@@ -1989,7 +2009,7 @@
                             <span class="tree-badge">${badgeParts.join(', ')}</span>
                         </div>
                     </td>
-                    <td></td><td></td><td></td><td></td><td></td><td></td>
+                    <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
                     <td><div class="actions-cell">
                         ${actionsCell('site', site.id, site.name)}
                         ${site.id !== null && aps.length === 0 ? `<a class="action-link danger" onclick="deleteSite(${site.id});event.stopPropagation();">Delete</a>` : ''}
@@ -2024,6 +2044,7 @@
                         <td></td>
                         <td>${statusCell(ap.ip, isOffline, null)}</td>
                         <td>${updateCell(ap.ip)}</td>
+                        <td>${lastUpdatedCell(ap.last_firmware_update)}</td>
                         <td><div class="actions-cell">${actionsCell('ap', ap.ip, apName)}</div></td>
                     </tr>`;
 
@@ -2055,6 +2076,7 @@
                             <td>${cpe.link_distance != null ? cpe.link_distance.toFixed(0) + ' m' : ''}</td>
                             <td>${statusCell(cpe.ip, false, health, cpe.auth_status, ap.ip)}</td>
                             <td>${updateCell(cpe.ip)}</td>
+                            <td></td>
                             <td><div class="actions-cell">${actionsCell('cpe', cpe.ip, cpeName)}</div></td>
                         </tr>`;
                     }
@@ -2080,6 +2102,7 @@
                         <td></td>
                         <td>${statusCell(sw.ip, isOffline, null)}</td>
                         <td>${updateCell(sw.ip)}</td>
+                        <td>${lastUpdatedCell(sw.last_firmware_update)}</td>
                         <td><div class="actions-cell">
                             <a class="action-link danger" onclick="deleteSwitch('${sw.ip}');event.stopPropagation();">Delete</a>
                         </div></td>
@@ -2088,7 +2111,7 @@
             }
 
             if (!html) {
-                html = '<tr><td colspan="8" class="empty-state">No devices found</td></tr>';
+                html = '<tr><td colspan="9" class="empty-state">No devices found</td></tr>';
             }
 
             tbody.innerHTML = html;
@@ -2140,6 +2163,10 @@
                     case 'status':
                         valA = a.last_error ? 1 : 0;
                         valB = b.last_error ? 1 : 0;
+                        break;
+                    case 'lastseen':
+                        valA = a.last_firmware_update ? new Date(a.last_firmware_update).getTime() : 0;
+                        valB = b.last_firmware_update ? new Date(b.last_firmware_update).getTime() : 0;
                         break;
                     default:
                         return 0;
@@ -2548,7 +2575,7 @@
 
             const firmware303l = settings.selected_firmware_303l || '';
             const firmwareTns100 = settings.selected_firmware_tns100 || '';
-            const bankMode = settings.bank_mode || 'both';
+            const bankMode = settings.bank_mode || 'one';
 
             // Mark as updating for visual feedback
             if (type === 'cpe' || type === 'ap') {
@@ -3152,7 +3179,9 @@
                     if (dur > 0) stepText += ` · ~${dur < 1 ? '<1' : Math.round(dur)} min`;
                     parts.push(stepText);
                 }
-                if (pred.estimated_completion_date) {
+                // Only show est. done if rollout is not complete
+                const isComplete = rollout.status === 'completed' || (p.total > 0 && p.updated >= p.total);
+                if (pred.estimated_completion_date && !isComplete) {
                     const d = new Date(pred.estimated_completion_date + 'T00:00:00');
                     const opts = { month: 'short', day: 'numeric' };
                     parts.push(`est. done ${d.toLocaleDateString('en-US', opts)}`);
@@ -3248,7 +3277,7 @@
                 document.getElementById('drawerEndHour').value = s.schedule_end_hour || '4';
 
                 // Bank mode
-                document.getElementById('drawerBankMode').value = s.bank_mode || 'both';
+                document.getElementById('drawerBankMode').value = s.bank_mode || 'one';
 
                 // Parallel
                 document.getElementById('drawerParallel').value = s.schedule_concurrency || '2';
