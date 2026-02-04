@@ -225,16 +225,33 @@ def is_in_schedule_window(
     start_hour: int,
     end_hour: int,
 ) -> bool:
-    """Check if current time is within the scheduled update window."""
-    # Check day
-    if current_day not in schedule_days:
-        return False
+    """Check if current time is within the scheduled update window.
 
-    # Check hour
-    if start_hour <= current_hour < end_hour:
-        return True
-
-    return False
+    Handles overnight windows (e.g., 20:00-04:00) where start_hour > end_hour.
+    For overnight windows, the day check applies to the start of the window.
+    """
+    if start_hour < end_hour:
+        # Same-day window (e.g., 3:00-4:00)
+        if not (start_hour <= current_hour < end_hour):
+            return False
+        return current_day in schedule_days
+    else:
+        # Overnight window (e.g., 20:00-04:00)
+        if current_hour >= start_hour:
+            # Evening portion (e.g., 20:00-23:59) - current day must be in schedule
+            return current_day in schedule_days
+        elif current_hour < end_hour:
+            # Morning portion (e.g., 00:00-03:59) - previous day started the window
+            day_order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+            try:
+                idx = day_order.index(current_day)
+                prev_day = day_order[(idx - 1) % 7]
+                return prev_day in schedule_days
+            except ValueError:
+                return False
+        else:
+            # Outside the window (between end_hour and start_hour)
+            return False
 
 
 async def get_external_time(timezone: str) -> Optional[datetime]:
