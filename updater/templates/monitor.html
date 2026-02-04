@@ -1154,10 +1154,11 @@
                     </svg>
                 </button>
                 <div class="user-dropdown" id="userDropdown">
-                    <button class="dropdown-item" onclick="openBackupModal()">Backup / Restore</button>
+                    <button class="dropdown-item" onclick="openBackupModal()">Backup&nbsp;/&nbsp;Restore</button>
                     <button class="dropdown-item" onclick="openNotificationsModal()">Notifications</button>
                     <button class="dropdown-item" onclick="openAuthModal()">Authentication</button>
                     <div style="border-top:1px solid #e5e7eb;"></div>
+                    <button class="dropdown-item" onclick="openAppUpdatesModal()">Settings</button>
                     <form method="POST" action="/logout" style="margin:0;">
                         <button type="submit" class="dropdown-item">Logout</button>
                     </form>
@@ -1172,7 +1173,7 @@
         <!-- Top section: Add APs + Chart -->
         <div class="top-section">
             <div class="card">
-                <h2>Add Devices</h2>
+                <h2>Add APs &amp; Switches</h2>
                 <p style="font-size:0.75rem;color:#9ca3af;margin-bottom:8px;">Devices are auto-classified as APs or switches based on model (TNA&nbsp;=&nbsp;AP, TNS&nbsp;=&nbsp;switch) and assigned to tower sites by their &ldquo;location&rdquo; field.</p>
                 <div class="discovery-form">
                     <textarea id="deviceIps" placeholder="Device IPs (one per line)&#10;192.168.1.1&#10;192.168.1.2"></textarea>
@@ -1180,7 +1181,7 @@
                         <input type="text" id="username" placeholder="Username" value="root">
                         <input type="password" id="password" placeholder="Password">
                     </div>
-                    <button class="btn" id="addDeviceBtn" onclick="addDevices()">Add Devices</button>
+                    <button class="btn" id="addDeviceBtn" onclick="addDevices()">Add APs &amp; Switches</button>
                 </div>
             </div>
 
@@ -1547,6 +1548,36 @@
         </div>
     </div>
 
+    <!-- Settings Modal -->
+    <div class="backup-overlay" id="appUpdatesOverlay" onclick="if(event.target===this)closeAppUpdatesModal()">
+        <div class="backup-modal">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <h3 style="margin:0;">Settings</h3>
+                <button onclick="closeAppUpdatesModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:1.2rem;line-height:1;padding:4px;">&times;</button>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+                <span class="toggle" id="appAutoUpdateToggle" onclick="toggleAppAutoUpdate()" style="flex-shrink:0;"></span>
+                <label style="margin:0;font-weight:500;">Check for App Updates</label>
+                <span id="appVersionDisplay" style="font-size:0.75rem;color:#6b7280;"></span>
+            </div>
+            <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 12px 0;">When enabled, the app will periodically check for new versions and notify you when updates are available.</p>
+
+            <div style="display:flex;align-items:center;gap:8px;">
+                <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
+                <span id="appUpdateStatus" style="font-size:0.75rem;color:#6b7280;"></span>
+            </div>
+
+            <div id="appUpdateBannerInline" style="display:none;margin-top:16px;padding:12px;background:#dbeafe;border-radius:8px;">
+                <div style="font-weight:500;color:#1e40af;">Update Available: <span id="appUpdateVersion"></span></div>
+                <div style="font-size:0.8rem;color:#3b82f6;margin-top:4px;">
+                    <a id="appUpdateReleaseLink" href="#" target="_blank" style="color:#2563eb;">View Release Notes</a>
+                </div>
+                <button class="backup-btn" onclick="applyAppUpdate()" style="margin-top:8px;background:#16a34a;">Update Now</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         function cToF(c) { return Math.round(c * 9/5 + 32); }
         function fToC(f) { return Math.round((f - 32) * 5/9); }
@@ -1651,7 +1682,7 @@
 
             document.getElementById('deviceIps').value = '';
             btn.disabled = false;
-            btn.textContent = 'Add Devices';
+            btn.textContent = 'Add APs & Switches';
 
             const parts = [];
             if (addedAps > 0) parts.push(`${addedAps} AP(s)`);
@@ -1812,7 +1843,8 @@
 
                     for (const cpe of sortedCPEs) {
                         const health = cpe.signal_health || 'red';
-                        const cpeName = cpe.system_name || cpe.ip || cpe.mac || 'Unknown';
+                        const cpeName = cpe.system_name || cpe.mac || 'Unknown';
+                        const cpeIp = cpe.ip || '';
                         const signalVal = cpe.primary_signal;
                         const signalClass = signalVal != null
                             ? (signalVal > -65 ? 'signal-good' : (signalVal > -75 ? 'signal-low' : 'signal-critical'))
@@ -1824,7 +1856,8 @@
                                 <div class="name-cell" style="padding-left:52px;">
                                     <span class="expand-toggle hidden">&#9654;</span>
                                     <span class="device-icon cpe ${health}"></span>
-                                    ${escapeHtml(cpeName)}
+                                    ${cpeIp ? `<a href="http://${cpeIp}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : escapeHtml(cpeName)}
+                                    ${cpeIp && cpe.system_name ? `<span style="color:#64748b;font-size:0.8rem;margin-left:6px;">${cpeIp}</span>` : ''}
                                 </div>
                             </td>
                             <td>${cpe.model || ''}</td>
@@ -2635,6 +2668,98 @@
             } catch (e) {
                 statusEl.textContent = 'Failed to save device credentials';
                 statusEl.style.color = '#ef4444';
+            }
+        }
+
+        // App Updates modal
+        async function openAppUpdatesModal() {
+            document.getElementById('userDropdown').classList.remove('open');
+            document.getElementById('appUpdatesOverlay').classList.add('open');
+            loadAppUpdateStatus();
+        }
+
+        function closeAppUpdatesModal() {
+            document.getElementById('appUpdatesOverlay').classList.remove('open');
+        }
+
+        async function loadAppUpdateStatus() {
+            try {
+                const response = await fetch('/api/updates');
+                const result = await response.json();
+
+                const versionEl = document.getElementById('appVersionDisplay');
+                if (versionEl) versionEl.textContent = 'v' + result.current_version;
+
+                const toggle = document.getElementById('appAutoUpdateToggle');
+                if (toggle) toggle.classList.toggle('active', result.enabled);
+
+                const statusEl = document.getElementById('appUpdateStatus');
+                if (statusEl && result.last_check) {
+                    const d = new Date(result.last_check.endsWith('Z') ? result.last_check : result.last_check + 'Z');
+                    statusEl.textContent = 'Last check: ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                }
+
+                // Show update banner if available
+                const banner = document.getElementById('appUpdateBannerInline');
+                if (result.update_available && result.available_version) {
+                    document.getElementById('appUpdateVersion').textContent = 'v' + result.available_version;
+                    document.getElementById('appUpdateReleaseLink').href = result.release_url || '#';
+                    banner.style.display = 'block';
+                } else {
+                    banner.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Failed to load app update status:', error);
+            }
+        }
+
+        function toggleAppAutoUpdate() {
+            const toggle = document.getElementById('appAutoUpdateToggle');
+            toggle.classList.toggle('active');
+            const enabled = toggle.classList.contains('active') ? 'true' : 'false';
+            fetch('/api/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ autoupdate_enabled: enabled }),
+            });
+        }
+
+        async function checkAppUpdate() {
+            const statusEl = document.getElementById('appUpdateStatus');
+            statusEl.textContent = 'Checking...';
+            try {
+                const response = await fetch('/api/updates/check', { method: 'POST' });
+                const result = await response.json();
+                if (result.error) {
+                    statusEl.textContent = 'Error: ' + result.error;
+                } else if (result.update_available) {
+                    statusEl.textContent = 'Update available!';
+                    loadAppUpdateStatus();
+                } else {
+                    statusEl.textContent = 'Up to date (v' + result.current_version + ')';
+                }
+            } catch (error) {
+                statusEl.textContent = 'Check failed';
+                console.error('Failed to check for updates:', error);
+            }
+        }
+
+        async function applyAppUpdate() {
+            if (!confirm('This will download and apply the latest update, then restart the app. Continue?')) return;
+            const statusEl = document.getElementById('appUpdateStatus');
+            statusEl.textContent = 'Applying update...';
+            try {
+                const response = await fetch('/api/updates/apply', { method: 'POST' });
+                const result = await response.json();
+                if (result.success) {
+                    statusEl.textContent = 'Update applied! Restarting...';
+                    setTimeout(() => location.reload(), 5000);
+                } else {
+                    statusEl.textContent = 'Update failed: ' + (result.error || 'Unknown error');
+                }
+            } catch (error) {
+                statusEl.textContent = 'Update failed';
+                console.error('Failed to apply update:', error);
             }
         }
 
