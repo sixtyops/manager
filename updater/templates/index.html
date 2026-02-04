@@ -1524,6 +1524,12 @@
                     </div>
                 </div>
 
+                <div style="display:flex;align-items:center;gap:8px;margin:12px 0 4px;">
+                    <span class="toggle" id="allowDowngradeToggle" onclick="toggleAllowDowngrade()" style="flex-shrink:0;"></span>
+                    <label style="margin:0;font-weight:500;">Allow Firmware Downgrade</label>
+                </div>
+                <div style="font-size:0.7rem;color:#9ca3af;margin-bottom:12px;padding-left:40px;">When disabled, devices with firmware newer than the target will be skipped.</div>
+
                 <div style="display:flex;align-items:center;gap:8px;margin:16px 0 4px;">
                     <span class="toggle" id="fwBetaToggle" onclick="toggleFwBeta()" style="flex-shrink:0;"></span>
                     <label style="margin:0;font-weight:500;">Include Beta Firmware</label>
@@ -1875,9 +1881,10 @@
                 if (device.bank1_version || device.bank2_version) {
                     const b1 = device.bank1_version || '?';
                     const b2 = device.bank2_version || '?';
-                    const b1Class = device.active_bank === 1 ? 'bank-active' : '';
-                    const b2Class = device.active_bank === 2 ? 'bank-active' : '';
-                    bankInfo = `<div class="bank-info">Bank 1: <span class="${b1Class}">${escapeHtml(b1)}</span> | Bank 2: <span class="${b2Class}">${escapeHtml(b2)}</span></div>`;
+                    // Show active bank first, inactive second
+                    const activeBank = device.active_bank || 1;
+                    const [activeVer, inactiveVer] = activeBank === 1 ? [b1, b2] : [b2, b1];
+                    bankInfo = `<div class="bank-info">Active: <span class="bank-active">${escapeHtml(activeVer)}</span> | Inactive: <span style="opacity:0.6">${escapeHtml(inactiveVer)}</span></div>`;
                 }
 
                 const modelInfo = device.model ? `<span style="color:#9ca3af;font-size:0.7rem;margin-left:6px;">${escapeHtml(device.model)}</span>` : '';
@@ -2977,6 +2984,17 @@
             }).then(() => loadFirmwareList());
         }
 
+        function toggleAllowDowngrade() {
+            const toggle = document.getElementById('allowDowngradeToggle');
+            toggle.classList.toggle('active');
+            const enabled = toggle.classList.contains('active') ? 'true' : 'false';
+            fetch('/api/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ allow_downgrade: enabled }),
+            });
+        }
+
         async function triggerFirmwareFetch() {
             const statusEl = document.getElementById('fwFetchStatus');
             statusEl.textContent = 'Checking for new firmware...';
@@ -3003,6 +3021,11 @@
                 const toggle = document.getElementById('fwBetaToggle');
                 if (result.settings.firmware_beta_enabled === 'true') {
                     toggle.classList.add('active');
+                }
+                // Load allow_downgrade setting
+                const downgradeToggle = document.getElementById('allowDowngradeToggle');
+                if (result.settings.allow_downgrade === 'true') {
+                    downgradeToggle.classList.add('active');
                 }
                 // Show last check status
                 const statusEl = document.getElementById('fwFetchStatus');
