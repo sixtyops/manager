@@ -233,6 +233,77 @@
             background: var(--border-light);
         }
 
+        /* Toggle switch */
+        .toggle {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            background: var(--toggle-off);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .toggle.active {
+            background: #3b82f6;
+        }
+
+        .toggle::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.2s;
+        }
+
+        .toggle.active::after {
+            transform: translateX(20px);
+        }
+
+        /* Settings tabs */
+        .settings-tabs {
+            display: flex;
+            border-bottom: 1px solid #e5e7eb;
+            margin-bottom: 16px;
+            gap: 4px;
+        }
+
+        .settings-tab {
+            padding: 8px 16px;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: #6b7280;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+            transition: color 0.15s, border-color 0.15s;
+        }
+
+        .settings-tab:hover {
+            color: #374151;
+        }
+
+        .settings-tab.active {
+            color: #3b82f6;
+            border-bottom-color: #3b82f6;
+        }
+
+        .settings-panel {
+            display: none;
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .settings-panel.active {
+            display: block;
+        }
+
         /* Layout */
         .container {
             max-width: 1400px;
@@ -588,6 +659,42 @@
             color: var(--primary);
             font-size: 0.75rem;
             font-weight: 500;
+        }
+
+        .update-spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-dots {
+            display: inline-flex;
+            gap: 3px;
+            align-items: center;
+        }
+
+        .loading-dots span {
+            width: 5px;
+            height: 5px;
+            background: var(--text-muted);
+            border-radius: 50%;
+            animation: dotPulse 1.2s ease-in-out infinite;
+        }
+
+        .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes dotPulse {
+            0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+            40% { opacity: 1; transform: scale(1); }
         }
 
         /* Actions cell */
@@ -1047,6 +1154,26 @@
         .status-bar-reason {
             color: var(--text-dim);
             font-size: 0.75rem;
+            max-width: 320px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .status-bar-inline-actions {
+            display: none;
+            gap: 6px;
+            margin-left: 8px;
+        }
+
+        .status-bar-inline-actions.visible {
+            display: inline-flex;
+        }
+
+        .status-bar-inline-actions .btn {
+            padding: 2px 8px;
+            font-size: 0.7rem;
+            white-space: nowrap;
         }
 
         .status-bar-muted {
@@ -1135,6 +1262,16 @@
             background: var(--warning-hover);
         }
 
+        .btn-outline-secondary {
+            background: transparent;
+            border: 1px solid var(--border-light);
+            color: var(--text-muted);
+        }
+        .btn-outline-secondary:hover {
+            background: var(--border-light);
+            color: var(--text);
+        }
+
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
@@ -1154,11 +1291,8 @@
                     </svg>
                 </button>
                 <div class="user-dropdown" id="userDropdown">
-                    <button class="dropdown-item" onclick="openBackupModal()">Backup&nbsp;/&nbsp;Restore</button>
-                    <button class="dropdown-item" onclick="openNotificationsModal()">Notifications</button>
-                    <button class="dropdown-item" onclick="openAuthModal()">Authentication</button>
+                    <button class="dropdown-item" onclick="openAppSettingsModal()">App Settings</button>
                     <div style="border-top:1px solid #e5e7eb;"></div>
-                    <button class="dropdown-item" onclick="openAppUpdatesModal()">Settings</button>
                     <form method="POST" action="/logout" style="margin:0;">
                         <button type="submit" class="dropdown-item">Logout</button>
                     </form>
@@ -1244,6 +1378,7 @@
                             <th data-sort="signal" onclick="sortTable('signal')">Signal <span class="sort-arrow"></span></th>
                             <th data-sort="distance" onclick="sortTable('distance')">Distance <span class="sort-arrow"></span></th>
                             <th data-sort="status" onclick="sortTable('status')">Status <span class="sort-arrow"></span></th>
+                            <th data-sort="update" onclick="sortTable('update')">Update <span class="sort-arrow"></span></th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -1263,9 +1398,16 @@
                 <span class="status-bar-label">Auto-Update</span>
                 <span class="status-badge status-bar-badge" id="barStateBadge">Off</span>
                 <span class="status-bar-reason" id="barBlockReason"></span>
+                <div class="status-bar-inline-actions" id="barInlineActions">
+                    <button class="btn btn-sm btn-warning" onclick="resumeRollout();event.stopPropagation();">Retry Next Window</button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="resetRollout();event.stopPropagation();">Reset</button>
+                </div>
             </div>
             <div class="status-bar-section" id="barDeviceCountSection" style="display: none;">
                 <span class="status-bar-count" id="barBehindCount"></span>
+            </div>
+            <div class="status-bar-section" style="margin-left: auto;">
+                <span id="barLastUpdated" style="font-size: 0.7rem; color: #9ca3af;"></span>
             </div>
             <div class="status-bar-section status-bar-rollout" id="barRolloutSection">
                 <div class="status-bar-phases" id="barPhaseIndicator"></div>
@@ -1372,6 +1514,10 @@
                             <span class="drawer-toggle-label">Beta Firmware</span>
                         </div>
                         <div class="drawer-toggle-row">
+                            <span class="drawer-toggle" id="drawerDowngradeToggle" onclick="toggleDrawerDowngrade()"></span>
+                            <span class="drawer-toggle-label">Allow Downgrade</span>
+                        </div>
+                        <div class="drawer-toggle-row">
                             <span class="drawer-toggle" id="drawerWeatherToggle" onclick="toggleDrawerWeather()"></span>
                             <span class="drawer-toggle-label">Disable updates below</span>
                             <input type="number" id="drawerMinTemp" value="14" min="-40" max="120" style="width:48px;" onchange="drawerSettingChanged()">
@@ -1407,57 +1553,81 @@
         </div>
     </div>
 
-    <!-- Backup / Restore Modal -->
-    <div class="backup-overlay" id="backupOverlay" onclick="if(event.target===this)closeBackupModal()">
-        <div class="backup-modal">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-                <h3 style="margin:0;">Backup / Restore</h3>
-                <button onclick="closeBackupModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:1.2rem;line-height:1;padding:4px;">&times;</button>
+    <!-- App Settings Modal -->
+    <div class="backup-overlay" id="appSettingsOverlay" onclick="if(event.target===this)closeAppSettingsModal()">
+        <div class="backup-modal" style="width:520px;height:520px;display:flex;flex-direction:column;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0;flex-shrink:0;">
+                <h3 style="margin:0;">App Settings</h3>
+                <button onclick="closeAppSettingsModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:1.2rem;line-height:1;padding:4px;">&times;</button>
             </div>
 
-            <!-- Export -->
-            <div style="margin-bottom:16px;">
-                <label>Export Devices (CSV)</label>
-                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 6px 0;">Download all devices as a CSV file. Passwords are encrypted with the passphrase you provide.</p>
-                <div style="display:flex;gap:6px;align-items:center;">
-                    <input type="password" id="exportPassphrase" placeholder="Passphrase (min 8 characters)" style="flex:1;">
-                    <button class="backup-btn" onclick="exportBackup()">Download CSV</button>
+            <!-- Tabs -->
+            <div class="settings-tabs" style="flex-shrink:0;">
+                <button class="settings-tab active" onclick="switchSettingsTab('updates')">Updates</button>
+                <button class="settings-tab" onclick="switchSettingsTab('backup')">Backup</button>
+                <button class="settings-tab" onclick="switchSettingsTab('notifications')">Notifications</button>
+                <button class="settings-tab" onclick="switchSettingsTab('auth')">Authentication</button>
+            </div>
+
+            <!-- Updates Panel -->
+            <div class="settings-panel active" id="settingsPanel-updates">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+                    <span class="toggle" id="appAutoUpdateToggle" onclick="toggleAppAutoUpdate()" style="flex-shrink:0;"></span>
+                    <label style="margin:0;font-weight:500;">Check for App Updates</label>
+                    <span id="appVersionDisplay" style="font-size:0.75rem;color:#6b7280;"></span>
+                </div>
+                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 12px 0;">When enabled, the app will periodically check for new versions and notify you when updates are available.</p>
+
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
+                    <span id="appUpdateStatus" style="font-size:0.75rem;color:#6b7280;"></span>
+                </div>
+
+                <div id="appUpdateBannerInline" style="display:none;margin-top:16px;padding:12px;background:#dbeafe;border-radius:8px;">
+                    <div style="font-weight:500;color:#1e40af;">Update Available: <span id="appUpdateVersion"></span></div>
+                    <div style="font-size:0.8rem;color:#3b82f6;margin-top:4px;">
+                        <a id="appUpdateReleaseLink" href="#" target="_blank" style="color:#2563eb;">View Release Notes</a>
+                    </div>
+                    <button class="backup-btn" onclick="applyAppUpdate()" style="margin-top:8px;background:#16a34a;">Update Now</button>
                 </div>
             </div>
 
-            <div style="border-top:1px solid #e5e7eb;margin-bottom:16px;"></div>
-
-            <!-- Import -->
-            <div>
-                <label>Import Devices (CSV)</label>
-                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 6px 0;">Import devices from a previously exported CSV. Use the same passphrase to decrypt passwords.</p>
-                <div style="display:flex;flex-direction:column;gap:8px;">
-                    <input type="file" id="importFile" accept=".csv" style="font-size:0.75rem;">
+            <!-- Backup Panel -->
+            <div class="settings-panel" id="settingsPanel-backup">
+                <!-- Export -->
+                <div style="margin-bottom:16px;">
+                    <label>Export Devices (CSV)</label>
+                    <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 6px 0;">Download all devices as a CSV file. Passwords are encrypted with the passphrase you provide.</p>
                     <div style="display:flex;gap:6px;align-items:center;">
-                        <input type="password" id="importPassphrase" placeholder="Passphrase" style="flex:1;">
-                        <select id="importConflictMode">
-                            <option value="skip">Skip existing</option>
-                            <option value="update">Update existing</option>
-                        </select>
-                        <button class="backup-btn" onclick="importBackup()">Import CSV</button>
+                        <input type="password" id="exportPassphrase" placeholder="Passphrase (min 8 characters)" style="flex:1;">
+                        <button class="backup-btn" onclick="exportBackup()">Download CSV</button>
                     </div>
                 </div>
+
+                <div style="border-top:1px solid #e5e7eb;margin-bottom:16px;"></div>
+
+                <!-- Import -->
+                <div>
+                    <label>Import Devices (CSV)</label>
+                    <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 6px 0;">Import devices from a previously exported CSV. Use the same passphrase to decrypt passwords.</p>
+                    <div style="display:flex;flex-direction:column;gap:8px;">
+                        <input type="file" id="importFile" accept=".csv" style="font-size:0.75rem;">
+                        <div style="display:flex;gap:6px;align-items:center;">
+                            <input type="password" id="importPassphrase" placeholder="Passphrase" style="flex:1;">
+                            <select id="importConflictMode">
+                                <option value="skip">Skip existing</option>
+                                <option value="update">Update existing</option>
+                            </select>
+                            <button class="backup-btn" onclick="importBackup()">Import CSV</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="backupStatus" style="font-size:0.75rem;color:#6b7280;margin-top:12px;min-height:1.2em;"></div>
             </div>
 
-            <div id="backupStatus" style="font-size:0.75rem;color:#6b7280;margin-top:12px;min-height:1.2em;"></div>
-        </div>
-    </div>
-
-    <!-- Notifications Modal -->
-    <div class="backup-overlay" id="notificationsOverlay" onclick="if(event.target===this)closeNotificationsModal()">
-        <div class="backup-modal">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-                <h3 style="margin:0;">Notifications</h3>
-                <button onclick="closeNotificationsModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:1.2rem;line-height:1;padding:4px;">&times;</button>
-            </div>
-
-            <!-- Slack Webhook -->
-            <div>
+            <!-- Notifications Panel -->
+            <div class="settings-panel" id="settingsPanel-notifications">
                 <label>Slack Webhook</label>
                 <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 6px 0;">Get notified in Slack when firmware update jobs complete. Create an <a href="https://api.slack.com/messaging/webhooks" target="_blank" style="color:var(--primary);">Incoming Webhook</a> in your Slack workspace and paste the URL below.</p>
                 <div style="display:flex;flex-direction:column;gap:8px;">
@@ -1467,113 +1637,76 @@
                         <button class="backup-btn" onclick="testSlackWebhookModal()" style="background:#6b7280;">Test</button>
                     </div>
                 </div>
+
+                <div id="notifStatus" style="font-size:0.75rem;color:#6b7280;margin-top:12px;min-height:1.2em;"></div>
             </div>
 
-            <div id="notifStatus" style="font-size:0.75rem;color:#6b7280;margin-top:12px;min-height:1.2em;"></div>
-        </div>
-    </div>
-
-    <!-- Authentication Modal -->
-    <div class="backup-overlay" id="authOverlay" onclick="if(event.target===this)closeAuthModal()">
-        <div class="backup-modal" style="width:520px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-                <h3 style="margin:0;">Authentication Settings</h3>
-                <button onclick="closeAuthModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:1.2rem;line-height:1;padding:4px;">&times;</button>
-            </div>
-
-            <!-- Web RADIUS Section -->
-            <div style="margin-bottom:20px;">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                    <h4 style="margin:0;font-size:0.85rem;font-weight:600;">Web RADIUS Authentication</h4>
-                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
-                        <input type="checkbox" id="authRadiusEnabled" onchange="toggleRadiusFields()">
-                        <span style="font-size:0.75rem;color:#6b7280;">Enabled</span>
-                    </label>
-                </div>
-                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 10px 0;">Authenticate admin users via a RADIUS server. Falls back to local authentication if RADIUS is unavailable.</p>
-                <div id="radiusFields" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                    <div style="grid-column:span 2;">
-                        <label style="font-size:0.7rem;color:#6b7280;">RADIUS Server</label>
-                        <input type="text" id="authRadiusServer" placeholder="radius.example.com" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+            <!-- Authentication Panel -->
+            <div class="settings-panel" id="settingsPanel-auth">
+                <!-- Web RADIUS Section -->
+                <div style="margin-bottom:20px;">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                        <h4 style="margin:0;font-size:0.85rem;font-weight:600;">Web RADIUS Authentication</h4>
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
+                            <input type="checkbox" id="authRadiusEnabled" onchange="toggleRadiusFields()">
+                            <span style="font-size:0.75rem;color:#6b7280;">Enabled</span>
+                        </label>
                     </div>
-                    <div>
-                        <label style="font-size:0.7rem;color:#6b7280;">Shared Secret</label>
-                        <input type="password" id="authRadiusSecret" placeholder="Enter shared secret" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                        <div>
-                            <label style="font-size:0.7rem;color:#6b7280;">Port</label>
-                            <input type="number" id="authRadiusPort" value="1812" min="1" max="65535" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                    <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 10px 0;">Authenticate admin users via a RADIUS server. Falls back to local authentication if RADIUS is unavailable.</p>
+                    <div id="radiusFields" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                        <div style="grid-column:span 2;">
+                            <label style="font-size:0.7rem;color:#6b7280;">RADIUS Server</label>
+                            <input type="text" id="authRadiusServer" placeholder="radius.example.com" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
                         </div>
                         <div>
-                            <label style="font-size:0.7rem;color:#6b7280;">Timeout (s)</label>
-                            <input type="number" id="authRadiusTimeout" value="5" min="1" max="30" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                            <label style="font-size:0.7rem;color:#6b7280;">Shared Secret</label>
+                            <input type="password" id="authRadiusSecret" placeholder="Enter shared secret" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                            <div>
+                                <label style="font-size:0.7rem;color:#6b7280;">Port</label>
+                                <input type="number" id="authRadiusPort" value="1812" min="1" max="65535" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.7rem;color:#6b7280;">Timeout (s)</label>
+                                <input type="number" id="authRadiusTimeout" value="5" min="1" max="30" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                            </div>
                         </div>
                     </div>
-                </div>
-                <div style="display:flex;gap:6px;margin-top:10px;">
-                    <button class="backup-btn" onclick="saveRadiusConfig()">Save RADIUS</button>
-                    <button class="backup-btn" onclick="testRadiusConfig()" style="background:#6b7280;color:#fff;">Test</button>
-                </div>
-            </div>
-
-            <div style="border-top:1px solid #e5e7eb;margin:16px 0;"></div>
-
-            <!-- Global Device Credentials Section -->
-            <div>
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                    <h4 style="margin:0;font-size:0.85rem;font-weight:600;">Global Device Credentials</h4>
-                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
-                        <input type="checkbox" id="authDeviceEnabled" onchange="toggleDeviceFields()">
-                        <span style="font-size:0.75rem;color:#6b7280;">Enabled</span>
-                    </label>
-                </div>
-                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 10px 0;">Default credentials for connecting to devices (APs/CPEs) when no device-specific credentials are configured. Used as fallback for CPE authentication.</p>
-                <div id="deviceFields" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                    <div>
-                        <label style="font-size:0.7rem;color:#6b7280;">Username</label>
-                        <input type="text" id="authDeviceUsername" placeholder="root" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
-                    </div>
-                    <div>
-                        <label style="font-size:0.7rem;color:#6b7280;">Password</label>
-                        <input type="password" id="authDevicePassword" placeholder="Enter password" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                    <div style="display:flex;gap:6px;margin-top:10px;">
+                        <button class="backup-btn" onclick="saveRadiusConfig()">Save RADIUS</button>
+                        <button class="backup-btn" onclick="testRadiusConfig()" style="background:#6b7280;color:#fff;">Test</button>
                     </div>
                 </div>
-                <div style="display:flex;gap:6px;margin-top:10px;">
-                    <button class="backup-btn" onclick="saveDeviceConfig()">Save Device Credentials</button>
+
+                <div style="border-top:1px solid #e5e7eb;margin:16px 0;"></div>
+
+                <!-- Global Device Credentials Section -->
+                <div>
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                        <h4 style="margin:0;font-size:0.85rem;font-weight:600;">Global Device Credentials</h4>
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
+                            <input type="checkbox" id="authDeviceEnabled" onchange="toggleDeviceFields()">
+                            <span style="font-size:0.75rem;color:#6b7280;">Enabled</span>
+                        </label>
+                    </div>
+                    <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 10px 0;">Default credentials for connecting to devices (APs/CPEs) when no device-specific credentials are configured. Used as fallback for CPE authentication.</p>
+                    <div id="deviceFields" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                        <div>
+                            <label style="font-size:0.7rem;color:#6b7280;">Username</label>
+                            <input type="text" id="authDeviceUsername" placeholder="root" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.7rem;color:#6b7280;">Password</label>
+                            <input type="password" id="authDevicePassword" placeholder="Enter password" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:6px;margin-top:10px;">
+                        <button class="backup-btn" onclick="saveDeviceConfig()">Save Device Credentials</button>
+                    </div>
                 </div>
-            </div>
 
-            <div id="authStatus" style="font-size:0.75rem;color:#6b7280;margin-top:16px;min-height:1.2em;"></div>
-        </div>
-    </div>
-
-    <!-- Settings Modal -->
-    <div class="backup-overlay" id="appUpdatesOverlay" onclick="if(event.target===this)closeAppUpdatesModal()">
-        <div class="backup-modal">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-                <h3 style="margin:0;">Settings</h3>
-                <button onclick="closeAppUpdatesModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:1.2rem;line-height:1;padding:4px;">&times;</button>
-            </div>
-
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-                <span class="toggle" id="appAutoUpdateToggle" onclick="toggleAppAutoUpdate()" style="flex-shrink:0;"></span>
-                <label style="margin:0;font-weight:500;">Check for App Updates</label>
-                <span id="appVersionDisplay" style="font-size:0.75rem;color:#6b7280;"></span>
-            </div>
-            <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 12px 0;">When enabled, the app will periodically check for new versions and notify you when updates are available.</p>
-
-            <div style="display:flex;align-items:center;gap:8px;">
-                <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
-                <span id="appUpdateStatus" style="font-size:0.75rem;color:#6b7280;"></span>
-            </div>
-
-            <div id="appUpdateBannerInline" style="display:none;margin-top:16px;padding:12px;background:#dbeafe;border-radius:8px;">
-                <div style="font-weight:500;color:#1e40af;">Update Available: <span id="appUpdateVersion"></span></div>
-                <div style="font-size:0.8rem;color:#3b82f6;margin-top:4px;">
-                    <a id="appUpdateReleaseLink" href="#" target="_blank" style="color:#2563eb;">View Release Notes</a>
-                </div>
-                <button class="backup-btn" onclick="applyAppUpdate()" style="margin-top:8px;background:#16a34a;">Update Now</button>
+                <div id="authStatus" style="font-size:0.75rem;color:#6b7280;margin-top:16px;min-height:1.2em;"></div>
             </div>
         </div>
     </div>
@@ -1619,7 +1752,40 @@
             ws.onmessage = (event) => {
                 const message = JSON.parse(event.data);
                 if (message.type === 'topology_update') {
+                    // Preserve CPEs that are currently updating
+                    const preservedCPEs = new Map(); // apIp -> [cpe, ...]
+                    if (topology && updatingDevices.size > 0) {
+                        for (const site of (topology.sites || [])) {
+                            for (const ap of (site.aps || [])) {
+                                for (const cpe of (ap.cpes || [])) {
+                                    if (updatingDevices.has(cpe.ip)) {
+                                        if (!preservedCPEs.has(ap.ip)) preservedCPEs.set(ap.ip, []);
+                                        preservedCPEs.get(ap.ip).push(cpe);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     topology = message.topology;
+
+                    // Merge back preserved CPEs that are missing from new topology
+                    if (preservedCPEs.size > 0) {
+                        for (const site of (topology.sites || [])) {
+                            for (const ap of (site.aps || [])) {
+                                const preserved = preservedCPEs.get(ap.ip);
+                                if (!preserved) continue;
+                                const existingIps = new Set((ap.cpes || []).map(c => c.ip));
+                                for (const cpe of preserved) {
+                                    if (!existingIps.has(cpe.ip)) {
+                                        ap.cpes = ap.cpes || [];
+                                        ap.cpes.push(cpe);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     updatingDevices.clear();
                     updateUI();
                 } else if (message.type === 'scheduler_status') {
@@ -1732,30 +1898,53 @@
             const b1 = device.bank1_version || '';
             const b2 = device.bank2_version || '';
             if (!b1 && !b2) return device.firmware_version || '';
-            const [hi, lo] = compareVersions(b1, b2) >= 0 ? [b1, b2] : [b2, b1];
-            return `${hi} / ${lo}`;
+            // Show active bank first, inactive second
+            const activeBank = device.active_bank || 1;
+            const [active, inactive] = activeBank === 1 ? [b1, b2] : [b2, b1];
+            if (!inactive) return active;
+            return `<span title="Active">${active}</span> / <span title="Inactive" style="opacity:0.6">${inactive}</span>`;
         }
 
-        function statusCell(ip, isOffline, signalHealth) {
+        const loadingDotsHtml = '<span class="loading-dots"><span></span><span></span><span></span></span>';
+
+        function statusCell(ip, isOffline, signalHealth, authStatus, parentApIp) {
             if (updatingDevices.has(ip)) {
                 return '<span class="updating-text">Updating\u2026</span>';
             }
-            const vs = versionStatus(ip);
-            const vsBadge = vs === 'current' ? '<span class="status-current">Current</span>'
-                : vs === 'behind' ? (autoUpdateEnabled
-                    ? '<span class="status-scheduled" title="Auto-update scheduled">&#8593;</span>'
-                    : '<span class="status-behind">Update available</span>')
-                : '';
-
+            // Show loading dots if parent AP is updating
+            if (parentApIp && updatingDevices.has(parentApIp)) {
+                return loadingDotsHtml;
+            }
             if (isOffline) {
-                return `<span class="status-offline">Offline</span>${vsBadge ? '<span class="status-sep">\u00b7</span>' + vsBadge : ''}`;
+                return '<span class="status-offline">Offline</span>';
+            }
+            // Show auth failure for CPEs
+            if (authStatus && authStatus !== 'ok') {
+                const authLabel = authStatus === 'unreachable' ? 'Unreachable' : 'Auth Failed';
+                return `<span class="status-offline">${authLabel}</span>`;
             }
             if (signalHealth) {
                 const healthLabel = signalHealth === 'green' ? 'Good' : signalHealth === 'yellow' ? 'Low' : 'Weak';
                 const healthClass = signalHealth === 'green' ? 'status-online' : signalHealth === 'yellow' ? 'signal-low' : 'signal-critical';
-                return `<span class="${healthClass}">${healthLabel}</span>${vsBadge ? '<span class="status-sep">\u00b7</span>' + vsBadge : ''}`;
+                return `<span class="${healthClass}">${healthLabel}</span>`;
             }
-            return `<span class="status-online">Online</span>${vsBadge ? '<span class="status-sep">\u00b7</span>' + vsBadge : ''}`;
+            return '<span class="status-online">Online</span>';
+        }
+
+        function updateCell(ip) {
+            if (updatingDevices.has(ip)) {
+                return '<span class="update-spinner" title="Updating..."></span>';
+            }
+            const vs = versionStatus(ip);
+            if (vs === 'current') {
+                return '<span class="status-current" title="Current">&#10003;</span>';
+            }
+            if (vs === 'behind') {
+                return autoUpdateEnabled
+                    ? '<span class="status-scheduled" title="Auto-update scheduled">&#8593;</span>'
+                    : '<span class="status-behind" title="Update available">&#8593;</span>';
+            }
+            return '';
         }
 
         function actionsCell(type, id, name) {
@@ -1800,7 +1989,7 @@
                             <span class="tree-badge">${badgeParts.join(', ')}</span>
                         </div>
                     </td>
-                    <td></td><td></td><td></td><td></td><td></td>
+                    <td></td><td></td><td></td><td></td><td></td><td></td>
                     <td><div class="actions-cell">
                         ${actionsCell('site', site.id, site.name)}
                         ${site.id !== null && aps.length === 0 ? `<a class="action-link danger" onclick="deleteSite(${site.id});event.stopPropagation();">Delete</a>` : ''}
@@ -1834,6 +2023,7 @@
                         <td></td>
                         <td></td>
                         <td>${statusCell(ap.ip, isOffline, null)}</td>
+                        <td>${updateCell(ap.ip)}</td>
                         <td><div class="actions-cell">${actionsCell('ap', ap.ip, apName)}</div></td>
                     </tr>`;
 
@@ -1857,14 +2047,14 @@
                                     <span class="expand-toggle hidden">&#9654;</span>
                                     <span class="device-icon cpe ${health}"></span>
                                     ${cpeIp ? `<a href="http://${cpeIp}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : escapeHtml(cpeName)}
-                                    ${cpeIp && cpe.system_name ? `<span style="color:#64748b;font-size:0.8rem;margin-left:6px;">${cpeIp}</span>` : ''}
                                 </div>
                             </td>
                             <td>${cpe.model || ''}</td>
                             <td>${versionCell(cpe)}</td>
                             <td class="${signalClass}">${signalVal != null ? signalVal.toFixed(1) + ' dBm' : ''}</td>
                             <td>${cpe.link_distance != null ? cpe.link_distance.toFixed(0) + ' m' : ''}</td>
-                            <td>${statusCell(cpe.ip, false, health)}</td>
+                            <td>${statusCell(cpe.ip, false, health, cpe.auth_status, ap.ip)}</td>
+                            <td>${updateCell(cpe.ip)}</td>
                             <td><div class="actions-cell">${actionsCell('cpe', cpe.ip, cpeName)}</div></td>
                         </tr>`;
                     }
@@ -1889,6 +2079,7 @@
                         <td></td>
                         <td></td>
                         <td>${statusCell(sw.ip, isOffline, null)}</td>
+                        <td>${updateCell(sw.ip)}</td>
                         <td><div class="actions-cell">
                             <a class="action-link danger" onclick="deleteSwitch('${sw.ip}');event.stopPropagation();">Delete</a>
                         </div></td>
@@ -1897,7 +2088,7 @@
             }
 
             if (!html) {
-                html = '<tr><td colspan="7" class="empty-state">No devices found</td></tr>';
+                html = '<tr><td colspan="8" class="empty-state">No devices found</td></tr>';
             }
 
             tbody.innerHTML = html;
@@ -2451,31 +2642,75 @@
             }
         });
 
-        // Backup modal
-        function openBackupModal() {
+        // App Settings modal
+        async function openAppSettingsModal(tab = 'updates') {
             document.getElementById('userDropdown').classList.remove('open');
-            document.getElementById('backupOverlay').classList.add('open');
-        }
-        function closeBackupModal() {
-            document.getElementById('backupOverlay').classList.remove('open');
-            document.getElementById('backupStatus').textContent = '';
+            document.getElementById('appSettingsOverlay').classList.add('open');
+            switchSettingsTab(tab);
+
+            // Load data for all tabs
+            loadAppUpdateStatus();
+            loadNotificationsData();
+            loadAuthData();
         }
 
-        // Notifications modal
-        async function openNotificationsModal() {
-            document.getElementById('userDropdown').classList.remove('open');
-            document.getElementById('notificationsOverlay').classList.add('open');
-            document.getElementById('notifStatus').textContent = '';
-            // Load current webhook URL
+        function closeAppSettingsModal() {
+            document.getElementById('appSettingsOverlay').classList.remove('open');
+            // Clear status messages
+            const statusEls = ['backupStatus', 'notifStatus', 'authStatus', 'appUpdateStatus'];
+            statusEls.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = '';
+            });
+        }
+
+        function switchSettingsTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.settings-tab').forEach(tab => {
+                tab.classList.toggle('active', tab.textContent.toLowerCase() === tabName ||
+                    (tabName === 'auth' && tab.textContent === 'Authentication') ||
+                    (tabName === 'backup' && tab.textContent === 'Backup'));
+            });
+            // Update panels
+            document.querySelectorAll('.settings-panel').forEach(panel => {
+                panel.classList.remove('active');
+            });
+            const panel = document.getElementById('settingsPanel-' + tabName);
+            if (panel) panel.classList.add('active');
+        }
+
+        async function loadNotificationsData() {
             try {
                 const resp = await fetch('/api/settings');
                 const data = await resp.json();
                 document.getElementById('notifSlackWebhook').value = data.settings.slack_webhook_url || '';
             } catch (e) {}
         }
-        function closeNotificationsModal() {
-            document.getElementById('notificationsOverlay').classList.remove('open');
-            document.getElementById('notifStatus').textContent = '';
+
+        async function loadAuthData() {
+            try {
+                const resp = await fetch('/api/auth/config');
+                const data = await resp.json();
+
+                // Web RADIUS
+                const radiusEnabled = data.web_radius?.enabled || false;
+                document.getElementById('authRadiusEnabled').checked = radiusEnabled;
+                document.getElementById('authRadiusServer').value = data.web_radius?.server || '';
+                document.getElementById('authRadiusPort').value = data.web_radius?.port || 1812;
+                document.getElementById('authRadiusTimeout').value = data.web_radius?.timeout || 5;
+                document.getElementById('authRadiusSecret').value = '';
+                toggleRadiusFields();
+
+                // Device defaults
+                const deviceEnabled = data.device_defaults?.enabled || false;
+                document.getElementById('authDeviceEnabled').checked = deviceEnabled;
+                document.getElementById('authDeviceUsername').value = data.device_defaults?.username || '';
+                document.getElementById('authDevicePassword').value = '';
+                toggleDeviceFields();
+            } catch (e) {
+                document.getElementById('authStatus').textContent = 'Failed to load config';
+                document.getElementById('authStatus').style.color = '#ef4444';
+            }
         }
         async function saveSlackWebhook() {
             const url = document.getElementById('notifSlackWebhook').value.trim();
@@ -2519,43 +2754,6 @@
                 statusEl.textContent = 'Error: ' + e.message;
                 statusEl.style.color = '#ef4444';
             }
-        }
-
-        // Authentication modal
-        async function openAuthModal() {
-            document.getElementById('userDropdown').classList.remove('open');
-            document.getElementById('authOverlay').classList.add('open');
-            document.getElementById('authStatus').textContent = '';
-
-            // Load current auth config
-            try {
-                const resp = await fetch('/api/auth/config');
-                const data = await resp.json();
-
-                // Web RADIUS
-                const radiusEnabled = data.web_radius?.enabled || false;
-                document.getElementById('authRadiusEnabled').checked = radiusEnabled;
-                document.getElementById('authRadiusServer').value = data.web_radius?.server || '';
-                document.getElementById('authRadiusPort').value = data.web_radius?.port || 1812;
-                document.getElementById('authRadiusTimeout').value = data.web_radius?.timeout || 5;
-                document.getElementById('authRadiusSecret').value = ''; // Don't show existing secret
-                toggleRadiusFields();
-
-                // Device defaults
-                const deviceEnabled = data.device_defaults?.enabled || false;
-                document.getElementById('authDeviceEnabled').checked = deviceEnabled;
-                document.getElementById('authDeviceUsername').value = data.device_defaults?.username || '';
-                document.getElementById('authDevicePassword').value = ''; // Don't show existing password
-                toggleDeviceFields();
-            } catch (e) {
-                document.getElementById('authStatus').textContent = 'Failed to load config';
-                document.getElementById('authStatus').style.color = '#ef4444';
-            }
-        }
-
-        function closeAuthModal() {
-            document.getElementById('authOverlay').classList.remove('open');
-            document.getElementById('authStatus').textContent = '';
         }
 
         function toggleRadiusFields() {
@@ -2669,17 +2867,6 @@
                 statusEl.textContent = 'Failed to save device credentials';
                 statusEl.style.color = '#ef4444';
             }
-        }
-
-        // App Updates modal
-        async function openAppUpdatesModal() {
-            document.getElementById('userDropdown').classList.remove('open');
-            document.getElementById('appUpdatesOverlay').classList.add('open');
-            loadAppUpdateStatus();
-        }
-
-        function closeAppUpdatesModal() {
-            document.getElementById('appUpdatesOverlay').classList.remove('open');
         }
 
         async function loadAppUpdateStatus() {
@@ -2809,14 +2996,18 @@
             const cls = stateStyles[state];
             if (cls) badge.classList.add(cls);
 
-            if (status.block_reason) reason.textContent = status.block_reason;
+            // Don't show block_reason when "All current" - the badge already says it
+            if (status.block_reason && state !== 'blocked_all_current') {
+                reason.textContent = status.block_reason;
+            }
 
             // Store next window for use in device count text
             lastNextWindow = status.next_window || '';
             lastPreRolloutPredictions = status.predictions || null;
             updateBarDeviceCount();
 
-            countSection.style.display = 'flex';
+            // Hide device count section when all current - badge already conveys this
+            countSection.style.display = state === 'blocked_all_current' ? 'none' : 'flex';
 
             // Update weather temp in drawer and header
             if (status.weather && status.weather.temperature_c !== null) {
@@ -2827,8 +3018,13 @@
                 if (headerTemp) headerTemp.textContent = ` · ${tempF}\u00B0F`;
             }
 
-            // Refresh idle phase labels with updated next_window (only if no active rollout)
-            if (!currentRolloutId) renderIdlePhases();
+            // Update rollout UI if there's an active rollout, otherwise show idle phases
+            if (status.rollout) {
+                updateRolloutUI(status);
+            } else {
+                currentRolloutId = null;
+                renderIdlePhases();
+            }
         }
 
         function _phaseDetail(pred, phaseIdx) {
@@ -2895,6 +3091,8 @@
             if (predEl) predEl.textContent = '';
             document.getElementById('barResumeBtn').style.display = 'none';
             document.getElementById('barCancelBtn').style.display = 'none';
+            const inlineActions = document.getElementById('barInlineActions');
+            if (inlineActions) inlineActions.classList.remove('visible');
         }
 
         function updateRolloutUI(data) {
@@ -2966,15 +3164,19 @@
 
             const resumeBtn = document.getElementById('barResumeBtn');
             const cancelBtn = document.getElementById('barCancelBtn');
+            const inlineActions = document.getElementById('barInlineActions');
             if (rollout.status === 'paused') {
                 resumeBtn.style.display = 'inline-block';
                 cancelBtn.style.display = 'inline-block';
+                if (inlineActions) inlineActions.classList.add('visible');
             } else if (rollout.status === 'active') {
                 resumeBtn.style.display = 'none';
                 cancelBtn.style.display = 'inline-block';
+                if (inlineActions) inlineActions.classList.remove('visible');
             } else {
                 resumeBtn.style.display = 'none';
                 cancelBtn.style.display = 'none';
+                if (inlineActions) inlineActions.classList.remove('visible');
             }
         }
 
@@ -2988,6 +3190,11 @@
         async function cancelRollout() {
             if (!currentRolloutId) return;
             try { await fetch(`/api/rollout/${currentRolloutId}/cancel`, { method: 'POST' }); } catch (e) {}
+        }
+
+        async function resetRollout() {
+            if (!currentRolloutId) return;
+            try { await fetch(`/api/rollout/${currentRolloutId}/reset`, { method: 'POST' }); } catch (e) {}
         }
 
         async function toggleAutoSchedule(event) {
@@ -3051,6 +3258,10 @@
                 const betaToggle = document.getElementById('drawerBetaToggle');
                 betaToggle.classList.toggle('active', drawerBetaEnabled);
 
+                // Downgrade
+                const downgradeToggle = document.getElementById('drawerDowngradeToggle');
+                downgradeToggle.classList.toggle('active', s.allow_downgrade === 'true');
+
                 // Weather
                 const weatherToggle = document.getElementById('drawerWeatherToggle');
                 weatherToggle.classList.toggle('active', s.weather_check_enabled === 'true');
@@ -3081,6 +3292,7 @@
                 days.push(btn.dataset.day);
             });
 
+            markPendingRecheck();
             try {
                 await fetch('/api/settings', {
                     method: 'PUT',
@@ -3097,6 +3309,8 @@
                         firmware_quarantine_days: document.getElementById('drawerQuarantineDays').value,
                     }),
                 });
+                // Trigger immediate refresh after settings change
+                loadFleetStatus();
             } catch (e) {}
         }
 
@@ -3105,6 +3319,7 @@
             const enabled = !toggle.classList.contains('active');
             toggle.classList.toggle('active', enabled);
             drawerBetaEnabled = enabled;
+            markPendingRecheck();
             try {
                 await fetch('/api/settings', {
                     method: 'PUT',
@@ -3115,6 +3330,22 @@
             } catch (e) {}
             drawerSettingsLoaded = false;
             loadDrawerFirmware();
+            loadFleetStatus();
+        }
+
+        async function toggleDrawerDowngrade() {
+            const toggle = document.getElementById('drawerDowngradeToggle');
+            const enabled = !toggle.classList.contains('active');
+            toggle.classList.toggle('active', enabled);
+            markPendingRecheck();
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ allow_downgrade: enabled ? 'true' : 'false' }),
+                });
+                loadFleetStatus();
+            } catch (e) {}
         }
 
         async function toggleDrawerWeather() {
@@ -3255,6 +3486,7 @@
             if (type === 'unknown') return;
             drawerFwSelected[type] = filename;
             renderDrawerFirmware();
+            markPendingRecheck();
             const data = {};
             if (type === 'tna-30x') data.selected_firmware_30x = filename;
             if (type === 'tna-303l') data.selected_firmware_303l = filename;
@@ -3265,6 +3497,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data),
                 });
+                loadFleetStatus();
             } catch (e) {}
         }
 
@@ -3366,6 +3599,11 @@
             }
         }
 
+        let lastFleetUpdate = null;
+        let pendingRecheck = false;
+        let nextRefreshTime = null;
+        const REFRESH_INTERVAL = 60000; // 60 seconds
+
         async function loadFleetStatus() {
             try {
                 const resp = await fetch('/api/fleet-status');
@@ -3386,8 +3624,46 @@
                 lastBehindCount = data.summary?.behind || 0;
                 lastFleetTotal = data.summary?.total || 0;
                 updateBarDeviceCount();
+
+                // Update refresh state
+                lastFleetUpdate = new Date();
+                nextRefreshTime = new Date(Date.now() + REFRESH_INTERVAL);
+                pendingRecheck = false;
+                updateRefreshDisplay();
             } catch (e) {}
         }
+
+        function markPendingRecheck() {
+            pendingRecheck = true;
+            updateRefreshDisplay();
+        }
+
+        function updateRefreshDisplay() {
+            const el = document.getElementById('barLastUpdated');
+            if (!el) return;
+
+            if (pendingRecheck) {
+                el.innerHTML = '<span style="color:#f59e0b;">Rechecking\u2026</span>';
+                return;
+            }
+
+            if (!nextRefreshTime) {
+                el.textContent = '';
+                return;
+            }
+
+            const now = Date.now();
+            const secsUntil = Math.max(0, Math.ceil((nextRefreshTime - now) / 1000));
+
+            if (secsUntil <= 0) {
+                el.textContent = 'Refreshing\u2026';
+            } else {
+                el.innerHTML = `<span style="opacity:0.7;">Next check in ${secsUntil}s</span>`;
+            }
+        }
+
+        // Update countdown every second
+        setInterval(updateRefreshDisplay, 1000);
 
         function updateBarDeviceCount() {
             const section = document.getElementById('barDeviceCountSection');
