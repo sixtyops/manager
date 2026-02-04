@@ -83,6 +83,9 @@ def complete_setup(new_password: str):
     hashed = _bcrypt.hashpw(new_password.encode(), _bcrypt.gensalt()).decode()
     db.set_setting("admin_password_hash", hashed)
     db.set_setting("setup_completed", "true")
+    # Enable auto-updates by default on first run
+    db.set_setting("schedule_enabled", "true")  # Device firmware auto-update
+    db.set_setting("autoupdate_enabled", "true")  # App self-update
 
 
 # ---------------------------------------------------------------------------

@@ -200,8 +200,9 @@ async def obtain_certificate(domain: str, email: str) -> Tuple[bool, str]:
 
     logger.info(f"Requesting certificate for {domain}")
 
-    # Run certbot in webroot mode
+    # Run certbot in webroot mode via docker exec (certbot runs in separate container)
     cmd = [
+        "docker", "exec", "tachyon-certbot",
         "certbot", "certonly",
         "--webroot",
         "--webroot-path", "/var/www/certbot",
@@ -254,7 +255,7 @@ async def obtain_certificate(domain: str, email: str) -> Tuple[bool, str]:
     except asyncio.TimeoutError:
         return False, "Certificate request timed out (120s)"
     except FileNotFoundError:
-        return False, "certbot not found - is it installed in the container?"
+        return False, "docker not found - cannot reach certbot container"
     except Exception as e:
         logger.exception(f"Certificate request error: {e}")
         return False, str(e)
@@ -273,7 +274,7 @@ async def renew_certificate() -> Tuple[bool, str]:
 
     logger.info(f"Renewing certificate for {domain}")
 
-    cmd = ["certbot", "renew", "--non-interactive"]
+    cmd = ["docker", "exec", "tachyon-certbot", "certbot", "renew", "--non-interactive"]
 
     try:
         proc = await asyncio.create_subprocess_exec(
