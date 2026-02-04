@@ -13,6 +13,25 @@ from . import services
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_version(version: str) -> tuple:
+    """Parse version string into tuple for comparison.
+
+    Handles formats like '1.12.3.54970' or '1.12.3.r54970'.
+    Returns tuple of integers for comparison.
+    """
+    if not version:
+        return (0,)
+    # Normalize .r to .
+    normalized = version.replace(".r", ".")
+    parts = []
+    for part in normalized.split("."):
+        try:
+            parts.append(int(part))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts) if parts else (0,)
+
 # Global scheduler instance
 _scheduler: Optional["AutoUpdateScheduler"] = None
 
@@ -74,10 +93,12 @@ class AutoUpdateScheduler:
     async def _check_and_run(self):
         """Main decision logic each tick."""
         settings = db.get_all_settings()
+        schedule_enabled = settings.get("schedule_enabled")
 
         # 1. Check if schedule is enabled
-        if settings.get("schedule_enabled") != "true":
+        if schedule_enabled != "true":
             if self._state != "disabled":
+                logger.info(f"Scheduler disabled (schedule_enabled={schedule_enabled!r})")
                 self._state = "disabled"
                 self._block_reason = None
                 await self._broadcast_status()
@@ -105,12 +126,32 @@ class AutoUpdateScheduler:
         now = time_result  # datetime object
         logger.info("Time validation passed")
 
-        # 5. Check if in schedule window
+        # 5. Check if all devices already current (check this FIRST, before window check)
+        # This ensures "All devices up to date" persists even outside maintenance window
+        fw_30x = settings.get("selected_firmware_30x", "")
+        allow_downgrade = settings.get("allow_downgrade", "false") == "true"
+        if fw_30x:
+            last_rollout = db.get_last_rollout_for_firmware(fw_30x)
+            if last_rollout and last_rollout["status"] == "completed" and last_rollout.get("target_version"):
+                scope_ips = self._resolve_scope(settings)
+                needs_update = self._filter_devices_needing_update(
+                    scope_ips, last_rollout["target_version"], allow_downgrade
+                )
+                if not needs_update:
+                    if self._state != "blocked_all_current":
+                        self._state = "blocked_all_current"
+                        self._block_reason = "All devices up to date"
+                        await self._broadcast_status()
+                    return
+
+        # 6. Check if in schedule window
         schedule_days = [d.strip() for d in settings.get("schedule_days", "").split(",") if d.strip()]
         start_hour = int(settings.get("schedule_start_hour", "3"))
         end_hour = int(settings.get("schedule_end_hour", "4"))
         current_day = now.strftime("%a").lower()
         current_hour = now.hour
+
+        logger.info(f"Schedule check: day={current_day} (in {schedule_days}?), hour={current_hour} (in {start_hour}-{end_hour}?)")
 
         if not services.is_in_schedule_window(current_hour, current_day, schedule_days, start_hour, end_hour):
             # Outside window - clear ran_today if we've moved past the window
@@ -122,6 +163,7 @@ class AutoUpdateScheduler:
                 self._ran_today.clear()
 
             if self._state != "idle":
+                logger.info(f"Outside maintenance window (day={current_day}, hour={current_hour}), setting state to idle")
                 self._state = "idle"
                 self._block_reason = None
                 self._weather_checked_today = None
@@ -129,24 +171,38 @@ class AutoUpdateScheduler:
                 await self._broadcast_status()
             return
 
-        # 6. Track ran_today to avoid re-running
+        logger.info(f"Inside maintenance window! day={current_day}, hour={current_hour}, window={start_hour}-{end_hour}")
+
+        # 7. Track ran_today to avoid starting NEW rollouts
+        # But allow active rollouts to continue through their phases
         today_key = now.strftime("%Y-%m-%d")
         if today_key in self._ran_today:
-            if self._state != "waiting":
-                self._state = "waiting"
-                self._block_reason = "Already ran today"
-                await self._broadcast_status()
-            return
+            # Check if there's an active rollout that needs to continue
+            active_rollout = db.get_last_rollout_for_firmware(fw_30x) if fw_30x else None
+            if not active_rollout or active_rollout["status"] != "active":
+                if self._state != "waiting":
+                    self._state = "waiting"
+                    self._block_reason = "Already ran today"
+                    await self._broadcast_status()
+                return
+            # Active rollout exists - continue with phase advancement below
+            logger.info(f"Continuing active rollout {active_rollout['id']} (phase {active_rollout['phase']})")
 
-        # 7. Check 10-minute cutoff before window end
-        minutes_until_end = (end_hour - current_hour) * 60 - now.minute
+        # 8. Check 10-minute cutoff before window end
+        # Handle overnight windows (e.g., 20:00-04:00)
+        if end_hour > current_hour:
+            # Same day: end is later today
+            minutes_until_end = (end_hour - current_hour) * 60 - now.minute
+        else:
+            # Overnight: end is tomorrow morning
+            minutes_until_end = (24 - current_hour + end_hour) * 60 - now.minute
         if minutes_until_end < 10:
             self._state = "waiting"
             self._block_reason = "Too close to maintenance window end"
             await self._broadcast_status()
             return
 
-        # 8. Check weather if enabled (once per schedule window)
+        # 9. Check weather if enabled (once per schedule window)
         if settings.get("weather_check_enabled") == "true":
             today_key = now.strftime("%Y-%m-%d")
             if self._weather_checked_today != today_key:
@@ -172,7 +228,7 @@ class AutoUpdateScheduler:
                 await self._broadcast_status()
                 return
 
-        # 9. Verify firmware is selected
+        # 10. Verify firmware is selected
         fw_30x = settings.get("selected_firmware_30x", "")
         if not fw_30x:
             self._state = "blocked_no_firmware"
@@ -183,7 +239,7 @@ class AutoUpdateScheduler:
         fw_303l = settings.get("selected_firmware_303l", "")
         fw_tns100 = settings.get("selected_firmware_tns100", "")
 
-        # 9.5. Check firmware quarantine
+        # 10.5. Check firmware quarantine
         quarantine_days = int(settings.get("firmware_quarantine_days", "7"))
         if quarantine_days > 0:
             # Check all selected firmware files against quarantine
@@ -204,7 +260,7 @@ class AutoUpdateScheduler:
                     await self._broadcast_status()
                     return
 
-        # 10. Get or create rollout
+        # 11. Get or create rollout
         rollout = db.get_active_rollout()
 
         if rollout and rollout["firmware_file"] != fw_30x:
@@ -221,7 +277,9 @@ class AutoUpdateScheduler:
                 # Check if any in-scope devices still need updating
                 scope_ips = self._resolve_scope(settings)
                 if last.get("target_version"):
-                    needs_update = self._filter_devices_needing_update(scope_ips, last["target_version"])
+                    needs_update = self._filter_devices_needing_update(
+                        scope_ips, last["target_version"], allow_downgrade
+                    )
                     if not needs_update:
                         self._state = "blocked_all_current"
                         self._block_reason = "All devices up to date"
@@ -234,14 +292,14 @@ class AutoUpdateScheduler:
             db.log_schedule_event("rollout_created", f"Rollout {rollout_id} for {fw_30x}")
             logger.info(f"Created rollout {rollout_id} for firmware {fw_30x}")
 
-        # 11. If rollout is paused, show state and return
+        # 12. If rollout is paused, show state and return
         if rollout["status"] == "paused":
             self._state = "waiting"
             self._block_reason = f"Rollout paused: {rollout.get('pause_reason', 'Unknown reason')}"
             await self._broadcast_status()
             return
 
-        # 12. Determine phase batch
+        # 13. Determine phase batch
         scope_ips = self._resolve_scope(settings)
         if not scope_ips:
             self._state = "idle"
@@ -249,7 +307,7 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
             return
 
-        batch_ips = self._get_devices_for_phase(rollout, scope_ips)
+        batch_ips = self._get_devices_for_phase(rollout, scope_ips, allow_downgrade)
 
         if not batch_ips:
             # No candidates for this phase - auto-advance
@@ -267,7 +325,7 @@ class AutoUpdateScheduler:
 
             # Try next phase immediately (recursive but bounded by 4 phases)
             logger.info(f"Phase {current_phase} has no candidates, advanced to {refreshed['phase']}")
-            batch_ips = self._get_devices_for_phase(refreshed, scope_ips)
+            batch_ips = self._get_devices_for_phase(refreshed, scope_ips, allow_downgrade)
             rollout = refreshed
 
             if not batch_ips:
@@ -282,7 +340,7 @@ class AutoUpdateScheduler:
         for ip in batch_ips:
             db.assign_device_to_rollout(rollout["id"], ip, "ap", rollout["phase"])
 
-        # 13. Launch the job
+        # 14. Launch the job
         self._state = "running"
         self._block_reason = None
         await self._broadcast_status()
@@ -317,20 +375,42 @@ class AutoUpdateScheduler:
             logger.error(f"Scheduler failed to start update: {e}")
             await self._broadcast_status()
 
-    def _filter_devices_needing_update(self, scope_ips: list[str], target_version: str) -> list[str]:
-        """Filter scope IPs to those whose firmware differs from target."""
+    def _filter_devices_needing_update(self, scope_ips: list[str], target_version: str,
+                                        allow_downgrade: bool = False) -> list[str]:
+        """Filter scope IPs to those whose firmware differs from target.
+
+        If allow_downgrade is False, devices with firmware newer than target are skipped.
+        """
         needs_update = []
+        target_parsed = _parse_version(target_version)
+
         for ip in scope_ips:
             ap = db.get_access_point(ip)
-            if ap and ap.get("firmware_version") != target_version:
-                needs_update.append(ip)
+            if not ap:
+                continue
+
+            device_version = ap.get("firmware_version", "")
+            if device_version == target_version:
+                # Already at target
+                continue
+
+            if not allow_downgrade:
+                device_parsed = _parse_version(device_version)
+                if device_parsed > target_parsed:
+                    # Device is newer than target, skip (no downgrade)
+                    logger.debug(f"Skipping {ip}: version {device_version} > target {target_version} (downgrade disabled)")
+                    continue
+
+            needs_update.append(ip)
         return needs_update
 
-    def _get_devices_for_phase(self, rollout: dict, scope_ips: list[str]) -> list[str]:
+    def _get_devices_for_phase(self, rollout: dict, scope_ips: list[str],
+                                allow_downgrade: bool = False) -> list[str]:
         """Determine which APs to update in the current phase."""
         phase = rollout["phase"]
         rollout_id = rollout["id"]
         target_version = rollout.get("target_version")
+        target_parsed = _parse_version(target_version) if target_version else None
 
         # Get already-processed devices in this rollout
         existing_devices = db.get_rollout_devices(rollout_id)
@@ -343,8 +423,17 @@ class AutoUpdateScheduler:
                 continue
             if target_version:
                 ap = db.get_access_point(ip)
-                if ap and ap.get("firmware_version") == target_version:
+                if not ap:
                     continue
+                device_version = ap.get("firmware_version", "")
+                if device_version == target_version:
+                    # Already at target
+                    continue
+                if not allow_downgrade and target_parsed:
+                    device_parsed = _parse_version(device_version)
+                    if device_parsed > target_parsed:
+                        # Device is newer, skip (no downgrade)
+                        continue
             candidates.append(ip)
 
         if not candidates:
@@ -363,8 +452,13 @@ class AutoUpdateScheduler:
         return candidates[:batch_size]
 
     def on_job_completed(self, job_id: str, success_count: int, failed_count: int,
-                         learned_version: Optional[str] = None):
-        """Called when a scheduled job finishes."""
+                         learned_version: Optional[str] = None,
+                         device_statuses: Optional[dict[str, str]] = None):
+        """Called when a scheduled job finishes.
+
+        Args:
+            device_statuses: Optional dict mapping IP -> status (success, failed, skipped, etc.)
+        """
         if self._current_job_id != job_id:
             return
 
@@ -377,8 +471,15 @@ class AutoUpdateScheduler:
                 # Pause rollout on failure
                 reason = f"{failed_count} device(s) failed during {rollout['phase']} phase"
                 db.pause_rollout(rollout["id"], reason)
-                # Mark phase devices as failed
-                db.mark_rollout_phase_devices(rollout["id"], rollout["phase"], "failed")
+                # Mark each device with its actual status
+                if device_statuses:
+                    for ip, status in device_statuses.items():
+                        # Map job status to rollout status
+                        rollout_status = "updated" if status == "success" else status
+                        db.mark_rollout_device(rollout["id"], ip, rollout_status)
+                else:
+                    # Fallback to bulk update if no device statuses provided
+                    db.mark_rollout_phase_devices(rollout["id"], rollout["phase"], "failed")
                 self._last_run_result = f"Rollout paused: {reason}"
                 db.log_schedule_event("rollout_paused", reason, job_id=job_id)
                 logger.warning(f"Rollout {rollout['id']} paused: {reason}")
@@ -388,8 +489,15 @@ class AutoUpdateScheduler:
                     db.set_rollout_target_version(rollout["id"], learned_version)
                     logger.info(f"Rollout {rollout['id']} learned target version: {learned_version}")
 
-                # Mark phase devices as updated
-                db.mark_rollout_phase_devices(rollout["id"], rollout["phase"], "updated")
+                # Mark each device with its actual status
+                if device_statuses:
+                    for ip, status in device_statuses.items():
+                        # Map job status to rollout status
+                        rollout_status = "updated" if status == "success" else status
+                        db.mark_rollout_device(rollout["id"], ip, rollout_status)
+                else:
+                    # Fallback to bulk update if no device statuses provided
+                    db.mark_rollout_phase_devices(rollout["id"], rollout["phase"], "updated")
 
                 # Advance phase
                 db.complete_rollout_phase(rollout["id"])
@@ -633,10 +741,10 @@ class AutoUpdateScheduler:
         end_hour = int(settings.get("schedule_end_hour", "4"))
         schedule_days = settings.get("schedule_days", "")
 
-        # Include rollout info
+        # Include rollout info (use get_current_rollout to include completed rollouts for UI)
         rollout_info = None
         pre_rollout_predictions = None
-        rollout = db.get_active_rollout()
+        rollout = db.get_current_rollout()
         if rollout:
             progress = db.get_rollout_progress(rollout["id"])
             try:

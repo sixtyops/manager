@@ -229,6 +229,7 @@ def init_db():
             "schedule_end_hour": "4",
             "parallel_updates": "2",
             "bank_mode": "both",
+            "allow_downgrade": "false",
             "timezone": "auto",
             "zip_code": "",
             "weather_check_enabled": "true",
@@ -818,6 +819,15 @@ def get_active_rollout() -> Optional[dict]:
     with get_db() as db:
         row = db.execute(
             "SELECT * FROM rollouts WHERE status IN ('active', 'paused') ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_current_rollout() -> Optional[dict]:
+    """Get the most recent rollout (active, paused, or completed) for UI display."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM rollouts WHERE status IN ('active', 'paused', 'completed') ORDER BY id DESC LIMIT 1"
         ).fetchone()
         return dict(row) if row else None
 
