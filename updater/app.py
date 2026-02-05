@@ -988,7 +988,10 @@ async def quick_add(
 async def get_settings(session: dict = Depends(require_auth)):
     """Get all settings."""
     settings = db.get_all_settings()
-    return {"settings": settings}
+    # Resolve temperature unit for UI
+    temp_unit_setting = settings.get("temperature_unit", "auto")
+    resolved_unit = await services.resolve_temperature_unit(temp_unit_setting)
+    return {"settings": settings, "resolved_temperature_unit": resolved_unit}
 
 
 @app.put("/api/settings")
@@ -1198,6 +1201,26 @@ async def cancel_rollout(rollout_id: int, session: dict = Depends(require_auth))
 
     db.cancel_rollout(rollout_id)
     db.log_schedule_event("rollout_cancelled", f"Rollout {rollout_id} cancelled by user")
+
+    # Broadcast updated status
+    scheduler = get_scheduler()
+    if scheduler:
+        await scheduler._broadcast_status()
+
+    return {"success": True}
+
+
+@app.post("/api/rollout/{rollout_id}/reset")
+async def reset_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+    """Reset a paused rollout - cancels it so a fresh rollout starts next window."""
+    rollout = db.get_rollout(rollout_id)
+    if not rollout:
+        raise HTTPException(404, "Rollout not found")
+    if rollout["status"] != "paused":
+        raise HTTPException(400, "Rollout is not paused")
+
+    db.cancel_rollout(rollout_id)
+    db.log_schedule_event("rollout_reset", f"Rollout {rollout_id} reset by user (will restart fresh)")
 
     # Broadcast updated status
     scheduler = get_scheduler()
@@ -1464,6 +1487,7 @@ async def firmware_fetch_status(session: dict = Depends(require_auth)):
 async def get_fleet_status(session: dict = Depends(require_auth)):
     """Get firmware version status for all devices."""
     settings = db.get_all_settings()
+    allow_downgrade = settings.get("allow_downgrade", "false") == "true"
 
     # Build target versions from selected firmware filenames
     targets = {}
@@ -1495,7 +1519,7 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
         fw_type = _get_firmware_type_for_model(ap.get("model"))
         target = targets.get(fw_type)
         target_version = target["version"] if target else ""
-        status = _device_version_status(ap.get("firmware_version"), target_version)
+        status = _device_version_status(ap.get("firmware_version"), target_version, allow_downgrade)
         summary["total"] += 1
         summary[status] += 1
 
@@ -1521,7 +1545,7 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             cpe_fw_type = _get_firmware_type_for_model(cpe.get("model"))
             cpe_target = targets.get(cpe_fw_type)
             cpe_target_version = cpe_target["version"] if cpe_target else ""
-            cpe_status = _device_version_status(cpe.get("firmware_version"), cpe_target_version)
+            cpe_status = _device_version_status(cpe.get("firmware_version"), cpe_target_version, allow_downgrade)
             summary["total"] += 1
             summary[cpe_status] += 1
 
@@ -1549,7 +1573,7 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
         fw_type = _get_firmware_type_for_model(sw.get("model"))
         target = targets.get(fw_type)
         target_version = target["version"] if target else ""
-        status = _device_version_status(sw.get("firmware_version"), target_version)
+        status = _device_version_status(sw.get("firmware_version"), target_version, allow_downgrade)
         summary["total"] += 1
         summary[status] += 1
 
@@ -1574,13 +1598,22 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
     return {"devices": devices, "summary": summary, "targets": targets}
 
 
-def _device_version_status(current: Optional[str], target: str) -> str:
-    """Determine version status: 'current', 'behind', or 'unknown'."""
+def _device_version_status(current: Optional[str], target: str, allow_downgrade: bool = False) -> str:
+    """Determine version status: 'current', 'behind', or 'unknown'.
+
+    Args:
+        current: Current firmware version on device
+        target: Target firmware version
+        allow_downgrade: If True, devices with newer firmware than target are 'behind'
+    """
     if not current or not target:
         return "unknown"
     cmp = _compare_versions(current, target)
-    if cmp >= 0:
+    if cmp == 0:
         return "current"
+    if cmp > 0:
+        # Device is newer than target
+        return "behind" if allow_downgrade else "current"
     return "behind"
 
 
@@ -1629,6 +1662,7 @@ def _is_tns100_model(model: Optional[str]) -> bool:
 
 
 TNS100_REBOOT_TIMEOUT = 900  # 15 minutes for switches
+AP_REBOOT_TIMEOUT = 480      # 8 minutes for APs (increased from 5 min due to slower reboots)
 
 
 def _extract_version_from_filename(filename: str) -> str:
@@ -1647,6 +1681,25 @@ def _extract_version_from_filename(filename: str) -> str:
     if match2:
         return match2.group(1)
     return ""
+
+
+def _parse_version(version: str) -> tuple:
+    """Parse version string into tuple for comparison.
+
+    Handles formats like '1.12.3.54970' or '1.12.3.r54970'.
+    Returns tuple of integers for comparison.
+    """
+    if not version:
+        return (0,)
+    # Normalize .r to .
+    normalized = version.replace(".r", ".")
+    parts = []
+    for part in normalized.split("."):
+        try:
+            parts.append(int(part))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts) if parts else (0,)
 
 
 
@@ -1702,6 +1755,9 @@ async def _start_scheduled_update(
     if not firmware_path.exists():
         raise RuntimeError(f"Firmware file not found: {firmware_file}")
 
+    # Get downgrade setting
+    allow_downgrade = db.get_setting("allow_downgrade", "false") == "true"
+
     firmware_files = {"tna-30x": str(firmware_path)}
     firmware_names = {"tna-30x": firmware_file}
 
@@ -1739,12 +1795,25 @@ async def _start_scheduled_update(
             cpe_ip = cpe.get("ip")
             if not cpe_ip or cpe.get("auth_status") != "ok":
                 continue
+            cpe_model = cpe.get("model")
+            cpe_fw = _select_firmware_for_model(cpe_model, firmware_files)
+
+            # Skip CPEs already at target firmware version (or newer if downgrade disabled)
+            if cpe_fw:
+                target_version = _extract_version_from_filename(Path(cpe_fw).name)
+                current_version = cpe.get("firmware_version", "").replace(".r", ".")
+                if target_version and current_version == target_version:
+                    logger.info(f"Skipping CPE {cpe_ip}: already at target version {target_version}")
+                    continue
+                if target_version and current_version and not allow_downgrade:
+                    if _parse_version(current_version) > _parse_version(target_version):
+                        logger.info(f"Skipping CPE {cpe_ip}: version {current_version} > target {target_version} (downgrade disabled)")
+                        continue
+
             cpe_ips.append(cpe_ip)
             device_roles[cpe_ip] = "cpe"
             device_parent[cpe_ip] = ip
             credentials[cpe_ip] = (ap["username"], ap["password"])
-            cpe_model = cpe.get("model")
-            cpe_fw = _select_firmware_for_model(cpe_model, firmware_files)
             if cpe_fw is None and _is_303l_model(cpe_model):
                 device_firmware_map[cpe_ip] = "__missing_303l__"
             elif cpe_fw is None:
@@ -1753,13 +1822,28 @@ async def _start_scheduled_update(
                 device_firmware_map[cpe_ip] = cpe_fw
         ap_cpe_map[ip] = cpe_ips
 
-    # Enroll enabled switches
+    # Enroll enabled switches (skip those already at target version)
     switches = db.get_switches(enabled_only=True)
+    valid_switches = []
     for sw in switches:
         sw_ip = sw["ip"]
+        sw_fw = _select_firmware_for_model(sw.get("model"), firmware_files)
+
+        # Skip switches already at target firmware version (or newer if downgrade disabled)
+        if sw_fw:
+            target_version = _extract_version_from_filename(Path(sw_fw).name)
+            current_version = sw.get("firmware_version", "").replace(".r", ".")
+            if target_version and current_version == target_version:
+                logger.info(f"Skipping switch {sw_ip}: already at target version {target_version}")
+                continue
+            if target_version and current_version and not allow_downgrade:
+                if _parse_version(current_version) > _parse_version(target_version):
+                    logger.info(f"Skipping switch {sw_ip}: version {current_version} > target {target_version} (downgrade disabled)")
+                    continue
+
+        valid_switches.append(sw_ip)
         credentials[sw_ip] = (sw["username"], sw["password"])
         device_roles[sw_ip] = "switch"
-        sw_fw = _select_firmware_for_model(sw.get("model"), firmware_files)
         if sw_fw is None and _is_tns100_model(sw.get("model")):
             device_firmware_map[sw_ip] = "__missing_tns100__"
         elif sw_fw is None:
@@ -1767,7 +1851,7 @@ async def _start_scheduled_update(
         else:
             device_firmware_map[sw_ip] = sw_fw
 
-    if not valid_aps and not switches:
+    if not valid_aps and not valid_switches:
         raise RuntimeError("No valid APs or switches found for scheduled update")
 
     job_id = str(uuid.uuid4())[:8]
@@ -2101,7 +2185,13 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             from zoneinfo import ZoneInfo
             tz = ZoneInfo(job.schedule_timezone)
             now = datetime.now(tz)
-            minutes_until_end = (job.end_hour - now.hour) * 60 - now.minute
+            # Handle overnight windows (e.g., 20:00-04:00)
+            if job.end_hour > now.hour:
+                # Same day: end is later today
+                minutes_until_end = (job.end_hour - now.hour) * 60 - now.minute
+            else:
+                # Overnight: end is tomorrow morning
+                minutes_until_end = (24 - now.hour + job.end_hour) * 60 - now.minute
             if minutes_until_end < 10:
                 device_status.status = "skipped"
                 device_status.progress_message = "Maintenance window ending"
@@ -2187,7 +2277,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     if job.device_type in ("tachyon", "mixed"):
         username, password = job.credentials[ip]
         client = TachyonClient(ip, username, password)
-        reboot_timeout = TNS100_REBOOT_TIMEOUT if device_status.role == "switch" else 300
+        reboot_timeout = TNS100_REBOOT_TIMEOUT if device_status.role == "switch" else AP_REBOOT_TIMEOUT
         result = await client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout)
     else:
         result = UpdateResult(ip=ip, success=False, error=f"Unsupported device type: {job.device_type}")
@@ -2472,8 +2562,11 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                 if ds.status == "success" and ds.new_version:
                     learned_version = ds.new_version
                     break
+            # Pass device statuses so rollout devices get marked correctly
+            device_statuses = {ip: ds.status for ip, ds in job.devices.items()}
             scheduler.on_job_completed(job.job_id, success_count, failed_count,
-                                       learned_version=learned_version)
+                                       learned_version=learned_version,
+                                       device_statuses=device_statuses)
 
     logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped, {cancelled_count} cancelled")
 

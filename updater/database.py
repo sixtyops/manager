@@ -30,6 +30,13 @@ def _migrate(db):
             db.execute(f"ALTER TABLE access_points ADD COLUMN {col} TEXT DEFAULT NULL")
     if "active_bank" not in ap_columns:
         db.execute("ALTER TABLE access_points ADD COLUMN active_bank INTEGER DEFAULT NULL")
+    if "last_firmware_update" not in ap_columns:
+        db.execute("ALTER TABLE access_points ADD COLUMN last_firmware_update TEXT DEFAULT NULL")
+
+    # Add last_firmware_update to switches
+    sw_columns = [row[1] for row in db.execute("PRAGMA table_info(switches)").fetchall()]
+    if "last_firmware_update" not in sw_columns:
+        db.execute("ALTER TABLE switches ADD COLUMN last_firmware_update TEXT DEFAULT NULL")
 
     # Add bank columns to cpe_cache
     if "bank1_version" not in columns:
@@ -89,6 +96,7 @@ def init_db():
                 last_seen TEXT,
                 last_error TEXT,
                 enabled INTEGER DEFAULT 1,
+                last_firmware_update TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
             );
@@ -110,6 +118,7 @@ def init_db():
                 bank1_version TEXT,
                 bank2_version TEXT,
                 active_bank INTEGER,
+                last_firmware_update TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
             );
@@ -228,11 +237,13 @@ def init_db():
             "schedule_start_hour": "3",
             "schedule_end_hour": "4",
             "parallel_updates": "2",
-            "bank_mode": "both",
+            "bank_mode": "one",
+            "allow_downgrade": "false",
             "timezone": "auto",
             "zip_code": "",
             "weather_check_enabled": "true",
             "min_temperature_c": "-10",
+            "temperature_unit": "auto",  # "auto", "c", or "f"
             "schedule_scope": "all",
             "schedule_scope_data": "",
             "firmware_beta_enabled": "false",
@@ -657,30 +668,91 @@ def unregister_firmware(filename: str):
         conn.execute("DELETE FROM firmware_registry WHERE filename = ?", (filename,))
 
 
-def is_firmware_quarantine_cleared(filename: str, quarantine_days: int = 7) -> bool:
-    """Check if firmware has cleared the quarantine period."""
+def _extract_release_date_from_filename(filename: str) -> Optional[datetime]:
+    """Extract release date from firmware filename (e.g., tna-30x-1.12.2-r54944-20250828-...).
+
+    Returns the release date as datetime, or None if not found.
+    """
+    import re
+    # Look for YYYYMMDD pattern in filename
+    match = re.search(r'-(\d{4})(\d{2})(\d{2})-', filename)
+    if match:
+        try:
+            year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            return datetime(year, month, day)
+        except ValueError:
+            pass
+    return None
+
+
+def is_firmware_hold_cleared(filename: str, hold_days: int = 7) -> bool:
+    """Check if firmware has cleared the auto-download hold period.
+
+    Uses the release date from the filename (preferred) or falls back to download date.
+    """
+    # Try to get release date from filename first
+    release_date = _extract_release_date_from_filename(filename)
+    if release_date:
+        return datetime.now() >= release_date + timedelta(days=hold_days)
+
+    # Fall back to download date
     added_at = get_firmware_added_at(filename)
     if added_at is None:
         return True  # Not registered — treat as cleared (legacy file)
     added_dt = datetime.fromisoformat(added_at)
-    return datetime.now() >= added_dt + timedelta(days=quarantine_days)
+    return datetime.now() >= added_dt + timedelta(days=hold_days)
 
 
-def get_firmware_quarantine_info(filename: str, quarantine_days: int = 7) -> dict:
-    """Get quarantine status info for a firmware file."""
-    added_at = get_firmware_added_at(filename)
-    if added_at is None:
-        return {"cleared": True, "added_at": None, "clears_at": None, "remaining_hours": 0}
-    added_dt = datetime.fromisoformat(added_at)
-    clears_at = added_dt + timedelta(days=quarantine_days)
+# Alias for backwards compatibility
+def is_firmware_quarantine_cleared(filename: str, quarantine_days: int = 7) -> bool:
+    """Alias for is_firmware_hold_cleared (backwards compatibility)."""
+    return is_firmware_hold_cleared(filename, quarantine_days)
+
+
+def get_firmware_hold_info(filename: str, hold_days: int = 7) -> dict:
+    """Get hold period status info for a firmware file.
+
+    Uses release date from filename when available.
+    """
+    # Try to get release date from filename first
+    release_date = _extract_release_date_from_filename(filename)
+
+    if release_date:
+        reference_dt = release_date
+        reference_type = "release_date"
+    else:
+        added_at = get_firmware_added_at(filename)
+        if added_at is None:
+            return {"cleared": True, "reference_date": None, "reference_type": None,
+                    "clears_at": None, "remaining_days": 0}
+        reference_dt = datetime.fromisoformat(added_at)
+        reference_type = "download_date"
+
+    clears_at = reference_dt + timedelta(days=hold_days)
     now = datetime.now()
     cleared = now >= clears_at
-    remaining = max(0, (clears_at - now).total_seconds() / 3600) if not cleared else 0
+    remaining_seconds = max(0, (clears_at - now).total_seconds()) if not cleared else 0
+    remaining_days = remaining_seconds / 86400
+
     return {
         "cleared": cleared,
-        "added_at": added_at,
+        "reference_date": reference_dt.isoformat(),
+        "reference_type": reference_type,
         "clears_at": clears_at.isoformat(),
-        "remaining_hours": round(remaining, 1),
+        "remaining_days": round(remaining_days, 1),
+    }
+
+
+# Alias for backwards compatibility
+def get_firmware_quarantine_info(filename: str, quarantine_days: int = 7) -> dict:
+    """Alias for get_firmware_hold_info (backwards compatibility)."""
+    info = get_firmware_hold_info(filename, quarantine_days)
+    # Map new fields to old field names for compatibility
+    return {
+        "cleared": info["cleared"],
+        "added_at": info.get("reference_date"),
+        "clears_at": info.get("clears_at"),
+        "remaining_hours": round(info.get("remaining_days", 0) * 24, 1),
     }
 
 
@@ -822,6 +894,15 @@ def get_active_rollout() -> Optional[dict]:
         return dict(row) if row else None
 
 
+def get_current_rollout() -> Optional[dict]:
+    """Get the most recent rollout (active, paused, or completed) for UI display."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM rollouts WHERE status IN ('active', 'paused', 'completed') ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def get_rollout(rollout_id: int) -> Optional[dict]:
     """Get a rollout by ID."""
     with get_db() as db:
@@ -954,6 +1035,17 @@ def mark_rollout_device(rollout_id: int, ip: str, status: str):
             "UPDATE rollout_devices SET status = ?, updated_at = ? WHERE rollout_id = ? AND ip = ?",
             (status, now, rollout_id, ip)
         )
+        # If successfully updated, record the timestamp on the device itself
+        if status == "updated":
+            # Try access_points first, then switches
+            db.execute(
+                "UPDATE access_points SET last_firmware_update = ? WHERE ip = ?",
+                (now, ip)
+            )
+            db.execute(
+                "UPDATE switches SET last_firmware_update = ? WHERE ip = ?",
+                (now, ip)
+            )
 
 
 def mark_rollout_phase_devices(rollout_id: int, phase: str, status: str):
@@ -964,6 +1056,23 @@ def mark_rollout_phase_devices(rollout_id: int, phase: str, status: str):
             "UPDATE rollout_devices SET status = ?, updated_at = ? WHERE rollout_id = ? AND phase_assigned = ?",
             (status, now, rollout_id, phase)
         )
+        # If successfully updated, record the timestamp on the devices themselves
+        if status == "updated":
+            # Get the IPs for this phase
+            rows = db.execute(
+                "SELECT ip FROM rollout_devices WHERE rollout_id = ? AND phase_assigned = ?",
+                (rollout_id, phase)
+            ).fetchall()
+            for row in rows:
+                ip = row[0]
+                db.execute(
+                    "UPDATE access_points SET last_firmware_update = ? WHERE ip = ?",
+                    (now, ip)
+                )
+                db.execute(
+                    "UPDATE switches SET last_firmware_update = ? WHERE ip = ?",
+                    (now, ip)
+                )
 
 
 def get_rollout_devices(rollout_id: int, phase: str = None) -> list[dict]:
