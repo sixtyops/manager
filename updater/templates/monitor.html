@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Unofficial Tachyon Networks Bulk Updater</title>
+    <link rel="icon" type="image/png" href="/static/favicon.png">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
@@ -654,6 +655,25 @@
         .status-label { font-size: 0.78rem; }
         .status-sep { color: var(--toggle-off); margin: 0 4px; }
 
+        /* Status icon cells */
+        .status-icon-cell {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            cursor: default;
+        }
+        .status-icon-cell.online { background: var(--success); }
+        .status-icon-cell.offline { background: var(--danger-bright); }
+        .status-icon-cell.warning { background: var(--warning); }
+        .status-icon-cell.critical { background: var(--danger-bright); }
+        .status-icon-cell.updating {
+            background: transparent;
+            border: 2px solid var(--primary);
+            border-top-color: transparent;
+            animation: spin 1s linear infinite;
+        }
+
         /* Updating indicator */
         .updating-text {
             color: var(--primary);
@@ -1145,6 +1165,9 @@
         }
 
         .status-bar-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
             padding: 3px 10px;
             border-radius: 10px;
             font-size: 0.75rem;
@@ -1158,6 +1181,29 @@
         .status-bar-badge.running { background: var(--indigo-bg); color: var(--indigo-text); }
         .status-bar-badge.blocked { background: var(--danger-bg); color: var(--danger-text); }
         .status-bar-badge.current { background: var(--success-bg); color: var(--success-text); }
+
+        .status-icon {
+            width: 12px;
+            height: 12px;
+            flex-shrink: 0;
+        }
+
+        .status-icon.spinner {
+            animation: spin 1s linear infinite;
+            border: 2px solid currentColor;
+            border-top-color: transparent;
+            border-radius: 50%;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .status-icon svg {
+            width: 100%;
+            height: 100%;
+            fill: currentColor;
+        }
 
         .status-bar-reason {
             color: var(--text-dim);
@@ -1407,18 +1453,11 @@
                 <span class="status-bar-label">Auto-Update</span>
                 <span class="status-badge status-bar-badge" id="barStateBadge">Off</span>
                 <span class="status-bar-reason" id="barBlockReason"></span>
-                <div class="status-bar-inline-actions" id="barInlineActions">
-                    <button class="btn btn-sm btn-warning" onclick="resumeRollout();event.stopPropagation();">Retry Next Window</button>
-                    <button class="btn btn-sm btn-outline-secondary" onclick="resetRollout();event.stopPropagation();">Reset</button>
-                </div>
             </div>
             <div class="status-bar-section" id="barDeviceCountSection" style="display: none;">
                 <span class="status-bar-count" id="barBehindCount"></span>
             </div>
-            <div class="status-bar-section" style="margin-left: auto;">
-                <span id="barLastUpdated" style="font-size: 0.7rem; color: #9ca3af;"></span>
-            </div>
-            <div class="status-bar-section status-bar-rollout" id="barRolloutSection">
+            <div class="status-bar-section status-bar-rollout" id="barRolloutSection" style="margin-left: auto;">
                 <div class="status-bar-phases" id="barPhaseIndicator"></div>
                 <span class="status-bar-muted" id="barRolloutProgress"></span>
                 <span class="status-bar-muted" id="barRolloutPrediction" style="opacity:0.7;font-size:0.8em;"></span>
@@ -1427,6 +1466,7 @@
                     <button class="btn btn-sm btn-danger" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();" style="display:none;">Cancel</button>
                 </div>
             </div>
+            <span id="drawerSavedIndicator" style="font-size:0.7rem;color:#10b981;opacity:0;transition:opacity 0.2s;">Saved</span>
             <div class="drawer-chevron" id="drawerChevron">&#9650;</div>
         </div>
         <div class="drawer-panel" id="drawerPanel">
@@ -1748,6 +1788,7 @@
         let lastBehindCount = 0;       // Devices needing update
         let lastFleetTotal = 0;        // Total devices
         let lastPreRolloutPredictions = null; // Pre-rollout estimate
+        let lastAutoState = '';        // Last auto-update state (idle, waiting, running, etc.)
 
         // Expand/collapse + sort state
         const expandState = new Map();
@@ -1930,26 +1971,26 @@
 
         function statusCell(ip, isOffline, signalHealth, authStatus, parentApIp) {
             if (updatingDevices.has(ip)) {
-                return '<span class="updating-text">Updating\u2026</span>';
+                return '<span class="status-icon-cell updating" title="Updating"></span>';
             }
             // Show loading dots if parent AP is updating
             if (parentApIp && updatingDevices.has(parentApIp)) {
                 return loadingDotsHtml;
             }
             if (isOffline) {
-                return '<span class="status-offline">Offline</span>';
+                return '<span class="status-icon-cell offline" title="Offline"></span>';
             }
             // Show auth failure for CPEs
             if (authStatus && authStatus !== 'ok') {
                 const authLabel = authStatus === 'unreachable' ? 'Unreachable' : 'Auth Failed';
-                return `<span class="status-offline">${authLabel}</span>`;
+                return `<span class="status-icon-cell offline" title="${authLabel}"></span>`;
             }
             if (signalHealth) {
-                const healthLabel = signalHealth === 'green' ? 'Good' : signalHealth === 'yellow' ? 'Low' : 'Weak';
-                const healthClass = signalHealth === 'green' ? 'status-online' : signalHealth === 'yellow' ? 'signal-low' : 'signal-critical';
-                return `<span class="${healthClass}">${healthLabel}</span>`;
+                const healthTitle = signalHealth === 'green' ? 'Good' : signalHealth === 'yellow' ? 'Low' : 'Weak';
+                const healthClass = signalHealth === 'green' ? 'online' : signalHealth === 'yellow' ? 'warning' : 'critical';
+                return `<span class="status-icon-cell ${healthClass}" title="${healthTitle}"></span>`;
             }
-            return '<span class="status-online">Online</span>';
+            return '<span class="status-icon-cell online" title="Online"></span>';
         }
 
         function updateCell(ip) {
@@ -3013,18 +3054,33 @@
             reason.textContent = '';
 
             if (state === 'disabled') {
-                badge.textContent = 'Off';
+                badge.innerHTML = '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>Off';
                 countSection.style.display = 'none';
+                const rolloutSection = document.getElementById('barRolloutSection');
+                if (rolloutSection) rolloutSection.style.display = 'none';
+                lastAutoState = 'disabled';
                 return;
             }
 
+            // Icons for each state
+            const stateIcons = {
+                idle: '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="currentColor"/></svg></span>',
+                waiting: '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 4v4l3 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>',
+                running: '<span class="status-icon spinner"></span>',
+                blocked_weather: '<span class="status-icon"><svg viewBox="0 0 16 16"><path d="M8 1l1.5 4.5H14l-3.5 2.5 1.5 4.5L8 10l-4 2.5 1.5-4.5L2 5.5h4.5z" fill="currentColor"/></svg></span>',
+                blocked_time: '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 4v4l3 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>',
+                blocked_no_firmware: '<span class="status-icon"><svg viewBox="0 0 16 16"><path d="M8 2L2 14h12L8 2z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 6v4M8 11v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>',
+                blocked_all_current: '<span class="status-icon"><svg viewBox="0 0 16 16"><path d="M3 8l3 3 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>',
+                blocked_quarantine: '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6 6l4 4M10 6l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>',
+            };
             const stateLabels = {
                 idle: 'Idle', waiting: 'Waiting', running: 'Running',
                 blocked_weather: 'Blocked', blocked_time: 'Blocked',
                 blocked_no_firmware: 'No firmware', blocked_all_current: 'All current',
                 blocked_quarantine: 'On Hold',
             };
-            badge.textContent = stateLabels[state] || state.replace(/_/g, ' ');
+            const icon = stateIcons[state] || '';
+            badge.innerHTML = icon + (stateLabels[state] || state.replace(/_/g, ' '));
 
             const stateStyles = {
                 idle: 'idle', waiting: 'waiting', running: 'running',
@@ -3039,6 +3095,10 @@
             if (status.block_reason && state !== 'blocked_all_current') {
                 reason.textContent = status.block_reason;
             }
+
+            // Track state changes for UI updates
+            const prevState = lastAutoState;
+            lastAutoState = state;
 
             // Store next window for use in device count text
             lastNextWindow = status.next_window || '';
@@ -3058,9 +3118,16 @@
             }
 
             // Update rollout UI if there's an active rollout, otherwise show idle phases
-            if (status.rollout) {
+            // Hide rollout progress when all devices are current
+            const rolloutSection = document.getElementById('barRolloutSection');
+            if (state === 'blocked_all_current') {
+                currentRolloutId = null;
+                if (rolloutSection) rolloutSection.style.display = 'none';
+            } else if (status.rollout) {
+                if (rolloutSection) rolloutSection.style.display = '';
                 updateRolloutUI(status);
             } else {
+                if (rolloutSection) rolloutSection.style.display = '';
                 currentRolloutId = null;
                 renderIdlePhases();
             }
@@ -3130,8 +3197,6 @@
             if (predEl) predEl.textContent = '';
             document.getElementById('barResumeBtn').style.display = 'none';
             document.getElementById('barCancelBtn').style.display = 'none';
-            const inlineActions = document.getElementById('barInlineActions');
-            if (inlineActions) inlineActions.classList.remove('visible');
         }
 
         function updateRolloutUI(data) {
@@ -3183,7 +3248,10 @@
             const total = p.total || 0;
             const failed = p.failed || 0;
             let progressText = `${updated}/${total}`;
-            if (failed > 0) progressText += ` (${failed} failed)`;
+            // Only show failure count when paused (not while actively running)
+            if (failed > 0 && rollout.status === 'paused') {
+                progressText += ` (${failed} failed)`;
+            }
             document.getElementById('barRolloutProgress').textContent = progressText;
 
             // Predictions
@@ -3214,19 +3282,15 @@
 
             const resumeBtn = document.getElementById('barResumeBtn');
             const cancelBtn = document.getElementById('barCancelBtn');
-            const inlineActions = document.getElementById('barInlineActions');
             if (rollout.status === 'paused') {
                 resumeBtn.style.display = 'inline-block';
                 cancelBtn.style.display = 'inline-block';
-                if (inlineActions) inlineActions.classList.add('visible');
             } else if (rollout.status === 'active') {
                 resumeBtn.style.display = 'none';
                 cancelBtn.style.display = 'inline-block';
-                if (inlineActions) inlineActions.classList.remove('visible');
             } else {
                 resumeBtn.style.display = 'none';
                 cancelBtn.style.display = 'none';
-                if (inlineActions) inlineActions.classList.remove('visible');
             }
         }
 
@@ -3242,11 +3306,6 @@
             try { await fetch(`/api/rollout/${currentRolloutId}/cancel`, { method: 'POST' }); } catch (e) {}
         }
 
-        async function resetRollout() {
-            if (!currentRolloutId) return;
-            try { await fetch(`/api/rollout/${currentRolloutId}/reset`, { method: 'POST' }); } catch (e) {}
-        }
-
         async function toggleAutoSchedule(event) {
             if (event) event.stopPropagation();
             const toggle = document.getElementById('barAutoToggle');
@@ -3258,6 +3317,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ schedule_enabled: newState ? 'true' : 'false' }),
                 });
+                showSavedIndicator();
             } catch (e) {}
         }
 
@@ -3336,6 +3396,15 @@
             loadDrawerFirmware();
         }
 
+        let savedIndicatorTimeout = null;
+        function showSavedIndicator() {
+            const el = document.getElementById('drawerSavedIndicator');
+            if (!el) return;
+            if (savedIndicatorTimeout) clearTimeout(savedIndicatorTimeout);
+            el.style.opacity = '1';
+            savedIndicatorTimeout = setTimeout(() => { el.style.opacity = '0'; }, 2000);
+        }
+
         function toggleDrawerDay(btn) {
             btn.classList.toggle('active');
             drawerSettingChanged();
@@ -3347,7 +3416,6 @@
                 days.push(btn.dataset.day);
             });
 
-            markPendingRecheck();
             try {
                 await fetch('/api/settings', {
                     method: 'PUT',
@@ -3364,7 +3432,7 @@
                         firmware_quarantine_days: document.getElementById('drawerQuarantineDays').value,
                     }),
                 });
-                // Trigger immediate refresh after settings change
+                showSavedIndicator();
                 loadFleetStatus();
             } catch (e) {}
         }
@@ -3374,7 +3442,6 @@
             const enabled = !toggle.classList.contains('active');
             toggle.classList.toggle('active', enabled);
             drawerBetaEnabled = enabled;
-            markPendingRecheck();
             try {
                 await fetch('/api/settings', {
                     method: 'PUT',
@@ -3382,6 +3449,7 @@
                     body: JSON.stringify({ firmware_beta_enabled: enabled ? 'true' : 'false' }),
                 });
                 await fetch('/api/firmware-reselect', { method: 'POST' });
+                showSavedIndicator();
             } catch (e) {}
             drawerSettingsLoaded = false;
             loadDrawerFirmware();
@@ -3392,13 +3460,13 @@
             const toggle = document.getElementById('drawerDowngradeToggle');
             const enabled = !toggle.classList.contains('active');
             toggle.classList.toggle('active', enabled);
-            markPendingRecheck();
             try {
                 await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ allow_downgrade: enabled ? 'true' : 'false' }),
                 });
+                showSavedIndicator();
                 loadFleetStatus();
             } catch (e) {}
         }
@@ -3413,6 +3481,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ weather_check_enabled: enabled ? 'true' : 'false' }),
                 });
+                showSavedIndicator();
             } catch (e) {}
         }
 
@@ -3472,6 +3541,10 @@
                     'tna-303l': settData.settings.selected_firmware_303l || '',
                     'tns-100': settData.settings.selected_firmware_tns100 || '',
                 };
+                // Sync beta enabled state from settings
+                drawerBetaEnabled = settData.settings.firmware_beta_enabled === 'true';
+                const betaToggle = document.getElementById('drawerBetaToggle');
+                if (betaToggle) betaToggle.classList.toggle('active', drawerBetaEnabled);
                 renderDrawerFirmware();
             } catch (e) {}
         }
@@ -3541,7 +3614,6 @@
             if (type === 'unknown') return;
             drawerFwSelected[type] = filename;
             renderDrawerFirmware();
-            markPendingRecheck();
             const data = {};
             if (type === 'tna-30x') data.selected_firmware_30x = filename;
             if (type === 'tna-303l') data.selected_firmware_303l = filename;
@@ -3552,6 +3624,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data),
                 });
+                showSavedIndicator();
                 loadFleetStatus();
             } catch (e) {}
         }
@@ -3568,14 +3641,31 @@
                 const resp = await fetch('/api/firmware-fetch/status');
                 const result = await resp.json();
                 const el = document.getElementById('drawerFwLastCheck');
-                if (el && result.last_check) {
-                    const raw = result.last_check;
-                    // Server stores local time without TZ — parse as-is (no 'Z' suffix)
-                    const d = new Date(raw);
-                    const timeStr = d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-                    el.textContent = result.last_error
-                        ? 'Checked ' + timeStr + ' \u2014 ' + result.last_error
-                        : 'Checked ' + timeStr;
+                if (!el) return;
+
+                if (result.last_error) {
+                    el.textContent = result.last_error;
+                    el.style.color = '#ef4444';
+                    return;
+                }
+
+                if (result.last_check) {
+                    const d = new Date(result.last_check);
+                    const now = new Date();
+                    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    const checkDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+                    const diffDays = Math.floor((today - checkDay) / (1000 * 60 * 60 * 24));
+
+                    if (diffDays <= 0) {
+                        el.textContent = 'Checked today';
+                        el.style.color = '';
+                    } else if (diffDays === 1) {
+                        el.textContent = 'Checked yesterday';
+                        el.style.color = '';
+                    } else {
+                        el.textContent = 'Stale (' + diffDays + ' days)';
+                        el.style.color = '#f59e0b';
+                    }
                 }
             } catch (e) {}
         }
@@ -3654,11 +3744,6 @@
             }
         }
 
-        let lastFleetUpdate = null;
-        let pendingRecheck = false;
-        let nextRefreshTime = null;
-        const REFRESH_INTERVAL = 60000; // 60 seconds
-
         async function loadFleetStatus() {
             try {
                 const resp = await fetch('/api/fleet-status');
@@ -3679,52 +3764,33 @@
                 lastBehindCount = data.summary?.behind || 0;
                 lastFleetTotal = data.summary?.total || 0;
                 updateBarDeviceCount();
-
-                // Update refresh state
-                lastFleetUpdate = new Date();
-                nextRefreshTime = new Date(Date.now() + REFRESH_INTERVAL);
-                pendingRecheck = false;
-                updateRefreshDisplay();
             } catch (e) {}
         }
-
-        function markPendingRecheck() {
-            pendingRecheck = true;
-            updateRefreshDisplay();
-        }
-
-        function updateRefreshDisplay() {
-            const el = document.getElementById('barLastUpdated');
-            if (!el) return;
-
-            if (pendingRecheck) {
-                el.innerHTML = '<span style="color:#f59e0b;">Rechecking\u2026</span>';
-                return;
-            }
-
-            if (!nextRefreshTime) {
-                el.textContent = '';
-                return;
-            }
-
-            const now = Date.now();
-            const secsUntil = Math.max(0, Math.ceil((nextRefreshTime - now) / 1000));
-
-            if (secsUntil <= 0) {
-                el.textContent = 'Refreshing\u2026';
-            } else {
-                el.innerHTML = `<span style="opacity:0.7;">Next check in ${secsUntil}s</span>`;
-            }
-        }
-
-        // Update countdown every second
-        setInterval(updateRefreshDisplay, 1000);
 
         function updateBarDeviceCount() {
             const section = document.getElementById('barDeviceCountSection');
             const count = document.getElementById('barBehindCount');
             if (!section || !count) return;
             count.style.color = '';
+
+            // Don't show anything when auto-update is disabled
+            if (lastAutoState === 'disabled') {
+                section.style.display = 'none';
+                return;
+            }
+
+            // Hide "pending" text when a rollout is actively running - progress is shown in rollout UI
+            if (currentRolloutId && lastAutoState === 'running') {
+                // Show schedule window only (no "pending" count during active rollout)
+                if (lastNextWindow) {
+                    section.style.display = '';
+                    count.textContent = lastNextWindow;
+                } else {
+                    section.style.display = 'none';
+                }
+                return;
+            }
+
             if (lastBehindCount > 0) {
                 section.style.display = '';
                 let text = lastBehindCount + ' pending';
