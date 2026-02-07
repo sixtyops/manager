@@ -126,7 +126,7 @@ Sends `rollout_status` message with current rollout info (if any), in addition t
 
 ---
 
-## UI Changes (`index.html`)
+## UI Changes (`monitor.html`)
 
 ### Rollout status card in Auto-Update tab
 
@@ -192,4 +192,4 @@ Positioned above the scheduler status bar, showing:
 | `updater/database.py` | 2 new tables, ~16 new rollout functions |
 | `updater/scheduler.py` | Replace steps 9-11 with rollout logic, modify `on_job_completed`, update `get_status` |
 | `updater/app.py` | 3 new endpoints, modify `run_update_job` to pass `learned_version`, send rollout status on WS connect |
-| `updater/templates/index.html` | Rollout status card with phase indicator + progress + resume/cancel buttons |
+| `updater/templates/monitor.html` | Rollout status card with phase indicator + progress + resume/cancel buttons |

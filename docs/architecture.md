@@ -7,7 +7,7 @@ Charlotte is a FastAPI application with an async-first architecture. The backend
 ```
 ┌─────────────────────────────────────┐
 │     Browser (HTML/JS Templates)     │
-│  login.html │ index.html │ monitor  │
+│  login.html │ monitor.html │ setup  │
 └──────────────┬──────────────────────┘
                │ HTTP + WebSocket
 ┌──────────────▼──────────────────────┐
@@ -97,10 +97,12 @@ Helpers for IP geolocation, weather forecasts (weather.gov), timezone detection,
 
 ## Frontend
 
-Four HTML templates rendered by Jinja2:
+Six HTML templates rendered by Jinja2:
 - `login.html` - Authentication form
-- `index.html` - Main UI with Firmware, Update, and Auto-Update tabs
-- `firmware.html` - Firmware file management
-- `monitor.html` - Network topology visualization
+- `monitor.html` - Main UI with firmware, update, auto-update, and network topology
+- `setup.html` - Initial site configuration
+- `setup_wizard.html` - Guided first-run setup
+- `backup_setup.html` - Backup configuration
+- `ssl_setup.html` - SSL certificate setup
 
 JavaScript in `static/js/` handles WebSocket connections and real-time DOM updates. No build step or framework dependencies.
