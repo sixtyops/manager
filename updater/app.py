@@ -217,11 +217,38 @@ async def login_page(request: Request, error: str = None):
     return templates.TemplateResponse("login.html", {"request": request, "error": error})
 
 
+_login_attempts: Dict[str, list] = {}  # IP -> list of timestamps
+LOGIN_RATE_LIMIT = 5       # max attempts
+LOGIN_RATE_WINDOW = 60     # per N seconds
+
+
+def _check_login_rate_limit(ip: str) -> bool:
+    """Return True if the IP is rate-limited."""
+    now = datetime.now()
+    cutoff = now.timestamp() - LOGIN_RATE_WINDOW
+    attempts = _login_attempts.get(ip, [])
+    attempts = [t for t in attempts if t > cutoff]
+    _login_attempts[ip] = attempts
+    return len(attempts) >= LOGIN_RATE_LIMIT
+
+
+def _record_login_attempt(ip: str):
+    """Record a login attempt for rate limiting."""
+    _login_attempts.setdefault(ip, []).append(datetime.now().timestamp())
+
+
 @app.post("/login")
 async def login(request: Request, username: str = Form(...), password: str = Form(...)):
     """Handle login form submission."""
+    ip_address = request.client.host if request.client else "unknown"
+    if _check_login_rate_limit(ip_address):
+        return templates.TemplateResponse("login.html", {
+            "request": request, "error": "Too many login attempts. Please wait and try again.",
+        }, status_code=429)
+
     user = authenticate(username, password)
     if not user:
+        _record_login_attempt(ip_address)
         return templates.TemplateResponse("login.html", {"request": request, "error": True}, status_code=401)
 
     ip_address = request.client.host if request.client else "unknown"
@@ -664,11 +691,18 @@ async def delete_site(site_id: int, session: dict = Depends(require_auth)):
 # Access Point API
 # ============================================================================
 
+def _strip_credentials(devices: list[dict]) -> list[dict]:
+    """Remove password fields from device dicts before returning to client."""
+    for d in devices:
+        d.pop("password", None)
+    return devices
+
+
 @app.get("/api/aps")
 async def list_aps(site_id: int = None, session: dict = Depends(require_auth)):
-    """List access points."""
+    """List access points (credentials redacted)."""
     aps = db.get_access_points(tower_site_id=site_id, enabled_only=False)
-    return {"aps": aps}
+    return {"aps": _strip_credentials(aps)}
 
 
 @app.post("/api/aps")
@@ -812,9 +846,9 @@ async def poll_ap(ip: str, session: dict = Depends(require_auth)):
 
 @app.get("/api/switches")
 async def list_switches(site_id: int = None, session: dict = Depends(require_auth)):
-    """List switches."""
+    """List switches (credentials redacted)."""
     switches = db.get_switches(tower_site_id=site_id, enabled_only=False)
-    return {"switches": switches}
+    return {"switches": _strip_credentials(switches)}
 
 
 @app.post("/api/switches")
@@ -984,21 +1018,43 @@ async def quick_add(
 # Settings API
 # ============================================================================
 
+_SETTINGS_SENSITIVE = {
+    "admin_password_hash", "radius_secret",
+    "device_default_password",
+}
+
+
 @app.get("/api/settings")
 async def get_settings(session: dict = Depends(require_auth)):
-    """Get all settings."""
+    """Get all settings. Sensitive values are redacted."""
     settings = db.get_all_settings()
+    for key in _SETTINGS_SENSITIVE:
+        if key in settings and settings[key]:
+            settings[key] = "********"
     # Resolve temperature unit for UI
     temp_unit_setting = settings.get("temperature_unit", "auto")
     resolved_unit = await services.resolve_temperature_unit(temp_unit_setting)
     return {"settings": settings, "resolved_temperature_unit": resolved_unit}
 
 
+_SETTINGS_WRITABLE = {
+    "schedule_enabled", "schedule_days", "schedule_start_hour", "schedule_end_hour",
+    "parallel_updates", "bank_mode", "allow_downgrade", "timezone", "zip_code",
+    "weather_check_enabled", "min_temperature_c", "temperature_unit",
+    "schedule_scope", "schedule_scope_data",
+    "firmware_beta_enabled", "firmware_quarantine_days",
+    "slack_webhook_url", "autoupdate_enabled",
+}
+
+
 @app.put("/api/settings")
 async def update_settings(request: Request, session: dict = Depends(require_auth)):
-    """Update settings."""
+    """Update settings. Only whitelisted keys are accepted."""
     data = await request.json()
-    db.set_settings(data)
+    filtered = {k: v for k, v in data.items() if k in _SETTINGS_WRITABLE}
+    if not filtered:
+        raise HTTPException(400, "No valid settings keys provided")
+    db.set_settings(filtered)
     return {"success": True}
 
 
@@ -1921,27 +1977,30 @@ async def start_update(
     if not ap_ips:
         raise HTTPException(400, "No valid IPs provided")
 
-    # Build firmware files dict
-    firmware_path = FIRMWARE_DIR / firmware_file
+    # Validate and build firmware files dict
+    safe_fw = validate_firmware_filename(firmware_file)
+    firmware_path = FIRMWARE_DIR / safe_fw
     if not firmware_path.exists():
-        raise HTTPException(400, f"Firmware file not found: {firmware_file}")
+        raise HTTPException(400, f"Firmware file not found: {safe_fw}")
 
     firmware_files = {"tna-30x": str(firmware_path)}
-    firmware_names = {"tna-30x": firmware_file}
+    firmware_names = {"tna-30x": safe_fw}
 
     if firmware_file_303l:
-        path_303l = FIRMWARE_DIR / firmware_file_303l
+        safe_303l = validate_firmware_filename(firmware_file_303l)
+        path_303l = FIRMWARE_DIR / safe_303l
         if not path_303l.exists():
-            raise HTTPException(400, f"303L firmware file not found: {firmware_file_303l}")
+            raise HTTPException(400, f"303L firmware file not found: {safe_303l}")
         firmware_files["tna-303l"] = str(path_303l)
-        firmware_names["tna-303l"] = firmware_file_303l
+        firmware_names["tna-303l"] = safe_303l
 
     if firmware_file_tns100:
-        path_tns100 = FIRMWARE_DIR / firmware_file_tns100
+        safe_tns100 = validate_firmware_filename(firmware_file_tns100)
+        path_tns100 = FIRMWARE_DIR / safe_tns100
         if not path_tns100.exists():
-            raise HTTPException(400, f"TNS100 firmware file not found: {firmware_file_tns100}")
+            raise HTTPException(400, f"TNS100 firmware file not found: {safe_tns100}")
         firmware_files["tns-100"] = str(path_tns100)
-        firmware_names["tns-100"] = firmware_file_tns100
+        firmware_names["tns-100"] = safe_tns100
 
     # Look up stored credentials for each AP and discover CPEs
     credentials = {}
@@ -2061,27 +2120,30 @@ async def update_single_device_endpoint(
     session: dict = Depends(require_auth),
 ):
     """Start a firmware update for a single device (AP, CPE, or switch)."""
-    # Check firmware file exists
-    firmware_path = FIRMWARE_DIR / firmware_file
+    # Validate and check firmware file exists
+    safe_fw = validate_firmware_filename(firmware_file)
+    firmware_path = FIRMWARE_DIR / safe_fw
     if not firmware_path.exists():
-        raise HTTPException(400, f"Firmware file not found: {firmware_file}")
+        raise HTTPException(400, f"Firmware file not found: {safe_fw}")
 
     firmware_files = {"tna-30x": str(firmware_path)}
-    firmware_names = {"tna-30x": firmware_file}
+    firmware_names = {"tna-30x": safe_fw}
 
     if firmware_file_303l:
-        path_303l = FIRMWARE_DIR / firmware_file_303l
+        safe_303l = validate_firmware_filename(firmware_file_303l)
+        path_303l = FIRMWARE_DIR / safe_303l
         if not path_303l.exists():
-            raise HTTPException(400, f"303L firmware file not found: {firmware_file_303l}")
+            raise HTTPException(400, f"303L firmware file not found: {safe_303l}")
         firmware_files["tna-303l"] = str(path_303l)
-        firmware_names["tna-303l"] = firmware_file_303l
+        firmware_names["tna-303l"] = safe_303l
 
     if firmware_file_tns100:
-        path_tns100 = FIRMWARE_DIR / firmware_file_tns100
+        safe_tns100 = validate_firmware_filename(firmware_file_tns100)
+        path_tns100 = FIRMWARE_DIR / safe_tns100
         if not path_tns100.exists():
-            raise HTTPException(400, f"TNS100 firmware file not found: {firmware_file_tns100}")
+            raise HTTPException(400, f"TNS100 firmware file not found: {safe_tns100}")
         firmware_files["tns-100"] = str(path_tns100)
-        firmware_names["tns-100"] = firmware_file_tns100
+        firmware_names["tns-100"] = safe_tns100
 
     # Look up device - check APs first, then switches, then CPEs
     ap = db.get_access_point(ip)
