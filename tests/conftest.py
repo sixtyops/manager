@@ -45,6 +45,27 @@ def memory_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
         );
+        CREATE TABLE switches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL UNIQUE,
+            tower_site_id INTEGER,
+            username TEXT NOT NULL,
+            password TEXT NOT NULL,
+            system_name TEXT,
+            model TEXT,
+            mac TEXT,
+            firmware_version TEXT,
+            location TEXT,
+            last_seen TEXT,
+            last_error TEXT,
+            enabled INTEGER DEFAULT 1,
+            bank1_version TEXT,
+            bank2_version TEXT,
+            active_bank INTEGER,
+            last_firmware_update TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
+        );
         CREATE TABLE cpe_cache (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ap_ip TEXT NOT NULL,
@@ -62,10 +83,30 @@ def memory_db():
             mcs INTEGER,
             link_uptime INTEGER,
             signal_health TEXT,
+            auth_status TEXT DEFAULT NULL,
             last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(ap_ip, ip)
         );
         CREATE INDEX idx_cpe_ap ON cpe_cache(ap_ip);
+        CREATE TABLE rollouts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            firmware_file TEXT NOT NULL,
+            firmware_file_303l TEXT,
+            firmware_file_tns100 TEXT DEFAULT NULL,
+            target_version TEXT,
+            phase TEXT NOT NULL DEFAULT 'canary',
+            status TEXT NOT NULL DEFAULT 'active',
+            pause_reason TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_phase_completed_at TEXT,
+            last_job_id TEXT
+        );
+        CREATE TABLE firmware_registry (
+            filename TEXT PRIMARY KEY,
+            added_at TEXT NOT NULL,
+            source TEXT DEFAULT 'manual'
+        );
         CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
             username TEXT NOT NULL,
@@ -91,6 +132,7 @@ def memory_db():
         "zip_code": "",
         "weather_check_enabled": "true",
         "min_temperature_c": "-10",
+        "setup_completed": "true",
     }
     for key, value in defaults.items():
         conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))
