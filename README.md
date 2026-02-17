@@ -37,7 +37,6 @@ Failures pause the rollout until manually reviewed.
 ## Supported Devices
 
 **Tachyon Networks**: TNA-301, TNA-302, TNA-303x, TNA-303L, TNA-303L-65, TNS-100
-**MikroTik**: Planned
 
 ## Additional Features
 

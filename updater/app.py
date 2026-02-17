@@ -9,7 +9,7 @@ import re
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional, Set
 
@@ -34,6 +34,7 @@ from . import slack
 from . import ssl_manager
 from . import git_backup
 from . import radius_config
+from . import oidc_config
 
 # Configure logging
 logging.basicConfig(
@@ -103,6 +104,20 @@ async def broadcast(message: dict):
         active_websockets.discard(ws)
 
 
+def _cleanup_oidc_states():
+    """Remove expired OIDC state entries (older than 10 minutes)."""
+    settings = db.get_all_settings()
+    cutoff = (datetime.now() - timedelta(minutes=10)).isoformat()
+    for key, value in settings.items():
+        if key.startswith("oidc_state_"):
+            try:
+                data = json.loads(value)
+                if data.get("created_at", "") < cutoff:
+                    db.set_setting(key, "")
+            except (json.JSONDecodeError, TypeError):
+                db.set_setting(key, "")
+
+
 async def _periodic_cleanup():
     """Periodically clean up expired sessions, old job history, and stale in-memory jobs."""
     while True:
@@ -114,6 +129,7 @@ async def _periodic_cleanup():
             db.cleanup_old_rollouts(max_age_days=180)
             db.cleanup_old_device_durations(max_age_days=180)
             _cleanup_completed_jobs(max_age_seconds=3600)
+            _cleanup_oidc_states()
             logger.info("Periodic cleanup completed")
         except Exception as e:
             logger.error(f"Periodic cleanup error: {e}")
@@ -214,7 +230,11 @@ async def login_page(request: Request, error: str = None):
     # First run with no password configured - redirect to setup
     if is_first_run():
         return RedirectResponse(url="/setup", status_code=302)
-    return templates.TemplateResponse("login.html", {"request": request, "error": error})
+    return templates.TemplateResponse("login.html", {
+        "request": request,
+        "error": error,
+        "oidc_enabled": oidc_config.is_oidc_enabled(),
+    })
 
 
 _login_attempts: Dict[str, list] = {}  # IP -> list of timestamps
@@ -1019,7 +1039,7 @@ async def quick_add(
 # ============================================================================
 
 _SETTINGS_SENSITIVE = {
-    "admin_password_hash", "radius_secret",
+    "admin_password_hash", "oidc_client_secret",
     "device_default_password",
 }
 
@@ -1108,23 +1128,6 @@ async def get_auth_config(session: dict = Depends(require_auth)):
     return radius_config.get_auth_config_summary()
 
 
-@app.put("/api/auth/radius")
-async def update_radius_config(request: Request, session: dict = Depends(require_auth)):
-    """Update web RADIUS authentication configuration."""
-    data = await request.json()
-
-    config = radius_config.RadiusConfig(
-        enabled=data.get("enabled", False),
-        server=data.get("server", ""),
-        secret=data.get("secret", ""),
-        port=int(data.get("port", 1812)),
-        timeout=int(data.get("timeout", 5)),
-    )
-
-    radius_config.set_web_radius_config(config)
-    return {"success": True}
-
-
 @app.put("/api/auth/device-defaults")
 async def update_device_auth_config(request: Request, session: dict = Depends(require_auth)):
     """Update global default device credentials."""
@@ -1140,24 +1143,254 @@ async def update_device_auth_config(request: Request, session: dict = Depends(re
     return {"success": True}
 
 
-@app.post("/api/auth/test-radius")
-async def test_radius_connection(request: Request, session: dict = Depends(require_auth)):
-    """Test RADIUS connection with provided credentials."""
+@app.get("/api/auth/oidc")
+async def get_oidc_config_api(session: dict = Depends(require_auth)):
+    """Get OIDC/SSO configuration (secret masked)."""
+    config = oidc_config.get_oidc_config()
+    return {
+        "enabled": config.enabled,
+        "provider_url": config.provider_url,
+        "client_id": config.client_id,
+        "redirect_uri": config.redirect_uri,
+        "allowed_group": config.allowed_group,
+        "scopes": config.scopes,
+        "configured": oidc_config.is_oidc_enabled(),
+    }
+
+
+@app.put("/api/auth/oidc")
+async def update_oidc_config_api(request: Request, session: dict = Depends(require_auth)):
+    """Update OIDC/SSO configuration."""
     data = await request.json()
-    username = data.get("username", "")
-    password = data.get("password", "")
 
-    if not username or not password:
-        return {"success": False, "message": "Username and password required"}
+    config = oidc_config.OIDCConfig(
+        enabled=data.get("enabled", False),
+        provider_url=data.get("provider_url", ""),
+        client_id=data.get("client_id", ""),
+        client_secret=data.get("client_secret", ""),
+        redirect_uri=data.get("redirect_uri", ""),
+        allowed_group=data.get("allowed_group", ""),
+        scopes=data.get("scopes", "openid email profile"),
+    )
 
-    if not radius_config.is_web_radius_enabled():
-        return {"success": False, "message": "RADIUS not configured"}
+    oidc_config.set_oidc_config(config)
+    return {"success": True}
 
-    success = radius_config.authenticate_via_radius(username, password)
-    if success:
-        return {"success": True, "message": "RADIUS authentication successful"}
-    else:
-        return {"success": False, "message": "RADIUS authentication failed"}
+
+@app.post("/api/auth/test-oidc")
+async def test_oidc_discovery(session: dict = Depends(require_auth)):
+    """Test OIDC discovery endpoint reachability."""
+    config = oidc_config.get_oidc_config()
+    if not config.provider_url:
+        return {"success": False, "message": "OIDC provider URL not configured"}
+
+    discovery_url = config.provider_url.rstrip("/") + "/.well-known/openid-configuration"
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(discovery_url)
+            if resp.status_code == 200:
+                data = resp.json()
+                issuer = data.get("issuer", "unknown")
+                return {"success": True, "message": f"OIDC provider reachable (issuer: {issuer})"}
+            else:
+                return {"success": False, "message": f"Discovery returned HTTP {resp.status_code}"}
+    except Exception as e:
+        return {"success": False, "message": f"Failed to reach OIDC provider: {e}"}
+
+
+# ============================================================================
+# OIDC SSO Login Flow (no auth dependency)
+# ============================================================================
+
+@app.get("/auth/oidc/login")
+async def oidc_login(request: Request):
+    """Initiate OIDC Authorization Code flow with PKCE."""
+    import secrets as _secrets
+    import hashlib
+    import base64
+
+    config = oidc_config.get_oidc_config()
+    if not oidc_config.is_oidc_enabled():
+        return RedirectResponse(url="/login", status_code=302)
+
+    # Generate state, nonce, and PKCE verifier
+    state = _secrets.token_urlsafe(32)
+    nonce = _secrets.token_urlsafe(32)
+    code_verifier = _secrets.token_urlsafe(64)
+
+    # S256 PKCE challenge
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()
+    ).rstrip(b"=").decode()
+
+    # Store state for validation in callback
+    db.set_setting(f"oidc_state_{state}", json.dumps({
+        "nonce": nonce,
+        "code_verifier": code_verifier,
+        "created_at": datetime.now().isoformat(),
+    }))
+
+    # Discover authorization endpoint
+    discovery_url = config.provider_url.rstrip("/") + "/.well-known/openid-configuration"
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(discovery_url)
+            resp.raise_for_status()
+            discovery = resp.json()
+    except Exception as e:
+        logger.error(f"OIDC discovery failed: {e}")
+        return RedirectResponse(url="/login?error=oidc_discovery_failed", status_code=302)
+
+    authorization_endpoint = discovery.get("authorization_endpoint")
+    if not authorization_endpoint:
+        return RedirectResponse(url="/login?error=oidc_discovery_failed", status_code=302)
+
+    # Build authorization URL
+    from urllib.parse import urlencode
+    params = urlencode({
+        "client_id": config.client_id,
+        "response_type": "code",
+        "redirect_uri": config.redirect_uri,
+        "scope": config.scopes,
+        "state": state,
+        "nonce": nonce,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+    })
+
+    return RedirectResponse(url=f"{authorization_endpoint}?{params}", status_code=302)
+
+
+@app.get("/auth/oidc/callback")
+async def oidc_callback(request: Request, code: str = None, state: str = None, error: str = None):
+    """Handle OIDC callback from Authentik."""
+    from .auth import authenticate_oidc_user, create_session, SESSION_COOKIE_NAME
+
+    if error:
+        logger.warning(f"OIDC callback error: {error}")
+        return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
+
+    if not code or not state:
+        return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
+
+    # Validate and consume state
+    stored_raw = db.get_setting(f"oidc_state_{state}", "")
+    if not stored_raw:
+        return RedirectResponse(url="/login?error=invalid_state", status_code=302)
+
+    db.set_setting(f"oidc_state_{state}", "")  # One-time use
+
+    try:
+        state_data = json.loads(stored_raw)
+    except (json.JSONDecodeError, TypeError):
+        return RedirectResponse(url="/login?error=invalid_state", status_code=302)
+
+    config = oidc_config.get_oidc_config()
+
+    # Discover token and JWKS endpoints
+    discovery_url = config.provider_url.rstrip("/") + "/.well-known/openid-configuration"
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(discovery_url)
+            resp.raise_for_status()
+            discovery = resp.json()
+    except Exception as e:
+        logger.error(f"OIDC discovery failed during callback: {e}")
+        return RedirectResponse(url="/login?error=oidc_discovery_failed", status_code=302)
+
+    token_endpoint = discovery.get("token_endpoint")
+    jwks_uri = discovery.get("jwks_uri")
+    issuer = discovery.get("issuer")
+
+    if not token_endpoint or not jwks_uri:
+        return RedirectResponse(url="/login?error=oidc_discovery_failed", status_code=302)
+
+    # Exchange authorization code for tokens
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            token_resp = await client.post(token_endpoint, data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": config.redirect_uri,
+                "client_id": config.client_id,
+                "client_secret": config.client_secret,
+                "code_verifier": state_data["code_verifier"],
+            })
+            token_resp.raise_for_status()
+            tokens = token_resp.json()
+    except Exception as e:
+        logger.error(f"OIDC token exchange failed: {e}")
+        return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
+
+    id_token = tokens.get("id_token")
+    if not id_token:
+        return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
+
+    # Validate and decode the id_token
+    try:
+        from authlib.jose import jwt as authlib_jwt, JsonWebKey
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            jwks_resp = await client.get(jwks_uri)
+            jwks_resp.raise_for_status()
+            jwks = JsonWebKey.import_key_set(jwks_resp.json())
+
+        claims = authlib_jwt.decode(id_token, jwks)
+        claims.validate()
+
+        # Validate issuer and audience
+        if claims.get("iss") != issuer:
+            logger.warning(f"OIDC issuer mismatch: {claims.get('iss')} != {issuer}")
+            return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
+
+        if claims.get("aud") != config.client_id:
+            # aud can be a string or list
+            aud = claims.get("aud")
+            if isinstance(aud, list) and config.client_id not in aud:
+                logger.warning(f"OIDC audience mismatch")
+                return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
+            elif isinstance(aud, str) and aud != config.client_id:
+                logger.warning(f"OIDC audience mismatch")
+                return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
+
+        # Validate nonce
+        if claims.get("nonce") != state_data.get("nonce"):
+            logger.warning("OIDC nonce mismatch")
+            return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
+
+    except Exception as e:
+        logger.error(f"OIDC id_token validation failed: {e}")
+        return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
+
+    email = claims.get("email", "")
+    groups = claims.get("groups", [])
+
+    if not email:
+        return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
+
+    # Validate group membership
+    user = authenticate_oidc_user(email, groups)
+    if not user:
+        return RedirectResponse(url="/login?error=oidc_unauthorized", status_code=302)
+
+    # Create session using existing infrastructure
+    ip_address = request.client.host if request.client else "unknown"
+    session_id = create_session(user, ip_address)
+
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session_id,
+        httponly=True,
+        secure=True,
+        max_age=86400,
+        samesite="lax",
+    )
+    return response
 
 
 @app.get("/api/time")

@@ -96,6 +96,30 @@ body {
     background: #2563eb;
 }
 
+.sso-btn {
+    display: block;
+    text-align: center;
+    text-decoration: none;
+    margin-bottom: 0;
+}
+
+.login-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 20px 0;
+    color: #64748b;
+    font-size: 0.8rem;
+}
+
+.login-divider::before,
+.login-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #334155;
+}
+
 .btn-secondary {
     flex: 1;
     padding: 12px;

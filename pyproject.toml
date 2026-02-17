@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "firmware-updater"
 version = "0.1.0"
-description = "Web-based firmware update tool for Tachyon and MikroTik devices"
+description = "Web-based firmware update tool for Tachyon devices"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}

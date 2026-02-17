@@ -283,6 +283,8 @@ def init_db():
             "autoupdate_available_version": "",
             "autoupdate_release_url": "",
             "autoupdate_release_notes": "",
+            # Vendor feature flags
+            "mikrotik_enabled": "false",
         }
         for key, value in defaults.items():
             db.execute(

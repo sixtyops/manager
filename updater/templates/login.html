@@ -12,14 +12,29 @@
         <h1>Unofficial Tachyon Networks Bulk Updater</h1>
         <p class="subtitle">Sign in to continue</p>
 
-        <div class="error-message {{ 'visible' if error else '' }}">
-            Invalid username or password.
+        {% if error == "oidc_denied" %}
+        <div class="error-message visible">SSO authentication was denied.</div>
+        {% elif error == "oidc_unauthorized" %}
+        <div class="error-message visible">Your account is not authorized for this application.</div>
+        {% elif error == "invalid_state" %}
+        <div class="error-message visible">SSO session expired. Please try again.</div>
+        {% elif error == "oidc_discovery_failed" %}
+        <div class="error-message visible">Could not reach SSO provider. Please try again later.</div>
+        {% elif error %}
+        <div class="error-message visible">Invalid username or password.</div>
+        {% endif %}
+
+        {% if oidc_enabled %}
+        <a href="/auth/oidc/login" class="btn-primary sso-btn">Sign in with SSO</a>
+        <div class="login-divider">
+            <span>or sign in with credentials</span>
         </div>
+        {% endif %}
 
         <form method="POST" action="/login">
             <div class="form-group">
                 <label for="username">Username</label>
-                <input type="text" id="username" name="username" autocomplete="username" required autofocus>
+                <input type="text" id="username" name="username" autocomplete="username" required {% if not oidc_enabled %}autofocus{% endif %}>
             </div>
             <div class="form-group">
                 <label for="password">Password</label>

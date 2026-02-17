@@ -1,4 +1,4 @@
-"""Authentication module: RADIUS + local fallback, session management."""
+"""Authentication module: local + OIDC SSO, session management."""
 
 import logging
 import os
@@ -11,26 +11,11 @@ import bcrypt as _bcrypt
 from fastapi import Request, WebSocket, HTTPException
 
 from . import database as db
-from . import radius_config
 
 logger = logging.getLogger(__name__)
 
 SESSION_COOKIE_NAME = "session_id"
 SESSION_TTL_HOURS = 24
-
-
-# ---------------------------------------------------------------------------
-# RADIUS authentication
-# ---------------------------------------------------------------------------
-
-def _radius_configured() -> bool:
-    """Check if RADIUS is configured (via database settings or env vars)."""
-    return radius_config.is_web_radius_enabled()
-
-
-def authenticate_radius(username: str, password: str) -> bool:
-    """Authenticate via RADIUS. Returns False if unconfigured or rejected."""
-    return radius_config.authenticate_via_radius(username, password)
 
 
 # ---------------------------------------------------------------------------
@@ -93,9 +78,32 @@ def complete_setup(new_password: str):
 # ---------------------------------------------------------------------------
 
 def authenticate(username: str, password: str) -> Optional[str]:
-    """Try RADIUS then local. Returns session_id on success, None on failure."""
-    if authenticate_radius(username, password) or authenticate_local(username, password):
+    """Authenticate via local credentials. Returns username on success, None on failure."""
+    if authenticate_local(username, password):
         return username
+    return None
+
+
+# ---------------------------------------------------------------------------
+# OIDC authentication (callback validation)
+# ---------------------------------------------------------------------------
+
+def authenticate_oidc_user(email: str, groups: list[str]) -> Optional[str]:
+    """Validate an OIDC-authenticated user against the allowed group.
+
+    Returns the email as session username if authorized, None otherwise.
+    """
+    from . import oidc_config
+
+    config = oidc_config.get_oidc_config()
+    if not config.enabled or not config.allowed_group:
+        return None
+
+    if config.allowed_group in groups:
+        logger.info(f"OIDC auth successful for {email} (group: {config.allowed_group})")
+        return email
+
+    logger.warning(f"OIDC auth denied for {email}: not in group '{config.allowed_group}'")
     return None
 
 

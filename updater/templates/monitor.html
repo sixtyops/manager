@@ -1692,39 +1692,41 @@
 
             <!-- Authentication Panel -->
             <div class="settings-panel" id="settingsPanel-auth">
-                <!-- Web RADIUS Section -->
+                <!-- SSO / OIDC Section -->
                 <div style="margin-bottom:20px;">
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                        <h4 style="margin:0;font-size:0.85rem;font-weight:600;">Web RADIUS Authentication</h4>
+                        <h4 style="margin:0;font-size:0.85rem;font-weight:600;">SSO Authentication (OIDC)</h4>
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
-                            <input type="checkbox" id="authRadiusEnabled" onchange="toggleRadiusFields()">
+                            <input type="checkbox" id="authOidcEnabled" onchange="toggleOidcFields()">
                             <span style="font-size:0.75rem;color:#6b7280;">Enabled</span>
                         </label>
                     </div>
-                    <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 10px 0;">Authenticate admin users via a RADIUS server. Falls back to local authentication if RADIUS is unavailable.</p>
-                    <div id="radiusFields" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                    <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 10px 0;">Authenticate admin users via Authentik or another OIDC provider. Local credentials remain available as fallback.</p>
+                    <div id="oidcFields" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
                         <div style="grid-column:span 2;">
-                            <label style="font-size:0.7rem;color:#6b7280;">RADIUS Server</label>
-                            <input type="text" id="authRadiusServer" placeholder="radius.example.com" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                            <label style="font-size:0.7rem;color:#6b7280;">Provider URL</label>
+                            <input type="text" id="authOidcProviderUrl" placeholder="https://authentik.example.com/application/o/tachyon/" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
                         </div>
                         <div>
-                            <label style="font-size:0.7rem;color:#6b7280;">Shared Secret</label>
-                            <input type="password" id="authRadiusSecret" placeholder="Enter shared secret" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                            <label style="font-size:0.7rem;color:#6b7280;">Client ID</label>
+                            <input type="text" id="authOidcClientId" placeholder="Client ID from provider" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
                         </div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                            <div>
-                                <label style="font-size:0.7rem;color:#6b7280;">Port</label>
-                                <input type="number" id="authRadiusPort" value="1812" min="1" max="65535" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
-                            </div>
-                            <div>
-                                <label style="font-size:0.7rem;color:#6b7280;">Timeout (s)</label>
-                                <input type="number" id="authRadiusTimeout" value="5" min="1" max="30" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
-                            </div>
+                        <div>
+                            <label style="font-size:0.7rem;color:#6b7280;">Client Secret</label>
+                            <input type="password" id="authOidcClientSecret" placeholder="Enter client secret" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                        </div>
+                        <div style="grid-column:span 2;">
+                            <label style="font-size:0.7rem;color:#6b7280;">Redirect URI</label>
+                            <input type="text" id="authOidcRedirectUri" placeholder="https://tachyon.example.com/auth/oidc/callback" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                        </div>
+                        <div style="grid-column:span 2;">
+                            <label style="font-size:0.7rem;color:#6b7280;">Allowed Group</label>
+                            <input type="text" id="authOidcAllowedGroup" placeholder="tachyon-admins" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
                         </div>
                     </div>
                     <div style="display:flex;gap:6px;margin-top:10px;">
-                        <button class="backup-btn" onclick="saveRadiusConfig()">Save RADIUS</button>
-                        <button class="backup-btn" onclick="testRadiusConfig()" style="background:#6b7280;color:#fff;">Test</button>
+                        <button class="backup-btn" onclick="saveOidcConfig()">Save SSO</button>
+                        <button class="backup-btn" onclick="testOidcConfig()" style="background:#6b7280;color:#fff;">Test</button>
                     </div>
                 </div>
 
@@ -2772,14 +2774,15 @@
                 const resp = await fetch('/api/auth/config');
                 const data = await resp.json();
 
-                // Web RADIUS
-                const radiusEnabled = data.web_radius?.enabled || false;
-                document.getElementById('authRadiusEnabled').checked = radiusEnabled;
-                document.getElementById('authRadiusServer').value = data.web_radius?.server || '';
-                document.getElementById('authRadiusPort').value = data.web_radius?.port || 1812;
-                document.getElementById('authRadiusTimeout').value = data.web_radius?.timeout || 5;
-                document.getElementById('authRadiusSecret').value = '';
-                toggleRadiusFields();
+                // OIDC/SSO
+                const oidcEnabled = data.oidc?.enabled || false;
+                document.getElementById('authOidcEnabled').checked = oidcEnabled;
+                document.getElementById('authOidcProviderUrl').value = data.oidc?.provider_url || '';
+                document.getElementById('authOidcClientId').value = data.oidc?.client_id || '';
+                document.getElementById('authOidcClientSecret').value = '';
+                document.getElementById('authOidcRedirectUri').value = data.oidc?.redirect_uri || '';
+                document.getElementById('authOidcAllowedGroup').value = data.oidc?.allowed_group || '';
+                toggleOidcFields();
 
                 // Device defaults
                 const deviceEnabled = data.device_defaults?.enabled || false;
@@ -2836,9 +2839,9 @@
             }
         }
 
-        function toggleRadiusFields() {
-            const enabled = document.getElementById('authRadiusEnabled').checked;
-            const fields = document.getElementById('radiusFields');
+        function toggleOidcFields() {
+            const enabled = document.getElementById('authOidcEnabled').checked;
+            const fields = document.getElementById('oidcFields');
             fields.style.opacity = enabled ? '1' : '0.5';
             fields.querySelectorAll('input').forEach(el => el.disabled = !enabled);
         }
@@ -2850,71 +2853,59 @@
             fields.querySelectorAll('input').forEach(el => el.disabled = !enabled);
         }
 
-        async function saveRadiusConfig() {
+        async function saveOidcConfig() {
             const statusEl = document.getElementById('authStatus');
-            const enabled = document.getElementById('authRadiusEnabled').checked;
-            const server = document.getElementById('authRadiusServer').value.trim();
-            const secret = document.getElementById('authRadiusSecret').value;
-            const port = parseInt(document.getElementById('authRadiusPort').value) || 1812;
-            const timeout = parseInt(document.getElementById('authRadiusTimeout').value) || 5;
+            const enabled = document.getElementById('authOidcEnabled').checked;
+            const provider_url = document.getElementById('authOidcProviderUrl').value.trim();
+            const client_id = document.getElementById('authOidcClientId').value.trim();
+            const client_secret = document.getElementById('authOidcClientSecret').value;
+            const redirect_uri = document.getElementById('authOidcRedirectUri').value.trim();
+            const allowed_group = document.getElementById('authOidcAllowedGroup').value.trim();
 
-            if (enabled && (!server || !secret)) {
-                statusEl.textContent = 'Server and secret required when enabled';
+            if (enabled && (!provider_url || !client_id || !client_secret)) {
+                statusEl.textContent = 'Provider URL, Client ID, and Client Secret required when enabled';
                 statusEl.style.color = '#f59e0b';
                 return;
             }
 
             try {
-                const resp = await fetch('/api/auth/radius', {
+                const resp = await fetch('/api/auth/oidc', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled, server, secret, port, timeout }),
+                    body: JSON.stringify({ enabled, provider_url, client_id, client_secret, redirect_uri, allowed_group }),
                 });
                 if (resp.ok) {
-                    statusEl.textContent = 'RADIUS config saved!';
+                    statusEl.textContent = 'SSO config saved!';
                     statusEl.style.color = '#10b981';
                 } else {
                     throw new Error('Failed to save');
                 }
             } catch (e) {
-                statusEl.textContent = 'Failed to save RADIUS config';
+                statusEl.textContent = 'Failed to save SSO config';
                 statusEl.style.color = '#ef4444';
             }
         }
 
-        async function testRadiusConfig() {
+        async function testOidcConfig() {
             const statusEl = document.getElementById('authStatus');
-            statusEl.textContent = 'Testing RADIUS...';
+            statusEl.textContent = 'Testing OIDC discovery...';
             statusEl.style.color = '#6b7280';
 
-            // Prompt for test credentials
-            const testUser = prompt('Enter username to test RADIUS authentication:');
-            if (!testUser) {
-                statusEl.textContent = '';
-                return;
-            }
-            const testPass = prompt('Enter password:');
-            if (!testPass) {
-                statusEl.textContent = '';
-                return;
-            }
-
             try {
-                const resp = await fetch('/api/auth/test-radius', {
+                const resp = await fetch('/api/auth/test-oidc', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username: testUser, password: testPass }),
                 });
                 const data = await resp.json();
                 if (data.success) {
                     statusEl.textContent = data.message;
                     statusEl.style.color = '#10b981';
                 } else {
-                    statusEl.textContent = data.message || 'RADIUS test failed';
+                    statusEl.textContent = data.message || 'OIDC test failed';
                     statusEl.style.color = '#ef4444';
                 }
             } catch (e) {
-                statusEl.textContent = 'Error testing RADIUS: ' + e.message;
+                statusEl.textContent = 'Error testing OIDC: ' + e.message;
                 statusEl.style.color = '#ef4444';
             }
         }

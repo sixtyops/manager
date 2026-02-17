@@ -57,10 +57,12 @@ services:
       # ADMIN_PASSWORD is optional - if not set, you'll be prompted to create
       # a password on first run via the web interface
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
-      # Optional RADIUS settings
-      # - RADIUS_SERVER=
-      # - RADIUS_SECRET=
-      # - RADIUS_PORT=1812
+      # Optional OIDC/SSO settings (Authentik)
+      # - OIDC_PROVIDER_URL=https://authentik.example.com/application/o/tachyon/
+      # - OIDC_CLIENT_ID=
+      # - OIDC_CLIENT_SECRET=
+      # - OIDC_REDIRECT_URI=https://tachyon.example.com/auth/oidc/callback
+      # - OIDC_ALLOWED_GROUP=tachyon-admins
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/login"]
       interval: 30s
