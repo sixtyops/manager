@@ -125,22 +125,22 @@ class TestOIDCRoutes:
         assert resp.headers["location"] == "/login"
 
     def test_oidc_callback_no_state(self, client):
-        """Callback without state redirects to login with error."""
+        """Callback without state redirects to login when SSO disabled."""
         resp = client.get("/auth/oidc/callback", follow_redirects=False)
         assert resp.status_code == 302
-        assert "error=oidc_denied" in resp.headers["location"]
+        assert resp.headers["location"] == "/login"
 
     def test_oidc_callback_invalid_state(self, client):
-        """Callback with unknown state redirects to login with error."""
+        """Callback with unknown state redirects to login when SSO disabled."""
         resp = client.get("/auth/oidc/callback?code=abc&state=invalid", follow_redirects=False)
         assert resp.status_code == 302
-        assert "error=invalid_state" in resp.headers["location"]
+        assert resp.headers["location"] == "/login"
 
     def test_oidc_callback_error_param(self, client):
-        """Callback with error parameter from provider."""
+        """Callback with error parameter redirects to login when SSO disabled."""
         resp = client.get("/auth/oidc/callback?error=access_denied", follow_redirects=False)
         assert resp.status_code == 302
-        assert "error=oidc_denied" in resp.headers["location"]
+        assert resp.headers["location"] == "/login"
 
     def test_login_page_no_sso_button_when_disabled(self, client):
         """SSO button should not appear when OIDC is disabled."""
