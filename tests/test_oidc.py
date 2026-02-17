@@ -25,7 +25,7 @@ class TestOIDCConfig:
             "OIDC_ALLOWED_GROUP": "tachyon-admins",
         }):
             config = get_oidc_config()
-            assert config.enabled is True
+            assert config.enabled is False
             assert config.provider_url == "https://authentik.example.com/application/o/tachyon/"
             assert config.client_id == "test-client-id"
             assert config.allowed_group == "tachyon-admins"
@@ -147,6 +147,12 @@ class TestOIDCRoutes:
         resp = client.get("/login")
         assert resp.status_code == 200
         assert "Sign in with SSO" not in resp.text
+
+    def test_oidc_callback_blocked_when_disabled(self, client):
+        """Callback redirects to /login when SSO is disabled."""
+        resp = client.get("/auth/oidc/callback?code=abc&state=valid", follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/login"
 
     def test_oidc_config_api_requires_auth(self, client):
         """OIDC config API requires authentication."""

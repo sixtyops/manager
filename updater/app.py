@@ -1289,6 +1289,9 @@ async def oidc_login(request: Request):
 @app.get("/auth/oidc/callback")
 async def oidc_callback(request: Request, code: str = None, state: str = None, error: str = None):
     """Handle OIDC callback from Authentik."""
+    if not oidc_config.is_oidc_enabled():
+        return RedirectResponse(url="/login", status_code=302)
+
     from .auth import authenticate_oidc_user, create_session, SESSION_COOKIE_NAME
 
     if error:

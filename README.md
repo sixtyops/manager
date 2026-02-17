@@ -43,7 +43,6 @@ Failures pause the rollout until manually reviewed.
 - **Manual updates** - Immediate updates for specific APs when needed
 - **Network topology view** - Visual map of tower sites, APs, and CPEs with signal health indicators
 - **Parallel updates** - Configurable concurrency for faster bulk updates
-- **RADIUS authentication** - Integration with existing auth infrastructure
 - **Git backups** - Automatic commit of configuration changes
 - **Real-time progress** - WebSocket-based live update status
 

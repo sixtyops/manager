@@ -12,7 +12,7 @@ Authenticate and create a session. Rate-limited to 5 attempts per IP per 60 seco
 
 - **Body**: `username` (form), `password` (form)
 - **Response**: Redirect to `/` on success, re-render login with error on failure
-- **Auth flow**: RADIUS first, then local fallback
+- **Auth flow**: Local username/password
 - **Cookie set**: `session_id` (httponly, secure, samesite=lax, 24h TTL)
 
 ### `POST /logout`
@@ -190,26 +190,10 @@ Update settings. Only whitelisted keys are accepted:
 - **Body** (JSON): Object of key-value pairs to set
 - **Response**: `{ "success": true }`
 
-## Authentication Configuration
-
-### `GET /api/auth/config`
-Get authentication configuration summary. Secrets are masked.
-
-### `PUT /api/auth/radius`
-Update web RADIUS authentication configuration.
-
-- **Body** (JSON): `enabled`, `server`, `secret`, `port`, `timeout`
-
 ### `PUT /api/auth/device-defaults`
-Update global default device credentials.
+Update global default device credentials (used when communicating with APs/switches).
 
 - **Body** (JSON): `enabled`, `username`, `password`
-
-### `POST /api/auth/test-radius`
-Test RADIUS connection with provided credentials.
-
-- **Body** (JSON): `username`, `password`
-- **Response**: `{ "success": bool, "message": "..." }`
 
 ### `POST /api/slack/test`
 Send a test notification to the configured Slack webhook.
@@ -315,13 +299,58 @@ Get Git backup configuration and status.
 ## App Updates
 
 ### `GET /api/updates`
-Get current app update status (available version, release notes).
+Get current app update status.
+
+- **Response**:
+  ```json
+  {
+    "current_version": "0.1.0",
+    "enabled": true,
+    "last_check": "2026-01-15T03:00:00",
+    "available_version": "0.2.0",
+    "release_url": "https://github.com/isolson/firmware-updater/releases/tag/v0.2.0",
+    "release_notes": "Bug fixes and new features...",
+    "update_available": true,
+    "docker_socket_available": true,
+    "can_update": true,
+    "blocked_reason": ""
+  }
+  ```
+- `can_update` is `false` during active firmware rollouts or maintenance windows
+- `docker_socket_available` indicates whether automatic updates can be applied
 
 ### `POST /api/updates/check`
-Manually trigger a check for app updates.
+Manually trigger a check for new releases on GitHub.
+
+- **Response**:
+  ```json
+  {
+    "current_version": "0.1.0",
+    "latest_version": "0.2.0",
+    "update_available": true,
+    "release_url": "https://github.com/...",
+    "release_notes": "...",
+    "error": null
+  }
+  ```
 
 ### `POST /api/updates/apply`
-Apply available update by pulling new Docker image and restarting.
+Pull the latest Docker image and restart the container.
+
+- Requires Docker socket to be mounted (`/var/run/docker.sock`)
+- Blocked during active firmware rollouts or maintenance windows
+- **Response (success)**:
+  ```json
+  { "success": true, "message": "Update started. The application will restart shortly." }
+  ```
+- **Response (blocked)**:
+  ```json
+  { "success": false, "message": "Cannot update now: ...", "blocked_reason": "..." }
+  ```
+- **Response (no Docker socket)**:
+  ```json
+  { "success": false, "manual": true, "message": "...", "commands": ["docker compose pull tachyon-mgmt", "docker compose up -d tachyon-mgmt"] }
+  ```
 
 ## SSL
 
