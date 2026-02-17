@@ -8,6 +8,7 @@ set -e
 REPO_URL="${TACHYON_REPO_URL:-https://github.com/isolson/firmware-updater.git}"
 INSTALL_DIR="${TACHYON_INSTALL_DIR:-/opt/tachyon}"
 BRANCH="${TACHYON_BRANCH:-main}"
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.standalone.yml"
 
 echo "=========================================="
 echo "  Tachyon Management System - Installer"
@@ -59,7 +60,7 @@ mkdir -p firmware data nginx/ssl certbot/www certbot/conf backups
 
 # Build and start
 echo "Building and starting services..."
-docker compose up -d --build
+$COMPOSE up -d --build
 
 # Create systemd service for auto-start
 cat > /etc/systemd/system/tachyon.service << EOF
@@ -72,8 +73,8 @@ After=docker.service
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=$INSTALL_DIR
-ExecStart=/usr/bin/docker compose up -d
-ExecStop=/usr/bin/docker compose down
+ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.standalone.yml up -d
+ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.standalone.yml down
 
 [Install]
 WantedBy=multi-user.target
@@ -99,7 +100,7 @@ echo "  1. Configuring HTTPS with Let's Encrypt"
 echo "  2. Setting up automatic backups"
 echo
 echo "Commands:"
-echo "  cd $INSTALL_DIR && docker compose logs -f    # View logs"
-echo "  cd $INSTALL_DIR && docker compose restart    # Restart"
+echo "  cd $INSTALL_DIR && $COMPOSE logs -f    # View logs"
+echo "  cd $INSTALL_DIR && $COMPOSE restart    # Restart"
 echo "  systemctl status tachyon                     # Service status"
 echo

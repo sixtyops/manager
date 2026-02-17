@@ -1,68 +1,25 @@
 services:
-  nginx:
-    image: nginx:alpine
-    container_name: tachyon-nginx
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - ./nginx/ssl:/etc/nginx/ssl
-      - ./nginx/entrypoint.sh:/entrypoint.sh:ro
-      - ./certbot/www:/var/www/certbot:ro
-      - ./certbot/conf:/etc/letsencrypt:ro
-    entrypoint: ["/bin/sh", "/entrypoint.sh"]
-    depends_on:
-      tachyon-mgmt:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "nginx", "-t"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-
-  certbot:
-    image: certbot/certbot
-    container_name: tachyon-certbot
-    volumes:
-      - ./certbot/www:/var/www/certbot
-      - ./certbot/conf:/etc/letsencrypt
-    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --quiet; sleep 12h & wait $${!}; done;'"
-    restart: unless-stopped
-
   tachyon-mgmt:
     build: .
     container_name: tachyon-management
-    expose:
-      - "8000"
+    ports:
+      - "8000:8000"
     volumes:
       # Persist firmware files
       - ./firmware:/app/firmware
       # Persist database
       - ./data:/app/data
-      # Let's Encrypt certificates (for status checking)
-      - ./certbot/conf:/etc/letsencrypt:ro
-      # Nginx config (for SSL manager to write new configs)
-      - ./nginx/conf.d:/app/nginx-conf
       # Git backup repository
       - ./backups:/app/backups
       # Docker socket for self-update capability
       - /var/run/docker.sock:/var/run/docker.sock
-      # Mount docker-compose.yml for self-update (read-only)
+      # Mount compose file(s) for self-update (read-only)
       - ./docker-compose.yml:/app/docker-compose.yml:ro
     environment:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       # ADMIN_PASSWORD is optional - if not set, you'll be prompted to create
       # a password on first run via the web interface
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
-      # Optional OIDC/SSO settings (Authentik)
-      # - OIDC_PROVIDER_URL=https://authentik.example.com/application/o/tachyon/
-      # - OIDC_CLIENT_ID=
-      # - OIDC_CLIENT_SECRET=
-      # - OIDC_REDIRECT_URI=https://tachyon.example.com/auth/oidc/callback
-      # - OIDC_ALLOWED_GROUP=tachyon-admins
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/login"]
       interval: 30s

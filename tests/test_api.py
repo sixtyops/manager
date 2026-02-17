@@ -1,6 +1,7 @@
 """Tests for API routes (authenticated)."""
 
 import pytest
+from unittest.mock import patch, MagicMock, AsyncMock
 
 
 class TestSitesAPI:
@@ -66,12 +67,14 @@ class TestSettingsAPI:
         assert resp.json()["settings"]["schedule_enabled"] == "true"
 
     def test_save_settings_and_reevaluate(self, authed_client):
-        resp = authed_client.post("/api/settings/save", json={
-            "schedule_days": "mon,wed,fri",
-            "schedule_start_hour": "2",
-            "schedule_end_hour": "5",
-            "parallel_updates": "4",
-        })
+        with patch("updater.app.get_fetcher", return_value=None), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = authed_client.post("/api/settings/save", json={
+                "schedule_days": "mon,wed,fri",
+                "schedule_start_hour": "2",
+                "schedule_end_hour": "5",
+                "parallel_updates": "4",
+            })
         assert resp.status_code == 200
         assert resp.json()["success"] is True
         # Verify settings persisted
@@ -85,6 +88,73 @@ class TestSettingsAPI:
             "admin_password_hash": "malicious",
         })
         assert resp.status_code == 400
+
+    def test_save_settings_accepts_firmware_keys(self, authed_client):
+        with patch("updater.app.get_fetcher", return_value=None), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = authed_client.post("/api/settings/save", json={
+                "selected_firmware_30x": "tachyon-v1.12.3.bin",
+                "selected_firmware_303l": "tachyon-303l-v1.12.3.bin",
+                "selected_firmware_tns100": "tachyon-tns100-v1.12.3.bin",
+            })
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        resp = authed_client.get("/api/settings")
+        s = resp.json()["settings"]
+        assert s["selected_firmware_30x"] == "tachyon-v1.12.3.bin"
+        assert s["selected_firmware_303l"] == "tachyon-303l-v1.12.3.bin"
+        assert s["selected_firmware_tns100"] == "tachyon-tns100-v1.12.3.bin"
+
+    def test_save_settings_mixed_valid_and_invalid_keys(self, authed_client):
+        with patch("updater.app.get_fetcher", return_value=None), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = authed_client.post("/api/settings/save", json={
+                "schedule_days": "mon,fri",
+                "parallel_updates": "8",
+                "admin_password_hash": "evil",
+                "secret_sauce": "nope",
+            })
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        resp = authed_client.get("/api/settings")
+        s = resp.json()["settings"]
+        assert s["schedule_days"] == "mon,fri"
+        assert s["parallel_updates"] == "8"
+        assert s.get("admin_password_hash") != "evil"
+
+    def test_save_settings_calls_fetcher_reselect(self, authed_client):
+        mock_fetcher = MagicMock()
+        with patch("updater.app.get_fetcher", return_value=mock_fetcher), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = authed_client.post("/api/settings/save", json={
+                "schedule_days": "mon,tue",
+            })
+        assert resp.status_code == 200
+        mock_fetcher.reselect.assert_called_once_with(False)
+
+    def test_save_settings_calls_scheduler_force_check(self, authed_client):
+        mock_scheduler = MagicMock()
+        mock_scheduler.force_check = AsyncMock()
+        with patch("updater.app.get_scheduler", return_value=mock_scheduler):
+            resp = authed_client.post("/api/settings/save", json={
+                "schedule_enabled": "true",
+            })
+        assert resp.status_code == 200
+        mock_scheduler.force_check.assert_awaited_once()
+
+    def test_save_settings_calls_both_fetcher_and_scheduler(self, authed_client):
+        mock_fetcher = MagicMock()
+        mock_scheduler = MagicMock()
+        mock_scheduler.force_check = AsyncMock()
+        with patch("updater.app.get_fetcher", return_value=mock_fetcher), \
+             patch("updater.app.get_scheduler", return_value=mock_scheduler):
+            resp = authed_client.post("/api/settings/save", json={
+                "firmware_beta_enabled": "true",
+                "schedule_enabled": "true",
+            })
+        assert resp.status_code == 200
+        mock_fetcher.reselect.assert_called_once_with(True)
+        mock_scheduler.force_check.assert_awaited_once()
 
 
 class TestTopologyAPI:
@@ -113,3 +183,128 @@ class TestFirmwareAPI:
         resp = authed_client.get("/api/firmware-files")
         assert resp.status_code == 200
         assert "files" in resp.json()
+
+
+class TestAutoUpdateAPI:
+    def test_get_update_status(self, authed_client):
+        mock_checker = MagicMock()
+        mock_checker.get_update_status.return_value = {
+            "current_version": "1.0.0",
+            "enabled": False,
+            "last_check": "",
+            "available_version": "",
+            "release_url": "",
+            "release_notes": "",
+            "update_available": False,
+            "docker_socket_available": False,
+            "can_update": True,
+            "blocked_reason": "",
+        }
+        with patch("updater.app.get_checker", return_value=mock_checker):
+            resp = authed_client.get("/api/updates")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["current_version"] == "1.0.0"
+        assert data["update_available"] is False
+
+    def test_get_update_status_with_available_update(self, authed_client):
+        mock_checker = MagicMock()
+        mock_checker.get_update_status.return_value = {
+            "current_version": "1.0.0",
+            "enabled": True,
+            "last_check": "2026-01-01T00:00:00",
+            "available_version": "0.2.0",
+            "release_url": "https://github.com/isolson/firmware-updater/releases/tag/v0.2.0",
+            "release_notes": "New features",
+            "update_available": True,
+            "docker_socket_available": True,
+            "can_update": True,
+            "blocked_reason": "",
+        }
+        with patch("updater.app.get_checker", return_value=mock_checker):
+            resp = authed_client.get("/api/updates")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["update_available"] is True
+        assert data["available_version"] == "0.2.0"
+
+    def test_check_for_updates(self, authed_client):
+        mock_checker = MagicMock()
+        mock_checker.check_for_updates = AsyncMock(return_value={
+            "current_version": "1.0.0",
+            "latest_version": "1.0.0",
+            "update_available": False,
+            "release_url": None,
+            "release_notes": None,
+            "error": None,
+        })
+        with patch("updater.app.get_checker", return_value=mock_checker):
+            resp = authed_client.post("/api/updates/check")
+        assert resp.status_code == 200
+        assert resp.json()["update_available"] is False
+        mock_checker.check_for_updates.assert_awaited_once()
+
+    def test_check_for_updates_finds_new_version(self, authed_client):
+        mock_checker = MagicMock()
+        mock_checker.check_for_updates = AsyncMock(return_value={
+            "current_version": "1.0.0",
+            "latest_version": "0.3.0",
+            "update_available": True,
+            "release_url": "https://github.com/isolson/firmware-updater/releases/tag/v0.3.0",
+            "release_notes": "Bug fixes and improvements",
+            "error": None,
+        })
+        with patch("updater.app.get_checker", return_value=mock_checker):
+            resp = authed_client.post("/api/updates/check")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["update_available"] is True
+        assert data["latest_version"] == "0.3.0"
+
+    def test_apply_update_success(self, authed_client):
+        with patch("updater.app.apply_update", new_callable=AsyncMock, return_value={
+            "success": True,
+            "message": "Update started. The application will restart shortly.",
+        }):
+            resp = authed_client.post("/api/updates/apply")
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+    def test_apply_update_blocked_by_rollout(self, authed_client):
+        with patch("updater.app.apply_update", new_callable=AsyncMock, return_value={
+            "success": False,
+            "message": "Cannot update now: A firmware rollout is currently active. Please try again later.",
+            "blocked_reason": "A firmware rollout is currently active",
+        }):
+            resp = authed_client.post("/api/updates/apply")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is False
+        assert "rollout" in data["blocked_reason"]
+
+    def test_apply_update_no_docker_socket(self, authed_client):
+        with patch("updater.app.apply_update", new_callable=AsyncMock, return_value={
+            "success": False,
+            "manual": True,
+            "message": "Docker socket not mounted. Run these commands manually:",
+            "commands": [
+                "cd /path/to/deployment",
+                "docker compose pull tachyon-mgmt",
+                "docker compose up -d tachyon-mgmt",
+            ],
+        }):
+            resp = authed_client.post("/api/updates/apply")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is False
+        assert data["manual"] is True
+        assert len(data["commands"]) == 3
+
+    def test_updates_require_auth(self, client):
+        for url, method in [
+            ("/api/updates", "get"),
+            ("/api/updates/check", "post"),
+            ("/api/updates/apply", "post"),
+        ]:
+            resp = getattr(client, method)(url, follow_redirects=False)
+            assert resp.status_code in (401, 303), f"{method.upper()} {url} should require auth"
