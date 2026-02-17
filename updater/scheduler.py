@@ -82,6 +82,19 @@ class AutoUpdateScheduler:
                 pass
         logger.info("Auto-update scheduler stopped")
 
+    async def force_check(self):
+        """Force immediate re-evaluation of scheduler state.
+
+        Called after settings are saved to immediately reflect changes
+        rather than waiting up to 60 seconds for the next tick.
+        """
+        self._weather_checked_today = None  # Reset weather cache
+        try:
+            await self._check_and_run()
+        except Exception as e:
+            logger.exception(f"Forced scheduler check error: {e}")
+        await self._broadcast_status()
+
     async def _check_loop(self):
         """Main loop: check every interval."""
         while self._running:

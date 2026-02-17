@@ -1114,6 +1114,39 @@
             color: var(--text-muted);
         }
 
+        .drawer-save-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 0 0;
+            border-top: 1px solid var(--border);
+            margin-top: 12px;
+        }
+        .drawer-save-btn {
+            padding: 6px 20px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.2s, opacity 0.2s;
+        }
+        .drawer-save-btn:hover { background: var(--primary-hover, var(--primary)); }
+        .drawer-save-btn:disabled { background: var(--toggle-off); cursor: not-allowed; opacity: 0.7; }
+        .drawer-save-btn.saving { opacity: 0.7; cursor: wait; }
+        .drawer-unsaved-dot {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: #f59e0b; display: none; flex-shrink: 0;
+        }
+        .drawer-unsaved-dot.visible { display: inline-block; }
+        .drawer-save-status {
+            font-size: 0.72rem;
+            color: var(--text-dim, #6b7280);
+            transition: opacity 0.3s;
+        }
+
         /* Status bar sections (inside drawer handle) */
         .status-bar-section {
             display: flex;
@@ -1466,6 +1499,7 @@
                     <button class="btn btn-sm btn-danger" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();" style="display:none;">Cancel</button>
                 </div>
             </div>
+            <span class="drawer-unsaved-dot" id="drawerUnsavedDot" title="Unsaved changes"></span>
             <span id="drawerSavedIndicator" style="font-size:0.7rem;color:#10b981;opacity:0;transition:opacity 0.2s;">Saved</span>
             <div class="drawer-chevron" id="drawerChevron">&#9650;</div>
         </div>
@@ -1489,7 +1523,7 @@
                     <div class="drawer-section-title">Window</div>
                     <div>
                         <label>Maintenance Start</label>
-                        <select id="drawerStartHour" onchange="drawerSettingChanged()">
+                        <select id="drawerStartHour">
                             <option value="0">12 AM</option>
                             <option value="1">1 AM</option>
                             <option value="2">2 AM</option>
@@ -1518,7 +1552,7 @@
                     </div>
                     <div>
                         <label>Maintenance End</label>
-                        <select id="drawerEndHour" onchange="drawerSettingChanged()">
+                        <select id="drawerEndHour">
                             <option value="1">1 AM</option>
                             <option value="2">2 AM</option>
                             <option value="3">3 AM</option>
@@ -1546,14 +1580,14 @@
                     </div>
                     <div>
                         <label>Update Mode</label>
-                        <select id="drawerBankMode" onchange="drawerSettingChanged()">
+                        <select id="drawerBankMode">
                             <option value="one">Single Bank (recommended)</option>
                             <option value="both">Both Banks</option>
                         </select>
                     </div>
                     <div>
                         <label>Parallel Updates</label>
-                        <input type="number" id="drawerParallel" value="2" min="1" max="10" onchange="drawerSettingChanged()">
+                        <input type="number" id="drawerParallel" value="2" min="1" max="10">
                     </div>
 
                     <div class="drawer-section-title">Options</div>
@@ -1569,17 +1603,17 @@
                         <div class="drawer-toggle-row">
                             <span class="drawer-toggle" id="drawerWeatherToggle" onclick="toggleDrawerWeather()"></span>
                             <span class="drawer-toggle-label">Disable updates below</span>
-                            <input type="number" id="drawerMinTemp" value="14" min="-40" max="120" style="width:48px;" onchange="drawerSettingChanged()">
+                            <input type="number" id="drawerMinTemp" value="14" min="-40" max="120" style="width:48px;">
                             <span id="drawerTempUnit" style="font-size:0.75rem;color:#6b7280;">&deg;F</span>
                             <span id="drawerWeatherTemp" style="font-size:0.72rem;color:#6b7280;"></span>
                         </div>
                         <div class="drawer-toggle-row" style="gap: 4px;">
                             <label style="font-size:0.68rem;color:#9ca3af;margin:0;">Postal</label>
-                            <input type="text" id="drawerZipCode" placeholder="Auto" maxlength="10" style="width:56px;" onchange="drawerSettingChanged()">
+                            <input type="text" id="drawerZipCode" placeholder="Auto" maxlength="10" style="width:56px;">
                         </div>
                         <div class="drawer-toggle-row" style="gap: 4px;">
                             <label style="font-size:0.68rem;color:#9ca3af;margin:0;">Auto-download hold</label>
-                            <input type="number" id="drawerQuarantineDays" value="7" min="0" max="90" style="width:48px;" onchange="drawerSettingChanged()">
+                            <input type="number" id="drawerQuarantineDays" value="7" min="0" max="90" style="width:48px;">
                             <span style="font-size:0.68rem;color:#9ca3af;">days</span>
                         </div>
                     </div>
@@ -1598,6 +1632,10 @@
                     </div>
                 </div>
 
+                <div class="drawer-save-row" id="drawerSaveRow">
+                    <button class="drawer-save-btn" id="drawerSaveBtn" onclick="saveDrawerSettings()" disabled>Save</button>
+                    <span class="drawer-save-status" id="drawerSaveStatus"></span>
+                </div>
             </div>
         </div>
     </div>
@@ -3352,7 +3390,7 @@
                 document.getElementById('drawerBankMode').value = s.bank_mode || 'one';
 
                 // Parallel
-                document.getElementById('drawerParallel').value = s.schedule_concurrency || '2';
+                document.getElementById('drawerParallel').value = s.parallel_updates || '2';
 
                 // Beta
                 drawerBetaEnabled = s.firmware_beta_enabled === 'true';
@@ -3368,7 +3406,7 @@
                 weatherToggle.classList.toggle('active', s.weather_check_enabled === 'true');
 
                 // Temperature unit (from resolved_temperature_unit if available)
-                tempUnit = result.resolved_temperature_unit || s.temperature_unit || 'f';
+                tempUnit = data.resolved_temperature_unit || s.temperature_unit || 'f';
                 if (tempUnit === 'auto') tempUnit = 'f';  // Fallback if not resolved
                 updateTempUnitLabels();
 
@@ -3387,6 +3425,29 @@
             loadDrawerFirmware();
         }
 
+        // ── Dirty state tracking ──
+        let drawerDirty = false;
+
+        function markDrawerDirty() {
+            drawerDirty = true;
+            const btn = document.getElementById('drawerSaveBtn');
+            if (btn) btn.disabled = false;
+            const dot = document.getElementById('drawerUnsavedDot');
+            if (dot) dot.classList.add('visible');
+            const status = document.getElementById('drawerSaveStatus');
+            if (status) { status.textContent = 'Unsaved changes'; status.style.color = '#f59e0b'; }
+        }
+
+        function clearDrawerDirty() {
+            drawerDirty = false;
+            const btn = document.getElementById('drawerSaveBtn');
+            if (btn) btn.disabled = true;
+            const dot = document.getElementById('drawerUnsavedDot');
+            if (dot) dot.classList.remove('visible');
+            const status = document.getElementById('drawerSaveStatus');
+            if (status) { status.textContent = ''; }
+        }
+
         let savedIndicatorTimeout = null;
         function showSavedIndicator() {
             const el = document.getElementById('drawerSavedIndicator');
@@ -3398,82 +3459,91 @@
 
         function toggleDrawerDay(btn) {
             btn.classList.toggle('active');
-            drawerSettingChanged();
+            markDrawerDirty();
         }
 
-        async function drawerSettingChanged() {
-            const days = [];
-            document.querySelectorAll('#drawerDays .drawer-day-btn.active').forEach(btn => {
-                days.push(btn.dataset.day);
-            });
-
-            try {
-                await fetch('/api/settings', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        schedule_days: days.join(','),
-                        schedule_start_hour: document.getElementById('drawerStartHour').value,
-                        schedule_end_hour: document.getElementById('drawerEndHour').value,
-                        bank_mode: document.getElementById('drawerBankMode').value,
-                        schedule_concurrency: document.getElementById('drawerParallel').value,
-                        schedule_scope: 'all',
-                        min_temperature_c: String(storageTemp(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
-                        zip_code: document.getElementById('drawerZipCode').value,
-                        firmware_quarantine_days: document.getElementById('drawerQuarantineDays').value,
-                    }),
-                });
-                showSavedIndicator();
-                loadFleetStatus();
-            } catch (e) {}
-        }
-
-        async function toggleDrawerBeta() {
+        function toggleDrawerBeta() {
             const toggle = document.getElementById('drawerBetaToggle');
             const enabled = !toggle.classList.contains('active');
             toggle.classList.toggle('active', enabled);
             drawerBetaEnabled = enabled;
-            try {
-                await fetch('/api/settings', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ firmware_beta_enabled: enabled ? 'true' : 'false' }),
-                });
-                await fetch('/api/firmware-reselect', { method: 'POST' });
-                showSavedIndicator();
-            } catch (e) {}
-            drawerSettingsLoaded = false;
-            loadDrawerFirmware();
-            loadFleetStatus();
+            renderDrawerFirmware();
+            markDrawerDirty();
         }
 
-        async function toggleDrawerDowngrade() {
+        function toggleDrawerDowngrade() {
             const toggle = document.getElementById('drawerDowngradeToggle');
-            const enabled = !toggle.classList.contains('active');
-            toggle.classList.toggle('active', enabled);
-            try {
-                await fetch('/api/settings', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ allow_downgrade: enabled ? 'true' : 'false' }),
-                });
-                showSavedIndicator();
-                loadFleetStatus();
-            } catch (e) {}
+            toggle.classList.toggle('active');
+            markDrawerDirty();
         }
 
-        async function toggleDrawerWeather() {
+        function toggleDrawerWeather() {
             const toggle = document.getElementById('drawerWeatherToggle');
-            const enabled = !toggle.classList.contains('active');
-            toggle.classList.toggle('active', enabled);
+            toggle.classList.toggle('active');
+            markDrawerDirty();
+        }
+
+        // Attach change listeners to drawer inputs
+        document.addEventListener('DOMContentLoaded', () => {
+            ['drawerStartHour', 'drawerEndHour', 'drawerBankMode',
+             'drawerParallel', 'drawerMinTemp', 'drawerZipCode',
+             'drawerQuarantineDays'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', markDrawerDirty);
+            });
+        });
+
+        async function saveDrawerSettings() {
+            const btn = document.getElementById('drawerSaveBtn');
+            const status = document.getElementById('drawerSaveStatus');
+
+            if (btn) { btn.disabled = true; btn.classList.add('saving'); btn.textContent = 'Saving\u2026'; }
+            if (status) { status.textContent = ''; }
+
+            const days = [];
+            document.querySelectorAll('#drawerDays .drawer-day-btn.active').forEach(b => {
+                days.push(b.dataset.day);
+            });
+
+            const settings = {
+                schedule_days: days.join(','),
+                schedule_start_hour: document.getElementById('drawerStartHour').value,
+                schedule_end_hour: document.getElementById('drawerEndHour').value,
+                bank_mode: document.getElementById('drawerBankMode').value,
+                parallel_updates: document.getElementById('drawerParallel').value,
+                schedule_scope: 'all',
+                min_temperature_c: String(storageTemp(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
+                zip_code: document.getElementById('drawerZipCode').value,
+                firmware_quarantine_days: document.getElementById('drawerQuarantineDays').value,
+                firmware_beta_enabled: drawerBetaEnabled ? 'true' : 'false',
+                allow_downgrade: document.getElementById('drawerDowngradeToggle').classList.contains('active') ? 'true' : 'false',
+                weather_check_enabled: document.getElementById('drawerWeatherToggle').classList.contains('active') ? 'true' : 'false',
+            };
+
+            if (drawerFwSelected['tna-30x']) settings.selected_firmware_30x = drawerFwSelected['tna-30x'];
+            if (drawerFwSelected['tna-303l']) settings.selected_firmware_303l = drawerFwSelected['tna-303l'];
+            if (drawerFwSelected['tns-100']) settings.selected_firmware_tns100 = drawerFwSelected['tns-100'];
+
             try {
-                await fetch('/api/settings', {
-                    method: 'PUT',
+                const resp = await fetch('/api/settings/save', {
+                    method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ weather_check_enabled: enabled ? 'true' : 'false' }),
+                    body: JSON.stringify(settings),
                 });
+                if (!resp.ok) throw new Error('Save failed');
+
+                clearDrawerDirty();
                 showSavedIndicator();
-            } catch (e) {}
+                if (status) { status.textContent = 'Saved'; status.style.color = '#10b981'; }
+                if (btn) { btn.textContent = 'Save'; btn.classList.remove('saving'); }
+
+                drawerSettingsLoaded = false;
+                loadDrawerFirmware();
+                loadFleetStatus();
+            } catch (e) {
+                if (status) { status.textContent = 'Save failed'; status.style.color = '#dc2626'; }
+                if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = 'Save'; }
+            }
         }
 
         // ── Drawer Firmware ──
@@ -3601,23 +3671,11 @@
             renderFwMeta();
         }
 
-        async function selectDrawerFw(filename, type) {
+        function selectDrawerFw(filename, type) {
             if (type === 'unknown') return;
             drawerFwSelected[type] = filename;
             renderDrawerFirmware();
-            const data = {};
-            if (type === 'tna-30x') data.selected_firmware_30x = filename;
-            if (type === 'tna-303l') data.selected_firmware_303l = filename;
-            if (type === 'tns-100') data.selected_firmware_tns100 = filename;
-            try {
-                await fetch('/api/settings', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data),
-                });
-                showSavedIndicator();
-                loadFleetStatus();
-            } catch (e) {}
+            markDrawerDirty();
         }
 
         function renderFwMeta() {

@@ -1064,6 +1064,7 @@ _SETTINGS_WRITABLE = {
     "schedule_scope", "schedule_scope_data",
     "firmware_beta_enabled", "firmware_quarantine_days",
     "slack_webhook_url", "autoupdate_enabled",
+    "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
 }
 
 
@@ -1075,6 +1076,28 @@ async def update_settings(request: Request, session: dict = Depends(require_auth
     if not filtered:
         raise HTTPException(400, "No valid settings keys provided")
     db.set_settings(filtered)
+    return {"success": True}
+
+
+@app.post("/api/settings/save")
+async def save_settings_and_reevaluate(request: Request, session: dict = Depends(require_auth)):
+    """Save settings, re-select firmware, and force scheduler re-evaluation."""
+    data = await request.json()
+    filtered = {k: v for k, v in data.items() if k in _SETTINGS_WRITABLE}
+    if not filtered:
+        raise HTTPException(400, "No valid settings keys provided")
+
+    db.set_settings(filtered)
+
+    fetcher = get_fetcher()
+    if fetcher:
+        beta_enabled = db.get_setting("firmware_beta_enabled", "false") == "true"
+        fetcher.reselect(beta_enabled)
+
+    scheduler = get_scheduler()
+    if scheduler:
+        await scheduler.force_check()
+
     return {"success": True}
 
 
