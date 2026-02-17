@@ -70,7 +70,7 @@ def get_oidc_config() -> OIDCConfig:
     client_id = os.environ.get("OIDC_CLIENT_ID", "")
 
     return OIDCConfig(
-        enabled=bool(provider_url and client_id),
+        enabled=False,
         provider_url=provider_url,
         client_id=client_id,
         client_secret=os.environ.get("OIDC_CLIENT_SECRET", ""),
