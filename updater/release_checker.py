@@ -172,6 +172,19 @@ def _get_compose_dir() -> Optional[Path]:
     return None
 
 
+def _get_compose_cmd(compose_dir: Path) -> list[str]:
+    """Build the docker compose command with appropriate -f flags.
+
+    In standalone mode (docker-compose.standalone.yml is mounted), both
+    compose files must be specified so docker compose operates on all services.
+    """
+    cmd = ["docker", "compose", "-f", str(compose_dir / "docker-compose.yml")]
+    standalone = compose_dir / "docker-compose.standalone.yml"
+    if standalone.exists():
+        cmd.extend(["-f", str(standalone)])
+    return cmd
+
+
 def _is_safe_to_update() -> tuple[bool, str]:
     """Check if it's safe to update the app (not during maintenance or active rollout).
 
@@ -217,19 +230,6 @@ async def apply_update() -> dict:
             "blocked_reason": reason,
         }
 
-    if not _docker_socket_available():
-        # Return manual commands if socket not available
-        return {
-            "success": False,
-            "manual": True,
-            "message": "Docker socket not mounted. Run these commands manually:",
-            "commands": [
-                "cd /path/to/deployment",
-                "docker compose pull tachyon-mgmt",
-                "docker compose up -d tachyon-mgmt",
-            ],
-        }
-
     compose_dir = _get_compose_dir()
     if not compose_dir:
         return {
@@ -237,11 +237,27 @@ async def apply_update() -> dict:
             "message": "Could not find docker-compose.yml",
         }
 
+    compose_cmd = _get_compose_cmd(compose_dir)
+
+    if not _docker_socket_available():
+        # Return manual commands if socket not available
+        cmd_prefix = " ".join(compose_cmd)
+        return {
+            "success": False,
+            "manual": True,
+            "message": "Docker socket not mounted. Run these commands manually:",
+            "commands": [
+                f"cd {compose_dir}",
+                f"{cmd_prefix} pull tachyon-mgmt",
+                f"{cmd_prefix} up -d tachyon-mgmt",
+            ],
+        }
+
     try:
         # Pull latest image
         logger.info("Pulling latest Docker image...")
         pull_result = subprocess.run(
-            ["docker", "compose", "pull", "tachyon-mgmt"],
+            compose_cmd + ["pull", "tachyon-mgmt"],
             cwd=compose_dir,
             capture_output=True,
             text=True,
@@ -257,7 +273,7 @@ async def apply_update() -> dict:
         logger.info("Recreating container with new image...")
         # Use subprocess.Popen so we don't wait for it to complete
         subprocess.Popen(
-            ["docker", "compose", "up", "-d", "tachyon-mgmt"],
+            compose_cmd + ["up", "-d", "tachyon-mgmt"],
             cwd=compose_dir,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

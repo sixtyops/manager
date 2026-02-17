@@ -17,7 +17,7 @@ Required:
 curl -sSL https://raw.githubusercontent.com/isolson/firmware-updater/main/scripts/install.sh | sudo bash
 ```
 
-This installs Docker if needed, clones the repo to `/opt/tachyon`, builds and starts all services, and creates a systemd service for auto-start on boot.
+This installs Docker if needed, clones the repo to `/opt/tachyon`, builds and starts all services in standalone mode, and creates a systemd service for auto-start on boot.
 
 ### Manual install
 
@@ -27,7 +27,7 @@ cd firmware-updater
 ./deploy.sh
 ```
 
-`deploy.sh` creates the required directories, builds the Docker images, and starts all three services (nginx, certbot, app).
+`deploy.sh` creates the required directories, builds the Docker images, and starts all services in standalone mode (app + nginx + certbot).
 
 ## Initial Setup
 
@@ -69,27 +69,55 @@ Upload firmware files on the Firmware tab. The system auto-detects which device 
 
 <!-- screenshot: firmware upload screen -->
 
-## Docker Compose Services
+## Docker Compose Files
 
-The default `docker-compose.yml` runs three services:
+The project ships two compose files:
+
+| File | Purpose |
+|------|---------|
+| `docker-compose.yml` | Base: just the app on port 8000. Use behind your own reverse proxy. |
+| `docker-compose.standalone.yml` | Overlay: adds nginx (80/443) and certbot. Use for standalone deployments. |
+
+### Behind your own proxy (base only)
+
+```bash
+docker compose up -d --build
+```
+
+Starts only the application container on port 8000. You provide your own reverse proxy and TLS termination.
+
+### Standalone mode (bundled nginx + Let's Encrypt)
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.standalone.yml up -d --build
+```
+
+Starts three services:
 
 | Service | Image | Purpose |
 |---------|-------|---------|
+| `tachyon-mgmt` | Built from `Dockerfile` | The application (FastAPI on port 8000) |
 | `nginx` | `nginx:alpine` | Reverse proxy, HTTPS termination, WebSocket upgrade |
 | `certbot` | `certbot/certbot` | Let's Encrypt certificate auto-renewal (every 12h) |
-| `tachyon-mgmt` | Built from `Dockerfile` | The application (FastAPI on port 8000) |
 
-Nginx listens on ports 80 and 443. The app container only exposes port 8000 internally to nginx — it is not directly accessible from outside.
+`install.sh` and `deploy.sh` use standalone mode by default.
 
 ## Volumes & Data
 
-All host paths (left side of `:`) can be changed to suit your setup. For example, use `/srv/tachyon/data` instead of `./data` if you prefer a different location.
+All host paths (left side of `:`) can be changed to suit your setup.
+
+### All modes
 
 | Host path | Container path | Contents |
 |-----------|---------------|----------|
 | `./firmware` | `/app/firmware` | Uploaded firmware files |
 | `./data` | `/app/data` | SQLite database (`updater.db`) |
 | `./backups` | `/app/backups` | Git backup repository |
+
+### Standalone mode (additional volumes)
+
+| Host path | Container path | Contents |
+|-----------|---------------|----------|
 | `./nginx/conf.d` | `/etc/nginx/conf.d` (nginx) and `/app/nginx-conf` (app) | Nginx site config |
 | `./nginx/ssl` | `/etc/nginx/ssl` | Self-signed certificate (initial boot) |
 | `./certbot/www` | `/var/www/certbot` | ACME challenge files |
@@ -122,9 +150,9 @@ python -c "from passlib.hash import bcrypt; print(bcrypt.hash('yourpassword'))"
 
 ## Reverse Proxy
 
-### Bundled nginx (default)
+### Standalone nginx (bundled)
 
-The included nginx container handles everything out of the box:
+In standalone mode, the included nginx container handles everything out of the box:
 - HTTP → HTTPS redirect
 - TLS 1.2/1.3 with strong ciphers
 - WebSocket upgrade at `/ws`
@@ -132,35 +160,17 @@ The included nginx container handles everything out of the box:
 - Security headers (X-Frame-Options, X-Content-Type-Options, etc.)
 - Let's Encrypt ACME challenge passthrough
 
-No additional configuration is needed for the default setup.
+No additional configuration is needed.
 
 ### Using your own reverse proxy
 
-If you already run a reverse proxy (Caddy, Traefik, another nginx, etc.), you can remove the bundled nginx and certbot services and expose the app directly.
+Use the base `docker-compose.yml` without the standalone overlay:
 
-**1. Modify `docker-compose.yml`:**
-
-Remove or comment out the `nginx` and `certbot` services. Expose port 8000 on `tachyon-mgmt`:
-
-```yaml
-services:
-  tachyon-mgmt:
-    build: .
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./firmware:/app/firmware
-      - ./data:/app/data
-      - ./backups:/app/backups
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./docker-compose.yml:/app/docker-compose.yml:ro
-    environment:
-      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
-    restart: unless-stopped
+```bash
+docker compose up -d --build
 ```
 
-**2. Configure your proxy** with these requirements:
+The app listens on `localhost:8000`. Configure your proxy to forward to it with these requirements:
 
 | Requirement | Value | Why |
 |-------------|-------|-----|
@@ -179,7 +189,7 @@ tachyon.example.com {
 
 Caddy handles WebSocket upgrade, large uploads, and HTTPS certificates automatically.
 
-**nginx example** (standalone):
+**nginx example**:
 
 ```nginx
 server {
@@ -216,33 +226,18 @@ server {
 
 ### No reverse proxy (direct port access)
 
-For testing, internal networks, or environments where TLS is handled elsewhere (e.g., a VPN), you can run the app container alone and access it directly over HTTP.
+For testing or internal networks where TLS is handled elsewhere (e.g., a VPN), use the base compose file and access the app directly over HTTP:
 
-Use the same simplified `docker-compose.yml` from the section above, and map to any host port you want:
-
-```yaml
-services:
-  tachyon-mgmt:
-    build: .
-    ports:
-      - "9090:8000"    # access on http://your-server:9090
-    volumes:
-      - ./firmware:/app/firmware
-      - ./data:/app/data
-      - ./backups:/app/backups
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./docker-compose.yml:/app/docker-compose.yml:ro
-    environment:
-      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
-    restart: unless-stopped
+```bash
+docker compose up -d --build
+# Access on http://your-server:8000
 ```
 
 This works but has no TLS — traffic including login credentials is sent in plaintext. A reverse proxy with HTTPS is recommended for any production or internet-facing deployment.
 
 ## SSL/TLS
 
-On first boot, the nginx entrypoint generates a self-signed certificate so HTTPS works immediately. When you configure Let's Encrypt through the setup wizard (or the SSL setup page), certbot requests a real certificate and the nginx config is updated automatically.
+In standalone mode, the nginx entrypoint generates a self-signed certificate on first boot so HTTPS works immediately. When you configure Let's Encrypt through the setup wizard (or the SSL setup page), certbot requests a real certificate and the nginx config is updated automatically.
 
 The certbot container checks for renewal every 12 hours. Certificates renew automatically before expiry.
 
@@ -321,13 +316,15 @@ The system will **not** apply updates when:
 
 ### Docker requirements
 
-For automatic updates, the container needs access to the Docker socket and compose file:
+For automatic updates, the container needs access to the Docker socket and compose file(s):
 
 ```yaml
 volumes:
   - /var/run/docker.sock:/var/run/docker.sock
   - ./docker-compose.yml:/app/docker-compose.yml:ro
 ```
+
+In standalone mode, the overlay also mounts `docker-compose.standalone.yml`. The auto-updater detects this file and includes it automatically when running `docker compose up`.
 
 If the Docker socket is not mounted, the API returns manual commands to run on the host instead.
 

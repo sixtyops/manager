@@ -1,11 +1,13 @@
 #!/bin/bash
-# Local deployment for Tachyon Management System
+# Local deployment for Tachyon Management System (standalone mode)
 # Usage: ./deploy.sh (after cloning the repo)
 #
 # For fresh server install, use:
 #   curl -sSL https://raw.githubusercontent.com/isolson/firmware-updater/main/scripts/install.sh | sudo bash
 
 set -e
+
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.standalone.yml"
 
 echo "=========================================="
 echo "  Tachyon Management System - Deploy"
@@ -31,7 +33,7 @@ mkdir -p firmware data nginx/ssl nginx/conf.d certbot/www certbot/conf backups
 
 # Build and start
 echo "Building and starting services..."
-docker compose up -d --build
+$COMPOSE up -d --build
 
 # Wait for health check
 echo
@@ -39,7 +41,7 @@ echo "Waiting for services to start..."
 sleep 5
 
 # Check if running
-if docker compose ps | grep -q "healthy"; then
+if $COMPOSE ps | grep -q "healthy"; then
     echo
     echo "=========================================="
     echo "  Deployment successful!"
@@ -57,6 +59,6 @@ if docker compose ps | grep -q "healthy"; then
 else
     echo
     echo "Services are starting... check status with:"
-    echo "  docker compose ps"
-    echo "  docker compose logs -f"
+    echo "  $COMPOSE ps"
+    echo "  $COMPOSE logs -f"
 fi
