@@ -65,6 +65,27 @@ class TestSettingsAPI:
         resp = authed_client.get("/api/settings")
         assert resp.json()["settings"]["schedule_enabled"] == "true"
 
+    def test_save_settings_and_reevaluate(self, authed_client):
+        resp = authed_client.post("/api/settings/save", json={
+            "schedule_days": "mon,wed,fri",
+            "schedule_start_hour": "2",
+            "schedule_end_hour": "5",
+            "parallel_updates": "4",
+        })
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        # Verify settings persisted
+        resp = authed_client.get("/api/settings")
+        s = resp.json()["settings"]
+        assert s["schedule_days"] == "mon,wed,fri"
+        assert s["parallel_updates"] == "4"
+
+    def test_save_settings_rejects_invalid_keys(self, authed_client):
+        resp = authed_client.post("/api/settings/save", json={
+            "admin_password_hash": "malicious",
+        })
+        assert resp.status_code == 400
+
 
 class TestTopologyAPI:
     def test_get_topology(self, authed_client):
