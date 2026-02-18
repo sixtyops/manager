@@ -31,3 +31,22 @@ services:
     mem_limit: 512m
     cpus: "1.0"
     restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: tachyon-nginx
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl
+      - ./nginx/entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    depends_on:
+      tachyon-mgmt:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
