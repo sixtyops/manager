@@ -12,6 +12,10 @@ Managing firmware updates across dozens or hundreds of Tachyon APs is time-consu
 
 This tool automates the entire process with built-in safety checks and gradual rollouts.
 
+![Dashboard — device table with signal health and update status](docs/screenshots/dashboard.png)
+
+![Auto-update configuration — schedule, firmware, and rollout settings](docs/screenshots/auto-update-config.png)
+
 ## Safety Mechanisms
 
 The scheduler includes several safety checks:
