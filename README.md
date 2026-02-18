@@ -130,6 +130,11 @@ Key endpoints for automation/monitoring:
 
 Full API docs: [docs/api.md](docs/api.md)
 
+## Roadmap
+
+- **Pre-update device config backup** — Pull and store AP/CPE configuration (SSIDs, channels, IP addressing, etc.) before firmware updates. The git backup system currently backs up the management database and device inventory, but not the operational configs on each device. This would enable automatic restore if a firmware update resets device settings to defaults.
+- **Git backup restore** — Add a restore flow (API + UI) to pull the latest backup from the configured git remote and replace the local database. Currently restore is a manual process (clone repo, copy `tachyon.db`, restart app).
+
 ## For Developers
 
 ```bash

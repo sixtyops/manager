@@ -13,18 +13,20 @@ Charlotte is a FastAPI application with an async-first architecture. The backend
 ┌──────────────▼──────────────────────┐
 │       FastAPI App (app.py)          │
 │  REST API │ WebSocket │ Templates   │
-└──────┬───────┬───────┬──────────────┘
-       │       │       │
-┌──────▼──┐ ┌──▼────┐ ┌▼───────────┐
-│Scheduler│ │Poller │ │TachyonClient│
-│scheduler│ │poller │ │tachyon.py   │
-│  .py    │ │ .py   │ │             │
-└────┬────┘ └───┬───┘ └──────┬──────┘
-     │          │             │
-┌────▼──────────▼─────┐      │ HTTPS/curl
-│  SQLite (database.py)│      │
-└──────────────────────┘      ▼
-                         Network Devices
+└──┬────┬───────┬───────┬─────┬───────┘
+   │    │       │       │     │
+┌──▼──┐ │ ┌────▼───┐ ┌─▼───┐ ┌▼───────────┐
+│Tele-│ │ │Schedul-│ │Poll-│ │TachyonClient│
+│metry│ │ │er      │ │er   │ │tachyon.py   │
+└──┬──┘ │ └───┬────┘ └──┬──┘ └──────┬──────┘
+   │    │     │          │           │
+   ▼    ▼     │          │           │ HTTPS/curl
+ AWS  Slack   │          │           │
+Lambda Webhook│          │           │
+       ┌──────▼──────────▼─────┐     │
+       │  SQLite (database.py) │     │
+       └───────────────────────┘     ▼
+                                Network Devices
 ```
 
 ## Modules
@@ -82,6 +84,20 @@ Pydantic models for API validation: `Device`, `CPEInfo`, `APWithCPEs`, `NetworkT
 ### `services.py` - External Integrations
 
 Helpers for IP geolocation, weather forecasts (weather.gov), timezone detection, and NTP time validation.
+
+### `telemetry.py` - Anonymous Usage Telemetry
+
+Sends anonymized job statistics to an AWS Lambda endpoint after each update job completes. Runs as a fire-and-forget background task that never blocks the main flow.
+
+**What is sent:** event type, timestamp, anonymous install ID (hashed), device counts (success/failed/skipped/cancelled), success rate, duration, bank mode, scheduled vs manual, device model distribution, categorized error counts (timeout, connection, auth, upload, install, reboot, verification), and per-role (AP/CPE/switch) breakdowns.
+
+**What is never sent:** IP addresses, MAC addresses, hostnames, credentials, location, or raw error messages.
+
+**Disabling telemetry:** Set the `DISABLE_TELEMETRY=1` environment variable (e.g., in `docker-compose.yml`), then restart the app.
+
+### `slack.py` - Slack Notifications
+
+Sends rich webhook notifications on job completion with success/failure counts, failed device details, rollout phase progress, and next scheduled job info. Configured via `slack_webhook_url` in settings.
 
 ## Key Design Decisions
 
