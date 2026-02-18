@@ -9,8 +9,11 @@ if [ -S /var/run/docker.sock ]; then
     usermod -aG "$SOCK_GROUP" appuser 2>/dev/null || true
 fi
 
-# Mark bind-mounted repo as safe for git (owner mismatch between host and container)
+# Fix bind-mounted repo permissions for self-update
+# Host-side git operations (run as root) leave root-owned files in .git/
+# that appuser can't overwrite. Fix on every startup.
 if [ -d /app/repo/.git ]; then
+    chown -R 1500:1500 /app/repo/.git
     git config --global --add safe.directory /app/repo
 fi
 
