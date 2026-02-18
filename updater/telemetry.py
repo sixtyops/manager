@@ -39,7 +39,10 @@ WHAT IS NEVER SENT:
 --------------------------------------------------------------------------------
 HOW TO DISABLE TELEMETRY:
 --------------------------------------------------------------------------------
-Set TELEMETRY_ENABLED = False below (around line 60), then restart the app.
+Set the DISABLE_TELEMETRY environment variable, then restart the app.
+In docker-compose.yml, add under the tachyon-mgmt service:
+  environment:
+    - DISABLE_TELEMETRY=1
 
 --------------------------------------------------------------------------------
 WHY WE COLLECT THIS:
@@ -55,6 +58,7 @@ WHY WE COLLECT THIS:
 import asyncio
 import hashlib
 import logging
+import os
 from collections import Counter
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -64,12 +68,12 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 # AWS Lambda endpoint for telemetry
-# Set this environment variable or update this URL to your Lambda function URL
-TELEMETRY_ENDPOINT = None  # e.g., "https://xxxxxxxxxx.lambda-url.us-east-1.on.aws/telemetry"
+TELEMETRY_ENDPOINT = "https://yv7ychij6cpafomyrxy627o7iu0phbdx.lambda-url.us-east-1.on.aws/"
 
-# Telemetry is enabled by default. Set to False to disable.
+# Telemetry is enabled by default. To disable, set the DISABLE_TELEMETRY
+# environment variable (e.g., DISABLE_TELEMETRY=1 in docker-compose.yml).
 # See the TELEMETRY DISCLOSURE above for details on what is sent.
-TELEMETRY_ENABLED = True
+TELEMETRY_ENABLED = os.environ.get("DISABLE_TELEMETRY", "").lower() not in ("1", "true", "yes")
 
 
 def _generate_anonymous_install_id() -> str:
