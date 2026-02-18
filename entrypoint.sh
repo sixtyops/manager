@@ -9,4 +9,9 @@ if [ -S /var/run/docker.sock ]; then
     usermod -aG "$SOCK_GROUP" appuser 2>/dev/null || true
 fi
 
+# Mark bind-mounted repo as safe for git (owner mismatch between host and container)
+if [ -d /app/repo/.git ]; then
+    git config --global --add safe.directory /app/repo
+fi
+
 exec gosu appuser "$@"
