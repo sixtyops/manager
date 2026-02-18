@@ -77,15 +77,15 @@ cd firmware-updater
 
 Access at `https://localhost` (accept self-signed certificate).
 
-### Without Bundled Nginx
+### Behind Your Own Reverse Proxy
 
-To run behind your own reverse proxy, or access the admin directly on port 8000:
+To run behind your own reverse proxy:
 
 ```bash
 docker compose up -d --build
 ```
 
-This starts just the app on port 8000 — no bundled nginx or certbot.
+The app listens on port 8000. The bundled nginx is included but has no published ports — your proxy forwards directly to `localhost:8000`. To expose nginx on custom ports instead (e.g., for the built-in SSL management), add a `docker-compose.override.yml`.
 
 See [docs/deployment.md](docs/deployment.md) for full deployment options.
 

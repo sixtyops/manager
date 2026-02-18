@@ -78,13 +78,25 @@ The project ships two compose files:
 | `docker-compose.yml` | Base: just the app on port 8000. Use behind your own reverse proxy. |
 | `docker-compose.standalone.yml` | Overlay: adds nginx (80/443) and certbot. Use for standalone deployments. |
 
-### Behind your own proxy (base only)
+### Behind your own proxy
 
 ```bash
 docker compose up -d --build
 ```
 
-Starts only the application container on port 8000. You provide your own reverse proxy and TLS termination.
+Starts the application on port 8000 and the bundled nginx (with no published ports). Your reverse proxy forwards to `localhost:8000` and handles TLS.
+
+If you prefer to route through the bundled nginx on custom ports (e.g., so the app's SSL management UI still works), create a `docker-compose.override.yml`:
+
+```yaml
+services:
+  nginx:
+    ports:
+      - "8443:443"
+      - "8080:80"
+```
+
+Then `docker compose up -d --build` exposes nginx on those ports. Your external proxy forwards to `localhost:8443` instead of `localhost:8000`.
 
 ### Standalone mode (bundled nginx + Let's Encrypt)
 
