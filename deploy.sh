@@ -31,6 +31,17 @@ fi
 echo "Creating directories..."
 mkdir -p firmware data nginx/ssl nginx/conf.d certbot/www certbot/conf backups
 
+# Set ownership to match container's appuser (UID/GID 1500)
+# Docker bind mounts use host-side permissions, so these must be writable by appuser
+if [ "$(id -u)" -eq 0 ]; then
+    chown 1500:1500 data firmware backups nginx/conf.d
+    chmod 700 data
+    chmod 755 firmware backups nginx/conf.d
+else
+    echo "Note: Not running as root. If the container cannot write to ./data, run:"
+    echo "  sudo chown 1500:1500 data firmware backups nginx/conf.d"
+fi
+
 # Build and start
 echo "Building and starting services..."
 $COMPOSE up -d --build

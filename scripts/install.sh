@@ -56,7 +56,13 @@ else
 fi
 
 # Create directories
-mkdir -p firmware data nginx/ssl certbot/www certbot/conf backups
+mkdir -p firmware data nginx/ssl nginx/conf.d certbot/www certbot/conf backups
+
+# Set ownership to match container's appuser (UID/GID 1500)
+# Docker bind mounts use host-side permissions, so these must be writable by appuser
+chown 1500:1500 data firmware backups nginx/conf.d
+chmod 700 data
+chmod 755 firmware backups nginx/conf.d
 
 # Build and start
 echo "Building and starting services..."

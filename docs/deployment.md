@@ -111,7 +111,7 @@ All host paths (left side of `:`) can be changed to suit your setup.
 | Host path | Container path | Contents |
 |-----------|---------------|----------|
 | `./firmware` | `/app/firmware` | Uploaded firmware files |
-| `./data` | `/app/data` | SQLite database (`updater.db`) |
+| `./data` | `/app/data` | SQLite database (`tachyon.db`) |
 | `./backups` | `/app/backups` | Git backup repository |
 
 ### Standalone mode (additional volumes)
@@ -122,6 +122,13 @@ All host paths (left side of `:`) can be changed to suit your setup.
 | `./nginx/ssl` | `/etc/nginx/ssl` | Self-signed certificate (initial boot) |
 | `./certbot/www` | `/var/www/certbot` | ACME challenge files |
 | `./certbot/conf` | `/etc/letsencrypt` | Let's Encrypt certificates |
+
+The application container runs as `appuser` (UID/GID 1500). Docker bind mounts use host-side permissions, so these directories must be owned by UID 1500 for the container to write to them. The install and deploy scripts handle this automatically. If you create directories manually:
+
+```bash
+sudo chown 1500:1500 data firmware backups nginx/conf.d
+sudo chmod 700 data
+```
 
 Back up `./data` and `./firmware` to preserve your database, device inventory, and firmware files.
 
@@ -283,7 +290,7 @@ uvicorn updater.app:app --reload --port 8000
 
 ## Database
 
-SQLite. The database file (`updater.db`) is created automatically on first run in the working directory (or `/app/data/` in Docker).
+SQLite. The database file (`tachyon.db`) is created automatically on first run in the working directory (or `/app/data/` in Docker).
 
 Schema migrations run automatically on startup. No manual database setup is required.
 
