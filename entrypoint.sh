@@ -10,10 +10,10 @@ if [ -S /var/run/docker.sock ]; then
 fi
 
 # Fix bind-mounted repo permissions for self-update
-# Host-side git operations (run as root) leave root-owned files in .git/
-# that appuser can't overwrite. Fix on every startup.
+# Host-side git operations (run as root) leave root-owned files that
+# appuser can't overwrite. Chown the entire repo so git checkout works.
 if [ -d /app/repo/.git ]; then
-    chown -R 1500:1500 /app/repo/.git
+    chown -R 1500:1500 /app/repo
     git config --global --add safe.directory /app/repo
 fi
 
