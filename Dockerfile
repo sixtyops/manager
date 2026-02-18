@@ -10,8 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN useradd -r -s /bin/false appuser
+# Create non-root user with fixed UID/GID so host-side scripts can set matching ownership on bind-mounted dirs
+RUN groupadd -r -g 1500 appuser && useradd -r -u 1500 -g 1500 -s /bin/false appuser
 
 # Install Python dependencies
 COPY requirements.txt .
