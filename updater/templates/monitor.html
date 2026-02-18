@@ -2696,7 +2696,7 @@
                 }
             }
 
-            if (!confirm(`Update ${targetName}${targetDetail}?\n\nThis will flash firmware and reboot the device(s).`)) {
+            if (!confirm(`Update ${targetName}${targetDetail}?\n\nThis will immediately flash firmware and reboot the device(s).`)) {
                 return;
             }
 
@@ -3057,15 +3057,22 @@
             }
         }
 
-        function toggleAppAutoUpdate() {
+        async function toggleAppAutoUpdate() {
             const toggle = document.getElementById('appAutoUpdateToggle');
             toggle.classList.toggle('active');
             const enabled = toggle.classList.contains('active') ? 'true' : 'false';
-            fetch('/api/settings', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ autoupdate_enabled: enabled }),
-            });
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ autoupdate_enabled: enabled }),
+                });
+                const statusEl = document.getElementById('appUpdateStatus');
+                if (statusEl) {
+                    statusEl.textContent = 'Saved';
+                    setTimeout(() => loadAppUpdateStatus(), 1500);
+                }
+            } catch (e) {}
         }
 
         async function checkAppUpdate() {

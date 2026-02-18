@@ -303,7 +303,7 @@ def init_db():
             # Setup wizard tracking
             "setup_wizard_completed": "false",
             # Auto-update configuration
-            "autoupdate_enabled": "false",
+            "autoupdate_enabled": "true",
             "autoupdate_last_check": "",
             "autoupdate_available_version": "",
             "autoupdate_release_url": "",
