@@ -3098,8 +3098,11 @@
                 if (result.success) {
                     statusEl.textContent = 'Update applied! Restarting...';
                     setTimeout(() => location.reload(), 5000);
+                } else if (result.manual && result.commands) {
+                    statusEl.innerHTML = result.message + '<br><code style="display:block;margin-top:8px;padding:8px;background:#1f2937;color:#e5e7eb;border-radius:4px;font-size:0.75rem;white-space:pre;">' +
+                        result.commands.join('\n') + '</code>';
                 } else {
-                    statusEl.textContent = 'Update failed: ' + (result.error || 'Unknown error');
+                    statusEl.textContent = 'Update failed: ' + (result.message || result.error || 'Unknown error');
                 }
             } catch (error) {
                 statusEl.textContent = 'Update failed';

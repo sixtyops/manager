@@ -25,7 +25,7 @@ from . import database as db
 from .poller import init_poller, get_poller
 from .scheduler import init_scheduler, get_scheduler
 from .firmware_fetcher import init_fetcher, get_fetcher
-from .release_checker import init_checker, get_checker, apply_update
+from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
 from . import services
 from .auth import require_auth, require_auth_ws, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup
 from .backup import build_csv_export, process_csv_import
@@ -192,6 +192,7 @@ async def lifespan(app: FastAPI):
     await fetcher.start()
     checker = init_checker(broadcast)
     await checker.start()
+    await verify_update_on_startup(broadcast)
     cleanup_task = asyncio.create_task(_periodic_cleanup())
     backup_task = asyncio.create_task(_backup_scheduler())
     logger.info("Application started")

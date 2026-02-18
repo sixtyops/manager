@@ -13,6 +13,8 @@ services:
       - ./backups:/app/backups
       # Docker socket for self-update capability
       - /var/run/docker.sock:/var/run/docker.sock
+      # Mount repo root for self-update (git pull + docker compose build)
+      - .:/app/repo
       # Mount compose file(s) for self-update (read-only)
       - ./docker-compose.yml:/app/docker-compose.yml:ro
     environment:

@@ -64,6 +64,10 @@ chown 1500:1500 data firmware backups nginx/conf.d
 chmod 700 data
 chmod 755 firmware backups nginx/conf.d
 
+# Make repo writable by appuser for self-update (git pull from inside container)
+chown -R 1500:1500 .git
+chmod -R u+w .git
+
 # Build and start
 echo "Building and starting services..."
 $COMPOSE up -d --build
