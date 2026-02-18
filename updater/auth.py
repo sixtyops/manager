@@ -1,5 +1,6 @@
 """Authentication module: local + OIDC SSO, session management."""
 
+import hmac
 import logging
 import os
 import uuid
@@ -44,7 +45,7 @@ def authenticate_local(username: str, password: str) -> bool:
     if admin_pass.startswith("$2b$") or admin_pass.startswith("$2a$"):
         return _bcrypt.checkpw(password.encode(), admin_pass.encode())
 
-    return password == admin_pass
+    return hmac.compare_digest(password, admin_pass)
 
 
 def is_setup_required() -> bool:

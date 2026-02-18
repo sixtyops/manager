@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unofficial Tachyon Networks Bulk Updater</title>
+    <title>Unofficial Tachyon Networks Auto Updater</title>
     <link rel="icon" type="image/png" href="/static/favicon.png">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -1369,7 +1369,7 @@
 </head>
 <body>
     <div class="header">
-        <h1>Unofficial Tachyon Networks Bulk Updater</h1>
+        <h1>Unofficial Tachyon Networks Auto Updater</h1>
         <div class="header-right">
             <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:#9ca3af;"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:#6b7280;"></span></span>
             <div class="user-menu">
@@ -3098,8 +3098,11 @@
                 if (result.success) {
                     statusEl.textContent = 'Update applied! Restarting...';
                     setTimeout(() => location.reload(), 5000);
+                } else if (result.manual && result.commands) {
+                    statusEl.innerHTML = result.message + '<br><code style="display:block;margin-top:8px;padding:8px;background:#1f2937;color:#e5e7eb;border-radius:4px;font-size:0.75rem;white-space:pre;">' +
+                        result.commands.join('\n') + '</code>';
                 } else {
-                    statusEl.textContent = 'Update failed: ' + (result.error || 'Unknown error');
+                    statusEl.textContent = 'Update failed: ' + (result.message || result.error || 'Unknown error');
                 }
             } catch (error) {
                 statusEl.textContent = 'Update failed';

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import shlex
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -98,14 +99,13 @@ class ReleaseChecker:
             result["release_url"] = data.get("html_url", "")
             result["release_notes"] = data.get("body", "")[:500]  # Truncate long notes
 
-            # Compare versions
+            # Compare versions (only flag upgrades, never downgrades)
             try:
                 if version.parse(latest) > version.parse(current):
                     result["update_available"] = True
             except Exception:
-                # Fallback to string comparison
-                if latest != current:
-                    result["update_available"] = True
+                logger.warning(f"Could not parse versions: current={current}, latest={latest}")
+                # Don't flag update if we can't reliably compare
 
             # Store in database
             db.set_setting("autoupdate_last_check", datetime.now().isoformat())
@@ -216,8 +216,206 @@ def _is_safe_to_update() -> tuple[bool, str]:
     return True, ""
 
 
+def _get_repo_dir() -> Optional[Path]:
+    """Find the git repository root on the host (bind-mounted into the container)."""
+    candidates = [
+        Path("/app/repo"),   # Explicit mount for self-update
+        Path("/opt/tachyon"),  # Default install location (install.sh)
+    ]
+    for path in candidates:
+        if (path / ".git").exists():
+            return path
+    return None
+
+
+def _get_host_repo_path() -> Optional[str]:
+    """Discover the host-side path of the /app/repo bind mount."""
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "tachyon-management",
+             "--format",
+             "{{range .Mounts}}{{if eq .Destination \"/app/repo\"}}{{.Source}}{{end}}{{end}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        path = result.stdout.strip()
+        return path if path else None
+    except Exception:
+        return None
+
+
+def _build_watchdog_script(
+    host_repo_dir: str,
+    rollback_ref: str,
+    has_standalone: bool,
+) -> str:
+    """Build the shell script that the watchdog container runs.
+
+    The watchdog: builds the new image, tags the old image for rollback,
+    swaps the container, monitors health, and rolls back on failure.
+    """
+    compose_cmd = f"docker compose -f {host_repo_dir}/docker-compose.yml"
+    if has_standalone:
+        compose_cmd += f" -f {host_repo_dir}/docker-compose.standalone.yml"
+
+    # Use .replace() instead of f-string to avoid escaping {{ }} for docker --format
+    return """#!/bin/sh
+# Tachyon update watchdog — build, swap, monitor health, rollback on failure
+set -e
+
+CONTAINER="tachyon-management"
+REPO="__REPO__"
+ROLLBACK_REF="__ROLLBACK_REF__"
+COMPOSE="__COMPOSE_CMD__"
+
+echo "[watchdog] Starting update build..."
+
+# Build new image (current container keeps running)
+cd "$REPO"
+$COMPOSE build tachyon-mgmt
+if [ $? -ne 0 ]; then
+    echo "[watchdog] Build failed. Reverting git checkout..."
+    apk add --no-cache git > /dev/null 2>&1
+    git config --global --add safe.directory "$REPO"
+    git -C "$REPO" checkout "$ROLLBACK_REF"
+    echo "[watchdog] Reverted to $ROLLBACK_REF. No container swap performed."
+    exit 1
+fi
+
+# Tag current image for rollback before swapping
+IMAGE=$(docker inspect --format='{{.Config.Image}}' "$CONTAINER" 2>/dev/null || echo "")
+if [ -n "$IMAGE" ]; then
+    ROLLBACK_IMAGE="${IMAGE%%:*}:rollback"
+    docker tag "$IMAGE" "$ROLLBACK_IMAGE"
+    echo "[watchdog] Tagged $IMAGE as $ROLLBACK_IMAGE"
+fi
+
+# Swap to new container
+echo "[watchdog] Swapping to new container..."
+$COMPOSE up -d tachyon-mgmt
+
+# Monitor health (90 seconds: 18 checks x 5s)
+echo "[watchdog] Monitoring health..."
+HEALTHY=false
+for i in $(seq 1 18); do
+    sleep 5
+    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo "not_found")
+    case "$STATUS" in
+        healthy)
+            echo "[watchdog] Health check passed on attempt $i"
+            HEALTHY=true
+            break
+            ;;
+        *)
+            echo "[watchdog] Health check $i/18: $STATUS"
+            ;;
+    esac
+done
+
+if [ "$HEALTHY" = "true" ]; then
+    echo "[watchdog] Update successful!"
+    # Clean up rollback image
+    if [ -n "$ROLLBACK_IMAGE" ]; then
+        docker rmi "$ROLLBACK_IMAGE" 2>/dev/null || true
+    fi
+    rm -f "$REPO/.update-watchdog.sh"
+    exit 0
+fi
+
+# ----- Health check failed — roll back -----
+echo "[watchdog] Health check failed after 90s. Rolling back..."
+
+# Install git for rollback
+apk add --no-cache git > /dev/null 2>&1
+git config --global --add safe.directory "$REPO"
+
+# Revert source to previous ref
+git -C "$REPO" checkout "$ROLLBACK_REF"
+
+# Re-tag rollback image as current so compose uses it without rebuilding
+if [ -n "$ROLLBACK_IMAGE" ] && [ -n "$IMAGE" ]; then
+    docker tag "$ROLLBACK_IMAGE" "$IMAGE"
+fi
+
+# Restart from old image (--no-build since we re-tagged it)
+$COMPOSE up -d --no-build tachyon-mgmt
+
+echo "[watchdog] Rollback initiated. Monitoring recovery..."
+for i in $(seq 1 12); do
+    sleep 5
+    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo "not_found")
+    if [ "$STATUS" = "healthy" ]; then
+        echo "[watchdog] Rollback successful."
+        docker rmi "$ROLLBACK_IMAGE" 2>/dev/null || true
+        rm -f "$REPO/.update-watchdog.sh"
+        exit 1
+    fi
+done
+
+echo "[watchdog] WARNING: Rollback also failed health check."
+rm -f "$REPO/.update-watchdog.sh"
+exit 1
+""".replace("__REPO__", host_repo_dir) \
+   .replace("__ROLLBACK_REF__", rollback_ref) \
+   .replace("__COMPOSE_CMD__", compose_cmd)
+
+
+def _launch_watchdog(
+    repo_dir: Path,
+    host_repo_dir: str,
+    rollback_ref: str,
+    has_standalone: bool,
+) -> bool:
+    """Write the watchdog script and launch it in a detached docker:cli container.
+
+    Returns True if the watchdog was launched successfully.
+    """
+    try:
+        # Remove any leftover watchdog container from a previous attempt
+        subprocess.run(
+            ["docker", "rm", "-f", "tachyon-update-watchdog"],
+            capture_output=True, timeout=10,
+        )
+
+        # Write watchdog script to the repo dir (persists on host via bind mount)
+        script = _build_watchdog_script(host_repo_dir, rollback_ref, has_standalone)
+        watchdog_path = repo_dir / ".update-watchdog.sh"
+        watchdog_path.write_text(script)
+        watchdog_path.chmod(0o755)
+
+        host_script = f"{host_repo_dir}/.update-watchdog.sh"
+
+        # Launch watchdog in a detached container that survives our restart.
+        # docker:cli is Alpine-based with docker CLI + compose plugin.
+        result = subprocess.run(
+            [
+                "docker", "run", "--rm", "-d",
+                "--name", "tachyon-update-watchdog",
+                "-v", "/var/run/docker.sock:/var/run/docker.sock",
+                "-v", f"{host_repo_dir}:{host_repo_dir}",
+                "-w", host_repo_dir,
+                "docker:cli",
+                "sh", host_script,
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        if result.returncode == 0:
+            logger.info(f"Update watchdog launched: {result.stdout.strip()[:12]}")
+            return True
+        else:
+            logger.error(f"Failed to launch watchdog: {result.stderr}")
+            return False
+
+    except Exception as e:
+        logger.error(f"Failed to launch watchdog: {e}")
+        return False
+
+
 async def apply_update() -> dict:
-    """Pull latest Docker image and recreate container.
+    """Fetch the target release tag and launch the update watchdog.
+
+    The watchdog (a detached docker:cli container) handles: build, image tagging,
+    container swap, health monitoring, and automatic rollback on failure.
 
     Returns dict with 'success', 'message', and optionally 'commands'.
     """
@@ -230,58 +428,134 @@ async def apply_update() -> dict:
             "blocked_reason": reason,
         }
 
-    compose_dir = _get_compose_dir()
-    if not compose_dir:
+    # Determine which version we're updating to
+    target_version = db.get_setting("autoupdate_available_version", "")
+    if not target_version:
         return {
             "success": False,
-            "message": "Could not find docker-compose.yml",
+            "message": "No update version available. Run a check first.",
         }
 
-    compose_cmd = _get_compose_cmd(compose_dir)
+    target_tag = f"v{target_version}"
+    repo_dir = _get_repo_dir()
 
     if not _docker_socket_available():
-        # Return manual commands if socket not available
-        cmd_prefix = " ".join(compose_cmd)
         return {
             "success": False,
             "manual": True,
-            "message": "Docker socket not mounted. Run these commands manually:",
+            "message": "Docker socket not mounted. Run these commands on the host:",
             "commands": [
-                f"cd {compose_dir}",
-                f"{cmd_prefix} pull tachyon-mgmt",
-                f"{cmd_prefix} up -d tachyon-mgmt",
+                "cd /opt/tachyon",
+                f"git fetch origin tag {target_tag}",
+                f"git checkout {target_tag}",
+                "docker compose up -d --build",
             ],
         }
 
+    if not repo_dir:
+        return {
+            "success": False,
+            "manual": True,
+            "message": "Git repo not mounted. Run these commands on the host:",
+            "commands": [
+                "cd /opt/tachyon",
+                f"git fetch origin tag {target_tag}",
+                f"git checkout {target_tag}",
+                "docker compose up -d --build",
+            ],
+        }
+
+    compose_cmd = _get_compose_cmd(repo_dir)
+    git_cmd = ["git", "-C", str(repo_dir)]
+
     try:
-        # Pull latest image
-        logger.info("Pulling latest Docker image...")
-        pull_result = subprocess.run(
-            compose_cmd + ["pull", "tachyon-mgmt"],
-            cwd=compose_dir,
-            capture_output=True,
-            text=True,
-            timeout=300,
+        # Mark repo as safe (container UID may differ from host repo owner)
+        subprocess.run(
+            ["git", "config", "--global", "--add", "safe.directory", str(repo_dir)],
+            capture_output=True, timeout=5,
         )
-        if pull_result.returncode != 0:
+
+        # Save current ref for rollback
+        save_result = subprocess.run(
+            git_cmd + ["rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        )
+        rollback_ref = save_result.stdout.strip() if save_result.returncode == 0 else None
+        if not rollback_ref:
             return {
                 "success": False,
-                "message": f"Docker pull failed: {pull_result.stderr}",
+                "message": "Could not determine current version for rollback",
             }
 
-        # Recreate container (this will kill the current process)
-        logger.info("Recreating container with new image...")
-        # Use subprocess.Popen so we don't wait for it to complete
-        subprocess.Popen(
-            compose_cmd + ["up", "-d", "tachyon-mgmt"],
-            cwd=compose_dir,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        # Fetch the specific release tag (not all of main)
+        logger.info(f"Fetching tag {target_tag} in {repo_dir}...")
+        fetch_result = subprocess.run(
+            git_cmd + ["fetch", "origin", "tag", target_tag, "--force"],
+            capture_output=True, text=True, timeout=60,
         )
+        if fetch_result.returncode != 0:
+            return {
+                "success": False,
+                "message": f"Git fetch failed: {fetch_result.stderr}",
+            }
+
+        # Checkout the exact tag — no unreviewed code from main
+        logger.info(f"Checking out {target_tag}...")
+        checkout_result = subprocess.run(
+            git_cmd + ["checkout", target_tag],
+            capture_output=True, text=True, timeout=30,
+        )
+        if checkout_result.returncode != 0:
+            return {
+                "success": False,
+                "message": f"Git checkout failed: {checkout_result.stderr}",
+            }
+
+        # Verify the checked-out version matches what we expect
+        version_file = repo_dir / "updater" / "__init__.py"
+        if version_file.exists():
+            content = version_file.read_text()
+            if f'"{target_version}"' not in content:
+                # Revert checkout
+                subprocess.run(git_cmd + ["checkout", rollback_ref],
+                               capture_output=True, timeout=30)
+                return {
+                    "success": False,
+                    "message": f"Version mismatch: tag {target_tag} does not contain version {target_version}",
+                }
+
+        # Store pending update info (persists in DB through restart)
+        db.set_setting("autoupdate_pending_version", target_version)
+        db.set_setting("autoupdate_rollback_ref", rollback_ref)
+
+        # Discover host repo path for the watchdog container
+        host_repo_dir = _get_host_repo_path()
+        has_standalone = (repo_dir / "docker-compose.standalone.yml").exists()
+
+        if host_repo_dir:
+            # Launch watchdog: build, swap, health check, rollback on failure
+            launched = _launch_watchdog(repo_dir, host_repo_dir, rollback_ref, has_standalone)
+            if not launched:
+                logger.warning("Watchdog failed to launch, falling back to direct update")
+                subprocess.Popen(
+                    compose_cmd + ["up", "-d", "--build", "tachyon-mgmt"],
+                    cwd=repo_dir,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+        else:
+            # Can't determine host path — proceed without rollback
+            logger.warning("Could not determine host repo path; no rollback available")
+            subprocess.Popen(
+                compose_cmd + ["up", "-d", "--build", "tachyon-mgmt"],
+                cwd=repo_dir,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
         return {
             "success": True,
-            "message": "Update started. The application will restart shortly.",
+            "message": f"Updating to {target_tag}. The application will restart shortly.",
         }
 
     except subprocess.TimeoutExpired:
@@ -295,6 +569,43 @@ async def apply_update() -> dict:
             "success": False,
             "message": str(e),
         }
+
+
+async def verify_update_on_startup(broadcast_func: Optional[Callable] = None):
+    """Check if an app update was recently applied and broadcast the result.
+
+    Call this during app startup, after DB is initialized. If we just restarted
+    after an update, the pending version in the DB will match (success) or not
+    match (rollback) our current __version__.
+    """
+    pending = db.get_setting("autoupdate_pending_version", "")
+    if not pending:
+        return
+
+    if pending == __version__:
+        logger.info(f"App update to v{__version__} completed successfully")
+        db.set_setting("autoupdate_pending_version", "")
+        db.set_setting("autoupdate_available_version", "")
+        db.set_setting("autoupdate_rollback_ref", "")
+        if broadcast_func:
+            await broadcast_func({
+                "type": "update_completed",
+                "version": __version__,
+                "success": True,
+            })
+    else:
+        logger.warning(
+            f"App update to v{pending} may have been rolled back "
+            f"(running v{__version__})"
+        )
+        db.set_setting("autoupdate_pending_version", "")
+        db.set_setting("autoupdate_rollback_ref", "")
+        if broadcast_func:
+            await broadcast_func({
+                "type": "update_rolled_back",
+                "attempted_version": pending,
+                "current_version": __version__,
+            })
 
 
 def get_checker() -> Optional[ReleaseChecker]:

@@ -5,9 +5,12 @@ Configuration can be set via:
 - Environment variables (bootstrap/deployment fallback)
 """
 
+import ipaddress
 import logging
 import os
+import socket
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from . import database as db
 
@@ -101,3 +104,20 @@ def is_oidc_enabled() -> bool:
             and bool(config.provider_url)
             and bool(config.client_id)
             and bool(config.client_secret))
+
+
+def validate_provider_url(url: str):
+    """Validate OIDC provider URL. Raises ValueError if invalid."""
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError("OIDC provider URL must use HTTPS")
+    if not parsed.hostname:
+        raise ValueError("OIDC provider URL has no hostname")
+    try:
+        addrs = socket.getaddrinfo(parsed.hostname, None)
+        for _, _, _, _, sockaddr in addrs:
+            ip = ipaddress.ip_address(sockaddr[0])
+            if ip.is_private or ip.is_loopback or ip.is_reserved:
+                raise ValueError("OIDC provider URL must not resolve to a private/loopback address")
+    except socket.gaierror:
+        raise ValueError("OIDC provider URL hostname could not be resolved")

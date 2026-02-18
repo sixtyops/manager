@@ -4,12 +4,24 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 
 from . import database as db
 
 logger = logging.getLogger(__name__)
+
+
+def is_valid_slack_url(url: str) -> bool:
+    """Validate that a URL is a legitimate Slack webhook."""
+    try:
+        parsed = urlparse(url)
+        return (parsed.scheme == "https"
+                and parsed.hostname is not None
+                and parsed.hostname.endswith(".slack.com"))
+    except Exception:
+        return False
 
 
 async def send_slack_notification(payload: dict) -> bool:
@@ -19,6 +31,10 @@ async def send_slack_notification(payload: dict) -> bool:
     """
     webhook_url = db.get_setting("slack_webhook_url", "")
     if not webhook_url:
+        return False
+
+    if not is_valid_slack_url(webhook_url):
+        logger.warning("Slack webhook URL rejected: not a valid https://hooks.slack.com/ URL")
         return False
 
     try:

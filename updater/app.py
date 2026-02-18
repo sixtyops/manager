@@ -25,7 +25,7 @@ from . import database as db
 from .poller import init_poller, get_poller
 from .scheduler import init_scheduler, get_scheduler
 from .firmware_fetcher import init_fetcher, get_fetcher
-from .release_checker import init_checker, get_checker, apply_update
+from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
 from . import services
 from .auth import require_auth, require_auth_ws, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup
 from .backup import build_csv_export, process_csv_import
@@ -192,6 +192,7 @@ async def lifespan(app: FastAPI):
     await fetcher.start()
     checker = init_checker(broadcast)
     await checker.start()
+    await verify_update_on_startup(broadcast)
     cleanup_task = asyncio.create_task(_periodic_cleanup())
     backup_task = asyncio.create_task(_backup_scheduler())
     logger.info("Application started")
@@ -213,8 +214,35 @@ async def lifespan(app: FastAPI):
 
 
 # FastAPI app
-app = FastAPI(title="Unofficial Tachyon Networks Bulk Updater", lifespan=lifespan)
+app = FastAPI(title="Unofficial Tachyon Networks Auto Updater", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+# ---------------------------------------------------------------------------
+# Security headers middleware
+# ---------------------------------------------------------------------------
+from starlette.middleware.base import BaseHTTPMiddleware
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "connect-src 'self' ws: wss:; "
+            "font-src 'self'"
+        )
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -1068,6 +1096,13 @@ _SETTINGS_WRITABLE = {
 }
 
 
+def _validate_settings(filtered: dict):
+    """Validate individual setting values before persisting."""
+    url = filtered.get("slack_webhook_url")
+    if url and not slack.is_valid_slack_url(url):
+        raise HTTPException(400, "Slack webhook URL must be a valid https://hooks.slack.com/ URL")
+
+
 @app.put("/api/settings")
 async def update_settings(request: Request, session: dict = Depends(require_auth)):
     """Update settings. Only whitelisted keys are accepted."""
@@ -1075,6 +1110,7 @@ async def update_settings(request: Request, session: dict = Depends(require_auth
     filtered = {k: v for k, v in data.items() if k in _SETTINGS_WRITABLE}
     if not filtered:
         raise HTTPException(400, "No valid settings keys provided")
+    _validate_settings(filtered)
     db.set_settings(filtered)
     return {"success": True}
 
@@ -1087,6 +1123,7 @@ async def save_settings_and_reevaluate(request: Request, session: dict = Depends
     if not filtered:
         raise HTTPException(400, "No valid settings keys provided")
 
+    _validate_settings(filtered)
     db.set_settings(filtered)
 
     fetcher = get_fetcher()
@@ -1195,6 +1232,12 @@ async def update_oidc_config_api(request: Request, session: dict = Depends(requi
         allowed_group=data.get("allowed_group", ""),
         scopes=data.get("scopes", "openid email profile"),
     )
+
+    if config.provider_url:
+        try:
+            oidc_config.validate_provider_url(config.provider_url)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
     oidc_config.set_oidc_config(config)
     return {"success": True}
@@ -1611,6 +1654,8 @@ async def import_backup(
 
     try:
         raw = await file.read()
+        if len(raw) > MAX_CSV_IMPORT_SIZE:
+            raise HTTPException(413, f"CSV file exceeds maximum size ({MAX_CSV_IMPORT_SIZE // (1024 * 1024)} MB)")
         csv_content = raw.decode("utf-8")
     except UnicodeDecodeError:
         raise HTTPException(400, "File is not valid UTF-8 text")
@@ -1676,6 +1721,10 @@ class UpdateJob:
     schedule_timezone: Optional[str] = None
 
 
+MAX_FIRMWARE_SIZE = 500 * 1024 * 1024   # 500 MB
+MAX_CSV_IMPORT_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
 @app.post("/api/upload-firmware")
 async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(require_auth)):
     """Upload a firmware file."""
@@ -1683,18 +1732,29 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
     safe_filename = validate_firmware_filename(file.filename)
     firmware_path = FIRMWARE_DIR / safe_filename
 
-    async with aiofiles.open(firmware_path, "wb") as f:
-        content = await file.read()
-        await f.write(content)
+    total_size = 0
+    chunk_size = 1024 * 1024  # 1 MB chunks
+    try:
+        async with aiofiles.open(firmware_path, "wb") as f:
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > MAX_FIRMWARE_SIZE:
+                    raise HTTPException(413, f"Firmware file exceeds maximum size ({MAX_FIRMWARE_SIZE // (1024 * 1024)} MB)")
+                await f.write(chunk)
+    except HTTPException:
+        firmware_path.unlink(missing_ok=True)
+        raise
 
-    file_size = firmware_path.stat().st_size
-    logger.info(f"Firmware uploaded: {safe_filename} ({file_size:,} bytes)")
+    logger.info(f"Firmware uploaded: {safe_filename} ({total_size:,} bytes)")
 
     db.register_firmware(safe_filename, source="manual")
 
     return {
         "filename": safe_filename,
-        "size": file_size,
+        "size": total_size,
     }
 
 
