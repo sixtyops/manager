@@ -3074,6 +3074,10 @@
             try {
                 const response = await fetch('/api/updates/check', { method: 'POST' });
                 const result = await response.json();
+                if (!response.ok) {
+                    statusEl.textContent = 'Error: ' + (result.detail || result.message || response.statusText);
+                    return;
+                }
                 if (result.error) {
                     statusEl.textContent = 'Error: ' + result.error;
                 } else if (result.update_available) {
@@ -3095,6 +3099,10 @@
             try {
                 const response = await fetch('/api/updates/apply', { method: 'POST' });
                 const result = await response.json();
+                if (!response.ok) {
+                    statusEl.textContent = 'Update failed: ' + (result.detail || result.message || response.statusText);
+                    return;
+                }
                 if (result.success) {
                     statusEl.textContent = 'Update applied! Restarting...';
                     setTimeout(() => location.reload(), 5000);
