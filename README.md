@@ -48,6 +48,8 @@ Failures pause the rollout until manually reviewed.
 
 ## Quick Start
 
+Both options below run in **standalone mode** — the app plus a bundled nginx reverse proxy with automatic HTTPS (self-signed on first boot, Let's Encrypt via the setup wizard).
+
 ### Production Deployment
 
 ```bash
@@ -71,7 +73,17 @@ cd firmware-updater
 
 Access at `https://localhost` (accept self-signed certificate).
 
-See [docs/deployment.md](docs/deployment.md) for advanced configuration.
+### Without Bundled Nginx
+
+To run behind your own reverse proxy, or access the admin directly on port 8000:
+
+```bash
+docker compose up -d --build
+```
+
+This starts just the app on port 8000 — no bundled nginx or certbot.
+
+See [docs/deployment.md](docs/deployment.md) for full deployment options.
 
 ## Usage
 
