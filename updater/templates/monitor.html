@@ -652,6 +652,8 @@
         .status-current { color: var(--success); font-weight: 500; }
         .status-behind { color: var(--warning); font-weight: 500; }
         .status-scheduled { color: var(--primary); font-weight: 600; font-size: 0.9rem; }
+        .update-clickable { cursor: pointer; text-decoration: none; }
+        .update-clickable:hover { opacity: 0.7; }
         .status-label { font-size: 0.78rem; }
         .status-sep { color: var(--toggle-off); margin: 0 4px; }
 
@@ -2033,8 +2035,8 @@
             return '<span class="status-icon-cell online" title="Online"></span>';
         }
 
-        function updateCell(ip) {
-            if (updatingDevices.has(ip)) {
+        function updateCell(type, ip, parentApIp) {
+            if (updatingDevices.has(ip) || (parentApIp && updatingDevices.has(parentApIp))) {
                 return '<span class="update-spinner" title="Updating..."></span>';
             }
             const vs = versionStatus(ip);
@@ -2042,11 +2044,26 @@
                 return '<span class="status-current" title="Current">&#10003;</span>';
             }
             if (vs === 'behind') {
-                return autoUpdateEnabled
-                    ? '<span class="status-scheduled" title="Auto-update scheduled">&#8593;</span>'
-                    : '<span class="status-behind" title="Update available">&#8593;</span>';
+                const title = autoUpdateEnabled ? 'Auto-update scheduled \u2013 click to update now' : 'Update available \u2013 click to update now';
+                const cls = autoUpdateEnabled ? 'status-scheduled' : 'status-behind';
+                return `<a class="${cls} update-clickable" title="${title}" onclick="triggerUpdate('${type}','${ip}');event.stopPropagation();">&#8593;</a>`;
             }
             return '';
+        }
+
+        function siteUpdateCell(siteId, aps) {
+            const anyUpdating = aps.some(ap => updatingDevices.has(ap.ip));
+            if (anyUpdating) {
+                return '<span class="update-spinner" title="Updating..."></span>';
+            }
+            const anyBehind = aps.some(ap => versionStatus(ap.ip) === 'behind');
+            if (!anyBehind) {
+                const allCurrent = aps.length > 0 && aps.every(ap => versionStatus(ap.ip) === 'current');
+                return allCurrent ? '<span class="status-current" title="All current">&#10003;</span>' : '';
+            }
+            const title = autoUpdateEnabled ? 'Auto-update scheduled \u2013 click to update now' : 'Update available \u2013 click to update now';
+            const cls = autoUpdateEnabled ? 'status-scheduled' : 'status-behind';
+            return `<a class="${cls} update-clickable" title="${title}" onclick="triggerUpdate('site','${siteId}');event.stopPropagation();">&#8593;</a>`;
         }
 
         function actionsCell(type, id, name) {
@@ -2102,7 +2119,9 @@
                             <span class="tree-badge">${badgeParts.join(', ')}</span>
                         </div>
                     </td>
-                    <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+                    <td></td><td></td><td></td><td></td><td></td>
+                    <td>${siteUpdateCell(site.id, aps)}</td>
+                    <td></td>
                     <td><div class="actions-cell">
                         ${actionsCell('site', site.id, site.name)}
                         ${site.id !== null && aps.length === 0 ? `<a class="action-link danger" onclick="deleteSite(${site.id});event.stopPropagation();">Delete</a>` : ''}
@@ -2136,7 +2155,7 @@
                         <td></td>
                         <td></td>
                         <td>${statusCell(ap.ip, isOffline, null)}</td>
-                        <td>${updateCell(ap.ip)}</td>
+                        <td>${updateCell('ap', ap.ip)}</td>
                         <td>${lastUpdatedCell(ap.last_firmware_update)}</td>
                         <td><div class="actions-cell">${actionsCell('ap', ap.ip, apName)}</div></td>
                     </tr>`;
@@ -2168,7 +2187,7 @@
                             <td class="${signalClass}">${signalVal != null ? signalVal.toFixed(1) + ' dBm' : ''}</td>
                             <td>${cpe.link_distance != null ? cpe.link_distance.toFixed(0) + ' m' : ''}</td>
                             <td>${statusCell(cpe.ip, false, health, cpe.auth_status, ap.ip)}</td>
-                            <td>${updateCell(cpe.ip)}</td>
+                            <td>${updateCell('cpe', cpe.ip, ap.ip)}</td>
                             <td></td>
                             <td><div class="actions-cell">${actionsCell('cpe', cpe.ip, cpeName)}</div></td>
                         </tr>`;
@@ -2194,7 +2213,7 @@
                         <td></td>
                         <td></td>
                         <td>${statusCell(sw.ip, isOffline, null)}</td>
-                        <td>${updateCell(sw.ip)}</td>
+                        <td>${updateCell('switch', sw.ip)}</td>
                         <td>${lastUpdatedCell(sw.last_firmware_update)}</td>
                         <td><div class="actions-cell">
                             <a class="action-link danger" onclick="deleteSwitch('${sw.ip}');event.stopPropagation();">Delete</a>
@@ -2651,18 +2670,33 @@
 
             // Build confirmation message
             let targetName = id;
+            let targetDetail = '';
             if (type === 'ap') {
                 const r = findAP(id);
-                targetName = r ? (r.ap.system_name || id) : id;
+                if (r) {
+                    targetName = r.ap.system_name || id;
+                    const cpeCount = (r.ap.cpes || []).filter(c => c.auth_status === 'ok').length;
+                    if (cpeCount > 0) {
+                        targetDetail = ` and ${cpeCount} CPE${cpeCount !== 1 ? 's' : ''}`;
+                    }
+                }
             } else if (type === 'cpe') {
                 const r = findCPE(id);
                 targetName = r ? (r.cpe.system_name || id) : id;
+            } else if (type === 'switch') {
+                const r = findSwitch(id);
+                targetName = r ? (r.sw.system_name || id) : id;
             } else if (type === 'site') {
                 const site = findSite(id === 'null' ? null : parseInt(id));
-                targetName = site ? site.name + ' (all APs)' : id;
+                if (site) {
+                    const apCount = (site.aps || []).length;
+                    const cpeCount = (site.aps || []).reduce((s, ap) => s + (ap.cpes || []).length, 0);
+                    targetName = site.name;
+                    targetDetail = ` (${apCount} AP${apCount !== 1 ? 's' : ''}, ${cpeCount} CPE${cpeCount !== 1 ? 's' : ''})`;
+                }
             }
 
-            if (!confirm(`Update ${targetName}?\n\nThis will flash firmware and reboot the device(s).`)) {
+            if (!confirm(`Update ${targetName}${targetDetail}?\n\nThis will flash firmware and reboot the device(s).`)) {
                 return;
             }
 
@@ -2671,7 +2705,7 @@
             const bankMode = settings.bank_mode || 'one';
 
             // Mark as updating for visual feedback
-            if (type === 'cpe' || type === 'ap') {
+            if (type === 'cpe' || type === 'ap' || type === 'switch') {
                 updatingDevices.add(id);
             } else if (type === 'site') {
                 const site = findSite(id === 'null' ? null : parseInt(id));
@@ -2711,6 +2745,20 @@
                         alert('Update failed: ' + (err.detail || 'Unknown error'));
                     }
                 } catch (e) { alert('Update error: ' + e.message); }
+            } else if (type === 'switch') {
+                try {
+                    const formData = new FormData();
+                    formData.append('ip', id);
+                    formData.append('firmware_file', firmware);
+                    formData.append('firmware_file_303l', firmware303l);
+                    formData.append('firmware_file_tns100', firmwareTns100);
+                    formData.append('bank_mode', bankMode);
+                    const resp = await fetch('/api/update-device', { method: 'POST', body: formData });
+                    if (resp.ok) { success = true; } else {
+                        const err = await resp.json();
+                        alert('Update failed: ' + (err.detail || 'Unknown error'));
+                    }
+                } catch (e) { alert('Update error: ' + e.message); }
             } else if (type === 'site') {
                 const site = findSite(id === 'null' ? null : parseInt(id));
                 if (!site) { alert('Site not found'); return; }
@@ -2735,7 +2783,7 @@
 
             // On failure, clear updating state
             if (!success) {
-                if (type === 'cpe' || type === 'ap') {
+                if (type === 'cpe' || type === 'ap' || type === 'switch') {
                     updatingDevices.delete(id);
                 } else if (type === 'site') {
                     const site = findSite(id === 'null' ? null : parseInt(id));

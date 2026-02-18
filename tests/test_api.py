@@ -1,6 +1,7 @@
 """Tests for API routes (authenticated)."""
 
 import pytest
+from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 
 
@@ -308,3 +309,99 @@ class TestAutoUpdateAPI:
         ]:
             resp = getattr(client, method)(url, follow_redirects=False)
             assert resp.status_code in (401, 303), f"{method.upper()} {url} should require auth"
+
+
+class TestStartUpdateAPI:
+    """Tests for /api/start-update (Update Now for AP + CPEs)."""
+
+    def _seed_ap_and_cpes(self, mock_db):
+        """Insert an AP with two authenticated CPEs into the test DB."""
+        mock_db.execute(
+            "INSERT INTO access_points (ip, username, password, model, firmware_version)"
+            " VALUES (?, ?, ?, ?, ?)",
+            ("10.0.0.1", "root", "pass", "TNA-301", "1.12.2.54970"),
+        )
+        mock_db.execute(
+            "INSERT INTO cpe_cache (ap_ip, ip, mac, model, firmware_version, auth_status)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            ("10.0.0.1", "10.0.0.10", "AA:BB:CC:00:00:01", "TNA-303L-65", "1.12.2.7713", "ok"),
+        )
+        mock_db.execute(
+            "INSERT INTO cpe_cache (ap_ip, ip, mac, model, firmware_version, auth_status)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            ("10.0.0.1", "10.0.0.11", "AA:BB:CC:00:00:02", "TNA-301", "1.12.2.54970", "ok"),
+        )
+        mock_db.commit()
+
+    def test_start_update_creates_job(self, authed_client, mock_db, tmp_path):
+        """POST with valid AP IP creates a job that includes AP + CPEs."""
+        self._seed_ap_and_cpes(mock_db)
+        fw_file = tmp_path / "tachyon-v1.12.3.bin"
+        fw_file.write_bytes(b"fake firmware")
+
+        with patch("updater.app.FIRMWARE_DIR", tmp_path), \
+             patch("updater.app.asyncio") as mock_asyncio:
+            mock_asyncio.create_task = MagicMock()
+            resp = authed_client.post("/api/start-update", data={
+                "firmware_file": "tachyon-v1.12.3.bin",
+                "device_type": "mixed",
+                "ip_list": "10.0.0.1",
+                "concurrency": "2",
+                "bank_mode": "both",
+            })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "job_id" in data
+        # AP (1) + 2 authenticated CPEs = 3 devices
+        assert data["device_count"] == 3
+
+    def test_start_update_no_firmware(self, authed_client, mock_db, tmp_path):
+        """POST with non-existent firmware file returns 400."""
+        self._seed_ap_and_cpes(mock_db)
+
+        with patch("updater.app.FIRMWARE_DIR", tmp_path):
+            resp = authed_client.post("/api/start-update", data={
+                "firmware_file": "nonexistent.bin",
+                "device_type": "mixed",
+                "ip_list": "10.0.0.1",
+            })
+
+        assert resp.status_code == 400
+
+    def test_start_update_no_ips(self, authed_client, mock_db, tmp_path):
+        """POST with empty ip_list returns 4xx."""
+        fw_file = tmp_path / "tachyon-v1.12.3.bin"
+        fw_file.write_bytes(b"fake firmware")
+
+        with patch("updater.app.FIRMWARE_DIR", tmp_path):
+            resp = authed_client.post("/api/start-update", data={
+                "firmware_file": "tachyon-v1.12.3.bin",
+                "device_type": "mixed",
+                "ip_list": "",
+            })
+
+        assert resp.status_code in (400, 422)
+
+    def test_start_update_missing_ap(self, authed_client, mock_db, tmp_path):
+        """POST with an IP not in the DB returns 400 (no stored credentials)."""
+        fw_file = tmp_path / "tachyon-v1.12.3.bin"
+        fw_file.write_bytes(b"fake firmware")
+
+        with patch("updater.app.FIRMWARE_DIR", tmp_path):
+            resp = authed_client.post("/api/start-update", data={
+                "firmware_file": "tachyon-v1.12.3.bin",
+                "device_type": "mixed",
+                "ip_list": "10.99.99.99",
+            })
+
+        assert resp.status_code == 400
+
+    def test_start_update_requires_auth(self, client):
+        """POST without session cookie returns 401/303."""
+        resp = client.post("/api/start-update", data={
+            "firmware_file": "fw.bin",
+            "device_type": "mixed",
+            "ip_list": "10.0.0.1",
+        }, follow_redirects=False)
+        assert resp.status_code in (401, 303)
