@@ -1,11 +1,16 @@
 """SQLite database for persistent storage."""
 
 import json
+import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+
+from .crypto import encrypt_password, decrypt_password, is_encrypted
+
+logger = logging.getLogger(__name__)
 
 # Database file location
 DB_PATH = Path(__file__).parent.parent / "data" / "tachyon.db"
@@ -65,6 +70,26 @@ def _migrate(db):
                     "INSERT OR IGNORE INTO firmware_registry (filename, added_at, source) VALUES (?, ?, ?)",
                     (f.name, "2020-01-01T00:00:00", "legacy")
                 )
+
+    # Encrypt any plaintext device passwords
+    _migrate_encrypt_passwords(db)
+
+
+def _migrate_encrypt_passwords(db):
+    """One-time migration: encrypt any plaintext device passwords in-place."""
+    migrated = 0
+    for table in ("access_points", "switches"):
+        rows = db.execute(f"SELECT ip, password FROM {table}").fetchall()
+        for row in rows:
+            pw = row[1]
+            if pw and not is_encrypted(pw):
+                db.execute(
+                    f"UPDATE {table} SET password = ? WHERE ip = ?",
+                    (encrypt_password(pw), row[0]),
+                )
+                migrated += 1
+    if migrated:
+        logger.info(f"Encrypted {migrated} plaintext device password(s)")
 
 
 def init_db():
@@ -350,6 +375,14 @@ def delete_tower_site(site_id: int):
         db.execute("DELETE FROM tower_sites WHERE id = ?", (site_id,))
 
 
+def _decrypt_device_row(row_dict: dict) -> dict:
+    """Decrypt the password field in a device row if it's encrypted."""
+    if row_dict and "password" in row_dict and row_dict["password"]:
+        if is_encrypted(row_dict["password"]):
+            row_dict["password"] = decrypt_password(row_dict["password"])
+    return row_dict
+
+
 # Access Point operations
 def get_access_points(tower_site_id: int = None, enabled_only: bool = True) -> list[dict]:
     """Get access points, optionally filtered by tower site."""
@@ -366,24 +399,25 @@ def get_access_points(tower_site_id: int = None, enabled_only: bool = True) -> l
 
         query += " ORDER BY ip"
         rows = db.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
+        return [_decrypt_device_row(dict(row)) for row in rows]
 
 
 def get_access_point(ip: str) -> Optional[dict]:
     """Get an access point by IP."""
     with get_db() as db:
         row = db.execute("SELECT * FROM access_points WHERE ip = ?", (ip,)).fetchone()
-        return dict(row) if row else None
+        return _decrypt_device_row(dict(row)) if row else None
 
 
 def upsert_access_point(ip: str, username: str, password: str, tower_site_id: int = None, **kwargs) -> int:
     """Create or update an access point."""
+    enc_password = encrypt_password(password) if not is_encrypted(password) else password
     with get_db() as db:
         existing = db.execute("SELECT id FROM access_points WHERE ip = ?", (ip,)).fetchone()
 
         if existing:
             # Update
-            updates = {"username": username, "password": password, "tower_site_id": tower_site_id}
+            updates = {"username": username, "password": enc_password, "tower_site_id": tower_site_id}
             allowed = {"system_name", "model", "mac", "firmware_version", "location", "last_seen", "last_error", "enabled"}
             updates.update({k: v for k, v in kwargs.items() if k in allowed})
 
@@ -395,7 +429,7 @@ def upsert_access_point(ip: str, username: str, password: str, tower_site_id: in
             db.execute(
                 """INSERT INTO access_points (ip, username, password, tower_site_id, system_name, model, mac, firmware_version, location)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (ip, username, password, tower_site_id,
+                (ip, username, enc_password, tower_site_id,
                  kwargs.get("system_name"), kwargs.get("model"), kwargs.get("mac"),
                  kwargs.get("firmware_version"), kwargs.get("location"))
             )
@@ -445,23 +479,24 @@ def get_switches(tower_site_id: int = None, enabled_only: bool = True) -> list[d
 
         query += " ORDER BY ip"
         rows = db.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
+        return [_decrypt_device_row(dict(row)) for row in rows]
 
 
 def get_switch(ip: str) -> Optional[dict]:
     """Get a switch by IP."""
     with get_db() as db:
         row = db.execute("SELECT * FROM switches WHERE ip = ?", (ip,)).fetchone()
-        return dict(row) if row else None
+        return _decrypt_device_row(dict(row)) if row else None
 
 
 def upsert_switch(ip: str, username: str, password: str, tower_site_id: int = None, **kwargs) -> int:
     """Create or update a switch."""
+    enc_password = encrypt_password(password) if not is_encrypted(password) else password
     with get_db() as db:
         existing = db.execute("SELECT id FROM switches WHERE ip = ?", (ip,)).fetchone()
 
         if existing:
-            updates = {"username": username, "password": password, "tower_site_id": tower_site_id}
+            updates = {"username": username, "password": enc_password, "tower_site_id": tower_site_id}
             allowed = {"system_name", "model", "mac", "firmware_version", "location", "last_seen", "last_error", "enabled"}
             updates.update({k: v for k, v in kwargs.items() if k in allowed})
 
@@ -472,7 +507,7 @@ def upsert_switch(ip: str, username: str, password: str, tower_site_id: int = No
             db.execute(
                 """INSERT INTO switches (ip, username, password, tower_site_id, system_name, model, mac, firmware_version, location)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (ip, username, password, tower_site_id,
+                (ip, username, enc_password, tower_site_id,
                  kwargs.get("system_name"), kwargs.get("model"), kwargs.get("mac"),
                  kwargs.get("firmware_version"), kwargs.get("location"))
             )

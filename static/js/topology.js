@@ -119,6 +119,16 @@ function truncate(text, maxLength) {
     return text.substring(0, maxLength - 3) + '...';
 }
 
+function escapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 function showTooltip(event, d, tooltip) {
     if (d.data.type === 'root') return;
 
@@ -127,30 +137,30 @@ function showTooltip(event, d, tooltip) {
     if (d.data.type === 'ap') {
         const ap = d.data.data;
         content = `
-            <h4>${ap.system_name || 'Access Point'}</h4>
+            <h4>${escapeHtml(ap.system_name) || 'Access Point'}</h4>
             <div class="tooltip-row">
                 <span class="tooltip-label">IP</span>
-                <span class="tooltip-value">${ap.ip}</span>
+                <span class="tooltip-value">${escapeHtml(ap.ip)}</span>
             </div>
             <div class="tooltip-row">
                 <span class="tooltip-label">MAC</span>
-                <span class="tooltip-value">${ap.mac || 'N/A'}</span>
+                <span class="tooltip-value">${escapeHtml(ap.mac) || 'N/A'}</span>
             </div>
             <div class="tooltip-row">
                 <span class="tooltip-label">Model</span>
-                <span class="tooltip-value">${ap.model || 'N/A'}</span>
+                <span class="tooltip-value">${escapeHtml(ap.model) || 'N/A'}</span>
             </div>
             <div class="tooltip-row">
                 <span class="tooltip-label">Firmware</span>
-                <span class="tooltip-value">${ap.firmware_version || 'N/A'}</span>
+                <span class="tooltip-value">${escapeHtml(ap.firmware_version) || 'N/A'}</span>
             </div>
             <div class="tooltip-row">
                 <span class="tooltip-label">CPEs</span>
-                <span class="tooltip-value">${ap.cpe_count}</span>
+                <span class="tooltip-value">${escapeHtml(ap.cpe_count)}</span>
             </div>
             ${ap.error ? `<div class="tooltip-row" style="color: #ef4444;">
                 <span class="tooltip-label">Error</span>
-                <span class="tooltip-value">${ap.error}</span>
+                <span class="tooltip-value">${escapeHtml(ap.error)}</span>
             </div>` : ''}
         `;
     } else if (d.data.type === 'cpe') {
@@ -158,18 +168,18 @@ function showTooltip(event, d, tooltip) {
         const healthColor = cpe.signal_health === 'green' ? '#10b981' :
                            cpe.signal_health === 'yellow' ? '#f59e0b' : '#ef4444';
         content = `
-            <h4>${cpe.system_name || 'CPE'}</h4>
+            <h4>${escapeHtml(cpe.system_name) || 'CPE'}</h4>
             <div class="tooltip-row">
                 <span class="tooltip-label">IP</span>
-                <span class="tooltip-value">${cpe.ip}</span>
+                <span class="tooltip-value">${escapeHtml(cpe.ip)}</span>
             </div>
             <div class="tooltip-row">
                 <span class="tooltip-label">MAC</span>
-                <span class="tooltip-value">${cpe.mac || 'N/A'}</span>
+                <span class="tooltip-value">${escapeHtml(cpe.mac) || 'N/A'}</span>
             </div>
             <div class="tooltip-row">
                 <span class="tooltip-label">Model</span>
-                <span class="tooltip-value">${cpe.model || 'N/A'}</span>
+                <span class="tooltip-value">${escapeHtml(cpe.model) || 'N/A'}</span>
             </div>
             <div class="tooltip-row">
                 <span class="tooltip-label">Signal</span>
@@ -185,7 +195,7 @@ function showTooltip(event, d, tooltip) {
             </div>
             <div class="tooltip-row">
                 <span class="tooltip-label">MCS</span>
-                <span class="tooltip-value">${cpe.mcs ?? 'N/A'}</span>
+                <span class="tooltip-value">${escapeHtml(cpe.mcs) ?? 'N/A'}</span>
             </div>
             <div class="tooltip-row">
                 <span class="tooltip-label">Uptime</span>
