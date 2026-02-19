@@ -116,6 +116,7 @@
         }
 
         .user-btn {
+            position: relative;
             background: var(--border);
             border: none;
             color: var(--text-muted);
@@ -132,6 +133,18 @@
         .user-btn:hover {
             color: var(--text);
             background: var(--toggle-off);
+        }
+
+        .settings-notif-dot {
+            display: none;
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            width: 8px;
+            height: 8px;
+            background: var(--danger-bright);
+            border-radius: 50%;
+            border: 1.5px solid var(--bg-card);
         }
 
         .user-dropdown {
@@ -307,6 +320,24 @@
 
         .settings-panel.active {
             display: block;
+        }
+
+        .release-notes-content {
+            margin-top: 8px;
+            padding: 8px 10px;
+            background: #f0f4ff;
+            border-radius: 6px;
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #bfdbfe;
+        }
+
+        .release-notes-content ul {
+            list-style: disc;
+        }
+
+        .release-notes-content a {
+            word-break: break-all;
         }
 
         /* Layout */
@@ -790,6 +821,54 @@
         .connection-status.disconnected {
             display: block;
             background: var(--danger-bright);
+        }
+
+        /* System update overlay */
+        .system-update-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 300;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+
+        .system-update-overlay.active {
+            display: flex;
+        }
+
+        .system-update-overlay .update-card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 32px 40px;
+            text-align: center;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+            max-width: 400px;
+        }
+
+        .system-update-overlay .update-card h3 {
+            margin: 0 0 8px 0;
+            font-size: 1.1rem;
+            color: var(--text);
+        }
+
+        .system-update-overlay .update-card p {
+            margin: 0;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .system-update-overlay .update-spinner-large {
+            display: inline-block;
+            width: 36px;
+            height: 36px;
+            border: 3px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-bottom: 12px;
         }
 
         /* Empty state */
@@ -1372,16 +1451,27 @@
     </style>
 </head>
 <body>
+    <!-- System Update Overlay (non-dismissable) -->
+    <div class="system-update-overlay" id="systemUpdateOverlay">
+        <div class="update-card">
+            <div class="update-spinner-large"></div>
+            <h3>System Updating</h3>
+            <p id="systemUpdateMessage">Applying update and restarting...</p>
+            <p id="systemUpdateElapsed" style="font-size:0.75rem;color:var(--text-dim);margin-top:8px;"></p>
+        </div>
+    </div>
+
     <div class="header">
         <h1>Unofficial Tachyon Networks Auto Updater</h1>
         <div class="header-right">
             <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:#9ca3af;"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:#6b7280;"></span></span>
             <div class="user-menu">
                 <button class="user-btn" onclick="document.getElementById('userDropdown').classList.toggle('open')">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                        <circle cx="12" cy="7" r="4"></circle>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                        <circle cx="12" cy="12" r="3"/>
                     </svg>
+                    <span class="settings-notif-dot" id="settingsNotifDot"></span>
                 </button>
                 <div class="user-dropdown" id="userDropdown">
                     <button class="dropdown-item" onclick="openAppSettingsModal()">App Settings</button>
@@ -1672,7 +1762,7 @@
                     <span class="toggle" id="appAutoUpdateToggle" onclick="toggleAppAutoUpdate()" style="flex-shrink:0;"></span>
                     <label style="margin:0;font-weight:500;">Auto Check and Install Updates</label>
                 </div>
-                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 16px 0;">When enabled, the app will automatically check for new versions and install them during the next maintenance window.</p>
+                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 16px 0;">When enabled, the app will automatically check for new versions and install them when no firmware rollout is active.</p>
 
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
                     <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
@@ -1690,10 +1780,11 @@
                 </div>
 
                 <div id="appUpdateBannerInline" style="display:none;margin-top:16px;padding:12px;background:#dbeafe;border-radius:8px;">
-                    <div style="font-weight:500;color:#1e40af;">Update Available: <span id="appUpdateVersion"></span></div>
-                    <div style="font-size:0.8rem;color:#3b82f6;margin-top:4px;">
-                        <a id="appUpdateReleaseLink" href="#" target="_blank" style="color:#2563eb;">View Release Notes</a>
+                    <div style="display:flex;align-items:center;justify-content:space-between;">
+                        <div style="font-weight:500;color:#1e40af;">Update Available: <span id="appUpdateVersion"></span></div>
+                        <a id="appUpdateReleaseLink" href="#" target="_blank" style="font-size:0.72rem;color:#2563eb;">View on GitHub</a>
                     </div>
+                    <div id="appUpdateNotesContainer" class="release-notes-content" style="display:none;"></div>
                     <button class="backup-btn" onclick="applyAppUpdate()" style="margin-top:8px;background:#16a34a;">Update Now</button>
                 </div>
             </div>
@@ -1854,6 +1945,67 @@
         let sortColumn = 'name';
         let sortDirection = 'asc';
 
+        // System update overlay state
+        let systemUpdateStartTime = null;
+        let systemUpdateTimer = null;
+        let systemUpdatePolling = false;
+
+        function showSystemUpdateOverlay(message) {
+            const overlay = document.getElementById('systemUpdateOverlay');
+            if (!overlay) return;
+            overlay.classList.add('active');
+            if (message) {
+                document.getElementById('systemUpdateMessage').textContent = message;
+            }
+            if (!systemUpdateStartTime) {
+                systemUpdateStartTime = Date.now();
+            }
+            if (!systemUpdateTimer) {
+                systemUpdateTimer = setInterval(() => {
+                    const elapsed = Math.floor((Date.now() - systemUpdateStartTime) / 1000);
+                    document.getElementById('systemUpdateElapsed').textContent = 'Elapsed: ' + elapsed + 's';
+                }, 1000);
+            }
+            if (!systemUpdatePolling) {
+                systemUpdatePolling = true;
+                pollForRestart();
+            }
+        }
+
+        function hideSystemUpdateOverlay() {
+            const overlay = document.getElementById('systemUpdateOverlay');
+            if (overlay) overlay.classList.remove('active');
+            if (systemUpdateTimer) {
+                clearInterval(systemUpdateTimer);
+                systemUpdateTimer = null;
+            }
+            systemUpdateStartTime = null;
+            systemUpdatePolling = false;
+            localStorage.removeItem('systemUpdateInProgress');
+        }
+
+        async function pollForRestart() {
+            while (systemUpdatePolling) {
+                await new Promise(r => setTimeout(r, 3000));
+                try {
+                    const resp = await fetch('/api/updates', { signal: AbortSignal.timeout(3000) });
+                    if (resp.ok) {
+                        document.getElementById('systemUpdateMessage').textContent = 'Update complete! Reloading...';
+                        localStorage.removeItem('systemUpdateInProgress');
+                        setTimeout(() => location.reload(), 1000);
+                        return;
+                    }
+                } catch (e) { /* server still down */ }
+                if (systemUpdateStartTime && (Date.now() - systemUpdateStartTime > 300000)) {
+                    document.getElementById('systemUpdateMessage').textContent =
+                        'Restart taking longer than expected. Try refreshing manually.';
+                    systemUpdatePolling = false;
+                    localStorage.removeItem('systemUpdateInProgress');
+                    return;
+                }
+            }
+        }
+
         // WebSocket connection
         function connectWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1862,11 +2014,23 @@
             ws.onopen = () => {
                 document.getElementById('connectionStatus').textContent = 'Connected';
                 document.getElementById('connectionStatus').classList.remove('disconnected');
+                // If reconnecting after a system update, the server is back - reload
+                const updateTs = localStorage.getItem('systemUpdateInProgress');
+                if (updateTs) {
+                    document.getElementById('systemUpdateMessage').textContent = 'Update complete! Reloading...';
+                    localStorage.removeItem('systemUpdateInProgress');
+                    setTimeout(() => location.reload(), 1000);
+                }
             };
 
             ws.onclose = () => {
                 document.getElementById('connectionStatus').textContent = 'Disconnected';
                 document.getElementById('connectionStatus').classList.add('disconnected');
+                // If a system update is in progress, show the overlay instead of just the disconnect toast
+                const updateTs = localStorage.getItem('systemUpdateInProgress');
+                if (updateTs && (Date.now() - parseInt(updateTs, 10) < 300000)) {
+                    showSystemUpdateOverlay('System update in progress, waiting for restart...');
+                }
                 setTimeout(connectWebSocket, 2000);
             };
 
@@ -1913,8 +2077,78 @@
                     updateSchedulerUI(message);
                 } else if (message.type === 'rollout_status') {
                     updateRolloutUI(message);
+                } else if (message.type === 'update_started') {
+                    localStorage.setItem('systemUpdateInProgress', String(Date.now()));
+                    showSystemUpdateOverlay('System update starting...');
+                } else if (message.type === 'update_completed') {
+                    hideSystemUpdateOverlay();
+                    location.reload();
+                } else if (message.type === 'update_rolled_back') {
+                    hideSystemUpdateOverlay();
+                    alert('System update to v' + message.attempted_version +
+                          ' was rolled back. Running v' + message.current_version + '.');
+                } else if (message.type === 'update_available') {
+                    const dot = document.getElementById('settingsNotifDot');
+                    if (dot) dot.style.display = 'block';
                 }
             };
+        }
+
+        function inlineFormat(text) {
+            // Bold: **text**
+            text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            // Markdown links: [text](url)
+            text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g,
+                '<a href="$2" target="_blank" rel="noopener" style="color:#2563eb;">$1</a>');
+            // Bare URLs (not already inside an href)
+            text = text.replace(/(^|[\s(])(https?:\/\/[^\s)<]+)/g,
+                '$1<a href="$2" target="_blank" rel="noopener" style="color:#2563eb;">$2</a>');
+            return text;
+        }
+
+        function renderReleaseNotes(md) {
+            if (!md) return '';
+            // Escape HTML to prevent XSS
+            let html = md
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+
+            const lines = html.split('\n');
+            const out = [];
+            let inList = false;
+
+            for (let i = 0; i < lines.length; i++) {
+                let line = lines[i];
+
+                // Headings: ## Text
+                if (/^#{1,3}\s+(.+)$/.test(line)) {
+                    if (inList) { out.push('</ul>'); inList = false; }
+                    const text = line.replace(/^#{1,3}\s+/, '');
+                    out.push('<strong style="display:block;margin:8px 0 4px 0;font-size:0.8rem;">' + inlineFormat(text) + '</strong>');
+                    continue;
+                }
+
+                // Bullet list items: * text  or - text
+                if (/^\s*[\*\-]\s+(.+)$/.test(line)) {
+                    if (!inList) { out.push('<ul style="margin:0 0 4px 0;padding-left:18px;font-size:0.75rem;color:#374151;">'); inList = true; }
+                    const text = line.replace(/^\s*[\*\-]\s+/, '');
+                    out.push('<li style="margin-bottom:2px;">' + inlineFormat(text) + '</li>');
+                    continue;
+                }
+
+                // Empty line
+                if (line.trim() === '') {
+                    if (inList) { out.push('</ul>'); inList = false; }
+                    continue;
+                }
+
+                // Regular paragraph
+                if (inList) { out.push('</ul>'); inList = false; }
+                out.push('<p style="margin:4px 0;font-size:0.75rem;color:#374151;">' + inlineFormat(line) + '</p>');
+            }
+            if (inList) out.push('</ul>');
+            return out.join('\n');
         }
 
         function extractIP(text) {
@@ -3073,12 +3307,22 @@
 
                 // Show update banner if available
                 const banner = document.getElementById('appUpdateBannerInline');
+                const dot = document.getElementById('settingsNotifDot');
                 if (result.update_available && result.available_version) {
                     document.getElementById('appUpdateVersion').textContent = 'v' + result.available_version;
                     document.getElementById('appUpdateReleaseLink').href = result.release_url || '#';
+                    const notesContainer = document.getElementById('appUpdateNotesContainer');
+                    if (notesContainer && result.release_notes) {
+                        notesContainer.innerHTML = renderReleaseNotes(result.release_notes);
+                        notesContainer.style.display = 'block';
+                    } else if (notesContainer) {
+                        notesContainer.style.display = 'none';
+                    }
                     banner.style.display = 'block';
+                    if (dot) dot.style.display = 'block';
                 } else {
                     banner.style.display = 'none';
+                    if (dot) dot.style.display = 'none';
                 }
             } catch (error) {
                 console.error('Failed to load app update status:', error);
@@ -3155,8 +3399,10 @@
                     return;
                 }
                 if (result.success) {
-                    statusEl.textContent = 'Update applied! Restarting...';
-                    setTimeout(() => location.reload(), 5000);
+                    localStorage.setItem('systemUpdateInProgress', String(Date.now()));
+                    const dot = document.getElementById('settingsNotifDot');
+                    if (dot) dot.style.display = 'none';
+                    showSystemUpdateOverlay('Applying update and restarting...');
                 } else if (result.manual && result.commands) {
                     statusEl.innerHTML = result.message + '<br><code style="display:block;margin-top:8px;padding:8px;background:#1f2937;color:#e5e7eb;border-radius:4px;font-size:0.75rem;white-space:pre;">' +
                         result.commands.join('\n') + '</code>';
@@ -4028,6 +4274,20 @@
                 tzEl.textContent = tzAbbr;
             }
         }
+
+        // Check if a system update was in progress (survives page refresh / 502)
+        (function checkPendingUpdate() {
+            const updateTs = localStorage.getItem('systemUpdateInProgress');
+            if (updateTs) {
+                const age = Date.now() - parseInt(updateTs, 10);
+                if (age < 300000) {
+                    systemUpdateStartTime = parseInt(updateTs, 10);
+                    showSystemUpdateOverlay('System update in progress, waiting for restart...');
+                } else {
+                    localStorage.removeItem('systemUpdateInProgress');
+                }
+            }
+        })();
 
         // Initialize
         connectWebSocket();
