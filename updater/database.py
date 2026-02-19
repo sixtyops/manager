@@ -303,11 +303,14 @@ def init_db():
             # Setup wizard tracking
             "setup_wizard_completed": "false",
             # Auto-update configuration
+            "release_channel": "stable",  # "stable" or "dev"
             "autoupdate_enabled": "true",
             "autoupdate_last_check": "",
             "autoupdate_available_version": "",
             "autoupdate_release_url": "",
             "autoupdate_release_notes": "",
+            # Pre-update reboot
+            "pre_update_reboot": "true",
             # Vendor feature flags
             "mikrotik_enabled": "false",
         }

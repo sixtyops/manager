@@ -1599,6 +1599,10 @@
                     <div class="drawer-section-title">Options</div>
                     <div style="grid-column: 2 / -1; display: flex; gap: 20px; padding-top: 4px; align-items: center; flex-wrap: wrap;">
                         <div class="drawer-toggle-row">
+                            <span class="drawer-toggle active" id="drawerPreRebootToggle" onclick="toggleDrawerPreReboot()"></span>
+                            <span class="drawer-toggle-label">Pre-update Reboot</span>
+                        </div>
+                        <div class="drawer-toggle-row">
                             <span class="drawer-toggle" id="drawerBetaToggle" onclick="toggleDrawerBeta()"></span>
                             <span class="drawer-toggle-label">Beta Firmware</span>
                         </div>
@@ -1670,6 +1674,15 @@
                     <span id="appVersionDisplay" style="font-size:0.75rem;color:#6b7280;"></span>
                 </div>
                 <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 12px 0;">When enabled, the app will periodically check for new versions and notify you when updates are available.</p>
+
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+                    <label style="margin:0;font-size:0.8rem;">Release Channel</label>
+                    <select id="appReleaseChannel" onchange="saveReleaseChannel()" style="font-size:0.8rem;">
+                        <option value="stable">Stable</option>
+                        <option value="dev">Dev</option>
+                    </select>
+                    <span style="font-size:0.68rem;color:#9ca3af;">Dev receives pre-release updates for testing</span>
+                </div>
 
                 <div style="display:flex;align-items:center;gap:8px;">
                     <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
@@ -3049,6 +3062,9 @@
                 const toggle = document.getElementById('appAutoUpdateToggle');
                 if (toggle) toggle.classList.toggle('active', result.enabled);
 
+                const channelSelect = document.getElementById('appReleaseChannel');
+                if (channelSelect) channelSelect.value = result.release_channel || 'stable';
+
                 const statusEl = document.getElementById('appUpdateStatus');
                 if (statusEl && result.last_check) {
                     const d = new Date(result.last_check.endsWith('Z') ? result.last_check : result.last_check + 'Z');
@@ -3082,6 +3098,22 @@
                 const statusEl = document.getElementById('appUpdateStatus');
                 if (statusEl) {
                     statusEl.textContent = 'Saved';
+                    setTimeout(() => loadAppUpdateStatus(), 1500);
+                }
+            } catch (e) {}
+        }
+
+        async function saveReleaseChannel() {
+            const channel = document.getElementById('appReleaseChannel').value;
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ release_channel: channel }),
+                });
+                const statusEl = document.getElementById('appUpdateStatus');
+                if (statusEl) {
+                    statusEl.textContent = 'Channel updated to ' + channel;
                     setTimeout(() => loadAppUpdateStatus(), 1500);
                 }
             } catch (e) {}
@@ -3476,6 +3508,10 @@
                 const betaToggle = document.getElementById('drawerBetaToggle');
                 betaToggle.classList.toggle('active', drawerBetaEnabled);
 
+                // Pre-update Reboot
+                const preRebootToggle = document.getElementById('drawerPreRebootToggle');
+                preRebootToggle.classList.toggle('active', s.pre_update_reboot !== 'false');
+
                 // Downgrade
                 const downgradeToggle = document.getElementById('drawerDowngradeToggle');
                 downgradeToggle.classList.toggle('active', s.allow_downgrade === 'true');
@@ -3550,6 +3586,12 @@
             markDrawerDirty();
         }
 
+        function toggleDrawerPreReboot() {
+            const toggle = document.getElementById('drawerPreRebootToggle');
+            toggle.classList.toggle('active');
+            markDrawerDirty();
+        }
+
         function toggleDrawerDowngrade() {
             const toggle = document.getElementById('drawerDowngradeToggle');
             toggle.classList.toggle('active');
@@ -3597,6 +3639,7 @@
                 firmware_beta_enabled: drawerBetaEnabled ? 'true' : 'false',
                 allow_downgrade: document.getElementById('drawerDowngradeToggle').classList.contains('active') ? 'true' : 'false',
                 weather_check_enabled: document.getElementById('drawerWeatherToggle').classList.contains('active') ? 'true' : 'false',
+                pre_update_reboot: document.getElementById('drawerPreRebootToggle').classList.contains('active') ? 'true' : 'false',
             };
 
             if (drawerFwSelected['tna-30x']) settings.selected_firmware_30x = drawerFwSelected['tna-30x'];
