@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 _checker: Optional["ReleaseChecker"] = None
 
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "isolson/firmware-updater")
-GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_API_RELEASES = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 CHECK_INTERVAL = int(os.environ.get("AUTOUPDATE_CHECK_INTERVAL", 604800))  # 7 days
 
 
@@ -71,26 +72,44 @@ class ReleaseChecker:
     async def check_for_updates(self) -> dict:
         """Check GitHub for the latest release.
 
+        Respects the release_channel setting: 'stable' checks only full
+        releases, 'dev' also considers pre-releases.
+
         Returns dict with 'current_version', 'latest_version', 'update_available', etc.
         """
         current = __version__
+        channel = db.get_setting("release_channel", "stable")
         result = {
             "current_version": current,
             "latest_version": None,
             "update_available": False,
             "release_url": None,
             "release_notes": None,
+            "release_channel": channel,
             "error": None,
         }
 
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(
-                    GITHUB_API_URL,
-                    headers={"Accept": "application/vnd.github+json"},
-                )
-                resp.raise_for_status()
-                data = resp.json()
+                if channel == "dev":
+                    # Fetch recent releases including pre-releases
+                    resp = await client.get(
+                        GITHUB_API_RELEASES,
+                        params={"per_page": 10},
+                        headers={"Accept": "application/vnd.github+json"},
+                    )
+                    resp.raise_for_status()
+                    releases = resp.json()
+                    # Pick the newest release (first in list, which includes pre-releases)
+                    data = releases[0] if releases else {}
+                else:
+                    # Stable: only the latest non-prerelease
+                    resp = await client.get(
+                        GITHUB_API_LATEST,
+                        headers={"Accept": "application/vnd.github+json"},
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
 
             tag_name = data.get("tag_name", "")
             # Strip leading 'v' if present (e.g., "v0.2.0" -> "0.2.0")
@@ -140,6 +159,7 @@ class ReleaseChecker:
         is_safe, blocked_reason = _is_safe_to_update()
         return {
             "current_version": __version__,
+            "release_channel": db.get_setting("release_channel", "stable"),
             "enabled": db.get_setting("autoupdate_enabled", "false") == "true",
             "last_check": db.get_setting("autoupdate_last_check", ""),
             "available_version": db.get_setting("autoupdate_available_version", ""),

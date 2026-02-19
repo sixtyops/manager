@@ -1091,8 +1091,9 @@ _SETTINGS_WRITABLE = {
     "weather_check_enabled", "min_temperature_c", "temperature_unit",
     "schedule_scope", "schedule_scope_data",
     "firmware_beta_enabled", "firmware_quarantine_days",
-    "slack_webhook_url", "autoupdate_enabled",
+    "slack_webhook_url", "autoupdate_enabled", "release_channel",
     "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
+    "pre_update_reboot",
 }
 
 
@@ -1199,6 +1200,11 @@ async def update_device_auth_config(request: Request, session: dict = Depends(re
         password=data.get("password", ""),
     )
 
+    # Preserve existing password if not provided (field is cleared on UI load)
+    if not config.password:
+        existing = radius_config.get_device_auth_config()
+        config.password = existing.password
+
     radius_config.set_device_auth_config(config)
     return {"success": True}
 
@@ -1232,6 +1238,11 @@ async def update_oidc_config_api(request: Request, session: dict = Depends(requi
         allowed_group=data.get("allowed_group", ""),
         scopes=data.get("scopes", "openid email profile"),
     )
+
+    # Preserve existing secret if not provided (field is cleared on UI load)
+    if not config.client_secret:
+        existing = oidc_config.get_oidc_config()
+        config.client_secret = existing.client_secret
 
     if config.provider_url:
         try:
@@ -1719,6 +1730,7 @@ class UpdateJob:
     is_scheduled: bool = False
     end_hour: Optional[int] = None
     schedule_timezone: Optional[str] = None
+    pre_update_reboot: bool = True
 
 
 MAX_FIRMWARE_SIZE = 500 * 1024 * 1024   # 500 MB
@@ -2229,6 +2241,8 @@ async def _start_scheduled_update(
     if not valid_aps and not valid_switches:
         raise RuntimeError("No valid APs or switches found for scheduled update")
 
+    pre_update_reboot = db.get_setting("pre_update_reboot", "true") == "true"
+
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
         job_id=job_id,
@@ -2246,6 +2260,7 @@ async def _start_scheduled_update(
         is_scheduled=True,
         end_hour=end_hour,
         schedule_timezone=schedule_timezone,
+        pre_update_reboot=pre_update_reboot,
     )
 
     for ip in valid_aps:
@@ -2385,6 +2400,8 @@ async def start_update(
         else:
             device_firmware_map[sw_ip] = sw_fw
 
+    pre_update_reboot = db.get_setting("pre_update_reboot", "true") == "true"
+
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
         job_id=job_id,
@@ -2399,6 +2416,7 @@ async def start_update(
         device_parent=device_parent,
         started_at=datetime.now(),
         status="running",
+        pre_update_reboot=pre_update_reboot,
     )
 
     # Create device statuses for all devices (APs + CPEs + Switches)
@@ -2516,6 +2534,8 @@ async def update_single_device_endpoint(
             # Create a dummy AP entry in ap_cpe_map so the job structure works
             ap_cpe_map[cpe["ap_ip"]] = [ip]
 
+    pre_update_reboot = db.get_setting("pre_update_reboot", "true") == "true"
+
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
         job_id=job_id,
@@ -2530,6 +2550,7 @@ async def update_single_device_endpoint(
         device_parent=device_parent,
         started_at=datetime.now(),
         status="running",
+        pre_update_reboot=pre_update_reboot,
     )
 
     role = device_roles[ip]
@@ -2715,6 +2736,87 @@ async def run_update_job(job: UpdateJob, concurrency: int):
     ap_ips = [ip for ip, role in job.device_roles.items() if role == "ap"]
     cpe_ips = [ip for ip, role in job.device_roles.items() if role == "cpe"]
     switch_ips = [ip for ip, role in job.device_roles.items() if role == "switch"]
+
+    # Pre-update reboot phase: reboot all devices before firmware update
+    if job.pre_update_reboot:
+        all_ips = cpe_ips + ap_ips + switch_ips
+        if all_ips:
+            logger.info(f"Job {job.job_id}: starting pre-update reboot phase ({len(all_ips)} devices)")
+
+            async def _reboot_device(ip):
+                async with semaphore:
+                    if job.cancelled:
+                        return
+                    ds = job.devices.get(ip)
+                    if not ds:
+                        return
+                    ds.status = "pre-rebooting"
+                    ds.progress_message = "Pre-update reboot..."
+                    await broadcast({
+                        "type": "device_update",
+                        "job_id": job.job_id,
+                        "ip": ip,
+                        "status": ds.status,
+                        "message": ds.progress_message,
+                        "role": ds.role,
+                        "parent_ap": ds.parent_ap,
+                    })
+                    username, password = job.credentials.get(ip, ("", ""))
+                    client = TachyonClient(ip, username, password)
+                    try:
+                        login_result = await client.login()
+                        if login_result is not True:
+                            ds.status = "failed"
+                            ds.error = login_result if isinstance(login_result, str) else "Login failed"
+                            ds.progress_message = f"Pre-reboot login failed: {ds.error}"
+                            job.cancelled = True
+                            return
+                        timeout = TNS100_REBOOT_TIMEOUT if ds.role == "switch" else AP_REBOOT_TIMEOUT
+                        if not await client.reboot(timeout=timeout):
+                            ds.status = "failed"
+                            ds.error = "Device did not come back online after pre-update reboot"
+                            ds.progress_message = ds.error
+                            job.cancelled = True
+                            return
+                        ds.status = "pending"
+                        ds.progress_message = "Rebooted, waiting for update..."
+                    except Exception as e:
+                        ds.status = "failed"
+                        ds.error = f"Pre-update reboot failed: {e}"
+                        ds.progress_message = ds.error
+                        job.cancelled = True
+                        return
+                    await broadcast({
+                        "type": "device_update",
+                        "job_id": job.job_id,
+                        "ip": ip,
+                        "status": ds.status,
+                        "message": ds.progress_message,
+                        "role": ds.role,
+                        "parent_ap": ds.parent_ap,
+                    })
+
+            await asyncio.gather(
+                *[_reboot_device(ip) for ip in all_ips],
+                return_exceptions=True,
+            )
+
+            if job.cancelled:
+                # Mark any remaining pending devices as cancelled
+                for ip in all_ips:
+                    ds = job.devices.get(ip)
+                    if ds and ds.status == "pending":
+                        ds.status = "cancelled"
+                        ds.progress_message = "Cancelled: another device failed to reboot"
+                        await broadcast({
+                            "type": "device_update",
+                            "job_id": job.job_id,
+                            "ip": ip,
+                            "status": ds.status,
+                            "message": ds.progress_message,
+                            "role": ds.role,
+                            "parent_ap": ds.parent_ap,
+                        })
 
     # Build phase list based on bank_mode
     # Switches always run last, after all APs and CPEs complete

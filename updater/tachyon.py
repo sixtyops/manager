@@ -7,6 +7,7 @@ API Endpoints:
 - GET /cgi.lua/status?type=wireless,zones - Get connected peers (CPEs)
 - PUT /cgi.lua/update - Upload firmware (multipart: fw=binary, force=false)
 - POST /cgi.lua/update - Trigger firmware install (JSON: {reset:false, force:false})
+- POST /reboot - Reboot device
 
 Security Note:
     By default, SSL certificate verification is disabled (-k flag) because Tachyon
@@ -524,6 +525,16 @@ class TachyonClient:
 
         logger.error(f"{self.ip} did not come back online within {timeout}s")
         return False
+
+    async def reboot(self, timeout: int = 300) -> bool:
+        """Reboot the device and wait for it to come back online."""
+        logger.info(f"Rebooting {self.ip}...")
+        try:
+            await self._curl("POST", "/reboot")
+        except Exception:
+            # Connection may drop immediately during reboot
+            logger.info(f"Reboot triggered on {self.ip} (connection closed)")
+        return await self.wait_for_reboot(timeout=timeout)
 
     async def update_firmware(
         self,

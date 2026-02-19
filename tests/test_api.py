@@ -157,6 +157,26 @@ class TestSettingsAPI:
         mock_fetcher.reselect.assert_called_once_with(True)
         mock_scheduler.force_check.assert_awaited_once()
 
+    def test_save_pre_update_reboot_setting(self, authed_client):
+        with patch("updater.app.get_fetcher", return_value=None), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = authed_client.post("/api/settings/save", json={
+                "pre_update_reboot": "false",
+            })
+        assert resp.status_code == 200
+        resp = authed_client.get("/api/settings")
+        assert resp.json()["settings"]["pre_update_reboot"] == "false"
+
+        # Toggle back on
+        with patch("updater.app.get_fetcher", return_value=None), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = authed_client.post("/api/settings/save", json={
+                "pre_update_reboot": "true",
+            })
+        assert resp.status_code == 200
+        resp = authed_client.get("/api/settings")
+        assert resp.json()["settings"]["pre_update_reboot"] == "true"
+
 
 class TestTopologyAPI:
     def test_get_topology(self, authed_client):

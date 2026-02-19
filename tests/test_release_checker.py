@@ -63,6 +63,85 @@ class TestVersionComparison:
         result = await self._check("1.0.0", "vNOT_A_VERSION")
         assert result["update_available"] is False
 
+    @pytest.mark.asyncio
+    async def test_dev_channel_checks_all_releases(self, mock_db):
+        """Dev channel should hit /releases (all) not /releases/latest."""
+        from updater import database
+        database.set_setting("release_channel", "dev")
+
+        with patch("updater.release_checker.__version__", "1.0.0"):
+            from updater.release_checker import ReleaseChecker
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json.return_value = [
+                {
+                    "tag_name": "v1.1.0-dev.1",
+                    "prerelease": True,
+                    "html_url": "https://github.com/test/releases/tag/v1.1.0-dev.1",
+                    "body": "dev release notes",
+                },
+                {
+                    "tag_name": "v1.0.0",
+                    "prerelease": False,
+                    "html_url": "https://github.com/test/releases/tag/v1.0.0",
+                    "body": "stable notes",
+                },
+            ]
+
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(return_value=mock_resp)
+
+            with patch("updater.release_checker.httpx.AsyncClient", return_value=mock_client):
+                checker = ReleaseChecker(broadcast_func=AsyncMock())
+                result = await checker.check_for_updates()
+
+        assert result["update_available"] is True
+        assert result["latest_version"] == "1.1.0-dev.1"
+        assert result["release_channel"] == "dev"
+        # Verify it called the releases list endpoint (not /latest)
+        call_args = mock_client.get.call_args
+        assert "/releases/latest" not in str(call_args)
+
+    @pytest.mark.asyncio
+    async def test_stable_channel_uses_latest_endpoint(self, mock_db):
+        """Stable channel should only hit /releases/latest."""
+        from updater import database
+        database.set_setting("release_channel", "stable")
+
+        with patch("updater.release_checker.__version__", "1.0.0"):
+            from updater.release_checker import ReleaseChecker, GITHUB_API_LATEST
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json.return_value = {
+                "tag_name": "v1.0.1",
+                "html_url": "https://github.com/test/releases/tag/v1.0.1",
+                "body": "stable notes",
+            }
+
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(return_value=mock_resp)
+
+            with patch("updater.release_checker.httpx.AsyncClient", return_value=mock_client):
+                checker = ReleaseChecker(broadcast_func=AsyncMock())
+                result = await checker.check_for_updates()
+
+        assert result["update_available"] is True
+        assert result["latest_version"] == "1.0.1"
+        assert result["release_channel"] == "stable"
+        # Verify it called the /latest endpoint
+        mock_client.get.assert_called_once_with(
+            GITHUB_API_LATEST,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+
 
 # ---------------------------------------------------------------------------
 # apply_update guardrails
