@@ -121,6 +121,7 @@ def get_auth_config_summary() -> dict:
             "enabled": oidc.enabled,
             "provider_url": oidc.provider_url,
             "client_id": oidc.client_id,
+            "client_secret_set": bool(oidc.client_secret),
             "redirect_uri": oidc.redirect_uri,
             "allowed_group": oidc.allowed_group,
             "scopes": oidc.scopes,

@@ -1199,6 +1199,11 @@ async def update_device_auth_config(request: Request, session: dict = Depends(re
         password=data.get("password", ""),
     )
 
+    # Preserve existing password if not provided (field is cleared on UI load)
+    if not config.password:
+        existing = radius_config.get_device_auth_config()
+        config.password = existing.password
+
     radius_config.set_device_auth_config(config)
     return {"success": True}
 
@@ -1232,6 +1237,11 @@ async def update_oidc_config_api(request: Request, session: dict = Depends(requi
         allowed_group=data.get("allowed_group", ""),
         scopes=data.get("scopes", "openid email profile"),
     )
+
+    # Preserve existing secret if not provided (field is cleared on UI load)
+    if not config.client_secret:
+        existing = oidc_config.get_oidc_config()
+        config.client_secret = existing.client_secret
 
     if config.provider_url:
         try:

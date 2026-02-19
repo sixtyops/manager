@@ -233,6 +233,10 @@
         .backup-modal .backup-btn:hover {
             background: var(--border-light);
         }
+        .backup-modal .backup-btn:active {
+            transform: scale(0.97);
+            opacity: 0.8;
+        }
 
         /* Toggle switch */
         .toggle {
@@ -1764,9 +1768,10 @@
                             <input type="text" id="authOidcAllowedGroup" placeholder="tachyon-admins" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
                         </div>
                     </div>
-                    <div style="display:flex;gap:6px;margin-top:10px;">
+                    <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
                         <button class="backup-btn" onclick="saveOidcConfig()">Save SSO</button>
                         <button class="backup-btn" onclick="testOidcConfig()" style="background:#6b7280;color:#fff;">Test</button>
+                        <span id="oidcStatus" style="font-size:0.75rem;color:#6b7280;"></span>
                     </div>
                 </div>
 
@@ -1792,12 +1797,11 @@
                             <input type="password" id="authDevicePassword" placeholder="Enter password" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
                         </div>
                     </div>
-                    <div style="display:flex;gap:6px;margin-top:10px;">
+                    <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
                         <button class="backup-btn" onclick="saveDeviceConfig()">Save Device Credentials</button>
+                        <span id="deviceStatus" style="font-size:0.75rem;color:#6b7280;"></span>
                     </div>
                 </div>
-
-                <div id="authStatus" style="font-size:0.75rem;color:#6b7280;margin-top:16px;min-height:1.2em;"></div>
             </div>
         </div>
     </div>
@@ -2825,7 +2829,7 @@
         function closeAppSettingsModal() {
             document.getElementById('appSettingsOverlay').classList.remove('open');
             // Clear status messages
-            const statusEls = ['backupStatus', 'notifStatus', 'authStatus', 'appUpdateStatus'];
+            const statusEls = ['backupStatus', 'notifStatus', 'oidcStatus', 'deviceStatus', 'appUpdateStatus'];
             statusEls.forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.textContent = '';
@@ -2865,7 +2869,9 @@
                 document.getElementById('authOidcEnabled').checked = oidcEnabled;
                 document.getElementById('authOidcProviderUrl').value = data.oidc?.provider_url || '';
                 document.getElementById('authOidcClientId').value = data.oidc?.client_id || '';
-                document.getElementById('authOidcClientSecret').value = '';
+                const secretEl = document.getElementById('authOidcClientSecret');
+                secretEl.value = '';
+                secretEl.placeholder = data.oidc?.client_secret_set ? '(unchanged)' : 'Enter client secret';
                 document.getElementById('authOidcRedirectUri').value = data.oidc?.redirect_uri || '';
                 document.getElementById('authOidcAllowedGroup').value = data.oidc?.allowed_group || '';
                 toggleOidcFields();
@@ -2874,11 +2880,13 @@
                 const deviceEnabled = data.device_defaults?.enabled || false;
                 document.getElementById('authDeviceEnabled').checked = deviceEnabled;
                 document.getElementById('authDeviceUsername').value = data.device_defaults?.username || '';
-                document.getElementById('authDevicePassword').value = '';
+                const pwEl = document.getElementById('authDevicePassword');
+                pwEl.value = '';
+                pwEl.placeholder = data.device_defaults?.has_password ? '(unchanged)' : 'Enter password';
                 toggleDeviceFields();
             } catch (e) {
-                document.getElementById('authStatus').textContent = 'Failed to load config';
-                document.getElementById('authStatus').style.color = '#ef4444';
+                document.getElementById('oidcStatus').textContent = 'Failed to load config';
+                document.getElementById('oidcStatus').style.color = '#ef4444';
             }
         }
         async function saveSlackWebhook() {
@@ -2940,15 +2948,17 @@
         }
 
         async function saveOidcConfig() {
-            const statusEl = document.getElementById('authStatus');
+            const statusEl = document.getElementById('oidcStatus');
             const enabled = document.getElementById('authOidcEnabled').checked;
             const provider_url = document.getElementById('authOidcProviderUrl').value.trim();
             const client_id = document.getElementById('authOidcClientId').value.trim();
-            const client_secret = document.getElementById('authOidcClientSecret').value;
+            const secretEl = document.getElementById('authOidcClientSecret');
+            const client_secret = secretEl.value;
+            const secretAlreadySet = secretEl.placeholder === '(unchanged)';
             const redirect_uri = document.getElementById('authOidcRedirectUri').value.trim();
             const allowed_group = document.getElementById('authOidcAllowedGroup').value.trim();
 
-            if (enabled && (!provider_url || !client_id || !client_secret)) {
+            if (enabled && (!provider_url || !client_id || (!client_secret && !secretAlreadySet))) {
                 statusEl.textContent = 'Provider URL, Client ID, and Client Secret required when enabled';
                 statusEl.style.color = '#f59e0b';
                 return;
@@ -2973,7 +2983,7 @@
         }
 
         async function testOidcConfig() {
-            const statusEl = document.getElementById('authStatus');
+            const statusEl = document.getElementById('oidcStatus');
             statusEl.textContent = 'Testing OIDC discovery...';
             statusEl.style.color = '#6b7280';
 
@@ -2997,12 +3007,14 @@
         }
 
         async function saveDeviceConfig() {
-            const statusEl = document.getElementById('authStatus');
+            const statusEl = document.getElementById('deviceStatus');
             const enabled = document.getElementById('authDeviceEnabled').checked;
             const username = document.getElementById('authDeviceUsername').value.trim();
-            const password = document.getElementById('authDevicePassword').value;
+            const pwEl = document.getElementById('authDevicePassword');
+            const password = pwEl.value;
+            const passwordAlreadySet = pwEl.placeholder === '(unchanged)';
 
-            if (enabled && (!username || !password)) {
+            if (enabled && (!username || (!password && !passwordAlreadySet))) {
                 statusEl.textContent = 'Username and password required when enabled';
                 statusEl.style.color = '#f59e0b';
                 return;
