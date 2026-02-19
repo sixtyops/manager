@@ -312,6 +312,59 @@
             border-bottom-color: #3b82f6;
         }
 
+        /* Main page tabs */
+        .main-tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid var(--border);
+            margin: 12px 0 0 0;
+            padding: 0;
+        }
+        .main-tab {
+            padding: 10px 20px;
+            border: none;
+            background: none;
+            color: #6b7280;
+            font-size: 0.82rem;
+            font-weight: 500;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .main-tab:hover { color: #374151; }
+        .main-tab.active { color: #3b82f6; border-bottom-color: #3b82f6; }
+
+        /* History table styles */
+        .history-status-badge {
+            display: inline-block;
+            padding: 1px 8px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .history-status-badge.success { background: #dcfce7; color: #16a34a; }
+        .history-status-badge.failed { background: #fef2f2; color: #dc2626; }
+        .history-status-badge.skipped { background: #f3f4f6; color: #6b7280; }
+        .history-status-badge.cancelled { background: #fef3c7; color: #d97706; }
+
+        .history-stage-pill {
+            display: inline-block;
+            font-size: 0.65rem;
+            padding: 1px 6px;
+            border-radius: 4px;
+            margin-right: 3px;
+        }
+        .history-stage-pill.ok { background: #dcfce7; color: #16a34a; }
+        .history-stage-pill.fail { background: #fef2f2; color: #dc2626; }
+
+        .history-detail-row td {
+            padding: 8px 12px;
+            background: var(--bg-secondary);
+            border-top: none;
+        }
+
         .settings-panel {
             display: none;
             flex: 1;
@@ -1528,48 +1581,94 @@
             </div>
         </div>
 
-        <!-- Stats -->
-        <div class="stats-bar" id="statsBar">
-            <div class="stat">
-                <div class="dot primary"></div>
-                <span class="stat-value" id="apCount">0</span>
-                <span class="stat-label">APs</span>
+        <!-- Main Tabs -->
+        <div class="main-tabs" id="mainTabs">
+            <button class="main-tab active" data-tab="updates" onclick="switchMainTab('updates')">Updates</button>
+            <button class="main-tab" data-tab="config" onclick="switchMainTab('config')">Config</button>
+            <button class="main-tab" data-tab="history" onclick="switchMainTab('history')">History</button>
+        </div>
+
+        <!-- Updates Tab Panel -->
+        <div id="tabPanel-updates">
+            <!-- Stats -->
+            <div class="stats-bar" id="statsBar">
+                <div class="stat">
+                    <div class="dot primary"></div>
+                    <span class="stat-value" id="apCount">0</span>
+                    <span class="stat-label">APs</span>
+                </div>
+                <div class="stat">
+                    <div class="dot success"></div>
+                    <span class="stat-value" id="greenCount">0</span>
+                </div>
+                <div class="stat">
+                    <div class="dot warning"></div>
+                    <span class="stat-value" id="yellowCount">0</span>
+                </div>
+                <div class="stat">
+                    <div class="dot danger"></div>
+                    <span class="stat-value" id="redCount">0</span>
+                </div>
             </div>
-            <div class="stat">
-                <div class="dot success"></div>
-                <span class="stat-value" id="greenCount">0</span>
-            </div>
-            <div class="stat">
-                <div class="dot warning"></div>
-                <span class="stat-value" id="yellowCount">0</span>
-            </div>
-            <div class="stat">
-                <div class="dot danger"></div>
-                <span class="stat-value" id="redCount">0</span>
+
+            <!-- Tree Table -->
+            <div class="table-card">
+                <div style="overflow-x:auto;">
+                    <table class="tree-table" id="deviceTable">
+                        <thead>
+                            <tr>
+                                <th data-sort="name" onclick="sortTable('name')">Name / IP <span class="sort-arrow"></span></th>
+                                <th data-sort="model" onclick="sortTable('model')">Model <span class="sort-arrow"></span></th>
+                                <th data-sort="firmware" onclick="sortTable('firmware')">Version <span class="sort-arrow"></span></th>
+                                <th data-sort="signal" onclick="sortTable('signal')">Signal <span class="sort-arrow"></span></th>
+                                <th data-sort="distance" onclick="sortTable('distance')">Distance <span class="sort-arrow"></span></th>
+                                <th data-sort="status" onclick="sortTable('status')">Status <span class="sort-arrow"></span></th>
+                                <th data-sort="update" onclick="sortTable('update')">Update <span class="sort-arrow"></span></th>
+                                <th data-sort="lastseen" onclick="sortTable('lastseen')">Last Updated <span class="sort-arrow"></span></th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="deviceTableBody">
+                            <tr><td colspan="9" class="empty-state">Enter AP IPs above to get started</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
-        <!-- Tree Table -->
-        <div class="table-card">
-            <div style="overflow-x:auto;">
-                <table class="tree-table" id="deviceTable">
-                    <thead>
-                        <tr>
-                            <th data-sort="name" onclick="sortTable('name')">Name / IP <span class="sort-arrow"></span></th>
-                            <th data-sort="model" onclick="sortTable('model')">Model <span class="sort-arrow"></span></th>
-                            <th data-sort="firmware" onclick="sortTable('firmware')">Version <span class="sort-arrow"></span></th>
-                            <th data-sort="signal" onclick="sortTable('signal')">Signal <span class="sort-arrow"></span></th>
-                            <th data-sort="distance" onclick="sortTable('distance')">Distance <span class="sort-arrow"></span></th>
-                            <th data-sort="status" onclick="sortTable('status')">Status <span class="sort-arrow"></span></th>
-                            <th data-sort="update" onclick="sortTable('update')">Update <span class="sort-arrow"></span></th>
-                            <th data-sort="lastseen" onclick="sortTable('lastseen')">Last Updated <span class="sort-arrow"></span></th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="deviceTableBody">
-                        <tr><td colspan="9" class="empty-state">Enter AP IPs above to get started</td></tr>
-                    </tbody>
-                </table>
+        <!-- Config Tab Panel -->
+        <div id="tabPanel-config" style="display:none;">
+            <div class="table-card" style="text-align:center;padding:48px;color:#9ca3af;">
+                <p style="font-size:0.9rem;font-weight:500;margin-bottom:4px;">Auto Configurator</p>
+                <p style="font-size:0.75rem;">Push RADIUS, SNMP, hostname, NTP, and other settings to devices. Coming soon.</p>
+            </div>
+        </div>
+
+        <!-- History Tab Panel -->
+        <div id="tabPanel-history" style="display:none;">
+            <div class="table-card">
+                <div style="overflow-x:auto;">
+                    <table class="tree-table" id="historyTable">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Device</th>
+                                <th>Role</th>
+                                <th>Action</th>
+                                <th>Version</th>
+                                <th>Status</th>
+                                <th>Failed Stage</th>
+                                <th>Duration</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyTableBody">
+                            <tr><td colspan="8" class="empty-state">No history yet</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="historyLoadMore" style="text-align:center;padding:12px;display:none;">
+                    <button class="btn btn-sm" onclick="loadMoreHistory()">Load More</button>
+                </div>
             </div>
         </div>
     </div>
@@ -1577,29 +1676,44 @@
     <!-- Bottom Drawer -->
     <div class="bottom-drawer" id="bottomDrawer">
         <div class="drawer-handle" id="drawerHandle" onclick="toggleDrawer(event)">
-            <div class="status-bar-section">
-                <span class="status-bar-toggle" id="barAutoToggle" onclick="toggleAutoSchedule(event)"></span>
-                <span class="status-bar-label">Auto-Update</span>
-                <span class="status-badge status-bar-badge" id="barStateBadge">Off</span>
-                <span class="status-bar-reason" id="barBlockReason"></span>
-            </div>
-            <div class="status-bar-section" id="barDeviceCountSection" style="display: none;">
-                <span class="status-bar-count" id="barBehindCount"></span>
-            </div>
-            <div class="status-bar-section status-bar-rollout" id="barRolloutSection" style="margin-left: auto;">
-                <div class="status-bar-phases" id="barPhaseIndicator"></div>
-                <span class="status-bar-muted" id="barRolloutProgress"></span>
-                <span class="status-bar-muted" id="barRolloutPrediction" style="opacity:0.7;font-size:0.8em;"></span>
-                <div class="status-bar-actions" id="barRolloutActions">
-                    <button class="btn btn-sm btn-warning" id="barResumeBtn" onclick="resumeRollout();event.stopPropagation();" style="display:none;">Resume</button>
-                    <button class="btn btn-sm btn-danger" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();" style="display:none;">Cancel</button>
+            <!-- Updates handle content -->
+            <div id="drawerHandle-updates" style="display:flex;align-items:center;gap:8px;flex:1;">
+                <div class="status-bar-section">
+                    <span class="status-bar-toggle" id="barAutoToggle" onclick="toggleAutoSchedule(event)"></span>
+                    <span class="status-bar-label">Auto-Update</span>
+                    <span class="status-badge status-bar-badge" id="barStateBadge">Off</span>
+                    <span class="status-bar-reason" id="barBlockReason"></span>
                 </div>
+                <div class="status-bar-section" id="barDeviceCountSection" style="display: none;">
+                    <span class="status-bar-count" id="barBehindCount"></span>
+                </div>
+                <div class="status-bar-section status-bar-rollout" id="barRolloutSection" style="margin-left: auto;">
+                    <div class="status-bar-phases" id="barPhaseIndicator"></div>
+                    <span class="status-bar-muted" id="barRolloutProgress"></span>
+                    <span class="status-bar-muted" id="barRolloutPrediction" style="opacity:0.7;font-size:0.8em;"></span>
+                    <div class="status-bar-actions" id="barRolloutActions">
+                        <button class="btn btn-sm btn-warning" id="barResumeBtn" onclick="resumeRollout();event.stopPropagation();" style="display:none;">Resume</button>
+                        <button class="btn btn-sm btn-danger" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();" style="display:none;">Cancel</button>
+                    </div>
+                </div>
+                <span class="drawer-unsaved-dot" id="drawerUnsavedDot" title="Unsaved changes"></span>
+                <span id="drawerSavedIndicator" style="font-size:0.7rem;color:#10b981;opacity:0;transition:opacity 0.2s;">Saved</span>
             </div>
-            <span class="drawer-unsaved-dot" id="drawerUnsavedDot" title="Unsaved changes"></span>
-            <span id="drawerSavedIndicator" style="font-size:0.7rem;color:#10b981;opacity:0;transition:opacity 0.2s;">Saved</span>
+            <!-- Config handle content -->
+            <div id="drawerHandle-config" style="display:none;flex:1;">
+                <span class="status-bar-label">Auto-Config</span>
+                <span class="status-badge status-bar-badge" style="background:#f3f4f6;color:#6b7280;">Coming Soon</span>
+            </div>
+            <!-- History handle content -->
+            <div id="drawerHandle-history" style="display:none;flex:1;">
+                <span class="status-bar-label">Filters</span>
+                <span class="status-bar-muted" id="barHistorySummary"></span>
+            </div>
             <div class="drawer-chevron" id="drawerChevron">&#9650;</div>
         </div>
         <div class="drawer-panel" id="drawerPanel">
+            <!-- Updates drawer content -->
+            <div id="drawerContent-updates">
             <div class="drawer-panel-inner">
                 <div class="drawer-settings-grid">
                     <div class="drawer-section-title">Schedule</div>
@@ -1735,6 +1849,45 @@
                 <div class="drawer-save-row" id="drawerSaveRow">
                     <button class="drawer-save-btn" id="drawerSaveBtn" onclick="saveDrawerSettings()" disabled>Save</button>
                     <span class="drawer-save-status" id="drawerSaveStatus"></span>
+                </div>
+            </div>
+            </div><!-- /drawerContent-updates -->
+
+            <!-- Config drawer content -->
+            <div id="drawerContent-config" style="display:none;">
+                <div class="drawer-panel-inner">
+                    <p style="color:#9ca3af;font-size:0.8rem;padding:8px 0;">Config push settings will appear here.</p>
+                </div>
+            </div>
+
+            <!-- History drawer content (filters) -->
+            <div id="drawerContent-history" style="display:none;">
+                <div class="drawer-panel-inner">
+                    <div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap;">
+                        <div>
+                            <label style="font-size:0.72rem;color:#9ca3af;display:block;margin-bottom:2px;">Device IP</label>
+                            <input type="text" id="historyFilterIp" placeholder="All devices" style="width:140px;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem;color:#9ca3af;display:block;margin-bottom:2px;">Status</label>
+                            <select id="historyFilterStatus">
+                                <option value="">All</option>
+                                <option value="success">Success</option>
+                                <option value="failed">Failed</option>
+                                <option value="skipped">Skipped</option>
+                                <option value="cancelled">Cancelled</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem;color:#9ca3af;display:block;margin-bottom:2px;">Action</label>
+                            <select id="historyFilterAction">
+                                <option value="">All</option>
+                                <option value="firmware_update">Firmware Update</option>
+                                <option value="config_push">Config Push</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-sm" onclick="loadHistory()">Apply Filters</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -3707,6 +3860,144 @@
             } catch (e) {}
         }
 
+        // ── Main Tabs ──
+
+        let currentMainTab = 'updates';
+
+        function switchMainTab(tab) {
+            currentMainTab = tab;
+            document.querySelectorAll('.main-tab').forEach(t =>
+                t.classList.toggle('active', t.dataset.tab === tab));
+            document.querySelectorAll('[id^="tabPanel-"]').forEach(p =>
+                p.style.display = p.id === `tabPanel-${tab}` ? '' : 'none');
+            updateDrawerForTab(tab);
+            if (tab === 'history' && !historyLoaded) loadHistory();
+        }
+
+        function updateDrawerForTab(tab) {
+            // Switch drawer handle sections
+            ['updates', 'config', 'history'].forEach(t => {
+                const handle = document.getElementById(`drawerHandle-${t}`);
+                if (handle) handle.style.display = t === tab ? 'flex' : 'none';
+                const content = document.getElementById(`drawerContent-${t}`);
+                if (content) content.style.display = t === tab ? '' : 'none';
+            });
+        }
+
+        // ── History ──
+
+        let historyOffset = 0;
+        let historyLoaded = false;
+
+        async function loadHistory(append) {
+            if (!append) historyOffset = 0;
+            const ip = document.getElementById('historyFilterIp').value.trim();
+            const status = document.getElementById('historyFilterStatus').value;
+            const action = document.getElementById('historyFilterAction').value;
+            const params = new URLSearchParams({limit: '100', offset: String(historyOffset)});
+            if (ip) params.set('ip', ip);
+            if (status) params.set('status', status);
+            if (action) params.set('action', action);
+
+            const tbody = document.getElementById('historyTableBody');
+            if (!append) tbody.innerHTML = '<tr><td colspan="8" class="empty-state">Loading...</td></tr>';
+
+            try {
+                const resp = await fetch(`/api/device-history?${params}`);
+                if (!resp.ok) throw new Error('Failed to load');
+                const data = await resp.json();
+                historyLoaded = true;
+
+                if (!append) tbody.innerHTML = '';
+
+                if (data.history.length === 0 && historyOffset === 0) {
+                    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No history found</td></tr>';
+                    document.getElementById('historyLoadMore').style.display = 'none';
+                    updateHistorySummary(0);
+                    return;
+                }
+
+                for (const entry of data.history) {
+                    const row = document.createElement('tr');
+                    row.style.cursor = 'pointer';
+                    row.onclick = function() { toggleHistoryDetail(this, entry); };
+
+                    const d = entry.completed_at ? new Date(entry.completed_at) : null;
+                    const timeStr = d && !isNaN(d.getTime()) ? d.toLocaleString() : '-';
+                    const verStr = entry.old_version && entry.new_version
+                        ? `${entry.old_version} → ${entry.new_version}`
+                        : entry.new_version || entry.old_version || '-';
+                    const durStr = entry.duration_seconds ? Math.round(entry.duration_seconds) + 's' : '-';
+                    const actionLabel = entry.action === 'config_push' ? 'Config' : 'Update';
+
+                    row.innerHTML = `
+                        <td style="font-size:0.72rem;white-space:nowrap;">${escapeHtml(timeStr)}</td>
+                        <td style="font-family:monospace;font-size:0.72rem;">${escapeHtml(entry.ip)}</td>
+                        <td style="font-size:0.72rem;">${escapeHtml(entry.role || '-')}</td>
+                        <td style="font-size:0.72rem;">${actionLabel}</td>
+                        <td style="font-size:0.72rem;">${escapeHtml(verStr)}</td>
+                        <td><span class="history-status-badge ${entry.status}">${entry.status}</span></td>
+                        <td style="font-size:0.72rem;color:${entry.failed_stage ? '#dc2626' : '#9ca3af'};">${entry.failed_stage || '-'}</td>
+                        <td style="font-size:0.72rem;">${durStr}</td>
+                    `;
+                    tbody.appendChild(row);
+                }
+
+                historyOffset += data.history.length;
+                document.getElementById('historyLoadMore').style.display =
+                    data.history.length >= 100 ? '' : 'none';
+                if (!append) updateHistorySummary(data.history.length);
+            } catch (e) {
+                if (!append) tbody.innerHTML = `<tr><td colspan="8" class="empty-state" style="color:#dc2626;">Error loading history</td></tr>`;
+            }
+        }
+
+        function loadMoreHistory() {
+            loadHistory(true);
+        }
+
+        function toggleHistoryDetail(row, entry) {
+            const next = row.nextElementSibling;
+            if (next && next.classList.contains('history-detail-row')) {
+                next.remove();
+                return;
+            }
+            // Remove any other open detail rows
+            row.closest('tbody').querySelectorAll('.history-detail-row').forEach(r => r.remove());
+
+            const detailRow = document.createElement('tr');
+            detailRow.className = 'history-detail-row';
+            let stagesHtml = '';
+            if (entry.stages && entry.stages.length > 0) {
+                stagesHtml = '<div style="margin-top:4px;">';
+                for (const s of entry.stages) {
+                    const cls = s.success ? 'ok' : 'fail';
+                    let dur = '';
+                    if (s.started_at && s.completed_at) {
+                        const ms = new Date(s.completed_at) - new Date(s.started_at);
+                        dur = ` (${Math.round(ms / 1000)}s)`;
+                    }
+                    stagesHtml += `<span class="history-stage-pill ${cls}">${s.stage}${dur}</span>`;
+                }
+                stagesHtml += '</div>';
+            }
+            let errorHtml = entry.error ? `<div style="font-size:0.72rem;color:#dc2626;margin-top:4px;">${escapeHtml(entry.error)}</div>` : '';
+            let modelHtml = entry.model ? `<span style="font-size:0.72rem;color:#6b7280;">Model: ${escapeHtml(entry.model)}</span>` : '';
+            let passHtml = entry.pass_number > 1 ? `<span style="font-size:0.72rem;color:#6b7280;margin-left:12px;">Pass ${entry.pass_number}</span>` : '';
+
+            detailRow.innerHTML = `<td colspan="8" style="padding:8px 12px;background:var(--bg-secondary, #f9fafb);border-top:none;">
+                ${modelHtml}${passHtml}
+                ${stagesHtml}
+                ${errorHtml}
+            </td>`;
+            row.after(detailRow);
+        }
+
+        function updateHistorySummary(count) {
+            const el = document.getElementById('barHistorySummary');
+            if (el) el.textContent = count > 0 ? `${count} entries` : 'No entries';
+        }
+
         // ── Drawer ──
 
         function toggleDrawer(event) {
@@ -3715,7 +4006,7 @@
             const drawer = document.getElementById('bottomDrawer');
             const opening = !drawer.classList.contains('open');
             drawer.classList.toggle('open');
-            if (opening) loadDrawerSettings();
+            if (opening && currentMainTab === 'updates') loadDrawerSettings();
             // Adjust body padding so content is scrollable behind the drawer
             requestAnimationFrame(() => {
                 setTimeout(() => {

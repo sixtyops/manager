@@ -128,6 +128,7 @@ async def _periodic_cleanup():
             db.cleanup_old_schedule_log(max_age_days=90)
             db.cleanup_old_rollouts(max_age_days=180)
             db.cleanup_old_device_durations(max_age_days=180)
+            db.cleanup_old_device_update_history(max_age_days=180)
             _cleanup_completed_jobs(max_age_seconds=3600)
             _cleanup_oidc_states()
             logger.info("Periodic cleanup completed")
@@ -1707,6 +1708,10 @@ class DeviceStatus:
     role: str = "ap"
     parent_ap: Optional[str] = None
     model: Optional[str] = None
+    # Stage tracking for history
+    stage_history: list = field(default_factory=list)
+    current_stage: Optional[str] = None
+    current_stage_started: Optional[str] = None
 
 
 @dataclass
@@ -2606,11 +2611,28 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     "role": device_status.role,
                     "parent_ap": device_status.parent_ap,
                 })
+                now_iso = datetime.now().isoformat()
+                try:
+                    db.save_device_update_history(
+                        job_id=job.job_id, ip=ip, role=device_status.role,
+                        pass_number=pass_number, status="skipped",
+                        old_version=None, new_version=None, model=None,
+                        error="Maintenance window ending", failed_stage=None,
+                        stages=[], duration_seconds=0,
+                        started_at=now_iso, completed_at=now_iso,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to save device history for {ip}: {e}")
                 return
         except Exception as e:
             logger.warning(f"Maintenance window check failed: {e}")
 
     device_start_time = datetime.now()
+
+    # Reset stage tracking for this pass
+    device_status.stage_history = []
+    device_status.current_stage = "connecting"
+    device_status.current_stage_started = device_start_time.isoformat()
 
     prefix = f"Pass {pass_number}: " if pass_number > 1 else ""
     device_status.status = "connecting"
@@ -2648,6 +2670,18 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             "role": device_status.role,
             "parent_ap": device_status.parent_ap,
         })
+        now_iso = datetime.now().isoformat()
+        try:
+            db.save_device_update_history(
+                job_id=job.job_id, ip=ip, role=device_status.role,
+                pass_number=pass_number, status="failed",
+                old_version=None, new_version=None, model=device_status.model,
+                error=missing_fw_error, failed_stage="connecting",
+                stages=[], duration_seconds=0,
+                started_at=device_start_time.isoformat(), completed_at=now_iso,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to save device history for {ip}: {e}")
         return
 
     def progress_callback(device_ip: str, message: str):
@@ -2660,10 +2694,26 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             "Verifying": "verifying",
             "Skipped": "skipped",
         }
+        new_stage = None
         for key, status in status_map.items():
             if key in message:
+                new_stage = status
                 device_status.status = status
                 break
+
+        # Record stage transitions
+        if new_stage and new_stage != device_status.current_stage:
+            now_iso = datetime.now().isoformat()
+            if device_status.current_stage and device_status.current_stage_started:
+                device_status.stage_history.append({
+                    "stage": device_status.current_stage,
+                    "started_at": device_status.current_stage_started,
+                    "completed_at": now_iso,
+                    "success": True,
+                })
+            device_status.current_stage = new_stage
+            device_status.current_stage_started = now_iso
+
         device_status.progress_message = f"{prefix}{message}"
 
         asyncio.create_task(broadcast({
@@ -2727,6 +2777,32 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         "parent_ap": device_status.parent_ap,
         "model": device_status.model,
     })
+
+    # Finalize stage tracking and persist device update history
+    now = datetime.now()
+    now_iso = now.isoformat()
+    if device_status.current_stage and device_status.current_stage_started:
+        is_success = device_status.status in ("success", "skipped")
+        device_status.stage_history.append({
+            "stage": device_status.current_stage,
+            "started_at": device_status.current_stage_started,
+            "completed_at": now_iso,
+            "success": is_success,
+        })
+    failed_stage = device_status.current_stage if device_status.status == "failed" else None
+    duration_secs = (now - device_start_time).total_seconds()
+    try:
+        db.save_device_update_history(
+            job_id=job.job_id, ip=ip, role=device_status.role,
+            pass_number=pass_number, status=device_status.status,
+            old_version=device_status.old_version, new_version=device_status.new_version,
+            model=device_status.model, error=device_status.error,
+            failed_stage=failed_stage, stages=device_status.stage_history,
+            duration_seconds=duration_secs,
+            started_at=device_start_time.isoformat(), completed_at=now_iso,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to save device update history for {ip}: {e}")
 
 
 async def run_update_job(job: UpdateJob, concurrency: int):
@@ -2817,6 +2893,18 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                             "role": ds.role,
                             "parent_ap": ds.parent_ap,
                         })
+                        now_iso = datetime.now().isoformat()
+                        try:
+                            db.save_device_update_history(
+                                job_id=job.job_id, ip=ip, role=ds.role,
+                                pass_number=1, status="cancelled",
+                                old_version=None, new_version=None, model=None,
+                                error="Cancelled: another device failed to reboot",
+                                failed_stage=None, stages=[], duration_seconds=0,
+                                started_at=now_iso, completed_at=now_iso,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to save cancelled device history for {ip}: {e}")
 
     # Build phase list based on bank_mode
     # Switches always run last, after all APs and CPEs complete
@@ -2852,6 +2940,18 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                     "role": ds.role,
                     "parent_ap": ds.parent_ap,
                 })
+                now_iso = datetime.now().isoformat()
+                try:
+                    db.save_device_update_history(
+                        job_id=job.job_id, ip=ip, role=ds.role,
+                        pass_number=1, status="cancelled",
+                        old_version=None, new_version=None, model=None,
+                        error="Cancelled: another device failed to reboot",
+                        failed_stage=None, stages=[], duration_seconds=0,
+                        started_at=now_iso, completed_at=now_iso,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to save cancelled device history for {ip}: {e}")
 
     async def _run_device(ip, pass_number):
         async with semaphore:
@@ -3073,6 +3173,17 @@ async def get_job_status(job_id: str, session: dict = Depends(require_auth)):
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         "devices": {ip: asdict(status) for ip, status in job.devices.items()},
     }
+
+
+@app.get("/api/device-history")
+async def get_device_history_api(
+    ip: str = None, action: str = None, status: str = None,
+    limit: int = 100, offset: int = 0,
+    session: dict = Depends(require_auth),
+):
+    """Get filterable device update/config history."""
+    history = db.get_device_update_history(ip=ip, action=action, status=status, limit=limit, offset=offset)
+    return {"history": history}
 
 
 def main():

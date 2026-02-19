@@ -119,6 +119,70 @@ def memory_db():
             value TEXT NOT NULL,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE job_history (
+            job_id TEXT PRIMARY KEY,
+            started_at TEXT,
+            completed_at TEXT,
+            duration REAL,
+            bank_mode TEXT,
+            success_count INTEGER DEFAULT 0,
+            failed_count INTEGER DEFAULT 0,
+            skipped_count INTEGER DEFAULT 0,
+            cancelled_count INTEGER DEFAULT 0,
+            devices_json TEXT,
+            ap_cpe_map_json TEXT,
+            device_roles_json TEXT,
+            timezone TEXT
+        );
+        CREATE TABLE schedule_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+            event TEXT NOT NULL,
+            details TEXT,
+            job_id TEXT
+        );
+        CREATE TABLE rollout_devices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rollout_id INTEGER NOT NULL,
+            ip TEXT NOT NULL,
+            device_type TEXT NOT NULL DEFAULT 'ap',
+            phase_assigned TEXT,
+            status TEXT DEFAULT 'pending',
+            updated_at TEXT,
+            FOREIGN KEY (rollout_id) REFERENCES rollouts(id),
+            UNIQUE(rollout_id, ip)
+        );
+        CREATE TABLE device_durations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            ip TEXT NOT NULL,
+            role TEXT NOT NULL,
+            duration_seconds REAL NOT NULL,
+            bank_mode TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE device_update_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT,
+            ip TEXT NOT NULL,
+            role TEXT NOT NULL,
+            action TEXT NOT NULL DEFAULT 'firmware_update',
+            pass_number INTEGER DEFAULT 1,
+            status TEXT NOT NULL,
+            old_version TEXT,
+            new_version TEXT,
+            model TEXT,
+            error TEXT,
+            failed_stage TEXT,
+            stages_json TEXT,
+            duration_seconds REAL,
+            started_at TEXT,
+            completed_at TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX idx_device_history_ip ON device_update_history(ip);
+        CREATE INDEX idx_device_history_job ON device_update_history(job_id);
+        CREATE INDEX idx_device_history_action ON device_update_history(action);
     """)
     # Insert default settings
     defaults = {

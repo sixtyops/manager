@@ -131,6 +131,165 @@ class TestHealthSummary:
         assert summary == {"green": 1, "yellow": 1, "red": 1}
 
 
+class TestDeviceUpdateHistory:
+    def test_save_and_get_by_ip(self, mock_db):
+        db.save_device_update_history(
+            job_id="job-1", ip="10.0.0.1", role="ap", pass_number=1,
+            status="success", old_version="1.0", new_version="1.1",
+            model="TNA-30X", error=None, failed_stage=None,
+            stages=[{"stage": "connecting", "started_at": "2026-01-01T00:00:00",
+                     "completed_at": "2026-01-01T00:00:02", "success": True}],
+            duration_seconds=120.5,
+            started_at="2026-01-01T00:00:00", completed_at="2026-01-01T00:02:00",
+        )
+        history = db.get_device_update_history(ip="10.0.0.1")
+        assert len(history) == 1
+        assert history[0]["status"] == "success"
+        assert history[0]["ip"] == "10.0.0.1"
+        assert history[0]["stages"][0]["stage"] == "connecting"
+        assert history[0]["model"] == "TNA-30X"
+
+    def test_get_empty(self, mock_db):
+        history = db.get_device_update_history(ip="10.0.0.99")
+        assert history == []
+
+    def test_filter_by_status(self, mock_db):
+        db.save_device_update_history(
+            job_id="job-1", ip="10.0.0.1", role="ap", pass_number=1,
+            status="success", old_version="1.0", new_version="1.1",
+            model=None, error=None, failed_stage=None, stages=[],
+            duration_seconds=60, started_at="2026-01-01T00:00:00",
+            completed_at="2026-01-01T00:01:00",
+        )
+        db.save_device_update_history(
+            job_id="job-2", ip="10.0.0.1", role="ap", pass_number=1,
+            status="failed", old_version="1.0", new_version=None,
+            model=None, error="Reboot timeout", failed_stage="rebooting",
+            stages=[], duration_seconds=300,
+            started_at="2026-01-02T00:00:00", completed_at="2026-01-02T00:05:00",
+        )
+        failed = db.get_device_update_history(status="failed")
+        assert len(failed) == 1
+        assert failed[0]["failed_stage"] == "rebooting"
+        success = db.get_device_update_history(status="success")
+        assert len(success) == 1
+
+    def test_filter_by_action(self, mock_db):
+        db.save_device_update_history(
+            job_id="job-1", ip="10.0.0.1", role="ap", pass_number=1,
+            status="success", old_version="1.0", new_version="1.1",
+            model=None, error=None, failed_stage=None, stages=[],
+            duration_seconds=60, started_at="2026-01-01T00:00:00",
+            completed_at="2026-01-01T00:01:00", action="firmware_update",
+        )
+        db.save_device_update_history(
+            job_id=None, ip="10.0.0.1", role="ap", pass_number=1,
+            status="success", old_version=None, new_version=None,
+            model=None, error=None, failed_stage=None, stages=[],
+            duration_seconds=5, started_at="2026-01-02T00:00:00",
+            completed_at="2026-01-02T00:00:05", action="config_push",
+        )
+        fw = db.get_device_update_history(action="firmware_update")
+        assert len(fw) == 1
+        cfg = db.get_device_update_history(action="config_push")
+        assert len(cfg) == 1
+
+    def test_ordering_newest_first(self, mock_db):
+        db.save_device_update_history(
+            job_id="job-old", ip="10.0.0.1", role="ap", pass_number=1,
+            status="success", old_version="1.0", new_version="1.1",
+            model=None, error=None, failed_stage=None, stages=[],
+            duration_seconds=60, started_at="2026-01-01T00:00:00",
+            completed_at="2026-01-01T00:01:00",
+        )
+        db.save_device_update_history(
+            job_id="job-new", ip="10.0.0.1", role="ap", pass_number=1,
+            status="success", old_version="1.1", new_version="1.2",
+            model=None, error=None, failed_stage=None, stages=[],
+            duration_seconds=60, started_at="2026-01-02T00:00:00",
+            completed_at="2026-01-02T00:01:00",
+        )
+        history = db.get_device_update_history(ip="10.0.0.1")
+        assert len(history) == 2
+        assert history[0]["job_id"] == "job-new"  # newest first
+
+    def test_pagination(self, mock_db):
+        for i in range(5):
+            db.save_device_update_history(
+                job_id=f"job-{i}", ip="10.0.0.1", role="ap", pass_number=1,
+                status="success", old_version="1.0", new_version="1.1",
+                model=None, error=None, failed_stage=None, stages=[],
+                duration_seconds=60,
+                started_at=f"2026-01-0{i+1}T00:00:00",
+                completed_at=f"2026-01-0{i+1}T00:01:00",
+            )
+        page1 = db.get_device_update_history(limit=2, offset=0)
+        assert len(page1) == 2
+        page2 = db.get_device_update_history(limit=2, offset=2)
+        assert len(page2) == 2
+        assert page1[0]["job_id"] != page2[0]["job_id"]
+
+    def test_get_by_job(self, mock_db):
+        db.save_device_update_history(
+            job_id="job-1", ip="10.0.0.1", role="ap", pass_number=1,
+            status="success", old_version="1.0", new_version="1.1",
+            model=None, error=None, failed_stage=None, stages=[],
+            duration_seconds=60, started_at="2026-01-01T00:00:00",
+            completed_at="2026-01-01T00:01:00",
+        )
+        db.save_device_update_history(
+            job_id="job-1", ip="10.0.0.2", role="cpe", pass_number=1,
+            status="failed", old_version="1.0", new_version=None,
+            model=None, error="Timeout", failed_stage="rebooting",
+            stages=[], duration_seconds=300,
+            started_at="2026-01-01T00:00:00", completed_at="2026-01-01T00:05:00",
+        )
+        records = db.get_device_update_history_by_job("job-1")
+        assert len(records) == 2
+
+    def test_cleanup(self, mock_db):
+        # Old record
+        db.save_device_update_history(
+            job_id="job-old", ip="10.0.0.1", role="ap", pass_number=1,
+            status="success", old_version="1.0", new_version="1.1",
+            model=None, error=None, failed_stage=None, stages=[],
+            duration_seconds=60, started_at="2024-01-01T00:00:00",
+            completed_at="2024-01-01T00:01:00",
+        )
+        # Recent record
+        db.save_device_update_history(
+            job_id="job-new", ip="10.0.0.1", role="ap", pass_number=1,
+            status="success", old_version="1.1", new_version="1.2",
+            model=None, error=None, failed_stage=None, stages=[],
+            duration_seconds=60, started_at="2026-01-01T00:00:00",
+            completed_at="2026-01-01T00:01:00",
+        )
+        db.cleanup_old_device_update_history(max_age_days=180)
+        remaining = db.get_device_update_history()
+        assert len(remaining) == 1
+        assert remaining[0]["job_id"] == "job-new"
+
+    def test_multi_pass(self, mock_db):
+        db.save_device_update_history(
+            job_id="job-1", ip="10.0.0.1", role="ap", pass_number=1,
+            status="success", old_version="1.0", new_version="1.1",
+            model=None, error=None, failed_stage=None, stages=[],
+            duration_seconds=60, started_at="2026-01-01T00:00:00",
+            completed_at="2026-01-01T00:01:00",
+        )
+        db.save_device_update_history(
+            job_id="job-1", ip="10.0.0.1", role="ap", pass_number=2,
+            status="success", old_version="1.1", new_version="1.1",
+            model=None, error=None, failed_stage=None, stages=[],
+            duration_seconds=60, started_at="2026-01-01T00:02:00",
+            completed_at="2026-01-01T00:03:00",
+        )
+        records = db.get_device_update_history_by_job("job-1")
+        assert len(records) == 2
+        assert records[0]["pass_number"] == 1
+        assert records[1]["pass_number"] == 2
+
+
 class TestSessions:
     def test_create_and_get(self, mock_db):
         expires = (datetime.now() + timedelta(hours=24)).isoformat()
