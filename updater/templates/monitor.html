@@ -1668,25 +1668,25 @@
 
             <!-- Updates Panel -->
             <div class="settings-panel active" id="settingsPanel-updates">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                     <span class="toggle" id="appAutoUpdateToggle" onclick="toggleAppAutoUpdate()" style="flex-shrink:0;"></span>
-                    <label style="margin:0;font-weight:500;">Check for App Updates</label>
-                    <span id="appVersionDisplay" style="font-size:0.75rem;color:#6b7280;"></span>
+                    <label style="margin:0;font-weight:500;">Auto Check and Install Updates</label>
                 </div>
-                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 12px 0;">When enabled, the app will periodically check for new versions and notify you when updates are available.</p>
+                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 16px 0;">When enabled, the app will automatically check for new versions and install them during the next maintenance window.</p>
 
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-                    <label style="margin:0;font-size:0.8rem;">Release Channel</label>
-                    <select id="appReleaseChannel" onchange="saveReleaseChannel()" style="font-size:0.8rem;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+                    <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
+                    <span id="appUpdateStatus" style="font-size:0.75rem;color:#6b7280;"></span>
+                    <span id="appVersionDisplay" style="font-size:0.75rem;color:#6b7280;margin-left:auto;"></span>
+                </div>
+
+                <div style="display:flex;align-items:center;gap:8px;padding-top:12px;border-top:1px solid #f3f4f6;">
+                    <label style="margin:0;font-size:0.75rem;color:#9ca3af;">Release Channel</label>
+                    <select id="appReleaseChannel" onchange="saveReleaseChannel()" style="font-size:0.75rem;">
                         <option value="stable">Stable</option>
                         <option value="dev">Dev</option>
                     </select>
-                    <span style="font-size:0.68rem;color:#9ca3af;">Dev receives pre-release updates for testing</span>
-                </div>
-
-                <div style="display:flex;align-items:center;gap:8px;">
-                    <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
-                    <span id="appUpdateStatus" style="font-size:0.75rem;color:#6b7280;"></span>
+                    <span style="font-size:0.68rem;color:#b0b5bd;">Dev receives pre-release updates for testing</span>
                 </div>
 
                 <div id="appUpdateBannerInline" style="display:none;margin-top:16px;padding:12px;background:#dbeafe;border-radius:8px;">
