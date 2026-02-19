@@ -3217,11 +3217,12 @@
 
             // Update weather temp in drawer and header
             if (status.weather && status.weather.temperature_c !== null) {
-                const tempF = Math.round(status.weather.temperature_c * 9 / 5 + 32);
+                const tempDisplay = displayTemp(status.weather.temperature_c);
+                const unit = tempUnit === 'f' ? '\u00B0F' : '\u00B0C';
                 const el = document.getElementById('drawerWeatherTemp');
-                if (el) el.textContent = `(currently ${tempF}\u00B0F)`;
+                if (el) el.textContent = `(currently ${tempDisplay}${unit})`;
                 const headerTemp = document.getElementById('headerTemp');
-                if (headerTemp) headerTemp.textContent = ` · ${tempF}\u00B0F`;
+                if (headerTemp) headerTemp.textContent = ` \u00B7 ${tempDisplay}${unit}`;
             }
 
             // Update rollout UI if there's an active rollout, otherwise show idle phases
@@ -3941,17 +3942,21 @@
                 const s = data.settings;
                 const toggle = document.getElementById('barAutoToggle');
                 toggle.classList.toggle('active', s.schedule_enabled === 'true');
+                // Resolve temperature unit before rendering weather
+                tempUnit = data.resolved_temperature_unit || s.temperature_unit || 'f';
+                if (tempUnit === 'auto') tempUnit = 'f';
             } catch (e) {}
             // Fetch current weather to populate header temp immediately
             try {
                 const resp = await fetch('/api/weather');
                 const data = await resp.json();
                 if (data.temperature_c !== undefined && data.temperature_c !== null) {
-                    const tempF = Math.round(data.temperature_c * 9 / 5 + 32);
+                    const tempDisplay = displayTemp(data.temperature_c);
+                    const unit = tempUnit === 'f' ? '\u00B0F' : '\u00B0C';
                     const headerTemp = document.getElementById('headerTemp');
-                    if (headerTemp) headerTemp.textContent = ` \u00B7 ${tempF}\u00B0F`;
+                    if (headerTemp) headerTemp.textContent = ` \u00B7 ${tempDisplay}${unit}`;
                     const drawerTemp = document.getElementById('drawerWeatherTemp');
-                    if (drawerTemp) drawerTemp.textContent = `(currently ${tempF}\u00B0F)`;
+                    if (drawerTemp) drawerTemp.textContent = `(currently ${tempDisplay}${unit})`;
                 }
             } catch (e) {}
         }
