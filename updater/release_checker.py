@@ -116,7 +116,7 @@ class ReleaseChecker:
             latest = tag_name.lstrip("v")
             result["latest_version"] = latest
             result["release_url"] = data.get("html_url", "")
-            result["release_notes"] = data.get("body", "")[:500]  # Truncate long notes
+            result["release_notes"] = data.get("body", "")[:2000]  # Truncate long notes
 
             # Compare versions (only flag upgrades, never downgrades)
             try:
