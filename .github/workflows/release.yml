@@ -3,13 +3,46 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - "v*-dev*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v1.2.0). Must already exist."
+        required: true
+        type: string
+      confirm:
+        description: "Type RELEASE to confirm stable release"
+        required: true
+        type: string
 
 jobs:
-  test:
+  validate-dispatch:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
+      - name: Validate confirmation
+        run: |
+          if [ "${{ inputs.confirm }}" != "RELEASE" ]; then
+            echo "::error::You must type RELEASE to confirm. Got: '${{ inputs.confirm }}'"
+            exit 1
+          fi
+
+      - name: Reject dev tags
+        run: |
+          TAG="${{ inputs.tag }}"
+          if echo "$TAG" | grep -q -- "-dev"; then
+            echo "::error::Use tag push for dev releases, not workflow_dispatch"
+            exit 1
+          fi
+
+  test:
+    runs-on: ubuntu-latest
+    if: always() && (needs.validate-dispatch.result == 'success' || needs.validate-dispatch.result == 'skipped')
+    needs: [validate-dispatch]
+    steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -26,28 +59,35 @@ jobs:
       - run: pytest -v
 
   release:
-    needs: test
+    needs: [test]
+    if: always() && needs.test.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
-      - name: Determine if pre-release
-        id: prerelease
+      - name: Determine release type
+        id: meta
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          if echo "$TAG" | grep -q -- "-dev"; then
-            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "name=$TAG (dev)" >> "$GITHUB_OUTPUT"
-          else
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "name=$TAG" >> "$GITHUB_OUTPUT"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "name=$TAG (dev)" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ steps.prerelease.outputs.name }}
-          prerelease: ${{ steps.prerelease.outputs.is_prerelease }}
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          prerelease: ${{ steps.meta.outputs.is_prerelease }}
           generate_release_notes: true
