@@ -149,6 +149,29 @@ uvicorn updater.app:app --reload --port 8000
 pytest -v
 ```
 
+## Development Workflow
+
+This project uses a two-branch model:
+
+- **`dev`** — All changes merge here first. Dev pre-releases (e.g., `v1.2.0-dev1`) are tagged from this branch and auto-published as GitHub pre-releases.
+- **`main`** — Production only. Receives merges from `dev` after testing. Stable releases require manual approval through GitHub Actions.
+
+### Contributing
+
+1. Create a feature branch from `dev`
+2. Make changes and run tests (`pytest -v`)
+3. Open a PR targeting `dev`
+4. After merge and staging testing, `dev` is merged to `main`
+5. Stable release is created through the GitHub Actions Release workflow
+
+### Release Channels
+
+The app supports two self-update channels (Settings > Updates):
+- **Stable** (default) — Only full releases from `main`
+- **Dev** — Includes pre-releases for early testing
+
+See [CLAUDE.md](CLAUDE.md) for detailed release procedures.
+
 ## Summary
 
 For networks with more than a few APs, automated updates are significantly more efficient than manual processes. Initial setup takes about 15 minutes. After that, firmware updates happen automatically according to your schedule.
