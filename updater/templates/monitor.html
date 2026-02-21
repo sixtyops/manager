@@ -989,6 +989,57 @@
             border-top: 1px solid var(--border);
         }
 
+        .config-section {
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 8px;
+        }
+        .config-section-header {
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 500;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            user-select: none;
+        }
+        .config-section-header:hover { background: var(--hover); }
+        .config-section-body {
+            padding: 8px 12px 12px;
+            border-top: 1px solid var(--border);
+            font-size: 0.75rem;
+        }
+        .config-section-body label { font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 2px; }
+        .config-section-body input[type="text"],
+        .config-section-body input[type="password"],
+        .config-section-body input[type="number"],
+        .config-section-body select,
+        .config-section-body textarea {
+            font-size: 0.75rem;
+            padding: 4px 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+        }
+        .config-section-status {
+            font-size: 0.7rem;
+            padding: 1px 6px;
+            border-radius: 8px;
+            background: #f3f4f6;
+            color: #6b7280;
+        }
+        .config-section-status.saved { background: #d1fae5; color: #065f46; }
+        .config-user-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 100px 40px;
+            gap: 6px;
+            align-items: end;
+            margin-bottom: 6px;
+        }
+        .config-compliance-ok { color: #10b981; }
+        .config-compliance-warn { color: #f59e0b; }
+        .config-compliance-unknown { color: #9ca3af; }
+
         .drawer-settings-grid {
             display: grid;
             grid-template-columns: auto 1fr 1fr 1fr 1fr;
@@ -1501,6 +1552,40 @@
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
         }
+
+        /* License gating styles */
+        .pro-badge {
+            display: inline-flex;
+            align-items: center;
+            font-size: 0.55rem;
+            font-weight: 700;
+            color: #7c3aed;
+            background: #ede9fe;
+            padding: 1px 5px;
+            border-radius: 3px;
+            letter-spacing: 0.4px;
+            vertical-align: middle;
+            margin-left: 4px;
+        }
+        .pro-locked {
+            opacity: 0.45;
+            pointer-events: none;
+            position: relative;
+        }
+        .nag-banner {
+            background: #fef3c7;
+            border: 1px solid #fbbf24;
+            border-radius: 8px;
+            padding: 8px 16px;
+            margin: 8px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            color: #92400e;
+        }
+        .nag-banner a { color: #7c3aed; font-weight: 500; text-decoration: none; }
+        .nag-banner a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -1538,6 +1623,11 @@
     </div>
 
     <div class="connection-status" id="connectionStatus">Connected</div>
+
+    <div class="nag-banner" id="deviceNagBanner" style="display:none;">
+        <span>You have <strong class="nag-count">0</strong> managed devices. Consider upgrading to <a href="https://tachyonupdater.com/pricing" target="_blank">Pro</a> for advanced features like manual updates, config management, and SSO.</span>
+        <button onclick="this.parentElement.style.display='none'" style="background:none;border:none;cursor:pointer;font-size:1rem;color:#92400e;padding:0 4px;">&times;</button>
+    </div>
 
     <div class="container">
         <!-- Top section: Add APs + Chart -->
@@ -1585,7 +1675,7 @@
         <div class="main-tabs" id="mainTabs">
             <button class="main-tab active" data-tab="updates" onclick="switchMainTab('updates')">Updates</button>
             <button class="main-tab" data-tab="config" onclick="switchMainTab('config')">Config</button>
-            <button class="main-tab" data-tab="history" onclick="switchMainTab('history')">History</button>
+            <button class="main-tab" data-tab="history" onclick="switchMainTab('history')">History <span class="pro-badge pro-badge-history">PRO</span></button>
         </div>
 
         <!-- Updates Tab Panel -->
@@ -1638,9 +1728,48 @@
 
         <!-- Config Tab Panel -->
         <div id="tabPanel-config" style="display:none;">
-            <div class="table-card" style="text-align:center;padding:48px;color:#9ca3af;">
-                <p style="font-size:0.9rem;font-weight:500;margin-bottom:4px;">Auto Configurator</p>
-                <p style="font-size:0.75rem;">Push RADIUS, SNMP, hostname, NTP, and other settings to devices. Coming soon.</p>
+            <!-- Config Stats -->
+            <div class="stats-bar" id="configStatsBar">
+                <div class="stat">
+                    <div class="dot primary"></div>
+                    <span class="stat-value" id="configDeviceCount">0</span>
+                    <span class="stat-label">Devices</span>
+                </div>
+                <div class="stat">
+                    <div class="dot success"></div>
+                    <span class="stat-value" id="configCompliantCount">0</span>
+                    <span class="stat-label">Compliant</span>
+                </div>
+                <div class="stat">
+                    <div class="dot warning"></div>
+                    <span class="stat-value" id="configNonCompliantCount">0</span>
+                    <span class="stat-label">Non-Compliant</span>
+                </div>
+                <div class="stat">
+                    <div class="dot" style="background:#9ca3af;"></div>
+                    <span class="stat-value" id="configUncheckedCount">0</span>
+                    <span class="stat-label">Unchecked</span>
+                </div>
+            </div>
+
+            <!-- Config Device Tree -->
+            <div class="table-card">
+                <div style="overflow-x:auto;">
+                    <table class="tree-table" id="configTable">
+                        <thead>
+                            <tr>
+                                <th>Name / IP</th>
+                                <th>Model</th>
+                                <th>Config Status</th>
+                                <th>Last Backup</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="configTableBody">
+                            <tr><td colspan="5" class="empty-state">Loading config data...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
@@ -1700,9 +1829,13 @@
                 <span id="drawerSavedIndicator" style="font-size:0.7rem;color:#10b981;opacity:0;transition:opacity 0.2s;">Saved</span>
             </div>
             <!-- Config handle content -->
-            <div id="drawerHandle-config" style="display:none;flex:1;">
-                <span class="status-bar-label">Auto-Config</span>
-                <span class="status-badge status-bar-badge" style="background:#f3f4f6;color:#6b7280;">Coming Soon</span>
+            <div id="drawerHandle-config" style="display:none;flex:1;align-items:center;gap:8px;">
+                <span class="status-bar-label">Config Templates</span>
+                <span class="status-badge status-bar-badge" id="configTemplateBadge">0 active</span>
+                <div style="margin-left:auto;display:flex;gap:6px;">
+                    <button class="btn btn-sm" onclick="checkCompliance();event.stopPropagation();">Check Compliance</button>
+                    <button class="btn btn-sm btn-primary" id="configPushBtn" onclick="showConfigPushDialog();event.stopPropagation();" style="display:none;">Push to Devices</button>
+                </div>
             </div>
             <!-- History handle content -->
             <div id="drawerHandle-history" style="display:none;flex:1;">
@@ -1855,8 +1988,135 @@
 
             <!-- Config drawer content -->
             <div id="drawerContent-config" style="display:none;">
-                <div class="drawer-panel-inner">
-                    <p style="color:#9ca3af;font-size:0.8rem;padding:8px 0;">Config push settings will appear here.</p>
+                <div class="drawer-panel-inner" style="max-height:400px;overflow-y:auto;">
+                    <!-- SNMP Section -->
+                    <details class="config-section" id="cfgSection-snmp">
+                        <summary class="config-section-header">
+                            <span>SNMP</span>
+                            <span class="config-section-status" id="cfgStatus-snmp"></span>
+                        </summary>
+                        <div class="config-section-body">
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                                <div>
+                                    <label><input type="checkbox" id="cfgSnmpV2RoEnabled"> SNMPv2 Read-Only</label>
+                                    <input type="text" id="cfgSnmpV2RoCommunity" placeholder="RO community string" style="width:100%;margin-top:4px;">
+                                </div>
+                                <div>
+                                    <label><input type="checkbox" id="cfgSnmpV2RwEnabled"> SNMPv2 Read-Write</label>
+                                    <input type="text" id="cfgSnmpV2RwCommunity" placeholder="RW community string" style="width:100%;margin-top:4px;">
+                                </div>
+                            </div>
+                            <div style="margin-top:8px;display:flex;gap:8px;justify-content:flex-end;">
+                                <button class="btn btn-sm" onclick="saveConfigSection('snmp')">Save</button>
+                            </div>
+                        </div>
+                    </details>
+
+                    <!-- Users Section -->
+                    <details class="config-section" id="cfgSection-users">
+                        <summary class="config-section-header">
+                            <span>Users</span>
+                            <span class="config-section-status" id="cfgStatus-users"></span>
+                        </summary>
+                        <div class="config-section-body">
+                            <div id="cfgUserRows"></div>
+                            <button class="btn btn-sm" onclick="addConfigUserRow()" style="margin-top:6px;">+ Add User</button>
+                            <div style="margin-top:8px;display:flex;gap:8px;justify-content:flex-end;">
+                                <button class="btn btn-sm" onclick="saveConfigSection('users')">Save</button>
+                            </div>
+                        </div>
+                    </details>
+
+                    <!-- RADIUS Section -->
+                    <details class="config-section" id="cfgSection-radius">
+                        <summary class="config-section-header">
+                            <span>RADIUS Authentication</span>
+                            <span class="config-section-status" id="cfgStatus-radius"></span>
+                        </summary>
+                        <div class="config-section-body">
+                            <div style="margin-bottom:6px;">
+                                <label>Auth Method</label>
+                                <select id="cfgRadiusMethod" style="width:120px;">
+                                    <option value="local">Local</option>
+                                    <option value="radius">RADIUS</option>
+                                </select>
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 100px 1fr;gap:8px;">
+                                <div>
+                                    <label>Auth Server</label>
+                                    <input type="text" id="cfgRadiusServer" placeholder="radius.example.com" style="width:100%;">
+                                </div>
+                                <div>
+                                    <label>Port</label>
+                                    <input type="number" id="cfgRadiusPort" value="1812" style="width:100%;">
+                                </div>
+                                <div>
+                                    <label>Secret</label>
+                                    <input type="password" id="cfgRadiusSecret" placeholder="shared secret" style="width:100%;">
+                                </div>
+                            </div>
+                            <div style="margin-top:8px;display:flex;gap:8px;justify-content:flex-end;">
+                                <button class="btn btn-sm" onclick="saveConfigSection('radius')">Save</button>
+                            </div>
+                        </div>
+                    </details>
+
+                    <!-- NTP Section -->
+                    <details class="config-section" id="cfgSection-ntp">
+                        <summary class="config-section-header">
+                            <span>NTP</span>
+                            <span class="config-section-status" id="cfgStatus-ntp"></span>
+                        </summary>
+                        <div class="config-section-body">
+                            <label><input type="checkbox" id="cfgNtpEnabled" checked> Enable NTP</label>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
+                                <div>
+                                    <label>Server 1</label>
+                                    <input type="text" id="cfgNtpServer1" placeholder="time.google.com" style="width:100%;">
+                                </div>
+                                <div>
+                                    <label>Server 2</label>
+                                    <input type="text" id="cfgNtpServer2" placeholder="time.cloudflare.com" style="width:100%;">
+                                </div>
+                            </div>
+                            <div style="margin-top:8px;display:flex;gap:8px;justify-content:flex-end;">
+                                <button class="btn btn-sm" onclick="saveConfigSection('ntp')">Save</button>
+                            </div>
+                        </div>
+                    </details>
+
+                    <!-- Discovery Section -->
+                    <details class="config-section" id="cfgSection-discovery">
+                        <summary class="config-section-header">
+                            <span>Discovery Services</span>
+                            <span class="config-section-status" id="cfgStatus-discovery"></span>
+                        </summary>
+                        <div class="config-section-body">
+                            <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                                <label><input type="checkbox" id="cfgDiscLldp"> LLDP</label>
+                                <label><input type="checkbox" id="cfgDiscMndp"> MNDP</label>
+                                <label><input type="checkbox" id="cfgDiscCdp"> CDP</label>
+                                <label><input type="checkbox" id="cfgDiscLldpServer"> LLDP Server</label>
+                            </div>
+                            <div style="margin-top:8px;display:flex;gap:8px;justify-content:flex-end;">
+                                <button class="btn btn-sm" onclick="saveConfigSection('discovery')">Save</button>
+                            </div>
+                        </div>
+                    </details>
+
+                    <!-- Custom JSON Section -->
+                    <details class="config-section" id="cfgSection-custom">
+                        <summary class="config-section-header">
+                            <span>Custom JSON</span>
+                            <span class="config-section-status" id="cfgStatus-custom"></span>
+                        </summary>
+                        <div class="config-section-body">
+                            <textarea id="cfgCustomJson" rows="6" placeholder='{"services": {"ssh": {"enabled": true}}}' style="width:100%;font-family:monospace;font-size:0.75rem;"></textarea>
+                            <div style="margin-top:8px;display:flex;gap:8px;justify-content:flex-end;">
+                                <button class="btn btn-sm" onclick="saveConfigSection('custom')">Save</button>
+                            </div>
+                        </div>
+                    </details>
                 </div>
             </div>
 
@@ -1904,9 +2164,10 @@
             <!-- Tabs -->
             <div class="settings-tabs" style="flex-shrink:0;">
                 <button class="settings-tab active" onclick="switchSettingsTab('updates')">Updates</button>
-                <button class="settings-tab" onclick="switchSettingsTab('backup')">Backup</button>
-                <button class="settings-tab" onclick="switchSettingsTab('notifications')">Notifications</button>
-                <button class="settings-tab" onclick="switchSettingsTab('auth')">Authentication</button>
+                <button class="settings-tab" onclick="switchSettingsTab('backup')">Backup <span class="pro-badge">PRO</span></button>
+                <button class="settings-tab" onclick="switchSettingsTab('notifications')">Notifications <span class="pro-badge">PRO</span></button>
+                <button class="settings-tab" onclick="switchSettingsTab('auth')">Authentication <span class="pro-badge">PRO</span></button>
+                <button class="settings-tab" onclick="switchSettingsTab('license')">License</button>
             </div>
 
             <!-- Updates Panel -->
@@ -2060,10 +2321,169 @@
                     </div>
                 </div>
             </div>
+
+            <!-- License Panel -->
+            <div class="settings-panel" id="settingsPanel-license">
+                <div id="licenseStatusSection">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+                        <span id="licenseTierBadge" style="display:inline-flex;align-items:center;font-size:0.75rem;font-weight:700;padding:3px 10px;border-radius:4px;color:#7c3aed;background:#ede9fe;">FREE</span>
+                        <span id="licenseStatusText" style="font-size:0.8rem;color:#6b7280;"></span>
+                    </div>
+                    <div style="font-size:0.75rem;color:#6b7280;margin-bottom:16px;">
+                        <div>Billable devices (APs + Switches): <strong id="licenseBillableCount">0</strong></div>
+                        <div id="licenseCustomerRow" style="display:none;">Customer: <strong id="licenseCustomerName"></strong></div>
+                        <div id="licenseExpiresRow" style="display:none;">Expires: <strong id="licenseExpiresAt"></strong></div>
+                        <div id="licenseValidatedRow" style="display:none;">Last validated: <strong id="licenseLastValidated"></strong></div>
+                    </div>
+                </div>
+                <div style="border-top:1px solid #e5e7eb;padding-top:12px;">
+                    <label style="font-size:0.75rem;color:#6b7280;">License Key</label>
+                    <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
+                        <input type="text" id="licenseKeyInput" placeholder="XXXX-XXXX-XXXX-XXXX" style="flex:1;font-family:monospace;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                        <button class="backup-btn" onclick="activateLicense()">Activate</button>
+                    </div>
+                    <div id="licenseKeyStatus" style="font-size:0.75rem;color:#6b7280;margin-top:6px;min-height:1.2em;"></div>
+                </div>
+                <div id="licenseDeactivateSection" style="display:none;margin-top:12px;border-top:1px solid #e5e7eb;padding-top:12px;">
+                    <button class="backup-btn" onclick="deactivateLicense()" style="background:#dc2626;">Remove License</button>
+                    <a href="https://tachyonupdater.com/billing" target="_blank" style="font-size:0.75rem;color:#7c3aed;margin-left:12px;">Manage Billing</a>
+                </div>
+                <div style="margin-top:16px;font-size:0.72rem;color:#9ca3af;">
+                    <a href="https://tachyonupdater.com/pricing" target="_blank" style="color:#7c3aed;">View pricing</a> &middot;
+                    <a href="https://docs.tachyonupdater.com/licensing" target="_blank" style="color:#7c3aed;">Documentation</a>
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
+        // License state (loaded on init, updated via WebSocket)
+        let licenseState = { tier: 'free', status: 'free', features: {}, billable_count: 0, should_nag: false, is_pro: false };
+
+        async function loadLicenseState() {
+            try {
+                const resp = await fetch('/api/license');
+                if (resp.ok) {
+                    licenseState = await resp.json();
+                    applyLicenseGating();
+                }
+            } catch (e) { console.warn('Failed to load license state:', e); }
+        }
+
+        function applyLicenseGating() {
+            // Show/hide PRO badges based on license (badges always visible, but gating changes)
+            const isPro = licenseState.is_pro || licenseState.tier === 'pro';
+
+            // Nag banner
+            const nagEl = document.getElementById('deviceNagBanner');
+            if (nagEl) {
+                if (licenseState.should_nag && !isPro) {
+                    nagEl.style.display = 'flex';
+                    nagEl.querySelector('.nag-count').textContent = licenseState.billable_count;
+                } else {
+                    nagEl.style.display = 'none';
+                }
+            }
+
+            // PRO badges — hide on pro tier
+            document.querySelectorAll('.pro-badge').forEach(el => {
+                el.style.display = isPro ? 'none' : '';
+            });
+
+            // Gate settings panels
+            const gatePanels = { 'settingsPanel-backup': 'config_backup', 'settingsPanel-notifications': 'slack_notifications', 'settingsPanel-auth': 'sso_oidc' };
+            for (const [panelId, feature] of Object.entries(gatePanels)) {
+                const panel = document.getElementById(panelId);
+                if (panel) {
+                    const enabled = licenseState.features && licenseState.features[feature];
+                    panel.classList.toggle('pro-locked', !isPro && !enabled);
+                }
+            }
+
+            // Gate beta firmware toggle and quarantine days
+            const betaToggle = document.getElementById('drawerBetaToggle');
+            if (betaToggle) betaToggle.classList.toggle('pro-locked', !isPro && !(licenseState.features||{}).beta_firmware);
+            const quarantine = document.getElementById('drawerQuarantineDays');
+            if (quarantine) quarantine.classList.toggle('pro-locked', !isPro && !(licenseState.features||{}).firmware_hold_custom);
+        }
+
+        function showProUpgradePrompt(featureName) {
+            const msg = featureName
+                ? `${featureName} requires a Pro license.`
+                : 'This feature requires a Pro license.';
+            alert(msg + '\nVisit tachyonupdater.com/pricing to upgrade.');
+        }
+
+        async function activateLicense() {
+            const key = document.getElementById('licenseKeyInput').value.trim();
+            if (!key) return;
+            const statusEl = document.getElementById('licenseKeyStatus');
+            statusEl.textContent = 'Activating...';
+            try {
+                const resp = await fetch('/api/license/activate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ license_key: key }),
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    statusEl.textContent = 'License activated!';
+                    statusEl.style.color = '#16a34a';
+                } else {
+                    statusEl.textContent = data.error || 'Activation failed.';
+                    statusEl.style.color = '#dc2626';
+                }
+                loadLicenseState();
+                loadLicensePanel();
+            } catch (e) {
+                statusEl.textContent = 'Network error.';
+                statusEl.style.color = '#dc2626';
+            }
+        }
+
+        async function deactivateLicense() {
+            if (!confirm('Remove your license key? Pro features will be disabled.')) return;
+            await fetch('/api/license/deactivate', { method: 'POST' });
+            loadLicenseState();
+            loadLicensePanel();
+        }
+
+        async function loadLicensePanel() {
+            try {
+                const resp = await fetch('/api/license');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const isPro = data.tier === 'pro';
+                const badge = document.getElementById('licenseTierBadge');
+                badge.textContent = isPro ? 'PRO' : 'FREE';
+                badge.style.color = isPro ? '#fff' : '#7c3aed';
+                badge.style.background = isPro ? '#7c3aed' : '#ede9fe';
+
+                document.getElementById('licenseStatusText').textContent =
+                    data.status === 'active' ? 'Active' :
+                    data.status === 'grace' ? 'Grace period' :
+                    data.status === 'expired' ? 'Expired' :
+                    data.status === 'invalid' ? 'Invalid' : '';
+
+                document.getElementById('licenseBillableCount').textContent = data.billable_count || 0;
+
+                const custRow = document.getElementById('licenseCustomerRow');
+                if (data.customer_name) { custRow.style.display = ''; document.getElementById('licenseCustomerName').textContent = data.customer_name; }
+                else custRow.style.display = 'none';
+
+                const expRow = document.getElementById('licenseExpiresRow');
+                if (data.expires_at) { expRow.style.display = ''; document.getElementById('licenseExpiresAt').textContent = data.expires_at.slice(0,10); }
+                else expRow.style.display = 'none';
+
+                const valRow = document.getElementById('licenseValidatedRow');
+                if (data.last_validated) { valRow.style.display = ''; document.getElementById('licenseLastValidated').textContent = data.last_validated.slice(0,10); }
+                else valRow.style.display = 'none';
+
+                document.getElementById('licenseDeactivateSection').style.display = data.has_key ? '' : 'none';
+                if (data.has_key) document.getElementById('licenseKeyInput').placeholder = '••••••••••••';
+            } catch (e) {}
+        }
+
         let tempUnit = 'f';  // Will be set from settings/location
         function cToF(c) { return Math.round(c * 9/5 + 32); }
         function fToC(f) { return Math.round((f - 32) * 5/9); }
@@ -2085,6 +2505,12 @@
         let selectedNode = { type: 'all' };
         let fleetStatusMap = new Map(); // ip -> { target_version, status }
         let updatingDevices = new Set(); // IPs currently being updated
+        // Flat lookup indices — rebuilt on topology update
+        let _apIndex = new Map();    // ip -> { ap, site }
+        let _cpeIndex = new Map();   // ip -> { cpe, ap, site }
+        let _switchIndex = new Map(); // ip -> { sw, site }
+        let _siteIndex = new Map();  // id -> site
+        let _uiDebounceTimer = null;
         let autoUpdateEnabled = false; // Whether auto-update scheduler is active
         let lastSchedulerStatus = null; // Last scheduler_status message
         let lastNextWindow = '';       // Next maintenance window text
@@ -2190,17 +2616,14 @@
             ws.onmessage = (event) => {
                 const message = JSON.parse(event.data);
                 if (message.type === 'topology_update') {
-                    // Preserve CPEs that are currently updating
+                    // Preserve CPEs that are currently updating (use index for O(1) lookup)
                     const preservedCPEs = new Map(); // apIp -> [cpe, ...]
                     if (topology && updatingDevices.size > 0) {
-                        for (const site of (topology.sites || [])) {
-                            for (const ap of (site.aps || [])) {
-                                for (const cpe of (ap.cpes || [])) {
-                                    if (updatingDevices.has(cpe.ip)) {
-                                        if (!preservedCPEs.has(ap.ip)) preservedCPEs.set(ap.ip, []);
-                                        preservedCPEs.get(ap.ip).push(cpe);
-                                    }
-                                }
+                        for (const ip of updatingDevices) {
+                            const entry = _cpeIndex.get(ip);
+                            if (entry) {
+                                if (!preservedCPEs.has(entry.ap.ip)) preservedCPEs.set(entry.ap.ip, []);
+                                preservedCPEs.get(entry.ap.ip).push(entry.cpe);
                             }
                         }
                     }
@@ -2224,8 +2647,9 @@
                         }
                     }
 
+                    rebuildTopologyIndex();
                     updatingDevices.clear();
-                    updateUI();
+                    scheduleUIUpdate();
                 } else if (message.type === 'scheduler_status') {
                     updateSchedulerUI(message);
                 } else if (message.type === 'rollout_status') {
@@ -2243,6 +2667,15 @@
                 } else if (message.type === 'update_available') {
                     const dot = document.getElementById('settingsNotifDot');
                     if (dot) dot.style.display = 'block';
+                } else if (message.type === 'config_poll_complete') {
+                    if (configLoaded) loadConfigData();
+                } else if (message.type === 'config_push_update') {
+                    handleConfigPushUpdate(message);
+                } else if (message.type === 'config_push_complete') {
+                    handleConfigPushComplete(message);
+                } else if (message.type === 'license_state') {
+                    licenseState = message;
+                    applyLicenseGating();
                 }
             };
         }
@@ -2368,6 +2801,33 @@
             }
 
             loadTopology();
+        }
+
+        // ── Topology Index ──
+
+        function rebuildTopologyIndex() {
+            _apIndex.clear();
+            _cpeIndex.clear();
+            _switchIndex.clear();
+            _siteIndex.clear();
+            if (!topology || !topology.sites) return;
+            for (const site of topology.sites) {
+                _siteIndex.set(site.id, site);
+                for (const ap of (site.aps || [])) {
+                    _apIndex.set(ap.ip, { ap, site });
+                    for (const cpe of (ap.cpes || [])) {
+                        _cpeIndex.set(cpe.ip, { cpe, ap, site });
+                    }
+                }
+                for (const sw of (site.switches || [])) {
+                    _switchIndex.set(sw.ip, { sw, site });
+                }
+            }
+        }
+
+        function scheduleUIUpdate() {
+            if (_uiDebounceTimer) clearTimeout(_uiDebounceTimer);
+            _uiDebounceTimer = setTimeout(() => { _uiDebounceTimer = null; updateUI(); }, 150);
         }
 
         // ── UI Update ──
@@ -2550,7 +3010,7 @@
                             <div class="name-cell" style="padding-left:28px;">
                                 <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
                                 <span class="device-icon ap">AP</span>
-                                <a href="http://${ap.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>
+                                ${licenseState.features?.device_portal ? `<a href="/api/device-portal/${ap.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>` : `<span class="name-link" style="cursor:default">${escapeHtml(apName)}</span>`}
                                 ${noLocation ? '<span class="no-location-tag">(no location)</span>' : ''}
                             </div>
                         </td>
@@ -2583,7 +3043,7 @@
                                 <div class="name-cell" style="padding-left:52px;">
                                     <span class="expand-toggle hidden">&#9654;</span>
                                     <span class="device-icon cpe ${health}"></span>
-                                    ${cpeIp ? `<a href="http://${cpeIp}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : escapeHtml(cpeName)}
+                                    ${cpeIp ? (licenseState.features?.device_portal ? `<a href="/api/device-portal/${cpeIp}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : `<span class="name-link" style="cursor:default">${escapeHtml(cpeName)}</span>`) : escapeHtml(cpeName)}
                                 </div>
                             </td>
                             <td>${cpe.model || ''}</td>
@@ -2609,7 +3069,7 @@
                             <div class="name-cell" style="padding-left:28px;">
                                 <span class="expand-toggle hidden">&#9654;</span>
                                 <span class="device-icon ap">SW</span>
-                                <a href="http://${sw.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>
+                                ${licenseState.features?.device_portal ? `<a href="/api/device-portal/${sw.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>` : `<span class="name-link" style="cursor:default">${escapeHtml(swName)}</span>`}
                             </div>
                         </td>
                         <td>${sw.model || ''}</td>
@@ -2709,30 +3169,15 @@
         // ── Selection (for chart filtering) ──
 
         function findSite(siteId) {
-            for (const site of (topology.sites || [])) {
-                if (site.id === siteId) return site;
-            }
-            return null;
+            return _siteIndex.get(siteId) || null;
         }
 
         function findAP(ip) {
-            for (const site of (topology.sites || [])) {
-                for (const ap of (site.aps || [])) {
-                    if (ap.ip === ip) return { ap, site };
-                }
-            }
-            return null;
+            return _apIndex.get(ip) || null;
         }
 
         function findCPE(ip) {
-            for (const site of (topology.sites || [])) {
-                for (const ap of (site.aps || [])) {
-                    for (const cpe of (ap.cpes || [])) {
-                        if (cpe.ip === ip) return { cpe, ap, site };
-                    }
-                }
-            }
-            return null;
+            return _cpeIndex.get(ip) || null;
         }
 
         function selectSite(siteId) {
@@ -2772,13 +3217,7 @@
         }
 
         function findSwitch(ip) {
-            if (!topology) return null;
-            for (const site of topology.sites) {
-                for (const sw of (site.switches || [])) {
-                    if (sw.ip === ip) return { sw, site };
-                }
-            }
-            return null;
+            return _switchIndex.get(ip) || null;
         }
 
         async function deleteSwitch(ip) {
@@ -3008,6 +3447,7 @@
                 const topoResponse = await fetch('/api/topology');
                 if (topoResponse.ok) {
                     topology = await topoResponse.json();
+                    rebuildTopologyIndex();
                     updateUI();
                 }
             } catch (error) {
@@ -3024,6 +3464,7 @@
                     const topoResponse = await fetch('/api/topology');
                     if (topoResponse.ok) {
                         topology = await topoResponse.json();
+                        rebuildTopologyIndex();
                         updateUI();
                     }
                 } else {
@@ -3044,6 +3485,7 @@
                     const topoResponse = await fetch('/api/topology');
                     if (topoResponse.ok) {
                         topology = await topoResponse.json();
+                        rebuildTopologyIndex();
                         updateUI();
                     }
                 } else {
@@ -3056,6 +3498,12 @@
         }
 
         async function triggerUpdate(type, id, mode) {
+            // Check license for manual update feature
+            if (!licenseState.is_pro && !licenseState.features?.update_single_device) {
+                showProUpgradePrompt('update_single_device');
+                return;
+            }
+
             let settings;
             try {
                 const resp = await fetch('/api/settings');
@@ -3224,6 +3672,7 @@
             loadAppUpdateStatus();
             loadNotificationsData();
             loadAuthData();
+            loadLicensePanel();
         }
 
         function closeAppSettingsModal() {
@@ -3239,9 +3688,11 @@
         function switchSettingsTab(tabName) {
             // Update tab buttons
             document.querySelectorAll('.settings-tab').forEach(tab => {
-                tab.classList.toggle('active', tab.textContent.toLowerCase() === tabName ||
-                    (tabName === 'auth' && tab.textContent === 'Authentication') ||
-                    (tabName === 'backup' && tab.textContent === 'Backup'));
+                const text = tab.textContent.replace(/PRO$/, '').trim().toLowerCase();
+                tab.classList.toggle('active', text === tabName ||
+                    (tabName === 'auth' && text === 'authentication') ||
+                    (tabName === 'backup' && text === 'backup') ||
+                    (tabName === 'license' && text === 'license'));
             });
             // Update panels
             document.querySelectorAll('.settings-panel').forEach(panel => {
@@ -3872,6 +4323,7 @@
                 p.style.display = p.id === `tabPanel-${tab}` ? '' : 'none');
             updateDrawerForTab(tab);
             if (tab === 'history' && !historyLoaded) loadHistory();
+            if (tab === 'config' && !configLoaded) loadConfigData();
         }
 
         function updateDrawerForTab(tab) {
@@ -4586,6 +5038,7 @@
         loadAutoSettings();
         loadFleetStatus();
         renderIdlePhases();
+        loadLicenseState();
         // Refresh fleet status periodically
         setInterval(loadFleetStatus, 60000);
 
@@ -4684,6 +5137,695 @@
                 status.textContent = 'Import error: ' + e.message;
                 status.style.color = '#dc2626';
             }
+        }
+
+        // ── Config Tab ──
+
+        let configLoaded = false;
+        let configCompliance = {};  // {ip: {compliant, checked_at}}
+        let configSummary = {};     // {ip: {id, config_hash, model, fetched_at}}
+        let configTemplates = [];
+        let configExpandState = new Map();
+        let configPushingDevices = new Set();
+
+        async function loadConfigData() {
+            try {
+                const [compResp, cfgResp, tplResp] = await Promise.all([
+                    fetch('/api/config-compliance'),
+                    fetch('/api/configs'),
+                    fetch('/api/config-templates'),
+                ]);
+                const compData = await compResp.json();
+                const cfgData = await cfgResp.json();
+                const tplData = await tplResp.json();
+
+                configCompliance = compData.devices || {};
+                configSummary = cfgData.configs || {};
+                configTemplates = tplData.templates || [];
+                configLoaded = true;
+
+                renderConfigTable();
+                updateConfigStats();
+                loadConfigTemplateUI();
+            } catch (e) {
+                console.error('Failed to load config data:', e);
+            }
+        }
+
+        function updateConfigStats() {
+            if (!topology) return;
+            let total = 0, compliant = 0, nonCompliant = 0, unchecked = 0;
+            for (const site of (topology.sites || [])) {
+                for (const ap of (site.aps || [])) {
+                    total++;
+                    const c = configCompliance[ap.ip];
+                    if (!c) unchecked++;
+                    else if (c.compliant) compliant++;
+                    else nonCompliant++;
+                    for (const cpe of (ap.cpes || [])) {
+                        if (!cpe.ip) continue;
+                        total++;
+                        const cc = configCompliance[cpe.ip];
+                        if (!cc) unchecked++;
+                        else if (cc.compliant) compliant++;
+                        else nonCompliant++;
+                    }
+                }
+                for (const sw of (site.switches || [])) {
+                    total++;
+                    const c = configCompliance[sw.ip];
+                    if (!c) unchecked++;
+                    else if (c.compliant) compliant++;
+                    else nonCompliant++;
+                }
+            }
+            document.getElementById('configDeviceCount').textContent = total;
+            document.getElementById('configCompliantCount').textContent = compliant;
+            document.getElementById('configNonCompliantCount').textContent = nonCompliant;
+            document.getElementById('configUncheckedCount').textContent = unchecked;
+        }
+
+        function configStatusCell(ip) {
+            const c = configCompliance[ip];
+            if (!c) return '<span class="config-compliance-unknown" title="Config not yet checked">&#8212;</span>';
+            if (c.compliant) return '<span class="config-compliance-ok" title="Compliant">&#10003;</span>';
+            return '<span class="config-compliance-warn" title="Non-compliant">&#9888;</span>';
+        }
+
+        function configLastBackupCell(ip) {
+            const cfg = configSummary[ip];
+            if (!cfg || !cfg.fetched_at) return '<span style="color:#9ca3af;">&#8212;</span>';
+            const d = new Date(cfg.fetched_at);
+            if (isNaN(d.getTime())) return '<span style="color:#9ca3af;">&#8212;</span>';
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            const yy = String(d.getFullYear()).slice(-2);
+            return `<span title="${d.toLocaleString()}">${mm}/${dd}/${yy}</span>`;
+        }
+
+        function configActionsCell(ip) {
+            const cfg = configSummary[ip];
+            const pushing = configPushingDevices.has(ip);
+            let html = `<a class="action-link" onclick="pollDeviceConfig('${ip}');event.stopPropagation();">Backup</a>`;
+            if (cfg && cfg.id) {
+                html += ` <a class="action-link" onclick="downloadConfigTar('${ip}', ${cfg.id});event.stopPropagation();">Download</a>`;
+                html += ` <a class="action-link" onclick="viewDeviceConfig('${ip}');event.stopPropagation();">View</a>`;
+            }
+            if (pushing) {
+                html += ' <span style="color:#6b7280;font-size:0.7rem;">Pushing...</span>';
+            }
+            return html;
+        }
+
+        function renderConfigTable() {
+            if (!topology || !topology.sites) return;
+            const tbody = document.getElementById('configTableBody');
+            let html = '';
+
+            const sortedSites = [...topology.sites].sort(siteComparator());
+
+            for (const site of sortedSites) {
+                const siteKey = `cfg-site:${site.id}`;
+                const siteExpanded = configExpandState.get(siteKey) !== false;
+                const aps = site.aps || [];
+                const switches = site.switches || [];
+                const totalCpes = aps.reduce((s, ap) => s + (ap.cpes?.length || 0), 0);
+
+                let badgeParts = [`${aps.length} AP${aps.length!==1?'s':''}`, `${totalCpes} CPE${totalCpes!==1?'s':''}`];
+                if (switches.length > 0) badgeParts.push(`${switches.length} SW`);
+
+                html += `<tr class="row-site">
+                    <td>
+                        <div class="name-cell" style="padding-left:4px;">
+                            <span class="expand-toggle ${siteExpanded ? 'expanded' : ''}" onclick="toggleConfigExpand('${siteKey}',event)">&#9654;</span>
+                            <span class="device-icon site">T</span>
+                            ${escapeHtml(site.name)}
+                            <span class="tree-badge">${badgeParts.join(', ')}</span>
+                        </div>
+                    </td>
+                    <td></td><td></td><td></td>
+                    <td><div class="actions-cell">
+                        ${site.id !== null ? `<a class="action-link" onclick="pushConfigToSite(${site.id});event.stopPropagation();">Push Templates</a>` : ''}
+                    </div></td>
+                </tr>`;
+
+                if (!siteExpanded) continue;
+
+                const sortedAPs = [...aps].sort(deviceComparator());
+
+                for (const ap of sortedAPs) {
+                    const apKey = `cfg-ap:${ap.ip}`;
+                    const apExpanded = configExpandState.get(apKey) !== false;
+                    const isOffline = !!ap.last_error;
+                    const cpes = ap.cpes || [];
+                    const apName = ap.system_name || ap.ip;
+
+                    html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''}">
+                        <td>
+                            <div class="name-cell" style="padding-left:28px;">
+                                <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleConfigExpand('${apKey}',event)">&#9654;</span>
+                                <span class="device-icon ap">AP</span>
+                                <a href="http://${ap.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>
+                            </div>
+                        </td>
+                        <td>${ap.model || ''}</td>
+                        <td>${configStatusCell(ap.ip)}</td>
+                        <td>${configLastBackupCell(ap.ip)}</td>
+                        <td><div class="actions-cell">${configActionsCell(ap.ip)}</div></td>
+                    </tr>`;
+
+                    if (!apExpanded) continue;
+
+                    const sortedCPEs = [...cpes].sort(deviceComparator());
+
+                    for (const cpe of sortedCPEs) {
+                        const cpeName = cpe.system_name || cpe.mac || 'Unknown';
+                        const cpeIp = cpe.ip || '';
+
+                        html += `<tr class="row-cpe">
+                            <td>
+                                <div class="name-cell" style="padding-left:52px;">
+                                    <span class="expand-toggle hidden">&#9654;</span>
+                                    <span class="device-icon cpe ${cpe.signal_health || 'red'}"></span>
+                                    ${cpeIp ? `<a href="http://${cpeIp}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : escapeHtml(cpeName)}
+                                </div>
+                            </td>
+                            <td>${cpe.model || ''}</td>
+                            <td>${cpeIp ? configStatusCell(cpeIp) : ''}</td>
+                            <td>${cpeIp ? configLastBackupCell(cpeIp) : ''}</td>
+                            <td><div class="actions-cell">${cpeIp ? configActionsCell(cpeIp) : ''}</div></td>
+                        </tr>`;
+                    }
+                }
+
+                for (const sw of switches) {
+                    const isOffline = !!sw.last_error;
+                    const swName = sw.system_name || sw.ip;
+
+                    html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''}">
+                        <td>
+                            <div class="name-cell" style="padding-left:28px;">
+                                <span class="expand-toggle hidden">&#9654;</span>
+                                <span class="device-icon ap">SW</span>
+                                <a href="http://${sw.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>
+                            </div>
+                        </td>
+                        <td>${sw.model || ''}</td>
+                        <td>${configStatusCell(sw.ip)}</td>
+                        <td>${configLastBackupCell(sw.ip)}</td>
+                        <td><div class="actions-cell">${configActionsCell(sw.ip)}</div></td>
+                    </tr>`;
+                }
+            }
+
+            if (!html) html = '<tr><td colspan="5" class="empty-state">No devices found</td></tr>';
+            tbody.innerHTML = html;
+        }
+
+        function toggleConfigExpand(key, event) {
+            event.stopPropagation();
+            const current = configExpandState.get(key);
+            configExpandState.set(key, current === false ? true : false);
+            renderConfigTable();
+        }
+
+        // Config actions
+        async function pollDeviceConfig(ip) {
+            try {
+                await fetch(`/api/configs/${ip}/poll`, {method: 'POST'});
+                await loadConfigData();
+            } catch (e) {
+                alert('Failed to poll config: ' + e.message);
+            }
+        }
+
+        function downloadConfigTar(ip, configId) {
+            window.open(`/api/configs/${ip}/download/${configId}`, '_blank');
+        }
+
+        async function viewDeviceConfig(ip) {
+            try {
+                const resp = await fetch(`/api/configs/${ip}/latest`);
+                const data = await resp.json();
+                const json = typeof data.config_json === 'string' ? JSON.parse(data.config_json) : data.config_json;
+                const pretty = JSON.stringify(json, null, 2);
+
+                // Load history
+                const histResp = await fetch(`/api/configs/${ip}?limit=10`);
+                const histData = await histResp.json();
+                const history = histData.history || [];
+
+                let histHtml = '';
+                for (const h of history) {
+                    const d = new Date(h.fetched_at);
+                    const dateStr = d.toLocaleString();
+                    histHtml += `<div style="padding:4px 0;border-bottom:1px solid var(--border);font-size:0.72rem;display:flex;justify-content:space-between;">
+                        <span>${dateStr}</span>
+                        <span style="color:#9ca3af;">${h.config_hash?.slice(0,8)}</span>
+                        <a class="action-link" onclick="downloadConfigTar('${ip}', ${h.id})">Download</a>
+                    </div>`;
+                }
+
+                // Show modal
+                const modal = document.createElement('div');
+                modal.className = 'backup-overlay';
+                modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+                modal.innerHTML = `
+                    <div class="backup-modal" style="width:700px;max-height:80vh;display:flex;flex-direction:column;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                            <h3 style="margin:0;">Config: ${escapeHtml(ip)}</h3>
+                            <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:1.2rem;">&times;</button>
+                        </div>
+                        <div style="display:flex;gap:16px;flex:1;overflow:hidden;">
+                            <div style="flex:1;overflow:auto;">
+                                <pre style="font-size:0.7rem;background:#f9fafb;padding:12px;border-radius:6px;overflow:auto;max-height:60vh;margin:0;">${escapeHtml(pretty)}</pre>
+                            </div>
+                            <div style="width:220px;overflow-y:auto;">
+                                <h4 style="margin:0 0 8px;font-size:0.8rem;">Version History</h4>
+                                ${histHtml || '<p style="color:#9ca3af;font-size:0.72rem;">No history</p>'}
+                            </div>
+                        </div>
+                    </div>`;
+                document.body.appendChild(modal);
+            } catch (e) {
+                alert('Failed to load config: ' + e.message);
+            }
+        }
+
+        async function checkCompliance() {
+            try {
+                const resp = await fetch('/api/config-compliance');
+                const data = await resp.json();
+                configCompliance = data.devices || {};
+                renderConfigTable();
+                updateConfigStats();
+            } catch (e) {
+                alert('Failed to check compliance: ' + e.message);
+            }
+        }
+
+        // Config Template UI
+        function loadConfigTemplateUI() {
+            const badge = document.getElementById('configTemplateBadge');
+            const enabled = configTemplates.filter(t => t.enabled);
+            badge.textContent = `${enabled.length} active`;
+
+            const pushBtn = document.getElementById('configPushBtn');
+            pushBtn.style.display = enabled.length > 0 ? '' : 'none';
+
+            // Populate form fields from saved templates
+            for (const t of configTemplates) {
+                const statusEl = document.getElementById(`cfgStatus-${t.category}`);
+                if (statusEl) {
+                    statusEl.textContent = 'Saved';
+                    statusEl.classList.add('saved');
+                }
+                if (t.form_data) {
+                    populateConfigForm(t.category, t.form_data);
+                }
+            }
+
+            // For categories without saved templates, try pre-fill
+            const categories = ['snmp', 'users', 'radius', 'ntp', 'discovery'];
+            for (const cat of categories) {
+                if (!configTemplates.find(t => t.category === cat)) {
+                    prefillConfigSection(cat);
+                }
+            }
+        }
+
+        function populateConfigForm(category, formData) {
+            if (typeof formData === 'string') formData = JSON.parse(formData);
+            switch (category) {
+                case 'snmp':
+                    if (formData.v2_ro_enabled !== undefined) document.getElementById('cfgSnmpV2RoEnabled').checked = formData.v2_ro_enabled;
+                    if (formData.v2_ro_community) document.getElementById('cfgSnmpV2RoCommunity').value = formData.v2_ro_community;
+                    if (formData.v2_rw_enabled !== undefined) document.getElementById('cfgSnmpV2RwEnabled').checked = formData.v2_rw_enabled;
+                    if (formData.v2_rw_community) document.getElementById('cfgSnmpV2RwCommunity').value = formData.v2_rw_community;
+                    break;
+                case 'ntp':
+                    if (formData.enabled !== undefined) document.getElementById('cfgNtpEnabled').checked = formData.enabled;
+                    if (formData.server1) document.getElementById('cfgNtpServer1').value = formData.server1;
+                    if (formData.server2) document.getElementById('cfgNtpServer2').value = formData.server2;
+                    break;
+                case 'radius':
+                    if (formData.method) document.getElementById('cfgRadiusMethod').value = formData.method;
+                    if (formData.server) document.getElementById('cfgRadiusServer').value = formData.server;
+                    if (formData.port) document.getElementById('cfgRadiusPort').value = formData.port;
+                    if (formData.secret) document.getElementById('cfgRadiusSecret').value = formData.secret;
+                    break;
+                case 'discovery':
+                    if (formData.lldp !== undefined) document.getElementById('cfgDiscLldp').checked = formData.lldp;
+                    if (formData.mndp !== undefined) document.getElementById('cfgDiscMndp').checked = formData.mndp;
+                    if (formData.cdp !== undefined) document.getElementById('cfgDiscCdp').checked = formData.cdp;
+                    if (formData.lldp_server !== undefined) document.getElementById('cfgDiscLldpServer').checked = formData.lldp_server;
+                    break;
+                case 'users':
+                    const container = document.getElementById('cfgUserRows');
+                    container.innerHTML = '';
+                    if (Array.isArray(formData.users)) {
+                        for (const u of formData.users) addConfigUserRow(u);
+                    }
+                    break;
+                case 'custom':
+                    if (formData.json) document.getElementById('cfgCustomJson').value = typeof formData.json === 'string' ? formData.json : JSON.stringify(formData.json, null, 2);
+                    break;
+            }
+        }
+
+        async function prefillConfigSection(category) {
+            try {
+                const resp = await fetch(`/api/config-prefill/${category}`);
+                const data = await resp.json();
+                if (!data.prefilled) return;
+
+                const prefillData = data.data;
+                switch (category) {
+                    case 'snmp':
+                        if (prefillData.v2) {
+                            if (prefillData.v2.ro) {
+                                document.getElementById('cfgSnmpV2RoEnabled').checked = prefillData.v2.ro.enabled !== false;
+                                if (prefillData.v2.ro.community) document.getElementById('cfgSnmpV2RoCommunity').value = prefillData.v2.ro.community;
+                            }
+                            if (prefillData.v2.rw) {
+                                document.getElementById('cfgSnmpV2RwEnabled').checked = prefillData.v2.rw.enabled !== false;
+                                if (prefillData.v2.rw.community) document.getElementById('cfgSnmpV2RwCommunity').value = prefillData.v2.rw.community;
+                            }
+                        }
+                        break;
+                    case 'ntp':
+                        if (prefillData.enabled !== undefined) document.getElementById('cfgNtpEnabled').checked = prefillData.enabled;
+                        if (prefillData.servers) {
+                            if (prefillData.servers[0]) document.getElementById('cfgNtpServer1').value = prefillData.servers[0];
+                            if (prefillData.servers[1]) document.getElementById('cfgNtpServer2').value = prefillData.servers[1];
+                        }
+                        break;
+                    case 'radius':
+                        if (prefillData.method) document.getElementById('cfgRadiusMethod').value = prefillData.method;
+                        if (prefillData.radius) {
+                            if (prefillData.radius.auth_server1) document.getElementById('cfgRadiusServer').value = prefillData.radius.auth_server1;
+                            if (prefillData.radius.auth_port) document.getElementById('cfgRadiusPort').value = prefillData.radius.auth_port;
+                        }
+                        break;
+                    case 'discovery':
+                        if (prefillData.lldp !== undefined) document.getElementById('cfgDiscLldp').checked = prefillData.lldp;
+                        if (prefillData.mndp !== undefined) document.getElementById('cfgDiscMndp').checked = prefillData.mndp;
+                        if (prefillData.cdp !== undefined) document.getElementById('cfgDiscCdp').checked = prefillData.cdp;
+                        if (prefillData.lldp_server !== undefined) document.getElementById('cfgDiscLldpServer').checked = prefillData.lldp_server;
+                        break;
+                }
+            } catch (e) {
+                console.debug('Prefill failed for', category, e);
+            }
+        }
+
+        function addConfigUserRow(userData) {
+            const container = document.getElementById('cfgUserRows');
+            const row = document.createElement('div');
+            row.className = 'config-user-row';
+            row.innerHTML = `
+                <div>
+                    <label>Username</label>
+                    <input type="text" class="cfg-user-name" value="${escapeHtml(userData?.username || '')}" placeholder="username" style="width:100%;">
+                </div>
+                <div>
+                    <label>Password</label>
+                    <input type="password" class="cfg-user-pass" value="${escapeHtml(userData?.password || '')}" placeholder="password" style="width:100%;">
+                </div>
+                <div>
+                    <label>Level</label>
+                    <select class="cfg-user-level" style="width:100%;">
+                        <option value="0" ${(!userData?.level || userData?.level === 0) ? 'selected' : ''}>Admin</option>
+                        <option value="9" ${userData?.level === 9 ? 'selected' : ''}>Read-Only</option>
+                    </select>
+                </div>
+                <div style="padding-top:16px;">
+                    <button class="btn btn-sm" onclick="this.closest('.config-user-row').remove()" style="color:#dc2626;">&times;</button>
+                </div>
+            `;
+            container.appendChild(row);
+        }
+
+        function collectFormData(category) {
+            switch (category) {
+                case 'snmp': return {
+                    v2_ro_enabled: document.getElementById('cfgSnmpV2RoEnabled').checked,
+                    v2_ro_community: document.getElementById('cfgSnmpV2RoCommunity').value,
+                    v2_rw_enabled: document.getElementById('cfgSnmpV2RwEnabled').checked,
+                    v2_rw_community: document.getElementById('cfgSnmpV2RwCommunity').value,
+                };
+                case 'ntp': return {
+                    enabled: document.getElementById('cfgNtpEnabled').checked,
+                    server1: document.getElementById('cfgNtpServer1').value,
+                    server2: document.getElementById('cfgNtpServer2').value,
+                };
+                case 'radius': return {
+                    method: document.getElementById('cfgRadiusMethod').value,
+                    server: document.getElementById('cfgRadiusServer').value,
+                    port: document.getElementById('cfgRadiusPort').value,
+                    secret: document.getElementById('cfgRadiusSecret').value,
+                };
+                case 'discovery': return {
+                    lldp: document.getElementById('cfgDiscLldp').checked,
+                    mndp: document.getElementById('cfgDiscMndp').checked,
+                    cdp: document.getElementById('cfgDiscCdp').checked,
+                    lldp_server: document.getElementById('cfgDiscLldpServer').checked,
+                };
+                case 'users': {
+                    const rows = document.querySelectorAll('.config-user-row');
+                    const users = [];
+                    rows.forEach(r => {
+                        const name = r.querySelector('.cfg-user-name').value.trim();
+                        if (name) users.push({
+                            username: name,
+                            password: r.querySelector('.cfg-user-pass').value,
+                            level: parseInt(r.querySelector('.cfg-user-level').value),
+                        });
+                    });
+                    return {users};
+                }
+                case 'custom': return {json: document.getElementById('cfgCustomJson').value};
+                default: return {};
+            }
+        }
+
+        function formDataToFragment(category, formData) {
+            switch (category) {
+                case 'snmp': return {services: {snmp: {
+                    v2: {
+                        ro: {enabled: formData.v2_ro_enabled, community: formData.v2_ro_community},
+                        rw: {enabled: formData.v2_rw_enabled, community: formData.v2_rw_community},
+                    }
+                }}};
+                case 'ntp': {
+                    const servers = [];
+                    if (formData.server1) servers.push(formData.server1);
+                    if (formData.server2) servers.push(formData.server2);
+                    return {services: {ntp: {enabled: formData.enabled, servers}}};
+                }
+                case 'radius': return {system: {auth: {
+                    method: formData.method,
+                    radius: {
+                        auth_server1: formData.server,
+                        auth_port: parseInt(formData.port) || 1812,
+                        auth_secret: formData.secret,
+                    }
+                }}};
+                case 'discovery': return {services: {discovery: {
+                    lldp: formData.lldp,
+                    mndp: formData.mndp,
+                    cdp: formData.cdp,
+                    lldp_server: formData.lldp_server,
+                }}};
+                case 'users': return {system: {users: (formData.users || []).map(u => ({
+                    username: u.username,
+                    password: u.password,
+                    level: u.level,
+                    enabled: true,
+                    first_login: false,
+                }))}};
+                case 'custom': {
+                    try { return JSON.parse(formData.json); }
+                    catch (e) { alert('Invalid JSON'); return null; }
+                }
+                default: return {};
+            }
+        }
+
+        async function saveConfigSection(category) {
+            const formData = collectFormData(category);
+            const fragment = formDataToFragment(category, formData);
+            if (!fragment) return;
+
+            const existing = configTemplates.find(t => t.category === category);
+            const name = category.charAt(0).toUpperCase() + category.slice(1) + ' Standard';
+
+            try {
+                let resp;
+                if (existing) {
+                    resp = await fetch(`/api/config-templates/${existing.id}`, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({config_fragment: fragment, form_data: formData}),
+                    });
+                } else {
+                    resp = await fetch('/api/config-templates', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            name,
+                            category,
+                            config_fragment: fragment,
+                            form_data: formData,
+                        }),
+                    });
+                }
+
+                const statusEl = document.getElementById(`cfgStatus-${category}`);
+                if (!resp.ok) {
+                    const errData = await resp.json().catch(() => ({}));
+                    const errMsg = errData.detail || `Save failed (${resp.status})`;
+                    if (statusEl) {
+                        statusEl.textContent = errMsg;
+                        statusEl.classList.remove('saved');
+                    }
+                    return;
+                }
+
+                if (statusEl) {
+                    statusEl.textContent = 'Saved';
+                    statusEl.classList.add('saved');
+                }
+
+                // Reload templates
+                const resp = await fetch('/api/config-templates');
+                const data = await resp.json();
+                configTemplates = data.templates || [];
+                loadConfigTemplateUI();
+            } catch (e) {
+                alert('Failed to save template: ' + e.message);
+            }
+        }
+
+        // Config Push
+        function showConfigPushDialog() {
+            const enabled = configTemplates.filter(t => t.enabled);
+            if (!enabled.length) { alert('No config templates saved. Save at least one section first.'); return; }
+
+            const templateList = enabled.map(t =>
+                `<label style="display:block;margin-bottom:4px;"><input type="checkbox" class="push-tpl" value="${t.id}" checked> ${escapeHtml(t.name)}</label>`
+            ).join('');
+
+            const modal = document.createElement('div');
+            modal.className = 'backup-overlay';
+            modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+            modal.innerHTML = `
+                <div class="backup-modal" style="width:400px;">
+                    <h3 style="margin:0 0 12px;">Push Config Templates</h3>
+                    <div style="margin-bottom:12px;">
+                        <label style="font-size:0.8rem;font-weight:500;display:block;margin-bottom:6px;">Templates to push:</label>
+                        ${templateList}
+                    </div>
+                    <div style="margin-bottom:12px;">
+                        <label style="font-size:0.8rem;font-weight:500;display:block;margin-bottom:6px;">Push to:</label>
+                        <select id="pushScope" style="width:100%;">
+                            <option value="all_aps">All APs</option>
+                            <option value="all_cpes">All CPEs</option>
+                            <option value="all">All Devices</option>
+                        </select>
+                    </div>
+                    <div style="display:flex;gap:8px;justify-content:flex-end;">
+                        <button class="btn btn-sm" onclick="this.closest('.backup-overlay').remove()">Cancel</button>
+                        <button class="btn btn-sm btn-primary" onclick="executePush(this.closest('.backup-overlay'))">Push</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(modal);
+        }
+
+        async function executePush(modal) {
+            const templateIds = [...modal.querySelectorAll('.push-tpl:checked')].map(c => parseInt(c.value));
+            if (!templateIds.length) { alert('Select at least one template.'); return; }
+
+            const scope = modal.querySelector('#pushScope').value;
+            const targets = [];
+
+            if (topology) {
+                for (const site of (topology.sites || [])) {
+                    if (site.id !== null && (scope === 'all' || scope === 'all_aps')) {
+                        targets.push({type: 'site', id: site.id});
+                    }
+                    if (site.id === null) {
+                        // Unassigned - add individual APs
+                        for (const ap of (site.aps || [])) {
+                            if (ap.ip && (scope === 'all' || scope === 'all_aps')) targets.push({type: 'ap', ip: ap.ip});
+                            if (scope === 'all' || scope === 'all_cpes') {
+                                for (const cpe of (ap.cpes || [])) {
+                                    if (cpe.ip) targets.push({type: 'cpe', ip: cpe.ip});
+                                }
+                            }
+                        }
+                    }
+                    if (scope === 'all_cpes' && site.id !== null) {
+                        for (const ap of (site.aps || [])) {
+                            for (const cpe of (ap.cpes || [])) {
+                                if (cpe.ip) targets.push({type: 'cpe', ip: cpe.ip});
+                            }
+                        }
+                    }
+                }
+            }
+
+            modal.remove();
+
+            try {
+                const resp = await fetch('/api/config-push', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({template_ids: templateIds, targets}),
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    alert(`Config push started for ${data.device_count} devices (${data.template_names})`);
+                } else {
+                    alert('Push failed: ' + (data.detail || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Failed to start config push: ' + e.message);
+            }
+        }
+
+        function pushConfigToSite(siteId) {
+            const enabled = configTemplates.filter(t => t.enabled);
+            if (!enabled.length) { alert('No config templates saved.'); return; }
+
+            const site = topology?.sites?.find(s => s.id === siteId);
+            const siteName = site?.name || `Site ${siteId}`;
+            if (!confirm(`Push all config templates to all devices in "${siteName}"?`)) return;
+
+            const templateIds = enabled.map(t => t.id);
+            fetch('/api/config-push', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({template_ids: templateIds, targets: [{type: 'site', id: siteId}]}),
+            }).then(r => r.json()).then(data => {
+                if (data.device_count) alert(`Config push started for ${data.device_count} devices`);
+            }).catch(e => alert('Push failed: ' + e.message));
+        }
+
+        function handleConfigPushUpdate(msg) {
+            if (msg.status === 'success' || msg.status === 'failed') {
+                configPushingDevices.delete(msg.ip);
+            } else {
+                configPushingDevices.add(msg.ip);
+            }
+            if (currentMainTab === 'config') renderConfigTable();
+        }
+
+        function handleConfigPushComplete(msg) {
+            configPushingDevices.clear();
+            if (currentMainTab === 'config') loadConfigData();
+            const summary = `Config push complete: ${msg.success_count} succeeded, ${msg.failed_count} failed`;
+            console.log(summary);
         }
     </script>
 </body>

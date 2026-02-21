@@ -10,10 +10,11 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
-# Cache for location/timezone data with TTL
+# Cache for location/timezone data with TTL and size limit
 _location_cache: dict = {}
 _location_cache_times: dict = {}
 _LOCATION_CACHE_TTL = 3600  # 1 hour
+_LOCATION_CACHE_MAX = 256  # Max entries before eviction
 
 
 def _cache_get(key: str) -> Optional[any]:
@@ -30,6 +31,11 @@ def _cache_get(key: str) -> Optional[any]:
 
 def _cache_set(key: str, value):
     """Set a value in the location cache with current timestamp."""
+    # Evict oldest entries if cache is full
+    if len(_location_cache) >= _LOCATION_CACHE_MAX and key not in _location_cache:
+        oldest_key = min(_location_cache_times, key=_location_cache_times.get)
+        _location_cache.pop(oldest_key, None)
+        _location_cache_times.pop(oldest_key, None)
     _location_cache[key] = value
     _location_cache_times[key] = time.monotonic()
 

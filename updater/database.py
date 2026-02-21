@@ -3,6 +3,7 @@
 import json
 import logging
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,6 +15,11 @@ logger = logging.getLogger(__name__)
 
 # Database file location
 DB_PATH = Path(__file__).parent.parent / "data" / "tachyon.db"
+
+# Settings cache — short TTL to reduce DB hits during poll cycles
+_settings_cache: Optional[dict] = None
+_settings_cache_time: float = 0
+_SETTINGS_CACHE_TTL = 5  # seconds
 
 
 def _migrate(db):
@@ -96,6 +102,23 @@ def init_db():
     """Initialize the database schema."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+    # Integrity check and vacuum on existing databases
+    if DB_PATH.exists():
+        check_conn = None
+        try:
+            check_conn = sqlite3.connect(str(DB_PATH), timeout=10)
+            result = check_conn.execute("PRAGMA integrity_check").fetchone()
+            if result[0] != "ok":
+                logger.error(f"Database integrity check failed: {result[0]}")
+            check_conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+            check_conn.execute("PRAGMA incremental_vacuum(100)")
+            check_conn.commit()
+        except Exception as e:
+            logger.error(f"Database integrity check error: {e}")
+        finally:
+            if check_conn:
+                check_conn.close()
+
     with get_db() as db:
         db.executescript("""
             CREATE TABLE IF NOT EXISTS tower_sites (
@@ -170,6 +193,7 @@ def init_db():
             );
 
             CREATE INDEX IF NOT EXISTS idx_cpe_ap ON cpe_cache(ap_ip);
+            CREATE INDEX IF NOT EXISTS idx_cpe_ip ON cpe_cache(ip);
 
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
@@ -274,6 +298,32 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_device_history_ip ON device_update_history(ip);
             CREATE INDEX IF NOT EXISTS idx_device_history_job ON device_update_history(job_id);
             CREATE INDEX IF NOT EXISTS idx_device_history_action ON device_update_history(action);
+            CREATE INDEX IF NOT EXISTS idx_device_history_completed ON device_update_history(completed_at DESC);
+
+            CREATE TABLE IF NOT EXISTS device_configs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip TEXT NOT NULL,
+                config_json TEXT NOT NULL,
+                config_hash TEXT NOT NULL,
+                model TEXT,
+                hardware_id TEXT,
+                fetched_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_device_configs_ip ON device_configs(ip);
+            CREATE INDEX IF NOT EXISTS idx_device_configs_hash ON device_configs(ip, config_hash);
+            CREATE INDEX IF NOT EXISTS idx_device_configs_fetched ON device_configs(ip, fetched_at DESC);
+
+            CREATE TABLE IF NOT EXISTS config_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                category TEXT NOT NULL,
+                config_fragment TEXT NOT NULL,
+                form_data TEXT,
+                description TEXT,
+                enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # Migrations: add columns if missing
@@ -335,8 +385,20 @@ def init_db():
             "autoupdate_release_notes": "",
             # Pre-update reboot
             "pre_update_reboot": "true",
+            # Config polling
+            "config_poll_enabled": "true",
+            "config_poll_interval_hours": "24",
             # Vendor feature flags
             "mikrotik_enabled": "false",
+            # License configuration
+            "license_key": "",
+            "license_status": "free",
+            "license_customer_name": "",
+            "license_expires_at": "",
+            "license_last_validated": "",
+            "license_grace_until": "",
+            "license_device_limit": "0",
+            "license_error": "",
         }
         for key, value in defaults.items():
             db.execute(
@@ -348,8 +410,11 @@ def init_db():
 @contextmanager
 def get_db():
     """Get database connection context manager."""
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA wal_autocheckpoint=1000")
     try:
         yield conn
         conn.commit()
@@ -369,6 +434,15 @@ def get_tower_site(site_id: int) -> Optional[dict]:
     """Get a tower site by ID."""
     with get_db() as db:
         row = db.execute("SELECT * FROM tower_sites WHERE id = ?", (site_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_tower_site_by_name(name: str) -> Optional[dict]:
+    """Get a tower site by name (case-insensitive)."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM tower_sites WHERE LOWER(name) = LOWER(?)", (name,)
+        ).fetchone()
         return dict(row) if row else None
 
 
@@ -400,6 +474,14 @@ def delete_tower_site(site_id: int):
         db.execute("UPDATE access_points SET tower_site_id = NULL WHERE tower_site_id = ?", (site_id,))
         db.execute("UPDATE switches SET tower_site_id = NULL WHERE tower_site_id = ?", (site_id,))
         db.execute("DELETE FROM tower_sites WHERE id = ?", (site_id,))
+
+
+def get_all_device_ips() -> set:
+    """Get all device IPs (APs + switches) without decrypting passwords."""
+    with get_db() as db:
+        ap_rows = db.execute("SELECT ip FROM access_points").fetchall()
+        sw_rows = db.execute("SELECT ip FROM switches").fetchall()
+        return {row["ip"] for row in ap_rows} | {row["ip"] for row in sw_rows}
 
 
 def _decrypt_device_row(row_dict: dict) -> dict:
@@ -617,6 +699,13 @@ def get_all_cpes() -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def get_cpe_by_ip(ip: str) -> Optional[dict]:
+    """Get a CPE by its IP address."""
+    with get_db() as db:
+        row = db.execute("SELECT * FROM cpe_cache WHERE ip = ?", (ip,)).fetchone()
+        return dict(row) if row else None
+
+
 def update_cpe_auth_status(ap_ip: str, cpe_ip: str, auth_status: str):
     """Update auth_status for a specific CPE."""
     with get_db() as db:
@@ -669,15 +758,34 @@ def get_health_summary() -> dict:
 
 
 # Settings operations
-def get_setting(key: str, default: str = None) -> Optional[str]:
-    """Get a setting value."""
+def _invalidate_settings_cache():
+    """Invalidate the in-memory settings cache."""
+    global _settings_cache, _settings_cache_time
+    _settings_cache = None
+    _settings_cache_time = 0
+
+
+def _get_cached_settings() -> dict:
+    """Get settings from cache or DB. Returns full settings dict."""
+    global _settings_cache, _settings_cache_time
+    now = time.monotonic()
+    if _settings_cache is not None and (now - _settings_cache_time) < _SETTINGS_CACHE_TTL:
+        return _settings_cache
     with get_db() as db:
-        row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-        return row["value"] if row else default
+        rows = db.execute("SELECT key, value FROM settings").fetchall()
+        _settings_cache = {row["key"]: row["value"] for row in rows}
+        _settings_cache_time = now
+        return _settings_cache
+
+
+def get_setting(key: str, default: str = None) -> Optional[str]:
+    """Get a setting value (uses cache)."""
+    return _get_cached_settings().get(key, default)
 
 
 def set_setting(key: str, value: str):
     """Set a setting value."""
+    _invalidate_settings_cache()
     with get_db() as db:
         db.execute(
             "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
@@ -685,15 +793,47 @@ def set_setting(key: str, value: str):
         )
 
 
-def get_all_settings() -> dict:
-    """Get all settings as a dictionary."""
+def delete_setting(key: str):
+    """Delete a setting by key."""
+    _invalidate_settings_cache()
     with get_db() as db:
-        rows = db.execute("SELECT key, value FROM settings").fetchall()
-        return {row["key"]: row["value"] for row in rows}
+        db.execute("DELETE FROM settings WHERE key = ?", (key,))
+
+
+def delete_expired_oidc_states(cutoff_iso: str) -> int:
+    """Delete OIDC state entries older than cutoff. Returns count deleted."""
+    _invalidate_settings_cache()
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT key, value FROM settings WHERE key LIKE 'oidc_state_%'"
+        ).fetchall()
+        deleted = 0
+        for row in rows:
+            value = row["value"]
+            if not value:
+                db.execute("DELETE FROM settings WHERE key = ?", (row["key"],))
+                deleted += 1
+                continue
+            try:
+                import json
+                data = json.loads(value)
+                if data.get("created_at", "") < cutoff_iso:
+                    db.execute("DELETE FROM settings WHERE key = ?", (row["key"],))
+                    deleted += 1
+            except (json.JSONDecodeError, TypeError):
+                db.execute("DELETE FROM settings WHERE key = ?", (row["key"],))
+                deleted += 1
+        return deleted
+
+
+def get_all_settings() -> dict:
+    """Get all settings as a dictionary (uses cache)."""
+    return dict(_get_cached_settings())
 
 
 def set_settings(settings: dict):
     """Set multiple settings at once."""
+    _invalidate_settings_cache()
     with get_db() as db:
         for key, value in settings.items():
             db.execute(
@@ -931,13 +1071,16 @@ def cleanup_old_rollouts(max_age_days: int = 180):
     from datetime import timedelta
     cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
     with get_db() as db:
-        old_ids = db.execute(
-            "SELECT id FROM rollouts WHERE status IN ('completed', 'cancelled') AND updated_at < ?",
+        db.execute(
+            """DELETE FROM rollout_devices WHERE rollout_id IN (
+                SELECT id FROM rollouts WHERE status IN ('completed', 'cancelled') AND updated_at < ?
+            )""",
             (cutoff,)
-        ).fetchall()
-        for row in old_ids:
-            db.execute("DELETE FROM rollout_devices WHERE rollout_id = ?", (row["id"],))
-            db.execute("DELETE FROM rollouts WHERE id = ?", (row["id"],))
+        )
+        db.execute(
+            "DELETE FROM rollouts WHERE status IN ('completed', 'cancelled') AND updated_at < ?",
+            (cutoff,)
+        )
 
 
 def cleanup_old_device_durations(max_age_days: int = 180):
@@ -1275,6 +1418,150 @@ def cleanup_old_device_update_history(max_age_days: int = 180):
     cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
     with get_db() as db:
         db.execute("DELETE FROM device_update_history WHERE completed_at < ?", (cutoff,))
+
+
+# Device Config operations
+
+def save_device_config(ip: str, config_json: str, config_hash: str,
+                       model: str = None, hardware_id: str = None):
+    """Save a device config snapshot."""
+    with get_db() as db:
+        db.execute(
+            """INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (ip, config_json, config_hash, model, hardware_id, datetime.now().isoformat())
+        )
+
+
+def get_latest_device_config(ip: str) -> Optional[dict]:
+    """Get the most recent config snapshot for a device."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM device_configs WHERE ip = ? ORDER BY fetched_at DESC LIMIT 1",
+            (ip,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_device_config_history(ip: str, limit: int = 20) -> list[dict]:
+    """Get config snapshots for a device, newest first."""
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id, ip, config_hash, model, hardware_id, fetched_at FROM device_configs WHERE ip = ? ORDER BY fetched_at DESC LIMIT ?",
+            (ip, limit)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_device_config_by_id(config_id: int) -> Optional[dict]:
+    """Get a specific config snapshot by ID."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM device_configs WHERE id = ?", (config_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_all_latest_configs() -> dict:
+    """Get the latest config for each device. Returns {ip: {id, config_json, config_hash, fetched_at, ...}}."""
+    with get_db() as db:
+        rows = db.execute("""
+            SELECT dc.* FROM device_configs dc
+            INNER JOIN (
+                SELECT ip, MAX(fetched_at) as max_fetched
+                FROM device_configs GROUP BY ip
+            ) latest ON dc.ip = latest.ip AND dc.fetched_at = latest.max_fetched
+        """).fetchall()
+        return {row["ip"]: dict(row) for row in rows}
+
+
+def get_latest_config_hash(ip: str) -> Optional[str]:
+    """Get the hash of the most recent config for a device."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT config_hash FROM device_configs WHERE ip = ? ORDER BY fetched_at DESC LIMIT 1",
+            (ip,)
+        ).fetchone()
+        return row["config_hash"] if row else None
+
+
+def cleanup_old_device_configs(max_per_device: int = 50):
+    """Keep only the most recent N config snapshots per device."""
+    with get_db() as db:
+        ips = db.execute("SELECT DISTINCT ip FROM device_configs").fetchall()
+        for row in ips:
+            ip = row["ip"]
+            db.execute("""
+                DELETE FROM device_configs WHERE ip = ? AND id NOT IN (
+                    SELECT id FROM device_configs WHERE ip = ?
+                    ORDER BY fetched_at DESC LIMIT ?
+                )
+            """, (ip, ip, max_per_device))
+
+
+# Config Template operations
+
+def save_config_template(name: str, category: str, config_fragment: str,
+                         form_data: str = None, description: str = None) -> int:
+    """Create a new config template. Returns the template ID."""
+    with get_db() as db:
+        cursor = db.execute(
+            """INSERT INTO config_templates (name, category, config_fragment, form_data, description)
+               VALUES (?, ?, ?, ?, ?)""",
+            (name, category, config_fragment, form_data, description)
+        )
+        return cursor.lastrowid
+
+
+def get_config_templates(enabled_only: bool = False) -> list[dict]:
+    """Get all config templates."""
+    with get_db() as db:
+        query = "SELECT * FROM config_templates"
+        if enabled_only:
+            query += " WHERE enabled = 1"
+        query += " ORDER BY category, name"
+        rows = db.execute(query).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_config_template(template_id: int) -> Optional[dict]:
+    """Get a config template by ID."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM config_templates WHERE id = ?", (template_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_config_template_by_category(category: str) -> Optional[dict]:
+    """Get a config template by category (returns first match)."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM config_templates WHERE category = ? ORDER BY id LIMIT 1",
+            (category,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def update_config_template(template_id: int, **kwargs):
+    """Update a config template."""
+    allowed = {"name", "category", "config_fragment", "form_data", "description", "enabled"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return
+    updates["updated_at"] = datetime.now().isoformat()
+    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+    with get_db() as db:
+        db.execute(
+            f"UPDATE config_templates SET {set_clause} WHERE id = ?",
+            (*updates.values(), template_id)
+        )
+
+
+def delete_config_template(template_id: int):
+    """Delete a config template."""
+    with get_db() as db:
+        db.execute("DELETE FROM config_templates WHERE id = ?", (template_id,))
 
 
 # Initialize on import

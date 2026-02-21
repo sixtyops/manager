@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 # Set test env vars before any app imports
 os.environ["ADMIN_USERNAME"] = "admin"
 os.environ["ADMIN_PASSWORD"] = "testpass123"
+# Enable all features by default in tests (license gating tests override this)
+os.environ["TACHYON_FORCE_PRO"] = "1"
 
 
 @pytest.fixture
@@ -183,6 +185,30 @@ def memory_db():
         CREATE INDEX idx_device_history_ip ON device_update_history(ip);
         CREATE INDEX idx_device_history_job ON device_update_history(job_id);
         CREATE INDEX idx_device_history_action ON device_update_history(action);
+
+        CREATE TABLE device_configs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL,
+            config_json TEXT NOT NULL,
+            config_hash TEXT NOT NULL,
+            model TEXT,
+            hardware_id TEXT,
+            fetched_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX idx_device_configs_ip ON device_configs(ip);
+        CREATE INDEX idx_device_configs_hash ON device_configs(ip, config_hash);
+
+        CREATE TABLE config_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            category TEXT NOT NULL,
+            config_fragment TEXT NOT NULL,
+            form_data TEXT,
+            description TEXT,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     # Insert default settings
     defaults = {
@@ -197,6 +223,17 @@ def memory_db():
         "weather_check_enabled": "true",
         "min_temperature_c": "-10",
         "setup_completed": "true",
+        "config_poll_enabled": "true",
+        "config_poll_interval_hours": "24",
+        # License defaults
+        "license_key": "",
+        "license_status": "free",
+        "license_customer_name": "",
+        "license_expires_at": "",
+        "license_last_validated": "",
+        "license_grace_until": "",
+        "license_device_limit": "0",
+        "license_error": "",
     }
     for key, value in defaults.items():
         conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))
@@ -208,8 +245,13 @@ def memory_db():
 @pytest.fixture
 def mock_db(memory_db):
     """Monkeypatch database.get_db to use in-memory DB."""
+    import updater.database as db_mod
+
     @contextmanager
     def _get_db():
+        # Invalidate settings cache on every DB access so tests
+        # that write settings directly via mock_db.execute() see fresh data
+        db_mod._invalidate_settings_cache()
         try:
             yield memory_db
             memory_db.commit()
@@ -217,6 +259,7 @@ def mock_db(memory_db):
             memory_db.rollback()
             raise
 
+    db_mod._invalidate_settings_cache()
     with patch("updater.database.get_db", _get_db):
         yield memory_db
 
@@ -254,3 +297,31 @@ def authed_client(client, mock_db):
     mock_db.commit()
     client.cookies.set("session_id", session_id)
     return client
+
+
+@pytest.fixture
+def pro_license(mock_db):
+    """Set up a PRO license in the test DB and enable it in the license module."""
+    import updater.license as lic
+    mock_db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("license_status", "active"))
+    mock_db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("license_key", "TEST-PRO-KEY"))
+    mock_db.commit()
+    lic._license_state = None
+    # Temporarily disable FORCE_PRO so license state is read from DB
+    old_force = lic._FORCE_PRO
+    lic._FORCE_PRO = False
+    yield
+    lic._FORCE_PRO = old_force
+    lic._license_state = None
+
+
+@pytest.fixture
+def free_license(mock_db):
+    """Ensure free tier with no license key, and disable FORCE_PRO."""
+    import updater.license as lic
+    lic._license_state = None
+    old_force = lic._FORCE_PRO
+    lic._FORCE_PRO = False
+    yield
+    lic._FORCE_PRO = old_force
+    lic._license_state = None

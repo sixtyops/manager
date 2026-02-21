@@ -219,6 +219,76 @@ class TestAPIGating:
         resp = authed_client.post("/api/backup/export", json={"passphrase": "testpass123"})
         assert resp.status_code == 403
 
+    def test_configs_list_blocked_free(self, authed_client, free_license):
+        resp = authed_client.get("/api/configs")
+        assert resp.status_code == 403
+
+    def test_configs_history_blocked_free(self, authed_client, free_license):
+        resp = authed_client.get("/api/configs/10.0.0.1")
+        assert resp.status_code == 403
+
+    def test_configs_latest_blocked_free(self, authed_client, free_license):
+        resp = authed_client.get("/api/configs/10.0.0.1/latest")
+        assert resp.status_code == 403
+
+    def test_configs_snapshot_blocked_free(self, authed_client, free_license):
+        resp = authed_client.get("/api/configs/10.0.0.1/snapshot/1")
+        assert resp.status_code == 403
+
+    def test_configs_download_blocked_free(self, authed_client, free_license):
+        resp = authed_client.get("/api/configs/10.0.0.1/download/1")
+        assert resp.status_code == 403
+
+    def test_config_templates_list_blocked_free(self, authed_client, free_license):
+        resp = authed_client.get("/api/config-templates")
+        assert resp.status_code == 403
+
+
+class TestNetworkConfigValidation:
+    """Tests for network config input sanitization."""
+
+    @pytest.fixture(autouse=True)
+    def _appliance_mode(self, monkeypatch):
+        monkeypatch.setenv("TACHYON_APPLIANCE", "1")
+
+    def test_network_rejects_shell_injection_in_address(self, authed_client):
+        resp = authed_client.post("/api/system/network", json={
+            "mode": "static",
+            "address": "10.0.0.1; rm -rf /",
+            "gateway": "10.0.0.254",
+        })
+        assert resp.status_code == 400
+
+    def test_network_rejects_backtick_injection(self, authed_client):
+        resp = authed_client.post("/api/system/network", json={
+            "mode": "static",
+            "address": "`cat /etc/passwd`",
+            "gateway": "10.0.0.254",
+        })
+        assert resp.status_code == 400
+
+    def test_network_rejects_pipe_injection(self, authed_client):
+        resp = authed_client.post("/api/system/network", json={
+            "mode": "static",
+            "address": "10.0.0.1|whoami",
+            "gateway": "10.0.0.254",
+        })
+        assert resp.status_code == 400
+
+    def test_network_rejects_invalid_ip_format(self, authed_client):
+        resp = authed_client.post("/api/system/network", json={
+            "mode": "static",
+            "address": "not-an-ip",
+            "gateway": "10.0.0.254",
+        })
+        assert resp.status_code == 400
+
+    def test_network_rejects_invalid_mode(self, authed_client):
+        resp = authed_client.post("/api/system/network", json={
+            "mode": "malicious",
+        })
+        assert resp.status_code == 400
+
 
 class TestLicenseAPI:
     """Tests for the license management API endpoints."""

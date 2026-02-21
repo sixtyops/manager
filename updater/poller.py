@@ -1,6 +1,7 @@
 """Background poller for refreshing AP/CPE data."""
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from typing import Callable, Optional
@@ -25,6 +26,7 @@ class NetworkPoller:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._clients: dict[str, TachyonClient] = {}  # IP -> authenticated client
+        self._last_config_poll: Optional[datetime] = None
 
     async def start(self):
         """Start the background polling loop."""
@@ -52,6 +54,9 @@ class NetworkPoller:
             try:
                 await self._poll_all_aps()
                 await self._poll_all_switches()
+
+                # Check if it's time for a config poll
+                await self._maybe_poll_configs()
             except Exception as e:
                 logger.exception(f"Error in poll loop: {e}")
 
@@ -59,9 +64,7 @@ class NetworkPoller:
 
     def _evict_stale_clients(self):
         """Remove cached clients for devices no longer in the database."""
-        ap_ips = {ap["ip"] for ap in db.get_access_points(enabled_only=False)}
-        sw_ips = {sw["ip"] for sw in db.get_switches(enabled_only=False)}
-        known_ips = ap_ips | sw_ips
+        known_ips = db.get_all_device_ips()
         stale = [ip for ip in self._clients if ip not in known_ips]
         for ip in stale:
             del self._clients[ip]
@@ -243,10 +246,9 @@ class NetworkPoller:
             return None
 
         # Check if site exists
-        sites = db.get_tower_sites()
-        for site in sites:
-            if site["name"].lower() == location.lower():
-                return site["id"]
+        existing = db.get_tower_site_by_name(location)
+        if existing:
+            return existing["id"]
 
         # Create new site
         try:
@@ -442,11 +444,141 @@ class NetworkPoller:
 
         return True
 
+    # ------------------------------------------------------------------
+    # Config polling
+    # ------------------------------------------------------------------
+
+    async def _maybe_poll_configs(self):
+        """Check if it's time for a config poll based on settings."""
+        try:
+            if db.get_setting("config_poll_enabled", "true") != "true":
+                return
+
+            interval_hours = int(db.get_setting("config_poll_interval_hours", "24"))
+            if self._last_config_poll:
+                elapsed = (datetime.now() - self._last_config_poll).total_seconds()
+                if elapsed < interval_hours * 3600:
+                    return
+
+            logger.info("Starting scheduled config poll")
+            await self.poll_all_configs()
+        except Exception as e:
+            logger.error(f"Error checking config poll schedule: {e}")
+
+    async def poll_all_configs(self):
+        """Fetch configs from all managed devices."""
+        aps = db.get_access_points(enabled_only=True)
+        switches = db.get_switches(enabled_only=True)
+        all_cpes = db.get_all_cpes()
+
+        # Build list of devices to poll: (ip, username, password, model, role)
+        devices = []
+        for ap in aps:
+            devices.append((ap["ip"], ap["username"], ap["password"], ap.get("model"), "ap"))
+        for sw in switches:
+            devices.append((sw["ip"], sw["username"], sw["password"], sw.get("model"), "switch"))
+        for cpe in all_cpes:
+            if cpe.get("auth_status") == "ok" and cpe.get("ip"):
+                # Use parent AP credentials for CPE
+                ap = db.get_access_point(cpe["ap_ip"])
+                if ap:
+                    devices.append((cpe["ip"], ap["username"], ap["password"], cpe.get("model"), "cpe"))
+
+        if not devices:
+            self._last_config_poll = datetime.now()
+            return
+
+        logger.info(f"Config poll: fetching configs from {len(devices)} devices")
+        sem = asyncio.Semaphore(5)
+
+        async def fetch_config(ip, username, password, model, role):
+            async with sem:
+                await self._fetch_and_store_config(ip, username, password, model)
+
+        await asyncio.gather(
+            *[fetch_config(ip, u, p, m, r) for ip, u, p, m, r in devices],
+            return_exceptions=True,
+        )
+
+        self._last_config_poll = datetime.now()
+        logger.info("Config poll completed")
+
+        if self.broadcast_func:
+            await self.broadcast_func({"type": "config_poll_complete"})
+
+    async def poll_configs_for_ips(self, ips: list[str]):
+        """Fetch configs for specific device IPs (e.g., after a config push)."""
+        sem = asyncio.Semaphore(5)
+
+        async def fetch_one(ip):
+            async with sem:
+                # Find device credentials
+                device = db.get_access_point(ip)
+                if device:
+                    await self._fetch_and_store_config(ip, device["username"], device["password"], device.get("model"))
+                    return
+                device = db.get_switch(ip)
+                if device:
+                    await self._fetch_and_store_config(ip, device["username"], device["password"], device.get("model"))
+                    return
+                cpe = db.get_cpe_by_ip(ip)
+                if cpe:
+                    ap = db.get_access_point(cpe["ap_ip"])
+                    if ap:
+                        await self._fetch_and_store_config(ip, ap["username"], ap["password"], cpe.get("model"))
+
+        await asyncio.gather(*[fetch_one(ip) for ip in ips], return_exceptions=True)
+
+        if self.broadcast_func:
+            await self.broadcast_func({"type": "config_poll_complete"})
+
+    async def _fetch_and_store_config(self, ip: str, username: str, password: str, model: str = None):
+        """Fetch config from a device and store if changed."""
+        try:
+            # Reuse cached client if available, otherwise create new
+            client = self._clients.get(ip)
+            if not client:
+                client = TachyonClient(ip, username, password, timeout=15)
+                login_result = await client.login()
+                if login_result is not True:
+                    logger.debug(f"Config poll: login failed for {ip}: {login_result}")
+                    return
+
+            config = await client.get_config()
+            if config is None:
+                logger.debug(f"Config poll: failed to get config from {ip}")
+                return
+
+            import hashlib
+            # Use compact separators to match _compute_config_hash in app.py
+            config_json = json.dumps(config, sort_keys=True, separators=(",", ":"))
+            config_hash = hashlib.sha256(config_json.encode()).hexdigest()
+
+            existing_hash = db.get_latest_config_hash(ip)
+            if existing_hash == config_hash:
+                logger.debug(f"Config poll: {ip} config unchanged")
+                return
+
+            hardware_id = TachyonClient.MODEL_HARDWARE_IDS.get(
+                (model or "").lower(), "tn-110-prs"
+            )
+            db.save_device_config(ip, config_json, config_hash, model, hardware_id)
+            logger.info(f"Config poll: saved new config for {ip} (hash: {config_hash[:12]})")
+
+        except Exception as e:
+            logger.debug(f"Config poll: error fetching config from {ip}: {e}")
+
     def get_topology(self) -> dict:
         """Build topology dict from database."""
         sites = db.get_tower_sites()
         aps = db.get_access_points(enabled_only=False)
         health = db.get_health_summary()
+
+        # Batch-load all CPEs in one query, grouped by AP IP
+        all_cpes = db.get_all_cpes()
+        cpes_by_ap = {}
+        for cpe in all_cpes:
+            cpes_by_ap.setdefault(cpe["ap_ip"], []).append(cpe)
 
         # Build site lookup
         site_lookup = {s["id"]: s for s in sites}
@@ -475,9 +607,8 @@ class NetworkPoller:
                 "health_summary": {"green": 0, "yellow": 0, "red": 0},
             }
 
-            # Get CPEs for this AP
-            cpes = db.get_cpes_for_ap(ap["ip"])
-            for cpe in cpes:
+            # Get CPEs for this AP from pre-loaded data
+            for cpe in cpes_by_ap.get(ap["ip"], []):
                 cpe_data = {
                     "ip": cpe["ip"],
                     "mac": cpe["mac"],
@@ -570,7 +701,7 @@ class NetworkPoller:
             })
 
         total_aps = len(aps)
-        total_cpes = sum(len(db.get_cpes_for_ap(ap["ip"])) for ap in aps)
+        total_cpes = sum(len(ap_entry["cpes"]) for site in sites_data for ap_entry in site.get("aps", []))
         total_switches = len(switches)
 
         return {

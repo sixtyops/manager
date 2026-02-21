@@ -1426,13 +1426,31 @@ async def update_network_config(request: Request, session: dict = Depends(requir
     if mode not in ("dhcp", "static"):
         raise HTTPException(400, "Mode must be 'dhcp' or 'static'")
 
+    def _validate_ip_field(value: str, field_name: str) -> str:
+        """Validate IP address format and reject shell metacharacters."""
+        if not value:
+            return ""
+        # Reject any shell metacharacters
+        if re.search(r'[;|&$`\\\'"\n\r(){}!<>]', value):
+            raise HTTPException(400, f"Invalid characters in {field_name}")
+        try:
+            ipaddress.ip_address(value)
+        except ValueError:
+            # Also allow CIDR notation for netmask-like values
+            parts = value.split(".")
+            if len(parts) != 4 or not all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+                raise HTTPException(400, f"Invalid IP address format for {field_name}")
+        return value
+
     config_lines = [f"MODE={mode}"]
     if mode == "static":
-        for field in ("address", "netmask", "gateway", "dns"):
-            value = data.get(field, "")
-            if field in ("address", "gateway") and not value:
-                raise HTTPException(400, f"{field} is required for static IP")
-            config_lines.append(f"{field.upper()}={value}")
+        for field_name in ("address", "netmask", "gateway", "dns"):
+            value = data.get(field_name, "")
+            if field_name in ("address", "gateway") and not value:
+                raise HTTPException(400, f"{field_name} is required for static IP")
+            if value:
+                value = _validate_ip_field(value, field_name)
+            config_lines.append(f"{field_name.upper()}={value}")
 
     network_conf = Path("/data/network/network.conf")
     network_conf.parent.mkdir(parents=True, exist_ok=True)
@@ -3567,7 +3585,7 @@ def _fragment_matches(config: dict, fragment: dict) -> bool:
 
 
 @app.get("/api/configs")
-async def get_configs_summary(session: dict = Depends(require_auth)):
+async def get_configs_summary(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """List all devices with their latest config summary."""
     all_configs = db.get_all_latest_configs()
     result = {}
@@ -3582,14 +3600,14 @@ async def get_configs_summary(session: dict = Depends(require_auth)):
 
 
 @app.get("/api/configs/{ip}")
-async def get_config_history(ip: str, limit: int = 20, session: dict = Depends(require_auth)):
+async def get_config_history(ip: str, limit: int = 20, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Get config snapshot history for a device."""
     history = db.get_device_config_history(ip, limit=limit)
     return {"history": history}
 
 
 @app.get("/api/configs/{ip}/latest")
-async def get_latest_config(ip: str, session: dict = Depends(require_auth)):
+async def get_latest_config(ip: str, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Get the latest config JSON for a device."""
     config = db.get_latest_device_config(ip)
     if not config:
@@ -3599,7 +3617,7 @@ async def get_latest_config(ip: str, session: dict = Depends(require_auth)):
 
 
 @app.get("/api/configs/{ip}/snapshot/{config_id}")
-async def get_config_snapshot(ip: str, config_id: int, session: dict = Depends(require_auth)):
+async def get_config_snapshot(ip: str, config_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Get a specific config snapshot."""
     config = db.get_device_config_by_id(config_id)
     if not config or config["ip"] != ip:
@@ -3609,7 +3627,7 @@ async def get_config_snapshot(ip: str, config_id: int, session: dict = Depends(r
 
 
 @app.get("/api/configs/{ip}/download/{config_id}")
-async def download_config_tar(ip: str, config_id: int, session: dict = Depends(require_auth)):
+async def download_config_tar(ip: str, config_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Download a config snapshot as a .tar file with config.json + CONTROL."""
     import io
     import tarfile
@@ -3711,7 +3729,7 @@ async def poll_all_configs(session: dict = Depends(require_auth)):
 # ============================================================================
 
 @app.get("/api/config-templates")
-async def list_config_templates(session: dict = Depends(require_auth)):
+async def list_config_templates(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """List all config templates."""
     templates = db.get_config_templates()
     for t in templates:

@@ -166,6 +166,21 @@ check_updates() {
 }
 
 factory_reset() {
+    # Require recovery key authentication before factory reset
+    MACHINE_ID=$(get_machine_id)
+    whiptail --title "Factory Reset — Authentication Required" --msgbox \
+        "Factory reset requires a recovery key.\n\nMachine ID: ${MACHINE_ID}\n\nContact support with this Machine ID to receive a recovery key." 12 $COLS
+
+    KEY=$(whiptail --title "Factory Reset — Recovery Key" --inputbox "Enter recovery key:" 8 $COLS 3>&1 1>&2 2>&3) || return
+    if [ -z "$KEY" ]; then
+        return
+    fi
+
+    if ! /usr/local/bin/recovery "$KEY"; then
+        whiptail --title "Factory Reset" --msgbox "Invalid or expired recovery key.\nFactory reset denied." 8 $COLS
+        return
+    fi
+
     whiptail --title "Factory Reset" --yesno "WARNING: This will erase ALL data:\n\n  - Database\n  - Firmware files\n  - Backups\n  - SSL certificates\n  - Network configuration\n\nThis action CANNOT be undone.\n\nAre you sure?" 16 $COLS
     if [ $? -ne 0 ]; then
         return
