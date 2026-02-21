@@ -1,0 +1,64 @@
+services:
+  tachyon-mgmt:
+    image: ghcr.io/isolson/firmware-updater:${APP_VERSION:-latest}
+    container_name: tachyon-management
+    volumes:
+      - /data/firmware:/app/firmware
+      - /data/db:/app/data
+      - /data/backups:/app/backups
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - TACHYON_APPLIANCE=1
+      - TACHYON_IMAGE=ghcr.io/isolson/firmware-updater
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    mem_limit: 512m
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: tachyon-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /opt/tachyon/nginx/conf.d:/etc/nginx/conf.d:ro
+      - /data/certs:/etc/nginx/ssl
+      - /opt/tachyon/nginx/entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    depends_on:
+      tachyon-mgmt:
+        condition: service_healthy
+    mem_limit: 128m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  autoheal:
+    image: docker:cli
+    container_name: tachyon-autoheal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "[autoheal] Starting container health monitor..."
+        while true; do
+          sleep 30
+          for id in $(docker ps -q --filter "health=unhealthy" --filter "label=com.docker.compose.project"); do
+            NAME=$(docker inspect --format '{{.Name}}' "$id" 2>/dev/null | sed 's|^/||')
+            echo "[autoheal] Restarting unhealthy container: $NAME"
+            docker restart "$id" 2>/dev/null || true
+          done
+        done
+    mem_limit: 32m
+    restart: unless-stopped

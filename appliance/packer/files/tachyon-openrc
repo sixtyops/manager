@@ -1,0 +1,48 @@
+#!/sbin/openrc-run
+# OpenRC service for Tachyon Firmware Updater
+
+name="tachyon"
+description="Tachyon Firmware Updater"
+
+depend() {
+    need docker
+    after docker
+}
+
+start() {
+    ebegin "Starting ${name}"
+    # Wait up to 30 seconds for Docker socket to be available
+    local i=0
+    while [ $i -lt 30 ]; do
+        if docker info >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    if [ $i -ge 30 ]; then
+        eerror "Docker not ready after 30 seconds"
+        eend 1
+        return 1
+    fi
+    cd /opt/tachyon
+    docker compose up -d
+    eend $?
+}
+
+stop() {
+    ebegin "Stopping ${name}"
+    cd /opt/tachyon
+    timeout 30 docker compose down 2>/dev/null
+    eend $?
+}
+
+status() {
+    if timeout 5 docker compose -f /opt/tachyon/docker-compose.yml ps --status running 2>/dev/null | grep -q tachyon-management; then
+        einfo "service started"
+        return 0
+    else
+        einfo "service stopped"
+        return 3
+    fi
+}

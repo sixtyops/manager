@@ -1,0 +1,114 @@
+name: Build Appliance
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_version:
+        description: "App version tag (e.g., v1.2.0)"
+        required: true
+        type: string
+  release:
+    types: [published]
+
+# Only build OVA for stable releases (not pre-releases)
+jobs:
+  build-ova:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'release' && !github.event.release.prerelease)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine versions
+        id: version
+        run: |
+          APPLIANCE_VERSION=$(cat appliance/VERSION | tr -d '[:space:]')
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            APP_VERSION="${{ inputs.app_version }}"
+          else
+            APP_VERSION="${{ github.event.release.tag_name }}"
+          fi
+          OVA_NAME="tachyon-appliance-a${APPLIANCE_VERSION}-app${APP_VERSION}"
+          echo "appliance_version=${APPLIANCE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "app_version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "ova_name=${OVA_NAME}" >> "$GITHUB_OUTPUT"
+          echo "Building appliance: platform v${APPLIANCE_VERSION}, app ${APP_VERSION}"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils ovmf
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: latest
+
+      - name: Initialize Packer
+        run: |
+          cd appliance/packer
+          packer init tachyon.pkr.hcl
+
+      - name: Build appliance image
+        run: |
+          cd appliance/packer
+          packer build \
+            -var "app_version=${{ steps.version.outputs.app_version }}" \
+            -var "appliance_version=${{ steps.version.outputs.appliance_version }}" \
+            -var "recovery_secret=${{ secrets.APPLIANCE_RECOVERY_SECRET }}" \
+            tachyon.pkr.hcl
+        env:
+          PACKER_LOG: 1
+
+      - name: Convert to OVA
+        run: |
+          python3 appliance/scripts/create-ova.py \
+            appliance/packer/output/tachyon-appliance \
+            -o ${{ steps.version.outputs.ova_name }}.ova \
+            -n tachyon-appliance \
+            -v ${{ steps.version.outputs.app_version }}
+
+      - name: Upload OVA as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.ova_name }}
+          path: ${{ steps.version.outputs.ova_name }}.ova
+          retention-days: 30
+
+      - name: Attach OVA to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.version.outputs.ova_name }}.ova
+          tag_name: ${{ github.event.release.tag_name }}
+
+      - name: Update latest-appliance release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OVA="${{ steps.version.outputs.ova_name }}.ova"
+          APPLIANCE_VER="${{ steps.version.outputs.appliance_version }}"
+          APP_VER="${{ steps.version.outputs.app_version }}"
+
+          # Delete old assets if the release exists
+          gh release view appliance-latest --json assets -q '.assets[].name' 2>/dev/null | while read -r name; do
+            gh release delete-asset appliance-latest "$name" -y 2>/dev/null || true
+          done
+
+          # Create release if it doesn't exist, or update the notes
+          gh release create appliance-latest \
+            --title "Latest Appliance" \
+            --notes "Latest stable appliance OVA (platform v${APPLIANCE_VER}, app ${APP_VER}). Auto-updated on each appliance build." \
+            2>/dev/null || \
+          gh release edit appliance-latest \
+            --title "Latest Appliance" \
+            --notes "Latest stable appliance OVA (platform v${APPLIANCE_VER}, app ${APP_VER}). Auto-updated on each appliance build."
+
+          # Upload new OVA
+          gh release upload appliance-latest "$OVA" --clobber

@@ -585,3 +585,290 @@ class TestVerifyUpdateOnStartup:
         broadcast = AsyncMock()
         await verify_update_on_startup(broadcast)
         broadcast.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Appliance mode
+# ---------------------------------------------------------------------------
+
+class TestApplianceMode:
+    """Test the appliance mode docker-pull update path."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_db(self, mock_db):
+        self.db = mock_db
+
+    def _set_setting(self, key, value):
+        self.db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+        self.db.commit()
+
+    def test_appliance_mode_env_var(self):
+        """APPLIANCE_MODE is driven by TACHYON_APPLIANCE env var."""
+        with patch.dict("os.environ", {"TACHYON_APPLIANCE": "1"}):
+            import importlib
+            import updater.release_checker as rc
+            importlib.reload(rc)
+            assert rc.APPLIANCE_MODE is True
+
+        with patch.dict("os.environ", {}, clear=True):
+            importlib.reload(rc)
+            assert rc.APPLIANCE_MODE is False
+
+        # Restore original state
+        importlib.reload(rc)
+
+    def test_get_update_status_includes_appliance_mode(self):
+        from updater.release_checker import ReleaseChecker
+        checker = ReleaseChecker(broadcast_func=AsyncMock())
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None):
+            status = checker.get_update_status()
+        assert "appliance_mode" in status
+
+    @pytest.mark.asyncio
+    async def test_appliance_update_pulls_image(self):
+        """In appliance mode, apply_update should docker pull, not git fetch."""
+        from updater.release_checker import _apply_update_appliance
+
+        calls = []
+
+        def mock_run(cmd, **kwargs):
+            calls.append(cmd)
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = ""
+            result.stderr = ""
+            return result
+
+        compose_dir = Path("/opt/tachyon")
+        with patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_compose_dir", return_value=compose_dir), \
+             patch("updater.release_checker.subprocess.run", side_effect=mock_run), \
+             patch("updater.release_checker._launch_appliance_watchdog", return_value=True):
+            result = await _apply_update_appliance("1.2.0", "v1.2.0")
+
+        assert result["success"] is True
+        # Verify docker pull was called with correct image
+        pull_cmds = [c for c in calls if "pull" in c]
+        assert len(pull_cmds) == 1
+        assert "ghcr.io/isolson/firmware-updater:v1.2.0" in pull_cmds[0]
+
+    @pytest.mark.asyncio
+    async def test_appliance_update_fails_on_pull_error(self):
+        from updater.release_checker import _apply_update_appliance
+
+        def mock_run(cmd, **kwargs):
+            result = MagicMock()
+            if "pull" in cmd:
+                result.returncode = 1
+                result.stderr = "manifest not found"
+            else:
+                result.returncode = 0
+            result.stdout = ""
+            return result
+
+        with patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_compose_dir", return_value=Path("/opt/tachyon")), \
+             patch("updater.release_checker.subprocess.run", side_effect=mock_run):
+            result = await _apply_update_appliance("1.2.0", "v1.2.0")
+
+        assert result["success"] is False
+        assert "pull failed" in result["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_appliance_update_no_docker_socket(self):
+        from updater.release_checker import _apply_update_appliance
+
+        with patch("updater.release_checker._docker_socket_available", return_value=False):
+            result = await _apply_update_appliance("1.2.0", "v1.2.0")
+
+        assert result["success"] is False
+        assert "socket" in result["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_appliance_update_fallback_on_watchdog_failure(self):
+        """If watchdog fails to launch, falls back to direct swap."""
+        from updater.release_checker import _apply_update_appliance
+
+        def mock_run(cmd, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = ""
+            result.stderr = ""
+            return result
+
+        with patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_compose_dir", return_value=Path("/opt/tachyon")), \
+             patch("updater.release_checker.subprocess.run", side_effect=mock_run), \
+             patch("updater.release_checker._launch_appliance_watchdog", return_value=False), \
+             patch("updater.release_checker.subprocess.Popen") as mock_popen:
+            result = await _apply_update_appliance("1.2.0", "v1.2.0")
+
+        assert result["success"] is True
+        mock_popen.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_apply_update_branches_to_appliance_mode(self):
+        """When APPLIANCE_MODE=True, apply_update uses the appliance path."""
+        from updater.release_checker import apply_update
+        self._set_setting("autoupdate_available_version", "1.2.0")
+
+        with patch("updater.release_checker.APPLIANCE_MODE", True), \
+             patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._apply_update_appliance", new_callable=AsyncMock,
+                   return_value={"success": True, "message": "ok"}) as mock_appliance:
+            result = await apply_update()
+
+        assert result["success"] is True
+        mock_appliance.assert_called_once_with("1.2.0", "v1.2.0")
+
+    @pytest.mark.asyncio
+    async def test_apply_update_uses_git_when_not_appliance(self):
+        """When APPLIANCE_MODE=False, apply_update takes the git path."""
+        from updater.release_checker import apply_update
+        self._set_setting("autoupdate_available_version", "1.0.2")
+
+        with patch("updater.release_checker.APPLIANCE_MODE", False), \
+             patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=False):
+            result = await apply_update()
+
+        # Git path returns manual commands when no docker socket
+        assert result["success"] is False
+        assert result.get("manual") is True
+
+
+class TestApplianceWatchdogScript:
+    def test_script_has_health_check(self):
+        from updater.release_checker import _build_appliance_watchdog_script
+        script = _build_appliance_watchdog_script("/opt/tachyon", False)
+        assert "Health.Status" in script
+        assert "healthy" in script
+
+    def test_script_has_rollback(self):
+        from updater.release_checker import _build_appliance_watchdog_script
+        script = _build_appliance_watchdog_script("/opt/tachyon", False)
+        assert "Rolling back" in script
+        assert ":rollback" in script
+
+    def test_script_no_git_operations(self):
+        """Appliance watchdog should NOT use git."""
+        from updater.release_checker import _build_appliance_watchdog_script
+        script = _build_appliance_watchdog_script("/opt/tachyon", False)
+        assert "git" not in script
+
+    def test_script_uses_no_build(self):
+        """Appliance watchdog should use --no-build (image already pulled)."""
+        from updater.release_checker import _build_appliance_watchdog_script
+        script = _build_appliance_watchdog_script("/opt/tachyon", False)
+        assert "--no-build" in script
+
+    def test_script_includes_standalone(self):
+        from updater.release_checker import _build_appliance_watchdog_script
+        script = _build_appliance_watchdog_script("/opt/tachyon", True)
+        assert "docker-compose.standalone.yml" in script
+
+
+# ---------------------------------------------------------------------------
+# Appliance version and compatibility
+# ---------------------------------------------------------------------------
+
+class TestApplianceVersion:
+    """Test appliance version detection and compatibility checking."""
+
+    def test_get_appliance_version_reads_file(self, tmp_path):
+        from updater.release_checker import get_appliance_version, APPLIANCE_VERSION_FILE
+        version_file = tmp_path / "appliance-version"
+        version_file.write_text("1.0\n")
+
+        with patch("updater.release_checker.APPLIANCE_VERSION_FILE", version_file):
+            assert get_appliance_version() == "1.0"
+
+    def test_get_appliance_version_returns_none_when_missing(self, tmp_path):
+        from updater.release_checker import get_appliance_version
+        missing = tmp_path / "nonexistent"
+
+        with patch("updater.release_checker.APPLIANCE_VERSION_FILE", missing):
+            assert get_appliance_version() is None
+
+    def test_parse_min_appliance_version_found(self):
+        from updater.release_checker import parse_min_appliance_version
+        notes = "Some release notes\n<!-- min_appliance_version: 1.1 -->\nMore text"
+        assert parse_min_appliance_version(notes) == "1.1"
+
+    def test_parse_min_appliance_version_not_found(self):
+        from updater.release_checker import parse_min_appliance_version
+        assert parse_min_appliance_version("Regular release notes") is None
+
+    def test_parse_min_appliance_version_none_input(self):
+        from updater.release_checker import parse_min_appliance_version
+        assert parse_min_appliance_version(None) is None
+
+    def test_parse_min_appliance_version_empty(self):
+        from updater.release_checker import parse_min_appliance_version
+        assert parse_min_appliance_version("") is None
+
+    def test_get_update_status_includes_appliance_version(self, mock_db):
+        from updater.release_checker import ReleaseChecker
+        checker = ReleaseChecker(broadcast_func=AsyncMock())
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker.get_appliance_version", return_value="1.0"):
+            status = checker.get_update_status()
+        assert status["appliance_version"] == "1.0"
+
+    @pytest.mark.asyncio
+    async def test_apply_update_blocks_incompatible_appliance(self, mock_db):
+        """apply_update should refuse when appliance platform is too old."""
+        from updater.release_checker import apply_update
+        from updater import database
+        database.set_setting("autoupdate_available_version", "2.0.0")
+        database.set_setting("autoupdate_release_notes",
+                             "Notes\n<!-- min_appliance_version: 1.1 -->")
+
+        with patch("updater.release_checker.APPLIANCE_MODE", True), \
+             patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker.get_appliance_version", return_value="1.0"):
+            result = await apply_update()
+
+        assert result["success"] is False
+        assert result.get("appliance_upgrade_required") is True
+        assert "1.1" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_apply_update_allows_compatible_appliance(self, mock_db):
+        """apply_update should proceed when appliance version is sufficient."""
+        from updater.release_checker import apply_update
+        from updater import database
+        database.set_setting("autoupdate_available_version", "2.0.0")
+        database.set_setting("autoupdate_release_notes",
+                             "Notes\n<!-- min_appliance_version: 1.0 -->")
+
+        with patch("updater.release_checker.APPLIANCE_MODE", True), \
+             patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker.get_appliance_version", return_value="1.0"), \
+             patch("updater.release_checker._apply_update_appliance", new_callable=AsyncMock,
+                   return_value={"success": True, "message": "ok"}) as mock_apply:
+            result = await apply_update()
+
+        assert result["success"] is True
+        mock_apply.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_apply_update_proceeds_without_min_version(self, mock_db):
+        """apply_update should proceed when no min_appliance_version in notes."""
+        from updater.release_checker import apply_update
+        from updater import database
+        database.set_setting("autoupdate_available_version", "2.0.0")
+        database.set_setting("autoupdate_release_notes", "Regular notes")
+
+        with patch("updater.release_checker.APPLIANCE_MODE", True), \
+             patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker.get_appliance_version", return_value="1.0"), \
+             patch("updater.release_checker._apply_update_appliance", new_callable=AsyncMock,
+                   return_value={"success": True, "message": "ok"}) as mock_apply:
+            result = await apply_update()
+
+        assert result["success"] is True
+        mock_apply.assert_called_once()
