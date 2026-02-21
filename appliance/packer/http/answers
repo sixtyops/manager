@@ -1,0 +1,17 @@
+KEYMAPOPTS="us us"
+HOSTNAMEOPTS="-n tachyon"
+INTERFACESOPTS="auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+"
+DNSOPTS="-d tachyon.local 8.8.8.8 1.1.1.1"
+TIMEZONEOPTS="-z UTC"
+PROXYOPTS="none"
+APKREPOSOPTS="-1"
+SSHDOPTS="-c openssh"
+NTPOPTS="-c chrony"
+DISKOPTS="-m sys -s 0 /dev/vda"
+LBUOPTS="none"
+APKCACHEOPTS="none"

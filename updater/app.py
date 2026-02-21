@@ -1,11 +1,13 @@
 """Tachyon Management System - Web Application."""
 
 import asyncio
+import html as html_module
 import ipaddress
 import json
 import logging
 import os
 import re
+import shutil
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
@@ -21,6 +23,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from .tachyon import TachyonClient, UpdateResult
+from . import __version__
 from . import database as db
 from .poller import init_poller, get_poller
 from .scheduler import init_scheduler, get_scheduler
@@ -35,6 +38,11 @@ from . import ssl_manager
 from . import git_backup
 from . import radius_config
 from . import oidc_config
+from .license import (
+    Feature, get_license_state, get_nag_info, get_billable_device_count,
+    is_feature_enabled, validate_license, clear_license,
+    init_license_validator, require_feature,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -96,7 +104,10 @@ async def broadcast(message: dict):
     disconnected = set()
     for ws in active_websockets:
         try:
-            await ws.send_json(message)
+            await asyncio.wait_for(ws.send_json(message), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("WebSocket send timed out, disconnecting slow client")
+            disconnected.add(ws)
         except Exception:
             disconnected.add(ws)
 
@@ -106,16 +117,21 @@ async def broadcast(message: dict):
 
 def _cleanup_oidc_states():
     """Remove expired OIDC state entries (older than 10 minutes)."""
-    settings = db.get_all_settings()
     cutoff = (datetime.now() - timedelta(minutes=10)).isoformat()
-    for key, value in settings.items():
-        if key.startswith("oidc_state_"):
-            try:
-                data = json.loads(value)
-                if data.get("created_at", "") < cutoff:
-                    db.set_setting(key, "")
-            except (json.JSONDecodeError, TypeError):
-                db.set_setting(key, "")
+    db.delete_expired_oidc_states(cutoff)
+
+
+async def _supervised_task(name: str, coro_func, *args, restart_delay: float = 10.0):
+    """Run a coroutine in a loop, restarting on unhandled exceptions."""
+    while True:
+        try:
+            await coro_func(*args)
+        except asyncio.CancelledError:
+            logger.info(f"Background task '{name}' cancelled")
+            raise
+        except Exception:
+            logger.exception(f"Background task '{name}' crashed, restarting in {restart_delay}s")
+            await asyncio.sleep(restart_delay)
 
 
 async def _periodic_cleanup():
@@ -128,11 +144,34 @@ async def _periodic_cleanup():
             db.cleanup_old_schedule_log(max_age_days=90)
             db.cleanup_old_rollouts(max_age_days=180)
             db.cleanup_old_device_durations(max_age_days=180)
+            db.cleanup_old_device_update_history(max_age_days=180)
             _cleanup_completed_jobs(max_age_seconds=3600)
             _cleanup_oidc_states()
             logger.info("Periodic cleanup completed")
         except Exception as e:
             logger.error(f"Periodic cleanup error: {e}")
+
+        # Disk space monitoring
+        try:
+            data_path = Path("/data") if os.environ.get("TACHYON_APPLIANCE") == "1" else DATA_DIR
+            usage = shutil.disk_usage(str(data_path))
+            percent_used = usage.used / usage.total * 100
+            if percent_used > 95:
+                logger.error(f"CRITICAL: Disk usage at {percent_used:.1f}%")
+                await broadcast({
+                    "type": "system_alert",
+                    "level": "critical",
+                    "message": f"Disk space critically low: {percent_used:.1f}% used. Free space: {usage.free // (1024*1024)} MB.",
+                })
+            elif percent_used > 90:
+                logger.warning(f"Disk usage high: {percent_used:.1f}%")
+                await broadcast({
+                    "type": "system_alert",
+                    "level": "warning",
+                    "message": f"Disk space low: {percent_used:.1f}% used. Free space: {usage.free // (1024*1024)} MB.",
+                })
+        except Exception as e:
+            logger.debug(f"Disk check failed: {e}")
 
 
 async def _backup_scheduler():
@@ -193,8 +232,16 @@ async def lifespan(app: FastAPI):
     checker = init_checker(broadcast)
     await checker.start()
     await verify_update_on_startup(broadcast)
-    cleanup_task = asyncio.create_task(_periodic_cleanup())
-    backup_task = asyncio.create_task(_backup_scheduler())
+    license_validator = init_license_validator(broadcast)
+    await license_validator.start()
+    cleanup_task = asyncio.create_task(
+        _supervised_task("periodic_cleanup", _periodic_cleanup)
+    )
+    backup_task = asyncio.create_task(
+        _supervised_task("backup_scheduler", _backup_scheduler)
+    )
+    state = get_license_state()
+    logger.info(f"License: {state.status.value} (tier={state.tier.value})")
     logger.info("Application started")
 
     yield
@@ -202,10 +249,12 @@ async def lifespan(app: FastAPI):
     # Shutdown
     backup_task.cancel()
     cleanup_task.cancel()
-    try:
-        await cleanup_task
-    except asyncio.CancelledError:
-        pass
+    for task in [cleanup_task, backup_task]:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    await license_validator.stop()
     await checker.stop()
     await fetcher.stop()
     await scheduler.stop()
@@ -545,14 +594,14 @@ async def backup_setup_submit(
 
 
 @app.post("/backup-run")
-async def backup_run_now(session: dict = Depends(require_auth)):
+async def backup_run_now(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Trigger an immediate backup."""
     await git_backup.run_backup()
     return RedirectResponse(url="/backup-setup", status_code=303)
 
 
 @app.get("/api/backup/git-status")
-async def get_git_backup_status_api(session: dict = Depends(require_auth)):
+async def get_git_backup_status_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     return git_backup.get_backup_status()
 
 
@@ -644,6 +693,15 @@ async def websocket_endpoint(websocket: WebSocket):
             "timezone": hist.get("timezone"),
         })
 
+    # Send license state
+    _ls = get_license_state()
+    await websocket.send_json({
+        "type": "license_state",
+        **_ls.to_dict(),
+        **get_nag_info(),
+        "features": {f.value: _ls.is_feature_enabled(f) for f in Feature},
+    })
+
     # Send scheduler status (includes rollout info)
     scheduler = get_scheduler()
     if scheduler:
@@ -702,6 +760,7 @@ async def create_site(
     latitude: float = Form(None),
     longitude: float = Form(None),
     session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.TOWER_SITES)),
 ):
     """Create a new tower site."""
     try:
@@ -722,6 +781,7 @@ async def update_site(
     latitude: float = Form(None),
     longitude: float = Form(None),
     session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.TOWER_SITES)),
 ):
     """Update a tower site."""
     db.update_tower_site(site_id, name=name, location=location, latitude=latitude, longitude=longitude)
@@ -729,7 +789,7 @@ async def update_site(
 
 
 @app.delete("/api/sites/{site_id}")
-async def delete_site(site_id: int, session: dict = Depends(require_auth)):
+async def delete_site(site_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.TOWER_SITES))):
     """Delete a tower site."""
     db.delete_tower_site(site_id)
     return {"success": True}
@@ -1021,6 +1081,110 @@ async def get_all_cpes(session: dict = Depends(require_auth)):
 
 
 # ============================================================================
+# Device Portal (auto-login redirect)
+# ============================================================================
+
+def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
+    """Build the auto-login HTML page for a device."""
+    escaped_ip = html_module.escape(ip)
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Connecting to {escaped_ip}...</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            display: flex; justify-content: center; align-items: center;
+            min-height: 100vh; margin: 0; background: #111827; color: #e5e7eb;
+        }}
+        .container {{ text-align: center; }}
+        .spinner {{
+            width: 40px; height: 40px; margin: 0 auto 16px;
+            border: 3px solid #374151; border-top-color: #60a5fa;
+            border-radius: 50%; animation: spin 0.8s linear infinite;
+        }}
+        @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+        .fallback {{ display: none; margin-top: 20px; font-size: 0.9rem; color: #9ca3af; }}
+        .fallback a {{ color: #60a5fa; text-decoration: none; }}
+        .fallback a:hover {{ text-decoration: underline; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="spinner" id="spinner"></div>
+        <p id="status">Logging in to {escaped_ip}...</p>
+        <div id="fallback" class="fallback">
+            <p>Auto-login may not have succeeded.</p>
+            <p><a href="https://{escaped_ip}/">Open {escaped_ip} manually</a></p>
+        </div>
+    </div>
+    <iframe name="loginFrame" style="display:none;"></iframe>
+    <form id="loginForm" method="POST" action="https://{escaped_ip}/cgi.lua/login"
+          target="loginFrame" enctype="text/plain" style="display:none;">
+        <input name='{safe_form_name}' value='"}}'>
+
+    </form>
+    <script>
+        document.getElementById('loginForm').submit();
+        setTimeout(function() {{
+            window.location.href = 'https://{escaped_ip}/';
+        }}, 2000);
+        setTimeout(function() {{
+            document.getElementById('fallback').style.display = 'block';
+            document.getElementById('spinner').style.display = 'none';
+            document.getElementById('status').textContent = 'Redirecting...';
+        }}, 5000);
+    </script>
+</body>
+</html>"""
+
+
+@app.get("/api/device-portal/{ip}", response_class=HTMLResponse)
+async def device_portal(ip: str, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.DEVICE_PORTAL))):
+    """Auto-login portal: authenticate to a device and redirect to its web UI."""
+    _validate_ip(ip)
+
+    username = None
+    password = None
+
+    # Check APs first
+    ap = db.get_access_point(ip)
+    if ap:
+        username, password = ap["username"], ap["password"]
+    else:
+        # Check switches
+        sw = db.get_switch(ip)
+        if sw:
+            username, password = sw["username"], sw["password"]
+        else:
+            # Check CPEs (inherit parent AP credentials)
+            cpe = db.get_cpe_by_ip(ip)
+            if cpe:
+                parent_ap = db.get_access_point(cpe["ap_ip"])
+                if parent_ap:
+                    username, password = parent_ap["username"], parent_ap["password"]
+
+    if not username or not password:
+        raise HTTPException(404, "Device not found or missing credentials")
+
+    # Build JSON body via enctype="text/plain" trick:
+    # Input name becomes the body prefix, value becomes "="}
+    # Result: {"username":"...","password":"...","_":"="}
+    json_name = f'{{"username":{json.dumps(username)},"password":{json.dumps(password)},"_":"'
+    safe_name = html_module.escape(json_name, quote=True)
+
+    page = _build_device_portal_html(ip, safe_name)
+
+    return HTMLResponse(
+        content=page,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
+    )
+
+
+# ============================================================================
 # Quick Add (combines site + AP creation)
 # ============================================================================
 
@@ -1068,7 +1232,7 @@ async def quick_add(
 
 _SETTINGS_SENSITIVE = {
     "admin_password_hash", "oidc_client_secret",
-    "device_default_password",
+    "device_default_password", "license_key",
 }
 
 
@@ -1102,6 +1266,18 @@ def _validate_settings(filtered: dict):
     url = filtered.get("slack_webhook_url")
     if url and not slack.is_valid_slack_url(url):
         raise HTTPException(400, "Slack webhook URL must be a valid https://hooks.slack.com/ URL")
+    # License-gated settings
+    if filtered.get("slack_webhook_url") and not is_feature_enabled(Feature.SLACK_NOTIFICATIONS):
+        raise HTTPException(403, detail={"error": "feature_locked", "feature": "slack_notifications",
+                                         "message": "Slack notifications require a Pro license."})
+    if filtered.get("firmware_beta_enabled") == "true" and not is_feature_enabled(Feature.BETA_FIRMWARE):
+        raise HTTPException(403, detail={"error": "feature_locked", "feature": "beta_firmware",
+                                         "message": "Beta firmware channel requires a Pro license."})
+    if "firmware_quarantine_days" in filtered and not is_feature_enabled(Feature.FIRMWARE_HOLD_CUSTOM):
+        current = db.get_setting("firmware_quarantine_days", "7")
+        if filtered["firmware_quarantine_days"] != current:
+            raise HTTPException(403, detail={"error": "feature_locked", "feature": "firmware_hold_custom",
+                                             "message": "Custom firmware hold period requires a Pro license."})
 
 
 @app.put("/api/settings")
@@ -1140,10 +1316,129 @@ async def save_settings_and_reevaluate(request: Request, session: dict = Depends
 
 
 @app.post("/api/slack/test")
-async def test_slack_webhook(session: dict = Depends(require_auth)):
+async def test_slack_webhook(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.SLACK_NOTIFICATIONS))):
     """Send a test notification to the configured Slack webhook."""
     success, message = await slack.send_test_notification()
     return {"success": success, "message": message}
+
+
+# ============================================================================
+# License API
+# ============================================================================
+
+@app.get("/api/license")
+async def get_license_status(session: dict = Depends(require_auth)):
+    """Get current license state, features map, and device counts."""
+    state = get_license_state()
+    nag = get_nag_info()
+    features = {f.value: state.is_feature_enabled(f) for f in Feature}
+    return {**state.to_dict(), **nag, "features": features}
+
+
+@app.post("/api/license/activate")
+async def activate_license(request: Request, session: dict = Depends(require_auth)):
+    """Activate or update the license key."""
+    data = await request.json()
+    key = data.get("license_key", "").strip()
+    if not key:
+        raise HTTPException(400, "License key is required")
+    from .license import LicenseStatus
+    state = await validate_license(license_key=key)
+    return {**state.to_dict(), "success": state.status == LicenseStatus.ACTIVE}
+
+
+@app.post("/api/license/deactivate")
+async def deactivate_license(session: dict = Depends(require_auth)):
+    """Remove the license key and revert to free tier."""
+    clear_license()
+    return {"success": True, "status": "free"}
+
+
+@app.post("/api/license/validate")
+async def force_validate_license(session: dict = Depends(require_auth)):
+    """Force re-validate the current license with the server."""
+    state = get_license_state()
+    if not state.license_key:
+        raise HTTPException(400, "No license key configured")
+    result = await validate_license()
+    return result.to_dict()
+
+
+# ============================================================================
+# System / Appliance API
+# ============================================================================
+
+@app.get("/api/system/info")
+async def get_system_info(session: dict = Depends(require_auth)):
+    """Get system information (version, uptime, disk usage, machine ID)."""
+    import shutil
+    import platform
+
+    from .release_checker import get_appliance_version
+
+    appliance_mode = os.environ.get("TACHYON_APPLIANCE") == "1"
+    info = {
+        "version": __version__,
+        "appliance_mode": appliance_mode,
+        "appliance_version": get_appliance_version(),
+        "os": platform.system(),
+        "os_version": platform.release(),
+        "uptime_seconds": None,
+        "disk_usage": None,
+        "machine_id": None,
+    }
+
+    try:
+        with open("/proc/uptime") as f:
+            info["uptime_seconds"] = float(f.read().split()[0])
+    except (FileNotFoundError, ValueError):
+        pass
+
+    data_path = Path("/data") if appliance_mode else DATA_DIR
+    try:
+        usage = shutil.disk_usage(str(data_path))
+        info["disk_usage"] = {
+            "total_gb": round(usage.total / (1024**3), 2),
+            "used_gb": round(usage.used / (1024**3), 2),
+            "free_gb": round(usage.free / (1024**3), 2),
+            "percent": round(usage.used / usage.total * 100, 1),
+        }
+    except (FileNotFoundError, OSError):
+        pass
+
+    try:
+        with open("/sys/class/dmi/id/product_uuid") as f:
+            info["machine_id"] = f.read().strip()[:8].upper()
+    except (FileNotFoundError, PermissionError):
+        pass
+
+    return info
+
+
+@app.post("/api/system/network")
+async def update_network_config(request: Request, session: dict = Depends(require_auth)):
+    """Update network configuration (appliance mode only)."""
+    if os.environ.get("TACHYON_APPLIANCE") != "1":
+        raise HTTPException(404, "Not available in this deployment mode")
+
+    data = await request.json()
+    mode = data.get("mode", "dhcp")
+    if mode not in ("dhcp", "static"):
+        raise HTTPException(400, "Mode must be 'dhcp' or 'static'")
+
+    config_lines = [f"MODE={mode}"]
+    if mode == "static":
+        for field in ("address", "netmask", "gateway", "dns"):
+            value = data.get(field, "")
+            if field in ("address", "gateway") and not value:
+                raise HTTPException(400, f"{field} is required for static IP")
+            config_lines.append(f"{field.upper()}={value}")
+
+    network_conf = Path("/data/network/network.conf")
+    network_conf.parent.mkdir(parents=True, exist_ok=True)
+    network_conf.write_text("\n".join(config_lines) + "\n")
+
+    return {"success": True, "mode": mode}
 
 
 # ============================================================================
@@ -1210,7 +1505,7 @@ async def update_device_auth_config(request: Request, session: dict = Depends(re
 
 
 @app.get("/api/auth/oidc")
-async def get_oidc_config_api(session: dict = Depends(require_auth)):
+async def get_oidc_config_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Get OIDC/SSO configuration (secret masked)."""
     config = oidc_config.get_oidc_config()
     return {
@@ -1225,7 +1520,7 @@ async def get_oidc_config_api(session: dict = Depends(require_auth)):
 
 
 @app.put("/api/auth/oidc")
-async def update_oidc_config_api(request: Request, session: dict = Depends(require_auth)):
+async def update_oidc_config_api(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Update OIDC/SSO configuration."""
     data = await request.json()
 
@@ -1255,7 +1550,7 @@ async def update_oidc_config_api(request: Request, session: dict = Depends(requi
 
 
 @app.post("/api/auth/test-oidc")
-async def test_oidc_discovery(session: dict = Depends(require_auth)):
+async def test_oidc_discovery(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Test OIDC discovery endpoint reachability."""
     config = oidc_config.get_oidc_config()
     if not config.provider_url:
@@ -1281,7 +1576,7 @@ async def test_oidc_discovery(session: dict = Depends(require_auth)):
 # ============================================================================
 
 @app.get("/auth/oidc/login")
-async def oidc_login(request: Request):
+async def oidc_login(request: Request, _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Initiate OIDC Authorization Code flow with PKCE."""
     import secrets as _secrets
     import hashlib
@@ -1341,7 +1636,7 @@ async def oidc_login(request: Request):
 
 
 @app.get("/auth/oidc/callback")
-async def oidc_callback(request: Request, code: str = None, state: str = None, error: str = None):
+async def oidc_callback(request: Request, code: str = None, state: str = None, error: str = None, _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Handle OIDC callback from Authentik."""
     if not oidc_config.is_oidc_enabled():
         return RedirectResponse(url="/login", status_code=302)
@@ -1360,7 +1655,7 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
     if not stored_raw:
         return RedirectResponse(url="/login?error=invalid_state", status_code=302)
 
-    db.set_setting(f"oidc_state_{state}", "")  # One-time use
+    db.delete_setting(f"oidc_state_{state}")  # One-time use
 
     try:
         state_data = json.loads(stored_raw)
@@ -1629,7 +1924,7 @@ async def get_location(session: dict = Depends(require_auth)):
 # ============================================================================
 
 @app.post("/api/backup/export")
-async def export_backup(request: Request, session: dict = Depends(require_auth)):
+async def export_backup(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Export devices as CSV with encrypted passwords."""
     data = await request.json()
     passphrase = data.get("passphrase", "")
@@ -1656,6 +1951,7 @@ async def import_backup(
     passphrase: str = Form(...),
     conflict_mode: str = Form("skip"),
     session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.CONFIG_BACKUP)),
 ):
     """Import devices from a CSV with encrypted passwords."""
     if not passphrase or len(passphrase) < 8:
@@ -1707,6 +2003,10 @@ class DeviceStatus:
     role: str = "ap"
     parent_ap: Optional[str] = None
     model: Optional[str] = None
+    # Stage tracking for history
+    stage_history: list = field(default_factory=list)
+    current_stage: Optional[str] = None
+    current_stage_started: Optional[str] = None
 
 
 @dataclass
@@ -2455,6 +2755,7 @@ async def update_single_device_endpoint(
     firmware_file_tns100: str = Form(""),
     bank_mode: str = Form("both"),
     session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.UPDATE_SINGLE_DEVICE)),
 ):
     """Start a firmware update for a single device (AP, CPE, or switch)."""
     # Validate and check firmware file exists
@@ -2606,11 +2907,28 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     "role": device_status.role,
                     "parent_ap": device_status.parent_ap,
                 })
+                now_iso = datetime.now().isoformat()
+                try:
+                    db.save_device_update_history(
+                        job_id=job.job_id, ip=ip, role=device_status.role,
+                        pass_number=pass_number, status="skipped",
+                        old_version=None, new_version=None, model=None,
+                        error="Maintenance window ending", failed_stage=None,
+                        stages=[], duration_seconds=0,
+                        started_at=now_iso, completed_at=now_iso,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to save device history for {ip}: {e}")
                 return
         except Exception as e:
             logger.warning(f"Maintenance window check failed: {e}")
 
     device_start_time = datetime.now()
+
+    # Reset stage tracking for this pass
+    device_status.stage_history = []
+    device_status.current_stage = "connecting"
+    device_status.current_stage_started = device_start_time.isoformat()
 
     prefix = f"Pass {pass_number}: " if pass_number > 1 else ""
     device_status.status = "connecting"
@@ -2648,6 +2966,18 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             "role": device_status.role,
             "parent_ap": device_status.parent_ap,
         })
+        now_iso = datetime.now().isoformat()
+        try:
+            db.save_device_update_history(
+                job_id=job.job_id, ip=ip, role=device_status.role,
+                pass_number=pass_number, status="failed",
+                old_version=None, new_version=None, model=device_status.model,
+                error=missing_fw_error, failed_stage="connecting",
+                stages=[], duration_seconds=0,
+                started_at=device_start_time.isoformat(), completed_at=now_iso,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to save device history for {ip}: {e}")
         return
 
     def progress_callback(device_ip: str, message: str):
@@ -2660,10 +2990,26 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             "Verifying": "verifying",
             "Skipped": "skipped",
         }
+        new_stage = None
         for key, status in status_map.items():
             if key in message:
+                new_stage = status
                 device_status.status = status
                 break
+
+        # Record stage transitions
+        if new_stage and new_stage != device_status.current_stage:
+            now_iso = datetime.now().isoformat()
+            if device_status.current_stage and device_status.current_stage_started:
+                device_status.stage_history.append({
+                    "stage": device_status.current_stage,
+                    "started_at": device_status.current_stage_started,
+                    "completed_at": now_iso,
+                    "success": True,
+                })
+            device_status.current_stage = new_stage
+            device_status.current_stage_started = now_iso
+
         device_status.progress_message = f"{prefix}{message}"
 
         asyncio.create_task(broadcast({
@@ -2727,6 +3073,32 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         "parent_ap": device_status.parent_ap,
         "model": device_status.model,
     })
+
+    # Finalize stage tracking and persist device update history
+    now = datetime.now()
+    now_iso = now.isoformat()
+    if device_status.current_stage and device_status.current_stage_started:
+        is_success = device_status.status in ("success", "skipped")
+        device_status.stage_history.append({
+            "stage": device_status.current_stage,
+            "started_at": device_status.current_stage_started,
+            "completed_at": now_iso,
+            "success": is_success,
+        })
+    failed_stage = device_status.current_stage if device_status.status == "failed" else None
+    duration_secs = (now - device_start_time).total_seconds()
+    try:
+        db.save_device_update_history(
+            job_id=job.job_id, ip=ip, role=device_status.role,
+            pass_number=pass_number, status=device_status.status,
+            old_version=device_status.old_version, new_version=device_status.new_version,
+            model=device_status.model, error=device_status.error,
+            failed_stage=failed_stage, stages=device_status.stage_history,
+            duration_seconds=duration_secs,
+            started_at=device_start_time.isoformat(), completed_at=now_iso,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to save device update history for {ip}: {e}")
 
 
 async def run_update_job(job: UpdateJob, concurrency: int):
@@ -2817,6 +3189,18 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                             "role": ds.role,
                             "parent_ap": ds.parent_ap,
                         })
+                        now_iso = datetime.now().isoformat()
+                        try:
+                            db.save_device_update_history(
+                                job_id=job.job_id, ip=ip, role=ds.role,
+                                pass_number=1, status="cancelled",
+                                old_version=None, new_version=None, model=None,
+                                error="Cancelled: another device failed to reboot",
+                                failed_stage=None, stages=[], duration_seconds=0,
+                                started_at=now_iso, completed_at=now_iso,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to save cancelled device history for {ip}: {e}")
 
     # Build phase list based on bank_mode
     # Switches always run last, after all APs and CPEs complete
@@ -2852,6 +3236,18 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                     "role": ds.role,
                     "parent_ap": ds.parent_ap,
                 })
+                now_iso = datetime.now().isoformat()
+                try:
+                    db.save_device_update_history(
+                        job_id=job.job_id, ip=ip, role=ds.role,
+                        pass_number=1, status="cancelled",
+                        old_version=None, new_version=None, model=None,
+                        error="Cancelled: another device failed to reboot",
+                        failed_stage=None, stages=[], duration_seconds=0,
+                        started_at=now_iso, completed_at=now_iso,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to save cancelled device history for {ip}: {e}")
 
     async def _run_device(ip, pass_number):
         async with semaphore:
@@ -3073,6 +3469,638 @@ async def get_job_status(job_id: str, session: dict = Depends(require_auth)):
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         "devices": {ip: asdict(status) for ip, status in job.devices.items()},
     }
+
+
+@app.get("/api/device-history")
+async def get_device_history_api(
+    ip: str = None, action: str = None, status: str = None,
+    limit: int = 100, offset: int = 0,
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.DEVICE_HISTORY)),
+):
+    """Get filterable device update/config history."""
+    history = db.get_device_update_history(ip=ip, action=action, status=status, limit=limit, offset=offset)
+    return {"history": history}
+
+
+# ============================================================================
+# Device Config Backup & Management
+# ============================================================================
+
+# Tracks IPs currently being pushed to, preventing overlapping pushes
+_config_pushing_ips: set = set()
+_config_push_lock = asyncio.Lock()
+
+# ============================================================================
+# ============================================================================
+
+def _canonical_config_json(config: dict) -> str:
+    """Serialize config dict to deterministic compact JSON for storage and hashing."""
+    return json.dumps(config, sort_keys=True, separators=(",", ":"))
+
+
+def _compute_config_hash(config: dict) -> str:
+    """Compute deterministic SHA-256 hash of a config dict."""
+    import hashlib
+    return hashlib.sha256(_canonical_config_json(config).encode()).hexdigest()
+
+
+# Top-level config keys that templates must never modify (prevents bricking devices)
+PROTECTED_CONFIG_KEYS = {"network", "ethernet"}
+
+
+def _validate_fragment_safety(fragment: dict):
+    """Raise ValueError if fragment tries to modify protected config sections."""
+    if not isinstance(fragment, dict):
+        return
+    for key in PROTECTED_CONFIG_KEYS:
+        if key in fragment:
+            raise ValueError(
+                f"Config templates cannot modify the '{key}' section — "
+                f"this could make devices unreachable"
+            )
+
+
+def deep_merge(base: dict, overlay: dict) -> dict:
+    """Recursively merge overlay into base. Overlay values win for scalars.
+    Lists in overlay replace lists in base entirely."""
+    from copy import deepcopy
+    result = deepcopy(base)
+    for key, value in overlay.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = deepcopy(value)
+    return result
+
+
+def _check_config_compliance(device_config: dict, templates: list[dict]) -> bool:
+    """Check if a device config matches all enabled templates.
+
+    For each template, extract the same key paths from the device config
+    and compare. Returns True if all templates match.
+    """
+    if not templates:
+        return True
+    config = device_config
+    if isinstance(config, str):
+        config = json.loads(config)
+
+    for template in templates:
+        fragment = json.loads(template["config_fragment"]) if isinstance(template["config_fragment"], str) else template["config_fragment"]
+        if not _fragment_matches(config, fragment):
+            return False
+    return True
+
+
+def _fragment_matches(config: dict, fragment: dict) -> bool:
+    """Check if all keys in fragment match corresponding values in config."""
+    for key, value in fragment.items():
+        if key not in config:
+            return False
+        if isinstance(value, dict) and isinstance(config[key], dict):
+            if not _fragment_matches(config[key], value):
+                return False
+        elif config[key] != value:
+            return False
+    return True
+
+
+@app.get("/api/configs")
+async def get_configs_summary(session: dict = Depends(require_auth)):
+    """List all devices with their latest config summary."""
+    all_configs = db.get_all_latest_configs()
+    result = {}
+    for ip, cfg in all_configs.items():
+        result[ip] = {
+            "id": cfg["id"],
+            "config_hash": cfg["config_hash"],
+            "model": cfg["model"],
+            "fetched_at": cfg["fetched_at"],
+        }
+    return {"configs": result}
+
+
+@app.get("/api/configs/{ip}")
+async def get_config_history(ip: str, limit: int = 20, session: dict = Depends(require_auth)):
+    """Get config snapshot history for a device."""
+    history = db.get_device_config_history(ip, limit=limit)
+    return {"history": history}
+
+
+@app.get("/api/configs/{ip}/latest")
+async def get_latest_config(ip: str, session: dict = Depends(require_auth)):
+    """Get the latest config JSON for a device."""
+    config = db.get_latest_device_config(ip)
+    if not config:
+        raise HTTPException(404, "No config found for this device")
+    config["config_json"] = json.loads(config["config_json"]) if isinstance(config["config_json"], str) else config["config_json"]
+    return config
+
+
+@app.get("/api/configs/{ip}/snapshot/{config_id}")
+async def get_config_snapshot(ip: str, config_id: int, session: dict = Depends(require_auth)):
+    """Get a specific config snapshot."""
+    config = db.get_device_config_by_id(config_id)
+    if not config or config["ip"] != ip:
+        raise HTTPException(404, "Config snapshot not found")
+    config["config_json"] = json.loads(config["config_json"]) if isinstance(config["config_json"], str) else config["config_json"]
+    return config
+
+
+@app.get("/api/configs/{ip}/download/{config_id}")
+async def download_config_tar(ip: str, config_id: int, session: dict = Depends(require_auth)):
+    """Download a config snapshot as a .tar file with config.json + CONTROL."""
+    import io
+    import tarfile
+
+    config = db.get_device_config_by_id(config_id)
+    if not config or config["ip"] != ip:
+        raise HTTPException(404, "Config snapshot not found")
+
+    config_json_str = config["config_json"]
+    if isinstance(config_json_str, str):
+        config_data = json.loads(config_json_str)
+    else:
+        config_data = config_json_str
+    pretty_json = json.dumps(config_data, indent=2)
+
+    hardware_id = config.get("hardware_id") or "tn-110-prs"
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        # Add config.json
+        json_bytes = pretty_json.encode("utf-8")
+        json_info = tarfile.TarInfo(name="config.json")
+        json_info.size = len(json_bytes)
+        tar.addfile(json_info, io.BytesIO(json_bytes))
+
+        # Add CONTROL
+        control_bytes = hardware_id.encode("utf-8")
+        control_info = tarfile.TarInfo(name="CONTROL")
+        control_info.size = len(control_bytes)
+        tar.addfile(control_info, io.BytesIO(control_bytes))
+
+    buf.seek(0)
+    device_name = ip.replace(".", "-")
+    filename = f"config-{device_name}-{config['fetched_at'][:10]}.tar"
+
+    return StreamingResponse(
+        buf,
+        media_type="application/x-tar",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/configs/{ip}/poll")
+async def poll_device_config(ip: str, session: dict = Depends(require_auth)):
+    """Trigger immediate config fetch for one device."""
+    # Find the device (AP, CPE, or switch)
+    device = db.get_access_point(ip)
+    role = "ap"
+    if not device:
+        device = db.get_switch(ip)
+        role = "switch"
+    if not device:
+        cpe = db.get_cpe_by_ip(ip)
+        if cpe:
+            # For CPEs, need to find parent AP credentials
+            ap = db.get_access_point(cpe["ap_ip"])
+            if ap:
+                device = {"ip": ip, "username": ap["username"], "password": ap["password"]}
+                role = "cpe"
+    if not device:
+        raise HTTPException(404, "Device not found")
+
+    client = TachyonClient(ip, device["username"], device["password"])
+    login_result = await client.login()
+    if login_result is not True:
+        raise HTTPException(502, f"Login failed: {login_result}")
+
+    config = await client.get_config()
+    if config is None:
+        raise HTTPException(502, "Failed to fetch config from device")
+
+    config_json = _canonical_config_json(config)
+    config_hash = _compute_config_hash(config)
+
+    existing_hash = db.get_latest_config_hash(ip)
+    changed = existing_hash != config_hash
+
+    # Get model and hardware_id
+    model = device.get("model")
+    hardware_id = client.get_hardware_id(model)
+
+    db.save_device_config(ip, config_json, config_hash, model, hardware_id)
+
+    return {"success": True, "changed": changed, "config_hash": config_hash}
+
+
+@app.post("/api/configs/poll")
+async def poll_all_configs(session: dict = Depends(require_auth)):
+    """Trigger config poll for all devices."""
+    poller = get_poller()
+    if poller:
+        asyncio.create_task(poller.poll_all_configs())
+        return {"success": True, "message": "Config poll started"}
+    raise HTTPException(500, "Poller not initialized")
+
+
+# ============================================================================
+# Config Templates
+# ============================================================================
+
+@app.get("/api/config-templates")
+async def list_config_templates(session: dict = Depends(require_auth)):
+    """List all config templates."""
+    templates = db.get_config_templates()
+    for t in templates:
+        t["config_fragment"] = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
+        if t.get("form_data"):
+            t["form_data"] = json.loads(t["form_data"]) if isinstance(t["form_data"], str) else t["form_data"]
+    return {"templates": templates}
+
+
+@app.post("/api/config-templates")
+async def create_config_template(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
+    """Create a new config template."""
+    data = await request.json()
+    name = data.get("name")
+    category = data.get("category")
+    config_fragment = data.get("config_fragment")
+    if not name or not category or not config_fragment:
+        raise HTTPException(400, "name, category, and config_fragment are required")
+
+    # Validate fragment is valid JSON and doesn't touch protected keys
+    if isinstance(config_fragment, str):
+        try:
+            config_fragment = json.loads(config_fragment)
+        except json.JSONDecodeError as e:
+            raise HTTPException(400, f"Invalid JSON in config_fragment: {e}")
+    try:
+        _validate_fragment_safety(config_fragment)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    fragment_str = json.dumps(config_fragment)
+    form_data_str = json.dumps(data["form_data"]) if data.get("form_data") else None
+
+    try:
+        template_id = db.save_config_template(
+            name=name,
+            category=category,
+            config_fragment=fragment_str,
+            form_data=form_data_str,
+            description=data.get("description"),
+        )
+    except Exception as e:
+        if "UNIQUE" in str(e):
+            raise HTTPException(409, f"Template with name '{name}' already exists")
+        raise
+
+    return {"id": template_id, "success": True}
+
+
+@app.put("/api/config-templates/{template_id}")
+async def update_config_template_api(template_id: int, request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
+    """Update a config template."""
+    existing = db.get_config_template(template_id)
+    if not existing:
+        raise HTTPException(404, "Template not found")
+
+    data = await request.json()
+    updates = {}
+    if "name" in data:
+        updates["name"] = data["name"]
+    if "category" in data:
+        updates["category"] = data["category"]
+    if "config_fragment" in data:
+        frag = data["config_fragment"]
+        if isinstance(frag, str):
+            try:
+                frag = json.loads(frag)
+            except json.JSONDecodeError as e:
+                raise HTTPException(400, f"Invalid JSON in config_fragment: {e}")
+        try:
+            _validate_fragment_safety(frag)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        updates["config_fragment"] = json.dumps(frag)
+    if "form_data" in data:
+        updates["form_data"] = json.dumps(data["form_data"]) if isinstance(data["form_data"], dict) else data["form_data"]
+    if "description" in data:
+        updates["description"] = data["description"]
+    if "enabled" in data:
+        updates["enabled"] = 1 if data["enabled"] else 0
+
+    db.update_config_template(template_id, **updates)
+    return {"success": True}
+
+
+@app.delete("/api/config-templates/{template_id}")
+async def delete_config_template_api(template_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
+    """Delete a config template."""
+    existing = db.get_config_template(template_id)
+    if not existing:
+        raise HTTPException(404, "Template not found")
+    db.delete_config_template(template_id)
+    return {"success": True}
+
+
+# ============================================================================
+# Config Compliance
+# ============================================================================
+
+@app.get("/api/config-compliance")
+async def get_config_compliance(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_COMPLIANCE))):
+    """Get per-device config compliance status."""
+    all_configs = db.get_all_latest_configs()
+    templates = db.get_config_templates(enabled_only=True)
+
+    devices = {}
+    for ip, cfg in all_configs.items():
+        config_data = json.loads(cfg["config_json"]) if isinstance(cfg["config_json"], str) else cfg["config_json"]
+        compliant = _check_config_compliance(config_data, templates)
+        devices[ip] = {
+            "compliant": compliant,
+            "checked_at": cfg["fetched_at"],
+        }
+
+    return {"devices": devices}
+
+
+@app.get("/api/config-prefill/{category}")
+async def get_config_prefill(category: str, session: dict = Depends(require_auth)):
+    """Get pre-fill data for a config category by analyzing fleet configs.
+
+    Only returns data if no saved template exists for this category.
+    """
+    existing = db.get_config_template_by_category(category)
+    if existing:
+        return {"prefilled": False, "reason": "template_exists"}
+
+    all_configs = db.get_all_latest_configs()
+    if not all_configs:
+        return {"prefilled": False, "reason": "no_configs"}
+
+    # Extract the relevant section from each device config
+    section_map = {
+        "snmp": ["services", "snmp"],
+        "ntp": ["services", "ntp"],
+        "radius": ["system", "auth"],
+        "users": ["system", "users"],
+        "discovery": ["services", "discovery"],
+    }
+
+    path = section_map.get(category)
+    if not path:
+        return {"prefilled": False, "reason": "unknown_category"}
+
+    # Collect values from all devices
+    values = []
+    for ip, cfg in all_configs.items():
+        config_data = json.loads(cfg["config_json"]) if isinstance(cfg["config_json"], str) else cfg["config_json"]
+        section = config_data
+        for key in path:
+            section = section.get(key, {}) if isinstance(section, dict) else {}
+        if section:
+            values.append(section)
+
+    if not values:
+        return {"prefilled": False, "reason": "no_data"}
+
+    # Find most common value (simple: use the first one if >80% match)
+    canonical = [json.dumps(v, sort_keys=True) for v in values]
+    from collections import Counter
+    counts = Counter(canonical)
+    most_common, count = counts.most_common(1)[0]
+    threshold = int(len(values) * 0.8)
+
+    if count >= threshold:
+        return {
+            "prefilled": True,
+            "data": json.loads(most_common),
+            "device_count": len(values),
+            "match_count": count,
+        }
+
+    return {
+        "prefilled": False,
+        "reason": "no_dominant_value",
+        "unique_values": len(counts),
+        "device_count": len(values),
+    }
+
+
+# ============================================================================
+# Config Push (Mass Operations)
+# ============================================================================
+
+@app.post("/api/config-push")
+async def push_config_templates(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
+    """Push config template(s) to devices.
+
+    Body: {
+        "template_ids": [1, 2],
+        "targets": [
+            {"type": "ap", "ip": "10.0.0.1"},
+            {"type": "site", "id": 5},
+            {"type": "cpe", "ip": "10.0.0.50"}
+        ]
+    }
+    """
+    data = await request.json()
+    template_ids = data.get("template_ids", [])
+    targets = data.get("targets", [])
+
+    if not template_ids or not targets:
+        raise HTTPException(400, "template_ids and targets are required")
+
+    # Load templates
+    templates = []
+    for tid in template_ids:
+        t = db.get_config_template(tid)
+        if not t:
+            raise HTTPException(404, f"Template {tid} not found")
+        fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
+        # Safety net: re-validate even though creation should have caught this
+        try:
+            _validate_fragment_safety(fragment)
+        except ValueError as e:
+            raise HTTPException(400, f"Template '{t['name']}' contains unsafe keys: {e}")
+        templates.append({"id": t["id"], "name": t["name"], "fragment": fragment})
+
+    # Resolve targets to device IPs with credentials
+    device_list = []  # [{ip, username, password, role, model}]
+    seen_ips = set()
+
+    for target in targets:
+        target_type = target.get("type")
+        if target_type == "ap":
+            ap = db.get_access_point(target["ip"])
+            if ap and ap["ip"] not in seen_ips:
+                device_list.append({"ip": ap["ip"], "username": ap["username"], "password": ap["password"], "role": "ap", "model": ap.get("model")})
+                seen_ips.add(ap["ip"])
+        elif target_type == "switch":
+            sw = db.get_switch(target["ip"])
+            if sw and sw["ip"] not in seen_ips:
+                device_list.append({"ip": sw["ip"], "username": sw["username"], "password": sw["password"], "role": "switch", "model": sw.get("model")})
+                seen_ips.add(sw["ip"])
+        elif target_type == "cpe":
+            cpe = db.get_cpe_by_ip(target["ip"])
+            if cpe:
+                ap = db.get_access_point(cpe["ap_ip"])
+                if ap and cpe["ip"] not in seen_ips:
+                    device_list.append({"ip": cpe["ip"], "username": ap["username"], "password": ap["password"], "role": "cpe", "model": cpe.get("model")})
+                    seen_ips.add(cpe["ip"])
+        elif target_type == "site":
+            site_id = target.get("id")
+            # Get all APs and switches in this site
+            for ap in db.get_access_points(tower_site_id=site_id):
+                if ap["ip"] not in seen_ips:
+                    device_list.append({"ip": ap["ip"], "username": ap["username"], "password": ap["password"], "role": "ap", "model": ap.get("model")})
+                    seen_ips.add(ap["ip"])
+                    # Also include CPEs for this AP
+                    for cpe in db.get_cpes_for_ap(ap["ip"]):
+                        if cpe["ip"] and cpe["ip"] not in seen_ips and cpe.get("auth_status") == "ok":
+                            device_list.append({"ip": cpe["ip"], "username": ap["username"], "password": ap["password"], "role": "cpe", "model": cpe.get("model")})
+                            seen_ips.add(cpe["ip"])
+            for sw in db.get_switches(tower_site_id=site_id):
+                if sw["ip"] not in seen_ips:
+                    device_list.append({"ip": sw["ip"], "username": sw["username"], "password": sw["password"], "role": "switch", "model": sw.get("model")})
+                    seen_ips.add(sw["ip"])
+
+    if not device_list:
+        raise HTTPException(400, "No valid devices found for the given targets")
+
+    # Run config push in background
+    job_id = str(uuid.uuid4())[:8]
+    template_names = ", ".join(t["name"] for t in templates)
+    asyncio.create_task(_run_config_push(job_id, device_list, templates))
+
+    return {
+        "job_id": job_id,
+        "device_count": len(device_list),
+        "template_names": template_names,
+    }
+
+
+async def _run_config_push(job_id: str, device_list: list, templates: list):
+    """Execute config push to devices concurrently."""
+    sem = asyncio.Semaphore(5)
+    success_count = 0
+    failed_count = 0
+    template_names = ", ".join(t["name"] for t in templates)
+
+    async def push_to_device(device: dict):
+        nonlocal success_count, failed_count
+        ip = device["ip"]
+        started_at = datetime.now().isoformat()
+
+        # Acquire push lock for this IP
+        async with _config_push_lock:
+            if ip in _config_pushing_ips:
+                failed_count += 1
+                await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "failed", "error": "Push already in progress for this device"})
+                return
+            _config_pushing_ips.add(ip)
+
+        try:
+            async with sem:
+                try:
+                    await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "connecting"})
+
+                    client = TachyonClient(ip, device["username"], device["password"])
+                    login_result = await client.login()
+                    if login_result is not True:
+                        raise RuntimeError(f"Login failed: {login_result}")
+
+                    await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "fetching_config"})
+
+                    current_config = await client.get_config()
+                    if current_config is None:
+                        raise RuntimeError("Failed to fetch current config")
+
+                    # Safety: save pre-push config snapshot so we have a "before" backup
+                    pre_push_json = _canonical_config_json(current_config)
+                    pre_push_hash = _compute_config_hash(current_config)
+                    model = device.get("model")
+                    hardware_id = client.get_hardware_id(model)
+                    db.save_device_config(ip, pre_push_json, pre_push_hash, model, hardware_id)
+
+                    # Merge all templates into current config
+                    merged = current_config
+                    for t in templates:
+                        merged = deep_merge(merged, t["fragment"])
+
+                    # Safety: dry_run first to validate the merged config
+                    await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "validating"})
+                    dry_result = await client.apply_config(merged, dry_run=True)
+                    if not dry_result.get("success"):
+                        error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run validation failed"))
+                        raise RuntimeError(f"Dry run rejected: {error_msg}")
+
+                    await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "applying"})
+
+                    result = await client.apply_config(merged)
+                    completed_at = datetime.now().isoformat()
+                    duration = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()
+
+                    if result.get("success"):
+                        success_count += 1
+                        db.save_device_update_history(
+                            job_id=job_id, ip=ip, role=device["role"], pass_number=1,
+                            status="success", old_version=None, new_version=None,
+                            model=None, error=None, failed_stage=None,
+                            stages=[], duration_seconds=duration,
+                            started_at=started_at, completed_at=completed_at,
+                            action="config_push",
+                        )
+                        await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "success"})
+                    else:
+                        failed_count += 1
+                        error_msg = result.get("error", result.get("raw_response", "Unknown error"))
+                        db.save_device_update_history(
+                            job_id=job_id, ip=ip, role=device["role"], pass_number=1,
+                            status="failed", old_version=None, new_version=None,
+                            model=None, error=str(error_msg), failed_stage="apply",
+                            stages=[], duration_seconds=duration,
+                            started_at=started_at, completed_at=completed_at,
+                            action="config_push",
+                        )
+                        await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "failed", "error": str(error_msg)})
+
+                except Exception as e:
+                    failed_count += 1
+                    completed_at = datetime.now().isoformat()
+                    duration = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()
+                    db.save_device_update_history(
+                        job_id=job_id, ip=ip, role=device["role"], pass_number=1,
+                        status="failed", old_version=None, new_version=None,
+                        model=None, error=str(e), failed_stage="connect",
+                        stages=[], duration_seconds=duration,
+                        started_at=started_at, completed_at=completed_at,
+                        action="config_push",
+                    )
+                    await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "failed", "error": str(e)})
+        finally:
+            _config_pushing_ips.discard(ip)
+
+    await asyncio.gather(*[push_to_device(d) for d in device_list])
+
+    await broadcast({
+        "type": "config_push_complete",
+        "job_id": job_id,
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "template_names": template_names,
+    })
+
+    # Re-poll configs for affected devices after push
+    poller = get_poller()
+    if poller:
+        affected_ips = [d["ip"] for d in device_list]
+        asyncio.create_task(poller.poll_configs_for_ips(affected_ips))
 
 
 def main():

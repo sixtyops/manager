@@ -5,12 +5,32 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
-- CPE authentication probing - detects CPEs with OK/failed auth status
-- Login retries for failed device connections
-- System time validation against NTP sources before running updates
-- Rebranded UI titles to "Unofficial Tachyon Networks Bulk Updater"
+- Inline release notes display in Settings > Updates panel
+- GitHub release notes categorization via `.github/release.yml`
 
-## 2025-01-XX - Gradual Rollout System
+## 1.1.1-dev1 - 2026-02-19
+
+### Added
+- Release workflow protections (dev/stable split, manual approval for stable)
+- Development documentation (CLAUDE.md, contributing section)
+- System update overlay with progress tracking
+- Settings notification dot for available updates
+
+### Changed
+- Updates panel layout and label clarity improvements
+
+## 1.1.0 - 2026-02-19
+
+### Added
+- SSO/OIDC authentication save fix
+- Updates panel layout improvements
+
+## 1.0.5 - 2026-02-18
+
+### Fixed
+- Data directory permissions for Docker volumes
+
+## 1.0.0 - 2026-02-17
 
 ### Added
 - Gradual rollout for scheduled updates: canary (1 AP) -> 10% -> 50% -> 100%
@@ -19,48 +39,30 @@ All notable changes to this project are documented in this file.
 - Target firmware version auto-detection after canary phase
 - API endpoints: `GET /api/rollout/current`, `POST /api/rollout/{id}/resume`, `POST /api/rollout/{id}/cancel`
 - `rollouts` and `rollout_devices` database tables
-
-## 2025-01-XX - Device-Level Phases
-
-### Changed
-- Replaced AP-group concurrency model with flat device-level phase ordering
-- Updates now run in phases: CPEs pass 1 -> APs pass 1 -> APs pass 2 -> CPEs pass 2 (bank mode)
-- Bank-mode ordering ensures dual-bank firmware is applied correctly
-
-## 2025-01-XX - Firmware Manager Tab
-
-### Changed
-- Split the single Firmware tab into separate **Firmware** (file management) and **Update** (manual updates) tabs
-- Firmware page is now a standalone view for uploading, listing, and deleting firmware files
-
-## 2025-01-XX - UI Improvements
+- CPE authentication probing - detects CPEs with OK/failed auth status
+- Login retries for failed device connections
+- System time validation against NTP sources before running updates
+- Rebranded UI titles to "Unofficial Tachyon Networks Bulk Updater"
+- CSV backup/restore for device lists
+- Real-time status broadcasts
+- Pre-rollout predictions
+- Single-page monitor with settings drawer
+- Firmware fetcher and UI polish
 
 ### Changed
-- IP addresses in the UI are now clickable links that open device web interfaces in a new tab
+- Device-level phase ordering replaces AP-group concurrency model
+- Updates run in phases: CPEs pass 1 -> APs pass 1 -> APs pass 2 -> CPEs pass 2
+- Split single Firmware tab into separate Firmware (file management) and Update (manual) tabs
+- IP addresses in UI are now clickable links
 
-## 2025-01-XX - Authentication and Monitoring
-
-### Added
+### Security
 - RADIUS authentication with local username/password fallback
 - Session-based auth with 24-hour TTL and HTTPOnly cookies
-- Login page
+- Resource cleanup and security hardening
+- API security hardening
+
+### Infrastructure
+- Dockerfile and docker-compose.yml with persistent volumes
+- Docker Compose split into base + standalone overlay
 - Background network poller discovering APs and CPEs every 60 seconds
-- Network topology monitor page with signal health indicators
 - SQLite persistence for devices, sessions, settings, and job history
-- Simplified firmware management page
-- Improved poller error reporting
-
-## 2025-01-XX - Docker Support
-
-### Added
-- Dockerfile and docker-compose.yml
-- Persistent volumes for firmware files and database
-
-## 2025-01-XX - Initial Release
-
-### Added
-- Web-based firmware update tool for Tachyon Networks devices
-- Parallel device updates with configurable concurrency
-- Real-time WebSocket progress monitoring
-- Firmware upload and IP list parsing
-- Support for TNA-301, TNA-302, TNA-303x, TNA-303L, TNS-100

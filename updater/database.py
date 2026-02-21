@@ -250,6 +250,30 @@ def init_db():
                 added_at TEXT NOT NULL,
                 source TEXT DEFAULT 'manual'
             );
+
+            CREATE TABLE IF NOT EXISTS device_update_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT,
+                ip TEXT NOT NULL,
+                role TEXT NOT NULL,
+                action TEXT NOT NULL DEFAULT 'firmware_update',
+                pass_number INTEGER DEFAULT 1,
+                status TEXT NOT NULL,
+                old_version TEXT,
+                new_version TEXT,
+                model TEXT,
+                error TEXT,
+                failed_stage TEXT,
+                stages_json TEXT,
+                duration_seconds REAL,
+                started_at TEXT,
+                completed_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_device_history_ip ON device_update_history(ip);
+            CREATE INDEX IF NOT EXISTS idx_device_history_job ON device_update_history(job_id);
+            CREATE INDEX IF NOT EXISTS idx_device_history_action ON device_update_history(action);
         """)
 
         # Migrations: add columns if missing
@@ -1180,6 +1204,77 @@ def get_avg_durations() -> dict:
             if row and row["avg_dur"] is not None:
                 result[role] = round(row["avg_dur"], 1)
     return result
+
+
+# Device Update History operations
+
+def save_device_update_history(job_id: Optional[str], ip: str, role: str, pass_number: int,
+                               status: str, old_version: Optional[str], new_version: Optional[str],
+                               model: Optional[str], error: Optional[str], failed_stage: Optional[str],
+                               stages: list, duration_seconds: float,
+                               started_at: str, completed_at: str,
+                               action: str = "firmware_update"):
+    """Save a per-device update/config history record."""
+    with get_db() as db:
+        db.execute(
+            """INSERT INTO device_update_history
+               (job_id, ip, role, action, pass_number, status, old_version, new_version,
+                model, error, failed_stage, stages_json, duration_seconds,
+                started_at, completed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (job_id, ip, role, action, pass_number, status, old_version, new_version,
+             model, error, failed_stage, json.dumps(stages), duration_seconds,
+             started_at, completed_at)
+        )
+
+
+def get_device_update_history(ip: Optional[str] = None, action: Optional[str] = None,
+                              status: Optional[str] = None,
+                              limit: int = 100, offset: int = 0) -> list[dict]:
+    """Get device update history with optional filters, newest first."""
+    with get_db() as db:
+        query = "SELECT * FROM device_update_history WHERE 1=1"
+        params = []
+        if ip:
+            query += " AND ip = ?"
+            params.append(ip)
+        if action:
+            query += " AND action = ?"
+            params.append(action)
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY completed_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = db.execute(query, params).fetchall()
+        results = []
+        for row in rows:
+            d = dict(row)
+            d["stages"] = json.loads(d.pop("stages_json")) if d.get("stages_json") else []
+            results.append(d)
+        return results
+
+
+def get_device_update_history_by_job(job_id: str) -> list[dict]:
+    """Get all device history records for a specific job."""
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT * FROM device_update_history WHERE job_id = ? ORDER BY ip, pass_number",
+            (job_id,)
+        ).fetchall()
+        results = []
+        for row in rows:
+            d = dict(row)
+            d["stages"] = json.loads(d.pop("stages_json")) if d.get("stages_json") else []
+            results.append(d)
+        return results
+
+
+def cleanup_old_device_update_history(max_age_days: int = 180):
+    """Remove device update history records older than max_age_days."""
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as db:
+        db.execute("DELETE FROM device_update_history WHERE completed_at < ?", (cutoff,))
 
 
 # Initialize on import

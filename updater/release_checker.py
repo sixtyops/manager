@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 import shlex
 import subprocess
 from datetime import datetime
@@ -25,6 +26,32 @@ GITHUB_REPO = os.environ.get("GITHUB_REPO", "isolson/firmware-updater")
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_API_RELEASES = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 CHECK_INTERVAL = int(os.environ.get("AUTOUPDATE_CHECK_INTERVAL", 604800))  # 7 days
+
+# Appliance mode: use docker pull from GHCR instead of git-based updates
+APPLIANCE_MODE = os.environ.get("TACHYON_APPLIANCE", "") == "1"
+GHCR_IMAGE = os.environ.get("TACHYON_IMAGE", "ghcr.io/isolson/firmware-updater")
+
+# Appliance platform version file (written during OVA build)
+APPLIANCE_VERSION_FILE = Path("/etc/tachyon/appliance-version")
+
+
+def get_appliance_version() -> Optional[str]:
+    """Read the appliance platform version (set during OVA build)."""
+    if APPLIANCE_VERSION_FILE.exists():
+        try:
+            return APPLIANCE_VERSION_FILE.read_text().strip()
+        except (OSError, PermissionError):
+            return None
+    return None
+
+
+def parse_min_appliance_version(release_notes: str) -> Optional[str]:
+    """Parse minimum required appliance version from release notes.
+
+    Looks for an HTML comment: <!-- min_appliance_version: X.Y -->
+    """
+    match = re.search(r'<!--\s*min_appliance_version:\s*(\S+)\s*-->', release_notes or "")
+    return match.group(1) if match else None
 
 
 class ReleaseChecker:
@@ -116,7 +143,7 @@ class ReleaseChecker:
             latest = tag_name.lstrip("v")
             result["latest_version"] = latest
             result["release_url"] = data.get("html_url", "")
-            result["release_notes"] = data.get("body", "")[:500]  # Truncate long notes
+            result["release_notes"] = data.get("body", "")[:2000]  # Truncate long notes
 
             # Compare versions (only flag upgrades, never downgrades)
             try:
@@ -125,6 +152,19 @@ class ReleaseChecker:
             except Exception:
                 logger.warning(f"Could not parse versions: current={current}, latest={latest}")
                 # Don't flag update if we can't reliably compare
+
+            # Check appliance compatibility if in appliance mode
+            if APPLIANCE_MODE and result["update_available"]:
+                min_ver = parse_min_appliance_version(result["release_notes"])
+                current_appliance = get_appliance_version()
+                if min_ver and current_appliance:
+                    try:
+                        if version.parse(min_ver) > version.parse(current_appliance):
+                            result["appliance_upgrade_required"] = True
+                            result["min_appliance_version"] = min_ver
+                            result["current_appliance_version"] = current_appliance
+                    except Exception:
+                        logger.warning(f"Could not parse appliance versions: current={current_appliance}, min={min_ver}")
 
             # Store in database
             db.set_setting("autoupdate_last_check", datetime.now().isoformat())
@@ -157,7 +197,7 @@ class ReleaseChecker:
     def get_update_status(self) -> dict:
         """Get current update status from database."""
         is_safe, blocked_reason = _is_safe_to_update()
-        return {
+        status = {
             "current_version": __version__,
             "release_channel": db.get_setting("release_channel", "stable"),
             "enabled": db.get_setting("autoupdate_enabled", "false") == "true",
@@ -169,7 +209,30 @@ class ReleaseChecker:
             "docker_socket_available": _docker_socket_available(),
             "can_update": is_safe,
             "blocked_reason": blocked_reason,
+            "appliance_mode": APPLIANCE_MODE,
+            "appliance_version": get_appliance_version(),
         }
+
+        # Check if available update requires a newer appliance
+        if APPLIANCE_MODE and status["update_available"]:
+            notes = status["release_notes"]
+            min_ver = parse_min_appliance_version(notes)
+            current_appliance = get_appliance_version()
+            if min_ver and current_appliance:
+                try:
+                    if version.parse(min_ver) > version.parse(current_appliance):
+                        status["appliance_upgrade_required"] = True
+                        status["min_appliance_version"] = min_ver
+                        status["can_update"] = False
+                        status["blocked_reason"] = (
+                            f"Requires appliance platform v{min_ver} "
+                            f"(current: v{current_appliance}). "
+                            "Download the latest appliance OVA to upgrade."
+                        )
+                except Exception:
+                    pass
+
+        return status
 
 
 def _docker_socket_available() -> bool:
@@ -431,6 +494,193 @@ def _launch_watchdog(
         return False
 
 
+# ── Appliance mode: docker pull instead of git-based updates ──
+
+
+def _build_appliance_watchdog_script(
+    compose_dir: str,
+    has_standalone: bool,
+) -> str:
+    """Build watchdog script for appliance mode (docker pull, no git)."""
+    compose_cmd = f"docker compose -f {compose_dir}/docker-compose.yml"
+    if has_standalone:
+        compose_cmd += f" -f {compose_dir}/docker-compose.standalone.yml"
+
+    return """#!/bin/sh
+# Tachyon appliance update watchdog — swap, monitor health, rollback on failure
+set -e
+
+CONTAINER="tachyon-management"
+COMPOSE="__COMPOSE_CMD__"
+
+echo "[watchdog] Starting appliance update..."
+
+# Tag current image for rollback before swapping
+IMAGE=$(docker inspect --format='{{.Config.Image}}' "$CONTAINER" 2>/dev/null || echo "")
+if [ -n "$IMAGE" ]; then
+    ROLLBACK_IMAGE="${IMAGE%%:*}:rollback"
+    docker tag "$IMAGE" "$ROLLBACK_IMAGE"
+    echo "[watchdog] Tagged $IMAGE as $ROLLBACK_IMAGE"
+fi
+
+# Swap to new container (image already pulled)
+echo "[watchdog] Swapping to new container..."
+$COMPOSE up -d --no-build tachyon-mgmt
+
+# Monitor health (90 seconds: 18 checks x 5s)
+echo "[watchdog] Monitoring health..."
+HEALTHY=false
+for i in $(seq 1 18); do
+    sleep 5
+    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo "not_found")
+    case "$STATUS" in
+        healthy)
+            echo "[watchdog] Health check passed on attempt $i"
+            HEALTHY=true
+            break
+            ;;
+        *)
+            echo "[watchdog] Health check $i/18: $STATUS"
+            ;;
+    esac
+done
+
+if [ "$HEALTHY" = "true" ]; then
+    echo "[watchdog] Update successful!"
+    if [ -n "$ROLLBACK_IMAGE" ]; then
+        docker rmi "$ROLLBACK_IMAGE" 2>/dev/null || true
+    fi
+    rm -f "__COMPOSE_DIR__/.update-watchdog.sh"
+    exit 0
+fi
+
+# ----- Health check failed — roll back -----
+echo "[watchdog] Health check failed after 90s. Rolling back..."
+
+# Re-tag rollback image as current so compose uses it
+if [ -n "$ROLLBACK_IMAGE" ] && [ -n "$IMAGE" ]; then
+    docker tag "$ROLLBACK_IMAGE" "$IMAGE"
+fi
+
+# Restart from old image
+$COMPOSE up -d --no-build tachyon-mgmt
+
+echo "[watchdog] Rollback initiated. Monitoring recovery..."
+for i in $(seq 1 12); do
+    sleep 5
+    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo "not_found")
+    if [ "$STATUS" = "healthy" ]; then
+        echo "[watchdog] Rollback successful."
+        docker rmi "$ROLLBACK_IMAGE" 2>/dev/null || true
+        rm -f "__COMPOSE_DIR__/.update-watchdog.sh"
+        exit 1
+    fi
+done
+
+echo "[watchdog] WARNING: Rollback also failed health check."
+rm -f "__COMPOSE_DIR__/.update-watchdog.sh"
+exit 1
+""".replace("__COMPOSE_CMD__", compose_cmd) \
+   .replace("__COMPOSE_DIR__", compose_dir)
+
+
+def _launch_appliance_watchdog(
+    compose_dir: Path,
+    has_standalone: bool,
+) -> bool:
+    """Launch the appliance watchdog in a detached docker:cli container."""
+    try:
+        subprocess.run(
+            ["docker", "rm", "-f", "tachyon-update-watchdog"],
+            capture_output=True, timeout=10,
+        )
+
+        script = _build_appliance_watchdog_script(str(compose_dir), has_standalone)
+        watchdog_path = compose_dir / ".update-watchdog.sh"
+        watchdog_path.write_text(script)
+        watchdog_path.chmod(0o755)
+
+        host_script = f"{compose_dir}/.update-watchdog.sh"
+
+        result = subprocess.run(
+            [
+                "docker", "run", "--rm", "-d",
+                "--name", "tachyon-update-watchdog",
+                "-v", "/var/run/docker.sock:/var/run/docker.sock",
+                "-v", f"{compose_dir}:{compose_dir}",
+                "-w", str(compose_dir),
+                "docker:cli",
+                "sh", host_script,
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        if result.returncode == 0:
+            logger.info(f"Appliance watchdog launched: {result.stdout.strip()[:12]}")
+            return True
+        else:
+            logger.error(f"Failed to launch appliance watchdog: {result.stderr}")
+            return False
+
+    except Exception as e:
+        logger.error(f"Failed to launch appliance watchdog: {e}")
+        return False
+
+
+async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
+    """Apply update in appliance mode: pull image from GHCR, swap containers."""
+    if not _docker_socket_available():
+        return {"success": False, "message": "Docker socket not available"}
+
+    compose_dir = _get_compose_dir()
+    if not compose_dir:
+        return {"success": False, "message": "Cannot find compose directory"}
+
+    image_ref = f"{GHCR_IMAGE}:{target_tag}"
+
+    try:
+        # Pull new image
+        logger.info(f"Pulling image {image_ref}...")
+        pull_result = subprocess.run(
+            ["docker", "pull", image_ref],
+            capture_output=True, text=True, timeout=300,
+        )
+        if pull_result.returncode != 0:
+            return {
+                "success": False,
+                "message": f"Docker pull failed: {pull_result.stderr.strip()}",
+            }
+
+        # Store pending update info (persists through restart)
+        db.set_setting("autoupdate_pending_version", target_version)
+        db.set_setting("autoupdate_pending_at", datetime.now().isoformat())
+
+        has_standalone = (compose_dir / "docker-compose.standalone.yml").exists()
+
+        # Launch watchdog for health-checked swap with rollback
+        launched = _launch_appliance_watchdog(compose_dir, has_standalone)
+        if not launched:
+            logger.warning("Appliance watchdog failed, falling back to direct swap")
+            compose_cmd = _get_compose_cmd(compose_dir)
+            subprocess.Popen(
+                compose_cmd + ["up", "-d", "--no-build", "tachyon-mgmt"],
+                cwd=compose_dir,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+        return {
+            "success": True,
+            "message": f"Updating to {target_tag}. The application will restart shortly.",
+        }
+
+    except subprocess.TimeoutExpired:
+        return {"success": False, "message": "Docker pull timed out"}
+    except Exception as e:
+        logger.exception(f"Appliance update failed: {e}")
+        return {"success": False, "message": str(e)}
+
+
 async def apply_update() -> dict:
     """Fetch the target release tag and launch the update watchdog.
 
@@ -457,6 +707,28 @@ async def apply_update() -> dict:
         }
 
     target_tag = f"v{target_version}"
+
+    if APPLIANCE_MODE:
+        # Check appliance compatibility before applying
+        release_notes = db.get_setting("autoupdate_release_notes", "")
+        min_ver = parse_min_appliance_version(release_notes)
+        current_appliance = get_appliance_version()
+        if min_ver and current_appliance:
+            try:
+                if version.parse(min_ver) > version.parse(current_appliance):
+                    return {
+                        "success": False,
+                        "message": (
+                            f"This update requires appliance platform v{min_ver} "
+                            f"(current: v{current_appliance}). "
+                            "Download the latest appliance OVA to upgrade."
+                        ),
+                        "appliance_upgrade_required": True,
+                    }
+            except Exception:
+                pass
+        return await _apply_update_appliance(target_version, target_tag)
+
     repo_dir = _get_repo_dir()
 
     if not _docker_socket_available():
@@ -546,6 +818,7 @@ async def apply_update() -> dict:
 
         # Store pending update info (persists in DB through restart)
         db.set_setting("autoupdate_pending_version", target_version)
+        db.set_setting("autoupdate_pending_at", datetime.now().isoformat())
         db.set_setting("autoupdate_rollback_ref", rollback_ref)
 
         # Discover host repo path for the watchdog container
@@ -602,9 +875,35 @@ async def verify_update_on_startup(broadcast_func: Optional[Callable] = None):
     if not pending:
         return
 
+    # Check for stuck state: pending for too long without resolution
+    pending_at = db.get_setting("autoupdate_pending_at", "")
+    if pending_at and pending != __version__:
+        try:
+            pending_time = datetime.fromisoformat(pending_at)
+            age_minutes = (datetime.now() - pending_time).total_seconds() / 60
+            if age_minutes > 15:
+                logger.warning(
+                    f"Update to v{pending} has been pending for {age_minutes:.0f} minutes "
+                    f"without completing. Clearing stuck state."
+                )
+                db.set_setting("autoupdate_pending_version", "")
+                db.set_setting("autoupdate_pending_at", "")
+                db.set_setting("autoupdate_rollback_ref", "")
+                if broadcast_func:
+                    await broadcast_func({
+                        "type": "update_failed",
+                        "attempted_version": pending,
+                        "current_version": __version__,
+                        "reason": "Update timed out without completing",
+                    })
+                return
+        except (ValueError, TypeError):
+            pass  # Malformed timestamp, fall through to existing logic
+
     if pending == __version__:
         logger.info(f"App update to v{__version__} completed successfully")
         db.set_setting("autoupdate_pending_version", "")
+        db.set_setting("autoupdate_pending_at", "")
         db.set_setting("autoupdate_available_version", "")
         db.set_setting("autoupdate_rollback_ref", "")
         if broadcast_func:
@@ -619,6 +918,7 @@ async def verify_update_on_startup(broadcast_func: Optional[Callable] = None):
             f"(running v{__version__})"
         )
         db.set_setting("autoupdate_pending_version", "")
+        db.set_setting("autoupdate_pending_at", "")
         db.set_setting("autoupdate_rollback_ref", "")
         if broadcast_func:
             await broadcast_func({
