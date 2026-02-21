@@ -90,6 +90,17 @@ class UpdateResult:
 class TachyonClient:
     """Client for Tachyon device firmware updates."""
 
+    # CONTROL file content per hardware model (for config .tar downloads)
+    # TODO: Verify these values for each model - defaulting to "tn-110-prs"
+    MODEL_HARDWARE_IDS = {
+        "tna-301": "tn-110-prs",
+        "tna-302": "tn-110-prs",
+        "tna-303x": "tn-110-prs",
+        "tna-303l": "tn-110-prs",
+        "tna-303l-65": "tn-110-prs",
+        "tns-100": "tn-110-prs",
+    }
+
     # Firmware pattern mappings for model validation
     MODEL_FIRMWARE_PATTERNS = {
         # TNA-30x standard series uses tna-30x firmware
@@ -785,3 +796,42 @@ class TachyonClient:
                 pass
 
         return info
+
+    async def get_config(self) -> Optional[dict]:
+        """Download full device config via GET /cgi.lua/apiv1/config."""
+        status, body = await self._curl("GET", "/cgi.lua/apiv1/config")
+        if status == 200:
+            try:
+                return json.loads(body)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse config from {self.ip}")
+                return None
+        logger.warning(f"Failed to get config from {self.ip}: HTTP {status}")
+        return None
+
+    async def apply_config(self, config: dict, dry_run: bool = False) -> dict:
+        """Apply full config to device via POST /cgi.lua/apiv1/config.
+
+        Args:
+            config: Full device configuration dict.
+            dry_run: If True, validate without applying.
+
+        Returns:
+            Dict with 'success' bool and response details.
+        """
+        endpoint = "/cgi.lua/apiv1/config"
+        if dry_run:
+            endpoint += "?dry_run=true"
+        status, body = await self._curl("POST", endpoint, data=config)
+        result = {"success": status == 200, "status_code": status}
+        try:
+            result.update(json.loads(body))
+        except json.JSONDecodeError:
+            result["raw_response"] = body
+        return result
+
+    def get_hardware_id(self, model: str) -> str:
+        """Get the CONTROL file hardware ID for a device model."""
+        if model:
+            return self.MODEL_HARDWARE_IDS.get(model.lower(), "tn-110-prs")
+        return "tn-110-prs"

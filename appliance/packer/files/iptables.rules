@@ -1,10 +1,29 @@
 *filter
 :INPUT DROP [0:0]
 :FORWARD DROP [0:0]
-:OUTPUT ACCEPT [0:0]
+:OUTPUT DROP [0:0]
+# Loopback
 -A INPUT -i lo -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+# Established connections
 -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+# Inbound: HTTP/HTTPS only
 -A INPUT -p tcp --dport 80 -j ACCEPT
 -A INPUT -p tcp --dport 443 -j ACCEPT
 -A INPUT -p icmp --icmp-type echo-request -j ACCEPT
+# Outbound: DNS (for Docker pulls, license checks, firmware fetching)
+-A OUTPUT -p udp --dport 53 -j ACCEPT
+-A OUTPUT -p tcp --dport 53 -j ACCEPT
+# Outbound: HTTPS (GHCR, license server, firmware API, Slack webhooks)
+-A OUTPUT -p tcp --dport 443 -j ACCEPT
+# Outbound: HTTP (device management — APs, switches, CPEs on local network)
+-A OUTPUT -p tcp --dport 80 -j ACCEPT
+# Outbound: NTP (time sync)
+-A OUTPUT -p udp --dport 123 -j ACCEPT
+# Outbound: ICMP (ping for connectivity checks)
+-A OUTPUT -p icmp --icmp-type echo-request -j ACCEPT
+# Docker inter-container communication (bridge network)
+-A FORWARD -i docker0 -o docker0 -j ACCEPT
+-A FORWARD -i br- -o br- -j ACCEPT
 COMMIT
