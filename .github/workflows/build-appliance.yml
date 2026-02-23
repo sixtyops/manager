@@ -75,7 +75,8 @@ jobs:
 
       - name: Prepare QCOW2 for Proxmox
         run: |
-          cp appliance/packer/output-tachyon/tachyon-appliance \
+          qemu-img convert -c -f qcow2 -O qcow2 \
+            appliance/packer/output-tachyon/tachyon-appliance \
             ${{ steps.version.outputs.ova_name }}.qcow2
 
       - name: Convert to OVA
