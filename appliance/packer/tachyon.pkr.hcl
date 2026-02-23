@@ -67,7 +67,11 @@ source "qemu" "tachyon" {
     "wget http://{{ .HTTPIP }}:{{ .HTTPPort }}/answers -O /tmp/answers<enter><wait3>",
     "ERASE_DISKS=/dev/vda setup-alpine -f /tmp/answers<enter><wait5>",
     "tachyon-build<enter><wait3>",
-    "tachyon-build<enter><wait60>",
+    "tachyon-build<enter><wait90>",
+    "mount /dev/vda3 /mnt<enter><wait3>",
+    "sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /mnt/etc/ssh/sshd_config<enter><wait2>",
+    "grep -q PermitRootLogin /mnt/etc/ssh/sshd_config || echo 'PermitRootLogin yes' >> /mnt/etc/ssh/sshd_config<enter><wait2>",
+    "umount /mnt<enter><wait2>",
     "reboot<enter>",
     "<wait30>"
   ]
