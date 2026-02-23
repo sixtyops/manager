@@ -37,6 +37,12 @@ variable "recovery_secret" {
   sensitive = true
 }
 
+variable "ghcr_token" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
 variable "disk_size" {
   type    = string
   default = "8G"
@@ -99,6 +105,7 @@ build {
       "APPLIANCE_VERSION=${var.appliance_version}",
       "GHCR_IMAGE=${var.ghcr_image}",
       "RECOVERY_SECRET=${var.recovery_secret}",
+      "GHCR_TOKEN=${var.ghcr_token}",
     ]
   }
 

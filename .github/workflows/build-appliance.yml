@@ -68,6 +68,7 @@ jobs:
             -var "app_version=${{ steps.version.outputs.app_version }}" \
             -var "appliance_version=${{ steps.version.outputs.appliance_version }}" \
             -var "recovery_secret=${{ secrets.APPLIANCE_RECOVERY_SECRET }}" \
+            -var "ghcr_token=${{ secrets.GITHUB_TOKEN }}" \
             tachyon.pkr.hcl
         env:
           PACKER_LOG: 1
