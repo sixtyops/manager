@@ -72,6 +72,7 @@ source "qemu" "tachyon" {
   ssh_username     = "root"
   ssh_password     = "tachyon-build"
   ssh_timeout      = "15m"
+  ssh_file_transfer_method = "sftp"
   vm_name          = "tachyon-appliance"
 }
 
