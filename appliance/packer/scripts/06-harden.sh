@@ -4,6 +4,7 @@ set -e
 
 echo "[06-harden] Installing and configuring firewall..."
 apk add iptables
+mkdir -p /etc/iptables
 cp /tmp/appliance-files/iptables.rules /etc/iptables/rules-save
 rc-update add iptables boot
 
