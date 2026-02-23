@@ -109,9 +109,4 @@ build {
     ]
   }
 
-  post-processor "shell-local" {
-    inline = [
-      "python3 ../../appliance/scripts/create-ova.py output-tachyon/tachyon-appliance output-tachyon/tachyon-appliance.ova"
-    ]
-  }
 }
