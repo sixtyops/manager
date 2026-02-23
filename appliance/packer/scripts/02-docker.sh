@@ -4,9 +4,13 @@ set -e
 
 echo "[02-docker] Enabling community repository..."
 # Alpine setup with -1 only enables 'main'; Docker is in 'community'
-if ! grep -q '/community' /etc/apk/repositories; then
-    sed 's|/main|/community|' /etc/apk/repositories >> /etc/apk/repositories
+# Uncomment community if commented, or add it based on the main repo URL
+sed -i 's|^#\(.*community\)|\1|' /etc/apk/repositories
+if ! grep -q '^[^#].*community' /etc/apk/repositories; then
+    MAIN_URL=$(grep '^[^#].*main' /etc/apk/repositories | head -1)
+    echo "${MAIN_URL%/main}/community" >> /etc/apk/repositories
 fi
+cat /etc/apk/repositories
 apk update
 
 echo "[02-docker] Installing Docker..."
