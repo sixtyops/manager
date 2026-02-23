@@ -55,6 +55,7 @@ source "qemu" "tachyon" {
   disk_size        = var.disk_size
   format           = "qcow2"
   accelerator      = "kvm"
+  headless         = true
   memory           = var.memory
   cpus             = 2
   net_device       = "virtio-net"
