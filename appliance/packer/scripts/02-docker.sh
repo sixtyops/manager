@@ -2,6 +2,13 @@
 # 02-docker.sh — Install Docker Engine + Compose plugin
 set -e
 
+echo "[02-docker] Enabling community repository..."
+# Alpine setup with -1 only enables 'main'; Docker is in 'community'
+if ! grep -q '/community' /etc/apk/repositories; then
+    sed 's|/main|/community|' /etc/apk/repositories >> /etc/apk/repositories
+fi
+apk update
+
 echo "[02-docker] Installing Docker..."
 apk add docker docker-cli-compose
 
