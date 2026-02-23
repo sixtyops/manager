@@ -73,6 +73,11 @@ jobs:
         env:
           PACKER_LOG: 1
 
+      - name: Prepare QCOW2 for Proxmox
+        run: |
+          cp appliance/packer/output-tachyon/tachyon-appliance \
+            ${{ steps.version.outputs.ova_name }}.qcow2
+
       - name: Convert to OVA
         run: |
           python3 appliance/scripts/create-ova.py \
@@ -81,18 +86,22 @@ jobs:
             -n tachyon-appliance \
             -v ${{ steps.version.outputs.app_version }}
 
-      - name: Upload OVA as artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.version.outputs.ova_name }}
-          path: ${{ steps.version.outputs.ova_name }}.ova
+          path: |
+            ${{ steps.version.outputs.ova_name }}.ova
+            ${{ steps.version.outputs.ova_name }}.qcow2
           retention-days: 30
 
-      - name: Attach OVA to release
+      - name: Attach to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.version.outputs.ova_name }}.ova
+          files: |
+            ${{ steps.version.outputs.ova_name }}.ova
+            ${{ steps.version.outputs.ova_name }}.qcow2
           tag_name: ${{ github.event.release.tag_name }}
 
       - name: Update latest-appliance release
@@ -108,14 +117,22 @@ jobs:
             gh release delete-asset appliance-latest "$name" -y 2>/dev/null || true
           done
 
+          QCOW2="${{ steps.version.outputs.ova_name }}.qcow2"
+
           # Create release if it doesn't exist, or update the notes
+          NOTES="Latest stable appliance (platform v${APPLIANCE_VER}, app ${APP_VER}).
+
+          **VMware/VirtualBox:** Download the \`.ova\` file and import.
+          **Proxmox:** Download the \`.qcow2\` file and use \`qm importdisk\`."
+
           gh release create appliance-latest \
             --title "Latest Appliance" \
-            --notes "Latest stable appliance OVA (platform v${APPLIANCE_VER}, app ${APP_VER}). Auto-updated on each appliance build." \
+            --notes "$NOTES" \
             2>/dev/null || \
           gh release edit appliance-latest \
             --title "Latest Appliance" \
-            --notes "Latest stable appliance OVA (platform v${APPLIANCE_VER}, app ${APP_VER}). Auto-updated on each appliance build."
+            --notes "$NOTES"
 
-          # Upload new OVA
+          # Upload both formats
           gh release upload appliance-latest "$OVA" --clobber
+          gh release upload appliance-latest "$QCOW2" --clobber
