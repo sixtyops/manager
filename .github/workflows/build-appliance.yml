@@ -76,7 +76,7 @@ jobs:
       - name: Convert to OVA
         run: |
           python3 appliance/scripts/create-ova.py \
-            appliance/packer/output/tachyon-appliance \
+            appliance/packer/output-tachyon/tachyon-appliance \
             -o ${{ steps.version.outputs.ova_name }}.ova \
             -n tachyon-appliance \
             -v ${{ steps.version.outputs.app_version }}
