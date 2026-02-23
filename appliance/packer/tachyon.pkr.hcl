@@ -14,7 +14,7 @@ variable "alpine_iso_url" {
 
 variable "alpine_iso_checksum" {
   type    = string
-  default = "sha256:366d498e0a3a5207e902a9c4edab15c8c0fb00aec0c4e1f9a2bdc7a0e759cec5"
+  default = "sha256:f28171c35bbf623aa3cbaec4b8b29297f13095b892c1a283b15970f7eb490f2d"
 }
 
 variable "app_version" {
