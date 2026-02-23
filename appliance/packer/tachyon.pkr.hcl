@@ -65,20 +65,16 @@ source "qemu" "tachyon" {
     "root<enter><wait5>",
     "ifconfig eth0 up && udhcpc -i eth0<enter><wait5>",
     "wget http://{{ .HTTPIP }}:{{ .HTTPPort }}/answers -O /tmp/answers<enter><wait3>",
-    "ERASE_DISKS=/dev/vda setup-alpine -f /tmp/answers<enter><wait5>",
-    "tachyon-build<enter><wait3>",
-    "tachyon-build<enter><wait90>",
-    "mount /dev/vda3 /mnt<enter><wait3>",
-    "sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /mnt/etc/ssh/sshd_config<enter><wait2>",
-    "grep -q PermitRootLogin /mnt/etc/ssh/sshd_config || echo 'PermitRootLogin yes' >> /mnt/etc/ssh/sshd_config<enter><wait2>",
-    "umount /mnt<enter><wait2>",
-    "reboot<enter>",
+    "ERASE_DISKS=/dev/vda setup-alpine -f /tmp/answers<enter><wait10>",
+    "tachyon-build<enter><wait5>",
+    "tachyon-build<enter><wait180>",
+    "mkdir -p /tmp/root; for p in /dev/vda2 /dev/vda3; do mount $p /tmp/root 2>/dev/null && break; done; sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /tmp/root/etc/ssh/sshd_config; echo 'PermitRootLogin yes' >> /tmp/root/etc/ssh/sshd_config; umount /tmp/root; reboot<enter>",
     "<wait30>"
   ]
   http_directory   = "http"
   ssh_username     = "root"
   ssh_password     = "tachyon-build"
-  ssh_timeout      = "10m"
+  ssh_timeout      = "15m"
   vm_name          = "tachyon-appliance"
 }
 
