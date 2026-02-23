@@ -2,6 +2,11 @@
 # 03-app.sh — Pull application image and configure compose
 set -e
 
+echo "[03-app] Authenticating with GHCR..."
+if [ -n "$GHCR_TOKEN" ]; then
+    echo "$GHCR_TOKEN" | docker login ghcr.io -u github --password-stdin
+fi
+
 echo "[03-app] Pulling application image: ${GHCR_IMAGE}:${APP_VERSION}..."
 docker pull "${GHCR_IMAGE}:${APP_VERSION}"
 
@@ -10,6 +15,9 @@ docker pull nginx:alpine
 
 echo "[03-app] Pulling watchdog image..."
 docker pull docker:cli
+
+# Remove Docker credentials so they don't persist in the OVA
+rm -f /root/.docker/config.json
 
 echo "[03-app] Installing compose and nginx configuration..."
 cp /tmp/appliance-files/docker-compose.appliance.yml /opt/tachyon/docker-compose.yml
