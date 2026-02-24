@@ -105,7 +105,7 @@ jobs:
             ${{ steps.version.outputs.ova_name }}.qcow2
           tag_name: ${{ github.event.release.tag_name }}
 
-      - name: Update latest-appliance release
+      - name: Update latest-appliance release (private repo)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -131,3 +131,31 @@ jobs:
           # Upload both formats (--clobber replaces existing assets)
           gh release upload appliance-latest "$OVA" --clobber
           gh release upload appliance-latest "$QCOW2" --clobber
+
+      - name: Publish to public downloads repo
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
+        run: |
+          OVA="${{ steps.version.outputs.ova_name }}.ova"
+          QCOW2="${{ steps.version.outputs.ova_name }}.qcow2"
+          APPLIANCE_VER="${{ steps.version.outputs.appliance_version }}"
+          APP_VER="${{ steps.version.outputs.app_version }}"
+          REPO="isolson/tachyon-manager-releases"
+
+          NOTES="Tachyon Manager Appliance (platform v${APPLIANCE_VER}, app ${APP_VER}).
+
+          **VMware/VirtualBox:** Download the \`.ova\` file and import.
+          **Proxmox:** Download the \`.qcow2\` file and use \`qm importdisk\`."
+
+          gh release create appliance-latest \
+            --repo "$REPO" \
+            --title "Latest Appliance" \
+            --notes "$NOTES" \
+            2>/dev/null || \
+          gh release edit appliance-latest \
+            --repo "$REPO" \
+            --title "Latest Appliance" \
+            --notes "$NOTES"
+
+          gh release upload appliance-latest "$OVA" --clobber --repo "$REPO"
+          gh release upload appliance-latest "$QCOW2" --clobber --repo "$REPO"
