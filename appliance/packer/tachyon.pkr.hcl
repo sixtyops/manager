@@ -63,13 +63,10 @@ source "qemu" "tachyon" {
   boot_wait        = "20s"
   boot_command = [
     "root<enter><wait5>",
-    "ifconfig eth0 up && udhcpc -i eth0<enter><wait5>",
-    "wget http://{{ .HTTPIP }}:{{ .HTTPPort }}/answers -O /tmp/answers<enter><wait3>",
-    "ERASE_DISKS=/dev/vda setup-alpine -f /tmp/answers<enter><wait10>",
-    "tachyon-build<enter><wait5>",
-    "tachyon-build<enter><wait180>",
-    "mkdir -p /tmp/root; for p in /dev/vda2 /dev/vda3; do mount $p /tmp/root 2>/dev/null && break; done; sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /tmp/root/etc/ssh/sshd_config; echo 'PermitRootLogin yes' >> /tmp/root/etc/ssh/sshd_config; umount /tmp/root; reboot<enter>",
-    "<wait30>"
+    "ifconfig eth0 up && udhcpc -i eth0<enter><wait10>",
+    "wget http://{{ .HTTPIP }}:{{ .HTTPPort }}/answers -O /tmp/answers<enter><wait5>",
+    "wget http://{{ .HTTPIP }}:{{ .HTTPPort }}/install.sh -O /tmp/install.sh && sh /tmp/install.sh<enter>",
+    "<wait300>"
   ]
   http_directory   = "http"
   ssh_username     = "root"
