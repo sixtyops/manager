@@ -110,22 +110,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           OVA="${{ steps.version.outputs.ova_name }}.ova"
+          QCOW2="${{ steps.version.outputs.ova_name }}.qcow2"
           APPLIANCE_VER="${{ steps.version.outputs.appliance_version }}"
           APP_VER="${{ steps.version.outputs.app_version }}"
 
-          # Delete old assets if the release exists
-          gh release view appliance-latest --json assets -q '.assets[].name' 2>/dev/null | while read -r name; do
-            gh release delete-asset appliance-latest "$name" -y 2>/dev/null || true
-          done
-
-          QCOW2="${{ steps.version.outputs.ova_name }}.qcow2"
-
-          # Create release if it doesn't exist, or update the notes
           NOTES="Latest stable appliance (platform v${APPLIANCE_VER}, app ${APP_VER}).
 
-          **VMware/VirtualBox:** Download the \`.ova\` file and import.
-          **Proxmox:** Download the \`.qcow2\` file and use \`qm importdisk\`."
+          **VMware/VirtualBox:** Download the .ova file and import.
+          **Proxmox:** Download the .qcow2 file and use qm importdisk."
 
+          # Create release if it doesn't exist, or update the notes
           gh release create appliance-latest \
             --title "Latest Appliance" \
             --notes "$NOTES" \
@@ -134,6 +128,6 @@ jobs:
             --title "Latest Appliance" \
             --notes "$NOTES"
 
-          # Upload both formats
+          # Upload both formats (--clobber replaces existing assets)
           gh release upload appliance-latest "$OVA" --clobber
           gh release upload appliance-latest "$QCOW2" --clobber
