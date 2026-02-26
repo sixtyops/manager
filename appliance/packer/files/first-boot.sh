@@ -3,10 +3,44 @@
 set -e
 
 MARKER="/data/.first-boot-done"
+DATA_MODE_FILE="/etc/tachyon/data-mode"
 
 if [ -f "$MARKER" ]; then
     exit 0
 fi
+
+# Verify /data mode and mount state (critical for data persistence)
+DATA_MODE="$(cat "$DATA_MODE_FILE" 2>/dev/null)"
+if [ -z "$DATA_MODE" ]; then
+    if grep -q 'tachyon-data' /etc/fstab 2>/dev/null; then
+        DATA_MODE="partition"
+    else
+        DATA_MODE="rootfs"
+    fi
+fi
+if [ "$DATA_MODE" = "partition" ]; then
+    if ! mountpoint -q /data; then
+        echo "[first-boot] WARNING: /data is not mounted, attempting mount..."
+        mount /data 2>/dev/null || true
+        if ! mountpoint -q /data; then
+            echo "[first-boot] CRITICAL: /data is not mounted. Aborting first-boot."
+            logger -p kern.crit "first-boot: /data partition not mounted — data partition missing or corrupt"
+            exit 1
+        fi
+    fi
+else
+    if ! mountpoint -q /data; then
+        echo "[first-boot] INFO: /data is on root filesystem mode"
+    fi
+fi
+
+# Verify /data is writable before proceeding.
+if ! touch /data/.write-test 2>/dev/null; then
+    echo "[first-boot] CRITICAL: /data is not writable. Aborting first-boot."
+    logger -p kern.crit "first-boot: /data not writable"
+    exit 1
+fi
+rm -f /data/.write-test
 
 echo "[first-boot] Running first-boot initialization..."
 
@@ -15,11 +49,6 @@ mkdir -p /data/db /data/firmware /data/backups /data/certs /data/network
 
 # Set ownership for tachyon user (UID 1500)
 chown -R 1500:1500 /data/db /data/firmware /data/backups
-
-# Generate machine-specific Docker Compose .env if not present
-if [ ! -f /opt/tachyon/.env ]; then
-    echo "APP_VERSION=latest" > /opt/tachyon/.env
-fi
 
 # Verify all critical directories exist before marking complete
 for dir in /data/db /data/firmware /data/backups /data/certs /data/network; do

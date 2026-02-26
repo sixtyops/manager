@@ -3,6 +3,7 @@
 
 name="tachyon"
 description="Tachyon Firmware Updater"
+DATA_MODE_FILE="/etc/tachyon/data-mode"
 
 depend() {
     need docker
@@ -11,20 +12,48 @@ depend() {
 
 start() {
     ebegin "Starting ${name}"
-    # Wait up to 30 seconds for Docker socket to be available
+    # Wait up to 60 seconds for Docker socket to be available
     local i=0
-    while [ $i -lt 30 ]; do
+    while [ $i -lt 60 ]; do
         if docker info >/dev/null 2>&1; then
             break
         fi
+        [ $((i % 10)) -eq 0 ] && [ $i -gt 0 ] && einfo "Waiting for Docker... (${i}s)"
         sleep 1
         i=$((i + 1))
     done
-    if [ $i -ge 30 ]; then
-        eerror "Docker not ready after 30 seconds"
+    if [ $i -ge 60 ]; then
+        eerror "Docker not ready after 60 seconds"
         eend 1
         return 1
     fi
+    # Verify /data state before starting containers (prevents silent data loss)
+    local data_mode
+    data_mode=$(cat "$DATA_MODE_FILE" 2>/dev/null)
+    if [ -z "$data_mode" ]; then
+        if grep -q 'tachyon-data' /etc/fstab 2>/dev/null; then
+            data_mode="partition"
+        else
+            data_mode="rootfs"
+        fi
+    fi
+    if [ "$data_mode" = "partition" ]; then
+        if ! mountpoint -q /data; then
+            eerror "/data partition is not mounted — refusing to start (data would be lost)"
+            eend 1
+            return 1
+        fi
+    elif ! mountpoint -q /data; then
+        einfo "/data is configured on root filesystem mode"
+    fi
+
+    if ! touch /data/.write-test 2>/dev/null; then
+        eerror "/data is not writable — refusing to start"
+        eend 1
+        return 1
+    fi
+    rm -f /data/.write-test
+
     cd /opt/tachyon
     docker compose up -d
     eend $?
@@ -33,12 +62,12 @@ start() {
 stop() {
     ebegin "Stopping ${name}"
     cd /opt/tachyon
-    timeout 30 docker compose down 2>/dev/null
+    timeout 90 docker compose down 2>/dev/null
     eend $?
 }
 
 status() {
-    if timeout 5 docker compose -f /opt/tachyon/docker-compose.yml ps --status running 2>/dev/null | grep -q tachyon-management; then
+    if timeout 5 docker ps --filter name=tachyon-management --filter status=running -q 2>/dev/null | grep -q .; then
         einfo "service started"
         return 0
     else

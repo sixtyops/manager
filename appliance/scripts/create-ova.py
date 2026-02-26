@@ -26,8 +26,35 @@ def convert_qcow2_to_vmdk(qcow2_path: str, vmdk_path: str) -> None:
     )
 
 
-def generate_ovf(vmdk_filename: str, vmdk_size: int, name: str, version: str) -> str:
-    """Generate OVF descriptor XML."""
+def parse_disk_size(disk_size: str) -> int:
+    """Parse a disk size string (e.g., '8G', '16G', '8589934592') to bytes."""
+    disk_size = disk_size.strip().upper()
+    if disk_size.endswith("G"):
+        return int(disk_size[:-1]) * 1024 * 1024 * 1024
+    elif disk_size.endswith("M"):
+        return int(disk_size[:-1]) * 1024 * 1024
+    return int(disk_size)
+
+
+def generate_ovf(
+    vmdk_filename: str,
+    vmdk_size: int,
+    name: str,
+    version: str,
+    cpus: int = 2,
+    memory_mb: int = 1024,
+    disk_capacity_bytes: int = 8589934592,
+) -> str:
+    """Generate OVF descriptor XML.
+
+    Raises ValueError if hardware parameters are out of valid range.
+    """
+    if cpus < 1 or cpus > 16:
+        raise ValueError(f"cpus must be between 1 and 16, got {cpus}")
+    if memory_mb < 256 or memory_mb > 65536:
+        raise ValueError(f"memory_mb must be between 256 and 65536, got {memory_mb}")
+    if disk_capacity_bytes < 1073741824:  # 1 GB
+        raise ValueError(f"disk_capacity_bytes must be at least 1GB (1073741824), got {disk_capacity_bytes}")
     return textwrap.dedent(f"""\
     <?xml version="1.0" encoding="UTF-8"?>
     <Envelope xmlns="http://schemas.dmtf.org/ovf/envelope/1"
@@ -41,7 +68,7 @@ def generate_ovf(vmdk_filename: str, vmdk_size: int, name: str, version: str) ->
       </References>
       <DiskSection>
         <Info>Virtual disk information</Info>
-        <Disk ovf:capacity="8589934592" ovf:capacityAllocationUnits="byte"
+        <Disk ovf:capacity="{disk_capacity_bytes}" ovf:capacityAllocationUnits="byte"
               ovf:diskId="vmdisk1" ovf:fileRef="file1"
               ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized"/>
       </DiskSection>
@@ -72,18 +99,18 @@ def generate_ovf(vmdk_filename: str, vmdk_size: int, name: str, version: str) ->
           <Item>
             <rasd:AllocationUnits>hertz * 10^6</rasd:AllocationUnits>
             <rasd:Description>Number of Virtual CPUs</rasd:Description>
-            <rasd:ElementName>2 virtual CPU(s)</rasd:ElementName>
+            <rasd:ElementName>{cpus} virtual CPU(s)</rasd:ElementName>
             <rasd:InstanceID>1</rasd:InstanceID>
             <rasd:ResourceType>3</rasd:ResourceType>
-            <rasd:VirtualQuantity>2</rasd:VirtualQuantity>
+            <rasd:VirtualQuantity>{cpus}</rasd:VirtualQuantity>
           </Item>
           <Item>
             <rasd:AllocationUnits>byte * 2^20</rasd:AllocationUnits>
             <rasd:Description>Memory Size</rasd:Description>
-            <rasd:ElementName>2048MB of memory</rasd:ElementName>
+            <rasd:ElementName>{memory_mb}MB of memory</rasd:ElementName>
             <rasd:InstanceID>2</rasd:InstanceID>
             <rasd:ResourceType>4</rasd:ResourceType>
-            <rasd:VirtualQuantity>2048</rasd:VirtualQuantity>
+            <rasd:VirtualQuantity>{memory_mb}</rasd:VirtualQuantity>
           </Item>
           <Item>
             <rasd:AddressOnParent>0</rasd:AddressOnParent>
@@ -95,10 +122,10 @@ def generate_ovf(vmdk_filename: str, vmdk_size: int, name: str, version: str) ->
           <Item>
             <rasd:AutomaticAllocation>true</rasd:AutomaticAllocation>
             <rasd:Connection>bridged</rasd:Connection>
-            <rasd:Description>E1000 ethernet adapter on bridged</rasd:Description>
+            <rasd:Description>VMXNET3 ethernet adapter on bridged</rasd:Description>
             <rasd:ElementName>Ethernet adapter 1</rasd:ElementName>
             <rasd:InstanceID>4</rasd:InstanceID>
-            <rasd:ResourceSubType>E1000</rasd:ResourceSubType>
+            <rasd:ResourceSubType>VMXNET3</rasd:ResourceSubType>
             <rasd:ResourceType>10</rasd:ResourceType>
           </Item>
         </VirtualHardwareSection>
@@ -124,6 +151,9 @@ def create_ova(
     output_path: str,
     name: str = "tachyon-appliance",
     version: str = "latest",
+    cpus: int = 2,
+    memory_mb: int = 1024,
+    disk_capacity_bytes: int = 8589934592,
 ) -> None:
     """Create OVA from QCOW2 image."""
     work_dir = os.path.dirname(output_path) or "."
@@ -142,7 +172,11 @@ def create_ova(
         vmdk_size = os.path.getsize(vmdk_path)
 
         # Step 2: Generate OVF descriptor
-        ovf_content = generate_ovf(vmdk_filename, vmdk_size, name, version)
+        ovf_content = generate_ovf(
+            vmdk_filename, vmdk_size, name, version,
+            cpus=cpus, memory_mb=memory_mb,
+            disk_capacity_bytes=disk_capacity_bytes,
+        )
         with open(ovf_path, "w") as f:
             f.write(ovf_content)
         print(f"Generated OVF descriptor: {ovf_path}")
@@ -194,6 +228,23 @@ def main():
         help="Appliance version string",
         default="latest",
     )
+    parser.add_argument(
+        "--cpus",
+        help="Number of virtual CPUs (default: 2)",
+        type=int,
+        default=2,
+    )
+    parser.add_argument(
+        "--memory",
+        help="Memory in MB (default: 1024)",
+        type=int,
+        default=1024,
+    )
+    parser.add_argument(
+        "--disk-size",
+        help="Disk size (e.g., '8G', '16G', default: 8G)",
+        default="8G",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.qcow2):
@@ -207,7 +258,12 @@ def main():
         print("Error: qemu-img not found. Install qemu-utils.", file=sys.stderr)
         sys.exit(1)
 
-    create_ova(args.qcow2, args.output, args.name, args.version)
+    disk_bytes = parse_disk_size(args.disk_size)
+    create_ova(
+        args.qcow2, args.output, args.name, args.version,
+        cpus=args.cpus, memory_mb=args.memory,
+        disk_capacity_bytes=disk_bytes,
+    )
 
 
 if __name__ == "__main__":

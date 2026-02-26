@@ -19,10 +19,14 @@ apk add docker docker-cli-compose
 echo "[02-docker] Enabling Docker at boot..."
 rc-update add docker boot
 
+echo "[02-docker] Adding tachyon user to docker group..."
+addgroup tachyon docker
+
 echo "[02-docker] Configuring Docker daemon..."
-mkdir -p /etc/docker
+mkdir -p /etc/docker /data/docker
 cat > /etc/docker/daemon.json << 'EOF'
 {
+  "data-root": "/data/docker",
   "log-driver": "json-file",
   "log-opts": {
     "max-size": "10m",

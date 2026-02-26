@@ -85,7 +85,10 @@ jobs:
             appliance/packer/output-tachyon/tachyon-appliance \
             -o ${{ steps.version.outputs.ova_name }}.ova \
             -n tachyon-appliance \
-            -v ${{ steps.version.outputs.app_version }}
+            -v ${{ steps.version.outputs.app_version }} \
+            --memory 1024 \
+            --disk-size 8G \
+            --cpus 2
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -116,8 +119,19 @@ jobs:
 
           NOTES="Latest stable appliance (platform v${APPLIANCE_VER}, app ${APP_VER}).
 
-          **VMware/VirtualBox:** Download the .ova file and import.
-          **Proxmox:** Download the .qcow2 file and use qm importdisk."
+          **VMware/VirtualBox:** Download the \`.ova\` file and import.
+
+          **Proxmox:** Download the \`.qcow2\` file, then:
+          \`\`\`
+          qm create <vmid> --name tachyon --memory 1024 --cores 2 --net0 virtio,bridge=vmbr0
+          qm importdisk <vmid> <filename>.qcow2 <storage>
+          qm set <vmid> --virtio0 <storage>:vm-<vmid>-disk-0
+          qm set <vmid> --boot order=virtio0
+          qm set <vmid> --agent enabled=1
+          qm set <vmid> --serial0 socket
+          qm start <vmid>
+          \`\`\`
+          Use \`qm terminal <vmid>\` for serial console access."
 
           # Create release if it doesn't exist, or update the notes
           gh release create appliance-latest \
@@ -145,7 +159,18 @@ jobs:
           NOTES="Tachyon Manager Appliance (platform v${APPLIANCE_VER}, app ${APP_VER}).
 
           **VMware/VirtualBox:** Download the \`.ova\` file and import.
-          **Proxmox:** Download the \`.qcow2\` file and use \`qm importdisk\`."
+
+          **Proxmox:** Download the \`.qcow2\` file, then:
+          \`\`\`
+          qm create <vmid> --name tachyon --memory 1024 --cores 2 --net0 virtio,bridge=vmbr0
+          qm importdisk <vmid> <filename>.qcow2 <storage>
+          qm set <vmid> --virtio0 <storage>:vm-<vmid>-disk-0
+          qm set <vmid> --boot order=virtio0
+          qm set <vmid> --agent enabled=1
+          qm set <vmid> --serial0 socket
+          qm start <vmid>
+          \`\`\`
+          Use \`qm terminal <vmid>\` for serial console access."
 
           gh release create appliance-latest \
             --repo "$REPO" \
