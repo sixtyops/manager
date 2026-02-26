@@ -310,9 +310,42 @@ def client(mock_db):
         "overall_health": {"green": 0, "yellow": 0, "red": 0},
     })
     mock_poller.poll_ap_now = AsyncMock(return_value=True)
+    mock_fetcher = MagicMock()
+    mock_fetcher.start = AsyncMock()
+    mock_fetcher.stop = AsyncMock()
+    mock_fetcher.reselect = MagicMock()
+    mock_fetcher.check_and_download = AsyncMock(return_value={"downloaded": [], "errors": []})
+    mock_checker = MagicMock()
+    mock_checker.start = AsyncMock()
+    mock_checker.stop = AsyncMock()
+    mock_checker.get_update_status = MagicMock(return_value={
+        "current_version": "test",
+        "enabled": False,
+        "last_check": "",
+        "available_version": "",
+        "release_url": "",
+        "release_notes": "",
+        "update_available": False,
+        "docker_socket_available": False,
+        "can_update": True,
+        "blocked_reason": "",
+    })
+    mock_checker.check_for_updates = AsyncMock(return_value={
+        "current_version": "test",
+        "latest_version": "test",
+        "update_available": False,
+        "release_url": "",
+        "release_notes": "",
+        "error": None,
+    })
 
     with patch("updater.app.init_poller", return_value=mock_poller), \
          patch("updater.app.get_poller", return_value=mock_poller), \
+         patch("updater.app.init_fetcher", return_value=mock_fetcher), \
+         patch("updater.app.get_fetcher", return_value=mock_fetcher), \
+         patch("updater.app.init_checker", return_value=mock_checker), \
+         patch("updater.app.get_checker", return_value=mock_checker), \
+         patch("updater.app.verify_update_on_startup", new=AsyncMock()), \
          patch("updater.database.cleanup_expired_sessions"):
         from updater.app import app
         with TestClient(app) as tc:

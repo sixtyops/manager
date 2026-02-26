@@ -366,8 +366,7 @@ class TestStartUpdateAPI:
         fw_file.write_bytes(b"fake firmware")
 
         with patch("updater.app.FIRMWARE_DIR", tmp_path), \
-             patch("updater.app.asyncio") as mock_asyncio:
-            mock_asyncio.create_task = MagicMock()
+             patch("updater.app._spawn_update_job") as mock_spawn:
             resp = authed_client.post("/api/start-update", data={
                 "firmware_file": "tachyon-v1.12.3.bin",
                 "device_type": "mixed",
@@ -375,6 +374,7 @@ class TestStartUpdateAPI:
                 "concurrency": "2",
                 "bank_mode": "both",
             })
+            mock_spawn.assert_called_once()
 
         assert resp.status_code == 200
         data = resp.json()
