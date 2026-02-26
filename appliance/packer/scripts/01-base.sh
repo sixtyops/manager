@@ -2,6 +2,12 @@
 # 01-base.sh — Base Alpine setup, /data partition, system user
 set -e
 
+echo "[01-base] Enabling community repository..."
+if ! grep -q '/community$' /etc/apk/repositories; then
+    MAIN_REPO=$(grep -m1 '/main$' /etc/apk/repositories)
+    echo "${MAIN_REPO%/main}/community" >> /etc/apk/repositories
+fi
+
 echo "[01-base] Updating packages..."
 apk update && apk upgrade
 
