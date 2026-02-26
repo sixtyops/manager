@@ -423,6 +423,19 @@ app = FastAPI(title="Unofficial Tachyon Networks Auto Updater", lifespan=lifespa
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
+def render_template(
+    request: Request,
+    template_name: str,
+    context: Optional[dict] = None,
+    status_code: int = 200,
+):
+    """Render template using the Request-first TemplateResponse signature."""
+    payload = {"request": request}
+    if context:
+        payload.update(context)
+    return templates.TemplateResponse(request, template_name, payload, status_code=status_code)
+
+
 # ---------------------------------------------------------------------------
 # Security headers middleware
 # ---------------------------------------------------------------------------
@@ -469,8 +482,7 @@ async def login_page(request: Request, error: str = None):
     # First run with no password configured - redirect to setup
     if is_first_run():
         return RedirectResponse(url="/setup", status_code=302)
-    return templates.TemplateResponse("login.html", {
-        "request": request,
+    return render_template(request, "login.html", {
         "error": error,
         "oidc_enabled": oidc_config.is_oidc_enabled(),
     })
@@ -501,14 +513,14 @@ async def login(request: Request, username: str = Form(...), password: str = For
     """Handle login form submission."""
     ip_address = request.client.host if request.client else "unknown"
     if _check_login_rate_limit(ip_address):
-        return templates.TemplateResponse("login.html", {
-            "request": request, "error": "Too many login attempts. Please wait and try again.",
+        return render_template(request, "login.html", {
+            "error": "Too many login attempts. Please wait and try again.",
         }, status_code=429)
 
     user = authenticate(username, password)
     if not user:
         _record_login_attempt(ip_address)
-        return templates.TemplateResponse("login.html", {"request": request, "error": True}, status_code=401)
+        return render_template(request, "login.html", {"error": True}, status_code=401)
 
     ip_address = request.client.host if request.client else "unknown"
     session_id = create_session(user, ip_address)
@@ -545,8 +557,7 @@ async def setup_page(request: Request):
     if not is_setup_required():
         return RedirectResponse(url="/", status_code=302)
 
-    return templates.TemplateResponse("setup.html", {
-        "request": request,
+    return render_template(request, "setup.html", {
         "error": None,
         "first_run": first_run,
     })
@@ -576,15 +587,13 @@ async def setup_submit(
         # Rate-limit password verification to prevent brute-force
         ip_address = request.client.host if request.client else "unknown"
         if _check_login_rate_limit(ip_address):
-            return templates.TemplateResponse("setup.html", {
-                "request": request,
+            return render_template(request, "setup.html", {
                 "error": "Too many attempts. Please wait and try again.",
                 "first_run": False,
             }, status_code=429)
 
         if not current_password:
-            return templates.TemplateResponse("setup.html", {
-                "request": request,
+            return render_template(request, "setup.html", {
                 "error": "Current password is required.",
                 "first_run": False,
             }, status_code=400)
@@ -592,8 +601,7 @@ async def setup_submit(
         user = authenticate(session["username"], current_password)
         if not user:
             _record_login_attempt(ip_address)
-            return templates.TemplateResponse("setup.html", {
-                "request": request,
+            return render_template(request, "setup.html", {
                 "error": "Current password is incorrect.",
                 "first_run": False,
             }, status_code=400)
@@ -605,15 +613,13 @@ async def setup_submit(
         return RedirectResponse(url="/", status_code=302)
 
     if new_password != confirm_password:
-        return templates.TemplateResponse("setup.html", {
-            "request": request,
+        return render_template(request, "setup.html", {
             "error": "New passwords do not match.",
             "first_run": first_run,
         }, status_code=400)
 
     if len(new_password) < 12:
-        return templates.TemplateResponse("setup.html", {
-            "request": request,
+        return render_template(request, "setup.html", {
             "error": "Password must be at least 12 characters.",
             "first_run": first_run,
         }, status_code=400)
@@ -667,8 +673,8 @@ async def setup_wizard_page(request: Request, step: int = 1, session: dict = Dep
     # Enforce sequential step access
     if not _wizard_step_allowed(step):
         return RedirectResponse(url="/setup-wizard?step=1", status_code=302)
-    return templates.TemplateResponse("setup_wizard.html", {
-        "request": request, "step": step,
+    return render_template(request, "setup_wizard.html", {
+        "step": step,
         "ssl_status": ssl_manager.get_ssl_status(),
         "backup_status": git_backup.get_backup_status(),
         "error": None, "success": None,
@@ -695,13 +701,13 @@ async def setup_wizard_submit(
         if action == "configure" and ssl_domain and ssl_email:
             ok, msg = await ssl_manager.obtain_certificate(ssl_domain, ssl_email)
             if not ok:
-                return templates.TemplateResponse("setup_wizard.html", {
-                    "request": request, "step": 1, "ssl_status": ssl_status,
+                return render_template(request, "setup_wizard.html", {
+                    "step": 1, "ssl_status": ssl_status,
                     "backup_status": backup_status, "error": msg, "success": None,
                 })
         db.set_setting("wizard_step_1_done", "true")
-        return templates.TemplateResponse("setup_wizard.html", {
-            "request": request, "step": 2,
+        return render_template(request, "setup_wizard.html", {
+            "step": 2,
             "ssl_status": ssl_manager.get_ssl_status(),
             "backup_status": backup_status, "error": None, "success": None,
         })
@@ -712,13 +718,13 @@ async def setup_wizard_submit(
                 ssh_key=backup_ssh_key, token=backup_token,
             )
             if not ok:
-                return templates.TemplateResponse("setup_wizard.html", {
-                    "request": request, "step": 2, "ssl_status": ssl_status,
+                return render_template(request, "setup_wizard.html", {
+                    "step": 2, "ssl_status": ssl_status,
                     "backup_status": backup_status, "error": msg, "success": None,
                 })
         db.set_setting("wizard_step_2_done", "true")
-        return templates.TemplateResponse("setup_wizard.html", {
-            "request": request, "step": 3,
+        return render_template(request, "setup_wizard.html", {
+            "step": 3,
             "ssl_status": ssl_manager.get_ssl_status(),
             "backup_status": git_backup.get_backup_status(),
             "error": None, "success": None,
@@ -735,8 +741,8 @@ async def setup_wizard_submit(
 @app.get("/ssl-setup", response_class=HTMLResponse)
 async def ssl_setup_page(request: Request, session: dict = Depends(require_auth)):
     """Serve the SSL setup page."""
-    return templates.TemplateResponse("ssl_setup.html", {
-        "request": request, "ssl_status": ssl_manager.get_ssl_status(),
+    return render_template(request, "ssl_setup.html", {
+        "ssl_status": ssl_manager.get_ssl_status(),
         "error": None, "success": None,
     })
 
@@ -749,8 +755,8 @@ async def ssl_setup_submit(
     """Handle SSL certificate request."""
     success, message = await ssl_manager.obtain_certificate(domain, email)
     status = ssl_manager.get_ssl_status()
-    return templates.TemplateResponse("ssl_setup.html", {
-        "request": request, "ssl_status": status,
+    return render_template(request, "ssl_setup.html", {
+        "ssl_status": status,
         "error": None if success else message,
         "success": message if success else None,
     }, status_code=200 if success else 400)
@@ -764,8 +770,8 @@ async def get_ssl_status_api(session: dict = Depends(require_auth)):
 @app.get("/backup-setup", response_class=HTMLResponse)
 async def backup_setup_page(request: Request, session: dict = Depends(require_auth)):
     """Serve the backup setup page."""
-    return templates.TemplateResponse("backup_setup.html", {
-        "request": request, "backup_status": git_backup.get_backup_status(),
+    return render_template(request, "backup_setup.html", {
+        "backup_status": git_backup.get_backup_status(),
         "error": None, "success": None,
     })
 
@@ -780,8 +786,8 @@ async def backup_setup_submit(
     success, message = await git_backup.init_backup_repo(
         repo_url=repo_url, auth_method=auth_method, ssh_key=ssh_key, token=token,
     )
-    return templates.TemplateResponse("backup_setup.html", {
-        "request": request, "backup_status": git_backup.get_backup_status(),
+    return render_template(request, "backup_setup.html", {
+        "backup_status": git_backup.get_backup_status(),
         "error": None if success else message,
         "success": message if success else None,
     }, status_code=200 if success else 400)
@@ -810,7 +816,7 @@ async def index(request: Request, session: dict = Depends(require_auth)):
         return RedirectResponse(url="/setup", status_code=302)
     if _is_wizard_needed():
         return RedirectResponse(url="/setup-wizard", status_code=302)
-    return templates.TemplateResponse("monitor.html", {"request": request})
+    return render_template(request, "monitor.html")
 
 
 
