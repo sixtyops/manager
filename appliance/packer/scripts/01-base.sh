@@ -3,10 +3,13 @@
 set -e
 
 echo "[01-base] Enabling community repository..."
-if ! grep -q '/community$' /etc/apk/repositories; then
-    MAIN_REPO=$(grep -m1 '/main$' /etc/apk/repositories)
-    echo "${MAIN_REPO%/main}/community" >> /etc/apk/repositories
+# Uncomment existing community line, or add one based on main repo URL
+if grep -q '^#.*community' /etc/apk/repositories; then
+    sed -i 's|^#\(.*community\)|\1|' /etc/apk/repositories
+elif ! grep -q 'community' /etc/apk/repositories; then
+    sed -i 's|^\(.*\)/main$|\1/main\n\1/community|' /etc/apk/repositories
 fi
+cat /etc/apk/repositories
 
 echo "[01-base] Updating packages..."
 apk update && apk upgrade
