@@ -72,6 +72,25 @@ chmod -R u+w .git
 echo "Building and starting services..."
 $COMPOSE up -d --build
 
+# Wait for services to be healthy
+echo "Waiting for services to start..."
+HEALTHY=false
+for i in $(seq 1 30); do
+    if curl -sk -o /dev/null -w "%{http_code}" https://localhost/login 2>/dev/null | grep -q "200\|302"; then
+        HEALTHY=true
+        break
+    fi
+    sleep 2
+done
+
+if [ "$HEALTHY" != "true" ]; then
+    echo
+    echo "WARNING: Services may not have started correctly."
+    echo "Check container status with: cd $INSTALL_DIR && $COMPOSE ps"
+    echo "Check logs with: cd $INSTALL_DIR && $COMPOSE logs"
+    echo
+fi
+
 # Create systemd service for auto-start
 cat > /etc/systemd/system/tachyon.service << EOF
 [Unit]

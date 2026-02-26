@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
@@ -26,11 +27,11 @@ from .tachyon import TachyonClient, UpdateResult
 from . import __version__
 from . import database as db
 from .poller import init_poller, get_poller
-from .scheduler import init_scheduler, get_scheduler
+from .scheduler import init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTES
 from .firmware_fetcher import init_fetcher, get_fetcher
 from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
 from . import services
-from .auth import require_auth, require_auth_ws, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup
+from .auth import require_auth, require_auth_ws, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure
 from .backup import build_csv_export, process_csv_import
 from . import telemetry
 from . import slack
@@ -43,6 +44,12 @@ from .license import (
     is_feature_enabled, validate_license, clear_license,
     init_license_validator, require_feature,
 )
+from .radius_server import (
+    init_radius_service, get_radius_service,
+    get_radius_server_config, set_radius_server_config,
+    RadiusServerConfig,
+)
+from . import radius_users
 
 # Configure logging
 logging.basicConfig(
@@ -97,6 +104,7 @@ DATA_DIR.mkdir(exist_ok=True)
 # Global state
 active_websockets: Set[WebSocket] = set()
 update_jobs: Dict[str, "UpdateJob"] = {}
+_last_data_housekeeping_day: Optional[str] = None
 
 
 async def broadcast(message: dict):
@@ -119,6 +127,131 @@ def _cleanup_oidc_states():
     """Remove expired OIDC state entries (older than 10 minutes)."""
     cutoff = (datetime.now() - timedelta(minutes=10)).isoformat()
     db.delete_expired_oidc_states(cutoff)
+
+
+def _parse_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Read bounded int from env, with safe fallback."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(f"Invalid {name}={raw!r}; using default {default}")
+        return default
+    if value < minimum:
+        return minimum
+    if value > maximum:
+        return maximum
+    return value
+
+
+def _selected_firmware_names() -> set[str]:
+    """Firmware files currently selected in settings and therefore protected from auto-prune."""
+    selected = set()
+    for key in ("selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100"):
+        value = (db.get_setting(key, "") or "").strip()
+        if value:
+            selected.add(Path(value).name)
+    return selected
+
+
+def _prune_firmware_storage() -> int:
+    """Trim old firmware files to keep storage bounded for long-lived appliances."""
+    max_files = _parse_int_env("FIRMWARE_RETENTION_MAX_FILES", default=300, minimum=50, maximum=5000)
+    max_age_days = _parse_int_env("FIRMWARE_RETENTION_MAX_AGE_DAYS", default=730, minimum=30, maximum=3650)
+    if max_files <= 0:
+        return 0
+
+    cutoff = datetime.now() - timedelta(days=max_age_days)
+    selected = _selected_firmware_names()
+    files = [p for p in FIRMWARE_DIR.iterdir() if p.is_file()]
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    removed = 0
+
+    # First pass: remove old unselected firmware.
+    for path in list(files):
+        if path.name in selected:
+            continue
+        try:
+            modified = datetime.fromtimestamp(path.stat().st_mtime)
+        except OSError:
+            continue
+        if modified >= cutoff:
+            continue
+        try:
+            path.unlink()
+            db.unregister_firmware(path.name)
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except Exception as exc:
+            logger.warning(f"Failed to delete old firmware {path.name}: {exc}")
+
+    # Second pass: enforce max file count by deleting oldest unselected files.
+    files = [p for p in FIRMWARE_DIR.iterdir() if p.is_file()]
+    files.sort(key=lambda p: p.stat().st_mtime)
+    while len(files) > max_files:
+        candidate = None
+        for path in files:
+            if path.name not in selected:
+                candidate = path
+                break
+        if candidate is None:
+            break
+        try:
+            candidate.unlink()
+            db.unregister_firmware(candidate.name)
+            removed += 1
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            logger.warning(f"Failed to enforce firmware count limit for {candidate.name}: {exc}")
+            break
+        files = [p for p in FIRMWARE_DIR.iterdir() if p.is_file()]
+        files.sort(key=lambda p: p.stat().st_mtime)
+
+    return removed
+
+
+def _run_backup_git_gc():
+    """Compact backup git repo history to prevent unbounded growth."""
+    backup_dir = Path("/app/backups")
+    if not (backup_dir / ".git").exists():
+        return
+
+    gc_days = _parse_int_env("BACKUP_GC_PRUNE_DAYS", default=90, minimum=7, maximum=3650)
+    expire = f"{gc_days}.days.ago"
+    commands = [
+        ["git", "-C", str(backup_dir), "reflog", "expire", f"--expire={expire}", f"--expire-unreachable={expire}", "--all"],
+        ["git", "-C", str(backup_dir), "gc", f"--prune={expire}", "--quiet"],
+    ]
+    for cmd in commands:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                logger.warning(f"Backup GC command failed ({' '.join(cmd)}): {stderr[:200]}")
+        except Exception as exc:
+            logger.warning(f"Backup GC command error ({' '.join(cmd)}): {exc}")
+
+
+def _run_daily_data_housekeeping():
+    """Run expensive data hygiene tasks once per day."""
+    global _last_data_housekeeping_day
+
+    if os.environ.get("TACHYON_APPLIANCE") != "1":
+        return
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    if _last_data_housekeeping_day == today:
+        return
+
+    removed = _prune_firmware_storage()
+    if removed:
+        logger.info(f"Firmware retention removed {removed} old file(s)")
+    _run_backup_git_gc()
+    _last_data_housekeeping_day = today
 
 
 async def _supervised_task(name: str, coro_func, *args, restart_delay: float = 10.0):
@@ -145,11 +278,27 @@ async def _periodic_cleanup():
             db.cleanup_old_rollouts(max_age_days=180)
             db.cleanup_old_device_durations(max_age_days=180)
             db.cleanup_old_device_update_history(max_age_days=180)
+            db.cleanup_old_device_configs(max_per_device=50)
             _cleanup_completed_jobs(max_age_seconds=3600)
             _cleanup_oidc_states()
+            db.cleanup_old_radius_auth_log(max_age_days=90)
+            _run_daily_data_housekeeping()
             logger.info("Periodic cleanup completed")
         except Exception as e:
             logger.error(f"Periodic cleanup error: {e}")
+
+        # SSL certificate renewal check
+        try:
+            ssl_status = ssl_manager.get_ssl_status()
+            if ssl_status.get("needs_renewal") and ssl_status.get("using_letsencrypt"):
+                logger.info("SSL certificate needs renewal, attempting auto-renewal...")
+                success, message = await ssl_manager.renew_certificate()
+                if success:
+                    logger.info(f"SSL certificate renewed: {message}")
+                else:
+                    logger.warning(f"SSL certificate renewal failed: {message}")
+        except Exception as e:
+            logger.debug(f"SSL renewal check failed: {e}")
 
         # Disk space monitoring
         try:
@@ -234,6 +383,10 @@ async def lifespan(app: FastAPI):
     await verify_update_on_startup(broadcast)
     license_validator = init_license_validator(broadcast)
     await license_validator.start()
+    radius_svc = init_radius_service(broadcast)
+    radius_task = asyncio.create_task(
+        _supervised_task("radius_server", radius_svc.run_forever)
+    )
     cleanup_task = asyncio.create_task(
         _supervised_task("periodic_cleanup", _periodic_cleanup)
     )
@@ -249,7 +402,9 @@ async def lifespan(app: FastAPI):
     # Shutdown
     backup_task.cancel()
     cleanup_task.cancel()
-    for task in [cleanup_task, backup_task]:
+    radius_task.cancel()
+    await radius_svc.stop()
+    for task in [cleanup_task, backup_task, radius_task]:
         try:
             await task
         except asyncio.CancelledError:
@@ -259,6 +414,7 @@ async def lifespan(app: FastAPI):
     await fetcher.stop()
     await scheduler.stop()
     await poller.stop()
+    db.checkpoint_db()
     logger.info("Application stopped")
 
 
@@ -295,6 +451,12 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/healthz")
+async def healthz():
+    """Lightweight health endpoint for container runtime checks."""
+    return {"status": "ok"}
 
 
 # ============================================================================
@@ -359,7 +521,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
         key=SESSION_COOKIE_NAME,
         value=session_id,
         httponly=True,
-        secure=True,
+        secure=is_request_secure(request),
         max_age=86400,
         samesite="lax",
     )
@@ -411,6 +573,15 @@ async def setup_submit(
         if not session:
             return RedirectResponse(url="/login", status_code=302)
 
+        # Rate-limit password verification to prevent brute-force
+        ip_address = request.client.host if request.client else "unknown"
+        if _check_login_rate_limit(ip_address):
+            return templates.TemplateResponse("setup.html", {
+                "request": request,
+                "error": "Too many attempts. Please wait and try again.",
+                "first_run": False,
+            }, status_code=429)
+
         if not current_password:
             return templates.TemplateResponse("setup.html", {
                 "request": request,
@@ -420,6 +591,7 @@ async def setup_submit(
 
         user = authenticate(session["username"], current_password)
         if not user:
+            _record_login_attempt(ip_address)
             return templates.TemplateResponse("setup.html", {
                 "request": request,
                 "error": "Current password is incorrect.",
@@ -439,21 +611,22 @@ async def setup_submit(
             "first_run": first_run,
         }, status_code=400)
 
-    if len(new_password) < 8:
+    if len(new_password) < 12:
         return templates.TemplateResponse("setup.html", {
             "request": request,
-            "error": "Password must be at least 8 characters.",
+            "error": "Password must be at least 12 characters.",
             "first_run": first_run,
         }, status_code=400)
 
-    complete_setup(new_password)
+    if not complete_setup(new_password):
+        # Another request completed setup first (race condition)
+        return RedirectResponse(url="/login", status_code=303)
     logger.info(f"Admin password {'created' if first_run else 'changed'} by {username} during initial setup")
 
-    if first_run:
-        # First run - redirect to login so they can log in with the new password
-        return RedirectResponse(url="/login", status_code=303)
+    # Invalidate all existing sessions so old credentials can't be reused
+    db.delete_all_sessions()
 
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url="/login", status_code=303)
 
 
 @app.post("/logout")
@@ -477,11 +650,23 @@ def _is_wizard_needed() -> bool:
     return db.get_setting("setup_wizard_completed", "false") != "true"
 
 
+def _wizard_step_allowed(step: int) -> bool:
+    """Check if a wizard step is allowed based on prior step completion."""
+    if step >= 2 and db.get_setting("wizard_step_1_done", "false") != "true":
+        return False
+    if step >= 3 and db.get_setting("wizard_step_2_done", "false") != "true":
+        return False
+    return True
+
+
 @app.get("/setup-wizard", response_class=HTMLResponse)
 async def setup_wizard_page(request: Request, step: int = 1, session: dict = Depends(require_auth)):
     """Serve the setup wizard page."""
     if not _is_wizard_needed():
         return RedirectResponse(url="/", status_code=302)
+    # Enforce sequential step access
+    if not _wizard_step_allowed(step):
+        return RedirectResponse(url="/setup-wizard?step=1", status_code=302)
     return templates.TemplateResponse("setup_wizard.html", {
         "request": request, "step": step,
         "ssl_status": ssl_manager.get_ssl_status(),
@@ -499,6 +684,10 @@ async def setup_wizard_submit(
     session: dict = Depends(require_auth),
 ):
     """Handle setup wizard form submissions."""
+    # Enforce sequential step progression
+    if not _wizard_step_allowed(step):
+        return RedirectResponse(url="/setup-wizard?step=1", status_code=303)
+
     ssl_status = ssl_manager.get_ssl_status()
     backup_status = git_backup.get_backup_status()
 
@@ -510,6 +699,7 @@ async def setup_wizard_submit(
                     "request": request, "step": 1, "ssl_status": ssl_status,
                     "backup_status": backup_status, "error": msg, "success": None,
                 })
+        db.set_setting("wizard_step_1_done", "true")
         return templates.TemplateResponse("setup_wizard.html", {
             "request": request, "step": 2,
             "ssl_status": ssl_manager.get_ssl_status(),
@@ -526,6 +716,7 @@ async def setup_wizard_submit(
                     "request": request, "step": 2, "ssl_status": ssl_status,
                     "backup_status": backup_status, "error": msg, "success": None,
                 })
+        db.set_setting("wizard_step_2_done", "true")
         return templates.TemplateResponse("setup_wizard.html", {
             "request": request, "step": 3,
             "ssl_status": ssl_manager.get_ssl_status(),
@@ -534,6 +725,9 @@ async def setup_wizard_submit(
         })
     elif step == 3:
         db.set_setting("setup_wizard_completed", "true")
+        # Clean up step-tracking settings
+        db.set_setting("wizard_step_1_done", "false")
+        db.set_setting("wizard_step_2_done", "false")
         return RedirectResponse(url="/", status_code=303)
     return RedirectResponse(url="/setup-wizard", status_code=303)
 
@@ -1233,6 +1427,7 @@ async def quick_add(
 _SETTINGS_SENSITIVE = {
     "admin_password_hash", "oidc_client_secret",
     "device_default_password", "license_key",
+    "radius_server_secret", "radius_server_ldap_bind_password",
 }
 
 
@@ -1261,11 +1456,87 @@ _SETTINGS_WRITABLE = {
 }
 
 
+def _parse_int_field(value, field: str) -> int:
+    """Parse an integer field value or raise a 400."""
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"Invalid integer for {field}")
+
+
+def _parse_float_field(value, field: str) -> float:
+    """Parse a float field value or raise a 400."""
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"Invalid number for {field}")
+
+
 def _validate_settings(filtered: dict):
     """Validate individual setting values before persisting."""
     url = filtered.get("slack_webhook_url")
     if url and not slack.is_valid_slack_url(url):
         raise HTTPException(400, "Slack webhook URL must be a valid https://hooks.slack.com/ URL")
+
+    # Validate enum/boolean-like fields
+    if "bank_mode" in filtered:
+        filtered["bank_mode"] = str(filtered["bank_mode"]).lower()
+    if "bank_mode" in filtered and filtered["bank_mode"] not in ("one", "both"):
+        raise HTTPException(400, "bank_mode must be 'one' or 'both'")
+    if "release_channel" in filtered:
+        filtered["release_channel"] = str(filtered["release_channel"]).lower()
+    if "release_channel" in filtered and filtered["release_channel"] not in ("stable", "dev"):
+        raise HTTPException(400, "release_channel must be 'stable' or 'dev'")
+    if "temperature_unit" in filtered:
+        filtered["temperature_unit"] = str(filtered["temperature_unit"]).lower()
+    if "temperature_unit" in filtered and filtered["temperature_unit"] not in ("auto", "c", "f"):
+        raise HTTPException(400, "temperature_unit must be 'auto', 'c', or 'f'")
+
+    bool_like = {
+        "schedule_enabled", "allow_downgrade", "weather_check_enabled",
+        "firmware_beta_enabled", "autoupdate_enabled", "pre_update_reboot",
+    }
+    for key in bool_like:
+        if key in filtered:
+            value = str(filtered[key]).lower()
+            if value not in ("true", "false"):
+                raise HTTPException(400, f"{key} must be 'true' or 'false'")
+            filtered[key] = value
+
+    # Validate numeric fields and ranges
+    if "schedule_start_hour" in filtered:
+        start_hour = _parse_int_field(filtered["schedule_start_hour"], "schedule_start_hour")
+        if not 0 <= start_hour <= 23:
+            raise HTTPException(400, "schedule_start_hour must be between 0 and 23")
+    if "schedule_end_hour" in filtered:
+        end_hour = _parse_int_field(filtered["schedule_end_hour"], "schedule_end_hour")
+        if not 0 <= end_hour <= 23:
+            raise HTTPException(400, "schedule_end_hour must be between 0 and 23")
+    if "parallel_updates" in filtered:
+        parallel = _parse_int_field(filtered["parallel_updates"], "parallel_updates")
+        if parallel < 1 or parallel > 32:
+            raise HTTPException(400, "parallel_updates must be between 1 and 32")
+    if "firmware_quarantine_days" in filtered:
+        hold_days = _parse_int_field(filtered["firmware_quarantine_days"], "firmware_quarantine_days")
+        if hold_days < 0 or hold_days > 365:
+            raise HTTPException(400, "firmware_quarantine_days must be between 0 and 365")
+    if "min_temperature_c" in filtered:
+        min_temp = _parse_float_field(filtered["min_temperature_c"], "min_temperature_c")
+        if min_temp < -100 or min_temp > 100:
+            raise HTTPException(400, "min_temperature_c must be between -100 and 100")
+
+    # Validate schedule_days format
+    if "schedule_days" in filtered:
+        allowed_days = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+        day_values = [d.strip().lower() for d in str(filtered["schedule_days"]).split(",") if d.strip()]
+        if not all(d in allowed_days for d in day_values):
+            raise HTTPException(400, "schedule_days must be comma-separated day abbreviations (mon..sun)")
+
+    # Validate firmware filenames to prevent traversal via settings
+    for fw_key in ("selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100"):
+        if fw_key in filtered and filtered[fw_key]:
+            validate_firmware_filename(str(filtered[fw_key]))
+
     # License-gated settings
     if filtered.get("slack_webhook_url") and not is_feature_enabled(Feature.SLACK_NOTIFICATIONS):
         raise HTTPException(403, detail={"error": "feature_locked", "feature": "slack_notifications",
@@ -1779,7 +2050,7 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
         key=SESSION_COOKIE_NAME,
         value=session_id,
         httponly=True,
-        secure=True,
+        secure=is_request_secure(request),
         max_age=86400,
         samesite="lax",
     )
@@ -2039,6 +2310,7 @@ class UpdateJob:
     devices: Dict[str, DeviceStatus] = field(default_factory=dict)
     bank_mode: str = "both"
     cancelled: bool = False
+    cancel_reason: Optional[str] = None
     ap_cpe_map: Dict[str, list] = field(default_factory=dict)  # AP IP -> [CPE IPs]
     device_roles: Dict[str, str] = field(default_factory=dict)  # IP -> "ap"/"cpe"
     device_parent: Dict[str, str] = field(default_factory=dict)  # CPE IP -> parent AP IP
@@ -2046,9 +2318,97 @@ class UpdateJob:
     completed_at: Optional[datetime] = None
     status: str = "pending"
     is_scheduled: bool = False
+    start_hour: Optional[int] = None
     end_hour: Optional[int] = None
+    schedule_days: list[str] = field(default_factory=list)
     schedule_timezone: Optional[str] = None
     pre_update_reboot: bool = True
+
+
+async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
+    """Finalize a job if its task crashes unexpectedly."""
+    if job.status == "completed":
+        return
+
+    err_text = f"Internal job error: {error}"
+    for ds in job.devices.values():
+        if ds.status not in ("success", "failed", "skipped", "cancelled"):
+            ds.status = "failed"
+            ds.error = err_text
+            ds.progress_message = err_text
+
+    job.completed_at = datetime.now()
+    job.status = "completed"
+
+    success_count = sum(1 for d in job.devices.values() if d.status == "success")
+    failed_count = sum(1 for d in job.devices.values() if d.status == "failed")
+    skipped_count = sum(1 for d in job.devices.values() if d.status == "skipped")
+    cancelled_count = sum(1 for d in job.devices.values() if d.status == "cancelled")
+
+    resolved_tz = job.schedule_timezone
+    if not resolved_tz:
+        settings = db.get_all_settings()
+        tz_setting = settings.get("timezone", "auto")
+        resolved_tz = await services.get_timezone() if tz_setting == "auto" else tz_setting
+
+    await broadcast({
+        "type": "job_completed",
+        "job_id": job.job_id,
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "skipped_count": skipped_count,
+        "cancelled_count": cancelled_count,
+        "duration": (job.completed_at - job.started_at).total_seconds() if job.started_at else 0,
+        "timezone": resolved_tz,
+        "error": err_text,
+        "devices": {
+            ip: {
+                "status": ds.status,
+                "message": ds.progress_message,
+                "old_version": ds.old_version,
+                "new_version": ds.new_version,
+                "error": ds.error,
+                "bank1_version": ds.bank1_version,
+                "bank2_version": ds.bank2_version,
+                "active_bank": ds.active_bank,
+                "role": ds.role,
+                "parent_ap": ds.parent_ap,
+                "model": ds.model,
+            }
+            for ip, ds in job.devices.items()
+        },
+        "ap_cpe_map": job.ap_cpe_map,
+        "device_roles": job.device_roles,
+    })
+
+    if job.is_scheduled:
+        scheduler = get_scheduler()
+        if scheduler:
+            device_statuses = {ip: ds.status for ip, ds in job.devices.items()}
+            scheduler.on_job_completed(
+                job.job_id,
+                success_count,
+                failed_count if failed_count > 0 else 1,
+                learned_version=None,
+                device_statuses=device_statuses,
+                cancel_reason=job.cancel_reason,
+            )
+
+
+def _spawn_update_job(job: "UpdateJob", concurrency: int):
+    """Spawn update task with crash guard so scheduler state cannot get stuck."""
+    task = asyncio.create_task(run_update_job(job, concurrency))
+
+    def _on_done(done_task: asyncio.Task):
+        try:
+            exc = done_task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc:
+            logger.exception(f"Update job {job.job_id} crashed", exc_info=exc)
+            asyncio.create_task(_finalize_crashed_job(job, exc))
+
+    task.add_done_callback(_on_done)
 
 
 MAX_FIRMWARE_SIZE = 500 * 1024 * 1024   # 500 MB
@@ -2077,6 +2437,12 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
     except HTTPException:
         firmware_path.unlink(missing_ok=True)
         raise
+    except Exception as e:
+        firmware_path.unlink(missing_ok=True)
+        logger.error(f"Firmware upload failed for {safe_filename}: {e}")
+        raise HTTPException(500, "Failed to upload firmware")
+    finally:
+        await file.close()
 
     logger.info(f"Firmware uploaded: {safe_filename} ({total_size:,} bytes)")
 
@@ -2104,7 +2470,10 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
     except (ValueError, TypeError):
         channels = {}
 
-    quarantine_days = int(db.get_setting("firmware_quarantine_days", "7"))
+    try:
+        quarantine_days = int(db.get_setting("firmware_quarantine_days", "7"))
+    except (TypeError, ValueError):
+        quarantine_days = 7
     registry = {r["filename"]: r for r in db.get_firmware_registry()}
 
     files = []
@@ -2452,31 +2821,39 @@ async def _start_scheduled_update(
     firmware_file_tns100: str = "",
     bank_mode: str = "both",
     concurrency: int = 2,
+    start_hour: int = None,
     end_hour: int = None,
+    schedule_days: list[str] = None,
     schedule_timezone: str = None,
 ) -> str:
     """Start an update job from the scheduler (Python args, not Form data)."""
-    firmware_path = FIRMWARE_DIR / firmware_file
+    if concurrency < 1:
+        raise RuntimeError("parallel_updates must be >= 1")
+
+    safe_fw = validate_firmware_filename(firmware_file)
+    firmware_path = FIRMWARE_DIR / safe_fw
     if not firmware_path.exists():
-        raise RuntimeError(f"Firmware file not found: {firmware_file}")
+        raise RuntimeError(f"Firmware file not found: {safe_fw}")
 
     # Get downgrade setting
     allow_downgrade = db.get_setting("allow_downgrade", "false") == "true"
 
     firmware_files = {"tna-30x": str(firmware_path)}
-    firmware_names = {"tna-30x": firmware_file}
+    firmware_names = {"tna-30x": safe_fw}
 
     if firmware_file_303l:
-        path_303l = FIRMWARE_DIR / firmware_file_303l
+        safe_303l = validate_firmware_filename(firmware_file_303l)
+        path_303l = FIRMWARE_DIR / safe_303l
         if path_303l.exists():
             firmware_files["tna-303l"] = str(path_303l)
-            firmware_names["tna-303l"] = firmware_file_303l
+            firmware_names["tna-303l"] = safe_303l
 
     if firmware_file_tns100:
-        path_tns100 = FIRMWARE_DIR / firmware_file_tns100
+        safe_tns100 = validate_firmware_filename(firmware_file_tns100)
+        path_tns100 = FIRMWARE_DIR / safe_tns100
         if path_tns100.exists():
             firmware_files["tns-100"] = str(path_tns100)
-            firmware_names["tns-100"] = firmware_file_tns100
+            firmware_names["tns-100"] = safe_tns100
 
     credentials = {}
     ap_cpe_map = {}
@@ -2576,7 +2953,9 @@ async def _start_scheduled_update(
         started_at=datetime.now(),
         status="running",
         is_scheduled=True,
+        start_hour=start_hour,
         end_hour=end_hour,
+        schedule_days=list(schedule_days or []),
         schedule_timezone=schedule_timezone,
         pre_update_reboot=pre_update_reboot,
     )
@@ -2586,8 +2965,8 @@ async def _start_scheduled_update(
     for ap_ip, cpe_ips in ap_cpe_map.items():
         for cpe_ip in cpe_ips:
             job.devices[cpe_ip] = DeviceStatus(ip=cpe_ip, role="cpe", parent_ap=ap_ip)
-    for sw in switches:
-        job.devices[sw["ip"]] = DeviceStatus(ip=sw["ip"], role="switch")
+    for sw_ip in valid_switches:
+        job.devices[sw_ip] = DeviceStatus(ip=sw_ip, role="switch")
 
     update_jobs[job_id] = job
 
@@ -2602,7 +2981,7 @@ async def _start_scheduled_update(
         "bank_mode": bank_mode,
     })
 
-    asyncio.create_task(run_update_job(job, concurrency))
+    _spawn_update_job(job, concurrency)
     return job_id
 
 
@@ -2618,6 +2997,9 @@ async def start_update(
     session: dict = Depends(require_auth),
 ):
     """Start a firmware update job."""
+    if concurrency < 1 or concurrency > 32:
+        raise HTTPException(400, "concurrency must be between 1 and 32")
+
     ap_ips = []
     for line in ip_list.strip().split("\n"):
         line = line.strip()
@@ -2760,7 +3142,7 @@ async def start_update(
         "bank_mode": bank_mode,
     })
 
-    asyncio.create_task(run_update_job(job, concurrency))
+    _spawn_update_job(job, concurrency)
 
     return {"job_id": job_id, "device_count": len(job.devices)}
 
@@ -2891,55 +3273,69 @@ async def update_single_device_endpoint(
         "bank_mode": bank_mode,
     })
 
-    asyncio.create_task(run_update_job(job, concurrency=1))
+    _spawn_update_job(job, concurrency=1)
 
     return {"job_id": job_id, "device_count": 1}
+
+
+def _request_job_cancel(job: "UpdateJob", reason: str):
+    """Cancel a running job and preserve the first meaningful reason."""
+    job.cancelled = True
+    if not job.cancel_reason:
+        job.cancel_reason = reason
+
+
+def _minutes_until_window_end(now: datetime, start_hour: int, end_hour: int) -> int:
+    """Compute minutes remaining in the active schedule window."""
+    if start_hour < end_hour:
+        # Same-day window (e.g., 03:00-04:00)
+        return (end_hour - now.hour) * 60 - now.minute
+    # Overnight window (e.g., 20:00-04:00)
+    if now.hour >= start_hour:
+        return (24 - now.hour + end_hour) * 60 - now.minute
+    return (end_hour - now.hour) * 60 - now.minute
+
+
+async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
+    """Fail-safe runtime gate for scheduled jobs."""
+    if not job.is_scheduled:
+        return (True, "")
+
+    if (
+        job.start_hour is None
+        or job.end_hour is None
+        or not job.schedule_timezone
+        or not job.schedule_days
+    ):
+        return (False, "Scheduled update missing maintenance window metadata")
+
+    time_ok, time_result = await services.validate_time_sources(job.schedule_timezone)
+    if not time_ok:
+        return (False, f"Time anomaly: {time_result}")
+
+    if not isinstance(time_result, datetime):
+        return (False, "Time validation returned an invalid timestamp")
+
+    now = time_result
+    current_day = now.strftime("%a").lower()
+    if not services.is_in_schedule_window(
+        now.hour,
+        current_day,
+        job.schedule_days,
+        job.start_hour,
+        job.end_hour,
+    ):
+        return (False, "Outside maintenance window")
+
+    if _minutes_until_window_end(now, job.start_hour, job.end_hour) <= SCHEDULE_END_BUFFER_MINUTES:
+        return (False, "Maintenance window ending")
+
+    return (True, "")
 
 
 async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1):
     """Update a single device within a job."""
     device_status = job.devices[ip]
-
-    # Maintenance window cutoff for scheduled jobs
-    if job.is_scheduled and job.end_hour is not None and job.schedule_timezone:
-        try:
-            from zoneinfo import ZoneInfo
-            tz = ZoneInfo(job.schedule_timezone)
-            now = datetime.now(tz)
-            # Handle overnight windows (e.g., 20:00-04:00)
-            if job.end_hour > now.hour:
-                # Same day: end is later today
-                minutes_until_end = (job.end_hour - now.hour) * 60 - now.minute
-            else:
-                # Overnight: end is tomorrow morning
-                minutes_until_end = (24 - now.hour + job.end_hour) * 60 - now.minute
-            if minutes_until_end < 10:
-                device_status.status = "skipped"
-                device_status.progress_message = "Maintenance window ending"
-                await broadcast({
-                    "type": "device_update",
-                    "job_id": job.job_id,
-                    "ip": ip,
-                    "status": device_status.status,
-                    "message": device_status.progress_message,
-                    "role": device_status.role,
-                    "parent_ap": device_status.parent_ap,
-                })
-                now_iso = datetime.now().isoformat()
-                try:
-                    db.save_device_update_history(
-                        job_id=job.job_id, ip=ip, role=device_status.role,
-                        pass_number=pass_number, status="skipped",
-                        old_version=None, new_version=None, model=None,
-                        error="Maintenance window ending", failed_stage=None,
-                        stages=[], duration_seconds=0,
-                        started_at=now_iso, completed_at=now_iso,
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to save device history for {ip}: {e}")
-                return
-        except Exception as e:
-            logger.warning(f"Maintenance window check failed: {e}")
 
     device_start_time = datetime.now()
 
@@ -3073,7 +3469,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
 
         # If device didn't come back online, cancel the job
         if result.error and "did not come back online" in result.error:
-            job.cancelled = True
+            _request_job_cancel(job, "Cancelled: device did not come back online")
 
     await broadcast({
         "type": "device_update",
@@ -3121,7 +3517,14 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
 
 async def run_update_job(job: UpdateJob, concurrency: int):
     """Run the firmware update job with phase-based ordering driven by bank_mode."""
-    semaphore = asyncio.Semaphore(concurrency)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    # For scheduled jobs, enforce maintenance window/time-source checks only at start.
+    # Once started, let the in-flight job complete even if it runs past window end.
+    is_allowed, block_reason = await _scheduled_job_guard(job)
+    if not is_allowed:
+        _request_job_cancel(job, block_reason)
+        logger.warning(f"Job {job.job_id} cancelled before start: {block_reason}")
 
     ap_ips = [ip for ip, role in job.device_roles.items() if role == "ap"]
     cpe_ips = [ip for ip, role in job.device_roles.items() if role == "cpe"]
@@ -3159,14 +3562,14 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                             ds.status = "failed"
                             ds.error = login_result if isinstance(login_result, str) else "Login failed"
                             ds.progress_message = f"Pre-reboot login failed: {ds.error}"
-                            job.cancelled = True
+                            _request_job_cancel(job, "Cancelled: another device failed to reboot")
                             return
                         timeout = TNS100_REBOOT_TIMEOUT if ds.role == "switch" else AP_REBOOT_TIMEOUT
                         if not await client.reboot(timeout=timeout):
                             ds.status = "failed"
                             ds.error = "Device did not come back online after pre-update reboot"
                             ds.progress_message = ds.error
-                            job.cancelled = True
+                            _request_job_cancel(job, "Cancelled: another device failed to reboot")
                             return
                         ds.status = "pending"
                         ds.progress_message = "Rebooted, waiting for update..."
@@ -3174,7 +3577,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                         ds.status = "failed"
                         ds.error = f"Pre-update reboot failed: {e}"
                         ds.progress_message = ds.error
-                        job.cancelled = True
+                        _request_job_cancel(job, "Cancelled: another device failed to reboot")
                         return
                     await broadcast({
                         "type": "device_update",
@@ -3192,12 +3595,13 @@ async def run_update_job(job: UpdateJob, concurrency: int):
             )
 
             if job.cancelled:
+                cancel_message = job.cancel_reason or "Cancelled: another device failed to reboot"
                 # Mark any remaining pending devices as cancelled
                 for ip in all_ips:
                     ds = job.devices.get(ip)
                     if ds and ds.status == "pending":
                         ds.status = "cancelled"
-                        ds.progress_message = "Cancelled: another device failed to reboot"
+                        ds.progress_message = cancel_message
                         await broadcast({
                             "type": "device_update",
                             "job_id": job.job_id,
@@ -3213,7 +3617,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                                 job_id=job.job_id, ip=ip, role=ds.role,
                                 pass_number=1, status="cancelled",
                                 old_version=None, new_version=None, model=None,
-                                error="Cancelled: another device failed to reboot",
+                                error=cancel_message,
                                 failed_stage=None, stages=[], duration_seconds=0,
                                 started_at=now_iso, completed_at=now_iso,
                             )
@@ -3240,11 +3644,12 @@ async def run_update_job(job: UpdateJob, concurrency: int):
 
     async def _mark_cancelled(ips):
         """Mark unstarted devices as cancelled."""
+        cancel_message = job.cancel_reason or "Cancelled: another device failed to reboot"
         for ip in ips:
             ds = job.devices.get(ip)
             if ds and ds.status == "pending":
                 ds.status = "cancelled"
-                ds.progress_message = "Cancelled: another device failed to reboot"
+                ds.progress_message = cancel_message
                 await broadcast({
                     "type": "device_update",
                     "job_id": job.job_id,
@@ -3260,7 +3665,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                         job_id=job.job_id, ip=ip, role=ds.role,
                         pass_number=1, status="cancelled",
                         old_version=None, new_version=None, model=None,
-                        error="Cancelled: another device failed to reboot",
+                        error=cancel_message,
                         failed_stage=None, stages=[], duration_seconds=0,
                         started_at=now_iso, completed_at=now_iso,
                     )
@@ -3380,21 +3785,24 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         }
         for ip, ds in job.devices.items()
     }
-    db.save_job_history(
-        job_id=job.job_id,
-        started_at=job.started_at.isoformat() if job.started_at else None,
-        completed_at=job.completed_at.isoformat() if job.completed_at else None,
-        duration=(job.completed_at - job.started_at).total_seconds(),
-        bank_mode=job.bank_mode,
-        success_count=success_count,
-        failed_count=failed_count,
-        skipped_count=skipped_count,
-        cancelled_count=cancelled_count,
-        devices=devices_dict,
-        ap_cpe_map=job.ap_cpe_map,
-        device_roles=job.device_roles,
-        timezone=resolved_tz,
-    )
+    try:
+        db.save_job_history(
+            job_id=job.job_id,
+            started_at=job.started_at.isoformat() if job.started_at else None,
+            completed_at=job.completed_at.isoformat() if job.completed_at else None,
+            duration=(job.completed_at - job.started_at).total_seconds(),
+            bank_mode=job.bank_mode,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+            cancelled_count=cancelled_count,
+            devices=devices_dict,
+            ap_cpe_map=job.ap_cpe_map,
+            device_roles=job.device_roles,
+            timezone=resolved_tz,
+        )
+    except Exception as e:
+        logger.error(f"Failed to persist job history for {job.job_id}: {e}")
 
     # Send anonymized telemetry (non-blocking background task)
     asyncio.create_task(telemetry.send_telemetry_background(
@@ -3435,21 +3843,6 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                         "estimated_completion": predictions.get("estimated_completion_date"),
                     }
 
-    firmware_name = job.firmware_names.get("30x", "") or list(job.firmware_names.values())[0] if job.firmware_names else "Unknown"
-    await slack.notify_job_completed(
-        job_id=job.job_id,
-        success_count=success_count,
-        failed_count=failed_count,
-        skipped_count=skipped_count,
-        cancelled_count=cancelled_count,
-        duration_seconds=(job.completed_at - job.started_at).total_seconds(),
-        devices=devices_dict,
-        firmware_name=firmware_name,
-        is_scheduled=job.is_scheduled,
-        rollout_info=rollout_info,
-        next_job_info=next_job_info,
-    )
-
     # Notify scheduler if this was a scheduled job
     if job.is_scheduled:
         scheduler = get_scheduler()
@@ -3463,7 +3856,30 @@ async def run_update_job(job: UpdateJob, concurrency: int):
             device_statuses = {ip: ds.status for ip, ds in job.devices.items()}
             scheduler.on_job_completed(job.job_id, success_count, failed_count,
                                        learned_version=learned_version,
-                                       device_statuses=device_statuses)
+                                       device_statuses=device_statuses,
+                                       cancel_reason=job.cancel_reason)
+
+    firmware_name = (
+        job.firmware_names.get("tna-30x", "")
+        or list(job.firmware_names.values())[0]
+        if job.firmware_names else "Unknown"
+    )
+    try:
+        await slack.notify_job_completed(
+            job_id=job.job_id,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+            cancelled_count=cancelled_count,
+            duration_seconds=(job.completed_at - job.started_at).total_seconds(),
+            devices=devices_dict,
+            firmware_name=firmware_name,
+            is_scheduled=job.is_scheduled,
+            rollout_info=rollout_info,
+            next_job_info=next_job_info,
+        )
+    except Exception as e:
+        logger.error(f"Slack notification failed for job {job.job_id}: {e}")
 
     logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped, {cancelled_count} cancelled")
 
@@ -3478,6 +3894,8 @@ async def get_job_status(job_id: str, session: dict = Depends(require_auth)):
     return {
         "job_id": job.job_id,
         "status": job.status,
+        "cancelled": job.cancelled,
+        "cancel_reason": job.cancel_reason,
         "firmware_names": job.firmware_names,
         "device_type": job.device_type,
         "bank_mode": job.bank_mode,
@@ -3486,6 +3904,32 @@ async def get_job_status(job_id: str, session: dict = Depends(require_auth)):
         "started_at": job.started_at.isoformat() if job.started_at else None,
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         "devices": {ip: asdict(status) for ip, status in job.devices.items()},
+    }
+
+
+@app.post("/api/job/{job_id}/cancel")
+async def cancel_job(job_id: str, session: dict = Depends(require_auth)):
+    """Request cancellation of an active update job."""
+    job = update_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+
+    if job.status == "completed":
+        raise HTTPException(400, "Job already completed")
+
+    if not job.cancelled:
+        _request_job_cancel(job, "Cancelled by user")
+        logger.info(f"User requested cancellation for job {job_id}")
+        await broadcast({
+            "type": "job_cancel_requested",
+            "job_id": job_id,
+            "message": job.cancel_reason,
+        })
+
+    return {
+        "job_id": job_id,
+        "cancelled": True,
+        "message": job.cancel_reason or "Cancellation requested",
     }
 
 
@@ -4119,6 +4563,366 @@ async def _run_config_push(job_id: str, device_list: list, templates: list):
     if poller:
         affected_ips = [d["ip"] for d in device_list]
         asyncio.create_task(poller.poll_configs_for_ips(affected_ips))
+
+
+# ============================================================================
+# RADIUS Server Management
+# ============================================================================
+
+@app.get("/api/radius-server/config")
+async def get_radius_server_config_api(
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Get RADIUS server configuration (secrets omitted)."""
+    config = get_radius_server_config()
+    svc = get_radius_service()
+    return {
+        "enabled": config.enabled,
+        "auth_port": config.auth_port,
+        "has_secret": bool(config.shared_secret),
+        "auth_mode": config.auth_mode,
+        "advertised_address": config.advertised_address,
+        "ldap_url": config.ldap_url,
+        "ldap_bind_dn": config.ldap_bind_dn,
+        "ldap_has_password": bool(config.ldap_bind_password),
+        "ldap_base_dn": config.ldap_base_dn,
+        "ldap_user_filter": config.ldap_user_filter,
+        "running": svc.is_running if svc else False,
+        "error": svc.last_error if svc else "",
+    }
+
+
+@app.put("/api/radius-server/config")
+async def update_radius_server_config_api(
+    request: Request,
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Update RADIUS server configuration."""
+    data = await request.json()
+    config = get_radius_server_config()
+
+    if "enabled" in data:
+        config.enabled = bool(data["enabled"])
+    if "auth_port" in data:
+        port = int(data["auth_port"])
+        if not (1024 <= port <= 65535):
+            raise HTTPException(400, "Port must be 1024-65535")
+        config.auth_port = port
+    if "shared_secret" in data and data["shared_secret"]:
+        secret = data["shared_secret"]
+        if len(secret) < 8:
+            raise HTTPException(400, "Shared secret must be at least 8 characters")
+        if len(set(secret)) == 1:
+            raise HTTPException(400, "Shared secret is too weak")
+        config.shared_secret = secret
+    if "auth_mode" in data:
+        if data["auth_mode"] not in ("local", "ldap"):
+            raise HTTPException(400, "auth_mode must be 'local' or 'ldap'")
+        config.auth_mode = data["auth_mode"]
+    if "advertised_address" in data:
+        config.advertised_address = data["advertised_address"].strip()
+    if "ldap_url" in data:
+        url = data["ldap_url"].strip()
+        if url and not (url.startswith("ldaps://") or url.startswith("ldap://")):
+            raise HTTPException(400, "LDAP URL must start with ldaps:// or ldap://")
+        config.ldap_url = url
+    if "ldap_bind_dn" in data:
+        config.ldap_bind_dn = data["ldap_bind_dn"].strip()
+    if "ldap_bind_password" in data and data["ldap_bind_password"]:
+        config.ldap_bind_password = data["ldap_bind_password"]
+    if "ldap_base_dn" in data:
+        config.ldap_base_dn = data["ldap_base_dn"].strip()
+    if "ldap_user_filter" in data:
+        config.ldap_user_filter = data["ldap_user_filter"].strip()
+
+    set_radius_server_config(config)
+
+    # Restart service so new config applies immediately, even if currently idle.
+    svc = get_radius_service()
+    if svc:
+        await svc.restart()
+
+    return {"status": "ok"}
+
+
+@app.post("/api/radius-server/restart")
+async def restart_radius_server_api(
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Restart the RADIUS server."""
+    svc = get_radius_service()
+    if not svc:
+        raise HTTPException(500, "RADIUS service not initialized")
+    await svc.restart()
+    return {"status": "ok"}
+
+
+@app.get("/api/radius-server/status")
+async def get_radius_server_status_api(
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Get RADIUS server running status and stats."""
+    svc = get_radius_service()
+    if not svc:
+        return {"running": False, "error": "Not initialized", "stats": {}}
+    return svc.get_status()
+
+
+@app.get("/api/radius-server/users")
+async def list_radius_users_api(
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """List all RADIUS users."""
+    return radius_users.get_radius_users()
+
+
+@app.post("/api/radius-server/users")
+async def create_radius_user_api(
+    request: Request,
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Create a RADIUS user."""
+    data = await request.json()
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+    description = data.get("description", "")
+    try:
+        user_id = radius_users.create_radius_user(username, password, description)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        if "UNIQUE constraint" in str(e):
+            raise HTTPException(409, f"Username '{username}' already exists")
+        raise
+    return {"id": user_id, "username": username}
+
+
+@app.put("/api/radius-server/users/{user_id}")
+async def update_radius_user_api(
+    user_id: int,
+    request: Request,
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Update a RADIUS user."""
+    data = await request.json()
+    try:
+        updated = radius_users.update_radius_user(user_id, **data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        if "UNIQUE constraint" in str(e):
+            raise HTTPException(409, "Username already exists")
+        raise
+    if not updated:
+        raise HTTPException(404, "User not found")
+    return {"status": "ok"}
+
+
+@app.delete("/api/radius-server/users/{user_id}")
+async def delete_radius_user_api(
+    user_id: int,
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Delete a RADIUS user."""
+    if not radius_users.delete_radius_user(user_id):
+        raise HTTPException(404, "User not found")
+    return {"status": "ok"}
+
+
+@app.get("/api/radius-server/auth-log")
+async def get_radius_auth_log_api(
+    limit: int = 50,
+    offset: int = 0,
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Get recent RADIUS authentication attempts."""
+    with db.get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM radius_auth_log ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (min(limit, 200), offset),
+        ).fetchall()
+        total = conn.execute("SELECT COUNT(*) FROM radius_auth_log").fetchone()[0]
+    return {"entries": [dict(r) for r in rows], "total": total}
+
+
+@app.post("/api/radius-server/test-ldap")
+async def test_ldap_connection_api(
+    request: Request,
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Test LDAP connectivity with current configuration."""
+    data = await request.json()
+    test_username = data.get("test_username", "testuser")
+
+    config = get_radius_server_config()
+    # Override with any provided fields for testing
+    if data.get("ldap_url"):
+        config.ldap_url = data["ldap_url"]
+    if data.get("ldap_bind_dn"):
+        config.ldap_bind_dn = data["ldap_bind_dn"]
+    if data.get("ldap_bind_password"):
+        config.ldap_bind_password = data["ldap_bind_password"]
+    if data.get("ldap_base_dn"):
+        config.ldap_base_dn = data["ldap_base_dn"]
+
+    try:
+        import ldap3
+        from ldap3.utils.conv import escape_filter_chars
+    except ImportError:
+        return {"success": False, "error": "ldap3 library not installed"}
+
+    if not config.ldap_url:
+        return {"success": False, "error": "LDAP URL not configured"}
+
+    try:
+        url = config.ldap_url.strip()
+        if url.startswith("ldaps://"):
+            srv = ldap3.Server(url, use_ssl=True, connect_timeout=10)
+        else:
+            tls = ldap3.Tls(validate=2)
+            srv = ldap3.Server(url, use_ssl=False, tls=tls, connect_timeout=10)
+
+        conn = ldap3.Connection(
+            srv, user=config.ldap_bind_dn,
+            password=config.ldap_bind_password,
+            auto_bind=True, receive_timeout=5,
+        )
+        if url.startswith("ldap://"):
+            conn.start_tls()
+
+        # Search for test user
+        safe_username = escape_filter_chars(test_username)
+        search_filter = config.ldap_user_filter.replace("{username}", safe_username)
+        conn.search(config.ldap_base_dn, search_filter, attributes=["dn"])
+        found = len(conn.entries)
+        conn.unbind()
+
+        return {
+            "success": True,
+            "message": f"LDAP connection successful. Search for '{test_username}' found {found} result(s).",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/radius-server/push-to-devices")
+async def push_radius_to_devices_api(
+    request: Request,
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Push this RADIUS server's config to managed devices."""
+    config = get_radius_server_config()
+    if not config.advertised_address:
+        raise HTTPException(400, "Advertised address must be configured before pushing to devices")
+    if not config.shared_secret:
+        raise HTTPException(400, "Shared secret must be configured before pushing to devices")
+
+    data = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    target_ips = data.get("target_ips")  # None = all devices
+
+    # Build RADIUS config fragment for devices
+    config_fragment = {
+        "system": {
+            "auth": {
+                "method": "radius",
+                "radius": {
+                    "auth_server1": config.advertised_address,
+                    "auth_port": config.auth_port,
+                    "auth_secret": config.shared_secret,
+                },
+            }
+        }
+    }
+
+    # Get target devices
+    with db.get_db() as conn:
+        if target_ips:
+            placeholders = ",".join("?" for _ in target_ips)
+            devices = conn.execute(
+                f"SELECT ip, username, password FROM access_points WHERE enabled = 1 AND ip IN ({placeholders})",
+                target_ips,
+            ).fetchall()
+            devices += conn.execute(
+                f"SELECT ip, username, password FROM switches WHERE enabled = 1 AND ip IN ({placeholders})",
+                target_ips,
+            ).fetchall()
+        else:
+            devices = conn.execute(
+                "SELECT ip, username, password FROM access_points WHERE enabled = 1"
+            ).fetchall()
+            devices += conn.execute(
+                "SELECT ip, username, password FROM switches WHERE enabled = 1"
+            ).fetchall()
+
+    if not devices:
+        raise HTTPException(404, "No target devices found")
+
+    device_list = []
+    for d in devices:
+        d = dict(d)
+        # Decrypt device password if encrypted
+        from .crypto import is_encrypted as _is_enc, decrypt_password as _dec_pw
+        if d.get("password") and _is_enc(d["password"]):
+            d["password"] = _dec_pw(d["password"])
+        device_list.append(d)
+
+    # Use the existing config push infrastructure
+    job_id = f"radius-push-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    asyncio.create_task(
+        _run_radius_push(job_id, device_list, config_fragment)
+    )
+
+    return {
+        "job_id": job_id,
+        "device_count": len(device_list),
+        "message": f"Pushing RADIUS config to {len(device_list)} device(s)",
+    }
+
+
+async def _run_radius_push(job_id: str, device_list: list[dict], config_fragment: dict):
+    """Push RADIUS config to devices using TachyonClient."""
+    from .tachyon import TachyonClient
+
+    success_count = 0
+    failed_count = 0
+
+    for d in device_list:
+        ip = d["ip"]
+        try:
+            client = TachyonClient(ip, d.get("username", "admin"), d.get("password", ""))
+            login_result = await client.login()
+            if login_result is not True:
+                raise Exception(f"Login failed: {login_result}")
+            result = await client.apply_config(config_fragment)
+            success_count += 1
+            await broadcast({
+                "type": "config_push_update", "job_id": job_id,
+                "ip": ip, "status": "success",
+            })
+        except Exception as e:
+            failed_count += 1
+            logger.warning("RADIUS config push failed for %s: %s", ip, e)
+            await broadcast({
+                "type": "config_push_update", "job_id": job_id,
+                "ip": ip, "status": "failed", "error": str(e),
+            })
+
+    await broadcast({
+        "type": "config_push_complete", "job_id": job_id,
+        "success_count": success_count, "failed_count": failed_count,
+        "template_names": ["RADIUS Server"],
+    })
 
 
 def main():

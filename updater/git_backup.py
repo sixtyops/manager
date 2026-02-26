@@ -134,6 +134,11 @@ async def init_backup_repo(
     await _run_git("config", "user.email", "backup@tachyon-mgmt.local")
     await _run_git("config", "user.name", "Tachyon Backup")
 
+    # Verify the remote is reachable before declaring success
+    returncode, _, stderr = await _run_git("ls-remote", "--exit-code", "origin")
+    if returncode != 0:
+        return False, f"Remote repository is unreachable: {stderr[:200]}"
+
     # Store settings (store original URL, not the one with embedded token)
     db.set_setting("backup_repo_url", repo_url)
     db.set_setting("backup_auth_method", auth_method)

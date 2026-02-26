@@ -324,6 +324,30 @@ def init_db():
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS radius_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                description TEXT,
+                enabled INTEGER DEFAULT 1,
+                last_auth_at TEXT,
+                auth_count INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS radius_auth_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                nas_ip TEXT,
+                result TEXT NOT NULL,
+                reject_reason TEXT,
+                auth_mode TEXT,
+                timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_radius_auth_log_time
+                ON radius_auth_log(timestamp DESC);
         """)
 
         # Migrations: add columns if missing
@@ -399,6 +423,17 @@ def init_db():
             "license_grace_until": "",
             "license_device_limit": "0",
             "license_error": "",
+            # Built-in RADIUS server
+            "radius_server_enabled": "false",
+            "radius_server_port": "1812",
+            "radius_server_secret": "",
+            "radius_server_auth_mode": "local",
+            "radius_server_advertised_address": "",
+            "radius_server_ldap_url": "",
+            "radius_server_ldap_bind_dn": "",
+            "radius_server_ldap_bind_password": "",
+            "radius_server_ldap_base_dn": "",
+            "radius_server_ldap_user_filter": "(&(objectClass=user)(sAMAccountName={username}))",
         }
         for key, value in defaults.items():
             db.execute(
@@ -420,6 +455,17 @@ def get_db():
         conn.commit()
     finally:
         conn.close()
+
+
+def checkpoint_db():
+    """Flush WAL to main database file for clean shutdown."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=10)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.close()
+        logger.info("Database WAL checkpoint completed")
+    except Exception as e:
+        logger.error(f"Database WAL checkpoint failed: {e}")
 
 
 # Tower Site operations
@@ -1044,6 +1090,12 @@ def delete_session(session_id: str):
         db.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
 
 
+def delete_all_sessions():
+    """Delete all sessions."""
+    with get_db() as db:
+        db.execute("DELETE FROM sessions")
+
+
 def cleanup_expired_sessions():
     """Remove all expired sessions."""
     with get_db() as db:
@@ -1089,6 +1141,14 @@ def cleanup_old_device_durations(max_age_days: int = 180):
     cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
     with get_db() as db:
         db.execute("DELETE FROM device_durations WHERE created_at < ?", (cutoff,))
+
+
+def cleanup_old_radius_auth_log(max_age_days: int = 90):
+    """Remove RADIUS auth log entries older than max_age_days."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as db:
+        db.execute("DELETE FROM radius_auth_log WHERE timestamp < ?", (cutoff,))
 
 
 # Rollout operations

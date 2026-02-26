@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,23 @@ logger = logging.getLogger(__name__)
 LETSENCRYPT_DIR = Path("/etc/letsencrypt")
 NGINX_CONF_DIR = Path("/app/nginx-conf")
 CERTBOT_WEBROOT = Path("/var/www/certbot")
+
+
+def _validate_domain(domain: str) -> bool:
+    """Validate domain name per RFC 1123."""
+    if not domain or len(domain) > 253:
+        return False
+    if "." not in domain:
+        return False
+    labels = domain.rstrip(".").split(".")
+    for label in labels:
+        if not label or len(label) > 63:
+            return False
+        if label.startswith("-") or label.endswith("-"):
+            return False
+        if not re.match(r'^[a-zA-Z0-9-]+$', label):
+            return False
+    return True
 
 
 def get_ssl_status() -> dict:
@@ -194,11 +212,26 @@ async def obtain_certificate(domain: str, email: str) -> Tuple[bool, str]:
     if not email:
         return False, "Email is required"
 
-    # Validate domain format (basic check)
-    if not domain.replace(".", "").replace("-", "").isalnum():
-        return False, "Invalid domain format"
+    # Validate domain format (RFC 1123)
+    if not _validate_domain(domain):
+        return False, "Invalid domain format. Must be a valid hostname (e.g., firmware.example.com)"
 
     logger.info(f"Requesting certificate for {domain}")
+
+    # Verify certbot container is running before attempting certificate request
+    try:
+        check = await asyncio.create_subprocess_exec(
+            "docker", "inspect", "--format", "{{.State.Running}}", "tachyon-certbot",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_check, _ = await asyncio.wait_for(check.communicate(), timeout=10)
+        if check.returncode != 0 or stdout_check.decode().strip() != "true":
+            return False, (
+                "Let's Encrypt is not available: the certbot container is not running. "
+                "This feature requires the Tachyon appliance deployment."
+            )
+    except Exception:
+        return False, "Unable to check certbot container status."
 
     # Run certbot in webroot mode via docker exec (certbot runs in separate container)
     cmd = [

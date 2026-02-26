@@ -3,6 +3,8 @@
 import io
 import json
 import tarfile
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from pathlib import Path
@@ -429,6 +431,107 @@ class TestStartUpdateAPI:
             "ip_list": "10.0.0.1",
         }, follow_redirects=False)
         assert resp.status_code in (401, 303)
+
+
+class TestJobCancelAPI:
+    def test_cancel_running_job(self, authed_client):
+        from updater.app import UpdateJob, update_jobs
+
+        update_jobs.clear()
+        try:
+            update_jobs["job12345"] = UpdateJob(job_id="job12345", status="running")
+            resp = authed_client.post("/api/job/job12345/cancel")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["cancelled"] is True
+            assert "cancelled by user" in data["message"].lower()
+            assert update_jobs["job12345"].cancelled is True
+        finally:
+            update_jobs.clear()
+
+    def test_cancel_completed_job_rejected(self, authed_client):
+        from updater.app import UpdateJob, update_jobs
+
+        update_jobs.clear()
+        try:
+            update_jobs["jobdone01"] = UpdateJob(job_id="jobdone01", status="completed")
+            resp = authed_client.post("/api/job/jobdone01/cancel")
+            assert resp.status_code == 400
+        finally:
+            update_jobs.clear()
+
+
+class TestScheduledRuntimeGuard:
+    @pytest.mark.asyncio
+    async def test_blocks_when_time_validation_fails(self):
+        from updater.app import UpdateJob, _scheduled_job_guard
+
+        job = UpdateJob(
+            job_id="sched1",
+            is_scheduled=True,
+            start_hour=3,
+            end_hour=4,
+            schedule_days=["thu"],
+            schedule_timezone="America/Chicago",
+        )
+        with patch("updater.app.services.validate_time_sources", new_callable=AsyncMock, return_value=(False, "NTP unavailable")):
+            allowed, reason = await _scheduled_job_guard(job)
+        assert allowed is False
+        assert "time anomaly" in reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_blocks_outside_window(self):
+        from updater.app import UpdateJob, _scheduled_job_guard
+
+        job = UpdateJob(
+            job_id="sched2",
+            is_scheduled=True,
+            start_hour=3,
+            end_hour=4,
+            schedule_days=["thu"],
+            schedule_timezone="America/Chicago",
+        )
+        now = datetime(2026, 2, 26, 10, 0, tzinfo=ZoneInfo("America/Chicago"))  # Thu
+        with patch("updater.app.services.validate_time_sources", new_callable=AsyncMock, return_value=(True, now)):
+            allowed, reason = await _scheduled_job_guard(job)
+        assert allowed is False
+        assert "outside maintenance window" in reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_blocks_when_window_is_ending(self):
+        from updater.app import UpdateJob, _scheduled_job_guard
+
+        job = UpdateJob(
+            job_id="sched3",
+            is_scheduled=True,
+            start_hour=3,
+            end_hour=4,
+            schedule_days=["thu"],
+            schedule_timezone="America/Chicago",
+        )
+        now = datetime(2026, 2, 26, 3, 55, tzinfo=ZoneInfo("America/Chicago"))  # Thu
+        with patch("updater.app.services.validate_time_sources", new_callable=AsyncMock, return_value=(True, now)):
+            allowed, reason = await _scheduled_job_guard(job)
+        assert allowed is False
+        assert "window ending" in reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_blocks_at_15_minute_boundary(self):
+        from updater.app import UpdateJob, _scheduled_job_guard
+
+        job = UpdateJob(
+            job_id="sched4",
+            is_scheduled=True,
+            start_hour=3,
+            end_hour=4,
+            schedule_days=["thu"],
+            schedule_timezone="America/Chicago",
+        )
+        now = datetime(2026, 2, 26, 3, 45, tzinfo=ZoneInfo("America/Chicago"))  # Thu, exactly 15 min left
+        with patch("updater.app.services.validate_time_sources", new_callable=AsyncMock, return_value=(True, now)):
+            allowed, reason = await _scheduled_job_guard(job)
+        assert allowed is False
+        assert "window ending" in reason.lower()
 
 
 class TestDevicePortalAPI:

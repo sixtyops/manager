@@ -80,14 +80,14 @@ def format_temperature(temp_c: float, unit: str) -> str:
 
 
 async def get_location_from_ip() -> Optional[dict]:
-    """Get location data from public IP using ip-api.com."""
+    """Get location data from public IP using ipwho.is (HTTPS)."""
     cached = _cache_get("ip_location")
     if cached is not None:
         return cached
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            "curl", "-s", "-m", "10", "http://ip-api.com/json/",
+            "curl", "-s", "-m", "10", "https://ipwho.is/",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -95,10 +95,22 @@ async def get_location_from_ip() -> Optional[dict]:
 
         if proc.returncode == 0:
             data = json.loads(stdout.decode())
-            if data.get("status") == "success":
-                _cache_set("ip_location", data)
-                logger.info(f"Detected location: {data.get('city')}, {data.get('regionName')}")
-                return data
+            if data.get("success") is True or data.get("status") == "success":
+                tz_value = data.get("timezone")
+                if isinstance(tz_value, dict):
+                    tz_value = tz_value.get("id")
+                normalized = {
+                    "status": "success",
+                    "city": data.get("city"),
+                    "regionName": data.get("regionName") or data.get("region"),
+                    "countryCode": data.get("countryCode") or data.get("country_code"),
+                    "timezone": tz_value,
+                    "lat": data.get("lat") if data.get("lat") is not None else data.get("latitude"),
+                    "lon": data.get("lon") if data.get("lon") is not None else data.get("longitude"),
+                }
+                _cache_set("ip_location", normalized)
+                logger.info(f"Detected location: {normalized.get('city')}, {normalized.get('regionName')}")
+                return normalized
     except Exception as e:
         logger.error(f"Failed to get location from IP: {e}")
 
@@ -345,7 +357,7 @@ async def get_external_time(timezone: str) -> Optional[datetime]:
     Returns datetime or None on failure.
     """
     try:
-        url = f"http://worldtimeapi.org/api/timezone/{timezone}"
+        url = f"https://worldtimeapi.org/api/timezone/{timezone}"
         proc = await asyncio.create_subprocess_exec(
             "curl", "-s", "-m", "10", url,
             stdout=asyncio.subprocess.PIPE,
@@ -372,8 +384,8 @@ async def validate_time_sources(timezone: str, max_drift: int = 300) -> Tuple[bo
         max_drift: Maximum allowed drift in seconds (default 300 = 5 min)
 
     Returns:
-        (True, system_datetime) if valid or external unavailable (fail-open),
-        (False, error_string) if drift exceeds max_drift.
+        (True, system_datetime) if valid,
+        (False, error_string) if external time is unavailable or drift exceeds max_drift.
     """
     try:
         tz = ZoneInfo(timezone)
@@ -384,8 +396,7 @@ async def validate_time_sources(timezone: str, max_drift: int = 300) -> Tuple[bo
 
     external_now = await get_external_time(timezone)
     if external_now is None:
-        logger.warning("External time source unavailable, allowing update (fail-open)")
-        return (True, system_now)
+        return (False, "Unable to verify trusted time source")
 
     # Make both offset-aware for comparison
     if external_now.tzinfo is None:
@@ -398,5 +409,3 @@ async def validate_time_sources(timezone: str, max_drift: int = 300) -> Tuple[bo
         return (False, f"Clock drift too large: {drift:.0f}s (max {max_drift}s). System: {system_now.strftime('%H:%M')}, External: {external_now.strftime('%H:%M')}")
 
     return (True, system_now)
-
-

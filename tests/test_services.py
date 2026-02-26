@@ -13,6 +13,7 @@ from updater.services import (
     f_to_c,
     format_temperature,
     get_temperature_unit_from_location,
+    validate_time_sources,
 )
 
 
@@ -108,6 +109,15 @@ class TestIsInScheduleWindow:
 
     def test_empty_days(self):
         assert is_in_schedule_window(3, "tue", [], 3, 4) is False
+
+
+class TestValidateTimeSources:
+    @pytest.mark.asyncio
+    async def test_external_time_unavailable_blocks(self):
+        with patch("updater.services.get_external_time", new_callable=AsyncMock, return_value=None):
+            ok, result = await validate_time_sources("America/Chicago")
+        assert ok is False
+        assert "verify trusted time source" in result.lower()
 
 
 class TestGetLocationFromIP:

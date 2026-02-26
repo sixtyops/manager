@@ -454,7 +454,10 @@ class NetworkPoller:
             if db.get_setting("config_poll_enabled", "true") != "true":
                 return
 
-            interval_hours = int(db.get_setting("config_poll_interval_hours", "24"))
+            try:
+                interval_hours = int(db.get_setting("config_poll_interval_hours", "24"))
+            except (TypeError, ValueError):
+                interval_hours = 24
             if self._last_config_poll:
                 elapsed = (datetime.now() - self._last_config_poll).total_seconds()
                 if elapsed < interval_hours * 3600:

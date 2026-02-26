@@ -14,6 +14,9 @@ from .services import format_temperature
 
 logger = logging.getLogger(__name__)
 
+# Do not start new scheduled jobs when the window has this many minutes or less remaining.
+SCHEDULE_END_BUFFER_MINUTES = 15
+
 
 def _parse_version(version: str) -> tuple:
     """Parse version string into tuple for comparison.
@@ -32,6 +35,22 @@ def _parse_version(version: str) -> tuple:
         except ValueError:
             parts.append(0)
     return tuple(parts) if parts else (0,)
+
+
+def _as_int(value, default: int) -> int:
+    """Parse int with fallback for malformed persisted settings."""
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value, default: float) -> float:
+    """Parse float with fallback for malformed persisted settings."""
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return default
 
 # Global scheduler instance
 _scheduler: Optional["AutoUpdateScheduler"] = None
@@ -160,8 +179,8 @@ class AutoUpdateScheduler:
 
         # 6. Check if in schedule window
         schedule_days = [d.strip() for d in settings.get("schedule_days", "").split(",") if d.strip()]
-        start_hour = int(settings.get("schedule_start_hour", "3"))
-        end_hour = int(settings.get("schedule_end_hour", "4"))
+        start_hour = _as_int(settings.get("schedule_start_hour", "3"), 3)
+        end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
         current_day = now.strftime("%a").lower()
         current_hour = now.hour
 
@@ -202,7 +221,7 @@ class AutoUpdateScheduler:
             # Active rollout exists - continue with phase advancement below
             logger.info(f"Continuing active rollout {active_rollout['id']} (phase {active_rollout['phase']})")
 
-        # 8. Check 10-minute cutoff before window end
+        # 8. Check cutoff before window end
         # Handle overnight windows (e.g., 20:00-04:00)
         if end_hour > current_hour:
             # Same day: end is later today
@@ -210,7 +229,7 @@ class AutoUpdateScheduler:
         else:
             # Overnight: end is tomorrow morning
             minutes_until_end = (24 - current_hour + end_hour) * 60 - now.minute
-        if minutes_until_end < 10:
+        if minutes_until_end <= SCHEDULE_END_BUFFER_MINUTES:
             self._state = "waiting"
             self._block_reason = "Too close to maintenance window end"
             await self._broadcast_status()
@@ -222,7 +241,7 @@ class AutoUpdateScheduler:
             if self._weather_checked_today != today_key:
                 # First check this window — fetch fresh weather
                 zip_code = settings.get("zip_code", "")
-                min_temp_c = float(settings.get("min_temperature_c", "-10"))
+                min_temp_c = _as_float(settings.get("min_temperature_c", "-10"), -10.0)
                 weather_ok, weather_data = await services.check_weather_ok(
                     zip_code if zip_code else None, min_temp_c
                 )
@@ -235,7 +254,7 @@ class AutoUpdateScheduler:
             if not weather_ok:
                 self._state = "blocked_weather"
                 temp_c = self._weather_info.get("temperature_c") if self._weather_info else None
-                min_temp_c = float(settings.get("min_temperature_c", "-10"))
+                min_temp_c = _as_float(settings.get("min_temperature_c", "-10"), -10.0)
                 # Format temperature in user's preferred unit
                 temp_unit = await services.resolve_temperature_unit(
                     settings.get("temperature_unit", "auto")
@@ -263,7 +282,7 @@ class AutoUpdateScheduler:
         fw_tns100 = settings.get("selected_firmware_tns100", "")
 
         # 10.5. Check firmware hold period (protects against bad auto-downloaded releases)
-        hold_days = int(settings.get("firmware_quarantine_days", "7"))
+        hold_days = _as_int(settings.get("firmware_quarantine_days", "7"), 7)
         if hold_days > 0:
             # Check all selected firmware files against hold period
             for fw_name in (fw_30x, fw_303l, fw_tns100):
@@ -369,7 +388,7 @@ class AutoUpdateScheduler:
         await self._broadcast_status()
 
         bank_mode = settings.get("bank_mode", "both")
-        concurrency = int(settings.get("parallel_updates", "2"))
+        concurrency = _as_int(settings.get("parallel_updates", "2"), 2)
 
         phase = rollout["phase"]
         db.log_schedule_event("job_starting",
@@ -384,7 +403,9 @@ class AutoUpdateScheduler:
                 firmware_file_tns100=fw_tns100,
                 bank_mode=bank_mode,
                 concurrency=concurrency,
+                start_hour=start_hour,
                 end_hour=end_hour,
+                schedule_days=schedule_days,
                 schedule_timezone=tz_str,
             )
             self._current_job_id = job_id
@@ -476,7 +497,8 @@ class AutoUpdateScheduler:
 
     def on_job_completed(self, job_id: str, success_count: int, failed_count: int,
                          learned_version: Optional[str] = None,
-                         device_statuses: Optional[dict[str, str]] = None):
+                         device_statuses: Optional[dict[str, str]] = None,
+                         cancel_reason: Optional[str] = None):
         """Called when a scheduled job finishes.
 
         Args:
@@ -490,7 +512,16 @@ class AutoUpdateScheduler:
 
         rollout = db.get_active_rollout()
         if rollout and rollout.get("last_job_id") == job_id:
-            if failed_count > 0:
+            if cancel_reason and success_count == 0 and failed_count == 0:
+                # Cancelled/deferred with no progress: keep phase active for next window.
+                if device_statuses:
+                    for ip, status in device_statuses.items():
+                        rollout_status = "updated" if status == "success" else status
+                        db.mark_rollout_device(rollout["id"], ip, rollout_status)
+                self._last_run_result = f"Deferred: {cancel_reason}"
+                db.log_schedule_event("job_deferred", cancel_reason, job_id=job_id)
+                logger.warning(f"Rollout {rollout['id']} deferred: {cancel_reason}")
+            elif failed_count > 0:
                 # Pause rollout on failure
                 reason = f"{failed_count} device(s) failed during {rollout['phase']} phase"
                 db.pause_rollout(rollout["id"], reason)
@@ -587,10 +618,10 @@ class AutoUpdateScheduler:
         from datetime import timedelta
 
         avg_durations = db.get_avg_durations()
-        concurrency = int(settings.get("parallel_updates", "2"))
+        concurrency = _as_int(settings.get("parallel_updates", "2"), 2)
         bank_mode = settings.get("bank_mode", "both")
-        start_hour = int(settings.get("schedule_start_hour", "3"))
-        end_hour = int(settings.get("schedule_end_hour", "4"))
+        start_hour = _as_int(settings.get("schedule_start_hour", "3"), 3)
+        end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
         schedule_days = settings.get("schedule_days", "")
         window_minutes = (end_hour - start_hour) * 60
         if window_minutes <= 0:
@@ -674,7 +705,7 @@ class AutoUpdateScheduler:
                           avg_durations["switch"] * passes) / 60.0
         else:
             sw_overhead = 0
-        effective_window = window_minutes - sw_overhead - 10  # 10 min cutoff buffer
+        effective_window = window_minutes - sw_overhead - SCHEDULE_END_BUFFER_MINUTES
         if time_per_ap_slot > 0 and effective_window > 0:
             aps_that_fit = int((effective_window * 60 / time_per_ap_slot) * concurrency)
             aps_that_fit = max(1, aps_that_fit)
@@ -760,8 +791,8 @@ class AutoUpdateScheduler:
     def get_status(self) -> dict:
         """Return current scheduler status for UI."""
         settings = db.get_all_settings()
-        start_hour = int(settings.get("schedule_start_hour", "3"))
-        end_hour = int(settings.get("schedule_end_hour", "4"))
+        start_hour = _as_int(settings.get("schedule_start_hour", "3"), 3)
+        end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
         schedule_days = settings.get("schedule_days", "")
 
         # Include rollout info (use get_current_rollout to include completed rollouts for UI)
@@ -796,7 +827,7 @@ class AutoUpdateScheduler:
                 logger.debug(f"Pre-rollout prediction failed: {e}")
 
         # Quarantine info for selected firmware
-        quarantine_days = int(settings.get("firmware_quarantine_days", "7"))
+        quarantine_days = _as_int(settings.get("firmware_quarantine_days", "7"), 7)
         quarantine = None
         if quarantine_days > 0:
             fw_30x = settings.get("selected_firmware_30x", "")

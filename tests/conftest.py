@@ -209,6 +209,30 @@ def memory_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE radius_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            description TEXT,
+            enabled INTEGER DEFAULT 1,
+            last_auth_at TEXT,
+            auth_count INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE radius_auth_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            nas_ip TEXT,
+            result TEXT NOT NULL,
+            reject_reason TEXT,
+            auth_mode TEXT,
+            timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX idx_radius_auth_log_time
+            ON radius_auth_log(timestamp DESC);
     """)
     # Insert default settings
     defaults = {
@@ -234,6 +258,17 @@ def memory_db():
         "license_grace_until": "",
         "license_device_limit": "0",
         "license_error": "",
+        # Built-in RADIUS server
+        "radius_server_enabled": "false",
+        "radius_server_port": "1812",
+        "radius_server_secret": "",
+        "radius_server_auth_mode": "local",
+        "radius_server_advertised_address": "",
+        "radius_server_ldap_url": "",
+        "radius_server_ldap_bind_dn": "",
+        "radius_server_ldap_bind_password": "",
+        "radius_server_ldap_base_dn": "",
+        "radius_server_ldap_user_filter": "(&(objectClass=user)(sAMAccountName={username}))",
     }
     for key, value in defaults.items():
         conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))

@@ -4,6 +4,7 @@ services:
     container_name: tachyon-management
     ports:
       - "8000:8000"
+      - "1812:1812/udp"
     volumes:
       # Persist firmware files
       - ./firmware:/app/firmware

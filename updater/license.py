@@ -37,6 +37,7 @@ class Feature(str, Enum):
     TOWER_SITES = "tower_sites"
     BETA_FIRMWARE = "beta_firmware"
     FIRMWARE_HOLD_CUSTOM = "firmware_hold_custom"
+    RADIUS_SERVER = "radius_server"
 
 
 class LicenseTier(str, Enum):

@@ -3,6 +3,7 @@
 import hmac
 import logging
 import os
+import threading
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional
@@ -49,8 +50,20 @@ def authenticate_local(username: str, password: str) -> bool:
 
 
 def is_setup_required() -> bool:
-    """Check if the admin needs to set or change the default password."""
-    return db.get_setting("setup_completed", "false") != "true"
+    """Check if the admin needs to set or change the default password.
+
+    Includes lockout recovery: if setup is marked complete but no password
+    exists anywhere, auto-reset to allow re-setup.
+    """
+    setup_done = db.get_setting("setup_completed", "false") == "true"
+    if setup_done and is_first_run():
+        # Lockout state: setup_completed=true but no password configured.
+        # This can happen if the DB is wiped after setup or env var removed.
+        # Auto-recover by resetting setup_completed so the setup page is accessible.
+        logger.warning("Lockout recovery: setup_completed=true but no password configured, resetting")
+        db.set_setting("setup_completed", "false")
+        return True
+    return not setup_done
 
 
 def is_first_run() -> bool:
@@ -64,14 +77,29 @@ def is_first_run() -> bool:
     return not has_db_hash and not has_env_password
 
 
-def complete_setup(new_password: str):
-    """Hash and store a new admin password, marking setup as complete."""
+_setup_lock = threading.Lock()
+
+
+def complete_setup(new_password: str) -> bool:
+    """Hash and store a new admin password, marking setup as complete.
+
+    Returns True if setup was performed, False if already completed (race guard).
+    Uses a lock to prevent TOCTOU race between concurrent /setup requests.
+    """
+    # Hash outside the lock (bcrypt is slow, ~100ms)
     hashed = _bcrypt.hashpw(new_password.encode(), _bcrypt.gensalt()).decode()
-    db.set_setting("admin_password_hash", hashed)
-    db.set_setting("setup_completed", "true")
-    # Enable auto-updates by default on first run
-    db.set_setting("schedule_enabled", "true")  # Device firmware auto-update
-    db.set_setting("autoupdate_enabled", "true")  # App self-update
+
+    with _setup_lock:
+        # Check inside lock to prevent race condition
+        if db.get_setting("setup_completed", "false") == "true":
+            return False
+        db.set_settings({
+            "admin_password_hash": hashed,
+            "setup_completed": "true",
+            "schedule_enabled": "true",
+            "autoupdate_enabled": "true",
+        })
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +151,13 @@ def create_session(username: str, ip_address: str) -> str:
 # ---------------------------------------------------------------------------
 # FastAPI dependencies
 # ---------------------------------------------------------------------------
+
+def is_request_secure(request: Request) -> bool:
+    """Return True if the request arrived over HTTPS (directly or via proxy)."""
+    if request.headers.get("x-forwarded-proto") == "https":
+        return True
+    return request.url.scheme == "https"
+
 
 async def require_auth(request: Request) -> dict:
     """Dependency that enforces authentication on every route.
