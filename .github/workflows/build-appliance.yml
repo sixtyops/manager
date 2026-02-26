@@ -91,6 +91,7 @@ jobs:
             --cpus 2
 
       - name: Upload artifacts
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.version.outputs.ova_name }}
@@ -108,7 +109,7 @@ jobs:
             ${{ steps.version.outputs.ova_name }}.qcow2
           tag_name: ${{ github.event.release.tag_name }}
 
-      - name: Update latest-appliance release (private repo)
+      - name: Update latest-appliance release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
