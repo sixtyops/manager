@@ -54,6 +54,17 @@ start() {
     fi
     rm -f /data/.write-test
 
+    # Ensure self-signed SSL cert exists for nginx
+    if [ ! -f /data/certs/selfsigned.crt ] || [ ! -f /data/certs/selfsigned.key ]; then
+        einfo "Generating self-signed SSL certificate..."
+        mkdir -p /data/certs
+        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+            -keyout /data/certs/selfsigned.key \
+            -out /data/certs/selfsigned.crt \
+            -subj "/C=US/ST=State/L=City/O=Tachyon/CN=localhost" \
+            2>/dev/null || ewarn "Failed to generate SSL certificate"
+    fi
+
     cd /opt/tachyon
     docker compose up -d
     eend $?

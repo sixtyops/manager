@@ -47,6 +47,21 @@ echo "[first-boot] Running first-boot initialization..."
 # Ensure data directories exist
 mkdir -p /data/db /data/firmware /data/backups /data/certs /data/network
 
+# Generate self-signed SSL certificate for nginx if not present
+if [ ! -f /data/certs/selfsigned.crt ] || [ ! -f /data/certs/selfsigned.key ]; then
+    echo "[first-boot] Generating self-signed SSL certificate..."
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout /data/certs/selfsigned.key \
+        -out /data/certs/selfsigned.crt \
+        -subj "/C=US/ST=State/L=City/O=Tachyon/CN=localhost" \
+        2>/dev/null
+    if [ $? -eq 0 ]; then
+        echo "[first-boot] Self-signed certificate generated successfully"
+    else
+        echo "[first-boot] WARNING: Failed to generate self-signed certificate"
+    fi
+fi
+
 # Set ownership for tachyon user (UID 1500)
 chown -R 1500:1500 /data/db /data/firmware /data/backups
 
