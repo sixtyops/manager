@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import time
+
+import httpx
 from datetime import datetime
 from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -352,27 +354,27 @@ def is_in_schedule_window(
 
 
 async def get_external_time(timezone: str) -> Optional[datetime]:
-    """Fetch current time from worldtimeapi.org for the given timezone.
+    """Fetch current time from an external API.
 
+    Tries worldtimeapi.org first, then timeapi.io as fallback.
     Returns datetime or None on failure.
     """
-    try:
-        url = f"https://worldtimeapi.org/api/timezone/{timezone}"
-        proc = await asyncio.create_subprocess_exec(
-            "curl", "-s", "-m", "10", url,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await proc.communicate()
-
-        if proc.returncode == 0:
-            data = json.loads(stdout.decode())
-            dt_str = data.get("datetime")
-            if dt_str:
-                return datetime.fromisoformat(dt_str)
-    except Exception as e:
-        logger.error(f"Failed to get external time: {e}")
-
+    sources = [
+        (f"https://worldtimeapi.org/api/timezone/{timezone}", "datetime"),
+        (f"https://timeapi.io/api/time/current/zone?timeZone={timezone}", "dateTime"),
+    ]
+    for url, key in sources:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                data = resp.json()
+                dt_str = data.get(key)
+                if dt_str:
+                    return datetime.fromisoformat(dt_str)
+        except Exception as e:
+            logger.warning(f"Time source {url} failed: {e}")
+            continue
     return None
 
 

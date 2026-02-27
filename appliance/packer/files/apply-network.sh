@@ -116,6 +116,9 @@ HEREDOC_END
         if [ -n "$DNS" ]; then
             echo "nameserver ${DNS}" > /etc/resolv.conf
         fi
+        # Kill DHCP client — it persists as a daemon and will overwrite static config on renewal
+        killall udhcpc 2>/dev/null || true
+        rm -f /var/lib/udhcpc/*.lease 2>/dev/null || true
         ;;
     *)
         cat >> /etc/network/interfaces << HEREDOC_END
