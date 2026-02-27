@@ -895,7 +895,7 @@ class TestConfigPrefillAPI:
         assert resp.json()["reason"] == "no_configs"
 
     def test_prefill_returns_dominant_value(self, authed_client, mock_db):
-        """When 80%+ devices share the same SNMP config, prefill returns it."""
+        """When 3+ devices share the same non-default SNMP config, prefill returns it."""
         snmp_config = {"services": {"snmp": {"v2_ro_community": "public"}}}
         for i in range(5):
             self._seed_config(mock_db, f"10.0.0.{i+1}", snmp_config)
@@ -904,6 +904,28 @@ class TestConfigPrefillAPI:
         assert data["prefilled"] is True
         assert data["data"]["v2_ro_community"] == "public"
         assert data["match_count"] == 5
+
+    def test_prefill_requires_three_matching_devices(self, authed_client, mock_db):
+        match = {"services": {"snmp": {"v2_ro_community": "public"}}}
+        other = {"services": {"snmp": {"v2_ro_community": "private"}}}
+        self._seed_config(mock_db, "10.0.0.1", match)
+        self._seed_config(mock_db, "10.0.0.2", match)
+        self._seed_config(mock_db, "10.0.0.3", other)
+        resp = authed_client.get("/api/config-prefill/snmp")
+        data = resp.json()
+        assert data["prefilled"] is False
+        assert data["reason"] == "insufficient_matches"
+        assert data["required_matches"] == 3
+        assert data["match_count"] == 2
+
+    def test_prefill_ignores_default_like_values(self, authed_client, mock_db):
+        default_ntp = {"services": {"ntp": {"enabled": True, "servers": []}}}
+        for i in range(3):
+            self._seed_config(mock_db, f"10.0.1.{i+1}", default_ntp)
+        resp = authed_client.get("/api/config-prefill/ntp")
+        data = resp.json()
+        assert data["prefilled"] is False
+        assert data["reason"] == "no_non_default_data"
 
     def test_prefill_blocked_when_template_exists(self, authed_client, mock_db):
         """Prefill should NOT run if a template already exists for this category."""
@@ -1180,29 +1202,18 @@ class TestHashConsistency:
 
 
 class TestPrefillThreshold:
-    """Tests for the prefill dominant value int() threshold fix."""
+    """Tests for config prefill suggestion threshold behavior."""
 
-    def test_threshold_is_integer(self):
-        """The 80% threshold should be int (floor), not float."""
-        # 3 * 0.8 = 2.4 → int() = 2, so 2 matches out of 3 should pass
-        threshold = int(3 * 0.8)
-        assert threshold == 2
-        assert 2 >= threshold  # 2 matches passes
+    def test_threshold_requires_more_than_two_matches(self):
+        required_matches = 3
+        assert required_matches > 2
 
-    def test_threshold_small_counts(self):
-        """With 2 devices, threshold should be 1, not 1.6."""
-        threshold = int(2 * 0.8)
-        assert threshold == 1
-        # With 1 device, threshold=0
-        assert int(1 * 0.8) == 0
-
-    def test_prefill_endpoint_returns_data(self, authed_client, mock_db):
-        """Prefill returns dominant value when enough configs match."""
+    def test_prefill_endpoint_requires_three_matches(self, authed_client, mock_db):
+        """Prefill should not trigger with only 2 matching devices."""
         import json
         snmp_config = {"services": {"snmp": {"community": "public", "enabled": True}}}
         config_json = json.dumps(snmp_config, sort_keys=True, separators=(",", ":"))
         config_hash = "abc123"
-        # Insert 3 device configs where 2 match
         for ip in ["10.0.0.1", "10.0.0.2"]:
             mock_db.execute(
                 "INSERT INTO device_configs (ip, config_json, config_hash) VALUES (?, ?, ?)",
@@ -1213,6 +1224,23 @@ class TestPrefillThreshold:
             "INSERT INTO device_configs (ip, config_json, config_hash) VALUES (?, ?, ?)",
             ("10.0.0.3", json.dumps(different, sort_keys=True, separators=(",", ":")), "def456"),
         )
+        mock_db.commit()
+        resp = authed_client.get("/api/config-prefill/snmp")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("prefilled") is False
+        assert data.get("reason") == "insufficient_matches"
+
+    def test_prefill_endpoint_returns_data_with_three_matches(self, authed_client, mock_db):
+        """Prefill should trigger when 3 devices share the same value."""
+        import json
+        snmp_config = {"services": {"snmp": {"community": "public", "enabled": True}}}
+        config_json = json.dumps(snmp_config, sort_keys=True, separators=(",", ":"))
+        for ip in ["10.0.0.1", "10.0.0.2", "10.0.0.3"]:
+            mock_db.execute(
+                "INSERT INTO device_configs (ip, config_json, config_hash) VALUES (?, ?, ?)",
+                (ip, config_json, f"hash-{ip}"),
+            )
         mock_db.commit()
         resp = authed_client.get("/api/config-prefill/snmp")
         assert resp.status_code == 200

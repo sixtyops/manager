@@ -4297,6 +4297,83 @@ async def get_config_compliance(session: dict = Depends(require_auth), _pro=Depe
     return {"devices": devices}
 
 
+def _strip_empty_prefill_value(value):
+    """Remove empty/default-like leaves from nested dict/list values."""
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, child in value.items():
+            normalized = _strip_empty_prefill_value(child)
+            if normalized is not None:
+                cleaned[key] = normalized
+        return cleaned or None
+    if isinstance(value, list):
+        cleaned = []
+        for child in value:
+            normalized = _strip_empty_prefill_value(child)
+            if normalized is not None:
+                cleaned.append(normalized)
+        return cleaned or None
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    if value is None or value is False:
+        return None
+    return value
+
+
+def _normalize_prefill_section(category: str, section):
+    """Return a normalized non-default section for prefill matching."""
+    if category == "users":
+        if not isinstance(section, list):
+            return None
+        users = []
+        for user in section:
+            if not isinstance(user, dict):
+                continue
+            username = str(user.get("username") or "").strip()
+            if not username:
+                continue
+            normalized_user = {"username": username}
+            if "level" in user:
+                normalized_user["level"] = user["level"]
+            users.append(normalized_user)
+        return users or None
+
+    if not isinstance(section, dict):
+        return None
+
+    if category == "ntp":
+        servers_raw = section.get("servers", [])
+        if not isinstance(servers_raw, list):
+            servers_raw = [servers_raw]
+        servers = [s.strip() for s in servers_raw if isinstance(s, str) and s.strip()]
+        enabled = section.get("enabled", True)
+        if enabled is True and not servers:
+            return None
+        normalized = {"enabled": bool(enabled)}
+        if servers:
+            normalized["servers"] = servers
+        return normalized
+
+    if category == "radius":
+        method = str(section.get("method", "local")).strip().lower() or "local"
+        radius = section.get("radius")
+        radius = radius if isinstance(radius, dict) else {}
+        normalized_radius = {}
+        for key, value in radius.items():
+            normalized = _strip_empty_prefill_value(value)
+            if normalized is not None:
+                normalized_radius[key] = normalized
+        if method == "local" and not normalized_radius:
+            return None
+        normalized = {"method": method}
+        if normalized_radius:
+            normalized["radius"] = normalized_radius
+        return normalized
+
+    return _strip_empty_prefill_value(section)
+
+
 @app.get("/api/config-prefill/{category}")
 async def get_config_prefill(category: str, session: dict = Depends(require_auth)):
     """Get pre-fill data for a config category by analyzing fleet configs.
@@ -4331,20 +4408,20 @@ async def get_config_prefill(category: str, session: dict = Depends(require_auth
         section = config_data
         for key in path:
             section = section.get(key, {}) if isinstance(section, dict) else {}
-        if section:
-            values.append(section)
+        normalized = _normalize_prefill_section(category, section)
+        if normalized is not None:
+            values.append(normalized)
 
     if not values:
-        return {"prefilled": False, "reason": "no_data"}
+        return {"prefilled": False, "reason": "no_non_default_data"}
 
-    # Find most common value (simple: use the first one if >80% match)
-    canonical = [json.dumps(v, sort_keys=True) for v in values]
+    # First-run suggestion rule: same non-default value on >2 devices.
+    canonical = [json.dumps(v, sort_keys=True, separators=(",", ":")) for v in values]
     from collections import Counter
     counts = Counter(canonical)
     most_common, count = counts.most_common(1)[0]
-    threshold = int(len(values) * 0.8)
 
-    if count >= threshold:
+    if count > 2:
         return {
             "prefilled": True,
             "data": json.loads(most_common),
@@ -4354,9 +4431,11 @@ async def get_config_prefill(category: str, session: dict = Depends(require_auth
 
     return {
         "prefilled": False,
-        "reason": "no_dominant_value",
+        "reason": "insufficient_matches",
+        "required_matches": 3,
         "unique_values": len(counts),
         "device_count": len(values),
+        "match_count": count,
     }
 
 

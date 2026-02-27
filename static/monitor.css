@@ -1085,25 +1085,54 @@
             border-top: 1px solid var(--border);
         }
 
+        .config-template-layout {
+            margin-top: 16px;
+            display: grid;
+            grid-template-columns: 220px 1fr;
+            gap: 12px;
+            align-items: start;
+        }
+        .config-category-list {
+            max-height: 360px;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-card);
+            padding: 6px;
+        }
+        .config-category-item {
+            width: 100%;
+            text-align: left;
+            border: 1px solid transparent;
+            background: transparent;
+            border-radius: 6px;
+            padding: 8px;
+            font-size: 0.78rem;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            cursor: pointer;
+        }
+        .config-category-item:hover {
+            background: var(--border-light);
+        }
+        .config-category-item.active {
+            border-color: var(--primary);
+            background: var(--primary-bg);
+            color: var(--primary-text);
+        }
+        .config-category-editor {
+            max-height: 360px;
+            overflow-y: auto;
+        }
         .config-section {
             border: 1px solid var(--border);
             border-radius: 6px;
-            margin-bottom: 8px;
         }
-        .config-section-header {
-            padding: 8px 12px;
-            cursor: pointer;
-            font-size: 0.8rem;
-            font-weight: 500;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            user-select: none;
-        }
-        .config-section-header:hover { background: var(--hover); }
         .config-section-body {
             padding: 8px 12px 12px;
-            border-top: 1px solid var(--border);
             font-size: 0.75rem;
         }
         .config-section-body label { font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 2px; }
@@ -1125,12 +1154,30 @@
             color: #6b7280;
         }
         .config-section-status.saved { background: #d1fae5; color: #065f46; }
+        .config-section-status.suggested { background: #e0e7ff; color: #3730a3; }
+        .config-editor-actions {
+            border-top: 1px solid var(--border);
+            margin-top: 12px;
+            padding-top: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
         .config-user-row {
             display: grid;
             grid-template-columns: 1fr 1fr 100px 40px;
             gap: 6px;
             align-items: end;
             margin-bottom: 6px;
+        }
+        @media (max-width: 900px) {
+            .config-template-layout {
+                grid-template-columns: 1fr;
+            }
+            .config-category-list {
+                max-height: 160px;
+            }
         }
         .config-compliance-ok { color: #10b981; }
         .config-compliance-warn { color: #f59e0b; }

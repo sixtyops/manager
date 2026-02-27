@@ -421,135 +421,122 @@
 
             <!-- Config drawer content -->
             <div id="drawerContent-config" class="hidden">
-                <div class="drawer-panel-inner" style="max-height:400px;overflow-y:auto;">
-                    <!-- SNMP Section -->
-                    <details class="config-section" id="cfgSection-snmp">
-                        <summary class="config-section-header">
-                            <span>SNMP</span>
-                            <span class="config-section-status" id="cfgStatus-snmp"></span>
-                        </summary>
-                        <div class="config-section-body">
-                            <div class="u-grid-2-gap8">
-                                <div>
-                                    <label><input type="checkbox" id="cfgSnmpV2RoEnabled"> SNMPv2 Read-Only</label>
-                                    <input type="text" id="cfgSnmpV2RoCommunity" placeholder="RO community string" class="u-w-full u-mt-4">
-                                </div>
-                                <div>
-                                    <label><input type="checkbox" id="cfgSnmpV2RwEnabled"> SNMPv2 Read-Write</label>
-                                    <input type="text" id="cfgSnmpV2RwCommunity" placeholder="RW community string" class="u-w-full u-mt-4">
-                                </div>
-                            </div>
-                            <div class="u-row-actions-end">
-                                <button class="btn btn-sm" onclick="saveConfigSection('snmp')">Save</button>
-                            </div>
+                <div class="drawer-panel-inner">
+                    <div class="config-template-layout">
+                        <div class="config-category-list" id="cfgCategoryList">
+                            <button type="button" class="config-category-item active" id="cfgCategoryBtn-snmp" onclick="selectConfigCategory('snmp')">
+                                <span>SNMP</span>
+                                <span class="config-section-status" id="cfgStatus-snmp"></span>
+                            </button>
+                            <button type="button" class="config-category-item" id="cfgCategoryBtn-users" onclick="selectConfigCategory('users')">
+                                <span>Users</span>
+                                <span class="config-section-status" id="cfgStatus-users"></span>
+                            </button>
+                            <button type="button" class="config-category-item" id="cfgCategoryBtn-radius" onclick="selectConfigCategory('radius')">
+                                <span>RADIUS</span>
+                                <span class="config-section-status" id="cfgStatus-radius"></span>
+                            </button>
+                            <button type="button" class="config-category-item" id="cfgCategoryBtn-ntp" onclick="selectConfigCategory('ntp')">
+                                <span>NTP</span>
+                                <span class="config-section-status" id="cfgStatus-ntp"></span>
+                            </button>
+                            <button type="button" class="config-category-item" id="cfgCategoryBtn-discovery" onclick="selectConfigCategory('discovery')">
+                                <span>Discovery</span>
+                                <span class="config-section-status" id="cfgStatus-discovery"></span>
+                            </button>
+                            <button type="button" class="config-category-item" id="cfgCategoryBtn-custom" onclick="selectConfigCategory('custom')">
+                                <span>Custom JSON</span>
+                                <span class="config-section-status" id="cfgStatus-custom"></span>
+                            </button>
                         </div>
-                    </details>
 
-                    <!-- Users Section -->
-                    <details class="config-section" id="cfgSection-users">
-                        <summary class="config-section-header">
-                            <span>Users</span>
-                            <span class="config-section-status" id="cfgStatus-users"></span>
-                        </summary>
-                        <div class="config-section-body">
-                            <div id="cfgUserRows"></div>
-                            <button class="btn btn-sm" onclick="addConfigUserRow()" style="margin-top:6px;">+ Add User</button>
-                            <div class="u-row-actions-end">
-                                <button class="btn btn-sm" onclick="saveConfigSection('users')">Save</button>
+                        <div class="config-category-editor">
+                            <div class="config-section config-category-panel" id="cfgPanel-snmp">
+                                <div class="config-section-body">
+                                    <div class="u-grid-2-gap8">
+                                        <div>
+                                            <label><input type="checkbox" id="cfgSnmpV2RoEnabled"> SNMPv2 Read-Only</label>
+                                            <input type="text" id="cfgSnmpV2RoCommunity" placeholder="RO community string" class="u-w-full u-mt-4">
+                                        </div>
+                                        <div>
+                                            <label><input type="checkbox" id="cfgSnmpV2RwEnabled"> SNMPv2 Read-Write</label>
+                                            <input type="text" id="cfgSnmpV2RwCommunity" placeholder="RW community string" class="u-w-full u-mt-4">
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
-                        </div>
-                    </details>
 
-                    <!-- RADIUS Section -->
-                    <details class="config-section" id="cfgSection-radius">
-                        <summary class="config-section-header">
-                            <span>RADIUS Authentication</span>
-                            <span class="config-section-status" id="cfgStatus-radius"></span>
-                        </summary>
-                        <div class="config-section-body">
-                            <div style="margin-bottom:6px;">
-                                <label>Auth Method</label>
-                                <select id="cfgRadiusMethod" style="width:120px;">
-                                    <option value="local">Local</option>
-                                    <option value="radius">RADIUS</option>
-                                </select>
-                            </div>
-                            <div style="display:grid;grid-template-columns:1fr 100px 1fr;gap:8px;">
-                                <div>
-                                    <label>Auth Server</label>
-                                    <input type="text" id="cfgRadiusServer" placeholder="radius.example.com" class="u-w-full">
-                                </div>
-                                <div>
-                                    <label>Port</label>
-                                    <input type="number" id="cfgRadiusPort" value="1812" class="u-w-full">
-                                </div>
-                                <div>
-                                    <label>Secret</label>
-                                    <input type="password" id="cfgRadiusSecret" placeholder="shared secret" class="u-w-full">
+                            <div class="config-section config-category-panel hidden" id="cfgPanel-users">
+                                <div class="config-section-body">
+                                    <div id="cfgUserRows"></div>
+                                    <button class="btn btn-sm" onclick="addConfigUserRow()" style="margin-top:6px;">+ Add User</button>
                                 </div>
                             </div>
-                            <div class="u-row-actions-end">
-                                <button class="btn btn-sm" onclick="saveConfigSection('radius')">Save</button>
-                            </div>
-                        </div>
-                    </details>
 
-                    <!-- NTP Section -->
-                    <details class="config-section" id="cfgSection-ntp">
-                        <summary class="config-section-header">
-                            <span>NTP</span>
-                            <span class="config-section-status" id="cfgStatus-ntp"></span>
-                        </summary>
-                        <div class="config-section-body">
-                            <label><input type="checkbox" id="cfgNtpEnabled" checked> Enable NTP</label>
-                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
-                                <div>
-                                    <label>Server 1</label>
-                                    <input type="text" id="cfgNtpServer1" placeholder="time.google.com" class="u-w-full">
+                            <div class="config-section config-category-panel hidden" id="cfgPanel-radius">
+                                <div class="config-section-body">
+                                    <div style="margin-bottom:6px;">
+                                        <label>Auth Method</label>
+                                        <select id="cfgRadiusMethod" style="width:120px;">
+                                            <option value="local">Local</option>
+                                            <option value="radius">RADIUS</option>
+                                        </select>
+                                    </div>
+                                    <div style="display:grid;grid-template-columns:1fr 100px 1fr;gap:8px;">
+                                        <div>
+                                            <label>Auth Server</label>
+                                            <input type="text" id="cfgRadiusServer" placeholder="radius.example.com" class="u-w-full">
+                                        </div>
+                                        <div>
+                                            <label>Port</label>
+                                            <input type="number" id="cfgRadiusPort" value="1812" class="u-w-full">
+                                        </div>
+                                        <div>
+                                            <label>Secret</label>
+                                            <input type="password" id="cfgRadiusSecret" placeholder="shared secret" class="u-w-full">
+                                        </div>
+                                    </div>
                                 </div>
-                                <div>
-                                    <label>Server 2</label>
-                                    <input type="text" id="cfgNtpServer2" placeholder="time.cloudflare.com" class="u-w-full">
+                            </div>
+
+                            <div class="config-section config-category-panel hidden" id="cfgPanel-ntp">
+                                <div class="config-section-body">
+                                    <label><input type="checkbox" id="cfgNtpEnabled" checked> Enable NTP</label>
+                                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
+                                        <div>
+                                            <label>Server 1</label>
+                                            <input type="text" id="cfgNtpServer1" placeholder="time.google.com" class="u-w-full">
+                                        </div>
+                                        <div>
+                                            <label>Server 2</label>
+                                            <input type="text" id="cfgNtpServer2" placeholder="time.cloudflare.com" class="u-w-full">
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                            <div class="u-row-actions-end">
-                                <button class="btn btn-sm" onclick="saveConfigSection('ntp')">Save</button>
-                            </div>
-                        </div>
-                    </details>
 
-                    <!-- Discovery Section -->
-                    <details class="config-section" id="cfgSection-discovery">
-                        <summary class="config-section-header">
-                            <span>Discovery Services</span>
-                            <span class="config-section-status" id="cfgStatus-discovery"></span>
-                        </summary>
-                        <div class="config-section-body">
-                            <div style="display:flex;gap:12px;flex-wrap:wrap;">
-                                <label><input type="checkbox" id="cfgDiscLldp"> LLDP</label>
-                                <label><input type="checkbox" id="cfgDiscMndp"> MNDP</label>
-                                <label><input type="checkbox" id="cfgDiscCdp"> CDP</label>
-                                <label><input type="checkbox" id="cfgDiscLldpServer"> LLDP Server</label>
+                            <div class="config-section config-category-panel hidden" id="cfgPanel-discovery">
+                                <div class="config-section-body">
+                                    <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                                        <label><input type="checkbox" id="cfgDiscLldp"> LLDP</label>
+                                        <label><input type="checkbox" id="cfgDiscMndp"> MNDP</label>
+                                        <label><input type="checkbox" id="cfgDiscCdp"> CDP</label>
+                                        <label><input type="checkbox" id="cfgDiscLldpServer"> LLDP Server</label>
+                                    </div>
+                                </div>
                             </div>
-                            <div class="u-row-actions-end">
-                                <button class="btn btn-sm" onclick="saveConfigSection('discovery')">Save</button>
-                            </div>
-                        </div>
-                    </details>
 
-                    <!-- Custom JSON Section -->
-                    <details class="config-section" id="cfgSection-custom">
-                        <summary class="config-section-header">
-                            <span>Custom JSON</span>
-                            <span class="config-section-status" id="cfgStatus-custom"></span>
-                        </summary>
-                        <div class="config-section-body">
-                            <textarea id="cfgCustomJson" rows="6" placeholder='{"services": {"ssh": {"enabled": true}}}' style="width:100%;font-family:monospace;font-size:0.75rem;"></textarea>
-                            <div class="u-row-actions-end">
-                                <button class="btn btn-sm" onclick="saveConfigSection('custom')">Save</button>
+                            <div class="config-section config-category-panel hidden" id="cfgPanel-custom">
+                                <div class="config-section-body">
+                                    <textarea id="cfgCustomJson" rows="8" placeholder='{"services": {"ssh": {"enabled": true}}}' style="width:100%;font-family:monospace;font-size:0.75rem;"></textarea>
+                                </div>
                             </div>
                         </div>
-                    </details>
+                    </div>
+                    <div class="config-editor-actions">
+                        <span class="u-text-xs-muted" id="cfgEditorHint">Editing SNMP</span>
+                        <button class="btn btn-sm btn-primary" onclick="saveActiveConfigCategory(event)">Save Category</button>
+                    </div>
                 </div>
             </div>
 
@@ -4289,6 +4276,11 @@
         let configTemplates = [];
         let configExpandState = new Map();
         let configPushingDevices = new Set();
+        const CONFIG_CATEGORIES = ['snmp', 'users', 'radius', 'ntp', 'discovery', 'custom'];
+        const CONFIG_PREFILL_CATEGORIES = ['snmp', 'users', 'radius', 'ntp', 'discovery'];
+        let activeConfigCategory = 'snmp';
+        let configPrefillLoaded = new Set();
+        let configSuggestedCategories = new Set();
 
         async function loadConfigData() {
             try {
@@ -4572,6 +4564,26 @@
         }
 
         // Config Template UI
+        function configCategoryLabel(category) {
+            if (category === 'radius') return 'RADIUS';
+            if (category === 'ntp') return 'NTP';
+            if (category === 'custom') return 'Custom JSON';
+            if (category === 'discovery') return 'Discovery';
+            return category.charAt(0).toUpperCase() + category.slice(1);
+        }
+
+        function selectConfigCategory(category) {
+            activeConfigCategory = category;
+            for (const cat of CONFIG_CATEGORIES) {
+                const btn = document.getElementById(`cfgCategoryBtn-${cat}`);
+                if (btn) btn.classList.toggle('active', cat === category);
+                const panel = document.getElementById(`cfgPanel-${cat}`);
+                if (panel) setHidden(panel, cat !== category);
+            }
+            const hint = document.getElementById('cfgEditorHint');
+            if (hint) hint.textContent = `Editing ${configCategoryLabel(category)}`;
+        }
+
         function loadConfigTemplateUI() {
             const badge = document.getElementById('configTemplateBadge');
             const enabled = configTemplates.filter(t => t.enabled);
@@ -4579,6 +4591,13 @@
 
             const pushBtn = document.getElementById('configPushBtn');
             setHidden(pushBtn, enabled.length === 0);
+
+            for (const cat of CONFIG_CATEGORIES) {
+                const statusEl = document.getElementById(`cfgStatus-${cat}`);
+                if (!statusEl) continue;
+                statusEl.textContent = '';
+                statusEl.classList.remove('saved', 'suggested');
+            }
 
             // Populate form fields from saved templates
             for (const t of configTemplates) {
@@ -4592,13 +4611,24 @@
                 }
             }
 
+            for (const cat of configSuggestedCategories) {
+                if (configTemplates.find(t => t.category === cat)) continue;
+                const statusEl = document.getElementById(`cfgStatus-${cat}`);
+                if (!statusEl) continue;
+                statusEl.textContent = 'Suggested';
+                statusEl.classList.add('suggested');
+            }
+
             // For categories without saved templates, try pre-fill
-            const categories = ['snmp', 'users', 'radius', 'ntp', 'discovery'];
-            for (const cat of categories) {
+            for (const cat of CONFIG_PREFILL_CATEGORIES) {
                 if (!configTemplates.find(t => t.category === cat)) {
+                    if (configPrefillLoaded.has(cat)) continue;
                     prefillConfigSection(cat);
                 }
             }
+
+            if (!CONFIG_CATEGORIES.includes(activeConfigCategory)) activeConfigCategory = 'snmp';
+            selectConfigCategory(activeConfigCategory);
         }
 
         function populateConfigForm(category, formData) {
@@ -4644,6 +4674,7 @@
             try {
                 const resp = await fetch(`/api/config-prefill/${category}`);
                 const data = await resp.json();
+                configPrefillLoaded.add(category);
                 if (!data.prefilled) return;
 
                 const prefillData = data.data;
@@ -4674,6 +4705,19 @@
                             if (prefillData.radius.auth_port) document.getElementById('cfgRadiusPort').value = prefillData.radius.auth_port;
                         }
                         break;
+                    case 'users': {
+                        const users = Array.isArray(prefillData) ? prefillData : (Array.isArray(prefillData.users) ? prefillData.users : []);
+                        const container = document.getElementById('cfgUserRows');
+                        if (container) container.innerHTML = '';
+                        for (const u of users) {
+                            addConfigUserRow({
+                                username: u?.username || '',
+                                level: u?.level === 9 ? 9 : 0,
+                                password: '',
+                            });
+                        }
+                        break;
+                    }
                     case 'discovery':
                         if (prefillData.lldp !== undefined) document.getElementById('cfgDiscLldp').checked = prefillData.lldp;
                         if (prefillData.mndp !== undefined) document.getElementById('cfgDiscMndp').checked = prefillData.mndp;
@@ -4681,7 +4725,15 @@
                         if (prefillData.lldp_server !== undefined) document.getElementById('cfgDiscLldpServer').checked = prefillData.lldp_server;
                         break;
                 }
+                configSuggestedCategories.add(category);
+                const statusEl = document.getElementById(`cfgStatus-${category}`);
+                if (statusEl && !configTemplates.find(t => t.category === category)) {
+                    statusEl.textContent = 'Suggested';
+                    statusEl.classList.remove('saved');
+                    statusEl.classList.add('suggested');
+                }
             } catch (e) {
+                configPrefillLoaded.add(category);
                 console.debug('Prefill failed for', category, e);
             }
         }
@@ -4799,6 +4851,11 @@
             }
         }
 
+        function saveActiveConfigCategory(event) {
+            if (event) event.stopPropagation();
+            saveConfigSection(activeConfigCategory);
+        }
+
         async function saveConfigSection(category) {
             const formData = collectFormData(category);
             const fragment = formDataToFragment(category, formData);
@@ -4834,14 +4891,17 @@
                     const errMsg = extractDetail(errData.detail) || `Save failed (${resp.status})`;
                     if (statusEl) {
                         statusEl.textContent = errMsg;
-                        statusEl.classList.remove('saved');
+                        statusEl.classList.remove('saved', 'suggested');
                     }
                     showToast(errMsg);
                     return;
                 }
 
+                configSuggestedCategories.delete(category);
+
                 if (statusEl) {
                     statusEl.textContent = 'Saved';
+                    statusEl.classList.remove('suggested');
                     statusEl.classList.add('saved');
                 }
 
