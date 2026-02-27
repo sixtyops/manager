@@ -254,6 +254,9 @@ async def validate_license(license_key: str = None) -> LicenseState:
         _save_to_db(_license_state)
         return _license_state
 
+    # Normalize: uppercase, strip whitespace (server enforces XXXX-XXXX-XXXX-XXXX)
+    key = key.strip().upper()
+
     device_count = get_billable_device_count()
 
     try:
@@ -266,6 +269,16 @@ async def validate_license(license_key: str = None) -> LicenseState:
                     "app_version": __version__,
                 },
             )
+            # 422 = malformed key (validation error), treat as invalid not server outage
+            if resp.status_code == 422:
+                _license_state = LicenseState(
+                    tier=LicenseTier.FREE,
+                    status=LicenseStatus.INVALID,
+                    license_key=key,
+                    error="Invalid license key format. Expected XXXX-XXXX-XXXX-XXXX.",
+                )
+                _save_to_db(_license_state)
+                return _license_state
             resp.raise_for_status()
             data = resp.json()
 
