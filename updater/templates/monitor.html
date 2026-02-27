@@ -1034,7 +1034,7 @@
             });
 
             // Gate settings panels
-            const gatePanels = { 'settingsPanel-backup': 'config_backup', 'settingsPanel-notifications': 'slack_notifications', 'settingsPanel-auth': 'sso_oidc' };
+            const gatePanels = { 'settingsPanel-backup': 'config_backup', 'settingsPanel-notifications': 'slack_notifications', 'settingsPanel-auth': 'sso_oidc', 'tabPanel-config': 'config_templates' };
             for (const [panelId, feature] of Object.entries(gatePanels)) {
                 const panel = document.getElementById(panelId);
                 if (panel) {
@@ -1048,6 +1048,13 @@
             if (betaToggle) betaToggle.classList.toggle('pro-locked', !isPro && !(licenseState.features||{}).beta_firmware);
             const quarantine = document.getElementById('drawerQuarantineDays');
             if (quarantine) quarantine.classList.toggle('pro-locked', !isPro && !(licenseState.features||{}).firmware_hold_custom);
+        }
+
+        function extractDetail(detail) {
+            if (!detail) return 'Unknown error';
+            if (typeof detail === 'string') return detail;
+            if (detail.message) return detail.message;
+            return JSON.stringify(detail);
         }
 
         function showProUpgradePrompt(featureName) {
@@ -2360,7 +2367,7 @@
         async function triggerUpdate(type, id, mode) {
             // Check license for manual update feature
             if (!licenseState.is_pro && !licenseState.features?.update_single_device) {
-                showProUpgradePrompt('update_single_device');
+                showProUpgradePrompt('Manual updates');
                 return;
             }
 
@@ -2442,7 +2449,7 @@
                     const resp = await fetch('/api/update-device', { method: 'POST', body: formData });
                     if (resp.ok) { success = true; } else {
                         const err = await resp.json();
-                        showToast('Update failed: ' + (err.detail || 'Unknown error'));
+                        showToast('Update failed: ' + extractDetail(err.detail));
                     }
                 } catch (e) { showToast('Update error: ' + e.message); }
             } else if (type === 'ap') {
@@ -2458,7 +2465,7 @@
                     const resp = await fetch('/api/start-update', { method: 'POST', body: formData });
                     if (resp.ok) { success = true; } else {
                         const err = await resp.json();
-                        showToast('Update failed: ' + (err.detail || 'Unknown error'));
+                        showToast('Update failed: ' + extractDetail(err.detail));
                     }
                 } catch (e) { showToast('Update error: ' + e.message); }
             } else if (type === 'switch') {
@@ -2472,7 +2479,7 @@
                     const resp = await fetch('/api/update-device', { method: 'POST', body: formData });
                     if (resp.ok) { success = true; } else {
                         const err = await resp.json();
-                        showToast('Update failed: ' + (err.detail || 'Unknown error'));
+                        showToast('Update failed: ' + extractDetail(err.detail));
                     }
                 } catch (e) { showToast('Update error: ' + e.message); }
             } else if (type === 'site') {
@@ -2492,7 +2499,7 @@
                     const resp = await fetch('/api/start-update', { method: 'POST', body: formData });
                     if (resp.ok) { success = true; } else {
                         const err = await resp.json();
-                        showToast('Update failed: ' + (err.detail || 'Unknown error'));
+                        showToast('Update failed: ' + extractDetail(err.detail));
                     }
                 } catch (e) { showToast('Update error: ' + e.message); }
             }
@@ -2853,7 +2860,7 @@
                     setTimeout(() => loadRadiusConfig(), 1000);
                 } else {
                     const err = await resp.json();
-                    statusEl.textContent = err.detail || 'Failed to save';
+                    statusEl.textContent = extractDetail(err.detail);
                     statusEl.style.color = '#ef4444';
                 }
             } catch (e) {
@@ -2911,7 +2918,7 @@
                     loadRadiusUsers();
                 } else {
                     const err = await resp.json();
-                    statusEl.textContent = err.detail || 'Failed to add user';
+                    statusEl.textContent = extractDetail(err.detail);
                 }
             } catch (e) { statusEl.textContent = 'Error: ' + e.message; }
         }
@@ -2996,7 +3003,7 @@
                     statusEl.style.color = '#10b981';
                 } else {
                     const err = await resp.json();
-                    statusEl.textContent = err.detail || 'Push failed';
+                    statusEl.textContent = extractDetail(err.detail);
                     statusEl.style.color = '#ef4444';
                 }
             } catch (e) {
@@ -3476,6 +3483,11 @@
 
             try {
                 const resp = await fetch(`/api/device-history?${params}`);
+                if (resp.status === 403) {
+                    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">Update history requires a Pro subscription.</td></tr>';
+                    setHidden('historyLoadMore', true);
+                    return;
+                }
                 if (!resp.ok) throw new Error('Failed to load');
                 const data = await resp.json();
                 historyLoaded = true;
@@ -3483,7 +3495,7 @@
                 if (!append) tbody.innerHTML = '';
 
                 if (data.history.length === 0 && historyOffset === 0) {
-                    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No history found</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No update history yet</td></tr>';
                     setHidden('historyLoadMore', true);
                     updateHistorySummary(0);
                     return;
@@ -3876,6 +3888,10 @@
             const typeLabels = { 'tna-30x': '30x', 'tna-303l': '303L', 'tns-100': 'TNS100', 'unknown': 'Other' };
 
             let html = '';
+            const hasBeta = drawerFwFiles.some(f => f.channel === 'beta');
+            if (drawerBetaEnabled && !hasBeta) {
+                html += `<div class="empty-state" style="margin-bottom:8px;font-size:12px;">No current beta firmware available — using latest stable.</div>`;
+            }
             for (const type of typeOrder) {
                 if (!groups[type] || groups[type].length === 0) continue;
                 html += `<div class="drawer-fw-row">`;
@@ -4188,7 +4204,7 @@
                 });
                 if (!resp.ok) {
                     const err = await resp.json();
-                    throw new Error(err.detail || 'Export failed');
+                    throw new Error(extractDetail(err.detail) || 'Export failed');
                 }
                 const blob = await resp.blob();
                 const disposition = resp.headers.get('Content-Disposition') || '';
@@ -4281,6 +4297,11 @@
                     fetch('/api/configs'),
                     fetch('/api/config-templates'),
                 ]);
+                // If any endpoint returns 403, config is pro-gated
+                if (compResp.status === 403 || cfgResp.status === 403 || tplResp.status === 403) {
+                    configLoaded = true;
+                    return;
+                }
                 const compData = await compResp.json();
                 const cfgData = await cfgResp.json();
                 const tplData = await tplResp.json();
@@ -4810,11 +4831,12 @@
                 const statusEl = document.getElementById(`cfgStatus-${category}`);
                 if (!resp.ok) {
                     const errData = await resp.json().catch(() => ({}));
-                    const errMsg = errData.detail || `Save failed (${resp.status})`;
+                    const errMsg = extractDetail(errData.detail) || `Save failed (${resp.status})`;
                     if (statusEl) {
                         statusEl.textContent = errMsg;
                         statusEl.classList.remove('saved');
                     }
+                    showToast(errMsg);
                     return;
                 }
 

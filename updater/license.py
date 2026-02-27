@@ -455,6 +455,22 @@ def get_license_validator() -> Optional[LicenseValidator]:
 
 from fastapi import HTTPException
 
+_FEATURE_DISPLAY_NAMES = {
+    "update_single_device": "Manual updates",
+    "config_backup": "Config backup",
+    "config_templates": "Config templates",
+    "config_compliance": "Config compliance",
+    "config_push": "Config push",
+    "device_history": "Update history",
+    "beta_firmware": "Beta firmware",
+    "firmware_hold_custom": "Custom firmware hold",
+    "slack_notifications": "Slack notifications",
+    "sso_oidc": "SSO / OIDC",
+    "device_portal": "Device portal",
+    "tower_sites": "Tower sites",
+    "radius_server": "RADIUS server",
+}
+
 
 async def require_pro():
     """FastAPI dependency: require any active PRO license."""
@@ -483,7 +499,7 @@ def require_feature(feature: Feature):
                 detail={
                     "error": "feature_locked",
                     "feature": feature.value,
-                    "message": f"The '{feature.value}' feature requires a Pro license.",
+                    "message": f"{_FEATURE_DISPLAY_NAMES.get(feature.value, feature.value)} requires a Pro license.",
                     "upgrade_url": "https://tachyonupdater.com/pricing",
                 },
             )
