@@ -144,7 +144,8 @@ configure_dhcp() {
     cat > /data/network/network.conf << 'EOF'
 MODE=dhcp
 EOF
-    if ! /usr/local/bin/apply-network.sh; then
+    whiptail --title "Network" --infobox "Applying network configuration..." 5 $COLS
+    if ! /usr/local/bin/apply-network.sh > /dev/null 2>&1; then
         whiptail --title "Error" --msgbox "Network configuration failed.\nPrevious settings restored." 8 $COLS
         return
     fi
@@ -187,7 +188,8 @@ NETMASK=${NETMASK}
 GATEWAY=${GATEWAY}
 DNS=${DNS}
 EOF
-    if ! /usr/local/bin/apply-network.sh; then
+    whiptail --title "Network" --infobox "Applying network configuration..." 5 $COLS
+    if ! /usr/local/bin/apply-network.sh > /dev/null 2>&1; then
         whiptail --title "Error" --msgbox "Network configuration failed.\nPrevious settings restored." 8 $COLS
         return
     fi
