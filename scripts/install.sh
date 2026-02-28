@@ -91,8 +91,9 @@ if [ "$HEALTHY" != "true" ]; then
     echo
 fi
 
-# Create systemd service for auto-start
-cat > /etc/systemd/system/tachyon.service << EOF
+# Create systemd service for auto-start when systemd is available
+if command -v systemctl &> /dev/null && [ -d /run/systemd/system ]; then
+    cat > /etc/systemd/system/tachyon.service << EOF
 [Unit]
 Description=Tachyon Management System
 Requires=docker.service
@@ -109,8 +110,11 @@ ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.standal
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-systemctl enable tachyon.service
+    systemctl daemon-reload
+    systemctl enable tachyon.service
+else
+    echo "Systemd not detected; skipping tachyon.service creation."
+fi
 
 echo
 echo "=========================================="

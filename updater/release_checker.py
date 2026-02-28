@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Global singleton
 _checker: Optional["ReleaseChecker"] = None
 
-GITHUB_REPO = os.environ.get("GITHUB_REPO", "isolson/firmware-updater")
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "isolson/tachyon-manager-releases")
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_API_RELEASES = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 CHECK_INTERVAL = int(os.environ.get("AUTOUPDATE_CHECK_INTERVAL", 604800))  # 7 days
