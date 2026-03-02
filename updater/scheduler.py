@@ -37,6 +37,65 @@ def _parse_version(version: str) -> tuple:
     return tuple(parts) if parts else (0,)
 
 
+def _normalize_version(value: Optional[str]) -> str:
+    """Normalize firmware version string for comparisons."""
+    if not value:
+        return ""
+    return str(value).strip().replace(".r", ".")
+
+
+def _get_active_inactive_bank_versions(device: dict) -> tuple[str, str]:
+    """Return (active_version, inactive_version) from DB record."""
+    bank1 = _normalize_version(device.get("bank1_version"))
+    bank2 = _normalize_version(device.get("bank2_version"))
+    firmware = _normalize_version(device.get("firmware_version"))
+
+    try:
+        active_bank = int(device.get("active_bank")) if device.get("active_bank") is not None else None
+    except (TypeError, ValueError):
+        active_bank = None
+
+    if active_bank == 1:
+        return (bank1 or firmware, bank2)
+    if active_bank == 2:
+        return (bank2 or firmware, bank1)
+    return (firmware, "")
+
+
+def _ap_needs_update_for_bank_mode(
+    ap: dict,
+    target_version: str,
+    bank_mode: str,
+    allow_downgrade: bool = False,
+) -> bool:
+    """Evaluate AP eligibility for rollout based on bank mode."""
+    target = _normalize_version(target_version)
+    if not target:
+        return True
+
+    active_version, inactive_version = _get_active_inactive_bank_versions(ap)
+    if not active_version:
+        return True
+
+    target_parsed = _parse_version(target)
+    active_parsed = _parse_version(active_version)
+
+    if active_version == target:
+        if bank_mode == "both":
+            if not inactive_version:
+                return False
+            if inactive_version == target:
+                return False
+            if not allow_downgrade and _parse_version(inactive_version) > target_parsed:
+                return False
+            return True
+        return False
+
+    if not allow_downgrade and active_parsed > target_parsed:
+        return False
+    return True
+
+
 def _as_int(value, default: int) -> int:
     """Parse int with fallback for malformed persisted settings."""
     try:
@@ -127,6 +186,7 @@ class AutoUpdateScheduler:
         """Main decision logic each tick."""
         settings = db.get_all_settings()
         schedule_enabled = settings.get("schedule_enabled")
+        bank_mode = settings.get("bank_mode", "both")
 
         # 1. Check if schedule is enabled
         if schedule_enabled != "true":
@@ -168,7 +228,7 @@ class AutoUpdateScheduler:
             if last_rollout and last_rollout["status"] == "completed" and last_rollout.get("target_version"):
                 scope_ips = self._resolve_scope(settings)
                 needs_update = self._filter_devices_needing_update(
-                    scope_ips, last_rollout["target_version"], allow_downgrade
+                    scope_ips, last_rollout["target_version"], allow_downgrade, bank_mode
                 )
                 if not needs_update:
                     if self._state != "blocked_all_current":
@@ -320,7 +380,7 @@ class AutoUpdateScheduler:
                 scope_ips = self._resolve_scope(settings)
                 if last.get("target_version"):
                     needs_update = self._filter_devices_needing_update(
-                        scope_ips, last["target_version"], allow_downgrade
+                        scope_ips, last["target_version"], allow_downgrade, bank_mode
                     )
                     if not needs_update:
                         self._state = "blocked_all_current"
@@ -349,7 +409,7 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
             return
 
-        batch_ips = self._get_devices_for_phase(rollout, scope_ips, allow_downgrade)
+        batch_ips = self._get_devices_for_phase(rollout, scope_ips, allow_downgrade, bank_mode)
 
         if not batch_ips:
             # No candidates for this phase - auto-advance
@@ -367,7 +427,7 @@ class AutoUpdateScheduler:
 
             # Try next phase immediately (recursive but bounded by 4 phases)
             logger.info(f"Phase {current_phase} has no candidates, advanced to {refreshed['phase']}")
-            batch_ips = self._get_devices_for_phase(refreshed, scope_ips, allow_downgrade)
+            batch_ips = self._get_devices_for_phase(refreshed, scope_ips, allow_downgrade, bank_mode)
             rollout = refreshed
 
             if not batch_ips:
@@ -387,7 +447,6 @@ class AutoUpdateScheduler:
         self._block_reason = None
         await self._broadcast_status()
 
-        bank_mode = settings.get("bank_mode", "both")
         concurrency = _as_int(settings.get("parallel_updates", "2"), 2)
 
         phase = rollout["phase"]
@@ -420,41 +479,30 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
 
     def _filter_devices_needing_update(self, scope_ips: list[str], target_version: str,
-                                        allow_downgrade: bool = False) -> list[str]:
+                                        allow_downgrade: bool = False,
+                                        bank_mode: str = "both") -> list[str]:
         """Filter scope IPs to those whose firmware differs from target.
 
         If allow_downgrade is False, devices with firmware newer than target are skipped.
         """
         needs_update = []
-        target_parsed = _parse_version(target_version)
 
         for ip in scope_ips:
             ap = db.get_access_point(ip)
             if not ap:
                 continue
 
-            device_version = ap.get("firmware_version", "")
-            if device_version == target_version:
-                # Already at target
-                continue
-
-            if not allow_downgrade:
-                device_parsed = _parse_version(device_version)
-                if device_parsed > target_parsed:
-                    # Device is newer than target, skip (no downgrade)
-                    logger.debug(f"Skipping {ip}: version {device_version} > target {target_version} (downgrade disabled)")
-                    continue
-
-            needs_update.append(ip)
+            if _ap_needs_update_for_bank_mode(ap, target_version, bank_mode, allow_downgrade):
+                needs_update.append(ip)
         return needs_update
 
     def _get_devices_for_phase(self, rollout: dict, scope_ips: list[str],
-                                allow_downgrade: bool = False) -> list[str]:
+                                allow_downgrade: bool = False,
+                                bank_mode: str = "both") -> list[str]:
         """Determine which APs to update in the current phase."""
         phase = rollout["phase"]
         rollout_id = rollout["id"]
         target_version = rollout.get("target_version")
-        target_parsed = _parse_version(target_version) if target_version else None
 
         # Get already-processed devices in this rollout
         existing_devices = db.get_rollout_devices(rollout_id)
@@ -469,15 +517,8 @@ class AutoUpdateScheduler:
                 ap = db.get_access_point(ip)
                 if not ap:
                     continue
-                device_version = ap.get("firmware_version", "")
-                if device_version == target_version:
-                    # Already at target
+                if not _ap_needs_update_for_bank_mode(ap, target_version, bank_mode, allow_downgrade):
                     continue
-                if not allow_downgrade and target_parsed:
-                    device_parsed = _parse_version(device_version)
-                    if device_parsed > target_parsed:
-                        # Device is newer, skip (no downgrade)
-                        continue
             candidates.append(ip)
 
         if not candidates:
@@ -620,6 +661,7 @@ class AutoUpdateScheduler:
         avg_durations = db.get_avg_durations()
         concurrency = _as_int(settings.get("parallel_updates", "2"), 2)
         bank_mode = settings.get("bank_mode", "both")
+        allow_downgrade = settings.get("allow_downgrade", "false") == "true"
         start_hour = _as_int(settings.get("schedule_start_hour", "3"), 3)
         end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
         schedule_days = settings.get("schedule_days", "")
@@ -647,7 +689,7 @@ class AutoUpdateScheduler:
                 continue
             if target_version:
                 ap = db.get_access_point(ip)
-                if ap and ap.get("firmware_version") == target_version:
+                if ap and not _ap_needs_update_for_bank_mode(ap, target_version, bank_mode, allow_downgrade):
                     continue
             candidates.append(ip)
 

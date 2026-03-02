@@ -44,3 +44,49 @@ class TestSchedulerCompletionHandling:
             "Outside maintenance window",
             job_id="job123",
         )
+
+
+class TestSchedulerBankModeFiltering:
+    def test_single_bank_skips_when_active_bank_is_target(self):
+        from updater.scheduler import AutoUpdateScheduler
+
+        scheduler = AutoUpdateScheduler(broadcast_func=None, start_update_func=None)
+        ap = {
+            "ip": "10.0.0.1",
+            "firmware_version": "1.12.2.54970",
+            "bank1_version": "1.12.2.54970",
+            "bank2_version": "1.12.1.54000",
+            "active_bank": 1,
+        }
+
+        with patch("updater.scheduler.db.get_access_point", return_value=ap):
+            result = scheduler._filter_devices_needing_update(
+                ["10.0.0.1"],
+                "1.12.2.54970",
+                allow_downgrade=False,
+                bank_mode="one",
+            )
+
+        assert result == []
+
+    def test_dual_bank_includes_when_inactive_bank_differs(self):
+        from updater.scheduler import AutoUpdateScheduler
+
+        scheduler = AutoUpdateScheduler(broadcast_func=None, start_update_func=None)
+        ap = {
+            "ip": "10.0.0.1",
+            "firmware_version": "1.12.2.54970",
+            "bank1_version": "1.12.2.54970",
+            "bank2_version": "1.12.1.54000",
+            "active_bank": 1,
+        }
+
+        with patch("updater.scheduler.db.get_access_point", return_value=ap):
+            result = scheduler._filter_devices_needing_update(
+                ["10.0.0.1"],
+                "1.12.2.54970",
+                allow_downgrade=False,
+                bank_mode="both",
+            )
+
+        assert result == ["10.0.0.1"]

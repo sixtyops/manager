@@ -432,6 +432,60 @@ class TestStartUpdateAPI:
         }, follow_redirects=False)
         assert resp.status_code in (401, 303)
 
+    def test_start_update_single_bank_skips_active_target(self, authed_client, mock_db, tmp_path):
+        """Single-bank mode should skip devices whose active bank already matches target."""
+        mock_db.execute("ALTER TABLE access_points ADD COLUMN bank1_version TEXT")
+        mock_db.execute("ALTER TABLE access_points ADD COLUMN bank2_version TEXT")
+        mock_db.execute("ALTER TABLE access_points ADD COLUMN active_bank INTEGER")
+        mock_db.execute(
+            "INSERT INTO access_points (ip, username, password, model, firmware_version, bank1_version, bank2_version, active_bank)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("10.0.0.1", "root", "pass", "TNA-301", "1.12.2.54970", "1.12.2.54970", "1.12.1.54000", 1),
+        )
+        mock_db.commit()
+
+        fw_file = tmp_path / "tna-30x-1.12.2-r54970.bin"
+        fw_file.write_bytes(b"fake firmware")
+
+        with patch("updater.app.FIRMWARE_DIR", tmp_path):
+            resp = authed_client.post("/api/start-update", data={
+                "firmware_file": "tna-30x-1.12.2-r54970.bin",
+                "device_type": "mixed",
+                "ip_list": "10.0.0.1",
+                "bank_mode": "one",
+            })
+
+        assert resp.status_code == 400
+        assert "No devices require update" in resp.text
+
+    def test_start_update_dual_bank_includes_inactive_mismatch(self, authed_client, mock_db, tmp_path):
+        """Dual-bank mode should include devices with active target but inactive mismatch."""
+        mock_db.execute("ALTER TABLE access_points ADD COLUMN bank1_version TEXT")
+        mock_db.execute("ALTER TABLE access_points ADD COLUMN bank2_version TEXT")
+        mock_db.execute("ALTER TABLE access_points ADD COLUMN active_bank INTEGER")
+        mock_db.execute(
+            "INSERT INTO access_points (ip, username, password, model, firmware_version, bank1_version, bank2_version, active_bank)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("10.0.0.1", "root", "pass", "TNA-301", "1.12.2.54970", "1.12.2.54970", "1.12.1.54000", 1),
+        )
+        mock_db.commit()
+
+        fw_file = tmp_path / "tna-30x-1.12.2-r54970.bin"
+        fw_file.write_bytes(b"fake firmware")
+
+        with patch("updater.app.FIRMWARE_DIR", tmp_path), \
+             patch("updater.app._spawn_update_job") as mock_spawn:
+            resp = authed_client.post("/api/start-update", data={
+                "firmware_file": "tna-30x-1.12.2-r54970.bin",
+                "device_type": "mixed",
+                "ip_list": "10.0.0.1",
+                "bank_mode": "both",
+            })
+            mock_spawn.assert_called_once()
+
+        assert resp.status_code == 200
+        assert resp.json()["device_count"] == 1
+
 
 class TestJobCancelAPI:
     def test_cancel_running_job(self, authed_client):
