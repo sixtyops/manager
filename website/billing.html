@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Billing Portal — SixtyOps</title>
+  <meta name="description" content="Manage your SixtyOps subscription, update payment methods, and view invoices.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+          colors: {
+            brand: {
+              50: '#CCFBF1', 100: '#99F6E4', 500: '#14B8A6',
+              600: '#0D9488', 700: '#0F766E', 800: '#115E59', 900: '#134E4A',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="assets/css/custom.css">
+</head>
+<body class="font-sans text-slate-900 bg-white antialiased">
+
+  <!-- Navigation -->
+  <nav class="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-slate-200" x-data="{ open: false }">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-16">
+        <a href="index.html" class="flex items-center gap-2">
+          <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center"><svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 19.5v.75"/></svg></div>
+          <span class="text-xl font-bold text-slate-900">Sixty<span class="text-brand-600">Ops</span></span>
+        </a>
+        <div class="hidden md:flex items-center gap-8">
+          <a href="features.html" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Features</a>
+          <a href="pricing.html" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Pricing</a>
+          <a href="about.html" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">About</a>
+          <a href="contact.html" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Contact</a>
+          <a href="pricing.html" class="inline-flex items-center px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold rounded-lg transition-colors">Get Started</a>
+        </div>
+        <button @click="open = !open" class="md:hidden p-2 text-slate-600 hover:text-slate-900" aria-label="Toggle menu">
+          <svg x-show="!open" class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/></svg>
+          <svg x-show="open" x-cloak class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div x-show="open" x-cloak x-transition class="md:hidden pb-4 border-t border-slate-100 mt-2 pt-4 space-y-3">
+        <a href="features.html" class="block text-sm font-medium text-slate-600 hover:text-brand-600">Features</a>
+        <a href="pricing.html" class="block text-sm font-medium text-slate-600 hover:text-brand-600">Pricing</a>
+        <a href="about.html" class="block text-sm font-medium text-slate-600 hover:text-brand-600">About</a>
+        <a href="contact.html" class="block text-sm font-medium text-slate-600 hover:text-brand-600">Contact</a>
+        <a href="pricing.html" class="inline-flex items-center px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold rounded-lg transition-colors">Get Started</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Billing Portal -->
+  <section class="py-20 bg-slate-50 min-h-[60vh] flex items-center">
+    <div class="max-w-lg mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      <div class="w-16 h-16 bg-brand-50 rounded-2xl flex items-center justify-center mx-auto mb-6">
+        <svg class="w-8 h-8 text-brand-600" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5z"/></svg>
+      </div>
+      <h1 class="text-3xl font-bold text-slate-900 mb-3">Manage Your Subscription</h1>
+      <p class="text-slate-500 mb-8">Update your payment method, view invoices, change plans, or cancel your subscription.</p>
+
+      <!-- Email input for portal access -->
+      <div class="bg-white border border-slate-200 rounded-xl p-6 text-left" x-data="{ email: '', loading: false, error: '' }">
+        <label for="portal-email" class="block text-sm font-medium text-slate-700 mb-2">Account email</label>
+        <div class="flex gap-3">
+          <input type="email" id="portal-email" x-model="email" required
+            class="flex-1 px-4 py-3 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none transition"
+            placeholder="you@company.com">
+          <button id="portal-btn"
+            @click="
+              if (!email) { error = 'Please enter your email'; return; }
+              loading = true;
+              error = '';
+              // TODO: Replace with actual API endpoint that creates a Stripe Customer Portal session
+              // fetch('https://api.sixtyops.net/create-portal-session', {
+              //   method: 'POST',
+              //   headers: { 'Content-Type': 'application/json' },
+              //   body: JSON.stringify({ email })
+              // })
+              // .then(r => r.json())
+              // .then(data => { window.location.href = data.url; })
+              // .catch(() => { error = 'Could not open billing portal. Please contact support.'; })
+              // .finally(() => { loading = false; });
+              setTimeout(() => { error = 'Billing portal coming soon. Please contact support@sixtyops.net.'; loading = false; }, 500);
+            "
+            :disabled="loading"
+            class="px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap">
+            <span x-show="!loading">Open Portal</span>
+            <span x-show="loading" x-cloak>Loading...</span>
+          </button>
+        </div>
+        <p x-show="error" x-text="error" class="mt-3 text-sm text-red-600"></p>
+      </div>
+
+      <div class="mt-10 space-y-4 text-sm text-slate-500">
+        <p>Not a customer yet? <a href="pricing.html" class="text-brand-600 hover:text-brand-700 font-medium">View pricing</a></p>
+        <p>Need help? <a href="contact.html" class="text-brand-600 hover:text-brand-700 font-medium">Contact support</a></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="bg-slate-900 text-slate-400 py-16">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid md:grid-cols-4 gap-8">
+        <div class="md:col-span-1">
+          <a href="index.html" class="flex items-center gap-2 mb-4">
+            <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center"><svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 19.5v.75"/></svg></div>
+            <span class="text-lg font-bold text-white">Sixty<span class="text-brand-500">Ops</span></span>
+          </a>
+          <p class="text-sm leading-relaxed">Hands-off ISP network management for Tachyon wireless infrastructure.</p>
+        </div>
+        <div>
+          <h4 class="text-sm font-semibold text-white uppercase tracking-wider mb-4">Product</h4>
+          <ul class="space-y-2 text-sm">
+            <li><a href="features.html" class="hover:text-white transition-colors">Features</a></li>
+            <li><a href="pricing.html" class="hover:text-white transition-colors">Pricing</a></li>
+            <li><a href="billing.html" class="hover:text-white transition-colors">Billing Portal</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="text-sm font-semibold text-white uppercase tracking-wider mb-4">Company</h4>
+          <ul class="space-y-2 text-sm">
+            <li><a href="about.html" class="hover:text-white transition-colors">About</a></li>
+            <li><a href="contact.html" class="hover:text-white transition-colors">Contact</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="text-sm font-semibold text-white uppercase tracking-wider mb-4">Legal</h4>
+          <ul class="space-y-2 text-sm">
+            <li><a href="#" class="hover:text-white transition-colors">Privacy Policy</a></li>
+            <li><a href="#" class="hover:text-white transition-colors">Terms of Service</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="mt-12 pt-8 border-t border-slate-800 text-sm text-center">&copy; 2026 SixtyOps. All rights reserved.</div>
+    </div>
+  </footer>
+
+  <script src="assets/js/main.js"></script>
+</body>
+</html>

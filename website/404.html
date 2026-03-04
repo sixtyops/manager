@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Page Not Found — SixtyOps</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+          colors: {
+            brand: {
+              50: '#CCFBF1', 100: '#99F6E4', 500: '#14B8A6',
+              600: '#0D9488', 700: '#0F766E', 800: '#115E59', 900: '#134E4A',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="font-sans text-slate-900 bg-slate-50 antialiased min-h-screen flex flex-col items-center justify-center px-4">
+  <div class="text-center max-w-md">
+    <div class="w-16 h-16 bg-brand-50 rounded-2xl flex items-center justify-center mx-auto mb-6">
+      <svg class="w-8 h-8 text-brand-600" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 19.5v.75"/></svg>
+    </div>
+    <h1 class="text-6xl font-extrabold text-slate-900 mb-2">404</h1>
+    <p class="text-lg text-slate-500 mb-8">This page couldn't be found. It might have been moved or doesn't exist.</p>
+    <a href="index.html" class="inline-flex items-center px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg transition-colors">
+      <svg class="mr-2 w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
+      Back to Home
+    </a>
+  </div>
+</body>
+</html>
