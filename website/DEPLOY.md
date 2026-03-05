@@ -1,151 +1,105 @@
-# SixtyOps Website — Deployment Guide
-
-## Overview
-
-Static single-page marketing site for sixtyops.net. No build step — plain HTML, CSS, and JS served directly from S3.
+# SixtyOps Website — Deployment
 
 ## Architecture
+
+Static site served from S3 via CloudFront. No build step.
 
 ```
 website/
 ├── index.html          # Single-page site (features, pricing, download)
 ├── billing.html        # Stripe Customer Portal page
 ├── 404.html            # Error page
+├── infra.yml           # CloudFormation (S3 + CloudFront + clean URLs)
 └── assets/
-    ├── css/custom.css   # Custom styles (mockup frames, device table, etc.)
-    └── js/main.js       # Scroll animations + smooth scroll
+    ├── css/custom.css
+    └── js/main.js
 ```
 
-### External Dependencies (CDN)
+CDN dependencies (no npm/bundler): Tailwind CSS, Alpine.js, Google Fonts.
 
-- **Tailwind CSS** — `cdn.tailwindcss.com` (runtime, no build)
-- **Alpine.js** — `cdn.jsdelivr.net/npm/alpinejs` (FAQ accordion, mobile menu)
-- **Inter + JetBrains Mono** — Google Fonts
+## Initial Setup
 
-No npm, no bundler, no build tools.
+### 1. ACM Certificate
 
-## S3 Deployment
-
-### 1. Create S3 Bucket
+Request a certificate in **us-east-1** for `sixtyops.net` and `*.sixtyops.net`. Note the ARN.
 
 ```bash
-aws s3 mb s3://sixtyops.net
+aws acm request-certificate \
+  --domain-name sixtyops.net \
+  --subject-alternative-names "*.sixtyops.net" \
+  --validation-method DNS \
+  --region us-east-1
 ```
 
-### 2. Configure Static Website Hosting
+Validate via DNS, then grab the ARN.
+
+### 2. Deploy Infrastructure
 
 ```bash
-aws s3 website s3://sixtyops.net \
-  --index-document index.html \
-  --error-document 404.html
+aws cloudformation deploy \
+  --template-file website/infra.yml \
+  --stack-name sixtyops-website \
+  --parameter-overrides \
+    DomainName=sixtyops.net \
+    CertificateArn=arn:aws:acm:us-east-1:ACCOUNT:certificate/CERT_ID \
+  --region us-east-1
 ```
 
-### 3. Set Bucket Policy (public read)
+This creates:
+- S3 bucket (private, CloudFront-only access via OAC)
+- CloudFront distribution with HTTP/2+3, TLS 1.2+
+- CloudFront Function for clean URLs (`/billing` → `/billing.html`) and www redirect
+- Custom error pages (403/404 → `/404.html`)
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Sid": "PublicRead",
-    "Effect": "Allow",
-    "Principal": "*",
-    "Action": "s3:GetObject",
-    "Resource": "arn:aws:s3:::sixtyops.net/*"
-  }]
-}
+### 3. DNS
+
+Point your domain to the CloudFront distribution:
+
 ```
+sixtyops.net        A     ALIAS → <distribution>.cloudfront.net
+www.sixtyops.net    CNAME       → <distribution>.cloudfront.net
+```
+
+Get the distribution domain from stack outputs:
 
 ```bash
-aws s3api put-bucket-policy \
-  --bucket sixtyops.net \
-  --policy file://bucket-policy.json
+aws cloudformation describe-stacks --stack-name sixtyops-website \
+  --query "Stacks[0].Outputs[?OutputKey=='DistributionDomain'].OutputValue" \
+  --output text
 ```
 
-### 4. Upload Files
+### 4. GitHub Actions Secrets
+
+Add to your repo settings:
+
+| Name | Type | Value |
+|------|------|-------|
+| `AWS_ROLE_ARN` | Secret | IAM role ARN with S3 + CloudFront permissions |
+| `WEBSITE_S3_BUCKET` | Variable | `sixtyops.net` |
+| `CLOUDFRONT_DISTRIBUTION_ID` | Variable | From stack outputs |
+
+The workflow uses OIDC (no access keys). Create an IAM role that trusts `token.actions.githubusercontent.com` with:
+- `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket` on the bucket
+- `cloudfront:CreateInvalidation` on the distribution
+
+### 5. Initial Upload
 
 ```bash
 aws s3 sync website/ s3://sixtyops.net/ \
   --delete \
+  --exclude "DEPLOY.md" \
+  --exclude "icon-preview.html" \
+  --exclude "infra.yml" \
   --cache-control "max-age=3600"
 ```
 
-### 5. CloudFront (recommended)
+## Deployment
 
-Create a CloudFront distribution pointing to the S3 website endpoint for HTTPS + custom domain.
+Automatic on push to `main` when `website/` files change. See `.github/workflows/deploy-website.yml`.
 
-```bash
-# Point CloudFront to: sixtyops.net.s3-website-us-east-1.amazonaws.com
-# Set alternate domain: sixtyops.net, www.sixtyops.net
-# SSL certificate: Request via ACM in us-east-1
-```
+Manual deploy: Actions → Deploy Website → Run workflow.
 
-### 6. DNS (Route 53 or your registrar)
+## Still Needs Hooking Up
 
-```
-sixtyops.net        A     ALIAS → CloudFront distribution
-www.sixtyops.net    CNAME       → CloudFront distribution
-```
-
-## What Still Needs Hooking Up
-
-### Download Links
-
-In `index.html`, the download buttons currently link to `#`. Replace with actual URLs:
-
-```html
-<!-- Find these two links in the #download section -->
-<a href="#">Download OVA</a>   → Point to GitHub release or S3 presigned URL
-<a href="#">Download QCOW2</a> → Point to GitHub release or S3 presigned URL
-```
-
-The GitHub releases already host appliance images at:
-`https://github.com/isolson/firmware-updater/releases/tag/appliance-latest`
-
-Example:
-```html
-<a href="https://github.com/isolson/firmware-updater/releases/download/appliance-latest/tachyon-appliance-a1.0-app1.2.0.ova">Download OVA</a>
-```
-
-### Free Tier Download Button
-
-In the pricing section, the "Download Free" button also links to `#`. Point it to the same download URL as above.
-
-### Pro Subscribe Button
-
-The "Subscribe →" button in the pricing section links to `#`. Replace with a Stripe Payment Link:
-
-```html
-<a href="https://buy.stripe.com/YOUR_LINK_ID">Subscribe →</a>
-```
-
-### Billing Portal (billing.html)
-
-The billing page has a placeholder that shows "Billing portal coming soon." To make it functional:
-
-1. Create a Lambda function that accepts an email, looks up the Stripe customer, and creates a Customer Portal session
-2. Deploy behind API Gateway
-3. Uncomment the fetch call in `billing.html` (lines 83-92) and replace the endpoint URL
-
-### Email Address
-
-Contact email `hello@sixtyops.net` appears in the download section footer. Make sure this mailbox exists or forwards somewhere.
-
-## Updating Content
-
-Edit the HTML files directly — no build step needed. After changes:
-
-```bash
-aws s3 sync website/ s3://sixtyops.net/ --delete --cache-control "max-age=3600"
-
-# If using CloudFront, invalidate cache:
-aws cloudfront create-invalidation \
-  --distribution-id YOUR_DIST_ID \
-  --paths "/*"
-```
-
-## Design Notes
-
-- **Theme**: "Engineering Precision" — minimal, teal + slate, monospace accents, thin rules between sections
-- **Product mockups**: HTML/CSS recreations of actual SixtyOps dashboard UI inside browser chrome frames (`.app-frame`)
-- **No images**: Everything is CSS — no image assets to manage
-- **Responsive**: Tailwind breakpoints handle mobile. Mockup tables hide columns on small screens.
+- **Email**: `hello@sixtyops.net` needs a mailbox or forward
+- **Billing portal**: Lambda for Stripe Customer Portal session creation
