@@ -1,5 +1,5 @@
 /**
- * D3.js topology tree rendering for Tachyon Management System.
+ * D3.js topology tree rendering for SixtyOps.
  */
 
 function renderTopologyTree(topology) {

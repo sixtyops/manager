@@ -66,6 +66,25 @@ class TestLoginFlow:
         assert resp.status_code == 401
         assert "Invalid" in resp.text
 
+    def test_post_rate_limited_after_repeated_failures(self, client):
+        import updater.app as app_mod
+
+        old_limit = app_mod.LOGIN_RATE_LIMIT
+        old_window = app_mod.AUTH_RATE_WINDOW
+        app_mod.LOGIN_RATE_LIMIT = 2
+        app_mod.AUTH_RATE_WINDOW = 60
+        app_mod._auth_rate_attempts.clear()
+        try:
+            client.post("/login", data={"username": "admin", "password": "wrong"}, follow_redirects=False)
+            client.post("/login", data={"username": "admin", "password": "wrong"}, follow_redirects=False)
+            resp = client.post("/login", data={"username": "admin", "password": "wrong"}, follow_redirects=False)
+            assert resp.status_code == 429
+            assert "Too many sign-in attempts" in resp.text
+        finally:
+            app_mod.LOGIN_RATE_LIMIT = old_limit
+            app_mod.AUTH_RATE_WINDOW = old_window
+            app_mod._auth_rate_attempts.clear()
+
     def test_protected_page_redirect(self, client):
         resp = client.get("/", headers={"accept": "text/html"}, follow_redirects=False)
         assert resp.status_code == 303

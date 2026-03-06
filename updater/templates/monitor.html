@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unofficial Tachyon Networks Auto Updater</title>
+    <title>SixtyOps</title>
     <link rel="icon" type="image/png" href="/static/favicon.png">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="stylesheet" href="/static/monitor.css">
@@ -20,7 +20,7 @@
     </div>
 
     <div class="header">
-        <h1>Unofficial Tachyon Networks Auto Updater</h1>
+        <h1>SixtyOps</h1>
         <div class="header-right">
             <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:#9ca3af;"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:#6b7280;"></span></span>
             <div class="user-menu">
@@ -44,9 +44,9 @@
 
     <div class="connection-status" id="connectionStatus">Connected</div>
 
-    <div class="nag-banner hidden" id="deviceNagBanner">
-        <span>You have <strong class="nag-count">0</strong> managed devices. Consider upgrading to <a href="https://tachyonupdater.com/pricing" target="_blank">Pro</a> for advanced features like manual updates, config management, and SSO.</span>
-        <button class="u-nag-close" type="button" onclick="dismissDeviceNagBanner()">&times;</button>
+    <div class="nag-banner" id="deviceNagBanner" style="display:none;">
+        <span>You have <strong class="nag-count">0</strong> managed devices. Consider upgrading to <a href="https://sixtyops.net/#pricing" target="_blank">Pro</a> for advanced features like manual updates, config management, and SSO.</span>
+        <button onclick="this.parentElement.style.display='none'" style="background:none;border:none;cursor:pointer;font-size:1rem;color:#92400e;padding:0 4px;">&times;</button>
     </div>
 
     <div class="container">
@@ -253,6 +253,7 @@
                     <div class="status-bar-phases" id="barPhaseIndicator"></div>
                     <span class="status-bar-muted" id="barRolloutProgress"></span>
                     <span class="status-bar-muted u-status-note" id="barRolloutPrediction"></span>
+                    <div id="barRolloutFailedDevices" style="display:none;flex-wrap:wrap;gap:4px;"></div>
                     <div class="status-bar-actions" id="barRolloutActions">
                         <button class="btn btn-sm btn-warning hidden" id="barResumeBtn" onclick="resumeRollout();event.stopPropagation();" >Resume</button>
                         <button class="btn btn-sm btn-danger hidden" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();" >Cancel</button>
@@ -395,6 +396,25 @@
                             <label class="u-text-xxs-dim">Auto-download hold</label>
                             <input type="number" id="drawerQuarantineDays" value="7" min="0" max="90" class="u-w-48">
                             <span class="u-text-xxs-dim">days</span>
+                        </div>
+                    </div>
+
+                    <div class="drawer-section-title">Canary</div>
+                    <div style="grid-column: 2 / -1;">
+                        <div style="font-size:0.72rem;color:#6b7280;margin-bottom:8px;">Optional test devices that always run first during the canary phase. AP canaries bring their attached CPEs with them. Clicking the pending Canary pill can run only this phase outside the normal maintenance window.</div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                            <div>
+                                <label>AP Canary Devices</label>
+                                <div class="drawer-canary-list" id="drawerCanaryApList">
+                                    <div class="drawer-canary-meta">No APs loaded yet.</div>
+                                </div>
+                            </div>
+                            <div>
+                                <label>Switch Canary Devices</label>
+                                <div class="drawer-canary-list" id="drawerCanarySwitchList">
+                                    <div class="drawer-canary-meta">No switches loaded yet.</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -625,6 +645,20 @@
 
             <!-- Backup Panel -->
             <div class="settings-panel" id="settingsPanel-backup">
+                <!-- SFTP Backup Status -->
+                <div style="margin-bottom:16px;">
+                    <label>Scheduled Backup</label>
+                    <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 6px 0;">Automatic nightly database backup via SFTP.</p>
+                    <div id="backupStatusInfo" style="font-size:0.75rem;color:#6b7280;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;">Loading...</div>
+                    <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
+                        <button class="backup-btn" onclick="runBackupNow()">Run Now</button>
+                        <a href="/backup-setup" class="backup-btn" style="text-decoration:none;text-align:center;background:#6b7280;color:#fff;">Configure</a>
+                        <span id="backupRunStatus" style="font-size:0.75rem;color:#6b7280;"></span>
+                    </div>
+                </div>
+
+                <div style="border-top:1px solid #e5e7eb;margin-bottom:16px;"></div>
+
                 <!-- Export -->
                 <div style="margin-bottom:16px;">
                     <label>Export Devices (CSV)</label>
@@ -674,11 +708,156 @@
 
             <!-- Authentication Panel -->
             <div class="settings-panel" id="settingsPanel-auth">
-                <!-- SSO / OIDC Section -->
+                <!-- Built-in RADIUS Section -->
                 <div style="margin-bottom:20px;">
-                    <div class="u-flex-center-gap8-mb8">
-                        <h4 class="u-title-compact">SSO Authentication (OIDC)</h4>
-                        <label class="u-row-gap6-auto">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                        <h4 style="margin:0;font-size:0.85rem;font-weight:600;">Built-in RADIUS Server</h4>
+                        <span id="authRadiusBadge" style="font-size:0.7rem;font-weight:600;padding:2px 8px;border-radius:999px;background:#e5e7eb;color:#4b5563;">Inactive</span>
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
+                            <input type="checkbox" id="authRadiusEnabled" onchange="toggleRadiusFields()">
+                            <span style="font-size:0.75rem;color:#6b7280;">Enabled</span>
+                        </label>
+                    </div>
+                    <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 10px 0;">Named admin accounts for APs, SMs, and switches authenticating back to this appliance. Reserved usernames <code>admin</code> and <code>root</code> are blocked.</p>
+                    <div id="radiusFields" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 140px;gap:8px;">
+                        <div>
+                            <label style="font-size:0.7rem;color:#6b7280;">Device Host</label>
+                            <input type="text" id="authRadiusHost" placeholder="radius.example.com" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.7rem;color:#6b7280;">Shared Secret</label>
+                            <input type="password" id="authRadiusSecret" placeholder="Enter shared secret" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.7rem;color:#6b7280;">UDP Port</label>
+                            <input type="number" id="authRadiusPort" min="1" max="65535" value="1812" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
+                        <button class="backup-btn" onclick="saveRadiusConfig()">Save RADIUS</button>
+                        <button class="backup-btn" onclick="testRadiusConfig()" style="background:#6b7280;color:#fff;">Test</button>
+                        <button class="backup-btn" onclick="refreshRadiusData()" style="background:#6b7280;color:#fff;">Refresh</button>
+                        <span id="radiusStatus" style="font-size:0.75rem;color:#6b7280;"></span>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px;">
+                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
+                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Last Rotated</div>
+                            <div id="radiusSecretRotated" style="font-size:0.9rem;font-weight:700;color:#111827;margin-top:4px;">Unknown</div>
+                        </div>
+                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
+                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Secret Age</div>
+                            <div id="radiusSecretAge" style="font-size:0.9rem;font-weight:700;color:#111827;margin-top:4px;">Unknown</div>
+                        </div>
+                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
+                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Review Policy</div>
+                            <div id="radiusSecretPolicy" style="font-size:0.9rem;font-weight:700;color:#111827;margin-top:4px;">365 days</div>
+                        </div>
+                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
+                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Secret Status</div>
+                            <div id="radiusSecretState" style="font-size:0.9rem;font-weight:700;color:#111827;margin-top:4px;">No Secret</div>
+                        </div>
+                    </div>
+
+                    <div id="radiusSecretReminder" style="display:none;margin-top:10px;padding:10px 12px;border-radius:8px;border:1px solid #fcd34d;background:#fffbeb;color:#92400e;font-size:0.75rem;">
+                        <div id="radiusSecretReminderText"></div>
+                        <button id="radiusSecretReviewButton" class="backup-btn" onclick="markRadiusSecretReviewed()" style="display:none;margin-top:8px;background:#92400e;color:#fff;">Mark Reviewed Today</button>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px;">
+                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
+                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Admin Accounts</div>
+                            <div id="radiusStatUsers" style="font-size:1rem;font-weight:700;color:#111827;margin-top:4px;">0</div>
+                        </div>
+                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
+                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Known Devices</div>
+                            <div id="radiusStatDevices" style="font-size:1rem;font-weight:700;color:#111827;margin-top:4px;">0</div>
+                        </div>
+                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
+                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Success Rate</div>
+                            <div id="radiusStatSuccess" style="font-size:1rem;font-weight:700;color:#0D9488;margin-top:4px;">100%</div>
+                        </div>
+                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
+                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Logins Today</div>
+                            <div id="radiusStatToday" style="font-size:1rem;font-weight:700;color:#111827;margin-top:4px;">0</div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top:14px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                            <h5 style="margin:0;font-size:0.8rem;font-weight:600;">Device Radius Rollout</h5>
+                            <div style="display:flex;gap:6px;">
+                                <button class="backup-btn" id="radiusRolloutStartBtn" onclick="startRadiusRollout()">Start Rollout</button>
+                                <button class="backup-btn" id="radiusRolloutResumeBtn" onclick="resumeRadiusRollout()" style="display:none;background:#6b7280;color:#fff;">Resume</button>
+                                <button class="backup-btn" id="radiusRolloutCancelBtn" onclick="cancelRadiusRollout()" style="display:none;background:#dc2626;color:#fff;">Cancel</button>
+                            </div>
+                        </div>
+                        <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 8px 0;">Rollout includes enabled APs, switches, and CPEs currently reachable with inherited parent AP credentials. Rollout start refreshes AP/CPE auth state first. If a CPE cannot log in with inherited credentials, fix the parent AP credentials here and resume.</p>
+                        <div id="radiusRolloutSummary" style="font-size:0.75rem;color:#6b7280;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;">No Radius rollout started.</div>
+                        <div id="radiusRolloutStatus" style="font-size:0.75rem;color:#6b7280;margin-top:8px;min-height:1.2em;"></div>
+                        <div id="radiusRolloutDevices" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;"></div>
+                    </div>
+
+                    <div style="margin-top:14px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                            <h5 style="margin:0;font-size:0.8rem;font-weight:600;">Admin Accounts</h5>
+                            <span style="font-size:0.72rem;color:#9ca3af;">Reserved: admin, root</span>
+                        </div>
+                        <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 80px auto;gap:8px;align-items:end;">
+                            <div>
+                                <label style="font-size:0.7rem;color:#6b7280;">Username</label>
+                                <input type="text" id="radiusNewUsername" placeholder="jsmith" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.7rem;color:#6b7280;">Password</label>
+                                <input type="password" id="radiusNewPassword" placeholder="Enter password" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                            </div>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:0.75rem;color:#6b7280;padding-bottom:8px;">
+                                <input type="checkbox" id="radiusNewEnabled" checked>
+                                Enabled
+                            </label>
+                            <button class="backup-btn" onclick="createRadiusUser()">Add User</button>
+                        </div>
+                        <div id="radiusUsersStatus" style="font-size:0.75rem;color:#6b7280;margin-top:8px;min-height:1.2em;"></div>
+                        <div id="radiusUsersList" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;"></div>
+                    </div>
+
+                    <div style="margin-top:14px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                            <h5 style="margin:0;font-size:0.8rem;font-weight:600;">Manual Client Overrides</h5>
+                            <span style="font-size:0.72rem;color:#9ca3af;">Use when device source IPs are not covered by inventory</span>
+                        </div>
+                        <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 80px auto;gap:8px;align-items:end;">
+                            <div>
+                                <label style="font-size:0.7rem;color:#6b7280;">IP or CIDR</label>
+                                <input type="text" id="radiusClientSpec" placeholder="10.0.0.5 or 10.0.0.0/24" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.7rem;color:#6b7280;">Short Name</label>
+                                <input type="text" id="radiusClientShortname" placeholder="tower-subnet" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                            </div>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:0.75rem;color:#6b7280;padding-bottom:8px;">
+                                <input type="checkbox" id="radiusClientEnabled" checked>
+                                Enabled
+                            </label>
+                            <button class="backup-btn" onclick="createRadiusClient()">Add Client</button>
+                        </div>
+                        <div id="radiusClientsStatus" style="font-size:0.75rem;color:#6b7280;margin-top:8px;min-height:1.2em;"></div>
+                        <div id="radiusClientsList" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;"></div>
+                    </div>
+
+                    <div style="margin-top:14px;">
+                        <h5 style="margin:0 0 8px 0;font-size:0.8rem;font-weight:600;">Recent Admin Logins</h5>
+                        <div id="radiusRecentLogins" style="display:flex;flex-direction:column;gap:6px;"></div>
+                    </div>
+                </div>
+
+                <!-- SSO / OIDC Section (hidden until tested) -->
+                <div style="display:none;margin-bottom:20px;">
+                    <div style="border-top:1px solid #e5e7eb;margin:16px 0;"></div>
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                        <h4 style="margin:0;font-size:0.85rem;font-weight:600;">SSO Authentication (OIDC)</h4>
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
                             <input type="checkbox" id="authOidcEnabled" onchange="toggleOidcFields()">
                             <span class="u-text-xs-muted">Enabled</span>
                         </label>
@@ -867,7 +1046,7 @@
             <div class="settings-panel" id="settingsPanel-license">
                 <div id="licenseStatusSection">
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-                        <span id="licenseTierBadge" style="display:inline-flex;align-items:center;font-size:0.75rem;font-weight:700;padding:3px 10px;border-radius:4px;color:#7c3aed;background:#ede9fe;">FREE</span>
+                        <span id="licenseTierBadge" style="display:inline-flex;align-items:center;font-size:0.75rem;font-weight:700;padding:3px 10px;border-radius:4px;color:#0D9488;background:#ede9fe;">FREE</span>
                         <span id="licenseStatusText" style="font-size:0.8rem;color:#6b7280;"></span>
                     </div>
                     <div style="font-size:0.75rem;color:#6b7280;margin-bottom:16px;">
@@ -887,11 +1066,12 @@
                 </div>
                 <div id="licenseDeactivateSection" style="display:none;margin-top:12px;border-top:1px solid #e5e7eb;padding-top:12px;">
                     <button class="backup-btn" onclick="deactivateLicense()" style="background:#dc2626;">Remove License</button>
-                    <a href="https://tachyonupdater.com/billing" target="_blank" style="font-size:0.75rem;color:#7c3aed;margin-left:12px;">Manage Billing</a>
+                    <a href="https://billing.sixtyops.net" target="_blank" style="font-size:0.75rem;color:#0D9488;margin-left:12px;">Manage Billing</a>
                 </div>
                 <div style="margin-top:16px;font-size:0.72rem;color:#9ca3af;">
-                    <a href="https://tachyonupdater.com/pricing" target="_blank" class="u-text-link-violet">View pricing</a> &middot;
-                    <a href="https://docs.tachyonupdater.com/licensing" target="_blank" class="u-text-link-violet">Documentation</a>
+                    <a href="https://sixtyops.net/#pricing" target="_blank" style="color:#0D9488;">View pricing</a> &middot;
+                    <a href="https://docs.sixtyops.net/licensing" target="_blank" style="color:#0D9488;">Documentation</a> &middot;
+                    <a href="mailto:support@sixtyops.net" style="color:#0D9488;">Support</a>
                 </div>
             </div>
         </div>
@@ -989,6 +1169,9 @@
         function dismissDeviceNagBanner() {
             setHidden('deviceNagBanner', true);
         }
+        let builtinRadiusSummary = null;
+        let currentRadiusRollout = null;
+        let radiusRolloutRepairTarget = null;
 
         async function loadLicenseState() {
             try {
@@ -1021,7 +1204,7 @@
             });
 
             // Gate settings panels
-            const gatePanels = { 'settingsPanel-backup': 'config_backup', 'settingsPanel-notifications': 'slack_notifications', 'settingsPanel-auth': 'sso_oidc', 'tabPanel-config': 'config_templates' };
+            const gatePanels = { 'settingsPanel-backup': 'config_backup', 'settingsPanel-notifications': 'slack_notifications', 'settingsPanel-auth': 'radius_auth', 'tabPanel-config': 'config_templates' };
             for (const [panelId, feature] of Object.entries(gatePanels)) {
                 const panel = document.getElementById(panelId);
                 if (panel) {
@@ -1048,7 +1231,7 @@
             const msg = featureName
                 ? `${featureName} requires a Pro license.`
                 : 'This feature requires a Pro license.';
-            showToast(msg + '\nVisit tachyonupdater.com/pricing to upgrade.');
+            showToast(msg + '\nVisit sixtyops.net/#pricing to upgrade.');
         }
 
         async function activateLicense() {
@@ -1333,6 +1516,8 @@
                     handleConfigPushUpdate(message);
                 } else if (message.type === 'config_push_complete') {
                     handleConfigPushComplete(message);
+                } else if (message.type === 'radius_rollout_status') {
+                    renderRadiusRollout(message.rollout || null);
                 } else if (message.type === 'license_state') {
                     licenseState = message;
                     applyLicenseGating();
@@ -1511,6 +1696,7 @@
 
             updateDeviceFilterModelOptions();
             renderTable();
+            if (drawerSettingsLoaded) renderDrawerCanaryOptions();
             updateChart();
         }
 
@@ -2558,6 +2744,7 @@
             });
             const panel = document.getElementById('settingsPanel-' + tabName);
             if (panel) panel.classList.add('active');
+            if (tabName === 'backup') loadBackupStatus();
         }
 
         async function loadNotificationsData() {
@@ -2572,6 +2759,19 @@
             try {
                 const resp = await fetch('/api/auth/config');
                 const data = await resp.json();
+
+                // Built-in RADIUS
+                builtinRadiusSummary = data.radius || null;
+                const radiusEnabled = data.radius?.enabled || false;
+                document.getElementById('authRadiusEnabled').checked = radiusEnabled;
+                document.getElementById('authRadiusHost').value = data.radius?.host || '';
+                document.getElementById('authRadiusPort').value = data.radius?.port || 1812;
+                const radiusSecretEl = document.getElementById('authRadiusSecret');
+                radiusSecretEl.value = '';
+                radiusSecretEl.placeholder = data.radius?.secret_set ? '(unchanged)' : 'Enter shared secret';
+                setRadiusBadge(data.radius);
+                renderRadiusSecretHealth(data.radius || {});
+                toggleRadiusFields();
 
                 // OIDC/SSO
                 const oidcEnabled = data.oidc?.enabled || false;
@@ -2599,6 +2799,13 @@
             } catch (e) {
                 document.getElementById('oidcStatus').textContent = 'Failed to load config';
                 document.getElementById('oidcStatus').style.color = '#ef4444';
+            }
+
+            try {
+                await refreshRadiusData();
+            } catch (e) {
+                document.getElementById('radiusStatus').textContent = 'Failed to load built-in RADIUS data';
+                document.getElementById('radiusStatus').style.color = '#ef4444';
             }
         }
         async function saveSlackWebhook() {
@@ -2645,6 +2852,88 @@
             }
         }
 
+        function setRadiusBadge(radius) {
+            const badge = document.getElementById('authRadiusBadge');
+            if (!badge) return;
+            if (radius?.running && radius?.healthy !== false) {
+                badge.textContent = 'Active';
+                badge.style.background = '#d1fae5';
+                badge.style.color = '#065f46';
+            } else if (radius?.running) {
+                badge.textContent = 'Degraded';
+                badge.style.background = '#fee2e2';
+                badge.style.color = '#991b1b';
+            } else if (radius?.enabled && !radius?.secret_set) {
+                badge.textContent = 'Needs Secret';
+                badge.style.background = '#fee2e2';
+                badge.style.color = '#991b1b';
+            } else if (radius?.enabled) {
+                badge.textContent = 'Configured';
+                badge.style.background = '#fef3c7';
+                badge.style.color = '#92400e';
+            } else {
+                badge.textContent = 'Inactive';
+                badge.style.background = '#e5e7eb';
+                badge.style.color = '#4b5563';
+            }
+        }
+
+        function renderRadiusSecretHealth(radius) {
+            const rotatedEl = document.getElementById('radiusSecretRotated');
+            const ageEl = document.getElementById('radiusSecretAge');
+            const policyEl = document.getElementById('radiusSecretPolicy');
+            const stateEl = document.getElementById('radiusSecretState');
+            const reminderEl = document.getElementById('radiusSecretReminder');
+            const reminderTextEl = document.getElementById('radiusSecretReminderText');
+            const reviewButtonEl = document.getElementById('radiusSecretReviewButton');
+            if (!rotatedEl || !ageEl || !policyEl || !stateEl || !reminderEl || !reminderTextEl || !reviewButtonEl) return;
+
+            const recommendDays = radius?.rotation_recommend_after_days || 365;
+            policyEl.textContent = `${recommendDays} days`;
+            reminderEl.style.display = 'none';
+            reviewButtonEl.style.display = 'none';
+
+            if (!radius?.secret_set) {
+                rotatedEl.textContent = 'Not set';
+                ageEl.textContent = '-';
+                stateEl.textContent = 'No Secret';
+                stateEl.style.color = '#6b7280';
+                return;
+            }
+
+            if (radius.rotation_status === 'unknown') {
+                rotatedEl.textContent = 'Unknown';
+                ageEl.textContent = 'Unknown';
+                stateEl.textContent = 'Age Unknown';
+                stateEl.style.color = '#92400e';
+                reminderTextEl.textContent = 'This shared secret predates rotation tracking. Review it manually, then mark it as reviewed today if you want the yearly reminder to start now.';
+                reminderEl.style.display = 'block';
+                reviewButtonEl.style.display = 'inline-flex';
+                return;
+            }
+
+            rotatedEl.textContent = radius.secret_last_rotated_at ? formatDateTime(radius.secret_last_rotated_at) : 'Unknown';
+            ageEl.textContent = Number.isFinite(radius.secret_age_days) ? `${radius.secret_age_days} days` : 'Unknown';
+
+            if (radius.rotation_status === 'due') {
+                stateEl.textContent = 'Review Due';
+                stateEl.style.color = '#b45309';
+                reminderTextEl.textContent = `Radius shared secret review recommended. It was last rotated ${radius.secret_age_days} days ago. Rotation remains manual and should be coordinated with downstream devices.`;
+                reminderEl.style.display = 'block';
+                return;
+            }
+
+            stateEl.textContent = 'Healthy';
+            stateEl.style.color = '#065f46';
+        }
+
+        function toggleRadiusFields() {
+            const enabled = document.getElementById('authRadiusEnabled').checked;
+            const fields = document.getElementById('radiusFields');
+            fields.style.opacity = enabled ? '1' : '0.5';
+            fields.querySelectorAll('input').forEach(el => el.disabled = !enabled);
+        }
+
         function toggleOidcFields() {
             const enabled = document.getElementById('authOidcEnabled').checked;
             const fields = document.getElementById('oidcFields');
@@ -2657,6 +2946,586 @@
             const fields = document.getElementById('deviceFields');
             fields.style.opacity = enabled ? '1' : '0.5';
             fields.querySelectorAll('input').forEach(el => el.disabled = !enabled);
+        }
+
+        function formatDateTime(value) {
+            if (!value) return 'Never';
+            const d = new Date(value);
+            return isNaN(d.getTime()) ? value : d.toLocaleString();
+        }
+
+        function renderRadiusUsers(users) {
+            const container = document.getElementById('radiusUsersList');
+            if (!users || users.length === 0) {
+                container.innerHTML = '<div style="font-size:0.75rem;color:#9ca3af;padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No RADIUS admin accounts configured.</div>';
+                return;
+            }
+
+            container.innerHTML = users.map(user => `
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;">
+                    <div>
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <strong style="font-size:0.82rem;">${escapeHtml(user.username)}</strong>
+                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${user.enabled ? '#d1fae5' : '#fee2e2'};color:${user.enabled ? '#065f46' : '#991b1b'};">
+                                ${user.enabled ? 'Enabled' : 'Disabled'}
+                            </span>
+                        </div>
+                        <div style="font-size:0.72rem;color:#6b7280;margin-top:4px;">
+                            Last auth: ${user.last_auth_at ? escapeHtml(formatDateTime(user.last_auth_at)) : 'Never'}
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center;">
+                        <button class="backup-btn" onclick='editRadiusUser(${user.id}, ${JSON.stringify(user.username)}, ${user.enabled ? "true" : "false"})' style="background:#6b7280;color:#fff;">Edit</button>
+                        <button class="backup-btn" onclick='deleteRadiusUser(${user.id}, ${JSON.stringify(user.username)})' style="background:#dc2626;color:#fff;">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderRadiusClients(clients) {
+            const container = document.getElementById('radiusClientsList');
+            if (!clients || clients.length === 0) {
+                container.innerHTML = '<div style="font-size:0.75rem;color:#9ca3af;padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No manual client overrides configured.</div>';
+                return;
+            }
+
+            container.innerHTML = clients.map(client => `
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;">
+                    <div>
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <strong style="font-size:0.82rem;">${escapeHtml(client.client_spec)}</strong>
+                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${client.enabled ? '#d1fae5' : '#fee2e2'};color:${client.enabled ? '#065f46' : '#991b1b'};">
+                                ${client.enabled ? 'Enabled' : 'Disabled'}
+                            </span>
+                        </div>
+                        <div style="font-size:0.72rem;color:#6b7280;margin-top:4px;">
+                            Short name: ${escapeHtml(client.shortname || '(auto)')}
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center;">
+                        <button class="backup-btn" onclick='editRadiusClient(${client.id}, ${JSON.stringify(client.client_spec)}, ${JSON.stringify(client.shortname || "")}, ${client.enabled ? "true" : "false"})' style="background:#6b7280;color:#fff;">Edit</button>
+                        <button class="backup-btn" onclick='deleteRadiusClient(${client.id}, ${JSON.stringify(client.client_spec)})' style="background:#dc2626;color:#fff;">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderRadiusRecentLogins(entries) {
+            const container = document.getElementById('radiusRecentLogins');
+            if (!entries || entries.length === 0) {
+                container.innerHTML = '<div style="font-size:0.75rem;color:#9ca3af;padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No admin login activity yet.</div>';
+                return;
+            }
+
+            container.innerHTML = entries.map(entry => `
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;">
+                    <div>
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <strong style="font-size:0.82rem;">${escapeHtml(entry.username || '(unknown)')}</strong>
+                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${entry.outcome === 'accept' ? '#d1fae5' : '#fee2e2'};color:${entry.outcome === 'accept' ? '#065f46' : '#991b1b'};">
+                                ${entry.outcome === 'accept' ? 'Accept' : 'Reject'}
+                            </span>
+                        </div>
+                        <div style="font-size:0.72rem;color:#6b7280;margin-top:4px;">
+                            ${escapeHtml(entry.client_name || entry.client_ip || 'Unknown device')}
+                            ${entry.client_model ? ` · <span class="font-mono">${escapeHtml(entry.client_model)}</span>` : ''}
+                            ${entry.reason ? ` · ${escapeHtml(entry.reason)}` : ''}
+                        </div>
+                    </div>
+                    <div style="font-size:0.72rem;color:#6b7280;text-align:right;white-space:nowrap;">
+                        ${entry.client_ip ? escapeHtml(entry.client_ip) + '<br>' : ''}
+                        ${escapeHtml(formatDateTime(entry.occurred_at))}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderRadiusRollout(rollout) {
+            const summaryEl = document.getElementById('radiusRolloutSummary');
+            const statusEl = document.getElementById('radiusRolloutStatus');
+            const devicesEl = document.getElementById('radiusRolloutDevices');
+            if (!summaryEl || !statusEl || !devicesEl) return;
+            currentRadiusRollout = rollout;
+
+            const startBtn = document.getElementById('radiusRolloutStartBtn');
+            const resumeBtn = document.getElementById('radiusRolloutResumeBtn');
+            const cancelBtn = document.getElementById('radiusRolloutCancelBtn');
+
+            if (!rollout) {
+                radiusRolloutRepairTarget = null;
+                summaryEl.textContent = 'No Radius rollout started.';
+                statusEl.textContent = '';
+                devicesEl.innerHTML = '';
+                if (startBtn) startBtn.style.display = 'inline-block';
+                if (resumeBtn) resumeBtn.style.display = 'none';
+                if (cancelBtn) cancelBtn.style.display = 'none';
+                return;
+            }
+
+            if (!rollout.status || rollout.status === 'completed' || rollout.status === 'cancelled') {
+                if (startBtn) startBtn.style.display = 'inline-block';
+                if (resumeBtn) resumeBtn.style.display = 'none';
+                if (cancelBtn) cancelBtn.style.display = 'none';
+            } else if (rollout.status === 'paused') {
+                if (startBtn) startBtn.style.display = 'none';
+                if (resumeBtn) resumeBtn.style.display = 'inline-block';
+                if (cancelBtn) cancelBtn.style.display = 'inline-block';
+            } else {
+                if (startBtn) startBtn.style.display = 'none';
+                if (resumeBtn) resumeBtn.style.display = 'none';
+                if (cancelBtn) cancelBtn.style.display = 'inline-block';
+            }
+
+            const progress = rollout.progress || {};
+            summaryEl.textContent = `Phase ${rollout.phase} • ${rollout.status} • ${progress.updated || 0}/${progress.total || 0} updated${rollout.pause_reason ? ` • ${rollout.pause_reason}` : ''}`;
+            statusEl.textContent = `Service account: ${escapeHtml(rollout.service_username || 'unknown')}`;
+            statusEl.style.color = rollout.status === 'paused' ? '#b45309' : (rollout.status === 'completed' ? '#10b981' : '#6b7280');
+
+            const devices = rollout.devices || [];
+            if (!devices.length) {
+                devicesEl.innerHTML = '';
+                return;
+            }
+
+            devicesEl.innerHTML = devices.slice(0, 12).map(device => {
+                const repairTarget = device.repair_target_ip || device.parent_ap_ip || '';
+                const repairKey = repairTarget.replace(/[^a-zA-Z0-9_-]/g, '-');
+                const canRepair = device.status === 'failed' && device.device_type === 'cpe' && repairTarget;
+                const repairOpen = canRepair && radiusRolloutRepairTarget === repairTarget;
+                return `
+                    <div style="padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;">
+                        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+                            <div style="font-size:0.78rem;color:#111827;flex:1 1 auto;">
+                                <strong>${escapeHtml(device.ip)}</strong>
+                                <span style="color:#6b7280;"> • ${escapeHtml(device.device_type || 'device')} • ${escapeHtml(device.phase_assigned || 'pending')}</span>
+                                ${device.parent_ap_ip ? `<div style="font-size:0.72rem;color:#6b7280;margin-top:4px;">Parent AP: <span class="font-mono">${escapeHtml(device.parent_ap_ip)}</span></div>` : ''}
+                            </div>
+                            <div style="display:flex;align-items:flex-end;flex-direction:column;gap:6px;">
+                                <div style="font-size:0.72rem;color:${device.status === 'updated' ? '#065f46' : (device.status === 'failed' ? '#991b1b' : '#6b7280')};text-align:right;">
+                                    ${escapeHtml(device.status || 'pending')}
+                                    ${device.error ? `<div style="margin-top:4px;max-width:280px;white-space:normal;">${escapeHtml(device.error)}</div>` : ''}
+                                </div>
+                                ${canRepair ? `<button class="backup-btn" style="padding:6px 8px;background:#6b7280;color:#fff;" onclick='toggleRadiusRolloutRepair(${repairOpen ? "null" : JSON.stringify(repairTarget)})'>${repairOpen ? 'Close Repair' : 'Fix Parent AP'}</button>` : ''}
+                            </div>
+                        </div>
+                        ${repairOpen ? `
+                            <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #d1d5db;">
+                                <div style="font-size:0.72rem;color:#6b7280;margin-bottom:6px;">Update AP ${escapeHtml(repairTarget)} credentials and reprobe attached CPEs before resuming the rollout.</div>
+                                <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:6px;align-items:end;">
+                                    <div>
+                                        <label style="font-size:0.68rem;color:#6b7280;">Username</label>
+                                        <input id="radiusRepairUser-${repairKey}" type="text" placeholder="root" style="width:100%;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:0.75rem;">
+                                    </div>
+                                    <div>
+                                        <label style="font-size:0.68rem;color:#6b7280;">Password</label>
+                                        <input id="radiusRepairPass-${repairKey}" type="password" placeholder="Enter password" style="width:100%;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:0.75rem;">
+                                    </div>
+                                    <div>
+                                        <button class="backup-btn" onclick='repairRadiusRolloutParentAp(${JSON.stringify(repairTarget)})'>Save AP Credentials</button>
+                                    </div>
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function toggleRadiusRolloutRepair(targetIp) {
+            radiusRolloutRepairTarget = targetIp;
+            renderRadiusRollout(currentRadiusRollout);
+        }
+
+        async function loadRadiusUsers() {
+            const resp = await fetch('/api/auth/radius/users');
+            if (!resp.ok) throw new Error('Failed to load users');
+            const data = await resp.json();
+            renderRadiusUsers(data.users || []);
+        }
+
+        async function loadRadiusClients() {
+            const resp = await fetch('/api/auth/radius/clients');
+            if (!resp.ok) throw new Error('Failed to load client overrides');
+            const data = await resp.json();
+            renderRadiusClients(data.clients || []);
+        }
+
+        async function loadRadiusStats() {
+            const resp = await fetch('/api/auth/radius/stats');
+            if (!resp.ok) throw new Error('Failed to load stats');
+            const data = await resp.json();
+            builtinRadiusSummary = data;
+            setRadiusBadge(data);
+            renderRadiusSecretHealth(data);
+            document.getElementById('radiusStatUsers').textContent = data.admin_accounts || 0;
+            document.getElementById('radiusStatDevices').textContent = data.known_clients || 0;
+            document.getElementById('radiusStatSuccess').textContent = `${Math.round(data.auth_success_rate || 0)}%`;
+            document.getElementById('radiusStatToday').textContent = data.logins_today || 0;
+            renderRadiusRecentLogins(data.recent_logins || []);
+            if (data.enabled && data.last_error) {
+                document.getElementById('radiusStatus').textContent = data.last_error;
+                document.getElementById('radiusStatus').style.color = '#ef4444';
+            } else if (data.enabled && data.running && data.healthy === false) {
+                document.getElementById('radiusStatus').textContent = `RADIUS container is unhealthy (${data.health_status || 'unknown'})`;
+                document.getElementById('radiusStatus').style.color = '#ef4444';
+            } else if (data.enabled && data.running) {
+                document.getElementById('radiusStatus').textContent = `RADIUS listening on UDP ${data.port}`;
+                document.getElementById('radiusStatus').style.color = '#10b981';
+            }
+        }
+
+        async function loadRadiusRollout() {
+            const resp = await fetch('/api/auth/radius/rollout');
+            if (!resp.ok) throw new Error('Failed to load Radius rollout');
+            const data = await resp.json();
+            renderRadiusRollout(data.rollout || null);
+        }
+
+        async function refreshRadiusData() {
+            try {
+                await Promise.all([loadRadiusUsers(), loadRadiusClients(), loadRadiusStats(), loadRadiusRollout()]);
+            } catch (e) {
+                document.getElementById('radiusStatus').textContent = e.message || 'Failed to refresh RADIUS data';
+                document.getElementById('radiusStatus').style.color = '#ef4444';
+            }
+        }
+
+        function prefillBuiltinRadiusConfig() {
+            if (!builtinRadiusSummary || !builtinRadiusSummary.enabled) {
+                alert('Built-in RADIUS is not enabled yet.');
+                return;
+            }
+
+            document.getElementById('cfgRadiusMethod').value = 'radius';
+            document.getElementById('cfgRadiusServer').value = builtinRadiusSummary.host || window.location.hostname || '';
+            document.getElementById('cfgRadiusPort').value = builtinRadiusSummary.port || 1812;
+            const statusEl = document.getElementById('cfgStatus-radius');
+            if (statusEl) {
+                statusEl.textContent = 'Server and port filled from this appliance. Enter the shared secret.';
+                statusEl.style.color = '#0D9488';
+            }
+        }
+
+        async function testRadiusConfig() {
+            const statusEl = document.getElementById('radiusStatus');
+            statusEl.innerHTML = '<span class="spinner-inline"></span> Testing...';
+            statusEl.style.color = '#6b7280';
+            try {
+                const resp = await fetch('/api/auth/radius/test', { method: 'POST' });
+                const data = await resp.json();
+                statusEl.textContent = data.message || (data.success ? 'RADIUS server is healthy' : 'RADIUS test failed');
+                statusEl.style.color = data.success ? '#10b981' : '#dc2626';
+            } catch (e) {
+                statusEl.textContent = 'Test failed: ' + e.message;
+                statusEl.style.color = '#dc2626';
+            }
+        }
+
+        async function saveRadiusConfig() {
+            const statusEl = document.getElementById('radiusStatus');
+            const enabled = document.getElementById('authRadiusEnabled').checked;
+            const host = document.getElementById('authRadiusHost').value.trim();
+            const port = document.getElementById('authRadiusPort').value.trim() || '1812';
+            const secretEl = document.getElementById('authRadiusSecret');
+            const secret = secretEl.value;
+            const secretAlreadySet = secretEl.placeholder === '(unchanged)';
+
+            if (enabled && !host) {
+                statusEl.textContent = 'Device host required when built-in RADIUS is enabled';
+                statusEl.style.color = '#f59e0b';
+                return;
+            }
+
+            if (enabled && !secret && !secretAlreadySet) {
+                statusEl.textContent = 'Shared secret required when built-in RADIUS is enabled';
+                statusEl.style.color = '#f59e0b';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/auth/radius', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled, host, port, secret }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to save');
+                builtinRadiusSummary = data;
+                secretEl.value = '';
+                secretEl.placeholder = data.secret_set ? '(unchanged)' : 'Enter shared secret';
+                setRadiusBadge(data);
+                if (data.running && data.healthy === false) {
+                    statusEl.textContent = `RADIUS config saved, but container health is ${data.health_status || 'unknown'}`;
+                    statusEl.style.color = '#ef4444';
+                } else {
+                    statusEl.textContent = data.running ? `RADIUS listening on UDP ${data.port}` : 'RADIUS config saved';
+                    statusEl.style.color = data.running ? '#10b981' : '#6b7280';
+                }
+                await refreshRadiusData();
+            } catch (e) {
+                statusEl.textContent = e.message || 'Failed to save RADIUS config';
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function markRadiusSecretReviewed() {
+            const statusEl = document.getElementById('radiusStatus');
+            try {
+                const resp = await fetch('/api/auth/radius/secret-review', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to mark secret reviewed');
+                builtinRadiusSummary = { ...(builtinRadiusSummary || {}), ...data };
+                renderRadiusSecretHealth(builtinRadiusSummary);
+                setRadiusBadge(builtinRadiusSummary);
+                statusEl.textContent = 'Secret review date recorded';
+                statusEl.style.color = '#10b981';
+                await refreshRadiusData();
+            } catch (e) {
+                statusEl.textContent = e.message || 'Failed to mark secret reviewed';
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function startRadiusRollout() {
+            if (!confirm('Start RADIUS rollout? This will push RADIUS configuration to all eligible devices in phases.')) return;
+            const statusEl = document.getElementById('radiusRolloutStatus');
+            try {
+                const resp = await fetch('/api/auth/radius/rollout/start', { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to start Radius rollout');
+                statusEl.textContent = 'Radius rollout started';
+                statusEl.style.color = '#10b981';
+                await refreshRadiusData();
+            } catch (e) {
+                statusEl.textContent = e.message || 'Failed to start Radius rollout';
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function resumeRadiusRollout() {
+            if (!confirm('Resume the RADIUS rollout? Remaining devices will continue to be configured.')) return;
+            const statusEl = document.getElementById('radiusRolloutStatus');
+            try {
+                const current = await fetch('/api/auth/radius/rollout').then(r => r.json());
+                const rollout = current.rollout;
+                if (!rollout) throw new Error('No Radius rollout found');
+                const resp = await fetch(`/api/auth/radius/rollout/${rollout.id}/resume`, { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to resume Radius rollout');
+                statusEl.textContent = 'Radius rollout resumed';
+                statusEl.style.color = '#10b981';
+                await refreshRadiusData();
+            } catch (e) {
+                statusEl.textContent = e.message || 'Failed to resume Radius rollout';
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function cancelRadiusRollout() {
+            if (!confirm('Cancel this RADIUS rollout? Devices not yet configured will remain unchanged.')) return;
+            const statusEl = document.getElementById('radiusRolloutStatus');
+            try {
+                const current = await fetch('/api/auth/radius/rollout').then(r => r.json());
+                const rollout = current.rollout;
+                if (!rollout) throw new Error('No Radius rollout found');
+                const resp = await fetch(`/api/auth/radius/rollout/${rollout.id}/cancel`, { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to cancel Radius rollout');
+                statusEl.textContent = 'Radius rollout cancelled';
+                statusEl.style.color = '#10b981';
+                await refreshRadiusData();
+            } catch (e) {
+                statusEl.textContent = e.message || 'Failed to cancel Radius rollout';
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function repairRadiusRolloutParentAp(ip) {
+            const statusEl = document.getElementById('radiusRolloutStatus');
+            const key = (ip || '').replace(/[^a-zA-Z0-9_-]/g, '-');
+            const username = document.getElementById(`radiusRepairUser-${key}`)?.value.trim();
+            const password = document.getElementById(`radiusRepairPass-${key}`)?.value || '';
+            if (!username || !password) {
+                statusEl.textContent = 'Enter both AP username and password to repair inherited CPE credentials.';
+                statusEl.style.color = '#b45309';
+                return;
+            }
+            try {
+                const formData = new FormData();
+                formData.set('username', username);
+                formData.set('password', password);
+                const resp = await fetch(`/api/aps/${encodeURIComponent(ip)}`, {
+                    method: 'PUT',
+                    body: formData,
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to update AP credentials');
+                radiusRolloutRepairTarget = null;
+                statusEl.textContent = `AP ${ip} credentials updated and reprobed`;
+                statusEl.style.color = '#10b981';
+                await refreshRadiusData();
+            } catch (e) {
+                statusEl.textContent = e.message || 'Failed to update AP credentials';
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function createRadiusUser() {
+            const statusEl = document.getElementById('radiusUsersStatus');
+            const username = document.getElementById('radiusNewUsername').value.trim();
+            const password = document.getElementById('radiusNewPassword').value;
+            const enabled = document.getElementById('radiusNewEnabled').checked;
+
+            if (!username || !password) {
+                statusEl.textContent = 'Username and password are required';
+                statusEl.style.color = '#f59e0b';
+                return;
+            }
+            if (password.length < 12) {
+                statusEl.textContent = 'Password must be at least 12 characters';
+                statusEl.style.color = '#f59e0b';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/auth/radius/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password, enabled }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to create user');
+                document.getElementById('radiusNewUsername').value = '';
+                document.getElementById('radiusNewPassword').value = '';
+                document.getElementById('radiusNewEnabled').checked = true;
+                statusEl.textContent = `Added ${data.username}`;
+                statusEl.style.color = '#10b981';
+                await refreshRadiusData();
+            } catch (e) {
+                statusEl.textContent = e.message || 'Failed to create user';
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function createRadiusClient() {
+            const statusEl = document.getElementById('radiusClientsStatus');
+            const client_spec = document.getElementById('radiusClientSpec').value.trim();
+            const shortname = document.getElementById('radiusClientShortname').value.trim();
+            const enabled = document.getElementById('radiusClientEnabled').checked;
+
+            if (!client_spec) {
+                statusEl.textContent = 'Client IP or CIDR is required';
+                statusEl.style.color = '#f59e0b';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/auth/radius/clients', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ client_spec, shortname, enabled }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to create client override');
+                document.getElementById('radiusClientSpec').value = '';
+                document.getElementById('radiusClientShortname').value = '';
+                document.getElementById('radiusClientEnabled').checked = true;
+                statusEl.textContent = `Added ${data.client_spec}`;
+                statusEl.style.color = '#10b981';
+                await refreshRadiusData();
+            } catch (e) {
+                statusEl.textContent = e.message || 'Failed to create client override';
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function editRadiusUser(userId, currentUsername, currentEnabled) {
+            const username = prompt('Username', currentUsername);
+            if (username === null) return;
+            const password = prompt('New password (leave blank to keep current)');
+            if (password === null) return;
+            const enabledPrompt = prompt('Enabled? Type yes or no', currentEnabled ? 'yes' : 'no');
+            if (enabledPrompt === null) return;
+            const enabled = !['no', 'false', '0', 'disabled'].includes(enabledPrompt.trim().toLowerCase());
+            const statusEl = document.getElementById('radiusUsersStatus');
+
+            try {
+                const resp = await fetch(`/api/auth/radius/users/${userId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password, enabled }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to update user');
+                statusEl.textContent = `Updated ${data.username}`;
+                statusEl.style.color = '#10b981';
+                await refreshRadiusData();
+            } catch (e) {
+                statusEl.textContent = e.message || 'Failed to update user';
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function editRadiusClient(clientId, currentSpec, currentShortname, currentEnabled) {
+            const client_spec = prompt('Client IP or CIDR', currentSpec);
+            if (client_spec === null) return;
+            const shortname = prompt('Short name', currentShortname || '');
+            if (shortname === null) return;
+            const enabledPrompt = prompt('Enabled? Type yes or no', currentEnabled ? 'yes' : 'no');
+            if (enabledPrompt === null) return;
+            const enabled = !['no', 'false', '0', 'disabled'].includes(enabledPrompt.trim().toLowerCase());
+            const statusEl = document.getElementById('radiusClientsStatus');
+
+            try {
+                const resp = await fetch(`/api/auth/radius/clients/${clientId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ client_spec, shortname, enabled }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to update client override');
+                statusEl.textContent = `Updated ${data.client_spec}`;
+                statusEl.style.color = '#10b981';
+                await refreshRadiusData();
+            } catch (e) {
+                statusEl.textContent = e.message || 'Failed to update client override';
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function deleteRadiusUser(userId, username) {
+            const statusEl = document.getElementById('radiusUsersStatus');
+            if (!confirm(`Delete RADIUS user ${username}?`)) return;
+            try {
+                const resp = await fetch(`/api/auth/radius/users/${userId}`, { method: 'DELETE' });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to delete user');
+                statusEl.textContent = `Deleted ${username}`;
+                statusEl.style.color = '#10b981';
+                await refreshRadiusData();
+            } catch (e) {
+                statusEl.textContent = e.message || 'Failed to delete user';
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function deleteRadiusClient(clientId, clientSpec) {
+            const statusEl = document.getElementById('radiusClientsStatus');
+            if (!confirm(`Delete RADIUS client override ${clientSpec}?`)) return;
+            try {
+                const resp = await fetch(`/api/auth/radius/clients/${clientId}`, { method: 'DELETE' });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to delete client override');
+                statusEl.textContent = `Deleted ${clientSpec}`;
+                statusEl.style.color = '#10b981';
+                await refreshRadiusData();
+            } catch (e) {
+                statusEl.textContent = e.message || 'Failed to delete client override';
+                statusEl.style.color = '#ef4444';
+            }
         }
 
         async function saveOidcConfig() {
@@ -3290,17 +4159,30 @@
             const pred = lastPreRolloutPredictions;
             let html = '';
             for (let i = 0; i < PHASES.length; i++) {
+                const isCanaryTrigger = i === 0 && canTriggerManualCanary(pred);
                 const detail = _phaseDetail(pred, i);
                 const detailHtml = detail ? `<span class="bar-phase-detail">${detail}</span>` : '';
-                html += `<div class="bar-phase-dot">${PHASE_LABELS[PHASES[i]]}${detailHtml}</div>`;
+                const dotClass = isCanaryTrigger ? 'bar-phase-dot clickable' : 'bar-phase-dot';
+                const onclick = isCanaryTrigger ? ' onclick="triggerCanaryNow(event)" title="Run canary now"' : '';
+                html += `<div class="${dotClass}"${onclick}>${PHASE_LABELS[PHASES[i]]}${detailHtml}</div>`;
                 if (i < PHASES.length - 1) html += `<div class="bar-phase-line"></div>`;
             }
             indicator.innerHTML = html;
             document.getElementById('barRolloutProgress').textContent = '';
+            const failedEl = document.getElementById('barRolloutFailedDevices');
+            if (failedEl) { failedEl.innerHTML = ''; failedEl.style.display = 'none'; }
             const predEl = document.getElementById('barRolloutPrediction');
             if (predEl) predEl.textContent = '';
             setHidden('barResumeBtn', true);
             setHidden('barCancelBtn', true);
+        }
+
+        function canTriggerManualCanary(pred) {
+            if (!pred) return false;
+            if (currentRolloutId) return false;
+            if (lastAutoState === 'disabled' || lastAutoState === 'running') return false;
+            if (lastBehindCount <= 0) return false;
+            return (pred.current_phase?.device_count || 0) > 0;
         }
 
         function updateRolloutUI(data) {
@@ -3358,6 +4240,20 @@
             }
             document.getElementById('barRolloutProgress').textContent = progressText;
 
+            // Failed device detail
+            const failedDevicesEl = document.getElementById('barRolloutFailedDevices');
+            if (failedDevicesEl) {
+                if (failed > 0 && rollout.status === 'paused' && rollout.failed_devices && rollout.failed_devices.length) {
+                    failedDevicesEl.innerHTML = rollout.failed_devices.map(d =>
+                        `<span style="font-size:0.7rem;padding:2px 6px;background:#fef2f2;border:1px solid #fecaca;border-radius:4px;color:#991b1b;">${escapeHtml(d.ip)} (${escapeHtml(d.device_type || 'device')})</span>`
+                    ).join('');
+                    failedDevicesEl.style.display = 'flex';
+                } else {
+                    failedDevicesEl.innerHTML = '';
+                    failedDevicesEl.style.display = 'none';
+                }
+            }
+
             // Predictions
             const predEl = document.getElementById('barRolloutPrediction');
             if (pred && predEl) {
@@ -3402,12 +4298,31 @@
 
         async function resumeRollout() {
             if (!currentRolloutId) return;
+            if (!confirm('Resume the firmware rollout? Devices will begin updating in the next maintenance window.')) return;
             try { await fetch(`/api/rollout/${currentRolloutId}/resume`, { method: 'POST' }); } catch (e) {}
         }
 
         async function cancelRollout() {
             if (!currentRolloutId) return;
+            if (!confirm('Cancel this firmware rollout? Remaining devices will NOT be updated.')) return;
             try { await fetch(`/api/rollout/${currentRolloutId}/cancel`, { method: 'POST' }); } catch (e) {}
+        }
+
+        async function triggerCanaryNow(event) {
+            if (event) event.stopPropagation();
+            if (!canTriggerManualCanary(lastPreRolloutPredictions)) return;
+            if (!confirm('Run canary now? This will start firmware updates on canary devices outside the scheduled maintenance window.')) return;
+            const predEl = document.getElementById('barRolloutPrediction');
+            if (predEl) predEl.textContent = 'Starting canary...';
+            try {
+                const resp = await fetch('/api/rollout/canary/trigger', { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to start canary');
+                await Promise.all([loadFleetStatus(), loadAutoSettings()]);
+            } catch (e) {
+                if (predEl) predEl.textContent = '';
+                alert(e.message || 'Failed to start canary');
+            }
         }
 
         async function toggleAutoSchedule(event) {
@@ -3586,10 +4501,118 @@
         }
 
         let drawerSettingsLoaded = false;
+        let drawerCanaryAps = new Set();
+        let drawerCanarySwitches = new Set();
+        let drawerCanaryInventory = [];
+
+        function parseIpSetting(value) {
+            return (value || '')
+                .split(',')
+                .map(v => v.trim())
+                .filter(Boolean);
+        }
+
+        async function ensureDrawerCanaryInventoryLoaded() {
+            if (drawerCanaryInventory.length) return;
+            try {
+                const fleetResp = await fetch('/api/fleet-status');
+                if (fleetResp.ok) {
+                    const fleetData = await fleetResp.json();
+                    drawerCanaryInventory = fleetData.devices || [];
+                    return;
+                }
+            } catch (e) {}
+        }
+
+        async function ensureDrawerTopologyLoaded() {
+            if (topology) return;
+            try {
+                const topoResp = await fetch('/api/topology');
+                if (!topoResp.ok) return;
+                topology = await topoResp.json();
+                rebuildTopologyIndex();
+            } catch (e) {}
+        }
+
+        function renderDrawerCanaryOptions() {
+            const apList = document.getElementById('drawerCanaryApList');
+            const switchList = document.getElementById('drawerCanarySwitchList');
+            if (!apList || !switchList) return;
+
+            const apOptions = [];
+            const switchOptions = [];
+            const cpeCounts = new Map();
+            for (const site of (topology?.sites || [])) {
+                for (const ap of (site.aps || [])) {
+                    cpeCounts.set(ap.ip, (ap.cpes || []).length);
+                }
+            }
+            for (const device of drawerCanaryInventory) {
+                if (!device.enabled) continue;
+                if (device.role === 'ap') {
+                    const cpeCount = cpeCounts.get(device.ip) || 0;
+                    apOptions.push({
+                        ip: device.ip,
+                        label: device.system_name || device.ip,
+                        meta: `${device.site_name || 'Unassigned'} • ${device.ip}${cpeCount ? ` • ${cpeCount} CPE` : ''}`,
+                    });
+                } else if (device.role === 'switch') {
+                    switchOptions.push({
+                        ip: device.ip,
+                        label: device.system_name || device.ip,
+                        meta: `${device.site_name || 'Unassigned'} • ${device.ip}`,
+                    });
+                }
+            }
+
+            apOptions.sort((a, b) => a.label.localeCompare(b.label));
+            switchOptions.sort((a, b) => a.label.localeCompare(b.label));
+
+            const renderOptions = (options, selected, role) => {
+                const rows = options.map(option => `
+                    <label class="drawer-canary-option">
+                        <input type="checkbox" ${selected.has(option.ip) ? 'checked' : ''} onchange="toggleDrawerCanary('${role}','${option.ip}',this.checked)">
+                        <span>
+                            <div>${escapeHtml(option.label)}</div>
+                            <div class="drawer-canary-meta">${escapeHtml(option.meta)}</div>
+                        </span>
+                    </label>
+                `);
+
+                const missing = [...selected].filter(ip => !options.some(option => option.ip === ip));
+                for (const ip of missing) {
+                    rows.push(`
+                        <label class="drawer-canary-option">
+                            <input type="checkbox" checked onchange="toggleDrawerCanary('${role}','${ip}',this.checked)">
+                            <span>
+                                <div>${escapeHtml(ip)}</div>
+                                <div class="drawer-canary-meta">Saved canary device not currently in topology.</div>
+                            </span>
+                        </label>
+                    `);
+                }
+                if (!rows.length) {
+                    rows.push('<div class="drawer-canary-meta">No enabled devices available.</div>');
+                }
+                return rows.join('');
+            };
+
+            apList.innerHTML = renderOptions(apOptions, drawerCanaryAps, 'ap');
+            switchList.innerHTML = renderOptions(switchOptions, drawerCanarySwitches, 'switch');
+        }
+
+        function toggleDrawerCanary(role, ip, enabled) {
+            const target = role === 'switch' ? drawerCanarySwitches : drawerCanaryAps;
+            if (enabled) target.add(ip);
+            else target.delete(ip);
+            markDrawerDirty();
+        }
 
         async function loadDrawerSettings() {
             if (drawerSettingsLoaded) return;
             try {
+                await ensureDrawerTopologyLoaded();
+                await ensureDrawerCanaryInventoryLoaded();
                 const resp = await fetch('/api/settings');
                 const data = await resp.json();
                 const s = data.settings;
@@ -3641,6 +4664,10 @@
 
                 // Quarantine
                 document.getElementById('drawerQuarantineDays').value = s.firmware_quarantine_days || '7';
+
+                drawerCanaryAps = new Set(parseIpSetting(s.rollout_canary_aps));
+                drawerCanarySwitches = new Set(parseIpSetting(s.rollout_canary_switches));
+                renderDrawerCanaryOptions();
 
                 drawerSettingsLoaded = true;
             } catch (e) {}
@@ -3747,6 +4774,8 @@
                 bank_mode: document.getElementById('drawerBankMode').value,
                 parallel_updates: document.getElementById('drawerParallel').value,
                 schedule_scope: 'all',
+                rollout_canary_aps: [...drawerCanaryAps].sort().join(','),
+                rollout_canary_switches: [...drawerCanarySwitches].sort().join(','),
                 min_temperature_c: String(storageTemp(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
                 zip_code: document.getElementById('drawerZipCode').value,
                 firmware_quarantine_days: document.getElementById('drawerQuarantineDays').value,
@@ -4040,6 +5069,7 @@
 
                 // Build lookup map for version status
                 fleetStatusMap.clear();
+                drawerCanaryInventory = data.devices || [];
                 for (const d of (data.devices || [])) {
                     fleetStatusMap.set(d.ip, {
                         target_version: d.target_version,
@@ -4049,6 +5079,7 @@
 
                 // Re-render table with version status
                 if (topology) renderTable();
+                if (drawerSettingsLoaded) renderDrawerCanaryOptions();
 
                 lastBehindCount = data.summary?.behind || 0;
                 lastFleetTotal = data.summary?.total || 0;
@@ -4173,6 +5204,42 @@
 
         // ── Backup / Restore ──
 
+        async function loadBackupStatus() {
+            const el = document.getElementById('backupStatusInfo');
+            if (!el) return;
+            try {
+                const resp = await fetch('/api/backup/status');
+                if (!resp.ok) { el.textContent = 'Could not load backup status'; return; }
+                const data = await resp.json();
+                if (!data.enabled) {
+                    el.textContent = 'Scheduled backup is not configured.';
+                } else {
+                    const statusColor = data.last_status === 'success' ? '#10b981' : (data.last_status ? '#dc2626' : '#6b7280');
+                    const statusText = data.last_status || 'never run';
+                    const lastRun = data.last_run || 'Never';
+                    el.innerHTML = `Status: <strong style="color:${statusColor}">${escapeHtml(statusText)}</strong> · Last run: ${escapeHtml(lastRun)}${data.sftp_display ? ` · ${escapeHtml(data.sftp_display)}` : ''}`;
+                }
+            } catch (e) {
+                el.textContent = 'Could not load backup status';
+            }
+        }
+
+        async function runBackupNow() {
+            const statusEl = document.getElementById('backupRunStatus');
+            statusEl.innerHTML = '<span class="spinner-inline"></span> Running...';
+            statusEl.style.color = '#6b7280';
+            try {
+                const resp = await fetch('/api/backup/run', { method: 'POST' });
+                const data = await resp.json();
+                statusEl.textContent = data.message || (data.success ? 'Backup complete' : 'Backup failed');
+                statusEl.style.color = data.success ? '#10b981' : '#dc2626';
+                await loadBackupStatus();
+            } catch (e) {
+                statusEl.textContent = 'Backup failed: ' + e.message;
+                statusEl.style.color = '#dc2626';
+            }
+        }
+
         async function exportBackup() {
             const passphrase = document.getElementById('exportPassphrase').value;
             const status = document.getElementById('backupStatus');
@@ -4231,7 +5298,7 @@
                 return;
             }
 
-            status.textContent = 'Importing...';
+            status.innerHTML = '<span class="spinner-inline"></span> Importing...';
             status.style.color = '#6b7280';
 
             const formData = new FormData();
@@ -4252,8 +5319,23 @@
                 const failures = d.failed || 0;
                 if (failures) parts.push(failures + ' failed');
 
-                status.textContent = 'Import complete: ' + (parts.join(', ') || 'no changes');
-                status.style.color = failures ? '#dc2626' : '#16a34a';
+                let summary = 'Devices: ' + (parts.join(', ') || 'no changes');
+
+                const ru = result.radius_users || {};
+                const ruParts = [];
+                if (ru.added) ruParts.push(ru.added + ' added');
+                if (ru.updated) ruParts.push(ru.updated + ' updated');
+                if (ru.skipped) ruParts.push(ru.skipped + ' skipped');
+                if (ru.failed) ruParts.push(ru.failed + ' failed');
+                if (ruParts.length) summary += ' · RADIUS users: ' + ruParts.join(', ');
+
+                const errors = [...(d.errors || []), ...(ru.errors || [])];
+                if (errors.length) {
+                    summary += '\n' + errors.slice(0, 5).join('; ');
+                }
+                const totalFailures = failures + (ru.failed || 0);
+                status.textContent = summary;
+                status.style.color = totalFailures ? '#dc2626' : '#16a34a';
 
                 document.getElementById('importPassphrase').value = '';
                 fileInput.value = '';

@@ -1,0 +1,351 @@
+/* SixtyOps — Engineering Precision Theme */
+
+html { scroll-behavior: smooth; }
+
+/* Fade-in animation */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in-up { animation: fadeInUp 0.5s ease-out forwards; }
+
+/* Section separator */
+.section-rule {
+  border-top: 1px solid #e2e8f0;
+}
+
+/* ─── App Frame (browser chrome mockup) ─── */
+.app-frame {
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  overflow: hidden;
+  box-shadow: 0 20px 50px -16px rgba(0, 0, 0, 0.15);
+  background: #f5f5f5;
+}
+.app-frame-bar {
+  background: #e5e7eb;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid #d1d5db;
+}
+.app-frame-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.app-frame-url {
+  margin-left: 10px;
+  background: #f3f4f6;
+  border-radius: 4px;
+  padding: 4px 14px;
+  font-size: 11px;
+  color: #6b7280;
+  font-family: 'JetBrains Mono', 'Monaco', 'Menlo', monospace;
+  flex: 1;
+  max-width: 280px;
+}
+.app-frame-body {
+  padding: 16px;
+  background: #f5f5f5;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* ─── Mockup device table ─── */
+.mock-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  background: white;
+  overflow: hidden;
+}
+.mock-table th {
+  text-align: left;
+  padding: 7px 8px;
+  font-weight: 600;
+  color: #6b7280;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 2px solid #e5e7eb;
+  background: #fafafa;
+  white-space: nowrap;
+}
+.mock-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #f3f4f6;
+  white-space: nowrap;
+  color: #374151;
+}
+.mock-table tr:hover td {
+  background: #f0fdfa;
+}
+.mock-table .site-row {
+  background: #f9fafb;
+  font-weight: 600;
+}
+.mock-table .site-row td {
+  border-bottom: 1px solid #e5e7eb;
+  color: #111827;
+}
+.mock-table .ap-row td:first-child { padding-left: 28px; }
+.mock-table .cpe-row td:first-child { padding-left: 44px; }
+.mock-table .version-cell {
+  font-family: 'JetBrains Mono', 'Monaco', 'Menlo', monospace;
+  font-size: 10px;
+  color: #374151;
+}
+
+/* Device type badges */
+.device-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  color: white;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+.device-badge.site { background: #6366f1; }
+.device-badge.ap { background: #3b82f6; }
+.device-badge.cpe-good { background: #10b981; }
+.device-badge.cpe-low { background: #f59e0b; }
+.device-badge.switch { background: #8b5cf6; }
+
+/* Signal colors */
+.signal-good { color: #10b981; font-weight: 600; }
+.signal-low { color: #f59e0b; font-weight: 600; }
+.signal-critical { color: #dc2626; font-weight: 600; }
+
+/* Status dot */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.status-online { background: #10b981; }
+.status-offline { background: #d1d5db; }
+
+/* ─── Auto-update status bar ─── */
+.autoupdate-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: white;
+  border-top: 1px solid #e5e7eb;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.autoupdate-toggle {
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.autoupdate-toggle.on { background: #0D9488; }
+.autoupdate-toggle.off { background: #d1d5db; }
+.autoupdate-toggle::after {
+  content: '';
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  position: absolute;
+  top: 2px;
+  transition: left 0.15s;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+}
+.autoupdate-toggle.on::after { left: 18px; }
+.autoupdate-toggle.off::after { left: 2px; }
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.status-badge.idle { background: #fef3c7; color: #92400e; }
+.status-badge.active { background: #d1fae5; color: #065f46; }
+.status-badge.pending { background: #fee2e2; color: #991b1b; }
+
+/* ─── Schedule mockup ─── */
+.day-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 28px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid #e5e7eb;
+  background: white;
+  color: #6b7280;
+}
+.day-btn.active {
+  background: #0D9488;
+  color: white;
+  border-color: #0D9488;
+}
+
+.mock-select {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 11px;
+  color: #374151;
+  display: inline-block;
+}
+.mock-input {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 11px;
+  color: #374151;
+  width: 48px;
+  text-align: center;
+  display: inline-block;
+}
+
+.mock-toggle {
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  display: inline-block;
+  position: relative;
+  flex-shrink: 0;
+}
+.mock-toggle.on { background: #0D9488; }
+.mock-toggle.off { background: #d1d5db; }
+.mock-toggle::after {
+  content: '';
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: white;
+  position: absolute;
+  top: 2px;
+}
+.mock-toggle.on::after { left: 16px; }
+.mock-toggle.off::after { left: 2px; }
+
+/* Firmware chips */
+.fw-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', 'Monaco', 'Menlo', monospace;
+  background: white;
+  border: 1px solid #e5e7eb;
+  color: #374151;
+}
+.fw-chip .fw-label {
+  font-family: -apple-system, system-ui, sans-serif;
+  font-weight: 600;
+  color: #0D9488;
+  font-size: 10px;
+}
+
+/* ─── Rollout phase indicator ─── */
+.phase-track {
+  display: flex;
+  align-items: center;
+}
+.phase-dot {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+  z-index: 1;
+}
+.phase-dot.completed { background: #10b981; color: white; }
+.phase-dot.active {
+  background: #0D9488;
+  color: white;
+  box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.2);
+  animation: phasePulse 2s infinite;
+}
+.phase-dot.pending { background: #e5e7eb; color: #9ca3af; }
+.phase-line { height: 2px; flex: 1; min-width: 12px; }
+.phase-line.completed { background: #10b981; }
+.phase-line.pending { background: #e5e7eb; }
+
+@keyframes phasePulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.2); }
+  50% { box-shadow: 0 0 0 8px rgba(13, 148, 136, 0.1); }
+}
+
+/* ─── Config backup mockup ─── */
+.backup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: white;
+  border-radius: 6px;
+  border: 1px solid #f3f4f6;
+  font-size: 12px;
+}
+.backup-row + .backup-row { margin-top: 4px; }
+
+/* ─── Scatter chart (CSS-only mockup) ─── */
+.scatter-area {
+  position: relative;
+  width: 100%;
+  height: 140px;
+  border-left: 1px solid #d1d5db;
+  border-bottom: 1px solid #d1d5db;
+  background:
+    repeating-linear-gradient(0deg, transparent, transparent 27px, #f3f4f6 27px, #f3f4f6 28px),
+    repeating-linear-gradient(90deg, transparent, transparent 39px, #f3f4f6 39px, #f3f4f6 40px);
+}
+.scatter-dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+
+/* ─── Mock card within app frame ─── */
+.mock-card {
+  background: white;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  overflow: hidden;
+}
+
+/* Action links */
+.mock-action {
+  font-size: 10px;
+  font-weight: 500;
+  cursor: default;
+}
+.mock-action.update { color: #3b82f6; }
+.mock-action.danger { color: #dc2626; }
+.mock-action.refresh { color: #6b7280; }

@@ -40,12 +40,12 @@ def create_radius_user(
     username = validate_username(username)
     if not password:
         raise ValueError("Password is required")
-    password_hash = _hash_password(password)
+    hashed = _hash_password(password)
     with db.get_db() as conn:
         cursor = conn.execute(
-            "INSERT INTO radius_users (username, password_hash, description) "
+            "INSERT INTO radius_users (username, password, description) "
             "VALUES (?, ?, ?)",
-            (username, password_hash, description),
+            (username, hashed, description),
         )
         return cursor.lastrowid
 
@@ -62,7 +62,7 @@ def get_radius_users() -> list[dict]:
 
 
 def get_radius_user(user_id: int) -> Optional[dict]:
-    """Get a single RADIUS user by ID (without password hash)."""
+    """Get a single RADIUS user by ID (without password)."""
     with db.get_db() as conn:
         row = conn.execute(
             "SELECT id, username, description, enabled, last_auth_at, "
@@ -94,7 +94,7 @@ def update_radius_user(user_id: int, **kwargs) -> bool:
             updates["username"] = value
         elif key == "password":
             if value:
-                updates["password_hash"] = _hash_password(value)
+                updates["password"] = _hash_password(value)
         elif key == "enabled":
             updates["enabled"] = 1 if value else 0
         else:
@@ -136,7 +136,7 @@ def verify_radius_user(username: str, password: str) -> bool:
         return False
     if not user["enabled"]:
         return False
-    if not bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
+    if not bcrypt.checkpw(password.encode(), user["password"].encode()):
         return False
     # Update auth stats on success
     with db.get_db() as conn:

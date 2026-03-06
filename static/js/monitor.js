@@ -1,5 +1,5 @@
 /**
- * Chart.js signal monitoring for Tachyon Management System.
+ * Chart.js signal monitoring for SixtyOps.
  */
 
 // Signal health thresholds (dBm)

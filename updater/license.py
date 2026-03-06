@@ -1,4 +1,4 @@
-"""License management and feature gating for Tachyon Management System."""
+"""License management and feature gating for SixtyOps."""
 
 import asyncio
 import logging
@@ -27,6 +27,7 @@ class Feature(str, Enum):
     """
     UPDATE_SINGLE_DEVICE = "update_single_device"
     SSO_OIDC = "sso_oidc"
+    RADIUS_AUTH = "radius_auth"
     CONFIG_BACKUP = "config_backup"
     CONFIG_TEMPLATES = "config_templates"
     CONFIG_COMPLIANCE = "config_compliance"
@@ -68,7 +69,7 @@ VALIDATION_INTERVAL = int(os.environ.get("LICENSE_CHECK_INTERVAL", 86400))
 # License server URL (configurable via env for dev/testing)
 LICENSE_SERVER_URL = os.environ.get(
     "LICENSE_SERVER_URL",
-    "https://license.tachyonupdater.com/api/v1",
+    "https://license.sixtyops.net/api/v1",
 )
 
 # Dev override: TACHYON_FORCE_PRO=1 bypasses all gating (disabled in appliance mode)
@@ -496,7 +497,7 @@ async def require_pro():
             detail={
                 "error": "pro_required",
                 "message": "This feature requires a Pro license.",
-                "upgrade_url": "https://tachyonupdater.com/pricing",
+                "upgrade_url": "https://sixtyops.net/#pricing",
             },
         )
 
@@ -512,8 +513,8 @@ def require_feature(feature: Feature):
                 detail={
                     "error": "feature_locked",
                     "feature": feature.value,
-                    "message": f"{_FEATURE_DISPLAY_NAMES.get(feature.value, feature.value)} requires a Pro license.",
-                    "upgrade_url": "https://tachyonupdater.com/pricing",
+                    "message": f"The '{feature.value}' feature requires a Pro license.",
+                    "upgrade_url": "https://sixtyops.net/#pricing",
                 },
             )
     return _check

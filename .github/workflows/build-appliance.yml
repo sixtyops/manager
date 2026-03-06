@@ -120,19 +120,27 @@ jobs:
 
           NOTES="Latest stable appliance (platform v${APPLIANCE_VER}, app ${APP_VER}).
 
-          **VMware/VirtualBox:** Download the \`.ova\` file and import.
+          ## Install
 
-          **Proxmox:** Download the \`.qcow2\` file, then:
+          ### VMware / ESXi
+          1. Download the \`.ova\` file
+          2. In vSphere/ESXi: **Create/Register VM → Deploy from OVF** and select the .ova
+          3. Boot the VM and follow the console setup wizard
+          4. Open the displayed URL in your browser and add your devices
+
+          ### Proxmox
+          SSH into your Proxmox host and run (replace \`100\` with your VM ID and \`local-lvm\` with your storage name):
+          \`\`\`bash
+          curl -LO https://github.com/isolson/firmware-updater/releases/download/appliance-latest/tachyon-appliance-latest.qcow2
+          qm create 100 --name sixtyops --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0
+          qm importdisk 100 tachyon-appliance-latest.qcow2 YOUR_STORAGE
+          qm set 100 --scsi0 YOUR_STORAGE:vm-100-disk-0
+          qm set 100 --boot order=scsi0
+          qm set 100 --serial0 socket --vga serial0
+          qm start 100
           \`\`\`
-          qm create <vmid> --name tachyon --memory 1024 --cores 2 --net0 virtio,bridge=vmbr0
-          qm importdisk <vmid> <filename>.qcow2 <storage>
-          qm set <vmid> --virtio0 <storage>:vm-<vmid>-disk-0
-          qm set <vmid> --boot order=virtio0
-          qm set <vmid> --agent enabled=1
-          qm set <vmid> --serial0 socket
-          qm start <vmid>
-          \`\`\`
-          Use \`qm terminal <vmid>\` for serial console access."
+          Common storage names: \`local-lvm\`, \`local-zfs\`, \`ceph-pool\`. Check yours with \`pvesm status\`.
+          Open the console and follow the setup wizard, then open the displayed URL in your browser."
 
           # Create release if it doesn't exist, or update the notes
           gh release create appliance-latest \
@@ -143,9 +151,15 @@ jobs:
             --title "Latest Appliance" \
             --notes "$NOTES"
 
-          # Upload both formats (--clobber replaces existing assets)
+          # Upload versioned assets (--clobber replaces existing)
           gh release upload appliance-latest "$OVA" --clobber
           gh release upload appliance-latest "$QCOW2" --clobber
+
+          # Upload fixed-name copies for stable download URLs
+          cp "$OVA" tachyon-appliance-latest.ova
+          cp "$QCOW2" tachyon-appliance-latest.qcow2
+          gh release upload appliance-latest tachyon-appliance-latest.ova --clobber
+          gh release upload appliance-latest tachyon-appliance-latest.qcow2 --clobber
 
       - name: Publish to public downloads repo
         env:
@@ -159,19 +173,29 @@ jobs:
 
           NOTES="Tachyon Manager Appliance (platform v${APPLIANCE_VER}, app ${APP_VER}).
 
-          **VMware/VirtualBox:** Download the \`.ova\` file and import.
+          ## Install
 
-          **Proxmox:** Download the \`.qcow2\` file, then:
+          ### VMware / ESXi
+          1. Download the \`.ova\` file
+          2. In vSphere/ESXi: **Create/Register VM → Deploy from OVF** and select the .ova
+          3. Boot the VM and follow the console setup wizard
+          4. Open the displayed URL in your browser and add your devices
+
+          ### Proxmox
+          SSH into your Proxmox host and run (replace \`100\` with your VM ID and \`local-lvm\` with your storage name):
+          \`\`\`bash
+          curl -LO https://github.com/isolson/tachyon-manager-releases/releases/download/appliance-latest/tachyon-appliance-latest.qcow2
+          qm create 100 --name sixtyops --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0
+          qm importdisk 100 tachyon-appliance-latest.qcow2 YOUR_STORAGE
+          qm set 100 --scsi0 YOUR_STORAGE:vm-100-disk-0
+          qm set 100 --boot order=scsi0
+          qm set 100 --serial0 socket --vga serial0
+          qm start 100
           \`\`\`
-          qm create <vmid> --name tachyon --memory 1024 --cores 2 --net0 virtio,bridge=vmbr0
-          qm importdisk <vmid> <filename>.qcow2 <storage>
-          qm set <vmid> --virtio0 <storage>:vm-<vmid>-disk-0
-          qm set <vmid> --boot order=virtio0
-          qm set <vmid> --agent enabled=1
-          qm set <vmid> --serial0 socket
-          qm start <vmid>
-          \`\`\`
-          Use \`qm terminal <vmid>\` for serial console access."
+          Common storage names: \`local-lvm\`, \`local-zfs\`, \`ceph-pool\`. Check yours with \`pvesm status\`.
+          Open the console and follow the setup wizard, then open the displayed URL in your browser.
+
+          Full docs: https://sixtyops.net#download"
 
           gh release create appliance-latest \
             --repo "$REPO" \
@@ -183,5 +207,12 @@ jobs:
             --title "Latest Appliance" \
             --notes "$NOTES"
 
+          # Upload versioned assets
           gh release upload appliance-latest "$OVA" --clobber --repo "$REPO"
           gh release upload appliance-latest "$QCOW2" --clobber --repo "$REPO"
+
+          # Upload fixed-name copies for stable download URLs (curl-friendly)
+          cp "$OVA" tachyon-appliance-latest.ova
+          cp "$QCOW2" tachyon-appliance-latest.qcow2
+          gh release upload appliance-latest tachyon-appliance-latest.ova --clobber --repo "$REPO"
+          gh release upload appliance-latest tachyon-appliance-latest.qcow2 --clobber --repo "$REPO"

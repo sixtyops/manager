@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Unofficial Tachyon Networks Auto Updater</title>
+    <title>Login - SixtyOps</title>
     <link rel="icon" type="image/png" href="/static/favicon.png">
     <link rel="stylesheet" href="/static/common.css">
 </head>
 <body>
     <div class="auth-card">
-        <h1>Unofficial Tachyon Networks Auto Updater</h1>
+        <h1>SixtyOps</h1>
         <p class="subtitle">Sign in to continue</p>
 
         {% if error == "oidc_denied" %}
@@ -20,6 +20,8 @@
         <div class="error-message visible">SSO session expired. Please try again.</div>
         {% elif error == "oidc_discovery_failed" %}
         <div class="error-message visible">Could not reach SSO provider. Please try again later.</div>
+        {% elif error == "rate_limited" %}
+        <div class="error-message visible">Too many sign-in attempts. Please wait and try again.</div>
         {% elif error %}
         <div class="error-message visible">Invalid username or password.</div>
         {% endif %}

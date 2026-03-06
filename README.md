@@ -21,7 +21,8 @@ This tool automates the entire process with built-in safety checks and gradual r
 The scheduler includes several safety checks:
 - **Temperature validation** - Blocks updates if temperature is below threshold (default 0°C/32°F)
 - **System time validation** - Blocks updates if AP clock is unreliable (prevents boot loops)
-- **Gradual rollout** - Updates 1 AP (canary), then 10%, 50%, 100% on consecutive nights
+- **Gradual rollout** - Updates pinned canary APs / switches first, then 10%, 50%, 100% on consecutive windows
+- **Manual canary run** - The pending Canary pill can run the test canary outside the normal maintenance window
 - **Automatic pause on failure** - Any failed update stops the rollout for manual review
 - **Maintenance windows** - Updates only run on specified days/times
 - **Dry-run mode** - Preview what would be updated before enabling the scheduler
@@ -30,11 +31,12 @@ The scheduler includes several safety checks:
 
 1. Upload firmware files and configure maintenance window (e.g., Sundays 2-6 AM)
 2. Enable the scheduler
-3. The system automatically updates APs over 4 consecutive maintenance windows:
-   - Night 1: 1 AP (canary test)
-   - Night 2: 10% of remaining APs
-   - Night 3: 50% of remaining APs
-   - Night 4: All remaining APs
+3. Optionally pin test APs and switches as dedicated canaries in the firmware drawer
+4. The system automatically updates the fleet over 4 consecutive maintenance windows:
+   - Window 1: Canary APs (+ attached CPEs) and canary switches
+   - Window 2: 10% of remaining APs and switches
+   - Window 3: 50% of remaining APs and switches
+   - Window 4: All remaining APs and switches
 
 Failures pause the rollout until manually reviewed.
 
@@ -47,6 +49,7 @@ Failures pause the rollout until manually reviewed.
 - **Manual updates** - Immediate updates for specific APs when needed
 - **Network topology view** - Visual map of tower sites, APs, and CPEs with signal health indicators
 - **Parallel updates** - Configurable concurrency for faster bulk updates
+- **Built-in device Radius** - FreeRADIUS container managed from the app for AP and switch admin authentication
 - **Git backups** - Automatic commit of configuration changes
 - **Real-time progress** - WebSocket-based live update status
 
@@ -101,6 +104,7 @@ See [docs/deployment.md](docs/deployment.md) for full deployment options.
    - Enable scheduler
 
 The system runs the gradual rollout automatically. Check **Rollout Status** to monitor progress.
+If you have a lab AP or switch, pin it as a canary in the firmware drawer. You can also click the pending `Canary` pill to run that test phase before the maintenance window opens.
 
 See [docs/gradual-rollout.md](docs/gradual-rollout.md) for rollout details.
 
@@ -119,7 +123,8 @@ The **Monitor** page displays network topology (tower sites → APs → CPEs) wi
 
 ## Documentation
 
-- **[Deployment Guide](docs/deployment.md)** - HTTPS, RADIUS, environment variables
+- **[Deployment Guide](docs/deployment.md)** - HTTPS, built-in Radius, environment variables
+- **[Radius Guide](docs/radius.md)** - Built-in FreeRADIUS setup, client overrides, and device rollout workflow
 - **[Gradual Rollout](docs/gradual-rollout.md)** - How the 4-night rollout works
 - **[Release System](docs/release-system.md)** - Branches, tags, workflows, GHCR, appliance publishing, self-update behavior
 - **[API Reference](docs/api.md)** - REST endpoints and WebSocket protocol

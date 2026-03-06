@@ -252,7 +252,7 @@ class TestSetupWizardPartialFailure:
 
         with patch("updater.ssl_manager.obtain_certificate", new_callable=AsyncMock) as mock_cert, \
              patch("updater.ssl_manager.get_ssl_status", return_value={"enabled": False}), \
-             patch("updater.git_backup.get_backup_status", return_value={"enabled": False}):
+             patch("updater.sftp_backup.get_backup_status", return_value={"enabled": False}):
             mock_cert.return_value = (False, "ACME server rejected domain")
             resp = authed_client.post("/setup-wizard", data={
                 "step": "1",
@@ -269,7 +269,7 @@ class TestSetupWizardPartialFailure:
         db.set_setting("setup_wizard_completed", "false")
 
         with patch("updater.ssl_manager.get_ssl_status", return_value={"enabled": False}), \
-             patch("updater.git_backup.get_backup_status", return_value={"enabled": False}):
+             patch("updater.sftp_backup.get_backup_status", return_value={"enabled": False}):
             resp = authed_client.post("/setup-wizard", data={
                 "step": "1",
                 "action": "skip",
@@ -284,16 +284,19 @@ class TestSetupWizardPartialFailure:
         db.set_setting("setup_wizard_completed", "false")
         db.set_setting("wizard_step_1_done", "true")
 
-        with patch("updater.git_backup.init_backup_repo", new_callable=AsyncMock) as mock_backup, \
+        with patch("updater.sftp_backup.configure_backup", new_callable=AsyncMock) as mock_backup, \
              patch("updater.ssl_manager.get_ssl_status", return_value={"enabled": False}), \
-             patch("updater.git_backup.get_backup_status", return_value={"enabled": False}):
+             patch("updater.sftp_backup.get_backup_status", return_value={"enabled": False}):
             mock_backup.return_value = (False, "Authentication failed: invalid token")
             resp = authed_client.post("/setup-wizard", data={
                 "step": "2",
                 "action": "configure",
-                "backup_repo": "https://github.com/user/backup.git",
-                "backup_auth": "token",
-                "backup_token": "bad-token",
+                "sftp_host": "backup.example.com",
+                "sftp_username": "backupuser",
+                "sftp_path": "/backups",
+                "sftp_port": "22",
+                "auth_method": "password",
+                "sftp_password": "bad-password",
             })
         assert resp.status_code == 200
         assert "Authentication failed" in resp.text
@@ -308,7 +311,7 @@ class TestSetupWizardPartialFailure:
         with patch("updater.ssl_manager.get_ssl_status", return_value={
             "enabled": False, "domain": "", "cert_exists": False,
             "needs_renewal": False, "using_letsencrypt": False, "days_until_expiry": None,
-        }), patch("updater.git_backup.get_backup_status", return_value={
+        }), patch("updater.sftp_backup.get_backup_status", return_value={
             "enabled": False, "repo_url": "", "auth_method": "", "last_run": "", "last_status": "",
         }):
             resp = authed_client.post("/setup-wizard", data={

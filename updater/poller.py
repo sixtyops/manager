@@ -332,6 +332,7 @@ class NetworkPoller:
             return False
 
         await self._poll_ap(ap)
+        refreshed = db.get_access_point(ip)
 
         # Broadcast update
         if self.broadcast_func:
@@ -341,7 +342,7 @@ class NetworkPoller:
                 "topology": topology,
             })
 
-        return True
+        return bool(refreshed and not refreshed.get("last_error"))
 
     async def _poll_all_switches(self):
         """Poll all enabled switches."""
