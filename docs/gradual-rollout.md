@@ -4,8 +4,10 @@
 
 Replaces the "update all devices at once" scheduler with an intelligent gradual rollout that:
 1. Auto-detects which devices need updates (compares DB firmware versions to target)
-2. Rolls out in phases: **1 AP+CPEs (canary) -> 10% -> 50% -> 100%**, one phase per schedule night
-3. Pauses on failure; resumes manually
+2. Rolls out in phases: **canary -> 10% -> 50% -> 100%**, one phase per schedule night
+3. Lets operators pin dedicated AP and switch canaries in the firmware drawer
+4. Lets the pending `Canary` pill run the canary phase immediately, outside the maintenance window
+5. Pauses on failure; resumes manually
 
 ---
 
@@ -18,7 +20,9 @@ CREATE TABLE IF NOT EXISTS rollouts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     firmware_file TEXT NOT NULL,
     firmware_file_303l TEXT,
-    target_version TEXT,               -- learned after first successful update
+    target_version TEXT,               -- learned / fallback target for tna-30x
+    target_version_303l TEXT,
+    target_version_tns100 TEXT,
     phase TEXT NOT NULL DEFAULT 'canary',  -- canary | pct10 | pct50 | pct100
     status TEXT NOT NULL DEFAULT 'active', -- active | paused | completed | cancelled
     pause_reason TEXT,
@@ -52,7 +56,7 @@ CREATE TABLE IF NOT EXISTS rollout_devices (
 - `pause_rollout(rollout_id, reason)`
 - `resume_rollout(rollout_id)`
 - `cancel_rollout(rollout_id)`
-- `set_rollout_target_version(rollout_id, version)`
+- `set_rollout_target_versions(rollout_id, versions)`
 - `set_rollout_job_id(rollout_id, job_id)`
 - `assign_device_to_rollout(rollout_id, ip, device_type, phase)`
 - `mark_rollout_device(rollout_id, ip, status)` -- mark a single device
@@ -76,22 +80,45 @@ Steps 9+ (replaced):
    - Otherwise create a new rollout for this firmware.
 3. **Firmware change detection** -- if active rollout uses different firmware file, cancel it and create new one
 4. **If rollout is paused** -- show state `waiting` with the pause reason, return
-5. **Determine phase batch** -- call `_get_devices_for_phase()`:
+5. **Determine phase batch** -- call `_get_devices_for_phase()` and `_get_switches_for_phase()`:
    - Get all in-scope AP IPs via `_resolve_scope()`
-   - Filter to those whose `firmware_version` in DB differs from `rollout.target_version` (if known) and not already `updated` in `rollout_devices`
-   - Select batch size: canary=1, pct10=ceil(10% of candidates), pct50=ceil(50%), pct100=all
+   - Get only in-scope switches via `_resolve_switch_scope()`
+   - Build per-family target versions for `tna-30x`, `tna-303l`, and `tns-100`
+   - An AP is considered pending when the AP itself or any attached manageable CPE is behind its family target
+   - A switch is considered pending only when it is behind the selected switch target and inside scope
+   - For canary:
+     - If `rollout_canary_aps` / `rollout_canary_switches` are configured, use those devices first
+     - Otherwise fall back to `1` AP and `1` switch when available
+   - For later phases, select `10%`, `50%`, or `100%` of the remaining APs and switches independently
    - If no candidates remain, advance phase (or complete rollout)
-   - Record selected APs in `rollout_devices`
-6. **Launch job** -- call `start_update_func()` with only the batch APs, store `job_id` on rollout
+   - Record selected APs and switches in `rollout_devices`
+6. **Launch job** -- call `start_update_func()` with the phase APs and phase switches, store `job_id` on rollout
+
+### Manual canary trigger
+
+- `POST /api/rollout/canary/trigger` starts only the canary phase immediately
+- It still respects:
+  - time-source validation
+  - firmware hold / quarantine
+  - weather guardrails
+  - saved canary validation and current rollout scope
+  - the configured canary AP / switch selection
+- It intentionally skips:
+  - the maintenance-window check
+  - the daily `_ran_today` lockout
+  - the per-device maintenance-window cutoff used by normal scheduled jobs
+- Result:
+  - the test canary can run during the day
+  - the later `10%`, `50%`, and `100%` phases still wait for the next maintenance window
 
 ### Modified `on_job_completed()`
 
-Added `learned_version: Optional[str] = None` parameter.
+Added `learned_versions: dict[str, str] | None` parameter.
 
 - If rollout is active and `last_job_id` matches:
   - **On failure** (`failed_count > 0`): pause rollout with reason, mark failed devices
   - **On success**:
-    - If `target_version` is None and `learned_version` is set, store it on rollout
+    - Store learned target versions per firmware family (`tna-30x`, `tna-303l`, `tns-100`) when available
     - Mark phase devices as `updated`
     - Call `complete_rollout_phase()` (advances to next phase)
 
@@ -110,13 +137,14 @@ Includes rollout info in the status dict:
 
 ## App Changes (`app.py`)
 
-### Modified `run_update_job()` -- pass learned version
+### Modified `run_update_job()` -- pass learned versions
 
-After job completion, if the job is scheduled, extract the first successful device's `new_version` and pass it to `scheduler.on_job_completed()` as `learned_version`.
+After job completion, if the job is scheduled, extract one learned version per firmware family from successful devices and pass that map to `scheduler.on_job_completed()`.
 
 ### API endpoints
 
 - `GET /api/rollout/current` -- return active/paused rollout + progress
+- `POST /api/rollout/canary/trigger` -- start the canary phase immediately
 - `POST /api/rollout/{rollout_id}/resume` -- resume paused rollout
 - `POST /api/rollout/{rollout_id}/cancel` -- cancel rollout
 
@@ -144,19 +172,22 @@ Positioned above the scheduler status bar, showing:
 - Handles `rollout_status` and `scheduler_status` (rollout field) WebSocket messages
 - `updateRolloutUI(rollout)` -- renders rollout card
 - `hideRolloutCard()` -- hides when no active rollout
+- `triggerCanaryNow()` -- fires the manual canary endpoint from the pending canary pill
 - `resumeRollout()` / `cancelRollout()` -- API calls
+- The firmware drawer persists `rollout_canary_aps` and `rollout_canary_switches` from inventory-backed checkbox lists, not just live topology
+- Saving canaries validates that they are real enabled devices in the effective rollout scope
 
 ---
 
 ## Version Comparison Logic
 
-**Problem:** We can't reliably extract version from firmware filename.
+**Problem:** A single learned target is not enough once APs, 303L CPEs, and switches can all be in the same rollout.
 
-**Solution -- learn on first success:**
-1. Canary phase: update 1 AP unconditionally (existing skip logic handles "already current")
-2. After canary succeeds, read `new_version` from the first successful device -> store as `rollouts.target_version`
-3. All subsequent phases filter devices: `access_points.firmware_version != target_version`
-4. Devices the poller shows already on `target_version` are skipped automatically
+**Solution -- per-family targets:**
+1. Prefer parsing target versions from the selected rollout firmware filenames
+2. If a filename cannot be parsed, learn the version from the first successful device of that firmware family
+3. AP eligibility checks the AP plus its attached manageable CPEs against the correct family targets
+4. Switch eligibility checks only the switch target for its family
 
 ---
 
@@ -164,12 +195,12 @@ Positioned above the scheduler status bar, showing:
 
 | Night | Phase | Batch Size | After Success |
 |-------|-------|-----------|---------------|
-| 1 | canary | 1 AP + its CPEs | Learn target_version, advance to pct10 |
-| 2 | pct10 | ~10% of remaining APs | Advance to pct50 |
-| 3 | pct50 | ~50% of remaining APs | Advance to pct100 |
-| 4 | pct100 | All remaining APs | Mark rollout completed |
+| 1 | canary | Configured canary APs (+ attached CPEs) and configured canary switches, else 1 AP + 1 switch when available | Learn any missing family targets, advance to pct10 |
+| 2 | pct10 | ~10% of remaining APs and ~10% of remaining switches | Advance to pct50 |
+| 3 | pct50 | ~50% of remaining APs and ~50% of remaining switches | Advance to pct100 |
+| 4 | pct100 | All remaining APs and switches | Mark rollout completed |
 
-- "Remaining" = in-scope APs whose DB `firmware_version != target_version` and not already `updated` in this rollout
+- "Remaining" = in-scope APs whose own firmware or manageable CPEs are behind, plus in-scope switches behind their family target, excluding devices already `updated` in this rollout
 - If a phase has 0 candidates (all already current), auto-advance to next phase immediately
 - If all phases are done, rollout status = `completed`
 
@@ -180,8 +211,9 @@ Positioned above the scheduler status bar, showing:
 1. **Failure pauses rollout** -- any device failure in a phase pauses the entire rollout. User must review and resume.
 2. **One phase per night** -- existing `_ran_today` set prevents re-running. Phase advances happen logically, not by re-triggering the same night.
 3. **New firmware = new rollout** -- if `selected_firmware_30x` changes, any active rollout is cancelled and a fresh one starts from canary.
-4. **Canary validates** -- first night is always 1 AP to catch bad firmware before wider deployment.
-5. **All existing safety rules preserved** -- time validation, maintenance window cutoff, weather check still apply before any phase runs.
+4. **Canary validates** -- the canary phase always runs the configured canary AP / switch first when available, or falls back to a single AP / switch.
+5. **All existing safety rules preserved** -- time validation, switch/AP scope, and weather checks still apply before any phase runs.
+6. **Manual canary is isolated** -- clicking the pending `Canary` pill does not consume the nightly rollout window for later phases and does not inherit the scheduled cutoff.
 
 ---
 

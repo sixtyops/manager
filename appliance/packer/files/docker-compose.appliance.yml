@@ -20,6 +20,26 @@ services:
     mem_limit: 512m
     restart: unless-stopped
 
+  radius:
+    image: freeradius/freeradius-server:latest-3.2-alpine
+    container_name: tachyon-radius
+    ports:
+      - "1812:1812/udp"
+    volumes:
+      - /data/db/radius/clients.conf:/etc/raddb/clients.conf:ro
+      - /data/db/radius/mods-config/files/authorize:/etc/raddb/mods-config/files/authorize:ro
+    depends_on:
+      tachyon-mgmt:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /etc/raddb/clients.conf && test -s /etc/raddb/mods-config/files/authorize && /opt/sbin/radiusd -C -d /etc/raddb >/dev/null 2>&1 && netstat -anu | grep -q ':1812 '"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
+    mem_limit: 128m
+    restart: unless-stopped
+
   nginx:
     image: nginx:alpine
     container_name: tachyon-nginx

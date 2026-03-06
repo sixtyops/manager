@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy — SixtyOps</title>
+  <meta name="description" content="SixtyOps Privacy Policy — how we handle your data.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230D9488'/><svg x='2' y='2' width='28' height='28' viewBox='0 0 28 28' fill='none'><rect x='3' y='8' width='2.5' height='12' rx='1' fill='white' opacity='0.9'/><rect x='7.5' y='6' width='2.5' height='16' rx='1' fill='white'/><rect x='12' y='4' width='2.5' height='20' rx='1' fill='white'/><path d='M17 10 L25 6' stroke='white' stroke-width='1.5' stroke-linecap='round' opacity='0.5'/><path d='M17 14 L26 14' stroke='white' stroke-width='1.5' stroke-linecap='round' opacity='0.8'/><path d='M17 18 L25 22' stroke='white' stroke-width='1.5' stroke-linecap='round' opacity='0.5'/></svg></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'Monaco', 'Menlo', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#CCFBF1', 100: '#99F6E4', 500: '#14B8A6',
+              600: '#0D9488', 700: '#0F766E', 800: '#115E59', 900: '#134E4A',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="assets/css/custom.css">
+</head>
+<body class="font-sans text-slate-900 bg-white antialiased">
+
+  <!-- ════════ NAV ════════ -->
+  <nav class="sticky top-0 z-50 bg-white border-b border-slate-200">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-12">
+        <a href="index.html" class="flex items-center gap-2">
+          <div class="w-6 h-6 bg-brand-600 rounded flex items-center justify-center">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 28 28" fill="none"><rect x="3" y="8" width="2.5" height="12" rx="1" fill="white" opacity="0.9"/><rect x="7.5" y="6" width="2.5" height="16" rx="1" fill="white"/><rect x="12" y="4" width="2.5" height="20" rx="1" fill="white"/><path d="M17 10 L25 6" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><path d="M17 14 L26 14" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/><path d="M17 18 L25 22" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg>
+          </div>
+          <span class="text-base font-bold tracking-tight text-slate-900">Sixty<span class="text-brand-600">Ops</span></span>
+        </a>
+        <div class="flex items-center gap-8">
+          <a href="index.html" class="text-sm text-slate-500 hover:text-slate-900 transition-colors">Home</a>
+          <a href="terms.html" class="text-sm text-slate-500 hover:text-slate-900 transition-colors">Terms</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ════════ CONTENT ════════ -->
+  <main class="py-16 sm:py-20">
+    <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+      <p class="font-mono text-sm text-slate-400 mb-4 tracking-wide">// legal</p>
+      <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900">Privacy Policy</h1>
+      <p class="mt-3 text-sm text-slate-500">Effective March 5, 2026</p>
+
+      <div class="mt-12 space-y-10 text-slate-600 leading-relaxed">
+
+        <!-- 1 -->
+        <section>
+          <h2 class="text-lg font-semibold text-slate-900 mb-3">1. Introduction</h2>
+          <p>This Privacy Policy describes how Isaac Olson, doing business as SixtyOps ("we", "us", "our"), collects, uses, and protects information when you use the SixtyOps website (sixtyops.net), the SixtyOps appliance software, and related services (collectively, the "Service").</p>
+          <p class="mt-3">SixtyOps is a self-hosted network management appliance. The vast majority of your data never leaves your infrastructure. This policy explains the limited circumstances in which data is transmitted externally.</p>
+        </section>
+
+        <!-- 2 -->
+        <section>
+          <h2 class="text-lg font-semibold text-slate-900 mb-3">2. Information We Collect</h2>
+
+          <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.1 Account Data</h3>
+          <p>When you set up SixtyOps, the appliance stores an administrator username and a bcrypt-hashed password locally on your appliance. If you enable SSO via an OIDC provider, your email address and group memberships are processed during authentication. This data is stored only on your appliance.</p>
+
+          <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.2 Device & Network Data</h3>
+          <p>SixtyOps manages your Tachyon wireless devices. The appliance stores device IP addresses, MAC addresses, firmware versions, configuration snapshots, signal metrics, and geographic coordinates locally in an SQLite database on your appliance. <strong>This data is never transmitted to us.</strong></p>
+
+          <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.3 Telemetry (Opt-Out)</h3>
+          <p>By default, SixtyOps sends anonymized, aggregate job statistics after firmware update jobs complete. This includes:</p>
+          <ul class="list-disc list-inside mt-2 space-y-1 text-sm">
+            <li>An anonymous install ID (SHA-256 hash, not personally identifiable)</li>
+            <li>Device counts and models (e.g., "TNA-301: 12")</li>
+            <li>Success, failure, and skip counts</li>
+            <li>Error categories (timeout, connection, auth, etc.)</li>
+            <li>Job duration and scheduling method</li>
+          </ul>
+          <p class="mt-3">Telemetry <strong>never</strong> includes IP addresses, MAC addresses, serial numbers, hostnames, credentials, locations, or any personally identifiable information.</p>
+          <p class="mt-2">You can disable telemetry entirely by setting the environment variable <code class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">DISABLE_TELEMETRY=1</code> on your appliance.</p>
+
+          <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.4 License Validation</h3>
+          <p>If you activate a Pro license, the appliance sends your license key and total device count (APs + switches) to our license server (license.sixtyops.net) approximately every 24 hours to validate your subscription. No device details, network data, or personal information is included.</p>
+
+          <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.5 Website Data</h3>
+          <p>When you visit sixtyops.net, our hosting provider may collect standard web server logs (IP address, browser type, pages visited). We do not use third-party analytics or advertising trackers on our website.</p>
+        </section>
+
+        <!-- 3 -->
+        <section>
+          <h2 class="text-lg font-semibold text-slate-900 mb-3">3. Data Ownership</h2>
+          <p>You own all device data, network configurations, and operational data stored on your SixtyOps appliance. We do not have access to your appliance or the data on it. Your data stays on your infrastructure at all times.</p>
+        </section>
+
+        <!-- 4 -->
+        <section>
+          <h2 class="text-lg font-semibold text-slate-900 mb-3">4. How We Use Information</h2>
+          <ul class="list-disc list-inside space-y-1 text-sm">
+            <li>Telemetry data: to improve product reliability, identify common failure modes, and prioritize device compatibility</li>
+            <li>License validation: to verify active subscriptions and enforce device limits</li>
+            <li>Website logs: to maintain site security and availability</li>
+          </ul>
+          <p class="mt-3">We do not sell, rent, or share your data with third parties for advertising or marketing purposes.</p>
+        </section>
+
+        <!-- 5 -->
+        <section>
+          <h2 class="text-lg font-semibold text-slate-900 mb-3">5. Third-Party Services</h2>
+          <p>SixtyOps integrates with the following third-party services at your discretion:</p>
+          <ul class="list-disc list-inside mt-2 space-y-1 text-sm">
+            <li><strong>Slack</strong> (optional): If you configure a Slack webhook, job completion summaries are sent to your Slack workspace. No device credentials or IP addresses are included.</li>
+            <li><strong>OIDC Provider</strong> (optional): If you enable SSO, authentication is handled by your chosen identity provider.</li>
+            <li><strong>GitHub</strong>: The appliance checks GitHub Releases for available software updates. No customer data is sent.</li>
+          </ul>
+          <p class="mt-3">Each third-party service is governed by its own privacy policy.</p>
+        </section>
+
+        <!-- 6 -->
+        <section>
+          <h2 class="text-lg font-semibold text-slate-900 mb-3">6. Cookies & Sessions</h2>
+          <p>The SixtyOps appliance uses a single session cookie:</p>
+          <ul class="list-disc list-inside mt-2 space-y-1 text-sm">
+            <li><strong>Name:</strong> <code class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">session_id</code></li>
+            <li><strong>Purpose:</strong> Authenticate your admin session</li>
+            <li><strong>Flags:</strong> HttpOnly, Secure, SameSite=Lax</li>
+            <li><strong>Duration:</strong> 24 hours</li>
+          </ul>
+          <p class="mt-3">The sixtyops.net website does not set any cookies.</p>
+        </section>
+
+        <!-- 7 -->
+        <section>
+          <h2 class="text-lg font-semibold text-slate-900 mb-3">7. Data Retention</h2>
+          <p>Data stored on your appliance follows these default retention periods:</p>
+          <ul class="list-disc list-inside mt-2 space-y-1 text-sm">
+            <li>Job history: 90 days</li>
+            <li>Schedule logs: 90 days</li>
+            <li>Device update history: 180 days</li>
+            <li>Configuration snapshots: most recent snapshots per device</li>
+            <li>Sessions: 24 hours</li>
+          </ul>
+          <p class="mt-3">These are automatic cleanup intervals within the appliance. Since the data resides on your infrastructure, you have full control over it at all times.</p>
+        </section>
+
+        <!-- 8 -->
+        <section>
+          <h2 class="text-lg font-semibold text-slate-900 mb-3">8. Security</h2>
+          <p>We take reasonable measures to protect the limited data we receive:</p>
+          <ul class="list-disc list-inside mt-2 space-y-1 text-sm">
+            <li>Admin passwords are bcrypt-hashed and never stored in plaintext</li>
+            <li>Device credentials are encrypted at rest on your appliance</li>
+            <li>All external communications (telemetry, license validation) use HTTPS/TLS</li>
+            <li>Login attempts are rate-limited to prevent brute-force attacks</li>
+          </ul>
+          <p class="mt-3">No method of electronic transmission or storage is 100% secure. We cannot guarantee absolute security, but we strive to use commercially reasonable protections.</p>
+        </section>
+
+        <!-- 9 -->
+        <section>
+          <h2 class="text-lg font-semibold text-slate-900 mb-3">9. Your Rights</h2>
+          <p>Since your device and network data is stored entirely on your own appliance, you have direct access to, and control over, all of it.</p>
+          <p class="mt-2">For data we process externally (telemetry, license validation), you may:</p>
+          <ul class="list-disc list-inside mt-2 space-y-1 text-sm">
+            <li>Request access to your telemetry records</li>
+            <li>Request deletion of your telemetry data</li>
+            <li>Opt out of telemetry at any time</li>
+          </ul>
+          <p class="mt-3">Contact us at <a href="mailto:support@sixtyops.net" class="text-brand-600 hover:text-brand-700">support@sixtyops.net</a> for any privacy-related requests.</p>
+        </section>
+
+        <!-- 10 -->
+        <section>
+          <h2 class="text-lg font-semibold text-slate-900 mb-3">10. Children's Privacy</h2>
+          <p>SixtyOps is a business-to-business service designed for ISP network administrators. We do not knowingly collect information from anyone under the age of 16. If you believe a child has provided us with personal information, please contact us and we will promptly delete it.</p>
+        </section>
+
+        <!-- 11 -->
+        <section>
+          <h2 class="text-lg font-semibold text-slate-900 mb-3">11. Changes to This Policy</h2>
+          <p>We may update this Privacy Policy from time to time. Changes will be posted on this page with an updated effective date. Your continued use of the Service after changes are posted constitutes acceptance of the revised policy.</p>
+        </section>
+
+        <!-- 12 -->
+        <section>
+          <h2 class="text-lg font-semibold text-slate-900 mb-3">12. Contact</h2>
+          <p>If you have questions about this Privacy Policy, contact us at:</p>
+          <p class="mt-2"><a href="mailto:support@sixtyops.net" class="text-brand-600 hover:text-brand-700">support@sixtyops.net</a></p>
+        </section>
+
+      </div>
+    </div>
+  </main>
+
+  <!-- ════════ FOOTER ════════ -->
+  <footer class="border-t border-slate-200 py-8">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex flex-col md:flex-row items-center justify-between gap-4">
+        <div class="flex items-center gap-2">
+          <div class="w-5 h-5 bg-brand-600 rounded flex items-center justify-center">
+            <svg class="w-3 h-3" viewBox="0 0 28 28" fill="none"><rect x="3" y="8" width="2.5" height="12" rx="1" fill="white" opacity="0.9"/><rect x="7.5" y="6" width="2.5" height="16" rx="1" fill="white"/><rect x="12" y="4" width="2.5" height="20" rx="1" fill="white"/><path d="M17 10 L25 6" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><path d="M17 14 L26 14" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/><path d="M17 18 L25 22" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg>
+          </div>
+          <span class="text-sm font-bold text-slate-900">Sixty<span class="text-brand-600">Ops</span></span>
+        </div>
+        <div class="flex items-center gap-6 text-xs text-slate-500">
+          <a href="index.html" class="hover:text-slate-700 transition-colors">Home</a>
+          <a href="terms.html" class="hover:text-slate-700 transition-colors">Terms</a>
+          <a href="privacy.html" class="text-slate-700 font-medium">Privacy</a>
+          <a href="billing.html" class="hover:text-slate-700 transition-colors">Billing</a>
+        </div>
+        <div class="text-xs text-slate-500">&copy; 2026 Isaac Olson</div>
+      </div>
+      <div class="mt-6 pt-4 border-t border-slate-200 text-center text-xs text-slate-500">
+        Made for <a href="https://treehouse.mn" class="text-slate-600 hover:text-slate-800 transition-colors">Treehouse Broadband</a> &amp; all WISPs by <a href="https://olson.io" class="text-slate-600 hover:text-slate-800 transition-colors">Isaac Olson</a>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>
