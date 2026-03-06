@@ -60,14 +60,13 @@
         </div>
 
         {% if step == 1 %}
-        <!-- Step 1: HTTPS Setup -->
-        <h1>HTTPS Setup</h1>
-        <p class="subtitle">Step 1 of 2: Configure secure connections</p>
-        <div class="step-label">Your server is currently using a self-signed certificate</div>
+        <!-- Step 1: HTTPS Certificate -->
+        <h1>HTTPS Certificate</h1>
+        <p class="subtitle">Step 1 of 2: Review HTTPS configuration</p>
 
         <div class="info-message">
-            Configure Let's Encrypt for a trusted HTTPS certificate. Your server must be accessible
-            from the internet on port 80 for domain verification.
+            Your server is secured with HTTPS using a self-signed certificate. This is recommended
+            for most deployments on private networks.
         </div>
 
         <div class="error-message {{ 'visible' if error else '' }}">
@@ -81,28 +80,41 @@
         <form method="POST" action="/setup-wizard">
             <input type="hidden" name="step" value="1">
 
-            <div class="form-group">
-                <label for="ssl_domain">Domain Name</label>
-                <input type="text" id="ssl_domain" name="ssl_domain"
-                       value="{{ ssl_status.domain or '' }}"
-                       placeholder="firmware.example.com">
+            <div id="letsencrypt-toggle" style="margin-bottom: 16px;">
+                <a href="#" onclick="document.getElementById('letsencrypt-fields').classList.toggle('active'); return false;"
+                   style="color: #94a3b8; font-size: 0.85rem; text-decoration: none;">
+                    Want a browser-trusted certificate? Configure Let's Encrypt &darr;
+                </a>
             </div>
 
-            <div class="form-group">
-                <label for="ssl_email">Email (for renewal notices)</label>
-                <input type="email" id="ssl_email" name="ssl_email"
-                       value="{{ ssl_status.email or '' }}"
-                       placeholder="admin@example.com">
+            <div id="letsencrypt-fields" class="conditional-field">
+                <div style="margin-bottom: 12px; font-size: 0.8rem; color: #64748b;">
+                    This uses HTTP-01 validation, which requires port 80 to be reachable from the internet.
+                    For private networks, consider using certbot with DNS-01 validation instead &mdash;
+                    it works without any inbound internet access.
+                </div>
+                <div class="form-group">
+                    <label for="ssl_domain">Domain Name</label>
+                    <input type="text" id="ssl_domain" name="ssl_domain"
+                           value="{{ ssl_status.domain or '' }}"
+                           placeholder="firmware.example.com">
+                </div>
+
+                <div class="form-group">
+                    <label for="ssl_email">Email (for renewal notices)</label>
+                    <input type="email" id="ssl_email" name="ssl_email"
+                           value="{{ ssl_status.email or '' }}"
+                           placeholder="admin@example.com">
+                </div>
+
+                <button type="submit" name="action" value="configure" class="btn-secondary" style="margin-bottom: 12px; width: 100%;">
+                    Get Let's Encrypt Certificate
+                </button>
             </div>
 
-            <div class="button-row">
-                <button type="submit" name="action" value="skip" class="btn-secondary">
-                    Skip (Use Self-Signed)
-                </button>
-                <button type="submit" name="action" value="configure" class="btn-primary">
-                    Get Certificate
-                </button>
-            </div>
+            <button type="submit" name="action" value="skip" class="btn-primary" style="width: 100%;">
+                Continue with Self-Signed Certificate
+            </button>
         </form>
 
         {% elif step == 2 %}
@@ -204,7 +216,7 @@
                     <span class="status-badge configured">Configured</span>
                     {% else %}
                     Self-signed certificate
-                    <span class="status-badge skipped">Skipped</span>
+                    <span class="status-badge configured">Default</span>
                     {% endif %}
                 </span>
             </div>

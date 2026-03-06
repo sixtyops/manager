@@ -106,7 +106,7 @@ echo
 echo "On first run, you'll be prompted to create an admin password."
 echo
 echo "The setup wizard will then guide you through:"
-echo "  1. Configuring HTTPS with Let's Encrypt"
+echo "  1. HTTPS certificate (self-signed by default, optional Let's Encrypt)"
 echo "  2. Setting up automatic backups"
 echo
 echo "Commands:"

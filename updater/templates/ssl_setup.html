@@ -74,8 +74,8 @@
 </head>
 <body>
     <div class="auth-card">
-        <h1>HTTPS Settings</h1>
-        <p class="subtitle">Configure SSL with Let's Encrypt</p>
+        <h1>HTTPS Certificate</h1>
+        <p class="subtitle">Manage your server's HTTPS certificate</p>
 
         {% if ssl_status.enabled and ssl_status.using_letsencrypt %}
         <div class="cert-status">
@@ -100,8 +100,10 @@
         </div>
         {% else %}
         <div class="info-message">
-            Your server is using a self-signed certificate. Configure Let's Encrypt for a trusted
-            HTTPS certificate. Your server must be accessible from the internet on port 80.
+            Your server is using a self-signed certificate, which is suitable for private network
+            deployments. To use a browser-trusted certificate, you can configure Let's Encrypt below
+            (requires port 80 accessible from the internet). For private networks, consider using
+            certbot with DNS-01 validation instead &mdash; it works without any inbound internet access.
         </div>
         {% endif %}
 
