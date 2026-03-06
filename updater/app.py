@@ -2768,6 +2768,9 @@ class DeviceStatus:
     stage_history: list = field(default_factory=list)
     current_stage: Optional[str] = None
     current_stage_started: Optional[str] = None
+    # Smoke test results
+    smoke_warnings: Optional[list] = None
+    smoke_checks: Optional[list] = None
 
 
 @dataclass
@@ -4041,6 +4044,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             "Installing firmware": "installing",
             "Rebooting": "rebooting",
             "Verifying": "verifying",
+            "Smoke testing": "smoke_testing",
             "Skipped": "skipped",
         }
         new_stage = None
@@ -4075,6 +4079,10 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             "parent_ap": device_status.parent_ap,
         }))
 
+    # Capture pre-update CPE count for smoke test comparison
+    pre_update_cpe_count = len(job.ap_cpe_map.get(ip, [])) if device_status.role == "ap" else 0
+
+    client = None
     if job.device_type in ("tachyon", "mixed"):
         username, password = job.credentials[ip]
         client = TachyonClient(ip, username, password)
@@ -4101,6 +4109,30 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             db.save_device_duration(job.job_id, ip, device_status.role, duration_secs, job.bank_mode)
         except Exception as e:
             logger.warning(f"Failed to save device duration for {ip}: {e}")
+
+        # Post-update smoke tests
+        if client:
+            try:
+                progress_callback(ip, "Smoke testing...")
+                smoke_result = await client.run_smoke_tests(
+                    role=device_status.role,
+                    pre_update_cpe_count=pre_update_cpe_count,
+                )
+                device_status.smoke_checks = smoke_result.checks
+                if not smoke_result.passed:
+                    device_status.smoke_warnings = smoke_result.warnings
+                    warning_summary = "; ".join(smoke_result.warnings[:3])
+                    if len(warning_summary) > 200:
+                        warning_summary = warning_summary[:197] + "..."
+                    device_status.progress_message = f"{prefix}Updated to {result.new_version} (warnings: {warning_summary})"
+                    logger.warning(f"Smoke test warnings for {ip}: {smoke_result.warnings}")
+                else:
+                    device_status.progress_message = f"{prefix}Updated to {result.new_version} (smoke tests passed)"
+            except Exception as e:
+                logger.warning(f"Smoke test error for {ip} (non-fatal): {e}")
+                device_status.smoke_warnings = [f"Smoke test error: {e}"]
+            # Restore status — progress_callback sets it to smoke_testing
+            device_status.status = "success"
     else:
         device_status.status = "failed"
         device_status.error = result.error
@@ -4125,6 +4157,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         "role": device_status.role,
         "parent_ap": device_status.parent_ap,
         "model": device_status.model,
+        "smoke_warnings": device_status.smoke_warnings,
+        "smoke_checks": device_status.smoke_checks,
     })
 
     # Finalize stage tracking and persist device update history
@@ -4139,6 +4173,15 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             "success": is_success,
         })
     failed_stage = device_status.current_stage if device_status.status == "failed" else None
+
+    # Enrich smoke_testing stage with check details and warnings
+    for stage in device_status.stage_history:
+        if stage["stage"] == "smoke_testing":
+            stage["smoke_checks"] = device_status.smoke_checks or []
+            stage["smoke_warnings"] = device_status.smoke_warnings or []
+            stage["has_warnings"] = bool(device_status.smoke_warnings)
+            break
+
     duration_secs = (now - device_start_time).total_seconds()
     try:
         db.save_device_update_history(
@@ -4404,6 +4447,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                 "role": ds.role,
                 "parent_ap": ds.parent_ap,
                 "model": ds.model,
+                "smoke_warnings": ds.smoke_warnings,
             }
             for ip, ds in job.devices.items()
         },
