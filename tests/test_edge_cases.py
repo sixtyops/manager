@@ -209,7 +209,7 @@ class TestCredentialStateMismatch:
             # Setup still required
             assert is_setup_required() is True
             # Login should work with env password
-            assert authenticate_local("admin", "bootstrap1") is True
+            assert authenticate_local("admin", "bootstrap1") is not None
 
     def test_db_hash_takes_precedence_over_env(self, mock_db):
         """Both DB hash and env password → DB hash used for auth."""
@@ -219,9 +219,9 @@ class TestCredentialStateMismatch:
         db.set_setting("admin_password_hash", hashed)
         with patch.dict(os.environ, {"ADMIN_USERNAME": "admin", "ADMIN_PASSWORD": "env_pass1"}):
             # DB hash wins
-            assert authenticate_local("admin", "db_password") is True
+            assert authenticate_local("admin", "db_password") is not None
             # Env password should NOT work
-            assert authenticate_local("admin", "env_pass1") is False
+            assert authenticate_local("admin", "env_pass1") is None
 
     def test_setup_complete_with_valid_hash(self, mock_db):
         """Normal state: setup done with valid hash → no setup required."""

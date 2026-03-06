@@ -271,6 +271,17 @@ def memory_db():
             updated_at TEXT,
             UNIQUE(rollout_id, ip)
         );
+
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            password_hash TEXT,
+            role TEXT NOT NULL DEFAULT 'viewer',
+            auth_method TEXT NOT NULL DEFAULT 'local',
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     # Insert default settings
     defaults = {
@@ -319,6 +330,11 @@ def memory_db():
     }
     for key, value in defaults.items():
         conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))
+    # Seed admin user for RBAC
+    conn.execute(
+        "INSERT INTO users (username, role, auth_method) VALUES (?, ?, ?)",
+        ("admin", "admin", "local"),
+    )
     conn.commit()
     yield conn
     conn.close()
@@ -408,6 +424,42 @@ def authed_client(client, mock_db):
     mock_db.execute(
         "INSERT INTO sessions (session_id, username, ip_address, expires_at) VALUES (?, ?, ?, ?)",
         (session_id, "admin", "127.0.0.1", expires)
+    )
+    mock_db.commit()
+    client.cookies.set("session_id", session_id)
+    return client
+
+
+@pytest.fixture
+def operator_client(client, mock_db):
+    """TestClient with an operator role session."""
+    mock_db.execute(
+        "INSERT OR IGNORE INTO users (username, role, auth_method) VALUES (?, ?, ?)",
+        ("operator1", "operator", "local"),
+    )
+    session_id = "test-session-operator"
+    expires = (datetime.now() + timedelta(hours=24)).isoformat()
+    mock_db.execute(
+        "INSERT INTO sessions (session_id, username, ip_address, expires_at) VALUES (?, ?, ?, ?)",
+        (session_id, "operator1", "127.0.0.1", expires),
+    )
+    mock_db.commit()
+    client.cookies.set("session_id", session_id)
+    return client
+
+
+@pytest.fixture
+def viewer_client(client, mock_db):
+    """TestClient with a viewer role session."""
+    mock_db.execute(
+        "INSERT OR IGNORE INTO users (username, role, auth_method) VALUES (?, ?, ?)",
+        ("viewer1", "viewer", "local"),
+    )
+    session_id = "test-session-viewer"
+    expires = (datetime.now() + timedelta(hours=24)).isoformat()
+    mock_db.execute(
+        "INSERT INTO sessions (session_id, username, ip_address, expires_at) VALUES (?, ?, ?, ?)",
+        (session_id, "viewer1", "127.0.0.1", expires),
     )
     mock_db.commit()
     client.cookies.set("session_id", session_id)

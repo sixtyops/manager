@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict, Optional, Set
 
 import aiofiles
+import bcrypt
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,7 +33,7 @@ from .scheduler import init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTE
 from .firmware_fetcher import init_fetcher, get_fetcher
 from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
 from . import services
-from .auth import require_auth, require_auth_ws, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure
+from .auth import require_auth, require_auth_ws, require_role, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user
 from .backup import build_csv_export, process_csv_import
 from . import telemetry
 from . import slack
@@ -399,6 +400,7 @@ def _cleanup_completed_jobs(max_age_seconds: int = 3600):
 async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
     # Startup
+    ensure_admin_user()
     db.cleanup_expired_sessions()
     radius_runtime = builtin_radius.get_runtime()
     await radius_runtime.start()
@@ -581,7 +583,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
         )
 
     _clear_rate_limit_bucket(bucket)
-    session_id = create_session(user, ip_address)
+    session_id = create_session(user["username"], ip_address)
 
     # Redirect to setup if password hasn't been changed from default
     redirect_url = "/setup" if is_setup_required() else "/"
@@ -812,7 +814,7 @@ async def ssl_setup_page(request: Request, session: dict = Depends(require_auth)
 @app.post("/ssl-setup")
 async def ssl_setup_submit(
     request: Request, domain: str = Form(...), email: str = Form(...),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin")),
 ):
     """Handle SSL certificate request."""
     success, message = await ssl_manager.obtain_certificate(domain, email)
@@ -849,7 +851,7 @@ async def backup_setup_submit(
     sftp_password: str = Form(None),
     ssh_key: str = Form(None),
     retention_count: int = Form(30),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin")),
 ):
     """Handle SFTP backup configuration."""
     success, message = await sftp_backup.configure_backup(
@@ -866,7 +868,7 @@ async def backup_setup_submit(
 
 
 @app.post("/backup-run")
-async def backup_run_now(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+async def backup_run_now(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Trigger an immediate backup."""
     success, message = await sftp_backup.run_backup()
     return templates.TemplateResponse("backup_setup.html", {
@@ -882,14 +884,14 @@ async def get_backup_status_api(session: dict = Depends(require_auth), _pro=Depe
 
 
 @app.post("/api/backup/run")
-async def api_backup_run_now(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+async def api_backup_run_now(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Trigger an immediate backup and return JSON result."""
     success, message = await sftp_backup.run_backup()
     return {"success": success, "message": message}
 
 
 @app.post("/api/backup/test-connection")
-async def test_backup_connection_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+async def test_backup_connection_api(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Test SFTP backup connection."""
     success, message = await sftp_backup.test_backup_connection()
     return {"success": success, "message": message}
@@ -1049,7 +1051,7 @@ async def create_site(
     location: str = Form(None),
     latitude: float = Form(None),
     longitude: float = Form(None),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.TOWER_SITES)),
 ):
     """Create a new tower site."""
@@ -1070,7 +1072,7 @@ async def update_site(
     location: str = Form(None),
     latitude: float = Form(None),
     longitude: float = Form(None),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.TOWER_SITES)),
 ):
     """Update a tower site."""
@@ -1079,7 +1081,7 @@ async def update_site(
 
 
 @app.delete("/api/sites/{site_id}")
-async def delete_site(site_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.TOWER_SITES))):
+async def delete_site(site_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.TOWER_SITES))):
     """Delete a tower site."""
     db.delete_tower_site(site_id)
     return {"success": True}
@@ -1109,7 +1111,7 @@ async def add_ap(
     username: str = Form(...),
     password: str = Form(...),
     tower_site_id: int = Form(None),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
 ):
     """Add a new access point."""
     _validate_ip(ip)
@@ -1134,7 +1136,7 @@ async def add_device(
     username: str = Form(...),
     password: str = Form(...),
     tower_site_id: int = Form(None),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
 ):
     """Add a device, auto-classifying as AP or switch based on model.
 
@@ -1184,7 +1186,7 @@ async def update_ap(
     password: str = Form(None),
     tower_site_id: int = Form(None),
     enabled: bool = Form(None),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
 ):
     """Update an access point."""
     ap = db.get_access_point(ip)
@@ -1226,7 +1228,7 @@ async def update_ap(
 
 
 @app.delete("/api/aps/{ip}")
-async def delete_ap(ip: str, session: dict = Depends(require_auth)):
+async def delete_ap(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Delete an access point."""
     poller = get_poller()
     if poller:
@@ -1243,7 +1245,7 @@ async def delete_ap(ip: str, session: dict = Depends(require_auth)):
 
 
 @app.post("/api/aps/{ip}/poll")
-async def poll_ap(ip: str, session: dict = Depends(require_auth)):
+async def poll_ap(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Trigger immediate poll of an AP."""
     poller = get_poller()
     if not poller:
@@ -1276,7 +1278,7 @@ async def add_switch(
     username: str = Form(...),
     password: str = Form(...),
     tower_site_id: int = Form(None),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
 ):
     """Add a new switch."""
     _validate_ip(ip)
@@ -1301,7 +1303,7 @@ async def update_switch(
     password: str = Form(None),
     tower_site_id: int = Form(None),
     enabled: bool = Form(None),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
 ):
     """Update a switch."""
     sw = db.get_switch(ip)
@@ -1323,7 +1325,7 @@ async def update_switch(
 
 
 @app.delete("/api/switches/{ip}")
-async def delete_switch(ip: str, session: dict = Depends(require_auth)):
+async def delete_switch(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Delete a switch."""
     poller = get_poller()
     if poller:
@@ -1340,7 +1342,7 @@ async def delete_switch(ip: str, session: dict = Depends(require_auth)):
 
 
 @app.post("/api/switches/{ip}/poll")
-async def poll_switch(ip: str, session: dict = Depends(require_auth)):
+async def poll_switch(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Trigger immediate poll of a switch."""
     poller = get_poller()
     if not poller:
@@ -1374,7 +1376,7 @@ async def get_topology(session: dict = Depends(require_auth)):
 
 
 @app.post("/api/topology/refresh")
-async def refresh_topology(session: dict = Depends(require_auth)):
+async def refresh_topology(session: dict = Depends(require_role("admin", "operator"))):
     """Trigger a full topology refresh."""
     poller = get_poller()
     if not poller:
@@ -1505,7 +1507,7 @@ async def quick_add(
     username: str = Form(...),
     password: str = Form(...),
     site_name: str = Form(None),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
 ):
     """Quick add an AP, optionally creating a new site."""
     _validate_ip(ip)
@@ -1750,7 +1752,7 @@ def _validate_settings(filtered: dict):
 
 
 @app.put("/api/settings")
-async def update_settings(request: Request, session: dict = Depends(require_auth)):
+async def update_settings(request: Request, session: dict = Depends(require_role("admin"))):
     """Update settings. Only whitelisted keys are accepted."""
     data = await request.json()
     filtered = {k: v for k, v in data.items() if k in _SETTINGS_WRITABLE}
@@ -1762,7 +1764,7 @@ async def update_settings(request: Request, session: dict = Depends(require_auth
 
 
 @app.post("/api/settings/save")
-async def save_settings_and_reevaluate(request: Request, session: dict = Depends(require_auth)):
+async def save_settings_and_reevaluate(request: Request, session: dict = Depends(require_role("admin"))):
     """Save settings, re-select firmware, and force scheduler re-evaluation."""
     data = await request.json()
     filtered = {k: v for k, v in data.items() if k in _SETTINGS_WRITABLE}
@@ -1785,7 +1787,7 @@ async def save_settings_and_reevaluate(request: Request, session: dict = Depends
 
 
 @app.post("/api/slack/test")
-async def test_slack_webhook(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.SLACK_NOTIFICATIONS))):
+async def test_slack_webhook(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SLACK_NOTIFICATIONS))):
     """Send a test notification to the configured Slack webhook."""
     success, message = await slack.send_test_notification()
     return {"success": success, "message": message}
@@ -1805,7 +1807,7 @@ async def get_license_status(session: dict = Depends(require_auth)):
 
 
 @app.post("/api/license/activate")
-async def activate_license(request: Request, session: dict = Depends(require_auth)):
+async def activate_license(request: Request, session: dict = Depends(require_role("admin"))):
     """Activate or update the license key."""
     data = await request.json()
     key = data.get("license_key", "").strip()
@@ -1817,14 +1819,14 @@ async def activate_license(request: Request, session: dict = Depends(require_aut
 
 
 @app.post("/api/license/deactivate")
-async def deactivate_license(session: dict = Depends(require_auth)):
+async def deactivate_license(session: dict = Depends(require_role("admin"))):
     """Remove the license key and revert to free tier."""
     clear_license()
     return {"success": True, "status": "free"}
 
 
 @app.post("/api/license/validate")
-async def force_validate_license(session: dict = Depends(require_auth)):
+async def force_validate_license(session: dict = Depends(require_role("admin"))):
     """Force re-validate the current license with the server."""
     state = get_license_state()
     if not state.license_key:
@@ -1885,7 +1887,7 @@ async def get_system_info(session: dict = Depends(require_auth)):
 
 
 @app.post("/api/system/network")
-async def update_network_config(request: Request, session: dict = Depends(require_auth)):
+async def update_network_config(request: Request, session: dict = Depends(require_role("admin"))):
     """Update network configuration (appliance mode only)."""
     if os.environ.get("TACHYON_APPLIANCE") != "1":
         raise HTTPException(404, "Not available in this deployment mode")
@@ -1942,7 +1944,7 @@ async def get_update_status(session: dict = Depends(require_auth)):
 
 
 @app.post("/api/updates/check")
-async def check_for_updates(session: dict = Depends(require_auth)):
+async def check_for_updates(session: dict = Depends(require_role("admin", "operator"))):
     """Manually trigger a check for updates."""
     checker = get_checker()
     if checker:
@@ -1952,7 +1954,7 @@ async def check_for_updates(session: dict = Depends(require_auth)):
 
 
 @app.post("/api/updates/apply")
-async def apply_app_update(session: dict = Depends(require_auth)):
+async def apply_app_update(session: dict = Depends(require_role("admin"))):
     """Apply available update by pulling new Docker image and restarting."""
     result = await apply_update()
     if result.get("success"):
@@ -1981,7 +1983,7 @@ async def get_builtin_radius_config(session: dict = Depends(require_auth), _pro=
 
 
 @app.post("/api/auth/radius/test")
-async def test_builtin_radius(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def test_builtin_radius(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Test the built-in RADIUS server health."""
     try:
         success, message = builtin_radius.test_radius_server()
@@ -1991,7 +1993,7 @@ async def test_builtin_radius(session: dict = Depends(require_auth), _pro=Depend
 
 
 @app.put("/api/auth/radius")
-async def update_builtin_radius_config(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def update_builtin_radius_config(request: Request, session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Update built-in RADIUS server settings."""
     data = await request.json()
     try:
@@ -2026,7 +2028,7 @@ async def list_builtin_radius_users(session: dict = Depends(require_auth), _pro=
 
 
 @app.post("/api/auth/radius/users")
-async def create_builtin_radius_user(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def create_builtin_radius_user(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Create a built-in RADIUS user."""
     data = await request.json()
     try:
@@ -2042,7 +2044,7 @@ async def create_builtin_radius_user(request: Request, session: dict = Depends(r
 
 
 @app.put("/api/auth/radius/users/{user_id}")
-async def update_builtin_radius_user(user_id: int, request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def update_builtin_radius_user(user_id: int, request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Update a built-in RADIUS user."""
     data = await request.json()
     try:
@@ -2059,7 +2061,7 @@ async def update_builtin_radius_user(user_id: int, request: Request, session: di
 
 
 @app.delete("/api/auth/radius/users/{user_id}")
-async def delete_builtin_radius_user(user_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def delete_builtin_radius_user(user_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Delete a built-in RADIUS user."""
     deleted = builtin_radius.delete_user(user_id)
     if not deleted:
@@ -2075,7 +2077,7 @@ async def list_builtin_radius_clients(session: dict = Depends(require_auth), _pr
 
 
 @app.post("/api/auth/radius/clients")
-async def create_builtin_radius_client(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def create_builtin_radius_client(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Create a manual RADIUS client override."""
     data = await request.json()
     try:
@@ -2091,7 +2093,7 @@ async def create_builtin_radius_client(request: Request, session: dict = Depends
 
 
 @app.put("/api/auth/radius/clients/{override_id}")
-async def update_builtin_radius_client(override_id: int, request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def update_builtin_radius_client(override_id: int, request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Update a manual RADIUS client override."""
     data = await request.json()
     try:
@@ -2108,7 +2110,7 @@ async def update_builtin_radius_client(override_id: int, request: Request, sessi
 
 
 @app.delete("/api/auth/radius/clients/{override_id}")
-async def delete_builtin_radius_client(override_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def delete_builtin_radius_client(override_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Delete a manual RADIUS client override."""
     deleted = builtin_radius.delete_client_override(override_id)
     if not deleted:
@@ -2124,7 +2126,7 @@ async def get_builtin_radius_stats(session: dict = Depends(require_auth), _pro=D
 
 
 @app.post("/api/auth/radius/secret-review")
-async def mark_builtin_radius_secret_reviewed(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def mark_builtin_radius_secret_reviewed(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Mark a legacy built-in RADIUS secret as reviewed today without changing it."""
     try:
         builtin_radius.mark_secret_reviewed()
@@ -2149,7 +2151,7 @@ async def get_builtin_radius_rollout(session: dict = Depends(require_auth), _pro
 
 
 @app.post("/api/auth/radius/rollout/start")
-async def start_builtin_radius_rollout(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def start_builtin_radius_rollout(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Start staged Radius migration for managed devices."""
     if builtin_radius.get_active_rollout():
         raise HTTPException(400, "A Radius rollout is already active")
@@ -2178,7 +2180,7 @@ async def start_builtin_radius_rollout(session: dict = Depends(require_auth), _p
 
 
 @app.post("/api/auth/radius/rollout/{rollout_id}/resume")
-async def resume_builtin_radius_rollout(rollout_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def resume_builtin_radius_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Resume a paused Radius migration rollout."""
     rollout = builtin_radius.get_rollout(rollout_id)
     if not rollout:
@@ -2192,7 +2194,7 @@ async def resume_builtin_radius_rollout(rollout_id: int, session: dict = Depends
 
 
 @app.post("/api/auth/radius/rollout/{rollout_id}/cancel")
-async def cancel_builtin_radius_rollout(rollout_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def cancel_builtin_radius_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Cancel an active or paused Radius migration rollout."""
     rollout = builtin_radius.get_rollout(rollout_id)
     if not rollout:
@@ -2205,7 +2207,7 @@ async def cancel_builtin_radius_rollout(rollout_id: int, session: dict = Depends
 
 
 @app.put("/api/auth/device-defaults")
-async def update_device_auth_config(request: Request, session: dict = Depends(require_auth)):
+async def update_device_auth_config(request: Request, session: dict = Depends(require_role("admin"))):
     """Update global default device credentials."""
     data = await request.json()
 
@@ -2240,7 +2242,7 @@ async def get_oidc_config_api(session: dict = Depends(require_auth), _pro=Depend
 
 
 @app.put("/api/auth/oidc")
-async def update_oidc_config_api(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.SSO_OIDC))):
+async def update_oidc_config_api(request: Request, session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Update OIDC/SSO configuration."""
     data = await request.json()
 
@@ -2270,7 +2272,7 @@ async def update_oidc_config_api(request: Request, session: dict = Depends(requi
 
 
 @app.post("/api/auth/test-oidc")
-async def test_oidc_discovery(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.SSO_OIDC))):
+async def test_oidc_discovery(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Test OIDC discovery endpoint reachability."""
     config = oidc_config.get_oidc_config()
     if not config.provider_url:
@@ -2490,13 +2492,18 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
         return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
 
     # Validate group membership
-    user = authenticate_oidc_user(email, groups)
-    if not user:
+    oidc_username = authenticate_oidc_user(email, groups)
+    if not oidc_username:
+        return RedirectResponse(url="/login?error=oidc_unauthorized", status_code=302)
+
+    # Ensure OIDC user exists in users table (auto-creates with default role)
+    db_user = ensure_oidc_user(oidc_username)
+    if db_user and not db_user.get("enabled", True):
         return RedirectResponse(url="/login?error=oidc_unauthorized", status_code=302)
 
     # Create session using existing infrastructure
     _clear_rate_limit_bucket(bucket)
-    session_id = create_session(user, ip_address)
+    session_id = create_session(oidc_username, ip_address)
 
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
@@ -2508,6 +2515,103 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
         samesite="lax",
     )
     return response
+
+
+# ---------------------------------------------------------------------------
+# User management API (RBAC)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/users/me")
+async def get_current_user(session: dict = Depends(require_auth)):
+    """Get current authenticated user info."""
+    return {"username": session["username"], "role": session.get("role", "viewer")}
+
+
+@app.get("/api/users", dependencies=[Depends(require_role("admin"))])
+async def list_users_api():
+    """List all users (admin only)."""
+    return {"users": db.list_users()}
+
+
+@app.post("/api/users", dependencies=[Depends(require_role("admin"))])
+async def create_user_api(request: Request):
+    """Create a new local user (admin only)."""
+    data = await request.json()
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+    role = data.get("role", "viewer")
+
+    if not username:
+        raise HTTPException(400, "Username is required")
+    if not password or len(password) < 12:
+        raise HTTPException(400, "Password must be at least 12 characters")
+    if role not in db.VALID_ROLES:
+        raise HTTPException(400, f"Invalid role. Must be one of: {', '.join(db.VALID_ROLES)}")
+    if db.get_user(username):
+        raise HTTPException(409, "Username already exists")
+
+    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    user_id = db.create_user(username, password_hash, role, "local")
+    return {"id": user_id, "username": username, "role": role}
+
+
+@app.put("/api/users/{user_id}", dependencies=[Depends(require_role("admin"))])
+async def update_user_api(user_id: int, request: Request, session: dict = Depends(require_auth)):
+    """Update a user (admin only)."""
+    user = db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    data = await request.json()
+    updates = {}
+
+    if "role" in data:
+        new_role = data["role"]
+        if new_role not in db.VALID_ROLES:
+            raise HTTPException(400, f"Invalid role. Must be one of: {', '.join(db.VALID_ROLES)}")
+        # Guard: cannot remove last admin
+        if user["role"] == "admin" and new_role != "admin" and db.count_admin_users() <= 1:
+            raise HTTPException(400, "Cannot remove the last admin user")
+        updates["role"] = new_role
+
+    if "password" in data and data["password"]:
+        if len(data["password"]) < 12:
+            raise HTTPException(400, "Password must be at least 12 characters")
+        updates["password_hash"] = bcrypt.hashpw(data["password"].encode(), bcrypt.gensalt()).decode()
+
+    if "enabled" in data:
+        enabled = bool(data["enabled"])
+        # Guard: cannot disable self
+        if not enabled and user["username"] == session["username"]:
+            raise HTTPException(400, "Cannot disable your own account")
+        # Guard: cannot disable last admin
+        if not enabled and user["role"] == "admin" and db.count_admin_users() <= 1:
+            raise HTTPException(400, "Cannot disable the last admin user")
+        updates["enabled"] = enabled
+
+    if not updates:
+        raise HTTPException(400, "No valid fields to update")
+
+    db.update_user(user_id, **updates)
+    return {"ok": True}
+
+
+@app.delete("/api/users/{user_id}", dependencies=[Depends(require_role("admin"))])
+async def delete_user_api(user_id: int, session: dict = Depends(require_auth)):
+    """Delete a user (admin only)."""
+    user = db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    # Guard: cannot delete self
+    if user["username"] == session["username"]:
+        raise HTTPException(400, "Cannot delete your own account")
+    # Guard: cannot delete last admin
+    if user["role"] == "admin" and db.count_admin_users() <= 1:
+        raise HTTPException(400, "Cannot delete the last admin user")
+
+    db.delete_sessions_for_user(user["username"])
+    db.delete_user(user_id)
+    return {"ok": True}
 
 
 @app.get("/api/time")
@@ -2581,7 +2685,7 @@ async def get_current_rollout(session: dict = Depends(require_auth)):
 
 
 @app.post("/api/rollout/{rollout_id}/resume")
-async def resume_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+async def resume_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Resume a paused rollout."""
     rollout = db.get_rollout(rollout_id)
     if not rollout:
@@ -2601,7 +2705,7 @@ async def resume_rollout(rollout_id: int, session: dict = Depends(require_auth))
 
 
 @app.post("/api/rollout/{rollout_id}/cancel")
-async def cancel_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+async def cancel_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Cancel an active/paused rollout."""
     rollout = db.get_rollout(rollout_id)
     if not rollout:
@@ -2621,7 +2725,7 @@ async def cancel_rollout(rollout_id: int, session: dict = Depends(require_auth))
 
 
 @app.post("/api/rollout/{rollout_id}/reset")
-async def reset_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+async def reset_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Reset a paused rollout - cancels it so a fresh rollout starts next window."""
     rollout = db.get_rollout(rollout_id)
     if not rollout:
@@ -2641,7 +2745,7 @@ async def reset_rollout(rollout_id: int, session: dict = Depends(require_auth)):
 
 
 @app.post("/api/rollout/canary/trigger")
-async def trigger_canary_rollout(session: dict = Depends(require_auth)):
+async def trigger_canary_rollout(session: dict = Depends(require_role("admin", "operator"))):
     """Trigger the canary phase immediately, outside the maintenance window."""
     scheduler = get_scheduler()
     if not scheduler:
@@ -2685,7 +2789,7 @@ async def get_location(session: dict = Depends(require_auth)):
 # ============================================================================
 
 @app.post("/api/backup/export")
-async def export_backup(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+async def export_backup(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Export devices as CSV with encrypted passwords."""
     data = await request.json()
     passphrase = data.get("passphrase", "")
@@ -2711,7 +2815,7 @@ async def import_backup(
     file: UploadFile = File(...),
     passphrase: str = Form(...),
     conflict_mode: str = Form("skip"),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.CONFIG_BACKUP)),
 ):
     """Import devices from a CSV with encrypted passwords."""
@@ -2892,7 +2996,7 @@ MAX_CSV_IMPORT_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
 @app.post("/api/upload-firmware")
-async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(require_auth)):
+async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(require_role("admin", "operator"))):
     """Upload a firmware file."""
     # Validate filename to prevent path traversal attacks
     safe_filename = validate_firmware_filename(file.filename)
@@ -2975,7 +3079,7 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
 
 
 @app.delete("/api/firmware-files/{filename:path}")
-async def delete_firmware_file(filename: str, session: dict = Depends(require_auth)):
+async def delete_firmware_file(filename: str, session: dict = Depends(require_role("admin", "operator"))):
     """Delete a firmware file."""
     # Validate filename to prevent path traversal attacks
     safe_filename = validate_firmware_filename(filename)
@@ -2988,7 +3092,7 @@ async def delete_firmware_file(filename: str, session: dict = Depends(require_au
 
 
 @app.post("/api/firmware-fetch")
-async def trigger_firmware_fetch(session: dict = Depends(require_auth)):
+async def trigger_firmware_fetch(session: dict = Depends(require_role("admin", "operator"))):
     """Trigger an on-demand firmware check and download."""
     fetcher = get_fetcher()
     if not fetcher:
@@ -2998,7 +3102,7 @@ async def trigger_firmware_fetch(session: dict = Depends(require_auth)):
 
 
 @app.post("/api/firmware-reselect")
-async def firmware_reselect(session: dict = Depends(require_auth)):
+async def firmware_reselect(session: dict = Depends(require_role("admin", "operator"))):
     """Re-run firmware auto-selection (e.g. after toggling beta)."""
     fetcher = get_fetcher()
     if not fetcher:
@@ -3550,7 +3654,7 @@ async def start_update(
     firmware_file_303l: str = Form(""),
     firmware_file_tns100: str = Form(""),
     bank_mode: str = Form("both"),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
 ):
     """Start a firmware update job."""
     if concurrency < 1 or concurrency > 32:
@@ -3754,7 +3858,7 @@ async def update_single_device_endpoint(
     firmware_file_303l: str = Form(""),
     firmware_file_tns100: str = Form(""),
     bank_mode: str = Form("both"),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.UPDATE_SINGLE_DEVICE)),
 ):
     """Start a firmware update for a single device (AP, CPE, or switch)."""
@@ -4592,7 +4696,7 @@ async def get_job_status(job_id: str, session: dict = Depends(require_auth)):
 
 
 @app.post("/api/job/{job_id}/cancel")
-async def cancel_job(job_id: str, session: dict = Depends(require_auth)):
+async def cancel_job(job_id: str, session: dict = Depends(require_role("admin", "operator"))):
     """Request cancellation of an active update job."""
     job = update_jobs.get(job_id)
     if not job:
@@ -4799,7 +4903,7 @@ async def download_config_tar(ip: str, config_id: int, session: dict = Depends(r
 
 
 @app.post("/api/configs/{ip}/poll")
-async def poll_device_config(ip: str, session: dict = Depends(require_auth)):
+async def poll_device_config(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Trigger immediate config fetch for one device."""
     # Find the device (AP, CPE, or switch)
     device = db.get_access_point(ip)
@@ -4843,7 +4947,7 @@ async def poll_device_config(ip: str, session: dict = Depends(require_auth)):
 
 
 @app.post("/api/configs/poll")
-async def poll_all_configs(session: dict = Depends(require_auth)):
+async def poll_all_configs(session: dict = Depends(require_role("admin", "operator"))):
     """Trigger config poll for all devices."""
     poller = get_poller()
     if poller:
@@ -4868,7 +4972,7 @@ async def list_config_templates(session: dict = Depends(require_auth), _pro=Depe
 
 
 @app.post("/api/config-templates")
-async def create_config_template(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
+async def create_config_template(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """Create a new config template."""
     data = await request.json()
     name = data.get("name")
@@ -4908,7 +5012,7 @@ async def create_config_template(request: Request, session: dict = Depends(requi
 
 
 @app.put("/api/config-templates/{template_id}")
-async def update_config_template_api(template_id: int, request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
+async def update_config_template_api(template_id: int, request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """Update a config template."""
     existing = db.get_config_template(template_id)
     if not existing:
@@ -4944,7 +5048,7 @@ async def update_config_template_api(template_id: int, request: Request, session
 
 
 @app.delete("/api/config-templates/{template_id}")
-async def delete_config_template_api(template_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
+async def delete_config_template_api(template_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """Delete a config template."""
     existing = db.get_config_template(template_id)
     if not existing:
@@ -5122,7 +5226,7 @@ async def get_config_prefill(category: str, session: dict = Depends(require_auth
 # ============================================================================
 
 @app.post("/api/config-push")
-async def push_config_templates(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
+async def push_config_templates(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
     """Push config template(s) to devices.
 
     Body: {
@@ -5359,7 +5463,7 @@ async def get_radius_server_config_api(
 @app.put("/api/radius-server/config")
 async def update_radius_server_config_api(
     request: Request,
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin")),
     _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
 ):
     """Update RADIUS server configuration."""
@@ -5412,7 +5516,7 @@ async def update_radius_server_config_api(
 
 @app.post("/api/radius-server/restart")
 async def restart_radius_server_api(
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin")),
     _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
 ):
     """Restart the RADIUS server."""
@@ -5447,7 +5551,7 @@ async def list_radius_users_api(
 @app.post("/api/radius-server/users")
 async def create_radius_user_api(
     request: Request,
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
 ):
     """Create a RADIUS user."""
@@ -5470,7 +5574,7 @@ async def create_radius_user_api(
 async def update_radius_user_api(
     user_id: int,
     request: Request,
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
 ):
     """Update a RADIUS user."""
@@ -5491,7 +5595,7 @@ async def update_radius_user_api(
 @app.delete("/api/radius-server/users/{user_id}")
 async def delete_radius_user_api(
     user_id: int,
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
 ):
     """Delete a RADIUS user."""
@@ -5520,7 +5624,7 @@ async def get_radius_auth_log_api(
 @app.post("/api/radius-server/test-ldap")
 async def test_ldap_connection_api(
     request: Request,
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin")),
     _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
 ):
     """Test LDAP connectivity with current configuration."""
@@ -5581,7 +5685,7 @@ async def test_ldap_connection_api(
 @app.post("/api/radius-server/push-to-devices")
 async def push_radius_to_devices_api(
     request: Request,
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
 ):
     """Push this RADIUS server's config to managed devices."""

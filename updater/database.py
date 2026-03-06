@@ -389,6 +389,17 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_radius_auth_client_ip ON radius_auth_log(client_ip);
             CREATE INDEX IF NOT EXISTS idx_radius_auth_username ON radius_auth_log(username);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_radius_auth_unique ON radius_auth_log(occurred_at, username, client_ip, outcome);
+
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                password_hash TEXT,
+                role TEXT NOT NULL DEFAULT 'viewer',
+                auth_method TEXT NOT NULL DEFAULT 'local',
+                enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # Migrations: add columns if missing
@@ -1725,6 +1736,102 @@ def delete_config_template(template_id: int):
     """Delete a config template."""
     with get_db() as db:
         db.execute("DELETE FROM config_templates WHERE id = ?", (template_id,))
+
+
+# ---------------------------------------------------------------------------
+# User management (RBAC)
+# ---------------------------------------------------------------------------
+
+VALID_ROLES = ("admin", "operator", "viewer")
+
+
+def create_user(username: str, password_hash: Optional[str], role: str = "viewer",
+                auth_method: str = "local") -> int:
+    """Create a user. Returns the new user ID."""
+    if role not in VALID_ROLES:
+        raise ValueError(f"Invalid role: {role}")
+    with get_db() as db:
+        cursor = db.execute(
+            "INSERT INTO users (username, password_hash, role, auth_method) VALUES (?, ?, ?, ?)",
+            (username, password_hash, role, auth_method),
+        )
+        return cursor.lastrowid
+
+
+def get_user(username: str) -> Optional[dict]:
+    """Get a user by username (case-insensitive). Returns dict or None."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT id, username, password_hash, role, auth_method, enabled, "
+            "created_at, updated_at FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_id(user_id: int) -> Optional[dict]:
+    """Get a user by ID. Returns dict or None."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT id, username, password_hash, role, auth_method, enabled, "
+            "created_at, updated_at FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_users() -> list[dict]:
+    """List all users (without password hashes)."""
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id, username, role, auth_method, enabled, created_at, updated_at "
+            "FROM users ORDER BY username"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_user(user_id: int, **kwargs) -> bool:
+    """Update a user. Returns True if found and updated."""
+    allowed = {"role", "password_hash", "enabled"}
+    updates = {}
+    for key, value in kwargs.items():
+        if key not in allowed:
+            continue
+        if key == "role" and value not in VALID_ROLES:
+            raise ValueError(f"Invalid role: {value}")
+        if key == "enabled":
+            value = 1 if value else 0
+        updates[key] = value
+    if not updates:
+        return False
+    updates["updated_at"] = datetime.now().isoformat()
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    values = list(updates.values()) + [user_id]
+    with get_db() as db:
+        cursor = db.execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)
+        return cursor.rowcount > 0
+
+
+def delete_user(user_id: int) -> bool:
+    """Delete a user. Returns True if found and deleted."""
+    with get_db() as db:
+        cursor = db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        return cursor.rowcount > 0
+
+
+def count_admin_users() -> int:
+    """Count enabled admin users."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT COUNT(*) FROM users WHERE role = 'admin' AND enabled = 1"
+        ).fetchone()
+        return row[0]
+
+
+def delete_sessions_for_user(username: str):
+    """Delete all sessions for a given username."""
+    with get_db() as db:
+        db.execute("DELETE FROM sessions WHERE username = ?", (username,))
 
 
 # Initialize on import

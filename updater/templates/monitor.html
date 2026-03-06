@@ -608,6 +608,7 @@
                 <button class="settings-tab" onclick="switchSettingsTab('notifications')">Notifications <span class="pro-badge">PRO</span></button>
                 <button class="settings-tab" onclick="switchSettingsTab('auth')">Authentication <span class="pro-badge">PRO</span></button>
                 <button class="settings-tab" onclick="switchSettingsTab('license')">License</button>
+                <button class="settings-tab" data-min-role="admin" onclick="switchSettingsTab('users')">Users</button>
             </div>
 
             <!-- Updates Panel -->
@@ -1074,6 +1075,44 @@
                     <a href="mailto:support@sixtyops.net" style="color:#0D9488;">Support</a>
                 </div>
             </div>
+
+            <!-- Users Panel (admin only) -->
+            <div class="settings-panel" id="settingsPanel-users" data-min-role="admin">
+                <div class="settings-section" id="user-management-section">
+                    <h3>User Management</h3>
+                    <p class="text-muted" style="margin-bottom: 12px; font-size: 13px;">
+                        Manage user accounts and roles. Admins have full access, operators can manage devices and updates, viewers have read-only access.
+                    </p>
+                    <button class="btn btn-sm btn-primary" onclick="showAddUserForm()" style="margin-bottom: 12px;">+ Add User</button>
+
+                    <div id="add-user-form" style="display:none; margin-bottom: 16px; padding: 12px; background: var(--bg-secondary, #f8f9fa); border-radius: 6px;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+                            <input type="text" id="new-user-username" placeholder="Username" class="form-control form-control-sm">
+                            <input type="password" id="new-user-password" placeholder="Password (min 12 chars)" class="form-control form-control-sm">
+                            <select id="new-user-role" class="form-control form-control-sm">
+                                <option value="viewer">Viewer</option>
+                                <option value="operator">Operator</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-sm btn-success" onclick="createUser()">Create</button>
+                        <button class="btn btn-sm btn-secondary" onclick="hideAddUserForm()">Cancel</button>
+                    </div>
+
+                    <table class="table table-sm" id="users-table">
+                        <thead>
+                            <tr>
+                                <th>Username</th>
+                                <th>Role</th>
+                                <th>Auth</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="users-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1091,6 +1130,32 @@
     </div>
 
     <script>
+        // Role-based UI visibility
+        let currentUserRole = 'viewer';
+
+        function initRoleVisibility() {
+            fetch('/api/users/me')
+                .then(r => r.json())
+                .then(data => {
+                    currentUserRole = data.role || 'viewer';
+                    applyRoleVisibility();
+                })
+                .catch(() => { currentUserRole = 'viewer'; applyRoleVisibility(); });
+        }
+
+        function applyRoleVisibility() {
+            const hierarchy = {admin: 3, operator: 2, viewer: 1};
+            const level = hierarchy[currentUserRole] || 1;
+            document.querySelectorAll('[data-min-role]').forEach(el => {
+                const minLevel = hierarchy[el.dataset.minRole] || 1;
+                if (level < minLevel) {
+                    el.style.display = 'none';
+                } else {
+                    el.style.display = '';
+                }
+            });
+        }
+
         // License state (loaded on init, updated via WebSocket)
         let licenseState = { tier: 'free', status: 'free', features: {}, billable_count: 0, should_nag: false, is_pro: false };
         let _confirmResolve = null;
@@ -2717,6 +2782,7 @@
             loadNotificationsData();
             loadAuthData();
             loadLicensePanel();
+            if (tab === 'users') loadUsers();
         }
 
         function closeAppSettingsModal() {
@@ -2745,6 +2811,7 @@
             const panel = document.getElementById('settingsPanel-' + tabName);
             if (panel) panel.classList.add('active');
             if (tabName === 'backup') loadBackupStatus();
+            if (tabName === 'users') loadUsers();
         }
 
         async function loadNotificationsData() {
@@ -5199,6 +5266,7 @@
         loadFleetStatus();
         renderIdlePhases();
         loadLicenseState();
+        initRoleVisibility();
         // Refresh fleet status periodically
         setInterval(loadFleetStatus, 60000);
 
@@ -6120,6 +6188,89 @@
             if (currentMainTab === 'config') loadConfigData();
             const summary = `Config push complete: ${msg.success_count} succeeded, ${msg.failed_count} failed`;
             console.log(summary);
+        }
+
+        // ── User Management ──
+
+        function loadUsers() {
+            fetch('/api/users')
+                .then(r => r.json())
+                .then(data => {
+                    const tbody = document.getElementById('users-table-body');
+                    if (!tbody) return;
+                    tbody.innerHTML = '';
+                    (data.users || []).forEach(u => {
+                        const row = document.createElement('tr');
+                        const statusBadge = u.enabled
+                            ? '<span style="color: green;">Active</span>'
+                            : '<span style="color: red;">Disabled</span>';
+                        const actions = [];
+                        actions.push(`<select onchange="changeUserRole(${u.id}, this.value)" class="form-control form-control-sm" style="width: auto; display: inline-block; font-size: 12px;"><option value="admin"${u.role==='admin'?' selected':''}>Admin</option><option value="operator"${u.role==='operator'?' selected':''}>Operator</option><option value="viewer"${u.role==='viewer'?' selected':''}>Viewer</option></select>`);
+                        actions.push(`<button class="btn btn-sm btn-outline-secondary" onclick="toggleUserEnabled(${u.id}, ${u.enabled ? 'false' : 'true'})" style="font-size: 11px;">${u.enabled ? 'Disable' : 'Enable'}</button>`);
+                        actions.push(`<button class="btn btn-sm btn-outline-danger" onclick="deleteUser(${u.id}, '${u.username}')" style="font-size: 11px;">Delete</button>`);
+                        row.innerHTML = `<td>${u.username}</td><td>${u.role}</td><td>${u.auth_method}</td><td>${statusBadge}</td><td>${actions.join(' ')}</td>`;
+                        tbody.appendChild(row);
+                    });
+                })
+                .catch(err => console.error('Failed to load users:', err));
+        }
+
+        function showAddUserForm() {
+            document.getElementById('add-user-form').style.display = 'block';
+        }
+
+        function hideAddUserForm() {
+            document.getElementById('add-user-form').style.display = 'none';
+            document.getElementById('new-user-username').value = '';
+            document.getElementById('new-user-password').value = '';
+            document.getElementById('new-user-role').value = 'viewer';
+        }
+
+        function createUser() {
+            const username = document.getElementById('new-user-username').value.trim();
+            const password = document.getElementById('new-user-password').value;
+            const role = document.getElementById('new-user-role').value;
+            if (!username || !password) { alert('Username and password are required'); return; }
+            if (password.length < 12) { alert('Password must be at least 12 characters'); return; }
+
+            fetch('/api/users', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password, role})
+            })
+            .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.detail); }); return r.json(); })
+            .then(() => { hideAddUserForm(); loadUsers(); })
+            .catch(err => alert('Error: ' + err.message));
+        }
+
+        function changeUserRole(userId, newRole) {
+            fetch(`/api/users/${userId}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({role: newRole})
+            })
+            .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.detail); }); return r.json(); })
+            .then(() => loadUsers())
+            .catch(err => { alert('Error: ' + err.message); loadUsers(); });
+        }
+
+        function toggleUserEnabled(userId, enabled) {
+            fetch(`/api/users/${userId}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({enabled: enabled === 'true' || enabled === true})
+            })
+            .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.detail); }); return r.json(); })
+            .then(() => loadUsers())
+            .catch(err => { alert('Error: ' + err.message); loadUsers(); });
+        }
+
+        function deleteUser(userId, username) {
+            if (!confirm(`Delete user "${username}"? This cannot be undone.`)) return;
+            fetch(`/api/users/${userId}`, {method: 'DELETE'})
+                .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.detail); }); return r.json(); })
+                .then(() => loadUsers())
+                .catch(err => alert('Error: ' + err.message));
         }
     </script>
 </body>
