@@ -13,7 +13,23 @@ HTML/JS frontend, SQLite database, Docker deployment.
 - **`dev`** — Staging. All feature work merges here first.
 - **Feature branches** — Branch from `dev`, PR back to `dev`.
 
-**Never push directly to `main`. Never create stable releases without testing on dev first.**
+### Branching Rules (MUST follow)
+
+1. **Never push directly to `main`** — all changes reach main via `dev` → `main` PR.
+2. **Never create PRs targeting `main`** from feature branches — always target `dev`.
+3. **Feature branches must branch from `dev`**, not `main`.
+4. **Before creating a feature branch**, run `git fetch origin && git checkout dev && git pull origin dev` to start from the latest `dev`.
+5. **After merging to `dev`**, sync periodically: `git fetch origin && git merge origin/dev`.
+6. **Keep `dev` up to date with `main`** — after a stable release merges `dev` → `main`, immediately merge `main` back into `dev` to avoid divergence.
+7. **If `main` and `dev` diverge**, merge `main` into `dev` (not the other way around) to reconcile.
+
+### PR Checklist
+
+Before creating any PR, verify:
+- [ ] Target branch is `dev` (not `main`) for feature work
+- [ ] Source branch was created from `dev`
+- [ ] All tests pass (`pytest -v`)
+- [ ] CHANGELOG.md updated if user-facing change
 
 ## Release Workflow
 
@@ -120,7 +136,10 @@ docker compose up -d --build
 
 ## Rules
 
-- Run tests before committing
+- Run tests before committing (`pytest -v` — all must pass)
 - Never commit secrets or credentials
 - Dev releases can be frequent; stable releases should be deliberate
 - `scripts/install.sh` always pulls from `main` — main must be stable
+- All PRs target `dev` unless it's a `dev` → `main` release PR
+- One feature per branch/PR — don't bundle unrelated changes
+- Keep commits focused and atomic with conventional commit messages
