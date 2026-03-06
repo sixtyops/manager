@@ -119,6 +119,11 @@ def process_csv_import(csv_content: str, passphrase: str, conflict_mode: str = "
 
     reader = csv.DictReader(io.StringIO("".join(csv_lines)))
 
+    required = {"ip", "username", "password"}
+    if not reader.fieldnames or not required.issubset(set(reader.fieldnames)):
+        missing = required - set(reader.fieldnames or [])
+        raise ValueError(f"CSV is missing required columns: {', '.join(sorted(missing))}")
+
     for row in reader:
         ip = row.get("ip", "").strip()
         if not ip:
@@ -127,9 +132,13 @@ def process_csv_import(csv_content: str, passphrase: str, conflict_mode: str = "
         # Decrypt password
         try:
             password = fernet.decrypt(row["password"].encode()).decode()
-        except (InvalidToken, Exception):
+        except InvalidToken:
             results["devices"]["failed"] += 1
             results["devices"]["errors"].append(f"{ip}: wrong passphrase or corrupted password")
+            continue
+        except Exception as e:
+            results["devices"]["failed"] += 1
+            results["devices"]["errors"].append(f"{ip}: import error — {e}")
             continue
 
         username = row.get("username", "").strip()

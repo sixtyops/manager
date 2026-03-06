@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import shutil
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
@@ -18,6 +19,9 @@ BACKUP_DIR = Path("/app/backups")
 DATA_DIR = Path("/app/data")
 DB_FILE = DATA_DIR / "tachyon.db"
 SSH_DIR = Path("/app/.ssh")
+
+# Prevent concurrent backup runs
+_backup_lock = asyncio.Lock()
 
 
 def get_backup_status() -> dict:
@@ -183,14 +187,29 @@ async def run_backup() -> Tuple[bool, str]:
     if not BACKUP_DIR.exists() or not (BACKUP_DIR / ".git").exists():
         return False, "Backup repository not configured"
 
+    if _backup_lock.locked():
+        return False, "Backup already in progress"
+
+    async with _backup_lock:
+        return await _run_backup_locked()
+
+
+async def _run_backup_locked() -> Tuple[bool, str]:
+    """Internal backup implementation (must be called with _backup_lock held)."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     logger.info(f"Starting backup at {timestamp}")
 
     try:
-        # Copy database file
+        # Copy database using SQLite backup API for consistency
         backup_db = BACKUP_DIR / "tachyon.db"
         if DB_FILE.exists():
-            shutil.copy2(DB_FILE, backup_db)
+            src = sqlite3.connect(str(DB_FILE))
+            dst = sqlite3.connect(str(backup_db))
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+                src.close()
         else:
             return False, "Database file not found"
 

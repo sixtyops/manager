@@ -650,10 +650,14 @@ async def backup_setup_submit(
 
 
 @app.post("/backup-run")
-async def backup_run_now(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+async def backup_run_now(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Trigger an immediate backup."""
-    await git_backup.run_backup()
-    return RedirectResponse(url="/backup-setup", status_code=303)
+    success, message = await git_backup.run_backup()
+    return templates.TemplateResponse("backup_setup.html", {
+        "request": request, "backup_status": git_backup.get_backup_status(),
+        "error": None if success else message,
+        "success": message if success else None,
+    })
 
 
 @app.get("/api/backup/git-status")
