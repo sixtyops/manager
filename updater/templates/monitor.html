@@ -16,11 +16,15 @@
             --text-subtle: #374151;
             --border: #e5e7eb;
             --border-light: #f3f4f6;
-            --input-bg: #f5f5f5;
+            --input-bg: #f9fafb;
             --primary: #3b82f6;
             --primary-hover: #2563eb;
             --primary-text: #1e40af;
             --primary-bg: #dbeafe;
+            --brand: #0D9488;
+            --brand-hover: #0F766E;
+            --brand-text: #115E59;
+            --brand-bg: #CCFBF1;
             --success: #10b981;
             --success-light: #34d399;
             --success-text: #065f46;
@@ -493,6 +497,14 @@
         .btn-sm {
             padding: 4px 10px;
             font-size: 0.75rem;
+        }
+
+        .btn-primary {
+            background: var(--brand);
+            color: white;
+        }
+        .btn-primary:hover {
+            background: var(--brand-hover);
         }
 
         /* Shared color dot */
@@ -1019,8 +1031,11 @@
             font-size: 0.75rem;
             padding: 4px 8px;
             border: 1px solid var(--border);
-            border-radius: 4px;
+            border-radius: 6px;
+            background: var(--input-bg);
         }
+        .config-section-body .btn { background: var(--brand); }
+        .config-section-body .btn:hover { background: var(--brand-hover); }
         .config-section-status {
             font-size: 0.7rem;
             padding: 1px 6px;
@@ -1028,7 +1043,7 @@
             background: #f3f4f6;
             color: #6b7280;
         }
-        .config-section-status.saved { background: #d1fae5; color: #065f46; }
+        .config-section-status.saved { background: var(--brand-bg); color: var(--brand-text); }
         .config-user-row {
             display: grid;
             grid-template-columns: 1fr 1fr 100px 40px;
@@ -1094,9 +1109,9 @@
         }
 
         .drawer-day-btn.active {
-            background: var(--primary-bg);
-            color: var(--primary-text);
-            border-color: var(--primary);
+            background: var(--brand-bg);
+            color: var(--brand-text);
+            border-color: var(--brand);
         }
 
         .drawer-toggle-row {
@@ -1129,7 +1144,7 @@
         }
 
         .drawer-toggle.active {
-            background: var(--primary);
+            background: var(--brand);
         }
 
         .drawer-toggle.active::after {
@@ -1313,7 +1328,7 @@
         }
         .drawer-save-btn {
             padding: 6px 20px;
-            background: var(--primary);
+            background: var(--brand);
             color: white;
             border: none;
             border-radius: 6px;
@@ -1322,7 +1337,7 @@
             cursor: pointer;
             transition: background 0.2s, opacity 0.2s;
         }
-        .drawer-save-btn:hover { background: var(--primary-hover, var(--primary)); }
+        .drawer-save-btn:hover { background: var(--brand-hover); }
         .drawer-save-btn:disabled { background: var(--toggle-off); cursor: not-allowed; opacity: 0.7; }
         .drawer-save-btn.saving { opacity: 0.7; cursor: wait; }
         .drawer-unsaved-dot {
@@ -1372,7 +1387,7 @@
         }
 
         .status-bar-toggle.active {
-            background: var(--primary);
+            background: var(--brand);
         }
 
         .status-bar-toggle.active::after {
