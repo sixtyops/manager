@@ -439,6 +439,22 @@ def list_users() -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def list_users_for_backup() -> list[dict]:
+    """Return RADIUS users with decrypted passwords for backup export."""
+    with db.get_db() as conn:
+        rows = conn.execute(
+            "SELECT username, password, enabled FROM radius_users ORDER BY username COLLATE NOCASE"
+        ).fetchall()
+        result = []
+        for row in rows:
+            result.append({
+                "username": row["username"],
+                "password": _decrypt_user_password(row["password"]),
+                "enabled": row["enabled"],
+            })
+        return result
+
+
 def get_user(user_id: int) -> Optional[dict]:
     """Return a single RADIUS user row including the encrypted password."""
     with db.get_db() as conn:
@@ -449,11 +465,13 @@ def get_user(user_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def create_user(username: str, password: str, enabled: bool = True) -> dict:
+def create_user(username: str, password: str, enabled: bool = True, *, _skip_length_check: bool = False) -> dict:
     """Create a new RADIUS user."""
     normalized = validate_username(username)
     if not password:
         raise ValueError("Password is required")
+    if not _skip_length_check and len(password) < 12:
+        raise ValueError("Password must be at least 12 characters")
 
     encrypted = encrypt_password(password)
     now = datetime.now().isoformat()
@@ -475,7 +493,7 @@ def create_user(username: str, password: str, enabled: bool = True) -> dict:
     return get_user_summary(user_id)
 
 
-def update_user(user_id: int, username: str, password: str = "", enabled: bool = True) -> dict:
+def update_user(user_id: int, username: str, password: str = "", enabled: bool = True, *, _skip_length_check: bool = False) -> dict:
     """Update an existing RADIUS user."""
     existing = get_user(user_id)
     if not existing:
@@ -484,6 +502,8 @@ def update_user(user_id: int, username: str, password: str = "", enabled: bool =
     normalized = validate_username(username)
     stored_password = existing["password"]
     if password:
+        if not _skip_length_check and len(password) < 12:
+            raise ValueError("Password must be at least 12 characters")
         stored_password = encrypt_password(password)
 
     try:
@@ -1300,3 +1320,23 @@ def get_runtime() -> BuiltinRadiusRuntime:
     if _runtime is None:
         _runtime = BuiltinRadiusRuntime()
     return _runtime
+
+
+def test_radius_server() -> tuple[bool, str]:
+    """Test the built-in RADIUS server by checking config and container health."""
+    config = get_config()
+    if not config.enabled:
+        return False, "RADIUS server is not enabled"
+
+    runtime = get_runtime()
+    state = runtime.get_container_state()
+
+    if not state["running"]:
+        return False, f"RADIUS container is not running (status: {state['status']})"
+
+    if state["health"] == "unhealthy":
+        return False, "RADIUS container is running but unhealthy"
+
+    user_count = len(list_users())
+    client_count = len(list_client_overrides())
+    return True, f"RADIUS server is running and healthy ({user_count} users, {client_count} client overrides)"

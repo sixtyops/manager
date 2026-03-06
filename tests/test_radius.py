@@ -70,7 +70,7 @@ class TestBuiltinRadiusAPI:
         reserved = authed_client.post("/api/auth/radius/users", json={"username": "admin", "password": "x"})
         assert reserved.status_code == 400
 
-        created = authed_client.post("/api/auth/radius/users", json={"username": "jsmith", "password": "pass123", "enabled": True})
+        created = authed_client.post("/api/auth/radius/users", json={"username": "jsmith", "password": "pass123456789", "enabled": True})
         assert created.status_code == 200
         assert created.json()["username"] == "jsmith"
         assert "password" not in created.json()
@@ -389,7 +389,7 @@ class TestBuiltinRadiusFiles:
         monkeypatch.setattr(builtin_radius, "RADIUS_USERS_FILE", users_file)
 
         builtin_radius.set_config(builtin_radius.BuiltinRadiusConfig(enabled=True, port=1812, secret="sharedsecret"))
-        builtin_radius.create_user("jsmith", "pass123")
+        builtin_radius.create_user("jsmith", "pass123456789")
         builtin_radius.create_client_override("10.0.10.0/24", "tower-subnet")
         builtin_radius._write_freeradius_files()
 
@@ -398,7 +398,7 @@ class TestBuiltinRadiusFiles:
         assert "10.0.0.5" in clients_text
         assert "10.0.10.0/24" in clients_text
         assert 'secret = "sharedsecret"' in clients_text
-        assert 'jsmith Cleartext-Password := "pass123"' in users_text
+        assert 'jsmith Cleartext-Password := "pass123456789"' in users_text
         assert 'sixtyops-radius-mgmt Cleartext-Password :=' in users_text
 
 
@@ -433,7 +433,7 @@ class TestBuiltinRadiusStats:
         )
         mock_db.commit()
 
-        builtin_radius.create_user("jsmith", "pass123")
+        builtin_radius.create_user("jsmith", "pass123456789")
 
         today = datetime.now().date().isoformat()
         log_text = "\n".join([

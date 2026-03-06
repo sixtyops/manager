@@ -441,10 +441,15 @@ def init_db():
             "ssl_domain": "",
             "ssl_email": "",
             "ssl_cert_expires": "",
-            # Git backup configuration
+            # SFTP backup configuration
             "backup_enabled": "false",
-            "backup_repo_url": "",
-            "backup_auth_method": "",
+            "backup_sftp_host": "",
+            "backup_sftp_port": "22",
+            "backup_sftp_path": "/backups/tachyon",
+            "backup_sftp_username": "",
+            "backup_sftp_password": "",
+            "backup_sftp_auth_method": "password",
+            "backup_retention_count": "30",
             "backup_last_run": "",
             "backup_last_status": "",
             # Setup wizard tracking
@@ -1423,6 +1428,16 @@ def get_rollout_progress(rollout_id: int) -> dict:
                 result[s] = c
             result["total"] += c
         return result
+
+
+def get_rollout_devices_by_status(rollout_id: int, status: str) -> list[dict]:
+    """Get rollout devices filtered by status."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT ip, device_type, phase_assigned, status, updated_at FROM rollout_devices WHERE rollout_id = ? AND status = ?",
+            (rollout_id, status),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 # Device duration tracking

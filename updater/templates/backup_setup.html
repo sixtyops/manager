@@ -57,7 +57,7 @@
             color: #e2e8f0;
             font-size: 0.85rem;
             text-align: right;
-            max-width: 220px;
+            max-width: 260px;
             overflow: hidden;
             text-overflow: ellipsis;
         }
@@ -134,6 +134,61 @@
             background: #475569;
         }
 
+        .btn-test {
+            width: 100%;
+            padding: 10px;
+            background: #1e3a5f;
+            color: #93c5fd;
+            border: 1px solid #2563eb;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            margin-top: 12px;
+            transition: background 0.2s;
+        }
+
+        .btn-test:hover {
+            background: #1e40af;
+        }
+
+        .btn-test:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .test-result {
+            font-size: 0.85rem;
+            margin-top: 8px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            display: none;
+        }
+
+        .test-result.success {
+            display: block;
+            background: #065f46;
+            color: #6ee7b7;
+        }
+
+        .test-result.error {
+            display: block;
+            background: #7f1d1d;
+            color: #fca5a5;
+        }
+
+        .inline-fields {
+            display: flex;
+            gap: 12px;
+        }
+
+        .inline-fields .form-group {
+            flex: 1;
+        }
+
+        .inline-fields .form-group.small {
+            flex: 0 0 90px;
+        }
+
         .back-link {
             display: block;
             text-align: center;
@@ -151,13 +206,13 @@
 <body>
     <div class="auth-card">
         <h1>Backup Settings</h1>
-        <p class="subtitle">Configure automatic database backups</p>
+        <p class="subtitle">Configure automatic SFTP backups</p>
 
         {% if backup_status.enabled %}
         <div class="backup-status">
             <div class="backup-status-row">
-                <span class="status-label">Repository</span>
-                <span class="status-value">{{ backup_status.repo_url }}</span>
+                <span class="status-label">SFTP Server</span>
+                <span class="status-value">{{ backup_status.sftp_display }}</span>
             </div>
             <div class="backup-status-row">
                 <span class="status-label">Last Backup</span>
@@ -166,8 +221,12 @@
             <div class="backup-status-row">
                 <span class="status-label">Status</span>
                 <span class="status-value {% if 'success' in (backup_status.last_status or '') %}status-good{% elif backup_status.last_status %}status-error{% endif %}">
-                    {{ backup_status.last_status or 'Unknown' }}
+                    {{ backup_status.last_status or 'Pending' }}
                 </span>
+            </div>
+            <div class="backup-status-row">
+                <span class="status-label">Retention</span>
+                <span class="status-value">{{ backup_status.retention_count }} backups</span>
             </div>
             <div class="backup-status-row">
                 <span class="status-label">Schedule</span>
@@ -177,8 +236,9 @@
         {% endif %}
 
         <div class="info-message">
-            Backups include the SQLite database (devices, settings, job history).
-            Firmware files are not backed up due to size. Backups only push when changes exist.
+            Backups include the database, settings, device inventory, and device configurations.
+            Archives are uploaded as timestamped .tar.gz files to your SFTP server.
+            Firmware files are not included due to size.
         </div>
 
         <div class="error-message {{ 'visible' if error else '' }}">
@@ -190,33 +250,55 @@
         {% endif %}
 
         <form method="POST" action="/backup-setup" id="backupForm">
+            <div class="inline-fields">
+                <div class="form-group">
+                    <label for="sftp_host">SFTP Host</label>
+                    <input type="text" id="sftp_host" name="sftp_host"
+                           value="{{ backup_status.sftp_host }}"
+                           placeholder="192.168.1.100 or backup.example.com" required>
+                </div>
+                <div class="form-group small">
+                    <label for="sftp_port">Port</label>
+                    <input type="number" id="sftp_port" name="sftp_port"
+                           value="{{ backup_status.sftp_port or '22' }}"
+                           min="1" max="65535">
+                </div>
+            </div>
+
             <div class="form-group">
-                <label for="repo_url">Git Repository URL</label>
-                <input type="text" id="repo_url" name="repo_url"
-                       value="{{ backup_status.repo_url if backup_status.repo_url and '****' not in backup_status.repo_url else '' }}"
-                       placeholder="https://github.com/user/tachyon-backup.git" required>
+                <label for="sftp_path">Remote Path</label>
+                <input type="text" id="sftp_path" name="sftp_path"
+                       value="{{ backup_status.sftp_path or '/backups/tachyon' }}"
+                       placeholder="/backups/tachyon">
+            </div>
+
+            <div class="form-group">
+                <label for="sftp_username">Username</label>
+                <input type="text" id="sftp_username" name="sftp_username"
+                       value="{{ backup_status.sftp_username }}"
+                       placeholder="backup" required>
             </div>
 
             <div class="form-group">
                 <label>Authentication Method</label>
                 <div class="radio-group">
                     <div class="radio-option">
-                        <input type="radio" id="auth_token" name="auth_method" value="token"
-                               {% if backup_status.auth_method != 'ssh' %}checked{% endif %}>
-                        <label for="auth_token">Access Token</label>
+                        <input type="radio" id="auth_password" name="auth_method" value="password"
+                               {% if backup_status.auth_method != 'key' %}checked{% endif %}>
+                        <label for="auth_password">Password</label>
                     </div>
                     <div class="radio-option">
-                        <input type="radio" id="auth_ssh" name="auth_method" value="ssh"
-                               {% if backup_status.auth_method == 'ssh' %}checked{% endif %}>
-                        <label for="auth_ssh">SSH Key</label>
+                        <input type="radio" id="auth_key" name="auth_method" value="key"
+                               {% if backup_status.auth_method == 'key' %}checked{% endif %}>
+                        <label for="auth_key">SSH Key</label>
                     </div>
                 </div>
             </div>
 
-            <div class="form-group conditional-field" id="token_field">
-                <label for="token">Personal Access Token</label>
-                <input type="password" id="token" name="token"
-                       placeholder="ghp_xxxx or glpat-xxxx">
+            <div class="form-group conditional-field" id="password_field">
+                <label for="sftp_password">Password</label>
+                <input type="password" id="sftp_password" name="sftp_password"
+                       placeholder="{{ '********' if backup_status.enabled else '' }}">
             </div>
 
             <div class="form-group conditional-field" id="ssh_field">
@@ -225,12 +307,24 @@
                           placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"></textarea>
             </div>
 
+            <div class="form-group">
+                <label for="retention_count">Keep Last N Backups</label>
+                <input type="number" id="retention_count" name="retention_count"
+                       value="{{ backup_status.retention_count or '30' }}"
+                       min="1" max="365">
+            </div>
+
             <button type="submit" class="btn-primary">
                 {{ 'Update Configuration' if backup_status.enabled else 'Configure Backup' }}
             </button>
         </form>
 
         {% if backup_status.enabled %}
+        <button type="button" class="btn-test" id="testBtn" onclick="testConnection()">
+            Test Connection
+        </button>
+        <div class="test-result" id="testResult"></div>
+
         <form method="POST" action="/backup-run">
             <button type="submit" class="btn-secondary">Run Backup Now</button>
         </form>
@@ -246,11 +340,32 @@
 
         function updateFields() {
             const method = document.querySelector('input[name="auth_method"]:checked').value;
-            document.getElementById('token_field').classList.toggle('active', method === 'token');
-            document.getElementById('ssh_field').classList.toggle('active', method === 'ssh');
+            document.getElementById('password_field').classList.toggle('active', method === 'password');
+            document.getElementById('ssh_field').classList.toggle('active', method === 'key');
         }
 
         updateFields();
+
+        async function testConnection() {
+            const btn = document.getElementById('testBtn');
+            const result = document.getElementById('testResult');
+            btn.disabled = true;
+            btn.textContent = 'Testing...';
+            result.className = 'test-result';
+            result.style.display = 'none';
+
+            try {
+                const resp = await fetch('/api/backup/test-connection', { method: 'POST' });
+                const data = await resp.json();
+                result.textContent = data.message;
+                result.className = 'test-result ' + (data.success ? 'success' : 'error');
+            } catch (e) {
+                result.textContent = 'Request failed: ' + e.message;
+                result.className = 'test-result error';
+            }
+            btn.disabled = false;
+            btn.textContent = 'Test Connection';
+        }
     </script>
 </body>
 </html>

@@ -13,3 +13,4 @@ pytest-asyncio>=0.21.0
 httpx>=0.24.0
 cryptography>=41.0.0
 packaging>=23.0
+asyncssh>=2.14.0
