@@ -1529,6 +1529,108 @@ def get_avg_durations() -> dict:
     return result
 
 
+# Analytics queries
+
+def get_analytics_summary(days: int = 90) -> dict:
+    """Get aggregate update analytics over the given time window."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) as total_jobs,
+                      COALESCE(SUM(success_count), 0) as total_success,
+                      COALESCE(SUM(failed_count), 0) as total_failed,
+                      COALESCE(SUM(skipped_count), 0) as total_skipped,
+                      COALESCE(SUM(cancelled_count), 0) as total_cancelled,
+                      COALESCE(AVG(duration), 0) as avg_duration
+               FROM job_history WHERE completed_at >= ?""",
+            (cutoff,)
+        ).fetchone()
+        result = dict(row)
+        total_devices = result["total_success"] + result["total_failed"]
+        result["success_rate"] = round(
+            result["total_success"] / total_devices * 100, 1
+        ) if total_devices > 0 else 0.0
+        return result
+
+
+def get_analytics_trends(days: int = 30) -> list[dict]:
+    """Get daily success/failure counts over the given time window."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT DATE(completed_at) as date,
+                      COUNT(*) as jobs,
+                      COALESCE(SUM(success_count), 0) as success,
+                      COALESCE(SUM(failed_count), 0) as failed,
+                      COALESCE(SUM(skipped_count), 0) as skipped
+               FROM job_history
+               WHERE completed_at >= ?
+               GROUP BY DATE(completed_at)
+               ORDER BY date""",
+            (cutoff,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_analytics_by_model(days: int = 90) -> list[dict]:
+    """Get success/failure breakdown by device model."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT COALESCE(model, 'Unknown') as model,
+                      COUNT(*) as total,
+                      SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success,
+                      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+                      ROUND(AVG(duration_seconds), 1) as avg_duration
+               FROM device_update_history
+               WHERE completed_at >= ? AND action = 'firmware_update'
+               GROUP BY model
+               ORDER BY total DESC""",
+            (cutoff,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_analytics_errors(days: int = 90, limit: int = 10) -> list[dict]:
+    """Get top error messages from failed updates."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT COALESCE(error, 'Unknown error') as error,
+                      COALESCE(failed_stage, 'unknown') as stage,
+                      COUNT(*) as count
+               FROM device_update_history
+               WHERE completed_at >= ? AND status = 'failed'
+                     AND action = 'firmware_update'
+               GROUP BY error, failed_stage
+               ORDER BY count DESC
+               LIMIT ?""",
+            (cutoff, limit)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_analytics_device_reliability(days: int = 90, limit: int = 20) -> list[dict]:
+    """Get per-device success rates, ordered by worst performers."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT ip, role, COALESCE(model, 'Unknown') as model,
+                      COUNT(*) as total,
+                      SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success,
+                      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+                      ROUND(AVG(duration_seconds), 1) as avg_duration
+               FROM device_update_history
+               WHERE completed_at >= ? AND action = 'firmware_update'
+               GROUP BY ip
+               HAVING total >= 2
+               ORDER BY (CAST(failed AS REAL) / total) DESC, total DESC
+               LIMIT ?""",
+            (cutoff, limit)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 # Device Update History operations
 
 def save_device_update_history(job_id: Optional[str], ip: str, role: str, pass_number: int,

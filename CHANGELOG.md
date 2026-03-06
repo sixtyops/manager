@@ -5,6 +5,7 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- Update analytics dashboard with summary stats, daily trends, model breakdown, error analysis, and device reliability
 - SNMP trap notifications for firmware update job completion (SNMPv2c)
 - SNMP trap configuration UI in Settings > Notifications panel
 - Test trap button for verifying SNMP configuration
