@@ -39,6 +39,7 @@ class Feature(str, Enum):
     BETA_FIRMWARE = "beta_firmware"
     FIRMWARE_HOLD_CUSTOM = "firmware_hold_custom"
     RADIUS_SERVER = "radius_server"
+    SNMP_TRAPS = "snmp_traps"
 
 
 class LicenseTier(str, Enum):
@@ -483,6 +484,7 @@ _FEATURE_DISPLAY_NAMES = {
     "device_portal": "Device portal",
     "tower_sites": "Tower sites",
     "radius_server": "RADIUS server",
+    "snmp_traps": "SNMP traps",
 }
 
 

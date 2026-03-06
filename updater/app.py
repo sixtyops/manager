@@ -37,6 +37,7 @@ from .auth import require_auth, require_auth_ws, require_role, authenticate, cre
 from .backup import build_csv_export, process_csv_import
 from . import telemetry
 from . import slack
+from . import snmp
 from . import ssl_manager
 from . import sftp_backup
 from . import builtin_radius
@@ -1570,7 +1571,10 @@ _SETTINGS_WRITABLE = {
     "schedule_scope", "schedule_scope_data",
     "rollout_canary_aps", "rollout_canary_switches",
     "firmware_beta_enabled", "firmware_quarantine_days",
-    "slack_webhook_url", "autoupdate_enabled", "release_channel",
+    "slack_webhook_url",
+    "snmp_traps_enabled", "snmp_trap_host", "snmp_trap_port",
+    "snmp_trap_community", "snmp_trap_version",
+    "autoupdate_enabled", "release_channel",
     "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
     "pre_update_reboot",
 }
@@ -1637,6 +1641,18 @@ def _validate_settings(filtered: dict):
     if url and not slack.is_valid_slack_url(url):
         raise HTTPException(400, "Slack webhook URL must be a valid https://hooks.slack.com/ URL")
 
+    # Validate SNMP trap settings
+    trap_host = filtered.get("snmp_trap_host")
+    if trap_host and not snmp.is_valid_trap_host(trap_host):
+        raise HTTPException(400, "SNMP trap host must be a valid IP address or hostname")
+    if "snmp_trap_port" in filtered:
+        trap_port = _parse_int_field(filtered["snmp_trap_port"], "snmp_trap_port")
+        if not 1 <= trap_port <= 65535:
+            raise HTTPException(400, "snmp_trap_port must be between 1 and 65535")
+    if "snmp_trap_version" in filtered:
+        if filtered["snmp_trap_version"] not in ("2c",):
+            raise HTTPException(400, "snmp_trap_version must be '2c'")
+
     # Validate enum/boolean-like fields
     if "bank_mode" in filtered:
         filtered["bank_mode"] = str(filtered["bank_mode"]).lower()
@@ -1654,6 +1670,7 @@ def _validate_settings(filtered: dict):
     bool_like = {
         "schedule_enabled", "allow_downgrade", "weather_check_enabled",
         "firmware_beta_enabled", "autoupdate_enabled", "pre_update_reboot",
+        "snmp_traps_enabled",
     }
     for key in bool_like:
         if key in filtered:
@@ -1700,6 +1717,9 @@ def _validate_settings(filtered: dict):
     if filtered.get("slack_webhook_url") and not is_feature_enabled(Feature.SLACK_NOTIFICATIONS):
         raise HTTPException(403, detail={"error": "feature_locked", "feature": "slack_notifications",
                                          "message": "Slack notifications require a Pro license."})
+    if filtered.get("snmp_traps_enabled") == "true" and not is_feature_enabled(Feature.SNMP_TRAPS):
+        raise HTTPException(403, detail={"error": "feature_locked", "feature": "snmp_traps",
+                                         "message": "SNMP trap notifications require a Pro license."})
     if filtered.get("firmware_beta_enabled") == "true" and not is_feature_enabled(Feature.BETA_FIRMWARE):
         raise HTTPException(403, detail={"error": "feature_locked", "feature": "beta_firmware",
                                          "message": "Beta firmware channel requires a Pro license."})
@@ -1790,6 +1810,13 @@ async def save_settings_and_reevaluate(request: Request, session: dict = Depends
 async def test_slack_webhook(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SLACK_NOTIFICATIONS))):
     """Send a test notification to the configured Slack webhook."""
     success, message = await slack.send_test_notification()
+    return {"success": success, "message": message}
+
+
+@app.post("/api/snmp/test")
+async def test_snmp_trap(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SNMP_TRAPS))):
+    """Send a test SNMP trap to verify configuration."""
+    success, message = await snmp.send_test_trap()
     return {"success": success, "message": message}
 
 
@@ -4668,6 +4695,23 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         )
     except Exception as e:
         logger.error(f"Slack notification failed for job {job.job_id}: {e}")
+
+    try:
+        await snmp.notify_job_completed(
+            job_id=job.job_id,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+            cancelled_count=cancelled_count,
+            duration_seconds=(job.completed_at - job.started_at).total_seconds(),
+            devices=devices_dict,
+            firmware_name=firmware_name,
+            is_scheduled=job.is_scheduled,
+            rollout_info=rollout_info,
+            next_job_info=next_job_info,
+        )
+    except Exception as e:
+        logger.error(f"SNMP notification failed for job {job.job_id}: {e}")
 
     logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped, {cancelled_count} cancelled")
 

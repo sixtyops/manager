@@ -705,6 +705,36 @@
                 </div>
 
                 <div id="notifStatus" class="u-status-line"></div>
+
+                <hr style="border:none;border-top:1px solid var(--border);margin:16px 0;">
+
+                <label>SNMP Traps</label>
+                <p class="u-note-inline">Send SNMPv2c traps to your NMS when firmware update jobs complete. Configure your trap receiver host and community string below.</p>
+                <div class="u-flex-col-gap8">
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="checkbox" id="snmpTrapsEnabled" onchange="toggleSnmpFields()">
+                        <span style="font-size:0.75rem;color:#6b7280;">Enable SNMP Traps</span>
+                    </label>
+                    <div id="snmpFields" style="display:grid;grid-template-columns:1fr 100px;gap:8px;">
+                        <div>
+                            <label style="font-size:0.7rem;color:#9ca3af;">Trap Host</label>
+                            <input type="text" id="snmpTrapHost" placeholder="192.168.1.100" style="width:100%;font-size:0.8rem;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.7rem;color:#9ca3af;">Port</label>
+                            <input type="number" id="snmpTrapPort" value="162" min="1" max="65535" style="width:100%;font-size:0.8rem;">
+                        </div>
+                        <div style="grid-column:1/-1;">
+                            <label style="font-size:0.7rem;color:#9ca3af;">Community String</label>
+                            <input type="text" id="snmpTrapCommunity" placeholder="public" style="width:100%;font-size:0.8rem;">
+                        </div>
+                    </div>
+                    <div class="u-flex-center-gap6">
+                        <button class="backup-btn" onclick="saveSnmpSettings()">Save</button>
+                        <button class="backup-btn" onclick="testSnmpTrap()" style="background:#6b7280;">Test Trap</button>
+                    </div>
+                </div>
+                <div id="snmpStatus" class="u-status-line"></div>
             </div>
 
             <!-- Authentication Panel -->
@@ -2819,6 +2849,11 @@
                 const resp = await fetch('/api/settings');
                 const data = await resp.json();
                 document.getElementById('notifSlackWebhook').value = data.settings.slack_webhook_url || '';
+                document.getElementById('snmpTrapsEnabled').checked = data.settings.snmp_traps_enabled === 'true';
+                document.getElementById('snmpTrapHost').value = data.settings.snmp_trap_host || '';
+                document.getElementById('snmpTrapPort').value = data.settings.snmp_trap_port || '162';
+                document.getElementById('snmpTrapCommunity').value = data.settings.snmp_trap_community || 'public';
+                toggleSnmpFields();
             } catch (e) {}
         }
 
@@ -2911,6 +2946,64 @@
                     statusEl.style.color = '#10b981';
                 } else {
                     statusEl.textContent = data.message || 'Failed to send test';
+                    statusEl.style.color = '#ef4444';
+                }
+            } catch (e) {
+                statusEl.textContent = 'Error: ' + e.message;
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        function toggleSnmpFields() {
+            const enabled = document.getElementById('snmpTrapsEnabled').checked;
+            const fields = document.getElementById('snmpFields');
+            if (fields) fields.style.opacity = enabled ? '1' : '0.5';
+        }
+
+        async function saveSnmpSettings() {
+            const statusEl = document.getElementById('snmpStatus');
+            const settings = {
+                snmp_traps_enabled: document.getElementById('snmpTrapsEnabled').checked ? 'true' : 'false',
+                snmp_trap_host: document.getElementById('snmpTrapHost').value.trim(),
+                snmp_trap_port: document.getElementById('snmpTrapPort').value,
+                snmp_trap_community: document.getElementById('snmpTrapCommunity').value.trim() || 'public',
+            };
+            try {
+                const resp = await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings),
+                });
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    throw new Error(err.detail || 'Save failed');
+                }
+                statusEl.textContent = 'Saved!';
+                statusEl.style.color = '#10b981';
+            } catch (e) {
+                statusEl.textContent = 'Failed to save: ' + e.message;
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function testSnmpTrap() {
+            const statusEl = document.getElementById('snmpStatus');
+            if (!document.getElementById('snmpTrapsEnabled').checked) {
+                statusEl.textContent = 'Enable SNMP traps first';
+                statusEl.style.color = '#f59e0b';
+                return;
+            }
+            await saveSnmpSettings();
+            statusEl.textContent = 'Sending test trap...';
+            statusEl.style.color = '#6b7280';
+            try {
+                const resp = await fetch('/api/snmp/test', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    statusEl.textContent = data.message || 'Test trap sent!';
+                    statusEl.style.color = '#10b981';
+                } else {
+                    statusEl.textContent = data.message || 'Failed to send test trap';
                     statusEl.style.color = '#ef4444';
                 }
             } catch (e) {

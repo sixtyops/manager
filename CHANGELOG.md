@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- SNMP trap notifications for firmware update job completion (SNMPv2c)
+- SNMP trap configuration UI in Settings > Notifications panel
+- Test trap button for verifying SNMP configuration
 - Inline release notes display in Settings > Updates panel
 - GitHub release notes categorization via `.github/release.yml`
 

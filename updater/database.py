@@ -429,6 +429,12 @@ def init_db():
             "admin_password_hash": "",
             "firmware_quarantine_days": "7",
             "slack_webhook_url": "",
+            # SNMP trap configuration
+            "snmp_traps_enabled": "false",
+            "snmp_trap_host": "",
+            "snmp_trap_port": "162",
+            "snmp_trap_community": "public",
+            "snmp_trap_version": "2c",
             # RADIUS configuration for web authentication
             "radius_enabled": "",  # Empty = use env vars, "true"/"false" = explicit
             "radius_server": "",

@@ -16,3 +16,4 @@ packaging>=23.0
 pyrad>=2.4,<3.0
 ldap3>=2.9.0,<3.0
 asyncssh>=2.14.0
+pysnmp-lextudio>=6.1.0
