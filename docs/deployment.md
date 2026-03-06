@@ -27,7 +27,7 @@ cd firmware-updater
 ./deploy.sh
 ```
 
-`deploy.sh` creates the required directories, builds the Docker images, and starts all services in standalone mode (app + nginx + certbot).
+`deploy.sh` creates the required directories, builds the Docker images, and starts all services in standalone mode (app + built-in FreeRADIUS + nginx + certbot).
 
 ## Initial Setup
 
@@ -75,8 +75,8 @@ The project ships two compose files:
 
 | File | Purpose |
 |------|---------|
-| `docker-compose.yml` | Base: just the app on port 8000. Use behind your own reverse proxy. |
-| `docker-compose.standalone.yml` | Overlay: adds nginx (80/443) and certbot. Use for standalone deployments. |
+| `docker-compose.yml` | Base: app on port 8000, built-in FreeRADIUS on UDP 1812, and bundled nginx with no published ports. Use behind your own reverse proxy. |
+| `docker-compose.standalone.yml` | Overlay: publishes nginx on 80/443 and adds certbot. Use for standalone deployments. |
 
 ### Behind your own proxy
 
@@ -84,7 +84,7 @@ The project ships two compose files:
 docker compose up -d --build
 ```
 
-Starts the application on port 8000 and the bundled nginx (with no published ports). Your reverse proxy forwards to `localhost:8000` and handles TLS.
+Starts the application on port 8000, the built-in FreeRADIUS service on UDP 1812, and the bundled nginx (with no published ports). Your reverse proxy forwards to `localhost:8000` and handles TLS.
 
 If you prefer to route through the bundled nginx on custom ports (e.g., so the app's SSL management UI still works), create a `docker-compose.override.yml`:
 
@@ -104,11 +104,12 @@ Then `docker compose up -d --build` exposes nginx on those ports. Your external 
 docker compose -f docker-compose.yml -f docker-compose.standalone.yml up -d --build
 ```
 
-Starts three services:
+Starts four services:
 
 | Service | Image | Purpose |
 |---------|-------|---------|
 | `tachyon-mgmt` | Built from `Dockerfile` | The application (FastAPI on port 8000) |
+| `radius` | `freeradius/freeradius-server:latest-3.2-alpine` | Built-in RADIUS server for device-admin auth on UDP 1812 |
 | `nginx` | `nginx:alpine` | Reverse proxy, HTTPS termination, WebSocket upgrade |
 | `certbot` | `certbot/certbot` | Let's Encrypt certificate auto-renewal (every 12h) |
 
@@ -125,6 +126,13 @@ All host paths (left side of `:`) can be changed to suit your setup.
 | `./firmware` | `/app/firmware` | Uploaded firmware files |
 | `./data` | `/app/data` | SQLite database (`tachyon.db`) |
 | `./backups` | `/app/backups` | Git backup repository |
+
+The built-in Radius service also uses files generated under `./data/radius/`:
+
+| Host path | Container path | Contents |
+|-----------|---------------|----------|
+| `./data/radius/clients.conf` | `/etc/raddb/clients.conf` (radius) | Allowed Radius clients generated from inventory and manual overrides |
+| `./data/radius/mods-config/files/authorize` | `/etc/raddb/mods-config/files/authorize` (radius) | Built-in Radius users generated from the app database |
 
 ### Standalone mode (additional volumes)
 
@@ -167,6 +175,26 @@ python -c "from passlib.hash import bcrypt; print(bcrypt.hash('yourpassword'))"
 | `GITHUB_REPO` | `isolson/firmware-updater` | GitHub repo for auto-update checks |
 | `AUTOUPDATE_CHECK_INTERVAL` | `604800` (7 days) | Seconds between release checks |
 
+Built-in Radius settings are managed in the web UI under `Settings > Authentication`, not by environment variables. New installs default the feature to enabled, but it will not authenticate devices until you set a shared secret and add Radius users.
+
+## Built-in Radius
+
+The appliance includes a FreeRADIUS container for device-admin authentication. This is separate from management UI login:
+
+- Web login uses local username/password and optional OIDC SSO
+- Device-admin Radius is for APs, switches, and other managed devices authenticating to this system
+- Reserved usernames `admin` and `root` are rejected for built-in Radius accounts
+
+Operational notes:
+
+- Radius listens on UDP `1812`
+- The app generates FreeRADIUS config from SQLite and reloads the Radius container after config changes
+- The Radius container has a Docker healthcheck, and the app also runs a background health monitor that attempts recovery if Docker reports the container unhealthy
+- The app recommends a manual Radius shared-secret review every 365 days; this is advisory only and never changes the secret automatically
+- Allowed Radius clients come from enabled inventory IPs plus any manual client overrides configured in the Authentication tab
+- If you add devices with manual credentials first and later migrate them to Radius, save a Radius config template and use the staged Radius rollout in `Settings > Authentication`
+- The shared secret is not returned by the API after initial save, so you should record it when configuring downstream devices
+
 ## Reverse Proxy
 
 ### Standalone nginx (bundled)
@@ -197,6 +225,8 @@ The app listens on `localhost:8000`. Configure your proxy to forward to it with 
 | WebSocket upgrade | `/ws` path, long timeout | Real-time status updates |
 | Max body size | 500 MB | Firmware file uploads |
 | Forwarded headers | `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto` | IP-based rate limiting, HTTPS detection |
+
+If you want devices to authenticate against the built-in Radius service through the same host, also allow UDP `1812` through whatever firewall or load balancer sits in front of the system.
 
 **Caddy example** (`Caddyfile`):
 
@@ -252,7 +282,7 @@ docker compose up -d --build
 # Access on http://your-server:8000
 ```
 
-This works but has no TLS — traffic including login credentials is sent in plaintext. A reverse proxy with HTTPS is recommended for any production or internet-facing deployment.
+This works but has no TLS for the web UI. A reverse proxy with HTTPS is recommended for any production or internet-facing deployment. If you are also using built-in Radius, devices will still reach the Radius service directly on UDP `1812`.
 
 ## SSL/TLS
 

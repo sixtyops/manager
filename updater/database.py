@@ -63,6 +63,10 @@ def _migrate(db):
     rollout_columns = [row[1] for row in db.execute("PRAGMA table_info(rollouts)").fetchall()]
     if "firmware_file_tns100" not in rollout_columns:
         db.execute("ALTER TABLE rollouts ADD COLUMN firmware_file_tns100 TEXT DEFAULT NULL")
+    if "target_version_303l" not in rollout_columns:
+        db.execute("ALTER TABLE rollouts ADD COLUMN target_version_303l TEXT DEFAULT NULL")
+    if "target_version_tns100" not in rollout_columns:
+        db.execute("ALTER TABLE rollouts ADD COLUMN target_version_tns100 TEXT DEFAULT NULL")
 
     # Backfill firmware_registry for existing firmware files
     firmware_dir = Path(__file__).parent.parent / "firmware"
@@ -238,6 +242,8 @@ def init_db():
                 firmware_file TEXT NOT NULL,
                 firmware_file_303l TEXT,
                 target_version TEXT,
+                target_version_303l TEXT,
+                target_version_tns100 TEXT,
                 phase TEXT NOT NULL DEFAULT 'canary',
                 status TEXT NOT NULL DEFAULT 'active',
                 pause_reason TEXT,
@@ -324,6 +330,63 @@ def init_db():
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS radius_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                password TEXT NOT NULL,
+                enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_auth_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS radius_auth_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT,
+                client_ip TEXT,
+                client_name TEXT,
+                client_model TEXT,
+                outcome TEXT NOT NULL,
+                reason TEXT,
+                occurred_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS radius_client_overrides (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_spec TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                shortname TEXT,
+                enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS radius_rollouts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                config_template_id INTEGER,
+                phase TEXT NOT NULL DEFAULT 'canary',
+                status TEXT NOT NULL DEFAULT 'active',
+                pause_reason TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_phase_completed_at TEXT,
+                completed_at TEXT,
+                service_username TEXT
+            );
+            CREATE TABLE IF NOT EXISTS radius_rollout_devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rollout_id INTEGER NOT NULL,
+                ip TEXT NOT NULL,
+                device_type TEXT NOT NULL,
+                phase_assigned TEXT,
+                status TEXT DEFAULT 'pending',
+                error TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (rollout_id) REFERENCES radius_rollouts(id),
+                UNIQUE(rollout_id, ip)
+            );
+            CREATE INDEX IF NOT EXISTS idx_radius_auth_occurred ON radius_auth_log(occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_radius_auth_client_ip ON radius_auth_log(client_ip);
+            CREATE INDEX IF NOT EXISTS idx_radius_auth_username ON radius_auth_log(username);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_radius_auth_unique ON radius_auth_log(occurred_at, username, client_ip, outcome);
         """)
 
         # Migrations: add columns if missing
@@ -359,6 +422,16 @@ def init_db():
             "radius_secret": "",
             "radius_port": "1812",
             "radius_timeout": "5",
+            # Built-in RADIUS server for device admin auth
+            "builtin_radius_enabled": "true",
+            "builtin_radius_host": "",
+            "builtin_radius_port": "1812",
+            "builtin_radius_secret": "",
+            "builtin_radius_secret_updated_at": "",
+            "builtin_radius_secret_review_acknowledged_at": "",
+            "builtin_radius_mgmt_password": "",
+            "rollout_canary_aps": "",
+            "rollout_canary_switches": "",
             # Global default device credentials
             "device_default_auth_enabled": "false",
             "device_default_username": "",
@@ -645,6 +718,17 @@ def delete_switch(ip: str):
     """Delete a switch."""
     with get_db() as db:
         db.execute("DELETE FROM switches WHERE ip = ?", (ip,))
+
+
+def update_device_credentials(device_type: str, ip: str, username: str, password: str):
+    """Update stored credentials for an AP or switch."""
+    enc_password = encrypt_password(password) if not is_encrypted(password) else password
+    table = "access_points" if device_type == "ap" else "switches"
+    with get_db() as db:
+        db.execute(
+            f"UPDATE {table} SET username = ?, password = ? WHERE ip = ?",
+            (username, enc_password, ip),
+        )
 
 
 # CPE Cache operations
@@ -1204,13 +1288,21 @@ def cancel_rollout(rollout_id: int):
         )
 
 
-def set_rollout_target_version(rollout_id: int, version: str):
-    """Set the learned target version on a rollout."""
+def set_rollout_target_versions(rollout_id: int, versions: dict):
+    """Set learned target versions on a rollout."""
     now = datetime.now().isoformat()
+    target_30x = versions.get("tna-30x")
+    target_303l = versions.get("tna-303l")
+    target_tns100 = versions.get("tns-100")
     with get_db() as db:
         db.execute(
-            "UPDATE rollouts SET target_version = ?, updated_at = ? WHERE id = ?",
-            (version, now, rollout_id)
+            """UPDATE rollouts
+               SET target_version = COALESCE(?, target_version),
+                   target_version_303l = COALESCE(?, target_version_303l),
+                   target_version_tns100 = COALESCE(?, target_version_tns100),
+                   updated_at = ?
+               WHERE id = ?""",
+            (target_30x, target_303l, target_tns100, now, rollout_id)
         )
 
 

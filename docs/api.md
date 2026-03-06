@@ -8,11 +8,11 @@ All API endpoints require authentication unless noted. Authenticated requests mu
 Renders the login page. No auth required. Redirects to `/setup` on first run.
 
 ### `POST /login`
-Authenticate and create a session. Rate-limited to 5 attempts per IP per 60 seconds.
+Authenticate and create a session. Rate-limited to 20 attempts per IP per 5 minutes.
 
 - **Body**: `username` (form), `password` (form)
 - **Response**: Redirect to `/` on success, re-render login with error on failure
-- **Auth flow**: Local username/password
+- **Auth flow**: Local username/password for the management UI
 - **Cookie set**: `session_id` (httponly, secure, samesite=lax, 24h TTL)
 
 ### `POST /logout`
@@ -34,6 +34,149 @@ Multi-step setup wizard for SSL and backup configuration. Auth required.
 Handle wizard steps (SSL certificate setup, Git backup, completion).
 
 - **Body**: `step` (form), `action` (form), plus step-specific fields
+
+### `GET /auth/oidc/login`
+Start the OIDC login flow. No auth required. Rate-limited to 60 requests per IP per 5 minutes.
+
+- **Response**: Redirect to the configured OIDC provider
+- **Notes**: Only available when OIDC is configured and licensed
+
+### `GET /auth/oidc/callback`
+Complete the OIDC login flow. No auth required. Rate-limited to 60 requests per IP per 5 minutes.
+
+- **Query**: Provider callback parameters such as `code`, `state`, or `error`
+- **Response**: Redirect to `/` on success, back to `/login` on failure
+
+### `GET /api/auth/config`
+Get a summary of the authentication configuration used by the UI.
+
+- **Response**: Built-in Radius summary, OIDC summary, and device-default credential summary
+
+### `GET /api/auth/radius`
+Get built-in Radius server configuration and a short stats snapshot. Requires PRO `radius_auth`.
+
+- **Response**: `enabled`, `host`, `port`, `secret_set`, `configured`, `running`, `healthy`, `container_status`, `health_status`, `last_error`, `secret_last_rotated_at`, `secret_age_days`, `rotation_recommended`, `rotation_status`, `rotation_recommend_after_days`, and `stats`
+
+### `PUT /api/auth/radius`
+Update built-in Radius server settings. Requires PRO `radius_auth`.
+
+- **Body** (JSON): `enabled`, `host`, `port`, `secret`
+- **Validation**:
+  - `host` is required when enabling the server
+  - `secret` is required when enabling the server
+  - If `secret` is omitted, the existing secret is preserved
+- **Effect**: Regenerates FreeRADIUS config and reloads the `tachyon-radius` container
+
+### `GET /api/auth/radius/users`
+List built-in Radius users. Requires PRO `radius_auth`.
+
+- **Response**: `{ "users": [{ "id", "username", "enabled", "created_at", "updated_at", "last_auth_at" }, ...] }`
+
+### `POST /api/auth/radius/users`
+Create a built-in Radius user. Requires PRO `radius_auth`.
+
+- **Body** (JSON): `username`, `password`, `enabled`
+- **Validation**:
+  - `username` is required
+  - Reserved usernames `admin` and `root` are rejected
+  - `password` is required
+- **Effect**: Regenerates FreeRADIUS user config and reloads the Radius container
+
+### `PUT /api/auth/radius/users/{user_id}`
+Update a built-in Radius user. Requires PRO `radius_auth`.
+
+- **Body** (JSON): `username`, `password`, `enabled`
+- **Notes**: If `password` is omitted, the existing password is preserved
+
+### `DELETE /api/auth/radius/users/{user_id}`
+Delete a built-in Radius user. Requires PRO `radius_auth`.
+
+- **Response**: `{ "success": true }`
+
+### `GET /api/auth/radius/clients`
+List manual built-in Radius client overrides. Requires PRO `radius_auth`.
+
+- **Response**: `{ "clients": [{ "id", "client_spec", "shortname", "enabled", "created_at", "updated_at" }, ...] }`
+- **Notes**: These overrides are merged with inventory-derived AP, switch, and CPE IPs when generating `clients.conf`
+
+### `POST /api/auth/radius/clients`
+Create a manual built-in Radius client override. Requires PRO `radius_auth`.
+
+- **Body** (JSON): `client_spec`, `shortname`, `enabled`
+- **Validation**: `client_spec` must be a valid IP address or CIDR
+
+### `PUT /api/auth/radius/clients/{override_id}`
+Update a manual built-in Radius client override. Requires PRO `radius_auth`.
+
+- **Body** (JSON): `client_spec`, `shortname`, `enabled`
+
+### `DELETE /api/auth/radius/clients/{override_id}`
+Delete a manual built-in Radius client override. Requires PRO `radius_auth`.
+
+- **Response**: `{ "success": true }`
+
+### `GET /api/auth/radius/stats`
+Get built-in Radius status, auth counters, and recent auth history. Requires PRO `radius_auth`.
+
+- **Response**: `enabled`, `configured`, `running`, `healthy`, `container_status`, `health_status`, `port`, `secret_set`, `last_error`, `secret_last_rotated_at`, `secret_age_days`, `rotation_recommended`, `rotation_status`, `rotation_recommend_after_days`, `admin_accounts`, `known_clients`, `active_devices_24h`, `auth_success_rate`, `logins_today`, `recent_logins`
+- **Notes**: Auth history is persisted in SQLite from FreeRADIUS logs by a background sync task
+
+### `POST /api/auth/radius/secret-review`
+Start tracking a legacy Radius shared secret from today without changing the secret value. Requires PRO `radius_auth`.
+
+- **Response**: Updated built-in Radius config summary
+- **Notes**:
+  - Only works when a shared secret exists
+  - Only available for older installs where the secret predates rotation tracking
+  - This does not rotate the secret or push changes to devices
+
+### `GET /api/auth/radius/rollout`
+Get the current staged Radius device-migration rollout, if any. Requires PRO `radius_auth`.
+
+- **Response**: `{ "rollout": null | { "id", "phase", "status", "pause_reason", "service_username", "created_at", "updated_at", "progress", "devices" } }`
+- **Notes**: Current scope is enabled APs, switches, and CPEs whose inherited parent-AP credentials currently work. CPE entries include `parent_ap_ip` when available.
+
+### `POST /api/auth/radius/rollout/start`
+Start a staged Radius migration rollout for enabled APs, switches, and manageable CPEs. Requires PRO `radius_auth`.
+
+- **Prerequisites**:
+  - Built-in Radius enabled with a device host and shared secret
+  - Saved and enabled Radius config template with `method=radius`
+  - Saved Radius config template server, port, and secret must match the built-in Radius host, port, and secret
+- **Behavior**:
+  - Forces a fresh AP poll before rollout so CPE inventory and inherited-auth state are current
+  - Uses the device's currently stored management credentials to push the Radius config
+  - For CPEs, reuses the parent AP credentials because CPE credentials are not stored separately
+  - Verifies the cutover by logging back into the device with the appliance's hidden Radius automation account
+  - If a CPE cannot log in with inherited AP credentials, the rollout pauses and the operator must correct the AP credentials before resuming
+  - Re-resolves remaining devices between phases so later CPE phases pick up updated parent AP credentials
+  - Pauses automatically on failure
+
+### `POST /api/auth/radius/rollout/{rollout_id}/resume`
+Resume a paused Radius migration rollout. Requires PRO `radius_auth`.
+
+### `POST /api/auth/radius/rollout/{rollout_id}/cancel`
+Cancel an active or paused Radius migration rollout. Requires PRO `radius_auth`.
+
+### `PUT /api/auth/device-defaults`
+Update global default credentials used when talking to managed devices.
+
+- **Body** (JSON): `enabled`, `username`, `password`
+- **Notes**: If `password` is omitted, the existing password is preserved
+
+### `GET /api/auth/oidc`
+Get OIDC configuration for the management UI. Requires PRO `sso_oidc`.
+
+- **Response**: `enabled`, `provider_url`, `client_id`, `redirect_uri`, `allowed_group`, `scopes`, `configured`
+
+### `PUT /api/auth/oidc`
+Update OIDC configuration for the management UI. Requires PRO `sso_oidc`.
+
+- **Body** (JSON): `enabled`, `provider_url`, `client_id`, `client_secret`, `redirect_uri`, `allowed_group`, `scopes`
+- **Notes**: If `client_secret` is omitted, the existing secret is preserved
+
+### `POST /api/auth/test-oidc`
+Test reachability of the configured OIDC discovery document. Requires PRO `sso_oidc`.
 
 ## Pages
 
@@ -185,9 +328,12 @@ Get all configuration settings as key-value pairs. Sensitive values (password ha
 ### `PUT /api/settings`
 Update settings. Only whitelisted keys are accepted:
 
-`schedule_enabled`, `schedule_days`, `schedule_start_hour`, `schedule_end_hour`, `parallel_updates`, `bank_mode`, `allow_downgrade`, `timezone`, `zip_code`, `weather_check_enabled`, `min_temperature_c`, `temperature_unit`, `schedule_scope`, `schedule_scope_data`, `firmware_beta_enabled`, `firmware_quarantine_days`, `slack_webhook_url`, `autoupdate_enabled`
+`schedule_enabled`, `schedule_days`, `schedule_start_hour`, `schedule_end_hour`, `parallel_updates`, `bank_mode`, `allow_downgrade`, `timezone`, `zip_code`, `weather_check_enabled`, `min_temperature_c`, `temperature_unit`, `schedule_scope`, `schedule_scope_data`, `rollout_canary_aps`, `rollout_canary_switches`, `firmware_beta_enabled`, `firmware_quarantine_days`, `slack_webhook_url`, `autoupdate_enabled`
 
 - **Body** (JSON): Object of key-value pairs to set
+- **Notes**:
+  - `rollout_canary_aps` must contain enabled AP IPs in the effective rollout scope
+  - `rollout_canary_switches` must contain enabled switch IPs in the effective rollout scope
 - **Response**: `{ "success": true }`
 
 ### `PUT /api/auth/device-defaults`
@@ -221,6 +367,15 @@ Get the active or paused rollout with device progress counts.
 
 ### `POST /api/rollout/{rollout_id}/resume`
 Resume a paused rollout. Only works if status is `paused`.
+
+### `POST /api/rollout/canary/trigger`
+Start only the canary phase immediately, even outside the configured maintenance window.
+
+- Uses the saved canary AP and switch settings when present
+- Still enforces time validation, weather checks, and firmware hold/quarantine rules
+- Still enforces rollout scope and canary validation
+- Does not consume the nightly rollout window for later phases
+- Does not apply the normal scheduled-job end-of-window cutoff
 
 ### `POST /api/rollout/{rollout_id}/cancel`
 Cancel an active or paused rollout.

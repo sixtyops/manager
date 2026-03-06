@@ -1,4 +1,4 @@
-"""Pydantic models for Tachyon Management System."""
+"""Pydantic models for SixtyOps."""
 
 from enum import Enum
 from typing import Optional

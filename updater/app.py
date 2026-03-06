@@ -1,10 +1,11 @@
-"""Tachyon Management System - Web Application."""
+"""SixtyOps - Web Application."""
 
 import asyncio
 import html as html_module
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -36,6 +37,7 @@ from . import telemetry
 from . import slack
 from . import ssl_manager
 from . import git_backup
+from . import builtin_radius
 from . import radius_config
 from . import oidc_config
 from .license import (
@@ -203,6 +205,28 @@ async def _backup_scheduler():
             logger.error(f"Backup scheduler error: {e}")
 
 
+async def _radius_log_sync():
+    """Persist recent FreeRADIUS auth events in the background."""
+    while True:
+        await asyncio.sleep(300)
+        try:
+            error = builtin_radius.sync_auth_history(hours=24)
+            if error:
+                logger.debug("Background RADIUS sync skipped: %s", error)
+        except Exception as e:
+            logger.error(f"Background RADIUS log sync error: {e}")
+
+
+async def _radius_health_monitor():
+    """Keep the FreeRADIUS container healthy over long-running deployments."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await builtin_radius.get_runtime().ensure_healthy()
+        except Exception as e:
+            logger.error(f"Background RADIUS health monitor error: {e}")
+
+
 def _cleanup_completed_jobs(max_age_seconds: int = 3600):
     """Remove completed jobs from in-memory dict after they've been persisted."""
     now = datetime.now()
@@ -223,6 +247,8 @@ async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
     # Startup
     db.cleanup_expired_sessions()
+    radius_runtime = builtin_radius.get_runtime()
+    await radius_runtime.start()
     poller = init_poller(broadcast, poll_interval=60)
     await poller.start()
     scheduler = init_scheduler(broadcast, _start_scheduled_update, check_interval=60)
@@ -240,6 +266,12 @@ async def lifespan(app: FastAPI):
     backup_task = asyncio.create_task(
         _supervised_task("backup_scheduler", _backup_scheduler)
     )
+    radius_sync_task = asyncio.create_task(
+        _supervised_task("radius_log_sync", _radius_log_sync)
+    )
+    radius_health_task = asyncio.create_task(
+        _supervised_task("radius_health_monitor", _radius_health_monitor)
+    )
     state = get_license_state()
     logger.info(f"License: {state.status.value} (tier={state.tier.value})")
     logger.info("Application started")
@@ -249,7 +281,9 @@ async def lifespan(app: FastAPI):
     # Shutdown
     backup_task.cancel()
     cleanup_task.cancel()
-    for task in [cleanup_task, backup_task]:
+    radius_sync_task.cancel()
+    radius_health_task.cancel()
+    for task in [cleanup_task, backup_task, radius_sync_task, radius_health_task]:
         try:
             await task
         except asyncio.CancelledError:
@@ -259,11 +293,12 @@ async def lifespan(app: FastAPI):
     await fetcher.stop()
     await scheduler.stop()
     await poller.stop()
+    await radius_runtime.stop()
     logger.info("Application stopped")
 
 
 # FastAPI app
-app = FastAPI(title="Unofficial Tachyon Networks Auto Updater", lifespan=lifespan)
+app = FastAPI(title="SixtyOps", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
@@ -314,41 +349,62 @@ async def login_page(request: Request, error: str = None):
     })
 
 
-_login_attempts: Dict[str, list] = {}  # IP -> list of timestamps
-LOGIN_RATE_LIMIT = 5       # max attempts
-LOGIN_RATE_WINDOW = 60     # per N seconds
+_auth_rate_attempts: Dict[str, list] = {}  # bucket -> list of timestamps
+AUTH_RATE_WINDOW = 300  # 5 minutes
+LOGIN_RATE_LIMIT = 20
+OIDC_RATE_LIMIT = 60
 
 
-def _check_login_rate_limit(ip: str) -> bool:
-    """Return True if the IP is rate-limited."""
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP for proxied deployments."""
+    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _check_rate_limit(bucket: str, limit: int, window_seconds: int) -> bool:
+    """Return True if the bucket is currently rate-limited."""
     now = datetime.now()
-    cutoff = now.timestamp() - LOGIN_RATE_WINDOW
-    attempts = _login_attempts.get(ip, [])
+    cutoff = now.timestamp() - window_seconds
+    attempts = _auth_rate_attempts.get(bucket, [])
     attempts = [t for t in attempts if t > cutoff]
-    _login_attempts[ip] = attempts
-    return len(attempts) >= LOGIN_RATE_LIMIT
+    _auth_rate_attempts[bucket] = attempts
+    return len(attempts) >= limit
 
 
-def _record_login_attempt(ip: str):
-    """Record a login attempt for rate limiting."""
-    _login_attempts.setdefault(ip, []).append(datetime.now().timestamp())
+def _record_rate_limit_event(bucket: str):
+    """Record an event in the bucket for rate limiting."""
+    _auth_rate_attempts.setdefault(bucket, []).append(datetime.now().timestamp())
+
+
+def _clear_rate_limit_bucket(bucket: str):
+    """Clear a rate-limit bucket after successful authentication."""
+    _auth_rate_attempts.pop(bucket, None)
 
 
 @app.post("/login")
 async def login(request: Request, username: str = Form(...), password: str = Form(...)):
     """Handle login form submission."""
-    ip_address = request.client.host if request.client else "unknown"
-    if _check_login_rate_limit(ip_address):
+    ip_address = _client_ip(request)
+    bucket = f"login:{ip_address}"
+    if _check_rate_limit(bucket, LOGIN_RATE_LIMIT, AUTH_RATE_WINDOW):
         return templates.TemplateResponse("login.html", {
-            "request": request, "error": "Too many login attempts. Please wait and try again.",
-        }, status_code=429)
+            "request": request,
+            "error": "rate_limited",
+            "oidc_enabled": oidc_config.is_oidc_enabled(),
+        }, status_code=429, headers={"Retry-After": str(AUTH_RATE_WINDOW)})
 
     user = authenticate(username, password)
     if not user:
-        _record_login_attempt(ip_address)
-        return templates.TemplateResponse("login.html", {"request": request, "error": True}, status_code=401)
+        _record_rate_limit_event(bucket)
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": True, "oidc_enabled": oidc_config.is_oidc_enabled()},
+            status_code=401,
+        )
 
-    ip_address = request.client.host if request.client else "unknown"
+    _clear_rate_limit_bucket(bucket)
     session_id = create_session(user, ip_address)
 
     # Redirect to setup if password hasn't been changed from default
@@ -905,14 +961,32 @@ async def update_ap(
     new_username = username if username else ap["username"]
     new_password = password if password else ap["password"]
     new_site_id = tower_site_id if tower_site_id is not None else ap["tower_site_id"]
+    credentials_changed = new_username != ap["username"] or new_password != ap["password"]
+
+    if credentials_changed:
+        client = TachyonClient(ip, new_username, new_password)
+        try:
+            login_result = await client.login()
+            if login_result is not True:
+                raise HTTPException(400, f"Cannot connect to {ip} with the supplied credentials")
+            await client.get_ap_info()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error(f"Failed to validate AP credentials for {ip}: {exc}")
+            raise HTTPException(400, f"Cannot connect to {ip} with the supplied credentials")
 
     db.upsert_access_point(ip, new_username, new_password, new_site_id, enabled=enabled)
 
-    # Invalidate cached client if credentials changed
-    if username or password:
+    if credentials_changed:
         poller = get_poller()
         if poller:
             poller.invalidate_client(ip)
+            success = await poller.poll_ap_now(ip)
+            refreshed = db.get_access_point(ip)
+            if not success or (refreshed and refreshed.get("last_error")):
+                detail = refreshed.get("last_error") if refreshed else ""
+                raise HTTPException(502, detail or f"Failed to verify {ip}")
 
     return {"success": True}
 
@@ -940,10 +1014,13 @@ async def poll_ap(ip: str, session: dict = Depends(require_auth)):
     poller = get_poller()
     if not poller:
         raise HTTPException(500, "Poller not initialized")
+    if not db.get_access_point(ip):
+        raise HTTPException(404, f"AP not found: {ip}")
 
     success = await poller.poll_ap_now(ip)
     if not success:
-        raise HTTPException(404, f"AP not found: {ip}")
+        refreshed = db.get_access_point(ip) or {}
+        raise HTTPException(502, refreshed.get("last_error") or f"Failed to poll {ip}")
 
     return {"success": True}
 
@@ -1254,11 +1331,51 @@ _SETTINGS_WRITABLE = {
     "parallel_updates", "bank_mode", "allow_downgrade", "timezone", "zip_code",
     "weather_check_enabled", "min_temperature_c", "temperature_unit",
     "schedule_scope", "schedule_scope_data",
+    "rollout_canary_aps", "rollout_canary_switches",
     "firmware_beta_enabled", "firmware_quarantine_days",
     "slack_webhook_url", "autoupdate_enabled", "release_channel",
     "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
     "pre_update_reboot",
 }
+
+
+def _parse_ip_csv(value: str) -> list[str]:
+    return [ip.strip() for ip in (value or "").split(",") if ip.strip()]
+
+
+def _resolve_rollout_scopes_for_validation(settings: dict) -> tuple[set[str], set[str]]:
+    scope = settings.get("schedule_scope", "all")
+    scope_data = settings.get("schedule_scope_data", "")
+
+    if scope == "all":
+        return (
+            {ap["ip"] for ap in db.get_access_points(enabled_only=True)},
+            {sw["ip"] for sw in db.get_switches(enabled_only=True)},
+        )
+
+    if scope == "sites":
+        site_ids = [int(s.strip()) for s in scope_data.split(",") if s.strip().isdigit()]
+        ap_ips = set()
+        sw_ips = set()
+        for site_id in site_ids:
+            ap_ips.update(ap["ip"] for ap in db.get_access_points(tower_site_id=site_id, enabled_only=True))
+            sw_ips.update(sw["ip"] for sw in db.get_switches(tower_site_id=site_id, enabled_only=True))
+        return ap_ips, sw_ips
+
+    if scope == "aps":
+        ap_ips = {ip for ip in _parse_ip_csv(scope_data) if (db.get_access_point(ip) or {}).get("enabled", 0)}
+        site_ids = {
+            ap.get("tower_site_id")
+            for ip in ap_ips
+            for ap in [db.get_access_point(ip)]
+            if ap and ap.get("tower_site_id") is not None
+        }
+        sw_ips = set()
+        for site_id in site_ids:
+            sw_ips.update(sw["ip"] for sw in db.get_switches(tower_site_id=site_id, enabled_only=True))
+        return ap_ips, sw_ips
+
+    return set(), set()
 
 
 def _validate_settings(filtered: dict):
@@ -1278,6 +1395,47 @@ def _validate_settings(filtered: dict):
         if filtered["firmware_quarantine_days"] != current:
             raise HTTPException(403, detail={"error": "feature_locked", "feature": "firmware_hold_custom",
                                              "message": "Custom firmware hold period requires a Pro license."})
+
+    effective_settings = db.get_all_settings()
+    effective_settings.update(filtered)
+    ap_scope, switch_scope = _resolve_rollout_scopes_for_validation(effective_settings)
+    canary_specs = (
+        ("rollout_canary_aps", db.get_access_point, ap_scope, "AP"),
+        ("rollout_canary_switches", db.get_switch, switch_scope, "switch"),
+    )
+    for key, getter, scope, label in canary_specs:
+        if key not in filtered:
+            continue
+        invalid = []
+        missing = []
+        disabled = []
+        out_of_scope = []
+        for ip in _parse_ip_csv(filtered.get(key, "")):
+            try:
+                _validate_ip(ip)
+            except HTTPException:
+                invalid.append(ip)
+                continue
+            device = getter(ip)
+            if not device:
+                missing.append(ip)
+                continue
+            if not device.get("enabled", 1):
+                disabled.append(ip)
+                continue
+            if scope and ip not in scope:
+                out_of_scope.append(ip)
+        if invalid or missing or disabled or out_of_scope:
+            parts = []
+            if invalid:
+                parts.append(f"invalid IPs: {', '.join(invalid)}")
+            if missing:
+                parts.append(f"unknown {label}s: {', '.join(missing)}")
+            if disabled:
+                parts.append(f"disabled {label}s: {', '.join(disabled)}")
+            if out_of_scope:
+                parts.append(f"out of rollout scope: {', '.join(out_of_scope)}")
+            raise HTTPException(400, f"Invalid {label} canary selection ({'; '.join(parts)})")
 
 
 @app.put("/api/settings")
@@ -1502,6 +1660,229 @@ async def get_auth_config(session: dict = Depends(require_auth)):
     return radius_config.get_auth_config_summary()
 
 
+@app.get("/api/auth/radius")
+async def get_builtin_radius_config(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Get built-in RADIUS server configuration and summary."""
+    return {
+        **builtin_radius.get_public_config_summary(),
+        "stats": builtin_radius.get_stats(limit=5),
+    }
+
+
+@app.put("/api/auth/radius")
+async def update_builtin_radius_config(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Update built-in RADIUS server settings."""
+    data = await request.json()
+    try:
+        port = int(data.get("port", 1812) or 1812)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Port must be a number")
+    config = builtin_radius.BuiltinRadiusConfig(
+        enabled=bool(data.get("enabled", False)),
+        host=(data.get("host", "") or "").strip(),
+        port=port,
+        secret=data.get("secret", ""),
+    )
+
+    if not config.secret:
+        existing = builtin_radius.get_config()
+        config.secret = existing.secret
+
+    if config.enabled and not config.host:
+        raise HTTPException(400, "Device host is required when built-in RADIUS is enabled")
+    if config.enabled and not config.secret:
+        raise HTTPException(400, "Shared secret is required when built-in RADIUS is enabled")
+
+    builtin_radius.set_config(config)
+    await builtin_radius.get_runtime().reload()
+    return builtin_radius.get_public_config_summary()
+
+
+@app.get("/api/auth/radius/users")
+async def list_builtin_radius_users(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """List built-in RADIUS users."""
+    return {"users": builtin_radius.list_users()}
+
+
+@app.post("/api/auth/radius/users")
+async def create_builtin_radius_user(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Create a built-in RADIUS user."""
+    data = await request.json()
+    try:
+        user = builtin_radius.create_user(
+            username=data.get("username", ""),
+            password=data.get("password", ""),
+            enabled=bool(data.get("enabled", True)),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    await builtin_radius.get_runtime().reload()
+    return user
+
+
+@app.put("/api/auth/radius/users/{user_id}")
+async def update_builtin_radius_user(user_id: int, request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Update a built-in RADIUS user."""
+    data = await request.json()
+    try:
+        user = builtin_radius.update_user(
+            user_id=user_id,
+            username=data.get("username", ""),
+            password=data.get("password", ""),
+            enabled=bool(data.get("enabled", True)),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    await builtin_radius.get_runtime().reload()
+    return user
+
+
+@app.delete("/api/auth/radius/users/{user_id}")
+async def delete_builtin_radius_user(user_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Delete a built-in RADIUS user."""
+    deleted = builtin_radius.delete_user(user_id)
+    if not deleted:
+        raise HTTPException(404, "User not found")
+    await builtin_radius.get_runtime().reload()
+    return {"success": True}
+
+
+@app.get("/api/auth/radius/clients")
+async def list_builtin_radius_clients(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """List manual RADIUS client overrides."""
+    return {"clients": builtin_radius.list_client_overrides()}
+
+
+@app.post("/api/auth/radius/clients")
+async def create_builtin_radius_client(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Create a manual RADIUS client override."""
+    data = await request.json()
+    try:
+        client = builtin_radius.create_client_override(
+            client_spec=data.get("client_spec", ""),
+            shortname=data.get("shortname", ""),
+            enabled=bool(data.get("enabled", True)),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    await builtin_radius.get_runtime().reload()
+    return client
+
+
+@app.put("/api/auth/radius/clients/{override_id}")
+async def update_builtin_radius_client(override_id: int, request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Update a manual RADIUS client override."""
+    data = await request.json()
+    try:
+        client = builtin_radius.update_client_override(
+            override_id=override_id,
+            client_spec=data.get("client_spec", ""),
+            shortname=data.get("shortname", ""),
+            enabled=bool(data.get("enabled", True)),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    await builtin_radius.get_runtime().reload()
+    return client
+
+
+@app.delete("/api/auth/radius/clients/{override_id}")
+async def delete_builtin_radius_client(override_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Delete a manual RADIUS client override."""
+    deleted = builtin_radius.delete_client_override(override_id)
+    if not deleted:
+        raise HTTPException(404, "Client override not found")
+    await builtin_radius.get_runtime().reload()
+    return {"success": True}
+
+
+@app.get("/api/auth/radius/stats")
+async def get_builtin_radius_stats(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Get built-in RADIUS server stats and recent auth events."""
+    return builtin_radius.get_stats()
+
+
+@app.post("/api/auth/radius/secret-review")
+async def mark_builtin_radius_secret_reviewed(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Mark a legacy built-in RADIUS secret as reviewed today without changing it."""
+    try:
+        builtin_radius.mark_secret_reviewed()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return builtin_radius.get_public_config_summary()
+
+
+@app.get("/api/auth/radius/rollout")
+async def get_builtin_radius_rollout(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Get current built-in Radius device migration rollout state."""
+    rollout = builtin_radius.get_current_rollout()
+    if not rollout:
+        return {"rollout": None}
+    return {
+        "rollout": {
+            **rollout,
+            "progress": builtin_radius.get_rollout_progress(rollout["id"]),
+            "devices": _serialize_radius_rollout_devices(rollout["id"]),
+        }
+    }
+
+
+@app.post("/api/auth/radius/rollout/start")
+async def start_builtin_radius_rollout(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Start staged Radius migration for managed devices."""
+    if builtin_radius.get_active_rollout():
+        raise HTTPException(400, "A Radius rollout is already active")
+
+    config = builtin_radius.get_config()
+    if not config.enabled or not config.secret or not config.host:
+        raise HTTPException(400, "Built-in Radius must be enabled with a device host and shared secret before rollout")
+
+    try:
+        await _refresh_radius_rollout_inventory()
+        template = _get_radius_rollout_template()
+        _validate_radius_rollout_template(template, config)
+        template["fragment"] = _apply_builtin_radius_settings_to_fragment(template["fragment"], config)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    devices = _radius_rollout_targets()
+    if not devices:
+        raise HTTPException(400, "No enabled APs, switches, or verified CPEs available for Radius rollout")
+
+    service_username, _ = builtin_radius.get_management_service_credentials(create_if_missing=True)
+    await builtin_radius.get_runtime().reload()
+    rollout_id = builtin_radius.create_rollout(template["id"], service_username)
+    _start_radius_rollout_task(rollout_id)
+    rollout = builtin_radius.get_rollout(rollout_id)
+    return {"rollout": rollout}
+
+
+@app.post("/api/auth/radius/rollout/{rollout_id}/resume")
+async def resume_builtin_radius_rollout(rollout_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Resume a paused Radius migration rollout."""
+    rollout = builtin_radius.get_rollout(rollout_id)
+    if not rollout:
+        raise HTTPException(404, "Radius rollout not found")
+    if rollout["status"] != "paused":
+        raise HTTPException(400, "Radius rollout is not paused")
+
+    builtin_radius.update_rollout_status(rollout_id, "active")
+    _start_radius_rollout_task(rollout_id)
+    return {"rollout": builtin_radius.get_rollout(rollout_id)}
+
+
+@app.post("/api/auth/radius/rollout/{rollout_id}/cancel")
+async def cancel_builtin_radius_rollout(rollout_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Cancel an active or paused Radius migration rollout."""
+    rollout = builtin_radius.get_rollout(rollout_id)
+    if not rollout:
+        raise HTTPException(404, "Radius rollout not found")
+    if rollout["status"] not in ("active", "paused"):
+        raise HTTPException(400, "Radius rollout cannot be cancelled")
+
+    builtin_radius.update_rollout_status(rollout_id, "cancelled")
+    return {"success": True}
+
+
 @app.put("/api/auth/device-defaults")
 async def update_device_auth_config(request: Request, session: dict = Depends(require_auth)):
     """Update global default device credentials."""
@@ -1600,6 +1981,17 @@ async def oidc_login(request: Request, _pro=Depends(require_feature(Feature.SSO_
     import hashlib
     import base64
 
+    ip_address = _client_ip(request)
+    bucket = f"oidc:{ip_address}"
+    if _check_rate_limit(bucket, OIDC_RATE_LIMIT, AUTH_RATE_WINDOW):
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": "rate_limited", "oidc_enabled": oidc_config.is_oidc_enabled()},
+            status_code=429,
+            headers={"Retry-After": str(AUTH_RATE_WINDOW)},
+        )
+    _record_rate_limit_event(bucket)
+
     config = oidc_config.get_oidc_config()
     if not oidc_config.is_oidc_enabled():
         return RedirectResponse(url="/login", status_code=302)
@@ -1656,6 +2048,17 @@ async def oidc_login(request: Request, _pro=Depends(require_feature(Feature.SSO_
 @app.get("/auth/oidc/callback")
 async def oidc_callback(request: Request, code: str = None, state: str = None, error: str = None, _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Handle OIDC callback from Authentik."""
+    ip_address = _client_ip(request)
+    bucket = f"oidc:{ip_address}"
+    if _check_rate_limit(bucket, OIDC_RATE_LIMIT, AUTH_RATE_WINDOW):
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": "rate_limited", "oidc_enabled": oidc_config.is_oidc_enabled()},
+            status_code=429,
+            headers={"Retry-After": str(AUTH_RATE_WINDOW)},
+        )
+    _record_rate_limit_event(bucket)
+
     if not oidc_config.is_oidc_enabled():
         return RedirectResponse(url="/login", status_code=302)
 
@@ -1771,7 +2174,7 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
         return RedirectResponse(url="/login?error=oidc_unauthorized", status_code=302)
 
     # Create session using existing infrastructure
-    ip_address = request.client.host if request.client else "unknown"
+    _clear_rate_limit_bucket(bucket)
     session_id = create_session(user, ip_address)
 
     response = RedirectResponse(url="/", status_code=303)
@@ -1912,6 +2315,21 @@ async def reset_rollout(rollout_id: int, session: dict = Depends(require_auth)):
     return {"success": True}
 
 
+@app.post("/api/rollout/canary/trigger")
+async def trigger_canary_rollout(session: dict = Depends(require_auth)):
+    """Trigger the canary phase immediately, outside the maintenance window."""
+    scheduler = get_scheduler()
+    if not scheduler:
+        raise HTTPException(503, "Scheduler not initialized")
+
+    try:
+        await scheduler.trigger_canary_now()
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return {"success": True, "status": scheduler.get_status()}
+
+
 @app.get("/api/location")
 async def get_location(session: dict = Depends(require_auth)):
     """Get detected location info."""
@@ -2049,6 +2467,7 @@ class UpdateJob:
     end_hour: Optional[int] = None
     schedule_timezone: Optional[str] = None
     pre_update_reboot: bool = True
+    enforce_window_cutoff: bool = True
 
 
 MAX_FIRMWARE_SIZE = 500 * 1024 * 1024   # 500 MB
@@ -2454,6 +2873,8 @@ async def _start_scheduled_update(
     concurrency: int = 2,
     end_hour: int = None,
     schedule_timezone: str = None,
+    switch_ips: list[str] | None = None,
+    enforce_window_cutoff: bool = True,
 ) -> str:
     """Start an update job from the scheduler (Python args, not Form data)."""
     firmware_path = FIRMWARE_DIR / firmware_file
@@ -2527,8 +2948,15 @@ async def _start_scheduled_update(
                 device_firmware_map[cpe_ip] = cpe_fw
         ap_cpe_map[ip] = cpe_ips
 
-    # Enroll enabled switches (skip those already at target version)
-    switches = db.get_switches(enabled_only=True)
+    # Enroll the requested switches (or all enabled switches for legacy callers)
+    if switch_ips is None:
+        switches = db.get_switches(enabled_only=True)
+    else:
+        switches = []
+        for ip in switch_ips:
+            sw = db.get_switch(ip)
+            if sw and sw.get("enabled", 1):
+                switches.append(sw)
     valid_switches = []
     for sw in switches:
         sw_ip = sw["ip"]
@@ -2579,6 +3007,7 @@ async def _start_scheduled_update(
         end_hour=end_hour,
         schedule_timezone=schedule_timezone,
         pre_update_reboot=pre_update_reboot,
+        enforce_window_cutoff=enforce_window_cutoff,
     )
 
     for ip in valid_aps:
@@ -2586,8 +3015,8 @@ async def _start_scheduled_update(
     for ap_ip, cpe_ips in ap_cpe_map.items():
         for cpe_ip in cpe_ips:
             job.devices[cpe_ip] = DeviceStatus(ip=cpe_ip, role="cpe", parent_ap=ap_ip)
-    for sw in switches:
-        job.devices[sw["ip"]] = DeviceStatus(ip=sw["ip"], role="switch")
+    for sw_ip in valid_switches:
+        job.devices[sw_ip] = DeviceStatus(ip=sw_ip, role="switch")
 
     update_jobs[job_id] = job
 
@@ -2901,7 +3330,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     device_status = job.devices[ip]
 
     # Maintenance window cutoff for scheduled jobs
-    if job.is_scheduled and job.end_hour is not None and job.schedule_timezone:
+    if job.is_scheduled and job.enforce_window_cutoff and job.end_hour is not None and job.schedule_timezone:
         try:
             from zoneinfo import ZoneInfo
             tz = ZoneInfo(job.schedule_timezone)
@@ -3454,15 +3883,16 @@ async def run_update_job(job: UpdateJob, concurrency: int):
     if job.is_scheduled:
         scheduler = get_scheduler()
         if scheduler:
-            learned_version = None
+            learned_versions = {}
             for ds in job.devices.values():
                 if ds.status == "success" and ds.new_version:
-                    learned_version = ds.new_version
-                    break
+                    fw_type = _get_firmware_type_for_model(ds.model)
+                    if fw_type and fw_type not in learned_versions:
+                        learned_versions[fw_type] = ds.new_version
             # Pass device statuses so rollout devices get marked correctly
             device_statuses = {ip: ds.status for ip, ds in job.devices.items()}
             scheduler.on_job_completed(job.job_id, success_count, failed_count,
-                                       learned_version=learned_version,
+                                       learned_versions=learned_versions,
                                        device_statuses=device_statuses)
 
     logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped, {cancelled_count} cancelled")
@@ -4119,6 +4549,341 @@ async def _run_config_push(job_id: str, device_list: list, templates: list):
     if poller:
         affected_ips = [d["ip"] for d in device_list]
         asyncio.create_task(poller.poll_configs_for_ips(affected_ips))
+
+
+_radius_rollout_task: Optional[asyncio.Task] = None
+_radius_rollout_lock = asyncio.Lock()
+
+
+def _radius_rollout_targets() -> list[dict]:
+    devices = []
+    seen_ips = set()
+    for ap in db.get_access_points(enabled_only=True):
+        if ap["ip"] not in seen_ips:
+            devices.append({
+                "ip": ap["ip"],
+                "role": "ap",
+                "username": ap["username"],
+                "password": ap["password"],
+            })
+            seen_ips.add(ap["ip"])
+        for cpe in db.get_cpes_for_ap(ap["ip"]):
+            cpe_ip = cpe.get("ip")
+            if not cpe_ip or cpe.get("auth_status") != "ok" or cpe_ip in seen_ips:
+                continue
+            devices.append({
+                "ip": cpe_ip,
+                "role": "cpe",
+                "username": ap["username"],
+                "password": ap["password"],
+                "parent_ap_ip": ap["ip"],
+            })
+            seen_ips.add(cpe_ip)
+    for switch in db.get_switches(enabled_only=True):
+        if switch["ip"] in seen_ips:
+            continue
+        devices.append({
+            "ip": switch["ip"],
+            "role": "switch",
+            "username": switch["username"],
+            "password": switch["password"],
+        })
+        seen_ips.add(switch["ip"])
+    devices.sort(key=lambda item: ipaddress.ip_address(item["ip"]))
+    return devices
+
+
+def _resolve_radius_rollout_device(ip: str, role: str) -> Optional[dict]:
+    if role == "ap":
+        ap = db.get_access_point(ip)
+        if not ap:
+            return None
+        return {
+            "ip": ap["ip"],
+            "role": "ap",
+            "username": ap["username"],
+            "password": ap["password"],
+        }
+    if role == "switch":
+        switch = db.get_switch(ip)
+        if not switch:
+            return None
+        return {
+            "ip": switch["ip"],
+            "role": "switch",
+            "username": switch["username"],
+            "password": switch["password"],
+        }
+    if role == "cpe":
+        cpe = db.get_cpe_by_ip(ip)
+        if not cpe:
+            return None
+        parent_ap = db.get_access_point(cpe["ap_ip"])
+        if not parent_ap:
+            return None
+        return {
+            "ip": cpe["ip"],
+            "role": "cpe",
+            "username": parent_ap["username"],
+            "password": parent_ap["password"],
+            "parent_ap_ip": parent_ap["ip"],
+        }
+    return None
+
+
+def _get_radius_rollout_template() -> dict:
+    template = db.get_config_template_by_category("radius")
+    if not template or not template.get("enabled"):
+        raise ValueError("Save and enable a Radius config template before starting rollout")
+
+    form_data = template.get("form_data")
+    if isinstance(form_data, str) and form_data:
+        form_data = json.loads(form_data)
+    form_data = form_data or {}
+
+    fragment = template.get("config_fragment")
+    if isinstance(fragment, str):
+        fragment = json.loads(fragment)
+
+    if form_data.get("method") != "radius":
+        raise ValueError("Radius rollout requires the saved Radius config template to use method=radius")
+    if not form_data.get("server") or not form_data.get("secret"):
+        raise ValueError("Radius rollout requires a saved server and shared secret in the Radius config template")
+
+    return {
+        "id": template["id"],
+        "name": template["name"],
+        "fragment": fragment,
+        "form_data": form_data,
+    }
+
+
+def _validate_radius_rollout_template(template: dict, config: builtin_radius.BuiltinRadiusConfig):
+    form_data = template.get("form_data") or {}
+    if not config.host:
+        raise ValueError("Set the built-in Radius device host before starting rollout")
+    if (form_data.get("server") or "").strip() != config.host:
+        raise ValueError("Saved Radius config template server does not match the built-in Radius device host")
+    try:
+        template_port = int(form_data.get("port", config.port) or config.port)
+    except (TypeError, ValueError):
+        raise ValueError("Saved Radius config template port is invalid")
+    if template_port != config.port:
+        raise ValueError("Saved Radius config template port does not match the built-in Radius port")
+    if (form_data.get("secret") or "") != config.secret:
+        raise ValueError("Saved Radius config template secret does not match the built-in Radius secret")
+
+
+def _apply_builtin_radius_settings_to_fragment(fragment: dict, config: builtin_radius.BuiltinRadiusConfig) -> dict:
+    system = fragment.setdefault("system", {})
+    auth = system.setdefault("auth", {})
+    radius = auth.setdefault("radius", {})
+    auth["method"] = "radius"
+    radius["auth_server1"] = config.host
+    radius["auth_port"] = config.port
+    radius["auth_secret"] = config.secret
+    return fragment
+
+
+def _radius_rollout_batch_size(phase: str, candidate_count: int) -> int:
+    if phase == "canary":
+        return 1
+    if phase == "pct10":
+        return max(1, math.ceil(candidate_count * 0.1))
+    if phase == "pct50":
+        return max(1, math.ceil(candidate_count * 0.5))
+    return candidate_count
+
+
+def _resolve_radius_rollout_phase_devices(rollout: dict, devices: list[dict]) -> list[dict]:
+    existing = builtin_radius.get_rollout_devices(rollout["id"])
+    existing_by_ip = {row["ip"]: row for row in existing}
+    current_by_ip = {device["ip"]: device for device in devices}
+
+    current_phase_rows = [
+        row for row in existing
+        if row["phase_assigned"] == rollout["phase"] and row["status"] in ("pending", "failed")
+    ]
+    if current_phase_rows:
+        resolved = []
+        for row in current_phase_rows:
+            device = current_by_ip.get(row["ip"]) or _resolve_radius_rollout_device(row["ip"], row["device_type"])
+            if device:
+                resolved.append(device)
+            else:
+                builtin_radius.mark_rollout_device(
+                    rollout["id"],
+                    row["ip"],
+                    "skipped",
+                    "Device missing from inventory",
+                )
+        return resolved
+
+    unassigned = [device for device in devices if device["ip"] not in existing_by_ip]
+    if not unassigned:
+        return []
+
+    batch_size = _radius_rollout_batch_size(rollout["phase"], len(unassigned))
+    batch = unassigned[:batch_size]
+    for device in batch:
+        builtin_radius.assign_device_to_rollout(rollout["id"], device["ip"], device["role"], rollout["phase"])
+    return batch
+
+
+def _serialize_radius_rollout_devices(rollout_id: int) -> list[dict]:
+    rows = builtin_radius.get_rollout_devices(rollout_id)
+    serialized = []
+    for row in rows:
+        entry = dict(row)
+        if entry.get("device_type") == "cpe":
+            cpe = db.get_cpe_by_ip(entry["ip"])
+            if cpe:
+                entry["parent_ap_ip"] = cpe.get("ap_ip")
+                entry["repair_target_ip"] = cpe.get("ap_ip")
+        elif entry.get("device_type") == "ap":
+            entry["repair_target_ip"] = entry["ip"]
+        serialized.append(entry)
+    return serialized
+
+
+async def _refresh_radius_rollout_inventory():
+    poller = get_poller()
+    if not poller:
+        raise ValueError("Poller not initialized")
+
+    failures = []
+    for ap in db.get_access_points(enabled_only=True):
+        ok = await poller.poll_ap_now(ap["ip"])
+        if ok:
+            continue
+        refreshed = db.get_access_point(ap["ip"]) or {}
+        failures.append(f"{ap['ip']} ({refreshed.get('last_error') or 'Immediate reprobe failed'})")
+
+    if failures:
+        raise ValueError(
+            "Radius rollout preflight failed for APs: "
+            + ", ".join(failures)
+            + ". Fix AP credentials or connectivity before starting rollout."
+        )
+
+
+async def _push_radius_to_device(rollout_id: int, device: dict, fragment: dict, service_username: str, service_password: str) -> tuple[bool, str]:
+    ip = device["ip"]
+    builtin_radius.mark_rollout_device(rollout_id, ip, "pending")
+    try:
+        client = TachyonClient(ip, device["username"], device["password"])
+        login_result = await client.login()
+        if login_result is not True:
+            if device["role"] == "cpe" and device.get("parent_ap_ip"):
+                raise RuntimeError(
+                    f"Inherited AP credentials from {device['parent_ap_ip']} failed. "
+                    "Update the AP credentials inline and resume rollout."
+                )
+            raise RuntimeError(f"Manual credential login failed: {login_result}")
+
+        current_config = await client.get_config()
+        if current_config is None:
+            raise RuntimeError("Failed to fetch current config")
+
+        merged = deep_merge(current_config, fragment)
+        dry_result = await client.apply_config(merged, dry_run=True)
+        if not dry_result.get("success"):
+            error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run validation failed"))
+            raise RuntimeError(f"Dry run rejected: {error_msg}")
+
+        apply_result = await client.apply_config(merged)
+        if not apply_result.get("success"):
+            error_msg = apply_result.get("error", apply_result.get("raw_response", "Config apply failed"))
+            raise RuntimeError(str(error_msg))
+
+        await asyncio.sleep(2)
+        verify_client = TachyonClient(ip, service_username, service_password)
+        verify_result = await verify_client.login()
+        if verify_result is not True:
+            raise RuntimeError(f"Radius verification failed: {verify_result}")
+
+        if device["role"] in ("ap", "switch"):
+            db.update_device_credentials(device["role"], ip, service_username, service_password)
+        builtin_radius.mark_rollout_device(rollout_id, ip, "updated")
+        return True, ""
+    except Exception as exc:
+        builtin_radius.mark_rollout_device(rollout_id, ip, "failed", str(exc))
+        return False, str(exc)
+
+
+def _broadcast_radius_rollout_state():
+    rollout = builtin_radius.get_current_rollout()
+    payload = {"type": "radius_rollout_status", "rollout": None}
+    if rollout:
+        payload["rollout"] = {
+            **rollout,
+            "progress": builtin_radius.get_rollout_progress(rollout["id"]),
+            "devices": _serialize_radius_rollout_devices(rollout["id"]),
+        }
+    return broadcast(payload)
+
+
+async def _run_radius_rollout(rollout_id: int):
+    async with _radius_rollout_lock:
+        try:
+            template = _get_radius_rollout_template()
+            current_config = builtin_radius.get_config()
+            _validate_radius_rollout_template(template, current_config)
+            template["fragment"] = _apply_builtin_radius_settings_to_fragment(template["fragment"], current_config)
+            service_username, service_password = builtin_radius.get_management_service_credentials(create_if_missing=True)
+
+            while True:
+                rollout = builtin_radius.get_rollout(rollout_id)
+                if not rollout or rollout["status"] != "active":
+                    await _broadcast_radius_rollout_state()
+                    return
+
+                devices = _radius_rollout_targets()
+                phase_devices = _resolve_radius_rollout_phase_devices(rollout, devices)
+                if not phase_devices:
+                    builtin_radius.complete_rollout_phase(rollout_id)
+                    refreshed = builtin_radius.get_rollout(rollout_id)
+                    await _broadcast_radius_rollout_state()
+                    if not refreshed or refreshed["status"] == "completed":
+                        return
+                    continue
+
+                results = await asyncio.gather(*[
+                    _push_radius_to_device(
+                        rollout_id,
+                        device,
+                        template["fragment"],
+                        service_username,
+                        service_password,
+                    )
+                    for device in phase_devices
+                ])
+                failures = [error for ok, error in results if not ok]
+                if failures:
+                    builtin_radius.update_rollout_status(
+                        rollout_id,
+                        "paused",
+                        f"{len(failures)} device(s) failed during {rollout['phase']} phase",
+                    )
+                    await _broadcast_radius_rollout_state()
+                    return
+
+                builtin_radius.complete_rollout_phase(rollout_id)
+                await _broadcast_radius_rollout_state()
+                refreshed = builtin_radius.get_rollout(rollout_id)
+                if not refreshed or refreshed["status"] == "completed":
+                    return
+        except Exception as exc:
+            logger.exception("Radius rollout %s failed", rollout_id)
+            builtin_radius.update_rollout_status(rollout_id, "paused", str(exc))
+            await _broadcast_radius_rollout_state()
+
+
+def _start_radius_rollout_task(rollout_id: int):
+    global _radius_rollout_task
+    if _radius_rollout_task and not _radius_rollout_task.done():
+        return
+    _radius_rollout_task = asyncio.create_task(_run_radius_rollout(rollout_id))
 
 
 def main():

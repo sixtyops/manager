@@ -111,12 +111,14 @@ def get_auth_config_summary() -> dict:
 
     Note: Secrets are masked for security.
     """
+    from . import builtin_radius
     from . import oidc_config
 
     device_auth = get_device_auth_config()
     oidc = oidc_config.get_oidc_config()
 
     return {
+        "radius": builtin_radius.get_public_config_summary(),
         "oidc": {
             "enabled": oidc.enabled,
             "provider_url": oidc.provider_url,

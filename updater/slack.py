@@ -293,7 +293,7 @@ async def send_test_notification() -> tuple[bool, str]:
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "This is a test notification from the Tachyon Firmware Updater.\nIf you see this, your Slack webhook is configured correctly!"
+                    "text": "This is a test notification from SixtyOps.\nIf you see this, your Slack webhook is configured correctly!"
                 }
             },
             {

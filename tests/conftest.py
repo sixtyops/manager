@@ -44,6 +44,10 @@ def memory_db():
             last_seen TEXT,
             last_error TEXT,
             enabled INTEGER DEFAULT 1,
+            bank1_version TEXT,
+            bank2_version TEXT,
+            active_bank INTEGER,
+            last_firmware_update TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
         );
@@ -96,6 +100,8 @@ def memory_db():
             firmware_file_303l TEXT,
             firmware_file_tns100 TEXT DEFAULT NULL,
             target_version TEXT,
+            target_version_303l TEXT,
+            target_version_tns100 TEXT,
             phase TEXT NOT NULL DEFAULT 'canary',
             status TEXT NOT NULL DEFAULT 'active',
             pause_reason TEXT,
@@ -209,6 +215,60 @@ def memory_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE radius_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            password TEXT NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_auth_at TEXT
+        );
+
+        CREATE TABLE radius_auth_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT,
+            client_ip TEXT,
+            client_name TEXT,
+            client_model TEXT,
+            outcome TEXT NOT NULL,
+            reason TEXT,
+            occurred_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX idx_radius_auth_unique ON radius_auth_log(occurred_at, username, client_ip, outcome);
+
+        CREATE TABLE radius_client_overrides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_spec TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            shortname TEXT,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE radius_rollouts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            config_template_id INTEGER,
+            phase TEXT NOT NULL DEFAULT 'canary',
+            status TEXT NOT NULL DEFAULT 'active',
+            pause_reason TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_phase_completed_at TEXT,
+            completed_at TEXT,
+            service_username TEXT
+        );
+        CREATE TABLE radius_rollout_devices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rollout_id INTEGER NOT NULL,
+            ip TEXT NOT NULL,
+            device_type TEXT NOT NULL,
+            phase_assigned TEXT,
+            status TEXT DEFAULT 'pending',
+            error TEXT,
+            updated_at TEXT,
+            UNIQUE(rollout_id, ip)
+        );
     """)
     # Insert default settings
     defaults = {
@@ -225,6 +285,15 @@ def memory_db():
         "setup_completed": "true",
         "config_poll_enabled": "true",
         "config_poll_interval_hours": "24",
+        "builtin_radius_enabled": "true",
+        "builtin_radius_host": "",
+        "builtin_radius_port": "1812",
+        "builtin_radius_secret": "",
+        "builtin_radius_secret_updated_at": "",
+        "builtin_radius_secret_review_acknowledged_at": "",
+        "builtin_radius_mgmt_password": "",
+        "rollout_canary_aps": "",
+        "rollout_canary_switches": "",
         # License defaults
         "license_key": "",
         "license_status": "free",

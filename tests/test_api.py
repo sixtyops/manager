@@ -8,6 +8,8 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 
+from updater import database as db
+
 
 class TestSitesAPI:
     def test_create_site(self, authed_client):
@@ -56,6 +58,57 @@ class TestAPsAPI:
         authed_client.post("/api/aps", data={"ip": "10.0.0.3", "username": "root", "password": "pass"})
         resp = authed_client.delete("/api/aps/10.0.0.3")
         assert resp.status_code == 200
+
+    def test_update_ap_reprobes_ap_and_cpes_when_credentials_change(self, authed_client):
+        db.upsert_access_point("10.0.0.4", "root", "oldpass")
+
+        mock_poller = MagicMock()
+        mock_poller.poll_ap_now = AsyncMock(return_value=True)
+
+        mock_client = MagicMock()
+        mock_client.login = AsyncMock(return_value=True)
+        mock_client.get_ap_info = AsyncMock(return_value={"model": "TNA-301"})
+
+        with patch("updater.app.get_poller", return_value=mock_poller), \
+             patch("updater.app.TachyonClient", return_value=mock_client):
+            resp = authed_client.put("/api/aps/10.0.0.4", data={"password": "newpass"})
+
+        assert resp.status_code == 200
+        mock_poller.invalidate_client.assert_called_once_with("10.0.0.4")
+        mock_poller.poll_ap_now.assert_awaited_once_with("10.0.0.4")
+
+    def test_update_ap_reports_failed_reprobe_after_save(self, authed_client):
+        db.upsert_access_point("10.0.0.6", "root", "oldpass")
+
+        mock_poller = MagicMock()
+        mock_poller.poll_ap_now = AsyncMock(return_value=False)
+
+        mock_client = MagicMock()
+        mock_client.login = AsyncMock(return_value=True)
+        mock_client.get_ap_info = AsyncMock(return_value={"model": "TNA-301"})
+
+        with patch("updater.app.get_poller", return_value=mock_poller), \
+             patch("updater.app.TachyonClient", return_value=mock_client):
+            resp = authed_client.put("/api/aps/10.0.0.6", data={"password": "newpass"})
+
+        assert resp.status_code == 502
+        assert "Failed to verify" in resp.json()["detail"]
+        refreshed = db.get_access_point("10.0.0.6")
+        assert refreshed["password"] == "newpass"
+
+    def test_update_ap_rejects_bad_credentials_before_save(self, authed_client):
+        db.upsert_access_point("10.0.0.5", "root", "oldpass")
+
+        mock_client = MagicMock()
+        mock_client.login = AsyncMock(return_value="bad password")
+
+        with patch("updater.app.TachyonClient", return_value=mock_client):
+            resp = authed_client.put("/api/aps/10.0.0.5", data={"password": "wrongpass"})
+
+        assert resp.status_code == 400
+        assert "Cannot connect" in resp.json()["detail"]
+        refreshed = db.get_access_point("10.0.0.5")
+        assert refreshed["password"] == "oldpass"
 
 
 class TestSettingsAPI:
@@ -180,6 +233,64 @@ class TestSettingsAPI:
         assert resp.status_code == 200
         resp = authed_client.get("/api/settings")
         assert resp.json()["settings"]["pre_update_reboot"] == "true"
+
+    def test_save_canary_settings(self, authed_client):
+        db.upsert_access_point("10.0.0.10", "root", "pass", enabled=True)
+        db.upsert_access_point("10.0.0.11", "root", "pass", enabled=True)
+        db.upsert_switch("10.0.1.5", "admin", "pass", enabled=True)
+        with patch("updater.app.get_fetcher", return_value=None), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = authed_client.post("/api/settings/save", json={
+                "rollout_canary_aps": "10.0.0.10,10.0.0.11",
+                "rollout_canary_switches": "10.0.1.5",
+            })
+        assert resp.status_code == 200
+        resp = authed_client.get("/api/settings")
+        s = resp.json()["settings"]
+        assert s["rollout_canary_aps"] == "10.0.0.10,10.0.0.11"
+        assert s["rollout_canary_switches"] == "10.0.1.5"
+
+    def test_save_canary_settings_rejects_unknown_or_out_of_scope_devices(self, authed_client):
+        site_a = db.create_tower_site("Site A")
+        site_b = db.create_tower_site("Site B")
+        db.upsert_access_point("10.0.0.10", "root", "pass", tower_site_id=site_a, enabled=True)
+        db.upsert_switch("10.0.1.5", "admin", "pass", tower_site_id=site_b, enabled=True)
+
+        with patch("updater.app.get_fetcher", return_value=None), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = authed_client.post("/api/settings/save", json={
+                "schedule_scope": "sites",
+                "schedule_scope_data": str(site_a),
+                "rollout_canary_aps": "10.0.0.99",
+                "rollout_canary_switches": "10.0.1.5",
+            })
+
+        assert resp.status_code == 400
+        assert "unknown APs" in resp.json()["detail"] or "out of rollout scope" in resp.json()["detail"]
+
+
+class TestRolloutAPI:
+    def test_trigger_canary_rollout_endpoint(self, authed_client):
+        mock_scheduler = MagicMock()
+        mock_scheduler.trigger_canary_now = AsyncMock()
+        mock_scheduler.get_status.return_value = {"state": "running"}
+
+        with patch("updater.app.get_scheduler", return_value=mock_scheduler):
+            resp = authed_client.post("/api/rollout/canary/trigger")
+
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        mock_scheduler.trigger_canary_now.assert_awaited_once()
+
+    def test_trigger_canary_rollout_endpoint_surfaces_runtime_errors(self, authed_client):
+        mock_scheduler = MagicMock()
+        mock_scheduler.trigger_canary_now = AsyncMock(side_effect=RuntimeError("No firmware selected"))
+
+        with patch("updater.app.get_scheduler", return_value=mock_scheduler):
+            resp = authed_client.post("/api/rollout/canary/trigger")
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "No firmware selected"
 
 
 class TestTopologyAPI:

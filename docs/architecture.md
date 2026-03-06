@@ -2,7 +2,7 @@
 
 ## Overview
 
-Charlotte is a FastAPI application with an async-first architecture. The backend is Python, the frontend is server-rendered HTML with vanilla JavaScript, and real-time updates flow over WebSocket.
+Charlotte is a FastAPI application with an async-first architecture. The backend is Python, the frontend is server-rendered HTML with vanilla JavaScript, and real-time updates flow over WebSocket. Device-admin RADIUS authentication is provided by a bundled FreeRADIUS container that is managed by the app.
 
 ```
 ┌─────────────────────────────────────┐
@@ -13,7 +13,7 @@ Charlotte is a FastAPI application with an async-first architecture. The backend
 ┌──────────────▼──────────────────────┐
 │       FastAPI App (app.py)          │
 │  REST API │ WebSocket │ Templates   │
-└──┬────┬───────┬───────┬─────┬───┬───┘
+└──┬────┬───────┬───────┬─────┬───┬────┘
    │    │       │       │     │   │
 ┌──▼──┐ │ ┌────▼───┐ ┌─▼───┐ │ ┌─▼──────────────┐
 │Tele-│ │ │Schedul-│ │Poll-│ │ │License Validator│
@@ -25,10 +25,11 @@ Charlotte is a FastAPI application with an async-first architecture. The backend
 Lambda Webhook│          │    │   (cloud-hosted)
        ┌──────▼──────────▼──┐ │         │
        │  SQLite (database) │ │         ▼
-       └────────────────────┘ │       Stripe
-                              │   HTTPS/curl
-                              ▼
-                        Network Devices
+       └──────┬─────────────┘ │       Stripe
+              │               │   HTTPS/curl
+              ▼               ▼
+      FreeRADIUS Container  Network Devices
+     (generated config, UDP 1812)
 ```
 
 ## Modules
@@ -41,7 +42,9 @@ Key responsibilities:
 - 30+ REST endpoints for sites, APs, CPEs, firmware, updates, settings, rollouts
 - WebSocket broadcast to all connected clients
 - Update job orchestration with phase-based device ordering
-- App lifespan management (starts/stops poller and scheduler)
+- App lifespan management (starts/stops poller, scheduler, release checks, and Radius log sync)
+- Generates and reloads FreeRADIUS config for built-in device-admin authentication
+- Monitors Radius container health and attempts automatic recovery when Docker marks it unhealthy
 
 ### `tachyon.py` - Device Communication
 
@@ -73,11 +76,22 @@ Background task that polls all APs every 60 seconds. Discovers connected CPEs, c
 
 ### `database.py` - Data Layer
 
-SQLite database with 9 tables. Handles schema creation, migrations, and all CRUD operations. Tables: `tower_sites`, `access_points`, `cpe_cache`, `sessions`, `settings`, `job_history`, `schedule_log`, `rollouts`, `rollout_devices`.
+SQLite database with schema creation, migrations, and CRUD helpers for inventory, jobs, auth, config backups, and Radius state. Radius-related tables include `radius_users`, `radius_auth_log`, and `radius_client_overrides`.
 
 ### `auth.py` - Authentication
 
-Dual authentication: RADIUS (primary) with local username/password fallback. Sessions stored in SQLite with 24-hour TTL. Cookie-based session validation for both HTTP and WebSocket requests.
+Web login authentication for the management UI. Supports local username/password and optional OIDC SSO. Sessions are stored in SQLite with a 24-hour TTL and validated for both HTTP and WebSocket requests.
+
+### `builtin_radius.py` - Device Admin RADIUS Control Plane
+
+Application-side management for the bundled FreeRADIUS service used by APs, switches, and other managed devices.
+
+Key responsibilities:
+- Stores built-in Radius users, auth history, and manual client overrides in SQLite
+- Generates `clients.conf` and `mods-config/files/authorize` under `data/radius/`
+- Reloads the `tachyon-radius` container when users or settings change
+- Syncs FreeRADIUS auth results back into SQLite for stats and audit history
+- Enforces reserved usernames (`admin` and `root`) for device-admin Radius accounts
 
 ### `models.py` - Data Models
 
@@ -152,6 +166,7 @@ Two tiers: **FREE** and **PRO**. All gated features are defined in the `Feature`
 PRO-only features:
 - `update_single_device` — Manual per-device updates
 - `sso_oidc` — SSO/OIDC authentication
+- `radius_auth` — Built-in device-admin Radius
 - `config_backup`, `config_templates`, `config_compliance`, `config_push` — Configuration management suite
 - `slack_notifications` — Slack integration
 - `device_portal` — Per-device detail portal
@@ -234,7 +249,7 @@ The firmware updater's `validate_license()` function (in `license.py`) sends a P
 }
 ```
 
-The `LICENSE_SERVER_URL` defaults to `https://license.tachyonupdater.com/api/v1` and is configurable via environment variable.
+The `LICENSE_SERVER_URL` defaults to `https://license.sixtyops.net/api/v1` and is configurable via environment variable.
 
 ### Offline Resilience
 
@@ -299,7 +314,7 @@ Customers manage their subscription (update payment method, view invoices, cance
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `LICENSE_SERVER_URL` | `https://license.tachyonupdater.com/api/v1` | License server base URL |
+| `LICENSE_SERVER_URL` | `https://license.sixtyops.net/api/v1` | License server base URL |
 | `LICENSE_CHECK_INTERVAL` | `86400` (24h) | Re-validation interval in seconds |
 | `TACHYON_FORCE_PRO` | (unset) | Set to `1` to bypass all license gating (dev/test only) |
 
