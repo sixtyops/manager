@@ -31,7 +31,7 @@ cd firmware-updater
 
 ## Initial Setup
 
-After starting the services, open `https://your-server-ip` in a browser. Accept the self-signed certificate warning — this is replaced with a real certificate in step 3.
+After starting the services, open `https://your-server-ip` in a browser. Accept the self-signed certificate warning — this certificate is suitable for private network deployments and can optionally be replaced with a Let's Encrypt certificate in step 3.
 
 **1. Create admin password**
 
@@ -45,11 +45,11 @@ After login you'll land on the main dashboard. The setup wizard runs automatical
 
 <!-- screenshot: main dashboard -->
 
-**3. Configure HTTPS (recommended)**
+**3. HTTPS certificate (optional upgrade)**
 
-The setup wizard prompts for your domain and email to request a Let's Encrypt certificate. The bundled certbot service handles automatic renewal.
+HTTPS works out of the box with a self-signed certificate, which is recommended for private network deployments. The setup wizard offers an optional Let's Encrypt configuration for a browser-trusted certificate. The built-in flow uses HTTP-01 validation (requires port 80 reachable from the internet). For private networks, you can use certbot with DNS-01 validation instead — it works without any inbound internet access by proving domain ownership via a DNS TXT record. The bundled certbot service handles automatic renewal.
 
-<!-- screenshot: SSL/Let's Encrypt wizard step -->
+<!-- screenshot: HTTPS certificate wizard step -->
 
 **4. Configure Git backups (optional)**
 
@@ -286,7 +286,7 @@ This works but has no TLS for the web UI. A reverse proxy with HTTPS is recommen
 
 ## SSL/TLS
 
-In standalone mode, the nginx entrypoint generates a self-signed certificate on first boot so HTTPS works immediately. When you configure Let's Encrypt through the setup wizard (or the SSL setup page), certbot requests a real certificate and the nginx config is updated automatically.
+In standalone mode, the nginx entrypoint generates a self-signed certificate on first boot so HTTPS works immediately. This is the default and is suitable for private network deployments. You can optionally configure Let's Encrypt through the setup wizard (or the SSL setup page under Settings) to obtain a browser-trusted certificate. The built-in flow uses HTTP-01 validation (port 80 must be reachable from the internet). For private networks, use certbot with a DNS-01 plugin to obtain trusted certificates without any inbound internet access.
 
 The certbot container checks for renewal every 12 hours. Certificates renew automatically before expiry.
 

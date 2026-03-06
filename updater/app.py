@@ -36,7 +36,7 @@ from .backup import build_csv_export, process_csv_import
 from . import telemetry
 from . import slack
 from . import ssl_manager
-from . import git_backup
+from . import sftp_backup
 from . import builtin_radius
 from . import radius_config
 from . import oidc_config
@@ -195,8 +195,12 @@ async def _backup_scheduler():
             if last_run and last_run[:10] == now.strftime("%Y-%m-%d"):
                 continue
 
+            # Guard: skip if SFTP host not configured (e.g. migrating from old git backup)
+            if not settings.get("backup_sftp_host"):
+                continue
+
             logger.info("Running scheduled backup")
-            success, msg = await git_backup.run_backup()
+            success, msg = await sftp_backup.run_backup()
             if success:
                 logger.info(f"Scheduled backup completed: {msg}")
             else:
@@ -541,7 +545,7 @@ async def setup_wizard_page(request: Request, step: int = 1, session: dict = Dep
     return templates.TemplateResponse("setup_wizard.html", {
         "request": request, "step": step,
         "ssl_status": ssl_manager.get_ssl_status(),
-        "backup_status": git_backup.get_backup_status(),
+        "backup_status": sftp_backup.get_backup_status(),
         "error": None, "success": None,
     })
 
@@ -550,13 +554,15 @@ async def setup_wizard_page(request: Request, step: int = 1, session: dict = Dep
 async def setup_wizard_submit(
     request: Request, step: int = Form(...), action: str = Form(...),
     ssl_domain: str = Form(None), ssl_email: str = Form(None),
-    backup_repo: str = Form(None), backup_auth: str = Form(None),
-    backup_token: str = Form(None), backup_ssh_key: str = Form(None),
+    sftp_host: str = Form(None), sftp_port: int = Form(22),
+    sftp_path: str = Form("/backups/tachyon"), sftp_username: str = Form(None),
+    auth_method: str = Form("password"), sftp_password: str = Form(None),
+    ssh_key: str = Form(None), retention_count: int = Form(30),
     session: dict = Depends(require_auth),
 ):
     """Handle setup wizard form submissions."""
     ssl_status = ssl_manager.get_ssl_status()
-    backup_status = git_backup.get_backup_status()
+    backup_status = sftp_backup.get_backup_status()
 
     if step == 1:
         if action == "configure" and ssl_domain and ssl_email:
@@ -572,10 +578,12 @@ async def setup_wizard_submit(
             "backup_status": backup_status, "error": None, "success": None,
         })
     elif step == 2:
-        if action == "configure" and backup_repo and backup_auth:
-            ok, msg = await git_backup.init_backup_repo(
-                repo_url=backup_repo, auth_method=backup_auth,
-                ssh_key=backup_ssh_key, token=backup_token,
+        if action == "configure" and sftp_host and sftp_username:
+            ok, msg = await sftp_backup.configure_backup(
+                host=sftp_host, port=sftp_port, path=sftp_path,
+                username=sftp_username, auth_method=auth_method,
+                password=sftp_password, ssh_key=ssh_key,
+                retention_count=retention_count,
             )
             if not ok:
                 return templates.TemplateResponse("setup_wizard.html", {
@@ -585,7 +593,7 @@ async def setup_wizard_submit(
         return templates.TemplateResponse("setup_wizard.html", {
             "request": request, "step": 3,
             "ssl_status": ssl_manager.get_ssl_status(),
-            "backup_status": git_backup.get_backup_status(),
+            "backup_status": sftp_backup.get_backup_status(),
             "error": None, "success": None,
         })
     elif step == 3:
@@ -627,38 +635,66 @@ async def get_ssl_status_api(session: dict = Depends(require_auth)):
 async def backup_setup_page(request: Request, session: dict = Depends(require_auth)):
     """Serve the backup setup page."""
     return templates.TemplateResponse("backup_setup.html", {
-        "request": request, "backup_status": git_backup.get_backup_status(),
+        "request": request, "backup_status": sftp_backup.get_backup_status(),
         "error": None, "success": None,
     })
 
 
 @app.post("/backup-setup")
 async def backup_setup_submit(
-    request: Request, repo_url: str = Form(...), auth_method: str = Form(...),
-    token: str = Form(None), ssh_key: str = Form(None),
+    request: Request,
+    sftp_host: str = Form(...),
+    sftp_port: int = Form(22),
+    sftp_path: str = Form("/backups/tachyon"),
+    sftp_username: str = Form(...),
+    auth_method: str = Form("password"),
+    sftp_password: str = Form(None),
+    ssh_key: str = Form(None),
+    retention_count: int = Form(30),
     session: dict = Depends(require_auth),
 ):
-    """Handle backup configuration."""
-    success, message = await git_backup.init_backup_repo(
-        repo_url=repo_url, auth_method=auth_method, ssh_key=ssh_key, token=token,
+    """Handle SFTP backup configuration."""
+    success, message = await sftp_backup.configure_backup(
+        host=sftp_host, port=sftp_port, path=sftp_path,
+        username=sftp_username, auth_method=auth_method,
+        password=sftp_password, ssh_key=ssh_key,
+        retention_count=retention_count,
     )
     return templates.TemplateResponse("backup_setup.html", {
-        "request": request, "backup_status": git_backup.get_backup_status(),
+        "request": request, "backup_status": sftp_backup.get_backup_status(),
         "error": None if success else message,
         "success": message if success else None,
     }, status_code=200 if success else 400)
 
 
 @app.post("/backup-run")
-async def backup_run_now(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+async def backup_run_now(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Trigger an immediate backup."""
-    await git_backup.run_backup()
-    return RedirectResponse(url="/backup-setup", status_code=303)
+    success, message = await sftp_backup.run_backup()
+    return templates.TemplateResponse("backup_setup.html", {
+        "request": request, "backup_status": sftp_backup.get_backup_status(),
+        "error": None if success else message,
+        "success": message if success else None,
+    })
 
 
-@app.get("/api/backup/git-status")
-async def get_git_backup_status_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
-    return git_backup.get_backup_status()
+@app.get("/api/backup/status")
+async def get_backup_status_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+    return sftp_backup.get_backup_status()
+
+
+@app.post("/api/backup/run")
+async def api_backup_run_now(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+    """Trigger an immediate backup and return JSON result."""
+    success, message = await sftp_backup.run_backup()
+    return {"success": success, "message": message}
+
+
+@app.post("/api/backup/test-connection")
+async def test_backup_connection_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+    """Test SFTP backup connection."""
+    success, message = await sftp_backup.test_backup_connection()
+    return {"success": success, "message": message}
 
 
 # ============================================================================
@@ -1669,6 +1705,16 @@ async def get_builtin_radius_config(session: dict = Depends(require_auth), _pro=
     }
 
 
+@app.post("/api/auth/radius/test")
+async def test_builtin_radius(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Test the built-in RADIUS server health."""
+    try:
+        success, message = builtin_radius.test_radius_server()
+        return {"success": success, "message": message}
+    except Exception as exc:
+        return {"success": False, "message": str(exc)}
+
+
 @app.put("/api/auth/radius")
 async def update_builtin_radius_config(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Update built-in RADIUS server settings."""
@@ -2239,6 +2285,9 @@ async def get_current_rollout(session: dict = Depends(require_auth)):
         return {"rollout": None}
 
     progress = db.get_rollout_progress(rollout["id"])
+    failed_devices = []
+    if rollout["status"] == "paused":
+        failed_devices = db.get_rollout_devices_by_status(rollout["id"], "failed")
     return {
         "rollout": {
             "id": rollout["id"],
@@ -2251,6 +2300,7 @@ async def get_current_rollout(session: dict = Depends(require_auth)):
             "pause_reason": rollout.get("pause_reason"),
             "created_at": rollout.get("created_at"),
             "updated_at": rollout.get("updated_at"),
+            "failed_devices": failed_devices,
         }
     }
 

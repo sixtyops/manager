@@ -805,6 +805,17 @@
             to { transform: rotate(360deg); }
         }
 
+        .spinner-inline {
+            display: inline-block;
+            width: 12px; height: 12px;
+            border: 2px solid #d1d5db;
+            border-top-color: #0D9488;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            vertical-align: middle;
+            margin-right: 4px;
+        }
+
         .loading-dots {
             display: inline-flex;
             gap: 3px;
@@ -1874,6 +1885,7 @@
                     <div class="status-bar-phases" id="barPhaseIndicator"></div>
                     <span class="status-bar-muted" id="barRolloutProgress"></span>
                     <span class="status-bar-muted" id="barRolloutPrediction" style="opacity:0.7;font-size:0.8em;"></span>
+                    <div id="barRolloutFailedDevices" style="display:none;flex-wrap:wrap;gap:4px;"></div>
                     <div class="status-bar-actions" id="barRolloutActions">
                         <button class="btn btn-sm btn-warning" id="barResumeBtn" onclick="resumeRollout();event.stopPropagation();" style="display:none;">Resume</button>
                         <button class="btn btn-sm btn-danger" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();" style="display:none;">Cancel</button>
@@ -2282,6 +2294,20 @@
 
             <!-- Backup Panel -->
             <div class="settings-panel" id="settingsPanel-backup">
+                <!-- SFTP Backup Status -->
+                <div style="margin-bottom:16px;">
+                    <label>Scheduled Backup</label>
+                    <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 6px 0;">Automatic nightly database backup via SFTP.</p>
+                    <div id="backupStatusInfo" style="font-size:0.75rem;color:#6b7280;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;">Loading...</div>
+                    <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
+                        <button class="backup-btn" onclick="runBackupNow()">Run Now</button>
+                        <a href="/backup-setup" class="backup-btn" style="text-decoration:none;text-align:center;background:#6b7280;color:#fff;">Configure</a>
+                        <span id="backupRunStatus" style="font-size:0.75rem;color:#6b7280;"></span>
+                    </div>
+                </div>
+
+                <div style="border-top:1px solid #e5e7eb;margin-bottom:16px;"></div>
+
                 <!-- Export -->
                 <div style="margin-bottom:16px;">
                     <label>Export Devices (CSV)</label>
@@ -2358,6 +2384,7 @@
                     </div>
                     <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
                         <button class="backup-btn" onclick="saveRadiusConfig()">Save RADIUS</button>
+                        <button class="backup-btn" onclick="testRadiusConfig()" style="background:#6b7280;color:#fff;">Test</button>
                         <button class="backup-btn" onclick="refreshRadiusData()" style="background:#6b7280;color:#fff;">Refresh</button>
                         <span id="radiusStatus" style="font-size:0.75rem;color:#6b7280;"></span>
                     </div>
@@ -2409,9 +2436,9 @@
                         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
                             <h5 style="margin:0;font-size:0.8rem;font-weight:600;">Device Radius Rollout</h5>
                             <div style="display:flex;gap:6px;">
-                                <button class="backup-btn" onclick="startRadiusRollout()">Start Rollout</button>
-                                <button class="backup-btn" onclick="resumeRadiusRollout()" style="background:#6b7280;color:#fff;">Resume</button>
-                                <button class="backup-btn" onclick="cancelRadiusRollout()" style="background:#dc2626;color:#fff;">Cancel</button>
+                                <button class="backup-btn" id="radiusRolloutStartBtn" onclick="startRadiusRollout()">Start Rollout</button>
+                                <button class="backup-btn" id="radiusRolloutResumeBtn" onclick="resumeRadiusRollout()" style="display:none;background:#6b7280;color:#fff;">Resume</button>
+                                <button class="backup-btn" id="radiusRolloutCancelBtn" onclick="cancelRadiusRollout()" style="display:none;background:#dc2626;color:#fff;">Cancel</button>
                             </div>
                         </div>
                         <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 8px 0;">Rollout includes enabled APs, switches, and CPEs currently reachable with inherited parent AP credentials. Rollout start refreshes AP/CPE auth state first. If a CPE cannot log in with inherited credentials, fix the parent AP credentials here and resume.</p>
@@ -2474,10 +2501,9 @@
                     </div>
                 </div>
 
-                <div style="border-top:1px solid #e5e7eb;margin:16px 0;"></div>
-
-                <!-- SSO / OIDC Section -->
-                <div style="margin-bottom:20px;">
+                <!-- SSO / OIDC Section (hidden until tested) -->
+                <div style="display:none;margin-bottom:20px;">
+                    <div style="border-top:1px solid #e5e7eb;margin:16px 0;"></div>
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
                         <h4 style="margin:0;font-size:0.85rem;font-weight:600;">SSO Authentication (OIDC)</h4>
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
@@ -2617,7 +2643,7 @@
             });
 
             // Gate settings panels
-            const gatePanels = { 'settingsPanel-backup': 'config_backup', 'settingsPanel-notifications': 'slack_notifications', 'settingsPanel-auth': 'sso_oidc' };
+            const gatePanels = { 'settingsPanel-backup': 'config_backup', 'settingsPanel-notifications': 'slack_notifications', 'settingsPanel-auth': 'radius_auth' };
             for (const [panelId, feature] of Object.entries(gatePanels)) {
                 const panel = document.getElementById(panelId);
                 if (panel) {
@@ -3929,6 +3955,7 @@
             });
             const panel = document.getElementById('settingsPanel-' + tabName);
             if (panel) panel.classList.add('active');
+            if (tabName === 'backup') loadBackupStatus();
         }
 
         async function loadNotificationsData() {
@@ -4228,12 +4255,33 @@
             if (!summaryEl || !statusEl || !devicesEl) return;
             currentRadiusRollout = rollout;
 
+            const startBtn = document.getElementById('radiusRolloutStartBtn');
+            const resumeBtn = document.getElementById('radiusRolloutResumeBtn');
+            const cancelBtn = document.getElementById('radiusRolloutCancelBtn');
+
             if (!rollout) {
                 radiusRolloutRepairTarget = null;
                 summaryEl.textContent = 'No Radius rollout started.';
                 statusEl.textContent = '';
                 devicesEl.innerHTML = '';
+                if (startBtn) startBtn.style.display = 'inline-block';
+                if (resumeBtn) resumeBtn.style.display = 'none';
+                if (cancelBtn) cancelBtn.style.display = 'none';
                 return;
+            }
+
+            if (!rollout.status || rollout.status === 'completed' || rollout.status === 'cancelled') {
+                if (startBtn) startBtn.style.display = 'inline-block';
+                if (resumeBtn) resumeBtn.style.display = 'none';
+                if (cancelBtn) cancelBtn.style.display = 'none';
+            } else if (rollout.status === 'paused') {
+                if (startBtn) startBtn.style.display = 'none';
+                if (resumeBtn) resumeBtn.style.display = 'inline-block';
+                if (cancelBtn) cancelBtn.style.display = 'inline-block';
+            } else {
+                if (startBtn) startBtn.style.display = 'none';
+                if (resumeBtn) resumeBtn.style.display = 'none';
+                if (cancelBtn) cancelBtn.style.display = 'inline-block';
             }
 
             const progress = rollout.progress || {};
@@ -4366,6 +4414,21 @@
             }
         }
 
+        async function testRadiusConfig() {
+            const statusEl = document.getElementById('radiusStatus');
+            statusEl.innerHTML = '<span class="spinner-inline"></span> Testing...';
+            statusEl.style.color = '#6b7280';
+            try {
+                const resp = await fetch('/api/auth/radius/test', { method: 'POST' });
+                const data = await resp.json();
+                statusEl.textContent = data.message || (data.success ? 'RADIUS server is healthy' : 'RADIUS test failed');
+                statusEl.style.color = data.success ? '#10b981' : '#dc2626';
+            } catch (e) {
+                statusEl.textContent = 'Test failed: ' + e.message;
+                statusEl.style.color = '#dc2626';
+            }
+        }
+
         async function saveRadiusConfig() {
             const statusEl = document.getElementById('radiusStatus');
             const enabled = document.getElementById('authRadiusEnabled').checked;
@@ -4435,6 +4498,7 @@
         }
 
         async function startRadiusRollout() {
+            if (!confirm('Start RADIUS rollout? This will push RADIUS configuration to all eligible devices in phases.')) return;
             const statusEl = document.getElementById('radiusRolloutStatus');
             try {
                 const resp = await fetch('/api/auth/radius/rollout/start', { method: 'POST' });
@@ -4450,6 +4514,7 @@
         }
 
         async function resumeRadiusRollout() {
+            if (!confirm('Resume the RADIUS rollout? Remaining devices will continue to be configured.')) return;
             const statusEl = document.getElementById('radiusRolloutStatus');
             try {
                 const current = await fetch('/api/auth/radius/rollout').then(r => r.json());
@@ -4468,6 +4533,7 @@
         }
 
         async function cancelRadiusRollout() {
+            if (!confirm('Cancel this RADIUS rollout? Devices not yet configured will remain unchanged.')) return;
             const statusEl = document.getElementById('radiusRolloutStatus');
             try {
                 const current = await fetch('/api/auth/radius/rollout').then(r => r.json());
@@ -4523,6 +4589,11 @@
 
             if (!username || !password) {
                 statusEl.textContent = 'Username and password are required';
+                statusEl.style.color = '#f59e0b';
+                return;
+            }
+            if (password.length < 12) {
+                statusEl.textContent = 'Password must be at least 12 characters';
                 statusEl.style.color = '#f59e0b';
                 return;
             }
@@ -5053,6 +5124,8 @@
             }
             indicator.innerHTML = html;
             document.getElementById('barRolloutProgress').textContent = '';
+            const failedEl = document.getElementById('barRolloutFailedDevices');
+            if (failedEl) { failedEl.innerHTML = ''; failedEl.style.display = 'none'; }
             const predEl = document.getElementById('barRolloutPrediction');
             if (predEl) predEl.textContent = '';
             document.getElementById('barResumeBtn').style.display = 'none';
@@ -5122,6 +5195,20 @@
             }
             document.getElementById('barRolloutProgress').textContent = progressText;
 
+            // Failed device detail
+            const failedDevicesEl = document.getElementById('barRolloutFailedDevices');
+            if (failedDevicesEl) {
+                if (failed > 0 && rollout.status === 'paused' && rollout.failed_devices && rollout.failed_devices.length) {
+                    failedDevicesEl.innerHTML = rollout.failed_devices.map(d =>
+                        `<span style="font-size:0.7rem;padding:2px 6px;background:#fef2f2;border:1px solid #fecaca;border-radius:4px;color:#991b1b;">${escapeHtml(d.ip)} (${escapeHtml(d.device_type || 'device')})</span>`
+                    ).join('');
+                    failedDevicesEl.style.display = 'flex';
+                } else {
+                    failedDevicesEl.innerHTML = '';
+                    failedDevicesEl.style.display = 'none';
+                }
+            }
+
             // Predictions
             const predEl = document.getElementById('barRolloutPrediction');
             if (pred && predEl) {
@@ -5166,17 +5253,20 @@
 
         async function resumeRollout() {
             if (!currentRolloutId) return;
+            if (!confirm('Resume the firmware rollout? Devices will begin updating in the next maintenance window.')) return;
             try { await fetch(`/api/rollout/${currentRolloutId}/resume`, { method: 'POST' }); } catch (e) {}
         }
 
         async function cancelRollout() {
             if (!currentRolloutId) return;
+            if (!confirm('Cancel this firmware rollout? Remaining devices will NOT be updated.')) return;
             try { await fetch(`/api/rollout/${currentRolloutId}/cancel`, { method: 'POST' }); } catch (e) {}
         }
 
         async function triggerCanaryNow(event) {
             if (event) event.stopPropagation();
             if (!canTriggerManualCanary(lastPreRolloutPredictions)) return;
+            if (!confirm('Run canary now? This will start firmware updates on canary devices outside the scheduled maintenance window.')) return;
             const predEl = document.getElementById('barRolloutPrediction');
             if (predEl) predEl.textContent = 'Starting canary...';
             try {
@@ -6054,6 +6144,42 @@
 
         // ── Backup / Restore ──
 
+        async function loadBackupStatus() {
+            const el = document.getElementById('backupStatusInfo');
+            if (!el) return;
+            try {
+                const resp = await fetch('/api/backup/status');
+                if (!resp.ok) { el.textContent = 'Could not load backup status'; return; }
+                const data = await resp.json();
+                if (!data.enabled) {
+                    el.textContent = 'Scheduled backup is not configured.';
+                } else {
+                    const statusColor = data.last_status === 'success' ? '#10b981' : (data.last_status ? '#dc2626' : '#6b7280');
+                    const statusText = data.last_status || 'never run';
+                    const lastRun = data.last_run || 'Never';
+                    el.innerHTML = `Status: <strong style="color:${statusColor}">${escapeHtml(statusText)}</strong> · Last run: ${escapeHtml(lastRun)}${data.sftp_display ? ` · ${escapeHtml(data.sftp_display)}` : ''}`;
+                }
+            } catch (e) {
+                el.textContent = 'Could not load backup status';
+            }
+        }
+
+        async function runBackupNow() {
+            const statusEl = document.getElementById('backupRunStatus');
+            statusEl.innerHTML = '<span class="spinner-inline"></span> Running...';
+            statusEl.style.color = '#6b7280';
+            try {
+                const resp = await fetch('/api/backup/run', { method: 'POST' });
+                const data = await resp.json();
+                statusEl.textContent = data.message || (data.success ? 'Backup complete' : 'Backup failed');
+                statusEl.style.color = data.success ? '#10b981' : '#dc2626';
+                await loadBackupStatus();
+            } catch (e) {
+                statusEl.textContent = 'Backup failed: ' + e.message;
+                statusEl.style.color = '#dc2626';
+            }
+        }
+
         async function exportBackup() {
             const passphrase = document.getElementById('exportPassphrase').value;
             const status = document.getElementById('backupStatus');
@@ -6112,7 +6238,7 @@
                 return;
             }
 
-            status.textContent = 'Importing...';
+            status.innerHTML = '<span class="spinner-inline"></span> Importing...';
             status.style.color = '#6b7280';
 
             const formData = new FormData();
@@ -6133,8 +6259,23 @@
                 const failures = d.failed || 0;
                 if (failures) parts.push(failures + ' failed');
 
-                status.textContent = 'Import complete: ' + (parts.join(', ') || 'no changes');
-                status.style.color = failures ? '#dc2626' : '#16a34a';
+                let summary = 'Devices: ' + (parts.join(', ') || 'no changes');
+
+                const ru = result.radius_users || {};
+                const ruParts = [];
+                if (ru.added) ruParts.push(ru.added + ' added');
+                if (ru.updated) ruParts.push(ru.updated + ' updated');
+                if (ru.skipped) ruParts.push(ru.skipped + ' skipped');
+                if (ru.failed) ruParts.push(ru.failed + ' failed');
+                if (ruParts.length) summary += ' · RADIUS users: ' + ruParts.join(', ');
+
+                const errors = [...(d.errors || []), ...(ru.errors || [])];
+                if (errors.length) {
+                    summary += '\n' + errors.slice(0, 5).join('; ');
+                }
+                const totalFailures = failures + (ru.failed || 0);
+                status.textContent = summary;
+                status.style.color = totalFailures ? '#dc2626' : '#16a34a';
 
                 document.getElementById('importPassphrase').value = '';
                 fileInput.value = '';

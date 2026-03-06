@@ -441,10 +441,15 @@ def init_db():
             "ssl_domain": "",
             "ssl_email": "",
             "ssl_cert_expires": "",
-            # Git backup configuration
+            # SFTP backup configuration
             "backup_enabled": "false",
-            "backup_repo_url": "",
-            "backup_auth_method": "",
+            "backup_sftp_host": "",
+            "backup_sftp_port": "22",
+            "backup_sftp_path": "/backups/tachyon",
+            "backup_sftp_username": "",
+            "backup_sftp_password": "",
+            "backup_sftp_auth_method": "password",
+            "backup_retention_count": "30",
             "backup_last_run": "",
             "backup_last_status": "",
             # Setup wizard tracking
@@ -1221,6 +1226,24 @@ def get_last_rollout_for_firmware(firmware_file: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
+def get_last_rollout_for_firmware_set(
+    firmware_file: str,
+    firmware_file_303l: str = None,
+    firmware_file_tns100: str = None,
+) -> Optional[dict]:
+    """Get the most recent rollout matching all three firmware files."""
+    with get_db() as db:
+        row = db.execute(
+            """SELECT * FROM rollouts
+               WHERE firmware_file = ?
+                 AND COALESCE(firmware_file_303l, '') = ?
+                 AND COALESCE(firmware_file_tns100, '') = ?
+               ORDER BY id DESC LIMIT 1""",
+            (firmware_file, firmware_file_303l or "", firmware_file_tns100 or ""),
+        ).fetchone()
+        return dict(row) if row else None
+
+
 PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
 
 
@@ -1405,6 +1428,16 @@ def get_rollout_progress(rollout_id: int) -> dict:
                 result[s] = c
             result["total"] += c
         return result
+
+
+def get_rollout_devices_by_status(rollout_id: int, status: str) -> list[dict]:
+    """Get rollout devices filtered by status."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT ip, device_type, phase_assigned, status, updated_at FROM rollout_devices WHERE rollout_id = ? AND status = ?",
+            (rollout_id, status),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 # Device duration tracking

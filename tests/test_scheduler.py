@@ -186,6 +186,112 @@ class TestSchedulerCanaries:
         assert rollout["target_version_303l"] == "2.5.0.456"
         assert rollout["target_version_tns100"] == "3.4.5.678"
 
+    def test_firmware_changed_detects_303l_change(self, mock_db):
+        """Changing 303L firmware should be detected as a firmware change."""
+        rollout_id = db.create_rollout("tna-30x-1.0.0-r100.bin", "tna-303l-1.0.0-r100.bin", None)
+        rollout = db.get_rollout(rollout_id)
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+
+        # Same firmware - no change
+        assert not scheduler._firmware_changed(
+            rollout, "tna-30x-1.0.0-r100.bin", "tna-303l-1.0.0-r100.bin", ""
+        )
+
+        # Different 303L firmware - should detect change
+        assert scheduler._firmware_changed(
+            rollout, "tna-30x-1.0.0-r100.bin", "tna-303l-2.0.0-r200.bin", ""
+        )
+
+    def test_firmware_changed_detects_tns100_change(self, mock_db):
+        """Changing TNS-100 firmware should be detected as a firmware change."""
+        rollout_id = db.create_rollout("tna-30x-1.0.0-r100.bin", None, "tns-100-1.0.0-r100.bin")
+        rollout = db.get_rollout(rollout_id)
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+
+        # Same firmware - no change
+        assert not scheduler._firmware_changed(
+            rollout, "tna-30x-1.0.0-r100.bin", "", "tns-100-1.0.0-r100.bin"
+        )
+
+        # Different TNS-100 firmware - should detect change
+        assert scheduler._firmware_changed(
+            rollout, "tna-30x-1.0.0-r100.bin", "", "tns-100-2.0.0-r200.bin"
+        )
+
+    def test_firmware_changed_detects_added_or_removed_firmware(self, mock_db):
+        """Adding or removing a firmware type should be detected as a change."""
+        rollout_id = db.create_rollout("tna-30x-1.0.0-r100.bin", None, None)
+        rollout = db.get_rollout(rollout_id)
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+
+        # Adding 303L where none existed
+        assert scheduler._firmware_changed(
+            rollout, "tna-30x-1.0.0-r100.bin", "tna-303l-2.0.0-r200.bin", ""
+        )
+
+    @pytest.mark.asyncio
+    async def test_canary_cancels_rollout_on_303l_change(self, mock_db, monkeypatch):
+        """Changing 303L firmware should cancel active rollout during canary trigger."""
+        _seed_rollout_devices()
+        # Create a rollout with old 303L firmware
+        rollout_id = db.create_rollout(
+            "tna-30x-1.0.0-r100.bin", "tna-303l-1.0.0-r100.bin", None
+        )
+
+        db.set_settings({
+            "schedule_enabled": "true",
+            "timezone": "America/Chicago",
+            "selected_firmware_30x": "tna-30x-1.0.0-r100.bin",
+            "selected_firmware_303l": "tna-303l-2.0.0-r200.bin",  # Changed!
+            "weather_check_enabled": "false",
+        })
+
+        start_update = AsyncMock(return_value="job-cancel-test")
+        scheduler = AutoUpdateScheduler(AsyncMock(), start_update)
+
+        monkeypatch.setattr(
+            "updater.scheduler.services.validate_time_sources",
+            AsyncMock(return_value=(True, datetime(2026, 3, 5, 13, 0, 0))),
+        )
+
+        await scheduler.trigger_canary_now()
+
+        # Old rollout should be cancelled
+        old_rollout = db.get_rollout(rollout_id)
+        assert old_rollout["status"] == "cancelled"
+
+        # New rollout should be created with updated 303L firmware
+        new_rollout = db.get_active_rollout()
+        assert new_rollout is not None
+        assert new_rollout["firmware_file_303l"] == "tna-303l-2.0.0-r200.bin"
+
+    def test_get_last_rollout_for_firmware_set_matches_all_columns(self, mock_db):
+        """get_last_rollout_for_firmware_set should match on all three firmware files."""
+        db.create_rollout("30x-v1.bin", "303l-v1.bin", "tns-v1.bin")
+
+        # Exact match
+        result = db.get_last_rollout_for_firmware_set("30x-v1.bin", "303l-v1.bin", "tns-v1.bin")
+        assert result is not None
+
+        # Different 303L - no match
+        result = db.get_last_rollout_for_firmware_set("30x-v1.bin", "303l-v2.bin", "tns-v1.bin")
+        assert result is None
+
+        # Different TNS-100 - no match
+        result = db.get_last_rollout_for_firmware_set("30x-v1.bin", "303l-v1.bin", "tns-v2.bin")
+        assert result is None
+
+    def test_get_last_rollout_for_firmware_set_handles_nulls(self, mock_db):
+        """NULL and empty string should be treated equivalently."""
+        db.create_rollout("30x-v1.bin", None, None)
+
+        # Empty strings should match NULLs
+        result = db.get_last_rollout_for_firmware_set("30x-v1.bin", "", "")
+        assert result is not None
+
+        result = db.get_last_rollout_for_firmware_set("30x-v1.bin", None, None)
+        assert result is not None
+
     @pytest.mark.asyncio
     async def test_manual_canary_job_disables_window_cutoff(self, mock_db, tmp_path):
         firmware_dir = tmp_path / "firmware"
