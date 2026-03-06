@@ -109,6 +109,17 @@ class AutoUpdateScheduler:
         self._ran_today: Set[str] = set()
         self._manual_canary_job_ids: Set[str] = set()
 
+    @staticmethod
+    def _firmware_changed(rollout: dict, fw_30x: str, fw_303l: str, fw_tns100: str) -> bool:
+        """Return True if any selected firmware differs from the rollout's stored firmware."""
+        if rollout["firmware_file"] != fw_30x:
+            return True
+        if (fw_303l or "") != (rollout.get("firmware_file_303l") or ""):
+            return True
+        if (fw_tns100 or "") != (rollout.get("firmware_file_tns100") or ""):
+            return True
+        return False
+
     async def start(self):
         """Start the scheduler check loop."""
         if self._running:
@@ -181,11 +192,13 @@ class AutoUpdateScheduler:
         fw_30x = settings.get("selected_firmware_30x", "")
         allow_downgrade = settings.get("allow_downgrade", "false") == "true"
         if fw_30x:
-            last_rollout = db.get_last_rollout_for_firmware(fw_30x)
+            fw_303l_early = settings.get("selected_firmware_303l", "")
+            fw_tns100_early = settings.get("selected_firmware_tns100", "")
+            last_rollout = db.get_last_rollout_for_firmware_set(fw_30x, fw_303l_early, fw_tns100_early)
             if last_rollout and last_rollout["status"] == "completed":
                 scope_ips = self._resolve_scope(settings)
                 switch_scope = self._resolve_switch_scope(settings)
-                target_versions = self._target_versions(settings, last_rollout)
+                target_versions = self._target_versions(settings, None)
                 needs_update = self._filter_devices_needing_update(
                     scope_ips, target_versions, allow_downgrade
                 )
@@ -305,18 +318,18 @@ class AutoUpdateScheduler:
 
         rollout = db.get_active_rollout()
 
-        if rollout and rollout["firmware_file"] != fw_30x:
+        if rollout and self._firmware_changed(rollout, fw_30x, fw_303l, fw_tns100):
             db.cancel_rollout(rollout["id"])
-            db.log_schedule_event("rollout_cancelled", f"Firmware changed to {fw_30x}")
+            db.log_schedule_event("rollout_cancelled", "Firmware selection changed")
             logger.info(f"Cancelled rollout {rollout['id']} due to firmware change")
             rollout = None
 
         if rollout is None:
-            last = db.get_last_rollout_for_firmware(fw_30x)
+            last = db.get_last_rollout_for_firmware_set(fw_30x, fw_303l, fw_tns100)
             if last and last["status"] == "completed":
                 scope_ips = self._resolve_scope(settings)
                 switch_scope = self._resolve_switch_scope(settings)
-                target_versions = self._target_versions(settings, last)
+                target_versions = self._target_versions(settings, None)
                 needs_update = self._filter_devices_needing_update(
                     scope_ips, target_versions, allow_downgrade
                 )
@@ -474,9 +487,9 @@ class AutoUpdateScheduler:
                     raise RuntimeError(f"On hold ({remaining_str}) - new firmware waiting period")
 
         rollout = db.get_active_rollout()
-        if rollout and rollout["firmware_file"] != fw_30x:
+        if rollout and self._firmware_changed(rollout, fw_30x, fw_303l, fw_tns100):
             db.cancel_rollout(rollout["id"])
-            db.log_schedule_event("rollout_cancelled", f"Firmware changed to {fw_30x}")
+            db.log_schedule_event("rollout_cancelled", "Firmware selection changed")
             rollout = None
         if rollout and rollout["status"] == "paused":
             raise RuntimeError("Current rollout is paused. Resume or reset it first")
@@ -487,9 +500,9 @@ class AutoUpdateScheduler:
         switch_scope = self._resolve_switch_scope(settings)
 
         if rollout is None:
-            last = db.get_last_rollout_for_firmware(fw_30x)
+            last = db.get_last_rollout_for_firmware_set(fw_30x, fw_303l, fw_tns100)
             if last and last["status"] == "completed":
-                target_versions = self._target_versions(settings, last)
+                target_versions = self._target_versions(settings, None)
                 needs_update = self._filter_devices_needing_update(
                     scope_ips, target_versions, allow_downgrade
                 )

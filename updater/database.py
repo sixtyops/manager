@@ -1221,6 +1221,24 @@ def get_last_rollout_for_firmware(firmware_file: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
+def get_last_rollout_for_firmware_set(
+    firmware_file: str,
+    firmware_file_303l: str = None,
+    firmware_file_tns100: str = None,
+) -> Optional[dict]:
+    """Get the most recent rollout matching all three firmware files."""
+    with get_db() as db:
+        row = db.execute(
+            """SELECT * FROM rollouts
+               WHERE firmware_file = ?
+                 AND COALESCE(firmware_file_303l, '') = ?
+                 AND COALESCE(firmware_file_tns100, '') = ?
+               ORDER BY id DESC LIMIT 1""",
+            (firmware_file, firmware_file_303l or "", firmware_file_tns100 or ""),
+        ).fetchone()
+        return dict(row) if row else None
+
+
 PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
 
 
