@@ -69,8 +69,8 @@ class TestSchedulerBankModeFiltering:
             "active_bank": 1,
         }
 
-        with patch("updater.scheduler.db.get_access_point", return_value=ap), \
-             patch("updater.scheduler.db.get_cpes_for_ap", return_value=[]):
+        with patch("updater.scheduler.db.get_all_access_points_dict", return_value={"10.0.0.1": ap}), \
+             patch("updater.scheduler.db.get_all_cpes_grouped", return_value={}):
             result = scheduler._filter_devices_needing_update(
                 ["10.0.0.1"],
                 {"tna-30x": "1.12.2.54970"},
@@ -90,8 +90,8 @@ class TestSchedulerBankModeFiltering:
             "active_bank": 1,
         }
 
-        with patch("updater.scheduler.db.get_access_point", return_value=ap), \
-             patch("updater.scheduler.db.get_cpes_for_ap", return_value=[]):
+        with patch("updater.scheduler.db.get_all_access_points_dict", return_value={"10.0.0.1": ap}), \
+             patch("updater.scheduler.db.get_all_cpes_grouped", return_value={}):
             result = scheduler._filter_devices_needing_update(
                 ["10.0.0.1"],
                 {"tna-30x": "1.12.2.54970"},

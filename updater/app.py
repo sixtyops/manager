@@ -38,6 +38,7 @@ from .backup import build_csv_export, process_csv_import
 from . import telemetry
 from . import slack
 from . import snmp
+from . import webhooks
 from . import ssl_manager
 from . import sftp_backup
 from . import builtin_radius
@@ -113,18 +114,19 @@ _last_data_housekeeping_day: Optional[str] = None
 
 async def broadcast(message: dict):
     """Broadcast message to all connected WebSocket clients."""
+    import json as _json
+    json_text = _json.dumps(message)
     disconnected = set()
     for ws in active_websockets:
         try:
-            await asyncio.wait_for(ws.send_json(message), timeout=5.0)
+            await asyncio.wait_for(ws.send_text(json_text), timeout=5.0)
         except asyncio.TimeoutError:
             logger.warning("WebSocket send timed out, disconnecting slow client")
             disconnected.add(ws)
         except Exception:
             disconnected.add(ws)
 
-    for ws in disconnected:
-        active_websockets.discard(ws)
+    active_websockets.difference_update(disconnected)
 
 
 def _cleanup_oidc_states():
@@ -286,6 +288,8 @@ async def _periodic_cleanup():
             _cleanup_completed_jobs(max_age_seconds=3600)
             _cleanup_oidc_states()
             db.cleanup_old_radius_auth_log(max_age_days=90)
+            db.cleanup_old_uptime_events(max_age_days=180)
+            db.cleanup_old_config_enforce_log(max_age_days=90)
             _run_daily_data_housekeeping()
             logger.info("Periodic cleanup completed")
         except Exception as e:
@@ -382,7 +386,7 @@ async def _radius_health_monitor():
             logger.error(f"Background RADIUS health monitor error: {e}")
 
 
-def _cleanup_completed_jobs(max_age_seconds: int = 3600):
+def _cleanup_completed_jobs(max_age_seconds: int = 600):
     """Remove completed jobs from in-memory dict after they've been persisted."""
     now = datetime.now()
     stale_ids = []
@@ -393,8 +397,34 @@ def _cleanup_completed_jobs(max_age_seconds: int = 3600):
                 stale_ids.append(job_id)
     for job_id in stale_ids:
         del update_jobs[job_id]
+    # Cap total completed jobs in memory
+    max_completed = 20
+    completed = [(jid, j) for jid, j in update_jobs.items()
+                 if j.status == "completed" and j.completed_at]
+    if len(completed) > max_completed:
+        completed.sort(key=lambda x: x[1].completed_at)
+        for jid, _ in completed[:len(completed) - max_completed]:
+            del update_jobs[jid]
+            stale_ids.append(jid)
     if stale_ids:
         logger.info(f"Cleaned up {len(stale_ids)} completed jobs from memory")
+
+
+async def _websocket_health_check():
+    """Periodically ping WebSocket clients and remove dead connections."""
+    while True:
+        await asyncio.sleep(30)
+        if not active_websockets:
+            continue
+        dead = set()
+        for ws in list(active_websockets):
+            try:
+                await asyncio.wait_for(ws.send_json({"type": "ping"}), timeout=5.0)
+            except Exception:
+                dead.add(ws)
+        if dead:
+            active_websockets.difference_update(dead)
+            logger.debug(f"Removed {len(dead)} dead WebSocket connection(s)")
 
 
 @asynccontextmanager
@@ -432,6 +462,9 @@ async def lifespan(app: FastAPI):
     radius_health_task = asyncio.create_task(
         _supervised_task("radius_health_monitor", _radius_health_monitor)
     )
+    ws_health_task = asyncio.create_task(
+        _supervised_task("ws_health_check", _websocket_health_check)
+    )
     state = get_license_state()
     logger.info(f"License: {state.status.value} (tier={state.tier.value})")
     logger.info("Application started")
@@ -443,7 +476,8 @@ async def lifespan(app: FastAPI):
     cleanup_task.cancel()
     radius_sync_task.cancel()
     radius_health_task.cancel()
-    for task in [cleanup_task, backup_task, radius_sync_task, radius_health_task]:
+    ws_health_task.cancel()
+    for task in [cleanup_task, backup_task, radius_sync_task, radius_health_task, ws_health_task]:
         try:
             await task
         except asyncio.CancelledError:
@@ -1700,6 +1734,13 @@ _SETTINGS_WRITABLE = {
     "autoupdate_enabled", "release_channel",
     "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
     "pre_update_reboot",
+    # Webhook settings
+    "webhook_enabled", "webhook_url", "webhook_method",
+    "webhook_headers", "webhook_secret", "webhook_events",
+    # Device alert settings
+    "alert_device_offline_enabled", "alert_device_offline_cooldown_minutes",
+    # Poller settings
+    "poller_concurrency",
 }
 
 
@@ -1946,6 +1987,13 @@ async def test_slack_webhook(session: dict = Depends(require_role("admin")), _pr
 async def test_snmp_trap(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SNMP_TRAPS))):
     """Send a test SNMP trap to verify configuration."""
     success, message = await snmp.send_test_trap()
+    return {"success": success, "message": message}
+
+
+@app.post("/api/webhooks/test", tags=["notifications"])
+async def test_webhook(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.WEBHOOKS))):
+    """Send a test webhook to verify configuration."""
+    success, message = await webhooks.send_test_webhook()
     return {"success": success, "message": message}
 
 
@@ -4846,6 +4894,21 @@ async def run_update_job(job: UpdateJob, concurrency: int):
     except Exception as e:
         logger.error(f"SNMP notification failed for job {job.job_id}: {e}")
 
+    try:
+        await webhooks.notify_job_completed(
+            job_id=job.job_id,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+            cancelled_count=cancelled_count,
+            duration_seconds=(job.completed_at - job.started_at).total_seconds(),
+            devices=devices_dict,
+            firmware_name=firmware_name,
+            is_scheduled=job.is_scheduled,
+        )
+    except Exception as e:
+        logger.error(f"Webhook notification failed for job {job.job_id}: {e}")
+
     logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped, {cancelled_count} cancelled")
 
 
@@ -5009,64 +5072,13 @@ def _compute_config_hash(config: dict) -> str:
 
 
 # Top-level config keys that templates must never modify (prevents bricking devices)
-PROTECTED_CONFIG_KEYS = {"network", "ethernet"}
-
-
-def _validate_fragment_safety(fragment: dict):
-    """Raise ValueError if fragment tries to modify protected config sections."""
-    if not isinstance(fragment, dict):
-        return
-    for key in PROTECTED_CONFIG_KEYS:
-        if key in fragment:
-            raise ValueError(
-                f"Config templates cannot modify the '{key}' section — "
-                f"this could make devices unreachable"
-            )
-
-
-def deep_merge(base: dict, overlay: dict) -> dict:
-    """Recursively merge overlay into base. Overlay values win for scalars.
-    Lists in overlay replace lists in base entirely."""
-    from copy import deepcopy
-    result = deepcopy(base)
-    for key, value in overlay.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = deep_merge(result[key], value)
-        else:
-            result[key] = deepcopy(value)
-    return result
-
-
-def _check_config_compliance(device_config: dict, templates: list[dict]) -> bool:
-    """Check if a device config matches all enabled templates.
-
-    For each template, extract the same key paths from the device config
-    and compare. Returns True if all templates match.
-    """
-    if not templates:
-        return True
-    config = device_config
-    if isinstance(config, str):
-        config = json.loads(config)
-
-    for template in templates:
-        fragment = json.loads(template["config_fragment"]) if isinstance(template["config_fragment"], str) else template["config_fragment"]
-        if not _fragment_matches(config, fragment):
-            return False
-    return True
-
-
-def _fragment_matches(config: dict, fragment: dict) -> bool:
-    """Check if all keys in fragment match corresponding values in config."""
-    for key, value in fragment.items():
-        if key not in config:
-            return False
-        if isinstance(value, dict) and isinstance(config[key], dict):
-            if not _fragment_matches(config[key], value):
-                return False
-        elif config[key] != value:
-            return False
-    return True
+from .config_utils import (
+    PROTECTED_CONFIG_KEYS,
+    validate_fragment_safety as _validate_fragment_safety,
+    deep_merge,
+    check_config_compliance as _check_config_compliance,
+    fragment_matches as _fragment_matches,
+)
 
 
 @app.get("/api/configs", tags=["config"])
@@ -5248,6 +5260,19 @@ async def create_config_template(request: Request, session: dict = Depends(requi
     fragment_str = json.dumps(config_fragment)
     form_data_str = json.dumps(data["form_data"]) if data.get("form_data") else None
 
+    scope = data.get("scope", "global")
+    site_id = data.get("site_id")
+    device_types = data.get("device_types")
+
+    if scope == "site":
+        if not site_id:
+            raise HTTPException(400, "site_id required when scope is 'site'")
+        site = db.get_tower_site(site_id)
+        if not site:
+            raise HTTPException(400, f"Invalid site_id: {site_id}")
+
+    device_types_str = json.dumps(device_types) if device_types else None
+
     try:
         template_id = db.save_config_template(
             name=name,
@@ -5255,6 +5280,9 @@ async def create_config_template(request: Request, session: dict = Depends(requi
             config_fragment=fragment_str,
             form_data=form_data_str,
             description=data.get("description"),
+            scope=scope,
+            site_id=site_id,
+            device_types=device_types_str,
         )
     except Exception as e:
         if "UNIQUE" in str(e):
@@ -5295,6 +5323,16 @@ async def update_config_template_api(template_id: int, request: Request, session
         updates["description"] = data["description"]
     if "enabled" in data:
         updates["enabled"] = 1 if data["enabled"] else 0
+    if "scope" in data:
+        updates["scope"] = data["scope"]
+    if "site_id" in data:
+        if data.get("scope") == "site" and data["site_id"]:
+            site = db.get_tower_site(data["site_id"])
+            if not site:
+                raise HTTPException(400, f"Invalid site_id: {data['site_id']}")
+        updates["site_id"] = data["site_id"]
+    if "device_types" in data:
+        updates["device_types"] = json.dumps(data["device_types"]) if data["device_types"] else None
 
     db.update_config_template(template_id, **updates)
     return {"success": True}
@@ -5316,20 +5354,61 @@ async def delete_config_template_api(template_id: int, session: dict = Depends(r
 
 @app.get("/api/config-compliance", tags=["config"])
 async def get_config_compliance(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_COMPLIANCE))):
-    """Get per-device config compliance status."""
+    """Get per-device config compliance status using scoped templates."""
     all_configs = db.get_all_latest_configs()
-    templates = db.get_config_templates(enabled_only=True)
+    effective = db.get_all_effective_templates()
+
+    # For devices with configs but not in access_points/switches (e.g. CPEs),
+    # fall back to global templates
+    global_templates = None
 
     devices = {}
     for ip, cfg in all_configs.items():
         config_data = json.loads(cfg["config_json"]) if isinstance(cfg["config_json"], str) else cfg["config_json"]
-        compliant = _check_config_compliance(config_data, templates)
+        device_templates = effective.get(ip)
+        if device_templates is None:
+            # Device not in AP/switch tables — use global templates
+            if global_templates is None:
+                global_templates = db.get_config_templates_for_device(ip, site_id=None)
+            device_templates = global_templates
+        compliant = _check_config_compliance(config_data, device_templates)
         devices[ip] = {
             "compliant": compliant,
             "checked_at": cfg["fetched_at"],
         }
 
     return {"devices": devices}
+
+
+# ============================================================================
+# Config Enforce Log
+# ============================================================================
+
+@app.get("/api/config-enforce/status", tags=["config"])
+async def get_config_enforce_status(session: dict = Depends(require_auth)):
+    """Get current auto-enforce status and recent log entries."""
+    poller = get_poller()
+    running = poller._enforce_running if poller else False
+    enabled = db.get_setting("config_auto_enforce", "false") == "true"
+    failures = db.get_enforce_failures(since_hours=24)
+    recent = db.get_config_enforce_log(limit=10)
+    return {
+        "enabled": enabled,
+        "running": running,
+        "failure_count": len(failures),
+        "recent": recent,
+    }
+
+
+@app.get("/api/config-enforce/log", tags=["config"])
+async def get_config_enforce_log_api(
+    ip: str = None,
+    limit: int = 50,
+    session: dict = Depends(require_auth),
+):
+    """Get config enforcement log entries."""
+    entries = db.get_config_enforce_log(ip=ip, limit=limit)
+    return {"entries": entries}
 
 
 def _strip_empty_prefill_value(value):
@@ -5415,7 +5494,7 @@ async def get_config_prefill(category: str, session: dict = Depends(require_auth
 
     Only returns data if no saved template exists for this category.
     """
-    existing = db.get_config_template_by_category(category)
+    existing = db.get_config_template_by_category(category, scope="global")
     if existing:
         return {"prefilled": False, "reason": "template_exists"}
 
@@ -5429,7 +5508,8 @@ async def get_config_prefill(category: str, session: dict = Depends(require_auth
         "ntp": ["services", "ntp"],
         "radius": ["system", "auth"],
         "users": ["system", "users"],
-        "discovery": ["services", "discovery"],
+        "syslog": ["services", "syslog"],
+        "watchdog": ["services", "watchdog"],
     }
 
     path = section_map.get(category)

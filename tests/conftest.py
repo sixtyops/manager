@@ -151,6 +151,7 @@ def memory_db():
             details TEXT,
             job_id TEXT
         );
+        CREATE INDEX idx_schedule_log_timestamp ON schedule_log(timestamp DESC);
         CREATE TABLE rollout_devices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             rollout_id INTEGER NOT NULL,
@@ -171,6 +172,8 @@ def memory_db():
             bank_mode TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE INDEX idx_device_durations_job ON device_durations(job_id);
+        CREATE INDEX idx_device_durations_created ON device_durations(created_at);
         CREATE TABLE device_update_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             job_id TEXT,
@@ -214,9 +217,24 @@ def memory_db():
             form_data TEXT,
             description TEXT,
             enabled INTEGER DEFAULT 1,
+            scope TEXT DEFAULT 'global',
+            site_id INTEGER REFERENCES tower_sites(id),
+            device_types TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE config_enforce_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL,
+            device_type TEXT,
+            phase TEXT,
+            status TEXT NOT NULL,
+            error TEXT,
+            template_ids TEXT,
+            enforced_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_config_enforce_ip ON config_enforce_log(ip, enforced_at DESC);
 
         CREATE TABLE radius_users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -341,6 +359,18 @@ def memory_db():
         "radius_server_ldap_bind_password": "",
         "radius_server_ldap_base_dn": "",
         "radius_server_ldap_user_filter": "(&(objectClass=user)(sAMAccountName={username}))",
+        # Poller concurrency
+        "poller_concurrency": "10",
+        # Device alerts
+        "alert_device_offline_enabled": "true",
+        "alert_device_offline_cooldown_minutes": "60",
+        # Generic webhooks
+        "webhook_enabled": "false",
+        "webhook_url": "",
+        "webhook_method": "POST",
+        "webhook_headers": "{}",
+        "webhook_secret": "",
+        "webhook_events": "job_completed,job_failed,device_offline,device_recovered",
     }
     for key, value in defaults.items():
         conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))

@@ -3,8 +3,24 @@ name: CI
 on:
   push:
     branches: [main, dev]
+    paths-ignore:
+      - 'docs/**'
+      - 'website/**'
+      - '*.md'
+      - '.context/**'
+      - 'LICENSE'
   pull_request:
     branches: [main, dev]
+    paths-ignore:
+      - 'docs/**'
+      - 'website/**'
+      - '*.md'
+      - '.context/**'
+      - 'LICENSE'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -24,7 +40,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - run: docker build -t firmware-updater:ci .
-
   appliance-check:
     runs-on: [self-hosted, linux, x64, proxmox]
     if: github.event_name == 'pull_request'
