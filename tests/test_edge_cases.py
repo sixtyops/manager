@@ -130,8 +130,10 @@ class TestSetupPasswordRace:
         t2 = threading.Thread(target=do_setup, args=(1, "password_B2"))
         t1.start()
         t2.start()
-        t1.join()
-        t2.join()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+        assert not t1.is_alive(), "Thread t1 hung"
+        assert not t2.is_alive(), "Thread t2 hung"
 
         # Exactly one should return True
         assert results.count(True) == 1
