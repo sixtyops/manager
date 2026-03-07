@@ -456,12 +456,37 @@ def client(mock_db):
         "error": None,
     })
 
+    mock_scheduler = MagicMock()
+    mock_scheduler.start = AsyncMock()
+    mock_scheduler.stop = AsyncMock()
+    mock_license_validator = MagicMock()
+    mock_license_validator.start = AsyncMock()
+    mock_license_validator.stop = AsyncMock()
+    mock_radius_svc = MagicMock()
+    mock_radius_svc.run_forever = AsyncMock()
+    mock_radius_runtime = MagicMock()
+    mock_radius_runtime.start = AsyncMock()
+    mock_radius_runtime.stop = AsyncMock()
+    mock_radius_runtime.reload = AsyncMock()
+    mock_radius_runtime.ensure_healthy = AsyncMock()
+
+    async def _noop_supervised_task(name, coro_func, *args, **kwargs):
+        """No-op replacement so supervised background loops don't spin."""
+        pass
+
     with patch("updater.app.init_poller", return_value=mock_poller), \
          patch("updater.app.get_poller", return_value=mock_poller), \
          patch("updater.app.init_fetcher", return_value=mock_fetcher), \
          patch("updater.app.get_fetcher", return_value=mock_fetcher), \
          patch("updater.app.init_checker", return_value=mock_checker), \
          patch("updater.app.get_checker", return_value=mock_checker), \
+         patch("updater.app.init_scheduler", return_value=mock_scheduler), \
+         patch("updater.app.init_license_validator", return_value=mock_license_validator), \
+         patch("updater.app.init_radius_service", return_value=mock_radius_svc), \
+         patch("updater.app.builtin_radius.get_runtime", return_value=mock_radius_runtime), \
+         patch("updater.app.ensure_admin_user"), \
+         patch("updater.app._recover_crashed_device_jobs"), \
+         patch("updater.app._supervised_task", side_effect=_noop_supervised_task), \
          patch("updater.app.verify_update_on_startup", new=AsyncMock()), \
          patch("updater.database.cleanup_expired_sessions"):
         from updater.app import app
