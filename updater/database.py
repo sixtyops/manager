@@ -600,6 +600,10 @@ def init_db():
             "autoupdate_release_notes": "",
             # Pre-update reboot
             "pre_update_reboot": "true",
+            # Smoke test strict mode: fail updates when smoke tests detect issues
+            "smoke_test_strict": "false",
+            # Auto-cancel rollout on canary failure
+            "canary_auto_cancel": "false",
             # Config polling
             "config_poll_enabled": "true",
             "config_poll_interval_hours": "24",

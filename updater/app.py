@@ -1794,6 +1794,7 @@ _SETTINGS_WRITABLE = {
     "autoupdate_enabled", "release_channel",
     "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
     "pre_update_reboot",
+    "smoke_test_strict", "canary_auto_cancel",
     # Webhook settings
     "webhook_enabled", "webhook_url", "webhook_method",
     "webhook_headers", "webhook_secret", "webhook_events",
@@ -4623,6 +4624,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             logger.warning(f"Failed to save device duration for {ip}: {e}")
 
         # Post-update smoke tests
+        strict_mode = db.get_setting("smoke_test_strict", "false") == "true"
+        smoke_failed = False
         if client:
             try:
                 progress_callback(ip, "Smoke testing...")
@@ -4636,15 +4639,32 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     warning_summary = "; ".join(smoke_result.warnings[:3])
                     if len(warning_summary) > 200:
                         warning_summary = warning_summary[:197] + "..."
-                    device_status.progress_message = f"{prefix}Updated to {result.new_version} (warnings: {warning_summary})"
-                    logger.warning(f"Smoke test warnings for {ip}: {smoke_result.warnings}")
+                    if strict_mode:
+                        smoke_failed = True
+                        device_status.status = "failed"
+                        device_status.error = f"Smoke test failed: {warning_summary}"
+                        device_status.progress_message = f"{prefix}Updated to {result.new_version} (FAILED smoke tests: {warning_summary})"
+                        logger.warning(f"Smoke test STRICT FAILURE for {ip}: {smoke_result.warnings}")
+                    else:
+                        device_status.progress_message = f"{prefix}Updated to {result.new_version} (warnings: {warning_summary})"
+                        logger.warning(f"Smoke test warnings for {ip}: {smoke_result.warnings}")
                 else:
                     device_status.progress_message = f"{prefix}Updated to {result.new_version} (smoke tests passed)"
             except Exception as e:
                 logger.warning(f"Smoke test error for {ip} (non-fatal): {e}")
                 device_status.smoke_warnings = [f"Smoke test error: {e}"]
-            # Restore status — progress_callback sets it to smoke_testing
-            device_status.status = "success"
+            # Restore status unless strict mode failed it
+            if not smoke_failed:
+                device_status.status = "success"
+
+        # Canary auto-cancel: if this device was in the canary phase and failed,
+        # auto-cancel the rollout to prevent the issue from spreading
+        if smoke_failed and db.get_setting("canary_auto_cancel", "false") == "true":
+            rollout = db.get_current_rollout()
+            if rollout and rollout["phase"] == "canary" and rollout["status"] == "active":
+                logger.warning(f"Auto-cancelling rollout {rollout['id']}: canary device {ip} failed smoke tests")
+                db.pause_rollout(rollout["id"], f"Auto-cancelled: canary device {ip} failed smoke tests")
+                _request_job_cancel(job, f"Canary auto-cancel: {ip} failed smoke tests")
     else:
         device_status.status = "failed"
         device_status.error = result.error
