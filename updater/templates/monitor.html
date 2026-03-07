@@ -327,6 +327,14 @@
             <div id="drawerHandle-config" class="hidden u-flex-center-gap8 u-flex-1">
                 <span class="status-bar-label">Config Templates</span>
                 <span class="status-badge status-bar-badge" id="configTemplateBadge">0 active</span>
+                <label class="status-bar-toggle" onclick="event.stopPropagation();" title="Auto-enforce config compliance">
+                    <input type="checkbox" id="configAutoEnforceToggle" onchange="toggleConfigAutoEnforce(this.checked)">
+                    <span class="slider round"></span>
+                </label>
+                <span class="status-bar-muted" style="font-size:0.7rem;">Auto-Enforce</span>
+                <span class="status-badge" id="configEnforceStatusBadge" style="display:none;font-size:0.65rem;"></span>
+                <div class="status-bar-phases" id="configEnforcePhases" style="display:none;"></div>
+                <span class="status-bar-muted" id="configEnforceProgress" style="display:none;"></span>
                 <div class="u-flex-center-gap6 u-ml-auto">
                     <button class="btn btn-sm" onclick="checkCompliance();event.stopPropagation();">Check Compliance</button>
                     <button class="btn btn-sm btn-primary hidden" id="configPushBtn" onclick="showConfigPushDialog();event.stopPropagation();" >Push to Devices</button>
@@ -525,9 +533,13 @@
                                 <span>NTP</span>
                                 <span class="config-section-status" id="cfgStatus-ntp"></span>
                             </button>
-                            <button type="button" class="config-category-item" id="cfgCategoryBtn-discovery" onclick="selectConfigCategory('discovery')">
-                                <span>Discovery</span>
-                                <span class="config-section-status" id="cfgStatus-discovery"></span>
+                            <button type="button" class="config-category-item" id="cfgCategoryBtn-syslog" onclick="selectConfigCategory('syslog')">
+                                <span>Syslog</span>
+                                <span class="config-section-status" id="cfgStatus-syslog"></span>
+                            </button>
+                            <button type="button" class="config-category-item" id="cfgCategoryBtn-watchdog" onclick="selectConfigCategory('watchdog')">
+                                <span>Watchdog</span>
+                                <span class="config-section-status" id="cfgStatus-watchdog"></span>
                             </button>
                             <button type="button" class="config-category-item" id="cfgCategoryBtn-custom" onclick="selectConfigCategory('custom')">
                                 <span>Custom JSON</span>
@@ -600,13 +612,49 @@
                                 </div>
                             </div>
 
-                            <div class="config-section config-category-panel hidden" id="cfgPanel-discovery">
+                            <div class="config-section config-category-panel hidden" id="cfgPanel-syslog">
                                 <div class="config-section-body">
-                                    <div style="display:flex;gap:12px;flex-wrap:wrap;">
-                                        <label><input type="checkbox" id="cfgDiscLldp"> LLDP</label>
-                                        <label><input type="checkbox" id="cfgDiscMndp"> MNDP</label>
-                                        <label><input type="checkbox" id="cfgDiscCdp"> CDP</label>
-                                        <label><input type="checkbox" id="cfgDiscLldpServer"> LLDP Server</label>
+                                    <label><input type="checkbox" id="cfgSyslogEnabled"> Enable Remote Syslog</label>
+                                    <div style="display:grid;grid-template-columns:1fr 100px 100px;gap:8px;margin-top:6px;">
+                                        <div>
+                                            <label>Server IP</label>
+                                            <input type="text" id="cfgSyslogServer" placeholder="192.168.1.100" class="u-w-full">
+                                        </div>
+                                        <div>
+                                            <label>Port</label>
+                                            <input type="number" id="cfgSyslogPort" value="514" class="u-w-full">
+                                        </div>
+                                        <div>
+                                            <label>Protocol</label>
+                                            <select id="cfgSyslogProtocol" class="u-w-full">
+                                                <option value="udp">UDP</option>
+                                                <option value="tcp">TCP</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="config-section config-category-panel hidden" id="cfgPanel-watchdog">
+                                <div class="config-section-body">
+                                    <label><input type="checkbox" id="cfgWatchdogEnabled"> Enable Ping Watchdog</label>
+                                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:6px;">
+                                        <div>
+                                            <label>Interval (sec)</label>
+                                            <input type="number" id="cfgWatchdogInterval" value="300" class="u-w-full">
+                                        </div>
+                                        <div>
+                                            <label>Startup Delay (sec)</label>
+                                            <input type="number" id="cfgWatchdogStartupDelay" value="300" class="u-w-full">
+                                        </div>
+                                        <div>
+                                            <label>Failure Count</label>
+                                            <input type="number" id="cfgWatchdogFailureCount" value="3" class="u-w-full">
+                                        </div>
+                                    </div>
+                                    <div style="margin-top:6px;">
+                                        <label>Ping Targets (comma-separated IPs)</label>
+                                        <input type="text" id="cfgWatchdogPingTargets" placeholder="8.8.8.8, 1.1.1.1" class="u-w-full">
                                     </div>
                                 </div>
                             </div>
@@ -620,6 +668,13 @@
                     </div>
                     <div class="config-editor-actions">
                         <span class="u-text-xs-muted" id="cfgEditorHint">Editing SNMP</span>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <select id="cfgScopeSelect" style="font-size:0.75rem;padding:2px 6px;" onchange="onConfigScopeChange()">
+                                <option value="global">Global</option>
+                            </select>
+                            <select id="cfgSiteSelect" style="font-size:0.75rem;padding:2px 6px;display:none;">
+                            </select>
+                        </div>
                         <button class="btn btn-sm btn-primary" onclick="saveActiveConfigCategory(event)">Save Category</button>
                     </div>
                 </div>
@@ -1676,6 +1731,8 @@
                     handleConfigPushUpdate(message);
                 } else if (message.type === 'config_push_complete') {
                     handleConfigPushComplete(message);
+                } else if (message.type === 'config_enforce_status') {
+                    handleConfigEnforceStatus(message);
                 } else if (message.type === 'radius_rollout_status') {
                     renderRadiusRollout(message.rollout || null);
                 } else if (message.type === 'license_state') {
@@ -5742,8 +5799,8 @@
         let configTemplates = [];
         let configExpandState = new Map();
         let configPushingDevices = new Set();
-        const CONFIG_CATEGORIES = ['snmp', 'users', 'radius', 'ntp', 'discovery', 'custom'];
-        const CONFIG_PREFILL_CATEGORIES = ['snmp', 'users', 'radius', 'ntp', 'discovery'];
+        const CONFIG_CATEGORIES = ['snmp', 'users', 'radius', 'ntp', 'syslog', 'watchdog', 'custom'];
+        const CONFIG_PREFILL_CATEGORIES = ['snmp', 'users', 'radius', 'ntp', 'syslog', 'watchdog'];
         let activeConfigCategory = 'snmp';
         let configPrefillLoaded = new Set();
         let configSuggestedCategories = new Set();
@@ -5772,6 +5829,8 @@
                 renderConfigTable();
                 updateConfigStats();
                 loadConfigTemplateUI();
+                loadEnforceStatus();
+                populateScopeSelector();
             } catch (e) {
                 console.error('Failed to load config data:', e);
             }
@@ -6034,7 +6093,8 @@
             if (category === 'radius') return 'RADIUS';
             if (category === 'ntp') return 'NTP';
             if (category === 'custom') return 'Custom JSON';
-            if (category === 'discovery') return 'Discovery';
+            if (category === 'syslog') return 'Syslog';
+            if (category === 'watchdog') return 'Watchdog';
             return category.charAt(0).toUpperCase() + category.slice(1);
         }
 
@@ -6117,11 +6177,18 @@
                     if (formData.port) document.getElementById('cfgRadiusPort').value = formData.port;
                     if (formData.secret) document.getElementById('cfgRadiusSecret').value = formData.secret;
                     break;
-                case 'discovery':
-                    if (formData.lldp !== undefined) document.getElementById('cfgDiscLldp').checked = formData.lldp;
-                    if (formData.mndp !== undefined) document.getElementById('cfgDiscMndp').checked = formData.mndp;
-                    if (formData.cdp !== undefined) document.getElementById('cfgDiscCdp').checked = formData.cdp;
-                    if (formData.lldp_server !== undefined) document.getElementById('cfgDiscLldpServer').checked = formData.lldp_server;
+                case 'syslog':
+                    if (formData.enabled !== undefined) document.getElementById('cfgSyslogEnabled').checked = formData.enabled;
+                    if (formData.server) document.getElementById('cfgSyslogServer').value = formData.server;
+                    if (formData.port) document.getElementById('cfgSyslogPort').value = formData.port;
+                    if (formData.protocol) document.getElementById('cfgSyslogProtocol').value = formData.protocol;
+                    break;
+                case 'watchdog':
+                    if (formData.enabled !== undefined) document.getElementById('cfgWatchdogEnabled').checked = formData.enabled;
+                    if (formData.interval) document.getElementById('cfgWatchdogInterval').value = formData.interval;
+                    if (formData.startup_delay) document.getElementById('cfgWatchdogStartupDelay').value = formData.startup_delay;
+                    if (formData.failure_count) document.getElementById('cfgWatchdogFailureCount').value = formData.failure_count;
+                    if (formData.ping_targets) document.getElementById('cfgWatchdogPingTargets').value = Array.isArray(formData.ping_targets) ? formData.ping_targets.join(', ') : formData.ping_targets;
                     break;
                 case 'users':
                     const container = document.getElementById('cfgUserRows');
@@ -6184,11 +6251,18 @@
                         }
                         break;
                     }
-                    case 'discovery':
-                        if (prefillData.lldp !== undefined) document.getElementById('cfgDiscLldp').checked = prefillData.lldp;
-                        if (prefillData.mndp !== undefined) document.getElementById('cfgDiscMndp').checked = prefillData.mndp;
-                        if (prefillData.cdp !== undefined) document.getElementById('cfgDiscCdp').checked = prefillData.cdp;
-                        if (prefillData.lldp_server !== undefined) document.getElementById('cfgDiscLldpServer').checked = prefillData.lldp_server;
+                    case 'syslog':
+                        if (prefillData.enabled !== undefined) document.getElementById('cfgSyslogEnabled').checked = prefillData.enabled;
+                        if (prefillData.server) document.getElementById('cfgSyslogServer').value = prefillData.server;
+                        if (prefillData.port) document.getElementById('cfgSyslogPort').value = prefillData.port;
+                        if (prefillData.protocol) document.getElementById('cfgSyslogProtocol').value = prefillData.protocol;
+                        break;
+                    case 'watchdog':
+                        if (prefillData.enabled !== undefined) document.getElementById('cfgWatchdogEnabled').checked = prefillData.enabled;
+                        if (prefillData.interval) document.getElementById('cfgWatchdogInterval').value = prefillData.interval;
+                        if (prefillData.startup_delay) document.getElementById('cfgWatchdogStartupDelay').value = prefillData.startup_delay;
+                        if (prefillData.failure_count) document.getElementById('cfgWatchdogFailureCount').value = prefillData.failure_count;
+                        if (prefillData.ping_targets) document.getElementById('cfgWatchdogPingTargets').value = Array.isArray(prefillData.ping_targets) ? prefillData.ping_targets.join(', ') : prefillData.ping_targets;
                         break;
                 }
                 configSuggestedCategories.add(category);
@@ -6250,11 +6324,18 @@
                     port: document.getElementById('cfgRadiusPort').value,
                     secret: document.getElementById('cfgRadiusSecret').value,
                 };
-                case 'discovery': return {
-                    lldp: document.getElementById('cfgDiscLldp').checked,
-                    mndp: document.getElementById('cfgDiscMndp').checked,
-                    cdp: document.getElementById('cfgDiscCdp').checked,
-                    lldp_server: document.getElementById('cfgDiscLldpServer').checked,
+                case 'syslog': return {
+                    enabled: document.getElementById('cfgSyslogEnabled').checked,
+                    server: document.getElementById('cfgSyslogServer').value,
+                    port: parseInt(document.getElementById('cfgSyslogPort').value) || 514,
+                    protocol: document.getElementById('cfgSyslogProtocol').value,
+                };
+                case 'watchdog': return {
+                    enabled: document.getElementById('cfgWatchdogEnabled').checked,
+                    interval: parseInt(document.getElementById('cfgWatchdogInterval').value) || 300,
+                    startup_delay: parseInt(document.getElementById('cfgWatchdogStartupDelay').value) || 300,
+                    failure_count: parseInt(document.getElementById('cfgWatchdogFailureCount').value) || 3,
+                    ping_targets: document.getElementById('cfgWatchdogPingTargets').value.split(',').map(s => s.trim()).filter(Boolean),
                 };
                 case 'users': {
                     const rows = document.querySelectorAll('.config-user-row');
@@ -6296,11 +6377,18 @@
                         auth_secret: formData.secret,
                     }
                 }}};
-                case 'discovery': return {services: {discovery: {
-                    lldp: formData.lldp,
-                    mndp: formData.mndp,
-                    cdp: formData.cdp,
-                    lldp_server: formData.lldp_server,
+                case 'syslog': return {services: {syslog: {
+                    enabled: formData.enabled,
+                    server: formData.server,
+                    port: formData.port,
+                    protocol: formData.protocol,
+                }}};
+                case 'watchdog': return {services: {watchdog: {
+                    enabled: formData.enabled,
+                    interval: formData.interval,
+                    startup_delay: formData.startup_delay,
+                    failure_count: formData.failure_count,
+                    ping_targets: formData.ping_targets,
                 }}};
                 case 'users': return {system: {users: (formData.users || []).map(u => ({
                     username: u.username,
@@ -6330,24 +6418,28 @@
             const existing = configTemplates.find(t => t.category === category);
             const name = category.charAt(0).toUpperCase() + category.slice(1) + ' Standard';
 
+            // Parse scope from selector
+            const scopeVal = document.getElementById('cfgScopeSelect')?.value || 'global';
+            let scope = 'global', site_id = null;
+            if (scopeVal.startsWith('site:')) {
+                scope = 'site';
+                site_id = parseInt(scopeVal.split(':')[1]);
+            }
+
             try {
                 let resp;
+                const payload = {config_fragment: fragment, form_data: formData, scope, site_id};
                 if (existing) {
                     resp = await fetch(`/api/config-templates/${existing.id}`, {
                         method: 'PUT',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({config_fragment: fragment, form_data: formData}),
+                        body: JSON.stringify(payload),
                     });
                 } else {
                     resp = await fetch('/api/config-templates', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            name,
-                            category,
-                            config_fragment: fragment,
-                            form_data: formData,
-                        }),
+                        body: JSON.stringify({name, category, ...payload}),
                     });
                 }
 
@@ -6404,6 +6496,7 @@
                         <label style="font-size:0.8rem;font-weight:500;display:block;margin-bottom:6px;">Push to:</label>
                         <select id="pushScope" class="u-w-full">
                             <option value="all_aps">All APs</option>
+                            <option value="all_switches">All Switches</option>
                             <option value="all_cpes">All CPEs</option>
                             <option value="all">All Devices</option>
                         </select>
@@ -6428,8 +6521,12 @@
                     if (site.id !== null && (scope === 'all' || scope === 'all_aps')) {
                         targets.push({type: 'site', id: site.id});
                     }
+                    if (site.id !== null && (scope === 'all' || scope === 'all_switches')) {
+                        for (const sw of (site.switches || [])) {
+                            if (sw.ip) targets.push({type: 'switch', ip: sw.ip});
+                        }
+                    }
                     if (site.id === null) {
-                        // Unassigned - add individual APs
                         for (const ap of (site.aps || [])) {
                             if (ap.ip && (scope === 'all' || scope === 'all_aps')) targets.push({type: 'ap', ip: ap.ip});
                             if (scope === 'all' || scope === 'all_cpes') {
@@ -6437,6 +6534,9 @@
                                     if (cpe.ip) targets.push({type: 'cpe', ip: cpe.ip});
                                 }
                             }
+                        }
+                        for (const sw of (site.switches || [])) {
+                            if (sw.ip && (scope === 'all' || scope === 'all_switches')) targets.push({type: 'switch', ip: sw.ip});
                         }
                     }
                     if (scope === 'all_cpes' && site.id !== null) {
@@ -6450,6 +6550,12 @@
             }
 
             modal.remove();
+
+            const confirmed = await showConfirmDialog(
+                `Push ${templateIds.length} template(s) to ${targets.length} target(s)?`,
+                {title: 'Confirm Config Push'}
+            );
+            if (!confirmed) return;
 
             try {
                 const resp = await fetch('/api/config-push', {
@@ -6504,6 +6610,104 @@
             if (currentMainTab === 'config') loadConfigData();
             const summary = `Config push complete: ${msg.success_count} succeeded, ${msg.failed_count} failed`;
             console.log(summary);
+        }
+
+        // ── Config Auto-Enforce ──
+
+        async function toggleConfigAutoEnforce(enabled) {
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({config_auto_enforce: enabled ? 'true' : 'false'}),
+                });
+                showToast(enabled ? 'Auto-enforce enabled' : 'Auto-enforce disabled');
+                updateEnforceStatusUI({enabled, running: false});
+            } catch (e) {
+                showToast('Failed to toggle auto-enforce: ' + e.message);
+            }
+        }
+
+        async function loadEnforceStatus() {
+            try {
+                const resp = await fetch('/api/config-enforce/status');
+                const data = await resp.json();
+                const toggle = document.getElementById('configAutoEnforceToggle');
+                if (toggle) toggle.checked = data.enabled;
+                updateEnforceStatusUI(data);
+            } catch (e) {
+                console.debug('Failed to load enforce status:', e);
+            }
+        }
+
+        function updateEnforceStatusUI(data) {
+            const badge = document.getElementById('configEnforceStatusBadge');
+            const phases = document.getElementById('configEnforcePhases');
+            const progress = document.getElementById('configEnforceProgress');
+            if (!badge) return;
+
+            if (data.running) {
+                badge.style.display = '';
+                badge.textContent = data.phase ? `Phase: ${data.phase}` : 'Running';
+                badge.className = 'status-badge status-badge-info';
+
+                if (data.phase && phases) {
+                    const PHASES = ['canary', 'pct10', 'pct50', 'pct100'];
+                    const phaseIdx = PHASES.indexOf(data.phase);
+                    phases.style.display = 'flex';
+                    phases.innerHTML = PHASES.map((p, i) => {
+                        let cls = 'bar-phase-dot';
+                        if (i < phaseIdx) cls += ' completed';
+                        else if (i === phaseIdx) cls += ' active';
+                        return `<span class="${cls}" title="${p}"></span>`;
+                    }).join('');
+                }
+
+                if (progress && data.completed !== undefined) {
+                    progress.style.display = '';
+                    progress.textContent = `${data.completed}/${data.total}`;
+                }
+            } else if (data.enabled) {
+                badge.style.display = '';
+                badge.textContent = data.failure_count ? `${data.failure_count} failures` : 'Idle';
+                badge.className = data.failure_count ? 'status-badge status-badge-warning' : 'status-badge status-badge-success';
+                if (phases) phases.style.display = 'none';
+                if (progress) progress.style.display = 'none';
+            } else {
+                badge.style.display = 'none';
+                if (phases) phases.style.display = 'none';
+                if (progress) progress.style.display = 'none';
+            }
+        }
+
+        function handleConfigEnforceStatus(msg) {
+            updateEnforceStatusUI({
+                enabled: true,
+                running: msg.status === 'running',
+                phase: msg.phase,
+                total: msg.total,
+                completed: msg.completed,
+                failure_count: 0,
+            });
+        }
+
+        function onConfigScopeChange() {
+            const scope = document.getElementById('cfgScopeSelect').value;
+            const siteSelect = document.getElementById('cfgSiteSelect');
+            if (siteSelect) siteSelect.style.display = scope === 'site' ? '' : 'none';
+        }
+
+        function populateScopeSelector() {
+            const select = document.getElementById('cfgScopeSelect');
+            if (!select) return;
+            select.innerHTML = '<option value="global">Global</option>';
+            if (topology && topology.sites) {
+                for (const site of topology.sites) {
+                    if (site.id !== null) {
+                        select.innerHTML += `<option value="site:${site.id}">Site: ${escapeHtml(site.name)}</option>`;
+                    }
+                }
+            }
         }
 
         // ── User Management ──

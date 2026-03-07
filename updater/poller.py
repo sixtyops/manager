@@ -3,13 +3,17 @@
 import asyncio
 import json
 import logging
+import math
 from datetime import datetime
 from typing import Callable, Optional
 
 from . import database as db
 from . import radius_config
+from .config_utils import deep_merge, fragment_matches, check_config_compliance
 from .tachyon import TachyonClient
 from .models import SignalHealth
+
+PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +31,7 @@ class NetworkPoller:
         self._task: Optional[asyncio.Task] = None
         self._clients: dict[str, TachyonClient] = {}  # IP -> authenticated client
         self._last_config_poll: Optional[datetime] = None
+        self._enforce_running = False
 
     async def start(self):
         """Start the background polling loop."""
@@ -485,6 +490,10 @@ class NetworkPoller:
 
             logger.info("Starting scheduled config poll")
             await self.poll_all_configs()
+
+            # After polling, check if auto-enforce is enabled
+            if db.get_setting("config_auto_enforce", "false") == "true":
+                await self._auto_enforce_compliance()
         except Exception as e:
             logger.error(f"Error checking config poll schedule: {e}")
 
@@ -590,6 +599,197 @@ class NetworkPoller:
 
         except Exception as e:
             logger.debug(f"Config poll: error fetching config from {ip}: {e}")
+
+    # ------------------------------------------------------------------
+    # Config auto-enforce
+    # ------------------------------------------------------------------
+
+    async def _auto_enforce_compliance(self):
+        """Detect non-compliant devices and push corrections in phases."""
+        if self._enforce_running:
+            logger.debug("Config enforce: already running, skipping")
+            return
+
+        self._enforce_running = True
+        try:
+            await self._run_enforce_phases()
+        except Exception as e:
+            logger.error(f"Config enforce error: {e}")
+        finally:
+            self._enforce_running = False
+
+    async def _run_enforce_phases(self):
+        """Core enforce loop: find non-compliant devices, push in phases."""
+        # Get effective templates per device (global + site overrides resolved)
+        effective = db.get_all_effective_templates()
+        if not effective:
+            return
+
+        # Get latest configs for all devices
+        all_configs = db.get_all_latest_configs()
+
+        # Find non-compliant devices
+        non_compliant = []  # [(ip, device_type, templates)]
+        for ip, templates in effective.items():
+            if not templates:
+                continue
+            config_row = all_configs.get(ip)
+            if not config_row:
+                continue  # No config snapshot yet — skip
+            try:
+                config_data = json.loads(config_row["config_json"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not check_config_compliance(config_data, templates):
+                # Determine device type
+                ap = db.get_access_point(ip)
+                device_type = "ap" if ap else "switch"
+                non_compliant.append((ip, device_type, templates))
+
+        if not non_compliant:
+            logger.info("Config enforce: all devices compliant")
+            if self.broadcast_func:
+                await self.broadcast_func({
+                    "type": "config_enforce_status",
+                    "status": "idle",
+                    "message": "All devices compliant",
+                })
+            return
+
+        logger.info(f"Config enforce: {len(non_compliant)} non-compliant device(s)")
+
+        try:
+            cooldown_minutes = int(db.get_setting("config_enforce_cooldown_minutes", "10"))
+        except (TypeError, ValueError):
+            cooldown_minutes = 10
+
+        remaining = list(non_compliant)
+        for phase in PHASE_ORDER:
+            if not remaining:
+                break
+
+            # Check if auto-enforce was toggled off
+            if db.get_setting("config_auto_enforce", "false") != "true":
+                logger.info("Config enforce: disabled mid-run, stopping")
+                if self.broadcast_func:
+                    await self.broadcast_func({
+                        "type": "config_enforce_status",
+                        "status": "stopped",
+                        "message": "Auto-enforce disabled",
+                    })
+                return
+
+            # Select batch for this phase
+            batch_size = self._phase_batch_size(phase, len(non_compliant))
+            batch = remaining[:batch_size]
+
+            logger.info(f"Config enforce phase {phase}: {len(batch)} device(s)")
+            if self.broadcast_func:
+                await self.broadcast_func({
+                    "type": "config_enforce_status",
+                    "status": "running",
+                    "phase": phase,
+                    "total": len(non_compliant),
+                    "batch_size": len(batch),
+                    "completed": len(non_compliant) - len(remaining),
+                })
+
+            # Push to batch concurrently
+            sem = asyncio.Semaphore(5)
+            results = await asyncio.gather(
+                *[self._enforce_device(ip, dtype, templates, phase, sem)
+                  for ip, dtype, templates in batch],
+                return_exceptions=True,
+            )
+
+            # Remove successful devices from remaining
+            success_ips = set()
+            for i, result in enumerate(results):
+                if result is True:
+                    success_ips.add(batch[i][0])
+            remaining = [(ip, dt, t) for ip, dt, t in remaining
+                         if ip not in success_ips and (ip, dt, t) not in batch]
+            # Also remove failed devices from remaining (don't retry)
+            batch_ips = {b[0] for b in batch}
+            remaining = [(ip, dt, t) for ip, dt, t in remaining
+                         if ip not in batch_ips]
+
+            # Cooldown between phases (skip after last phase)
+            if remaining and phase != PHASE_ORDER[-1]:
+                logger.info(f"Config enforce: cooldown {cooldown_minutes}m before next phase")
+                await asyncio.sleep(cooldown_minutes * 60)
+
+        logger.info("Config enforce: completed all phases")
+        if self.broadcast_func:
+            await self.broadcast_func({
+                "type": "config_enforce_status",
+                "status": "idle",
+                "message": "Enforce completed",
+            })
+
+    def _phase_batch_size(self, phase: str, total: int) -> int:
+        """Return batch size for a phase."""
+        if phase == "canary":
+            return 1
+        elif phase == "pct10":
+            return max(1, math.ceil(total * 0.1))
+        elif phase == "pct50":
+            return max(1, math.ceil(total * 0.5))
+        else:
+            return total
+
+    async def _enforce_device(self, ip: str, device_type: str,
+                              templates: list[dict], phase: str,
+                              sem: asyncio.Semaphore) -> bool:
+        """Push templates to a single device. Returns True on success."""
+        async with sem:
+            try:
+                # Get device credentials
+                device = db.get_access_point(ip)
+                if not device:
+                    device = db.get_switch(ip)
+                if not device:
+                    raise RuntimeError("Device not found in database")
+
+                client = TachyonClient(ip, device["username"], device["password"], timeout=15)
+                login_result = await client.login()
+                if login_result is not True:
+                    raise RuntimeError(f"Login failed: {login_result}")
+
+                current_config = await client.get_config()
+                if current_config is None:
+                    raise RuntimeError("Failed to fetch current config")
+
+                # Merge all template fragments into current config
+                merged = current_config
+                for t in templates:
+                    frag = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
+                    merged = deep_merge(merged, frag)
+
+                # Dry-run validation
+                dry_result = await client.apply_config(merged, dry_run=True)
+                if not dry_result.get("success"):
+                    error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run failed"))
+                    raise RuntimeError(f"Dry run rejected: {error_msg}")
+
+                # Apply
+                result = await client.apply_config(merged)
+                if not result.get("success"):
+                    error_msg = result.get("error", result.get("raw_response", "Apply failed"))
+                    raise RuntimeError(f"Apply failed: {error_msg}")
+
+                template_ids = [t["id"] for t in templates]
+                db.save_config_enforce_log(ip, device_type, phase, "success",
+                                           template_ids=template_ids)
+                logger.info(f"Config enforce: {ip} corrected successfully ({phase})")
+                return True
+
+            except Exception as e:
+                template_ids = [t["id"] for t in templates]
+                db.save_config_enforce_log(ip, device_type, phase, "failed",
+                                           error=str(e), template_ids=template_ids)
+                logger.warning(f"Config enforce: {ip} failed ({phase}): {e}")
+                return False
 
     def get_topology(self) -> dict:
         """Build topology dict from database."""

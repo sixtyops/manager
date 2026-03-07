@@ -91,6 +91,15 @@ def _migrate(db):
     if "notes" not in sw_columns:
         db.execute("ALTER TABLE switches ADD COLUMN notes TEXT DEFAULT NULL")
 
+    # Add scope/site_id/device_types columns to config_templates
+    ct_columns = [row[1] for row in db.execute("PRAGMA table_info(config_templates)").fetchall()]
+    if "scope" not in ct_columns:
+        db.execute("ALTER TABLE config_templates ADD COLUMN scope TEXT DEFAULT 'global'")
+    if "site_id" not in ct_columns:
+        db.execute("ALTER TABLE config_templates ADD COLUMN site_id INTEGER REFERENCES tower_sites(id)")
+    if "device_types" not in ct_columns:
+        db.execute("ALTER TABLE config_templates ADD COLUMN device_types TEXT")
+
     # Encrypt any plaintext device passwords
     _migrate_encrypt_passwords(db)
 
@@ -337,9 +346,24 @@ def init_db():
                 form_data TEXT,
                 description TEXT,
                 enabled INTEGER DEFAULT 1,
+                scope TEXT DEFAULT 'global',
+                site_id INTEGER REFERENCES tower_sites(id),
+                device_types TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS config_enforce_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip TEXT NOT NULL,
+                device_type TEXT,
+                phase TEXT,
+                status TEXT NOT NULL,
+                error TEXT,
+                template_ids TEXT,
+                enforced_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_config_enforce_ip ON config_enforce_log(ip, enforced_at DESC);
 
             CREATE TABLE IF NOT EXISTS radius_users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -509,6 +533,9 @@ def init_db():
             # Config polling
             "config_poll_enabled": "true",
             "config_poll_interval_hours": "24",
+            # Config auto-enforce
+            "config_auto_enforce": "false",
+            "config_enforce_cooldown_minutes": "10",
             # Vendor feature flags
             "mikrotik_enabled": "false",
             # License configuration
@@ -2012,13 +2039,16 @@ def cleanup_old_device_configs(max_per_device: int = 50):
 # Config Template operations
 
 def save_config_template(name: str, category: str, config_fragment: str,
-                         form_data: str = None, description: str = None) -> int:
+                         form_data: str = None, description: str = None,
+                         scope: str = "global", site_id: int = None,
+                         device_types: str = None) -> int:
     """Create a new config template. Returns the template ID."""
     with get_db() as db:
         cursor = db.execute(
-            """INSERT INTO config_templates (name, category, config_fragment, form_data, description)
-               VALUES (?, ?, ?, ?, ?)""",
-            (name, category, config_fragment, form_data, description)
+            """INSERT INTO config_templates
+               (name, category, config_fragment, form_data, description, scope, site_id, device_types)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (name, category, config_fragment, form_data, description, scope, site_id, device_types)
         )
         return cursor.lastrowid
 
@@ -2055,7 +2085,8 @@ def get_config_template_by_category(category: str) -> Optional[dict]:
 
 def update_config_template(template_id: int, **kwargs):
     """Update a config template."""
-    allowed = {"name", "category", "config_fragment", "form_data", "description", "enabled"}
+    allowed = {"name", "category", "config_fragment", "form_data", "description",
+               "enabled", "scope", "site_id", "device_types"}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return
@@ -2072,6 +2103,93 @@ def delete_config_template(template_id: int):
     """Delete a config template."""
     with get_db() as db:
         db.execute("DELETE FROM config_templates WHERE id = ?", (template_id,))
+
+
+def get_config_templates_for_device(ip: str, site_id: int = None) -> list[dict]:
+    """Return effective templates for a device: global + site overrides (site wins per category)."""
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT * FROM config_templates WHERE enabled = 1 ORDER BY category, id"
+        ).fetchall()
+        templates = [dict(row) for row in rows]
+
+    # Separate global and site-scoped templates
+    global_by_cat: dict[str, dict] = {}
+    site_by_cat: dict[str, dict] = {}
+    for t in templates:
+        scope = t.get("scope", "global")
+        if scope == "global":
+            global_by_cat[t["category"]] = t
+        elif scope == "site" and t.get("site_id") == site_id and site_id is not None:
+            site_by_cat[t["category"]] = t
+
+    # Merge: site overrides global per category
+    effective = {}
+    for cat in set(list(global_by_cat.keys()) + list(site_by_cat.keys())):
+        effective[cat] = site_by_cat.get(cat, global_by_cat.get(cat))
+
+    return [t for t in effective.values() if t is not None]
+
+
+def get_all_effective_templates() -> dict[str, list[dict]]:
+    """Return {ip: [templates]} for all devices, resolving global/site scope."""
+    with get_db() as db:
+        aps = db.execute("SELECT ip, tower_site_id FROM access_points WHERE enabled = 1").fetchall()
+        switches = db.execute("SELECT ip, tower_site_id FROM switches WHERE enabled = 1").fetchall()
+
+    result = {}
+    for row in list(aps) + list(switches):
+        ip = row["ip"]
+        site_id = row["tower_site_id"]
+        result[ip] = get_config_templates_for_device(ip, site_id)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Config enforce log
+# ---------------------------------------------------------------------------
+
+def save_config_enforce_log(ip: str, device_type: str, phase: str,
+                            status: str, error: str = None,
+                            template_ids: list[int] = None):
+    """Record a config enforcement action."""
+    with get_db() as db:
+        db.execute(
+            """INSERT INTO config_enforce_log
+               (ip, device_type, phase, status, error, template_ids)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (ip, device_type, phase, status, error,
+             json.dumps(template_ids) if template_ids else None)
+        )
+
+
+def get_config_enforce_log(ip: str = None, limit: int = 50) -> list[dict]:
+    """Get config enforcement log entries."""
+    with get_db() as db:
+        if ip:
+            rows = db.execute(
+                "SELECT * FROM config_enforce_log WHERE ip = ? ORDER BY enforced_at DESC LIMIT ?",
+                (ip, limit)
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT * FROM config_enforce_log ORDER BY enforced_at DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_enforce_failures(since_hours: int = 24) -> list[dict]:
+    """Get recent enforcement failures."""
+    cutoff = (datetime.now() - timedelta(hours=since_hours)).isoformat()
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT * FROM config_enforce_log
+               WHERE status = 'failed' AND enforced_at >= ?
+               ORDER BY enforced_at DESC""",
+            (cutoff,)
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 # ---------------------------------------------------------------------------

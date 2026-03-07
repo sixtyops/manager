@@ -214,9 +214,24 @@ def memory_db():
             form_data TEXT,
             description TEXT,
             enabled INTEGER DEFAULT 1,
+            scope TEXT DEFAULT 'global',
+            site_id INTEGER REFERENCES tower_sites(id),
+            device_types TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE config_enforce_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL,
+            device_type TEXT,
+            phase TEXT,
+            status TEXT NOT NULL,
+            error TEXT,
+            template_ids TEXT,
+            enforced_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_config_enforce_ip ON config_enforce_log(ip, enforced_at DESC);
 
         CREATE TABLE radius_users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
