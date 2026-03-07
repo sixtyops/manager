@@ -37,6 +37,15 @@ DEFAULT_TRAP_PORT = 162
 DEFAULT_COMMUNITY = "public"
 
 
+def is_pysnmp_available() -> bool:
+    """Check if pysnmp-lextudio is installed and importable."""
+    try:
+        import pysnmp.hlapi.v1arch.asyncio  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def is_valid_trap_host(host: str) -> bool:
     """Validate an SNMP trap destination (IP or hostname)."""
     if not host or not host.strip():
@@ -63,9 +72,13 @@ def _get_snmp_config() -> Optional[dict]:
     host = db.get_setting("snmp_trap_host", "")
     if not host:
         return None
+    try:
+        port = int(db.get_setting("snmp_trap_port", str(DEFAULT_TRAP_PORT)))
+    except (ValueError, TypeError):
+        port = DEFAULT_TRAP_PORT
     return {
         "host": host,
-        "port": int(db.get_setting("snmp_trap_port", str(DEFAULT_TRAP_PORT))),
+        "port": port,
         "community": db.get_setting("snmp_trap_community", DEFAULT_COMMUNITY),
         "version": db.get_setting("snmp_trap_version", "2c"),
     }
@@ -207,7 +220,7 @@ async def _send_with_retry(trap_oid: str, varbinds: list, config: dict,
             return
         if attempt < max_retries:
             await asyncio.sleep(2 ** attempt)
-    logger.warning("Failed to send SNMP trap after retries")
+    logger.error(f"SNMP trap delivery failed after {max_retries + 1} attempts to {config.get('host')}:{config.get('port')}")
 
 
 async def send_test_trap() -> tuple[bool, str]:
@@ -215,6 +228,9 @@ async def send_test_trap() -> tuple[bool, str]:
 
     Returns (success, message) tuple.
     """
+    if not is_pysnmp_available():
+        return False, "pysnmp-lextudio is not installed. Install with: pip install pysnmp-lextudio"
+
     config = _get_snmp_config()
     if not config:
         return False, "SNMP traps not configured or not enabled"

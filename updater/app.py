@@ -1847,6 +1847,8 @@ def _validate_settings(filtered: dict):
     if filtered.get("snmp_traps_enabled") == "true" and not is_feature_enabled(Feature.SNMP_TRAPS):
         raise HTTPException(403, detail={"error": "feature_locked", "feature": "snmp_traps",
                                          "message": "SNMP trap notifications require a Pro license."})
+    if filtered.get("snmp_traps_enabled") == "true" and not snmp.is_pysnmp_available():
+        raise HTTPException(400, "Cannot enable SNMP traps: pysnmp-lextudio is not installed")
     if filtered.get("firmware_beta_enabled") == "true" and not is_feature_enabled(Feature.BETA_FIRMWARE):
         raise HTTPException(403, detail={"error": "feature_locked", "feature": "beta_firmware",
                                          "message": "Beta firmware channel requires a Pro license."})
