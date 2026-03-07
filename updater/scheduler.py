@@ -143,6 +143,20 @@ class AutoUpdateScheduler:
         """Start the scheduler check loop."""
         if self._running:
             return
+        # Recover _ran_today from DB to prevent double-run after restart
+        today_key = datetime.now().strftime("%Y-%m-%d")
+        try:
+            with db.get_db() as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM schedule_log WHERE event = 'job_started' "
+                    "AND DATE(timestamp) = ? LIMIT 1",
+                    (today_key,),
+                ).fetchone()
+                if row:
+                    self._ran_today.add(today_key)
+                    logger.info(f"Scheduler: recovered _ran_today for {today_key} from DB")
+        except Exception as e:
+            logger.warning(f"Scheduler: failed to recover _ran_today: {e}")
         self._running = True
         self._task = asyncio.create_task(self._check_loop())
         logger.info(f"Auto-update scheduler started (interval: {self.check_interval}s)")

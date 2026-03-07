@@ -80,8 +80,8 @@ class NetworkPoller:
             await asyncio.sleep(self.poll_interval)
 
     def _evict_stale_clients(self):
-        """Remove cached clients for devices no longer in the database or expired by TTL."""
-        known_ips = db.get_all_device_ips()
+        """Remove cached clients for devices no longer in the database, disabled, or expired by TTL."""
+        known_ips = db.get_enabled_device_ips()
         now = time.time()
         stale = []
         for ip, (client, last_used) in self._clients.items():

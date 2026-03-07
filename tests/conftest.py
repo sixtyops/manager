@@ -304,6 +304,15 @@ def memory_db():
         CREATE INDEX idx_uptime_occurred ON device_uptime_events(occurred_at);
         CREATE INDEX idx_uptime_device_type ON device_uptime_events(device_type, occurred_at DESC);
 
+        CREATE TABLE active_jobs (
+            job_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'running',
+            started_at TEXT,
+            device_ips_json TEXT,
+            firmware_name TEXT,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -328,6 +337,7 @@ def memory_db():
         "weather_check_enabled": "true",
         "min_temperature_c": "-10",
         "setup_completed": "true",
+        "notification_consecutive_failures": "0",
         "config_poll_enabled": "true",
         "config_poll_interval_hours": "24",
         "builtin_radius_enabled": "true",
