@@ -2,6 +2,7 @@
 
 from unittest.mock import patch
 
+import json
 import pytest
 
 
@@ -41,6 +42,18 @@ class TestDeviceNotes:
             upsert_access_point("10.0.0.1", "admin", "pass", None, notes="test note")
             ap = get_access_point("10.0.0.1")
             assert ap["notes"] == "test note"
+
+    def test_notes_on_insert(self, mock_db):
+        from updater.database import upsert_access_point, get_access_point
+        upsert_access_point("10.0.0.99", "admin", "pass", None, notes="new device note")
+        ap = get_access_point("10.0.0.99")
+        assert ap["notes"] == "new device note"
+
+    def test_switch_notes_on_insert(self, mock_db):
+        from updater.database import upsert_switch, get_switch
+        upsert_switch("10.0.1.99", "admin", "pass", None, notes="switch note")
+        sw = get_switch("10.0.1.99")
+        assert sw["notes"] == "switch note"
 
 
 class TestBulkEnable:
@@ -173,3 +186,58 @@ class TestBulkDBFunctions:
             from updater.database import bulk_move_to_site
             count = bulk_move_to_site("switch", ["10.0.1.1"], 5)
             assert count == 1
+
+    def test_bulk_empty_ips_raises(self, mock_db):
+        from updater.database import bulk_set_enabled
+        with pytest.raises(ValueError, match="must not be empty"):
+            bulk_set_enabled("ap", [], True)
+
+    def test_bulk_too_many_ips_raises(self, mock_db):
+        from updater.database import bulk_set_enabled, _BULK_MAX_IPS
+        ips = [f"10.0.0.{i}" for i in range(_BULK_MAX_IPS + 1)]
+        with pytest.raises(ValueError, match="Too many IPs"):
+            bulk_set_enabled("ap", ips, True)
+
+    def test_bulk_move_invalid_site_raises(self, mock_db):
+        from updater.database import bulk_move_to_site
+        mock_db.execute("INSERT INTO access_points (ip, username, password) VALUES ('10.0.0.1', 'a', 'p')")
+        mock_db.commit()
+        with pytest.raises(ValueError, match="not found"):
+            bulk_move_to_site("ap", ["10.0.0.1"], 9999)
+
+    def test_bulk_move_none_site_ok(self, mock_db):
+        from updater.database import bulk_move_to_site
+        mock_db.execute("INSERT INTO access_points (ip, username, password) VALUES ('10.0.0.1', 'a', 'p')")
+        mock_db.commit()
+        count = bulk_move_to_site("ap", ["10.0.0.1"], None)
+        assert count == 1
+
+
+class TestBulkAPIHardening:
+    def test_malformed_json_returns_400(self, authed_client):
+        resp = authed_client.post(
+            "/api/devices/bulk-enable",
+            content="not json{",
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_too_many_ips_returns_400(self, authed_client, mock_db):
+        ips = [f"10.0.{i // 256}.{i % 256}" for i in range(501)]
+        resp = authed_client.post("/api/devices/bulk-enable", json={
+            "device_type": "ap",
+            "ips": ips,
+        })
+        assert resp.status_code == 400
+        assert "Too many" in resp.json()["detail"]
+
+    def test_bulk_move_nonexistent_site_returns_400(self, authed_client, mock_db):
+        mock_db.execute("INSERT INTO access_points (ip, username, password) VALUES ('10.0.0.1', 'a', 'p')")
+        mock_db.commit()
+        resp = authed_client.post("/api/devices/bulk-move", json={
+            "device_type": "ap",
+            "ips": ["10.0.0.1"],
+            "site_id": 9999,
+        })
+        assert resp.status_code == 400
+        assert "not found" in resp.json()["detail"]

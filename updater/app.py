@@ -1381,12 +1381,18 @@ async def bulk_enable_devices(
     session: dict = Depends(require_role("admin", "operator")),
 ):
     """Enable multiple devices."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
     device_type = body.get("device_type", "ap")
     ips = body.get("ips", [])
     if not ips or device_type not in ("ap", "switch"):
         raise HTTPException(400, "Provide ips list and device_type (ap or switch)")
-    count = db.bulk_set_enabled(device_type, ips, True)
+    try:
+        count = db.bulk_set_enabled(device_type, ips, True)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"success": True, "affected": count}
 
 
@@ -1396,12 +1402,18 @@ async def bulk_disable_devices(
     session: dict = Depends(require_role("admin", "operator")),
 ):
     """Disable multiple devices."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
     device_type = body.get("device_type", "ap")
     ips = body.get("ips", [])
     if not ips or device_type not in ("ap", "switch"):
         raise HTTPException(400, "Provide ips list and device_type (ap or switch)")
-    count = db.bulk_set_enabled(device_type, ips, False)
+    try:
+        count = db.bulk_set_enabled(device_type, ips, False)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"success": True, "affected": count}
 
 
@@ -1411,7 +1423,10 @@ async def bulk_delete_devices(
     session: dict = Depends(require_role("admin")),
 ):
     """Delete multiple devices. Admin only."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
     device_type = body.get("device_type", "ap")
     ips = body.get("ips", [])
     if not ips or device_type not in ("ap", "switch"):
@@ -1420,7 +1435,10 @@ async def bulk_delete_devices(
     if poller:
         for ip in ips:
             poller.invalidate_client(ip)
-    count = db.bulk_delete_devices(device_type, ips)
+    try:
+        count = db.bulk_delete_devices(device_type, ips)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"success": True, "deleted": count}
 
 
@@ -1430,13 +1448,19 @@ async def bulk_move_devices(
     session: dict = Depends(require_role("admin", "operator")),
 ):
     """Move multiple devices to a site."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
     device_type = body.get("device_type", "ap")
     ips = body.get("ips", [])
     site_id = body.get("site_id")
     if not ips or device_type not in ("ap", "switch"):
         raise HTTPException(400, "Provide ips list and device_type (ap or switch)")
-    count = db.bulk_move_to_site(device_type, ips, site_id)
+    try:
+        count = db.bulk_move_to_site(device_type, ips, site_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"success": True, "affected": count}
 
 
