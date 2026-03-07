@@ -3,6 +3,7 @@
 import json
 import logging
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -19,6 +20,7 @@ DB_PATH = Path(__file__).parent.parent / "data" / "tachyon.db"
 # Settings cache — short TTL to reduce DB hits during poll cycles
 _settings_cache: Optional[dict] = None
 _settings_cache_time: float = 0
+_settings_cache_lock = threading.Lock()
 _SETTINGS_CACHE_TTL = 5  # seconds
 
 
@@ -976,21 +978,25 @@ def get_health_summary() -> dict:
 def _invalidate_settings_cache():
     """Invalidate the in-memory settings cache."""
     global _settings_cache, _settings_cache_time
-    _settings_cache = None
-    _settings_cache_time = 0
+    with _settings_cache_lock:
+        _settings_cache = None
+        _settings_cache_time = 0
 
 
 def _get_cached_settings() -> dict:
     """Get settings from cache or DB. Returns full settings dict."""
     global _settings_cache, _settings_cache_time
     now = time.monotonic()
-    if _settings_cache is not None and (now - _settings_cache_time) < _SETTINGS_CACHE_TTL:
-        return _settings_cache
+    with _settings_cache_lock:
+        if _settings_cache is not None and (now - _settings_cache_time) < _SETTINGS_CACHE_TTL:
+            return _settings_cache
     with get_db() as db:
         rows = db.execute("SELECT key, value FROM settings").fetchall()
-        _settings_cache = {row["key"]: row["value"] for row in rows}
-        _settings_cache_time = now
-        return _settings_cache
+        result = {row["key"]: row["value"] for row in rows}
+    with _settings_cache_lock:
+        _settings_cache = result
+        _settings_cache_time = time.monotonic()
+    return result
 
 
 def get_setting(key: str, default: str = None) -> Optional[str]:
@@ -1649,7 +1655,7 @@ def get_analytics_trends(days: int = 30) -> list[dict]:
                       COALESCE(SUM(failed_count), 0) as failed,
                       COALESCE(SUM(skipped_count), 0) as skipped
                FROM job_history
-               WHERE completed_at >= ?
+               WHERE completed_at IS NOT NULL AND completed_at >= ?
                GROUP BY DATE(completed_at)
                ORDER BY date""",
             (cutoff,)
