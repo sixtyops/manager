@@ -91,6 +91,11 @@ def _migrate(db):
     if "notes" not in sw_columns:
         db.execute("ALTER TABLE switches ADD COLUMN notes TEXT DEFAULT NULL")
 
+    # Add performance indexes for scaling
+    db.execute("CREATE INDEX IF NOT EXISTS idx_schedule_log_timestamp ON schedule_log(timestamp DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_device_durations_job ON device_durations(job_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_device_durations_created ON device_durations(created_at)")
+
     # Encrypt any plaintext device passwords
     _migrate_encrypt_passwords(db)
 
@@ -284,6 +289,10 @@ def init_db():
                 bank_mode TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE INDEX IF NOT EXISTS idx_schedule_log_timestamp ON schedule_log(timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_device_durations_job ON device_durations(job_id);
+            CREATE INDEX IF NOT EXISTS idx_device_durations_created ON device_durations(created_at);
 
             CREATE TABLE IF NOT EXISTS firmware_registry (
                 filename TEXT PRIMARY KEY,
@@ -531,6 +540,18 @@ def init_db():
             "radius_server_ldap_bind_password": "",
             "radius_server_ldap_base_dn": "",
             "radius_server_ldap_user_filter": "(&(objectClass=user)(sAMAccountName={username}))",
+            # Poller concurrency
+            "poller_concurrency": "10",
+            # Device alert configuration
+            "alert_device_offline_enabled": "true",
+            "alert_device_offline_cooldown_minutes": "60",
+            # Generic webhook configuration
+            "webhook_enabled": "false",
+            "webhook_url": "",
+            "webhook_method": "POST",
+            "webhook_headers": "{}",
+            "webhook_secret": "",
+            "webhook_events": "job_completed,job_failed,device_offline,device_recovered",
         }
         for key, value in defaults.items():
             db.execute(
@@ -923,6 +944,39 @@ def get_cpe_by_ip(ip: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
+# Batch-fetch functions for scaling (eliminate N+1 queries)
+
+def get_all_access_points_dict(enabled_only: bool = True) -> dict[str, dict]:
+    """Get all APs as {ip: row_dict}. Single query, avoids N+1 lookups."""
+    with get_db() as conn:
+        query = "SELECT * FROM access_points"
+        if enabled_only:
+            query += " WHERE enabled = 1"
+        rows = conn.execute(query).fetchall()
+        return {row["ip"]: _decrypt_device_row(dict(row)) for row in rows}
+
+
+def get_all_switches_dict(enabled_only: bool = True) -> dict[str, dict]:
+    """Get all switches as {ip: row_dict}. Single query, avoids N+1 lookups."""
+    with get_db() as conn:
+        query = "SELECT * FROM switches"
+        if enabled_only:
+            query += " WHERE enabled = 1"
+        rows = conn.execute(query).fetchall()
+        return {row["ip"]: _decrypt_device_row(dict(row)) for row in rows}
+
+
+def get_all_cpes_grouped() -> dict[str, list[dict]]:
+    """Get all CPEs grouped by AP IP. Single query, avoids per-AP lookups."""
+    from collections import defaultdict
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM cpe_cache ORDER BY ap_ip, ip").fetchall()
+        result: dict[str, list[dict]] = defaultdict(list)
+        for row in rows:
+            result[row["ap_ip"]].append(dict(row))
+        return dict(result)
+
+
 def update_cpe_auth_status(ap_ip: str, cpe_ip: str, auth_status: str):
     """Update auth_status for a specific CPE."""
     with get_db() as db:
@@ -1217,6 +1271,25 @@ def get_job_history(limit: int = 20) -> list[dict]:
             d["device_roles"] = json.loads(d.pop("device_roles_json"))
             results.append(d)
         return results
+
+
+def get_job_history_paginated(page: int = 1, per_page: int = 50) -> tuple[list[dict], int]:
+    """Get paginated job history. Returns (items, total_count)."""
+    with get_db() as db:
+        total = db.execute("SELECT COUNT(*) FROM job_history").fetchone()[0]
+        offset = (page - 1) * per_page
+        rows = db.execute(
+            "SELECT * FROM job_history ORDER BY completed_at DESC LIMIT ? OFFSET ?",
+            (per_page, offset)
+        ).fetchall()
+        results = []
+        for row in rows:
+            d = dict(row)
+            d["devices"] = json.loads(d.pop("devices_json"))
+            d["ap_cpe_map"] = json.loads(d.pop("ap_cpe_map_json"))
+            d["device_roles"] = json.loads(d.pop("device_roles_json"))
+            results.append(d)
+        return results, total
 
 
 # Schedule Log operations

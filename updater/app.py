@@ -38,6 +38,7 @@ from .backup import build_csv_export, process_csv_import
 from . import telemetry
 from . import slack
 from . import snmp
+from . import webhooks
 from . import ssl_manager
 from . import sftp_backup
 from . import builtin_radius
@@ -113,18 +114,19 @@ _last_data_housekeeping_day: Optional[str] = None
 
 async def broadcast(message: dict):
     """Broadcast message to all connected WebSocket clients."""
+    import json as _json
+    json_text = _json.dumps(message)
     disconnected = set()
     for ws in active_websockets:
         try:
-            await asyncio.wait_for(ws.send_json(message), timeout=5.0)
+            await asyncio.wait_for(ws.send_text(json_text), timeout=5.0)
         except asyncio.TimeoutError:
             logger.warning("WebSocket send timed out, disconnecting slow client")
             disconnected.add(ws)
         except Exception:
             disconnected.add(ws)
 
-    for ws in disconnected:
-        active_websockets.discard(ws)
+    active_websockets.difference_update(disconnected)
 
 
 def _cleanup_oidc_states():
@@ -286,6 +288,7 @@ async def _periodic_cleanup():
             _cleanup_completed_jobs(max_age_seconds=3600)
             _cleanup_oidc_states()
             db.cleanup_old_radius_auth_log(max_age_days=90)
+            db.cleanup_old_uptime_events(max_age_days=180)
             _run_daily_data_housekeeping()
             logger.info("Periodic cleanup completed")
         except Exception as e:
@@ -382,7 +385,7 @@ async def _radius_health_monitor():
             logger.error(f"Background RADIUS health monitor error: {e}")
 
 
-def _cleanup_completed_jobs(max_age_seconds: int = 3600):
+def _cleanup_completed_jobs(max_age_seconds: int = 600):
     """Remove completed jobs from in-memory dict after they've been persisted."""
     now = datetime.now()
     stale_ids = []
@@ -393,8 +396,34 @@ def _cleanup_completed_jobs(max_age_seconds: int = 3600):
                 stale_ids.append(job_id)
     for job_id in stale_ids:
         del update_jobs[job_id]
+    # Cap total completed jobs in memory
+    max_completed = 20
+    completed = [(jid, j) for jid, j in update_jobs.items()
+                 if j.status == "completed" and j.completed_at]
+    if len(completed) > max_completed:
+        completed.sort(key=lambda x: x[1].completed_at)
+        for jid, _ in completed[:len(completed) - max_completed]:
+            del update_jobs[jid]
+            stale_ids.append(jid)
     if stale_ids:
         logger.info(f"Cleaned up {len(stale_ids)} completed jobs from memory")
+
+
+async def _websocket_health_check():
+    """Periodically ping WebSocket clients and remove dead connections."""
+    while True:
+        await asyncio.sleep(30)
+        if not active_websockets:
+            continue
+        dead = set()
+        for ws in list(active_websockets):
+            try:
+                await asyncio.wait_for(ws.send_json({"type": "ping"}), timeout=5.0)
+            except Exception:
+                dead.add(ws)
+        if dead:
+            active_websockets.difference_update(dead)
+            logger.debug(f"Removed {len(dead)} dead WebSocket connection(s)")
 
 
 @asynccontextmanager
@@ -432,6 +461,9 @@ async def lifespan(app: FastAPI):
     radius_health_task = asyncio.create_task(
         _supervised_task("radius_health_monitor", _radius_health_monitor)
     )
+    ws_health_task = asyncio.create_task(
+        _supervised_task("ws_health_check", _websocket_health_check)
+    )
     state = get_license_state()
     logger.info(f"License: {state.status.value} (tier={state.tier.value})")
     logger.info("Application started")
@@ -443,7 +475,8 @@ async def lifespan(app: FastAPI):
     cleanup_task.cancel()
     radius_sync_task.cancel()
     radius_health_task.cancel()
-    for task in [cleanup_task, backup_task, radius_sync_task, radius_health_task]:
+    ws_health_task.cancel()
+    for task in [cleanup_task, backup_task, radius_sync_task, radius_health_task, ws_health_task]:
         try:
             await task
         except asyncio.CancelledError:
@@ -1700,6 +1733,13 @@ _SETTINGS_WRITABLE = {
     "autoupdate_enabled", "release_channel",
     "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
     "pre_update_reboot",
+    # Webhook settings
+    "webhook_enabled", "webhook_url", "webhook_method",
+    "webhook_headers", "webhook_secret", "webhook_events",
+    # Device alert settings
+    "alert_device_offline_enabled", "alert_device_offline_cooldown_minutes",
+    # Poller settings
+    "poller_concurrency",
 }
 
 
@@ -1946,6 +1986,13 @@ async def test_slack_webhook(session: dict = Depends(require_role("admin")), _pr
 async def test_snmp_trap(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SNMP_TRAPS))):
     """Send a test SNMP trap to verify configuration."""
     success, message = await snmp.send_test_trap()
+    return {"success": success, "message": message}
+
+
+@app.post("/api/webhooks/test", tags=["notifications"])
+async def test_webhook(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.WEBHOOKS))):
+    """Send a test webhook to verify configuration."""
+    success, message = await webhooks.send_test_webhook()
     return {"success": success, "message": message}
 
 
@@ -4845,6 +4892,21 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         )
     except Exception as e:
         logger.error(f"SNMP notification failed for job {job.job_id}: {e}")
+
+    try:
+        await webhooks.notify_job_completed(
+            job_id=job.job_id,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+            cancelled_count=cancelled_count,
+            duration_seconds=(job.completed_at - job.started_at).total_seconds(),
+            devices=devices_dict,
+            firmware_name=firmware_name,
+            is_scheduled=job.is_scheduled,
+        )
+    except Exception as e:
+        logger.error(f"Webhook notification failed for job {job.job_id}: {e}")
 
     logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped, {cancelled_count} cancelled")
 
