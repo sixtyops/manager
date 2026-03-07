@@ -544,6 +544,15 @@ def init_db():
             "syslog_forward_port": "514",
             "syslog_forward_protocol": "udp",
             "syslog_forward_facility": "local0",
+            # Email notification configuration
+            "email_enabled": "false",
+            "email_smtp_host": "",
+            "email_smtp_port": "587",
+            "email_smtp_username": "",
+            "email_smtp_password": "",
+            "email_smtp_tls": "true",
+            "email_from_address": "",
+            "email_to_addresses": "",
             # RADIUS configuration for web authentication
             "radius_enabled": "",  # Empty = use env vars, "true"/"false" = explicit
             "radius_server": "",
