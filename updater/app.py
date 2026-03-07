@@ -459,7 +459,24 @@ async def lifespan(app: FastAPI):
 
 
 # FastAPI app
-app = FastAPI(title="SixtyOps", lifespan=lifespan)
+app = FastAPI(
+    title="SixtyOps Firmware Updater",
+    description="Automated firmware update management for Tachyon wireless network devices (APs, CPEs, switches).",
+    version=__version__,
+    lifespan=lifespan,
+    openapi_tags=[
+        {"name": "devices", "description": "Device inventory management (APs, CPEs, switches)"},
+        {"name": "firmware", "description": "Firmware file management and updates"},
+        {"name": "jobs", "description": "Update job execution and monitoring"},
+        {"name": "settings", "description": "Application configuration"},
+        {"name": "analytics", "description": "Update analytics and trends"},
+        {"name": "notifications", "description": "Slack and SNMP notification configuration"},
+        {"name": "auth", "description": "Authentication, sessions, and user management"},
+        {"name": "license", "description": "License management and feature gating"},
+        {"name": "config", "description": "Device configuration backup and templates"},
+        {"name": "system", "description": "System health, updates, and maintenance"},
+    ],
+)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
@@ -827,7 +844,7 @@ async def ssl_setup_submit(
     }, status_code=200 if success else 400)
 
 
-@app.get("/api/ssl/status")
+@app.get("/api/ssl/status", tags=["system"])
 async def get_ssl_status_api(session: dict = Depends(require_auth)):
     return ssl_manager.get_ssl_status()
 
@@ -879,19 +896,19 @@ async def backup_run_now(request: Request, session: dict = Depends(require_role(
     })
 
 
-@app.get("/api/backup/status")
+@app.get("/api/backup/status", tags=["config"])
 async def get_backup_status_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     return sftp_backup.get_backup_status()
 
 
-@app.post("/api/backup/run")
+@app.post("/api/backup/run", tags=["config"])
 async def api_backup_run_now(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Trigger an immediate backup and return JSON result."""
     success, message = await sftp_backup.run_backup()
     return {"success": success, "message": message}
 
 
-@app.post("/api/backup/test-connection")
+@app.post("/api/backup/test-connection", tags=["config"])
 async def test_backup_connection_api(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Test SFTP backup connection."""
     success, message = await sftp_backup.test_backup_connection()
@@ -1039,14 +1056,14 @@ def _validate_ip(ip: str):
 # Tower Site API
 # ============================================================================
 
-@app.get("/api/sites")
+@app.get("/api/sites", tags=["devices"])
 async def list_sites(session: dict = Depends(require_auth)):
     """List all tower sites."""
     sites = db.get_tower_sites()
     return {"sites": sites}
 
 
-@app.post("/api/sites")
+@app.post("/api/sites", tags=["devices"])
 async def create_site(
     name: str = Form(...),
     location: str = Form(None),
@@ -1066,7 +1083,7 @@ async def create_site(
         raise HTTPException(500, "Failed to create site")
 
 
-@app.put("/api/sites/{site_id}")
+@app.put("/api/sites/{site_id}", tags=["devices"])
 async def update_site(
     site_id: int,
     name: str = Form(None),
@@ -1081,7 +1098,7 @@ async def update_site(
     return {"success": True}
 
 
-@app.delete("/api/sites/{site_id}")
+@app.delete("/api/sites/{site_id}", tags=["devices"])
 async def delete_site(site_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.TOWER_SITES))):
     """Delete a tower site."""
     db.delete_tower_site(site_id)
@@ -1099,14 +1116,14 @@ def _strip_credentials(devices: list[dict]) -> list[dict]:
     return devices
 
 
-@app.get("/api/aps")
+@app.get("/api/aps", tags=["devices"])
 async def list_aps(site_id: int = None, session: dict = Depends(require_auth)):
     """List access points (credentials redacted)."""
     aps = db.get_access_points(tower_site_id=site_id, enabled_only=False)
     return {"aps": _strip_credentials(aps)}
 
 
-@app.post("/api/aps")
+@app.post("/api/aps", tags=["devices"])
 async def add_ap(
     ip: str = Form(...),
     username: str = Form(...),
@@ -1131,7 +1148,7 @@ async def add_ap(
     return {"id": ap_id, "ip": ip}
 
 
-@app.post("/api/devices")
+@app.post("/api/devices", tags=["devices"])
 async def add_device(
     ip: str = Form(...),
     username: str = Form(...),
@@ -1180,7 +1197,7 @@ async def add_device(
     return {"id": device_id, "ip": ip, "device_type": device_type, "model": model}
 
 
-@app.put("/api/aps/{ip}")
+@app.put("/api/aps/{ip}", tags=["devices"])
 async def update_ap(
     ip: str,
     username: str = Form(None),
@@ -1228,7 +1245,7 @@ async def update_ap(
     return {"success": True}
 
 
-@app.delete("/api/aps/{ip}")
+@app.delete("/api/aps/{ip}", tags=["devices"])
 async def delete_ap(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Delete an access point."""
     poller = get_poller()
@@ -1245,7 +1262,7 @@ async def delete_ap(ip: str, session: dict = Depends(require_role("admin", "oper
     return {"success": True}
 
 
-@app.post("/api/aps/{ip}/poll")
+@app.post("/api/aps/{ip}/poll", tags=["devices"])
 async def poll_ap(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Trigger immediate poll of an AP."""
     poller = get_poller()
@@ -1266,14 +1283,14 @@ async def poll_ap(ip: str, session: dict = Depends(require_role("admin", "operat
 # Switch API
 # ============================================================================
 
-@app.get("/api/switches")
+@app.get("/api/switches", tags=["devices"])
 async def list_switches(site_id: int = None, session: dict = Depends(require_auth)):
     """List switches (credentials redacted)."""
     switches = db.get_switches(tower_site_id=site_id, enabled_only=False)
     return {"switches": _strip_credentials(switches)}
 
 
-@app.post("/api/switches")
+@app.post("/api/switches", tags=["devices"])
 async def add_switch(
     ip: str = Form(...),
     username: str = Form(...),
@@ -1297,7 +1314,7 @@ async def add_switch(
     return {"id": sw_id, "ip": ip}
 
 
-@app.put("/api/switches/{ip}")
+@app.put("/api/switches/{ip}", tags=["devices"])
 async def update_switch(
     ip: str,
     username: str = Form(None),
@@ -1325,7 +1342,7 @@ async def update_switch(
     return {"success": True}
 
 
-@app.delete("/api/switches/{ip}")
+@app.delete("/api/switches/{ip}", tags=["devices"])
 async def delete_switch(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Delete a switch."""
     poller = get_poller()
@@ -1342,7 +1359,7 @@ async def delete_switch(ip: str, session: dict = Depends(require_role("admin", "
     return {"success": True}
 
 
-@app.post("/api/switches/{ip}/poll")
+@app.post("/api/switches/{ip}/poll", tags=["devices"])
 async def poll_switch(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Trigger immediate poll of a switch."""
     poller = get_poller()
@@ -1360,7 +1377,7 @@ async def poll_switch(ip: str, session: dict = Depends(require_role("admin", "op
 # Topology API
 # ============================================================================
 
-@app.get("/api/topology")
+@app.get("/api/topology", tags=["devices"])
 async def get_topology(session: dict = Depends(require_auth)):
     """Get current network topology."""
     poller = get_poller()
@@ -1376,7 +1393,7 @@ async def get_topology(session: dict = Depends(require_auth)):
     }
 
 
-@app.post("/api/topology/refresh")
+@app.post("/api/topology/refresh", tags=["devices"])
 async def refresh_topology(session: dict = Depends(require_role("admin", "operator"))):
     """Trigger a full topology refresh."""
     poller = get_poller()
@@ -1387,7 +1404,7 @@ async def refresh_topology(session: dict = Depends(require_role("admin", "operat
     return poller.get_topology()
 
 
-@app.get("/api/cpes")
+@app.get("/api/cpes", tags=["devices"])
 async def get_all_cpes(session: dict = Depends(require_auth)):
     """Get all CPEs."""
     cpes = db.get_all_cpes()
@@ -1453,7 +1470,7 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
 </html>"""
 
 
-@app.get("/api/device-portal/{ip}", response_class=HTMLResponse)
+@app.get("/api/device-portal/{ip}", tags=["devices"], response_class=HTMLResponse)
 async def device_portal(ip: str, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.DEVICE_PORTAL))):
     """Auto-login portal: authenticate to a device and redirect to its web UI."""
     _validate_ip(ip)
@@ -1502,7 +1519,7 @@ async def device_portal(ip: str, session: dict = Depends(require_auth), _pro=Dep
 # Quick Add (combines site + AP creation)
 # ============================================================================
 
-@app.post("/api/quick-add")
+@app.post("/api/quick-add", tags=["devices"])
 async def quick_add(
     ip: str = Form(...),
     username: str = Form(...),
@@ -1551,7 +1568,7 @@ _SETTINGS_SENSITIVE = {
 }
 
 
-@app.get("/api/settings")
+@app.get("/api/settings", tags=["settings"])
 async def get_settings(session: dict = Depends(require_auth)):
     """Get all settings. Sensitive values are redacted."""
     settings = db.get_all_settings()
@@ -1776,7 +1793,7 @@ def _validate_settings(filtered: dict):
             raise HTTPException(400, f"Invalid {label} canary selection ({'; '.join(parts)})")
 
 
-@app.put("/api/settings")
+@app.put("/api/settings", tags=["settings"])
 async def update_settings(request: Request, session: dict = Depends(require_role("admin"))):
     """Update settings. Only whitelisted keys are accepted."""
     data = await request.json()
@@ -1788,7 +1805,7 @@ async def update_settings(request: Request, session: dict = Depends(require_role
     return {"success": True}
 
 
-@app.post("/api/settings/save")
+@app.post("/api/settings/save", tags=["settings"])
 async def save_settings_and_reevaluate(request: Request, session: dict = Depends(require_role("admin"))):
     """Save settings, re-select firmware, and force scheduler re-evaluation."""
     data = await request.json()
@@ -1811,14 +1828,14 @@ async def save_settings_and_reevaluate(request: Request, session: dict = Depends
     return {"success": True}
 
 
-@app.post("/api/slack/test")
+@app.post("/api/slack/test", tags=["notifications"])
 async def test_slack_webhook(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SLACK_NOTIFICATIONS))):
     """Send a test notification to the configured Slack webhook."""
     success, message = await slack.send_test_notification()
     return {"success": success, "message": message}
 
 
-@app.post("/api/snmp/test")
+@app.post("/api/snmp/test", tags=["notifications"])
 async def test_snmp_trap(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SNMP_TRAPS))):
     """Send a test SNMP trap to verify configuration."""
     success, message = await snmp.send_test_trap()
@@ -1829,7 +1846,7 @@ async def test_snmp_trap(session: dict = Depends(require_role("admin")), _pro=De
 # License API
 # ============================================================================
 
-@app.get("/api/license")
+@app.get("/api/license", tags=["license"])
 async def get_license_status(session: dict = Depends(require_auth)):
     """Get current license state, features map, and device counts."""
     state = get_license_state()
@@ -1838,7 +1855,7 @@ async def get_license_status(session: dict = Depends(require_auth)):
     return {**state.to_dict(), **nag, "features": features}
 
 
-@app.post("/api/license/activate")
+@app.post("/api/license/activate", tags=["license"])
 async def activate_license(request: Request, session: dict = Depends(require_role("admin"))):
     """Activate or update the license key."""
     data = await request.json()
@@ -1850,14 +1867,14 @@ async def activate_license(request: Request, session: dict = Depends(require_rol
     return {**state.to_dict(), "success": state.status == LicenseStatus.ACTIVE}
 
 
-@app.post("/api/license/deactivate")
+@app.post("/api/license/deactivate", tags=["license"])
 async def deactivate_license(session: dict = Depends(require_role("admin"))):
     """Remove the license key and revert to free tier."""
     clear_license()
     return {"success": True, "status": "free"}
 
 
-@app.post("/api/license/validate")
+@app.post("/api/license/validate", tags=["license"])
 async def force_validate_license(session: dict = Depends(require_role("admin"))):
     """Force re-validate the current license with the server."""
     state = get_license_state()
@@ -1871,7 +1888,7 @@ async def force_validate_license(session: dict = Depends(require_role("admin")))
 # System / Appliance API
 # ============================================================================
 
-@app.get("/api/system/info")
+@app.get("/api/system/info", tags=["system"])
 async def get_system_info(session: dict = Depends(require_auth)):
     """Get system information (version, uptime, disk usage, machine ID)."""
     import shutil
@@ -1918,7 +1935,7 @@ async def get_system_info(session: dict = Depends(require_auth)):
     return info
 
 
-@app.post("/api/system/network")
+@app.post("/api/system/network", tags=["system"])
 async def update_network_config(request: Request, session: dict = Depends(require_role("admin"))):
     """Update network configuration (appliance mode only)."""
     if os.environ.get("TACHYON_APPLIANCE") != "1":
@@ -1966,7 +1983,7 @@ async def update_network_config(request: Request, session: dict = Depends(requir
 # Auto-Update API
 # ============================================================================
 
-@app.get("/api/updates")
+@app.get("/api/updates", tags=["jobs"])
 async def get_update_status(session: dict = Depends(require_auth)):
     """Get current update status."""
     checker = get_checker()
@@ -1975,7 +1992,7 @@ async def get_update_status(session: dict = Depends(require_auth)):
     return {"error": "Release checker not initialized"}
 
 
-@app.post("/api/updates/check")
+@app.post("/api/updates/check", tags=["jobs"])
 async def check_for_updates(session: dict = Depends(require_role("admin", "operator"))):
     """Manually trigger a check for updates."""
     checker = get_checker()
@@ -1985,7 +2002,7 @@ async def check_for_updates(session: dict = Depends(require_role("admin", "opera
     return {"error": "Release checker not initialized"}
 
 
-@app.post("/api/updates/apply")
+@app.post("/api/updates/apply", tags=["jobs"])
 async def apply_app_update(session: dict = Depends(require_role("admin"))):
     """Apply available update by pulling new Docker image and restarting."""
     result = await apply_update()
@@ -1999,13 +2016,13 @@ async def apply_app_update(session: dict = Depends(require_role("admin"))):
 # Authentication Configuration API
 # ============================================================================
 
-@app.get("/api/auth/config")
+@app.get("/api/auth/config", tags=["auth"])
 async def get_auth_config(session: dict = Depends(require_auth)):
     """Get authentication configuration (secrets masked)."""
     return radius_config.get_auth_config_summary()
 
 
-@app.get("/api/auth/radius")
+@app.get("/api/auth/radius", tags=["auth"])
 async def get_builtin_radius_config(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Get built-in RADIUS server configuration and summary."""
     return {
@@ -2014,7 +2031,7 @@ async def get_builtin_radius_config(session: dict = Depends(require_auth), _pro=
     }
 
 
-@app.post("/api/auth/radius/test")
+@app.post("/api/auth/radius/test", tags=["auth"])
 async def test_builtin_radius(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Test the built-in RADIUS server health."""
     try:
@@ -2024,7 +2041,7 @@ async def test_builtin_radius(session: dict = Depends(require_role("admin")), _p
         return {"success": False, "message": str(exc)}
 
 
-@app.put("/api/auth/radius")
+@app.put("/api/auth/radius", tags=["auth"])
 async def update_builtin_radius_config(request: Request, session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Update built-in RADIUS server settings."""
     data = await request.json()
@@ -2053,13 +2070,13 @@ async def update_builtin_radius_config(request: Request, session: dict = Depends
     return builtin_radius.get_public_config_summary()
 
 
-@app.get("/api/auth/radius/users")
+@app.get("/api/auth/radius/users", tags=["auth"])
 async def list_builtin_radius_users(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """List built-in RADIUS users."""
     return {"users": builtin_radius.list_users()}
 
 
-@app.post("/api/auth/radius/users")
+@app.post("/api/auth/radius/users", tags=["auth"])
 async def create_builtin_radius_user(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Create a built-in RADIUS user."""
     data = await request.json()
@@ -2075,7 +2092,7 @@ async def create_builtin_radius_user(request: Request, session: dict = Depends(r
     return user
 
 
-@app.put("/api/auth/radius/users/{user_id}")
+@app.put("/api/auth/radius/users/{user_id}", tags=["auth"])
 async def update_builtin_radius_user(user_id: int, request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Update a built-in RADIUS user."""
     data = await request.json()
@@ -2092,7 +2109,7 @@ async def update_builtin_radius_user(user_id: int, request: Request, session: di
     return user
 
 
-@app.delete("/api/auth/radius/users/{user_id}")
+@app.delete("/api/auth/radius/users/{user_id}", tags=["auth"])
 async def delete_builtin_radius_user(user_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Delete a built-in RADIUS user."""
     deleted = builtin_radius.delete_user(user_id)
@@ -2102,13 +2119,13 @@ async def delete_builtin_radius_user(user_id: int, session: dict = Depends(requi
     return {"success": True}
 
 
-@app.get("/api/auth/radius/clients")
+@app.get("/api/auth/radius/clients", tags=["auth"])
 async def list_builtin_radius_clients(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """List manual RADIUS client overrides."""
     return {"clients": builtin_radius.list_client_overrides()}
 
 
-@app.post("/api/auth/radius/clients")
+@app.post("/api/auth/radius/clients", tags=["auth"])
 async def create_builtin_radius_client(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Create a manual RADIUS client override."""
     data = await request.json()
@@ -2124,7 +2141,7 @@ async def create_builtin_radius_client(request: Request, session: dict = Depends
     return client
 
 
-@app.put("/api/auth/radius/clients/{override_id}")
+@app.put("/api/auth/radius/clients/{override_id}", tags=["auth"])
 async def update_builtin_radius_client(override_id: int, request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Update a manual RADIUS client override."""
     data = await request.json()
@@ -2141,7 +2158,7 @@ async def update_builtin_radius_client(override_id: int, request: Request, sessi
     return client
 
 
-@app.delete("/api/auth/radius/clients/{override_id}")
+@app.delete("/api/auth/radius/clients/{override_id}", tags=["auth"])
 async def delete_builtin_radius_client(override_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Delete a manual RADIUS client override."""
     deleted = builtin_radius.delete_client_override(override_id)
@@ -2151,13 +2168,13 @@ async def delete_builtin_radius_client(override_id: int, session: dict = Depends
     return {"success": True}
 
 
-@app.get("/api/auth/radius/stats")
+@app.get("/api/auth/radius/stats", tags=["auth"])
 async def get_builtin_radius_stats(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Get built-in RADIUS server stats and recent auth events."""
     return builtin_radius.get_stats()
 
 
-@app.post("/api/auth/radius/secret-review")
+@app.post("/api/auth/radius/secret-review", tags=["auth"])
 async def mark_builtin_radius_secret_reviewed(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Mark a legacy built-in RADIUS secret as reviewed today without changing it."""
     try:
@@ -2167,7 +2184,7 @@ async def mark_builtin_radius_secret_reviewed(session: dict = Depends(require_ro
     return builtin_radius.get_public_config_summary()
 
 
-@app.get("/api/auth/radius/rollout")
+@app.get("/api/auth/radius/rollout", tags=["auth"])
 async def get_builtin_radius_rollout(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Get current built-in Radius device migration rollout state."""
     rollout = builtin_radius.get_current_rollout()
@@ -2182,7 +2199,7 @@ async def get_builtin_radius_rollout(session: dict = Depends(require_auth), _pro
     }
 
 
-@app.post("/api/auth/radius/rollout/start")
+@app.post("/api/auth/radius/rollout/start", tags=["auth"])
 async def start_builtin_radius_rollout(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Start staged Radius migration for managed devices."""
     if builtin_radius.get_active_rollout():
@@ -2211,7 +2228,7 @@ async def start_builtin_radius_rollout(session: dict = Depends(require_role("adm
     return {"rollout": rollout}
 
 
-@app.post("/api/auth/radius/rollout/{rollout_id}/resume")
+@app.post("/api/auth/radius/rollout/{rollout_id}/resume", tags=["auth"])
 async def resume_builtin_radius_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Resume a paused Radius migration rollout."""
     rollout = builtin_radius.get_rollout(rollout_id)
@@ -2225,7 +2242,7 @@ async def resume_builtin_radius_rollout(rollout_id: int, session: dict = Depends
     return {"rollout": builtin_radius.get_rollout(rollout_id)}
 
 
-@app.post("/api/auth/radius/rollout/{rollout_id}/cancel")
+@app.post("/api/auth/radius/rollout/{rollout_id}/cancel", tags=["auth"])
 async def cancel_builtin_radius_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Cancel an active or paused Radius migration rollout."""
     rollout = builtin_radius.get_rollout(rollout_id)
@@ -2238,7 +2255,7 @@ async def cancel_builtin_radius_rollout(rollout_id: int, session: dict = Depends
     return {"success": True}
 
 
-@app.put("/api/auth/device-defaults")
+@app.put("/api/auth/device-defaults", tags=["auth"])
 async def update_device_auth_config(request: Request, session: dict = Depends(require_role("admin"))):
     """Update global default device credentials."""
     data = await request.json()
@@ -2258,7 +2275,7 @@ async def update_device_auth_config(request: Request, session: dict = Depends(re
     return {"success": True}
 
 
-@app.get("/api/auth/oidc")
+@app.get("/api/auth/oidc", tags=["auth"])
 async def get_oidc_config_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Get OIDC/SSO configuration (secret masked)."""
     config = oidc_config.get_oidc_config()
@@ -2273,7 +2290,7 @@ async def get_oidc_config_api(session: dict = Depends(require_auth), _pro=Depend
     }
 
 
-@app.put("/api/auth/oidc")
+@app.put("/api/auth/oidc", tags=["auth"])
 async def update_oidc_config_api(request: Request, session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Update OIDC/SSO configuration."""
     data = await request.json()
@@ -2303,7 +2320,7 @@ async def update_oidc_config_api(request: Request, session: dict = Depends(requi
     return {"success": True}
 
 
-@app.post("/api/auth/test-oidc")
+@app.post("/api/auth/test-oidc", tags=["auth"])
 async def test_oidc_discovery(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Test OIDC discovery endpoint reachability."""
     config = oidc_config.get_oidc_config()
@@ -2553,19 +2570,19 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
 # User management API (RBAC)
 # ---------------------------------------------------------------------------
 
-@app.get("/api/users/me")
+@app.get("/api/users/me", tags=["auth"])
 async def get_current_user(session: dict = Depends(require_auth)):
     """Get current authenticated user info."""
     return {"username": session["username"], "role": session.get("role", "viewer")}
 
 
-@app.get("/api/users", dependencies=[Depends(require_role("admin"))])
+@app.get("/api/users", tags=["auth"], dependencies=[Depends(require_role("admin"))])
 async def list_users_api():
     """List all users (admin only)."""
     return {"users": db.list_users()}
 
 
-@app.post("/api/users", dependencies=[Depends(require_role("admin"))])
+@app.post("/api/users", tags=["auth"], dependencies=[Depends(require_role("admin"))])
 async def create_user_api(request: Request):
     """Create a new local user (admin only)."""
     data = await request.json()
@@ -2587,7 +2604,7 @@ async def create_user_api(request: Request):
     return {"id": user_id, "username": username, "role": role}
 
 
-@app.put("/api/users/{user_id}", dependencies=[Depends(require_role("admin"))])
+@app.put("/api/users/{user_id}", tags=["auth"], dependencies=[Depends(require_role("admin"))])
 async def update_user_api(user_id: int, request: Request, session: dict = Depends(require_auth)):
     """Update a user (admin only)."""
     user = db.get_user_by_id(user_id)
@@ -2628,7 +2645,7 @@ async def update_user_api(user_id: int, request: Request, session: dict = Depend
     return {"ok": True}
 
 
-@app.delete("/api/users/{user_id}", dependencies=[Depends(require_role("admin"))])
+@app.delete("/api/users/{user_id}", tags=["auth"], dependencies=[Depends(require_role("admin"))])
 async def delete_user_api(user_id: int, session: dict = Depends(require_auth)):
     """Delete a user (admin only)."""
     user = db.get_user_by_id(user_id)
@@ -2646,7 +2663,7 @@ async def delete_user_api(user_id: int, session: dict = Depends(require_auth)):
     return {"ok": True}
 
 
-@app.get("/api/time")
+@app.get("/api/time", tags=["system"])
 async def get_current_time(session: dict = Depends(require_auth)):
     """Get current time info with timezone."""
     settings = db.get_all_settings()
@@ -2661,7 +2678,7 @@ async def get_current_time(session: dict = Depends(require_auth)):
     return time_info
 
 
-@app.get("/api/weather")
+@app.get("/api/weather", tags=["system"])
 async def get_weather(session: dict = Depends(require_auth)):
     """Get current weather."""
     settings = db.get_all_settings()
@@ -2679,7 +2696,7 @@ async def get_weather(session: dict = Depends(require_auth)):
     return weather
 
 
-@app.get("/api/scheduler/status")
+@app.get("/api/scheduler/status", tags=["system"])
 async def get_scheduler_status(session: dict = Depends(require_auth)):
     """Get current scheduler status."""
     scheduler = get_scheduler()
@@ -2688,7 +2705,7 @@ async def get_scheduler_status(session: dict = Depends(require_auth)):
     return scheduler.get_status()
 
 
-@app.get("/api/rollout/current")
+@app.get("/api/rollout/current", tags=["system"])
 async def get_current_rollout(session: dict = Depends(require_auth)):
     """Get the current active/paused rollout with progress."""
     rollout = db.get_active_rollout()
@@ -2716,7 +2733,7 @@ async def get_current_rollout(session: dict = Depends(require_auth)):
     }
 
 
-@app.post("/api/rollout/{rollout_id}/resume")
+@app.post("/api/rollout/{rollout_id}/resume", tags=["system"])
 async def resume_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Resume a paused rollout."""
     rollout = db.get_rollout(rollout_id)
@@ -2736,7 +2753,7 @@ async def resume_rollout(rollout_id: int, session: dict = Depends(require_role("
     return {"success": True}
 
 
-@app.post("/api/rollout/{rollout_id}/cancel")
+@app.post("/api/rollout/{rollout_id}/cancel", tags=["system"])
 async def cancel_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Cancel an active/paused rollout."""
     rollout = db.get_rollout(rollout_id)
@@ -2756,7 +2773,7 @@ async def cancel_rollout(rollout_id: int, session: dict = Depends(require_role("
     return {"success": True}
 
 
-@app.post("/api/rollout/{rollout_id}/reset")
+@app.post("/api/rollout/{rollout_id}/reset", tags=["system"])
 async def reset_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Reset a paused rollout - cancels it so a fresh rollout starts next window."""
     rollout = db.get_rollout(rollout_id)
@@ -2776,7 +2793,7 @@ async def reset_rollout(rollout_id: int, session: dict = Depends(require_role("a
     return {"success": True}
 
 
-@app.post("/api/rollout/canary/trigger")
+@app.post("/api/rollout/canary/trigger", tags=["system"])
 async def trigger_canary_rollout(session: dict = Depends(require_role("admin", "operator"))):
     """Trigger the canary phase immediately, outside the maintenance window."""
     scheduler = get_scheduler()
@@ -2791,7 +2808,7 @@ async def trigger_canary_rollout(session: dict = Depends(require_role("admin", "
     return {"success": True, "status": scheduler.get_status()}
 
 
-@app.get("/api/location")
+@app.get("/api/location", tags=["system"])
 async def get_location(session: dict = Depends(require_auth)):
     """Get detected location info."""
     settings = db.get_all_settings()
@@ -2820,7 +2837,7 @@ async def get_location(session: dict = Depends(require_auth)):
 # Backup API
 # ============================================================================
 
-@app.post("/api/backup/export")
+@app.post("/api/backup/export", tags=["config"])
 async def export_backup(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Export devices as CSV with encrypted passwords."""
     data = await request.json()
@@ -2842,7 +2859,7 @@ async def export_backup(request: Request, session: dict = Depends(require_role("
     )
 
 
-@app.post("/api/backup/import")
+@app.post("/api/backup/import", tags=["config"])
 async def import_backup(
     file: UploadFile = File(...),
     passphrase: str = Form(...),
@@ -3027,7 +3044,7 @@ MAX_FIRMWARE_SIZE = 500 * 1024 * 1024   # 500 MB
 MAX_CSV_IMPORT_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
-@app.post("/api/upload-firmware")
+@app.post("/api/upload-firmware", tags=["firmware"])
 async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(require_role("admin", "operator"))):
     """Upload a firmware file."""
     # Validate filename to prevent path traversal attacks
@@ -3066,7 +3083,7 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
     }
 
 
-@app.get("/api/firmware-files")
+@app.get("/api/firmware-files", tags=["firmware"])
 async def list_firmware_files(session: dict = Depends(require_auth)):
     """List available firmware files."""
     import json as _json
@@ -3110,7 +3127,7 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
     }
 
 
-@app.delete("/api/firmware-files/{filename:path}")
+@app.delete("/api/firmware-files/{filename:path}", tags=["firmware"])
 async def delete_firmware_file(filename: str, session: dict = Depends(require_role("admin", "operator"))):
     """Delete a firmware file."""
     # Validate filename to prevent path traversal attacks
@@ -3123,7 +3140,7 @@ async def delete_firmware_file(filename: str, session: dict = Depends(require_ro
     return {"success": True}
 
 
-@app.post("/api/firmware-fetch")
+@app.post("/api/firmware-fetch", tags=["firmware"])
 async def trigger_firmware_fetch(session: dict = Depends(require_role("admin", "operator"))):
     """Trigger an on-demand firmware check and download."""
     fetcher = get_fetcher()
@@ -3133,7 +3150,7 @@ async def trigger_firmware_fetch(session: dict = Depends(require_role("admin", "
     return result
 
 
-@app.post("/api/firmware-reselect")
+@app.post("/api/firmware-reselect", tags=["firmware"])
 async def firmware_reselect(session: dict = Depends(require_role("admin", "operator"))):
     """Re-run firmware auto-selection (e.g. after toggling beta)."""
     fetcher = get_fetcher()
@@ -3151,7 +3168,7 @@ async def firmware_reselect(session: dict = Depends(require_role("admin", "opera
     return {"success": True}
 
 
-@app.get("/api/firmware-fetch/status")
+@app.get("/api/firmware-fetch/status", tags=["firmware"])
 async def firmware_fetch_status(session: dict = Depends(require_auth)):
     """Get firmware fetch status."""
     import json as _json
@@ -3169,7 +3186,7 @@ async def firmware_fetch_status(session: dict = Depends(require_auth)):
     }
 
 
-@app.get("/api/fleet-status")
+@app.get("/api/fleet-status", tags=["system"])
 async def get_fleet_status(session: dict = Depends(require_auth)):
     """Get firmware version status for all devices."""
     settings = db.get_all_settings()
@@ -3677,7 +3694,7 @@ async def _start_scheduled_update(
     return job_id
 
 
-@app.post("/api/start-update")
+@app.post("/api/start-update", tags=["jobs"])
 async def start_update(
     firmware_file: str = Form(...),
     device_type: str = Form(...),
@@ -3883,7 +3900,7 @@ async def start_update(
     return {"job_id": job_id, "device_count": len(job.devices)}
 
 
-@app.post("/api/update-device")
+@app.post("/api/update-device", tags=["jobs"])
 async def update_single_device_endpoint(
     ip: str = Form(...),
     firmware_file: str = Form(...),
@@ -4722,7 +4739,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
     logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped, {cancelled_count} cancelled")
 
 
-@app.get("/api/job/{job_id}")
+@app.get("/api/job/{job_id}", tags=["jobs"])
 async def get_job_status(job_id: str, session: dict = Depends(require_auth)):
     """Get status of an update job."""
     if job_id not in update_jobs:
@@ -4745,7 +4762,7 @@ async def get_job_status(job_id: str, session: dict = Depends(require_auth)):
     }
 
 
-@app.post("/api/job/{job_id}/cancel")
+@app.post("/api/job/{job_id}/cancel", tags=["jobs"])
 async def cancel_job(job_id: str, session: dict = Depends(require_role("admin", "operator"))):
     """Request cancellation of an active update job."""
     job = update_jobs.get(job_id)
@@ -4775,7 +4792,7 @@ async def cancel_job(job_id: str, session: dict = Depends(require_role("admin", 
 # Analytics API
 # ============================================================================
 
-@app.get("/api/analytics/summary")
+@app.get("/api/analytics/summary", tags=["analytics"])
 async def get_analytics_summary(days: int = 90, session: dict = Depends(require_auth)):
     """Get aggregate update statistics over a time window."""
     if days < 1 or days > 365:
@@ -4783,7 +4800,7 @@ async def get_analytics_summary(days: int = 90, session: dict = Depends(require_
     return db.get_analytics_summary(days)
 
 
-@app.get("/api/analytics/trends")
+@app.get("/api/analytics/trends", tags=["analytics"])
 async def get_analytics_trends(days: int = 30, session: dict = Depends(require_auth)):
     """Get daily success/failure trends."""
     if days < 1 or days > 365:
@@ -4791,7 +4808,7 @@ async def get_analytics_trends(days: int = 30, session: dict = Depends(require_a
     return {"trends": db.get_analytics_trends(days)}
 
 
-@app.get("/api/analytics/models")
+@app.get("/api/analytics/models", tags=["analytics"])
 async def get_analytics_models(days: int = 90, session: dict = Depends(require_auth)):
     """Get update success/failure breakdown by device model."""
     if days < 1 or days > 365:
@@ -4799,7 +4816,7 @@ async def get_analytics_models(days: int = 90, session: dict = Depends(require_a
     return {"models": db.get_analytics_by_model(days)}
 
 
-@app.get("/api/analytics/errors")
+@app.get("/api/analytics/errors", tags=["analytics"])
 async def get_analytics_errors(days: int = 90, limit: int = 10, session: dict = Depends(require_auth)):
     """Get top error messages from failed updates."""
     if days < 1 or days > 365:
@@ -4807,7 +4824,7 @@ async def get_analytics_errors(days: int = 90, limit: int = 10, session: dict = 
     return {"errors": db.get_analytics_errors(days, limit)}
 
 
-@app.get("/api/analytics/reliability")
+@app.get("/api/analytics/reliability", tags=["analytics"])
 async def get_analytics_reliability(days: int = 90, limit: int = 20, session: dict = Depends(require_auth)):
     """Get per-device reliability stats, worst performers first."""
     if days < 1 or days > 365:
@@ -4815,7 +4832,7 @@ async def get_analytics_reliability(days: int = 90, limit: int = 20, session: di
     return {"devices": db.get_analytics_device_reliability(days, limit)}
 
 
-@app.get("/api/device-history")
+@app.get("/api/device-history", tags=["config"])
 async def get_device_history_api(
     ip: str = None, action: str = None, status: str = None,
     limit: int = 100, offset: int = 0,
@@ -4910,7 +4927,7 @@ def _fragment_matches(config: dict, fragment: dict) -> bool:
     return True
 
 
-@app.get("/api/configs")
+@app.get("/api/configs", tags=["config"])
 async def get_configs_summary(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """List all devices with their latest config summary."""
     all_configs = db.get_all_latest_configs()
@@ -4925,14 +4942,14 @@ async def get_configs_summary(session: dict = Depends(require_auth), _pro=Depend
     return {"configs": result}
 
 
-@app.get("/api/configs/{ip}")
+@app.get("/api/configs/{ip}", tags=["config"])
 async def get_config_history(ip: str, limit: int = 20, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Get config snapshot history for a device."""
     history = db.get_device_config_history(ip, limit=limit)
     return {"history": history}
 
 
-@app.get("/api/configs/{ip}/latest")
+@app.get("/api/configs/{ip}/latest", tags=["config"])
 async def get_latest_config(ip: str, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Get the latest config JSON for a device."""
     config = db.get_latest_device_config(ip)
@@ -4942,7 +4959,7 @@ async def get_latest_config(ip: str, session: dict = Depends(require_auth), _pro
     return config
 
 
-@app.get("/api/configs/{ip}/snapshot/{config_id}")
+@app.get("/api/configs/{ip}/snapshot/{config_id}", tags=["config"])
 async def get_config_snapshot(ip: str, config_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Get a specific config snapshot."""
     config = db.get_device_config_by_id(config_id)
@@ -4952,7 +4969,7 @@ async def get_config_snapshot(ip: str, config_id: int, session: dict = Depends(r
     return config
 
 
-@app.get("/api/configs/{ip}/download/{config_id}")
+@app.get("/api/configs/{ip}/download/{config_id}", tags=["config"])
 async def download_config_tar(ip: str, config_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Download a config snapshot as a .tar file with config.json + CONTROL."""
     import io
@@ -4996,7 +5013,7 @@ async def download_config_tar(ip: str, config_id: int, session: dict = Depends(r
     )
 
 
-@app.post("/api/configs/{ip}/poll")
+@app.post("/api/configs/{ip}/poll", tags=["config"])
 async def poll_device_config(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Trigger immediate config fetch for one device."""
     # Find the device (AP, CPE, or switch)
@@ -5040,7 +5057,7 @@ async def poll_device_config(ip: str, session: dict = Depends(require_role("admi
     return {"success": True, "changed": changed, "config_hash": config_hash}
 
 
-@app.post("/api/configs/poll")
+@app.post("/api/configs/poll", tags=["config"])
 async def poll_all_configs(session: dict = Depends(require_role("admin", "operator"))):
     """Trigger config poll for all devices."""
     poller = get_poller()
@@ -5054,7 +5071,7 @@ async def poll_all_configs(session: dict = Depends(require_role("admin", "operat
 # Config Templates
 # ============================================================================
 
-@app.get("/api/config-templates")
+@app.get("/api/config-templates", tags=["config"])
 async def list_config_templates(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """List all config templates."""
     templates = db.get_config_templates()
@@ -5065,7 +5082,7 @@ async def list_config_templates(session: dict = Depends(require_auth), _pro=Depe
     return {"templates": templates}
 
 
-@app.post("/api/config-templates")
+@app.post("/api/config-templates", tags=["config"])
 async def create_config_template(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """Create a new config template."""
     data = await request.json()
@@ -5105,7 +5122,7 @@ async def create_config_template(request: Request, session: dict = Depends(requi
     return {"id": template_id, "success": True}
 
 
-@app.put("/api/config-templates/{template_id}")
+@app.put("/api/config-templates/{template_id}", tags=["config"])
 async def update_config_template_api(template_id: int, request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """Update a config template."""
     existing = db.get_config_template(template_id)
@@ -5141,7 +5158,7 @@ async def update_config_template_api(template_id: int, request: Request, session
     return {"success": True}
 
 
-@app.delete("/api/config-templates/{template_id}")
+@app.delete("/api/config-templates/{template_id}", tags=["config"])
 async def delete_config_template_api(template_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """Delete a config template."""
     existing = db.get_config_template(template_id)
@@ -5155,7 +5172,7 @@ async def delete_config_template_api(template_id: int, session: dict = Depends(r
 # Config Compliance
 # ============================================================================
 
-@app.get("/api/config-compliance")
+@app.get("/api/config-compliance", tags=["config"])
 async def get_config_compliance(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_COMPLIANCE))):
     """Get per-device config compliance status."""
     all_configs = db.get_all_latest_configs()
@@ -5250,7 +5267,7 @@ def _normalize_prefill_section(category: str, section):
     return _strip_empty_prefill_value(section)
 
 
-@app.get("/api/config-prefill/{category}")
+@app.get("/api/config-prefill/{category}", tags=["config"])
 async def get_config_prefill(category: str, session: dict = Depends(require_auth)):
     """Get pre-fill data for a config category by analyzing fleet configs.
 
@@ -5319,7 +5336,7 @@ async def get_config_prefill(category: str, session: dict = Depends(require_auth
 # Config Push (Mass Operations)
 # ============================================================================
 
-@app.post("/api/config-push")
+@app.post("/api/config-push", tags=["config"])
 async def push_config_templates(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
     """Push config template(s) to devices.
 
@@ -5530,7 +5547,7 @@ async def _run_config_push(job_id: str, device_list: list, templates: list):
 # RADIUS Server Management
 # ============================================================================
 
-@app.get("/api/radius-server/config")
+@app.get("/api/radius-server/config", tags=["auth"])
 async def get_radius_server_config_api(
     session: dict = Depends(require_auth),
     _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
@@ -5554,7 +5571,7 @@ async def get_radius_server_config_api(
     }
 
 
-@app.put("/api/radius-server/config")
+@app.put("/api/radius-server/config", tags=["auth"])
 async def update_radius_server_config_api(
     request: Request,
     session: dict = Depends(require_role("admin")),
@@ -5608,7 +5625,7 @@ async def update_radius_server_config_api(
     return {"status": "ok"}
 
 
-@app.post("/api/radius-server/restart")
+@app.post("/api/radius-server/restart", tags=["auth"])
 async def restart_radius_server_api(
     session: dict = Depends(require_role("admin")),
     _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
@@ -5621,7 +5638,7 @@ async def restart_radius_server_api(
     return {"status": "ok"}
 
 
-@app.get("/api/radius-server/status")
+@app.get("/api/radius-server/status", tags=["auth"])
 async def get_radius_server_status_api(
     session: dict = Depends(require_auth),
     _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
@@ -5633,7 +5650,7 @@ async def get_radius_server_status_api(
     return svc.get_status()
 
 
-@app.get("/api/radius-server/users")
+@app.get("/api/radius-server/users", tags=["auth"])
 async def list_radius_users_api(
     session: dict = Depends(require_auth),
     _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
@@ -5642,7 +5659,7 @@ async def list_radius_users_api(
     return radius_users.get_radius_users()
 
 
-@app.post("/api/radius-server/users")
+@app.post("/api/radius-server/users", tags=["auth"])
 async def create_radius_user_api(
     request: Request,
     session: dict = Depends(require_role("admin", "operator")),
@@ -5664,7 +5681,7 @@ async def create_radius_user_api(
     return {"id": user_id, "username": username}
 
 
-@app.put("/api/radius-server/users/{user_id}")
+@app.put("/api/radius-server/users/{user_id}", tags=["auth"])
 async def update_radius_user_api(
     user_id: int,
     request: Request,
@@ -5686,7 +5703,7 @@ async def update_radius_user_api(
     return {"status": "ok"}
 
 
-@app.delete("/api/radius-server/users/{user_id}")
+@app.delete("/api/radius-server/users/{user_id}", tags=["auth"])
 async def delete_radius_user_api(
     user_id: int,
     session: dict = Depends(require_role("admin", "operator")),
@@ -5698,7 +5715,7 @@ async def delete_radius_user_api(
     return {"status": "ok"}
 
 
-@app.get("/api/radius-server/auth-log")
+@app.get("/api/radius-server/auth-log", tags=["auth"])
 async def get_radius_auth_log_api(
     limit: int = 50,
     offset: int = 0,
@@ -5715,7 +5732,7 @@ async def get_radius_auth_log_api(
     return {"entries": [dict(r) for r in rows], "total": total}
 
 
-@app.post("/api/radius-server/test-ldap")
+@app.post("/api/radius-server/test-ldap", tags=["auth"])
 async def test_ldap_connection_api(
     request: Request,
     session: dict = Depends(require_role("admin")),
@@ -5776,7 +5793,7 @@ async def test_ldap_connection_api(
         return {"success": False, "error": str(e)}
 
 
-@app.post("/api/radius-server/push-to-devices")
+@app.post("/api/radius-server/push-to-devices", tags=["auth"])
 async def push_radius_to_devices_api(
     request: Request,
     session: dict = Depends(require_role("admin", "operator")),

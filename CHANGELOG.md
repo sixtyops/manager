@@ -5,6 +5,7 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- OpenAPI documentation with tagged endpoints, Swagger UI at /docs, ReDoc at /redoc
 - Bandwidth throttling for firmware uploads (configurable KB/s limit per device)
 - Update analytics dashboard with summary stats, daily trends, model breakdown, error analysis, and device reliability
 - SNMP trap notifications for firmware update job completion (SNMPv2c)
