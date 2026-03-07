@@ -39,6 +39,7 @@ from . import telemetry
 from . import slack
 from . import snmp
 from . import webhooks
+from . import syslog_forwarder
 from . import ssl_manager
 from . import sftp_backup
 from . import builtin_radius
@@ -481,6 +482,7 @@ async def lifespan(app: FastAPI):
     await checker.start()
     await verify_update_on_startup(broadcast)
     _recover_crashed_device_jobs()
+    syslog_forwarder.reload_config()
     license_validator = init_license_validator(broadcast)
     await license_validator.start()
     radius_svc = init_radius_service(broadcast)
@@ -1788,6 +1790,9 @@ _SETTINGS_WRITABLE = {
     "alert_device_offline_enabled", "alert_device_offline_cooldown_minutes",
     # Poller settings
     "poller_concurrency",
+    # Syslog forwarding
+    "syslog_forward_enabled", "syslog_forward_host", "syslog_forward_port",
+    "syslog_forward_protocol", "syslog_forward_facility",
 }
 
 
@@ -2020,6 +2025,10 @@ async def save_settings_and_reevaluate(request: Request, session: dict = Depends
     if scheduler:
         await scheduler.force_check()
 
+    # Reload syslog if syslog settings changed
+    if any(k.startswith("syslog_forward") for k in filtered):
+        syslog_forwarder.reload_config()
+
     return {"success": True}
 
 
@@ -2041,6 +2050,19 @@ async def test_snmp_trap(session: dict = Depends(require_role("admin")), _pro=De
 async def test_webhook(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.WEBHOOKS))):
     """Send a test webhook to verify configuration."""
     success, message = await webhooks.send_test_webhook()
+    return {"success": success, "message": message}
+
+
+@app.get("/api/syslog/status", tags=["notifications"])
+async def get_syslog_status(session: dict = Depends(require_role("admin"))):
+    """Get syslog forwarder status."""
+    return syslog_forwarder.get_status()
+
+
+@app.post("/api/syslog/test", tags=["notifications"])
+async def test_syslog(session: dict = Depends(require_role("admin"))):
+    """Send a test syslog message."""
+    success, message = syslog_forwarder.test_connection()
     return {"success": success, "message": message}
 
 
@@ -4965,6 +4987,19 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         )
     except Exception as e:
         logger.error(f"Webhook notification failed for job {job.job_id}: {e}")
+
+    # Syslog notification
+    try:
+        duration = (job.completed_at - job.started_at).total_seconds()
+        severity = "info" if failed_count == 0 else "warning"
+        syslog_forwarder.send_event(
+            "job",
+            f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, "
+            f"{skipped_count} skipped, firmware={firmware_name}, duration={duration:.0f}s",
+            severity=severity,
+        )
+    except Exception as e:
+        logger.error(f"Syslog notification failed for job {job.job_id}: {e}")
 
     logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped, {cancelled_count} cancelled")
 
