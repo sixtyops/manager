@@ -286,6 +286,7 @@ async def _periodic_cleanup():
             _cleanup_completed_jobs(max_age_seconds=3600)
             _cleanup_oidc_states()
             db.cleanup_old_radius_auth_log(max_age_days=90)
+            db.cleanup_old_config_enforce_log(max_age_days=90)
             _run_daily_data_housekeeping()
             logger.info("Periodic cleanup completed")
         except Exception as e:
@@ -5431,7 +5432,7 @@ async def get_config_prefill(category: str, session: dict = Depends(require_auth
 
     Only returns data if no saved template exists for this category.
     """
-    existing = db.get_config_template_by_category(category)
+    existing = db.get_config_template_by_category(category, scope="global")
     if existing:
         return {"prefilled": False, "reason": "template_exists"}
 

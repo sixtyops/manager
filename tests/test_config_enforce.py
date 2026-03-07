@@ -324,3 +324,88 @@ class TestAutoEnforce:
             if c[0][0].get("status") == "stopped"
         ]
         assert len(stopped_msgs) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Fix validation tests
+# ---------------------------------------------------------------------------
+
+class TestEnforceLogCleanup:
+    def test_cleanup_old_entries(self, scoped_db):
+        """Enforce log entries older than max_age_days are purged."""
+        from datetime import datetime, timedelta
+        old_date = (datetime.now() - timedelta(days=100)).isoformat()
+        scoped_db.execute(
+            "INSERT INTO config_enforce_log (ip, device_type, phase, status, enforced_at) VALUES (?, ?, ?, ?, ?)",
+            ("10.0.0.1", "ap", "canary", "success", old_date)
+        )
+        db.save_config_enforce_log(ip="10.0.0.2", device_type="ap", phase="canary", status="success")
+        scoped_db.commit()
+
+        assert len(db.get_config_enforce_log()) == 2
+        db.cleanup_old_config_enforce_log(max_age_days=90)
+        remaining = db.get_config_enforce_log()
+        assert len(remaining) == 1
+        assert remaining[0]["ip"] == "10.0.0.2"
+
+
+class TestEffectiveTemplatesPerformance:
+    def test_single_query_approach(self, scoped_db):
+        """get_all_effective_templates uses single query, not N+1."""
+        db.save_config_template(
+            name="SNMP Global", category="snmp",
+            config_fragment='{"services":{"snmp":{"community":"public"}}}',
+            scope="global"
+        )
+        db.save_config_template(
+            name="SNMP Site-Alpha", category="snmp",
+            config_fragment='{"services":{"snmp":{"community":"secret"}}}',
+            scope="site", site_id=1
+        )
+        result = db.get_all_effective_templates()
+        # Site 1 devices get site override
+        frag = json.loads(result["10.0.0.1"][0]["config_fragment"])
+        assert frag["services"]["snmp"]["community"] == "secret"
+        # Site 2 device gets global
+        frag = json.loads(result["10.0.0.2"][0]["config_fragment"])
+        assert frag["services"]["snmp"]["community"] == "public"
+
+
+class TestDeviceTypesFiltering:
+    def test_device_types_respected_in_template_resolution(self, scoped_db):
+        """Templates with device_types should only apply to matching device types."""
+        # Custom template only for switches
+        db.save_config_template(
+            name="Switch Custom", category="custom",
+            config_fragment='{"custom":{"switch_only":true}}',
+            scope="global",
+            device_types='["switch"]'
+        )
+        # SNMP for all
+        db.save_config_template(
+            name="SNMP Global", category="snmp",
+            config_fragment='{"services":{"snmp":{"community":"public"}}}',
+            scope="global"
+        )
+        # All devices get both templates from get_config_templates_for_device
+        # (device_types filtering happens in the poller, not the DB query)
+        templates = db.get_config_templates_for_device("10.0.0.1", site_id=1)
+        assert len(templates) == 2  # Both returned; poller filters by device_type
+
+
+class TestPrefillScopeAware:
+    def test_site_template_doesnt_block_global_prefill(self, scoped_db):
+        """A site-scoped template shouldn't prevent global prefill suggestions."""
+        db.save_config_template(
+            name="SNMP Site-Alpha", category="snmp",
+            config_fragment='{"services":{"snmp":{"community":"secret"}}}',
+            scope="site", site_id=1
+        )
+        # Global lookup should return None (no global template)
+        result = db.get_config_template_by_category("snmp", scope="global")
+        assert result is None
+
+        # Without scope filter, it should find the site template
+        result = db.get_config_template_by_category("snmp")
+        assert result is not None
+        assert result["scope"] == "site"

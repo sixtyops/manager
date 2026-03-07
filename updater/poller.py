@@ -9,7 +9,7 @@ from typing import Callable, Optional
 
 from . import database as db
 from . import radius_config
-from .config_utils import deep_merge, fragment_matches, check_config_compliance
+from .config_utils import deep_merge, fragment_matches, check_config_compliance, validate_fragment_safety
 from .tachyon import TachyonClient
 from .models import SignalHealth
 
@@ -640,11 +640,25 @@ class NetworkPoller:
                 config_data = json.loads(config_row["config_json"])
             except (json.JSONDecodeError, TypeError):
                 continue
-            if not check_config_compliance(config_data, templates):
-                # Determine device type
-                ap = db.get_access_point(ip)
-                device_type = "ap" if ap else "switch"
-                non_compliant.append((ip, device_type, templates))
+            # Determine device type
+            ap = db.get_access_point(ip)
+            device_type = "ap" if ap else "switch"
+            # Filter templates by device_types (custom category may target specific types)
+            applicable = []
+            for t in templates:
+                dt = t.get("device_types")
+                if dt:
+                    try:
+                        allowed_types = json.loads(dt) if isinstance(dt, str) else dt
+                        if device_type not in allowed_types:
+                            continue
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                applicable.append(t)
+            if not applicable:
+                continue
+            if not check_config_compliance(config_data, applicable):
+                non_compliant.append((ip, device_type, applicable))
 
         if not non_compliant:
             logger.info("Config enforce: all devices compliant")
@@ -702,17 +716,35 @@ class NetworkPoller:
                 return_exceptions=True,
             )
 
-            # Remove successful devices from remaining
-            success_ips = set()
+            # Count successes and failures in this batch
+            batch_successes = 0
+            batch_failures = 0
             for i, result in enumerate(results):
                 if result is True:
-                    success_ips.add(batch[i][0])
-            remaining = [(ip, dt, t) for ip, dt, t in remaining
-                         if ip not in success_ips and (ip, dt, t) not in batch]
-            # Also remove failed devices from remaining (don't retry)
+                    batch_successes += 1
+                else:
+                    batch_failures += 1
+
+            # Remove all batch devices from remaining (don't retry failures)
             batch_ips = {b[0] for b in batch}
             remaining = [(ip, dt, t) for ip, dt, t in remaining
                          if ip not in batch_ips]
+
+            # If canary phase failed, warn loudly but continue (skip-on-failure design)
+            if phase == "canary" and batch_failures > 0 and batch_successes == 0:
+                logger.warning(
+                    "Config enforce: canary device failed — continuing with caution"
+                )
+                if self.broadcast_func:
+                    await self.broadcast_func({
+                        "type": "config_enforce_status",
+                        "status": "running",
+                        "phase": phase,
+                        "total": len(non_compliant),
+                        "completed": len(non_compliant) - len(remaining),
+                        "message": "Canary failed — proceeding with remaining devices",
+                        "canary_failed": True,
+                    })
 
             # Cooldown between phases (skip after last phase)
             if remaining and phase != PHASE_ORDER[-1]:
@@ -720,6 +752,12 @@ class NetworkPoller:
                 await asyncio.sleep(cooldown_minutes * 60)
 
         logger.info("Config enforce: completed all phases")
+
+        # Re-poll configs for enforced devices to verify changes
+        enforced_ips = [ip for ip, _, _ in non_compliant]
+        if enforced_ips:
+            await self.poll_configs_for_ips(enforced_ips)
+
         if self.broadcast_func:
             await self.broadcast_func({
                 "type": "config_enforce_status",
@@ -760,10 +798,21 @@ class NetworkPoller:
                 if current_config is None:
                     raise RuntimeError("Failed to fetch current config")
 
+                # Save pre-enforce config snapshot (backup)
+                import hashlib
+                pre_json = json.dumps(current_config, sort_keys=True, separators=(",", ":"))
+                pre_hash = hashlib.sha256(pre_json.encode()).hexdigest()
+                model = device.get("model")
+                hardware_id = TachyonClient.MODEL_HARDWARE_IDS.get(
+                    (model or "").lower(), "tn-110-prs"
+                )
+                db.save_device_config(ip, pre_json, pre_hash, model, hardware_id)
+
                 # Merge all template fragments into current config
                 merged = current_config
                 for t in templates:
                     frag = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
+                    validate_fragment_safety(frag)
                     merged = deep_merge(merged, frag)
 
                 # Dry-run validation

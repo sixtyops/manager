@@ -205,6 +205,16 @@
                     </table>
                 </div>
             </div>
+
+            <!-- Config Enforce Log (collapsible) -->
+            <details id="enforceLogDetails" style="margin-top:4px;">
+                <summary style="font-size:0.75rem;font-weight:500;cursor:pointer;padding:4px 8px;color:var(--text-muted);">
+                    Enforce Log <span id="enforceLogCount" style="color:var(--text-dim);font-weight:400;"></span>
+                </summary>
+                <div class="enforce-log-panel" id="enforceLogPanel">
+                    <div style="color:var(--text-dim);padding:8px;">No enforce log entries yet.</div>
+                </div>
+            </details>
         </div>
 
         <!-- History Tab Panel -->
@@ -332,6 +342,11 @@
                     <span class="slider round"></span>
                 </label>
                 <span class="status-bar-muted" style="font-size:0.7rem;">Auto-Enforce</span>
+                <input type="number" id="configEnforceCooldown" min="1" max="60" value="10"
+                    style="width:36px;font-size:0.65rem;padding:1px 3px;display:none;"
+                    title="Cooldown minutes between phases"
+                    onchange="updateEnforceCooldown(this.value)" onclick="event.stopPropagation();">
+                <span id="configCooldownLabel" style="font-size:0.6rem;color:var(--text-dim);display:none;">min cooldown</span>
                 <span class="status-badge" id="configEnforceStatusBadge" style="display:none;font-size:0.65rem;"></span>
                 <div class="status-bar-phases" id="configEnforcePhases" style="display:none;"></div>
                 <span class="status-bar-muted" id="configEnforceProgress" style="display:none;"></span>
@@ -5830,6 +5845,7 @@
                 updateConfigStats();
                 loadConfigTemplateUI();
                 loadEnforceStatus();
+                loadEnforceLog();
                 populateScopeSelector();
             } catch (e) {
                 console.error('Failed to load config data:', e);
@@ -6108,6 +6124,7 @@
             }
             const hint = document.getElementById('cfgEditorHint');
             if (hint) hint.textContent = `Editing ${configCategoryLabel(category)}`;
+            reflectTemplateScopeInSelector(category);
         }
 
         function loadConfigTemplateUI() {
@@ -6155,6 +6172,7 @@
 
             if (!CONFIG_CATEGORIES.includes(activeConfigCategory)) activeConfigCategory = 'snmp';
             selectConfigCategory(activeConfigCategory);
+            updateCategorySiteBadges();
         }
 
         function populateConfigForm(category, formData) {
@@ -6330,13 +6348,21 @@
                     port: parseInt(document.getElementById('cfgSyslogPort').value) || 514,
                     protocol: document.getElementById('cfgSyslogProtocol').value,
                 };
-                case 'watchdog': return {
-                    enabled: document.getElementById('cfgWatchdogEnabled').checked,
-                    interval: parseInt(document.getElementById('cfgWatchdogInterval').value) || 300,
-                    startup_delay: parseInt(document.getElementById('cfgWatchdogStartupDelay').value) || 300,
-                    failure_count: parseInt(document.getElementById('cfgWatchdogFailureCount').value) || 3,
-                    ping_targets: document.getElementById('cfgWatchdogPingTargets').value.split(',').map(s => s.trim()).filter(Boolean),
-                };
+                case 'watchdog': {
+                    const ipPattern = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+                    const rawTargets = document.getElementById('cfgWatchdogPingTargets').value.split(',').map(s => s.trim()).filter(Boolean);
+                    const invalidTargets = rawTargets.filter(t => !ipPattern.test(t));
+                    if (invalidTargets.length) {
+                        showToast(`Invalid IP(s): ${invalidTargets.join(', ')}`);
+                    }
+                    return {
+                        enabled: document.getElementById('cfgWatchdogEnabled').checked,
+                        interval: parseInt(document.getElementById('cfgWatchdogInterval').value) || 300,
+                        startup_delay: parseInt(document.getElementById('cfgWatchdogStartupDelay').value) || 300,
+                        failure_count: parseInt(document.getElementById('cfgWatchdogFailureCount').value) || 3,
+                        ping_targets: rawTargets.filter(t => ipPattern.test(t)),
+                    };
+                }
                 case 'users': {
                     const rows = document.querySelectorAll('.config-user-row');
                     const users = [];
@@ -6415,15 +6441,27 @@
             const fragment = formDataToFragment(category, formData);
             if (!fragment) return;
 
-            const existing = configTemplates.find(t => t.category === category);
-            const name = category.charAt(0).toUpperCase() + category.slice(1) + ' Standard';
-
             // Parse scope from selector
             const scopeVal = document.getElementById('cfgScopeSelect')?.value || 'global';
             let scope = 'global', site_id = null;
             if (scopeVal.startsWith('site:')) {
                 scope = 'site';
                 site_id = parseInt(scopeVal.split(':')[1]);
+            }
+
+            // Match existing template by category + scope + site_id
+            const existing = configTemplates.find(t =>
+                t.category === category &&
+                (t.scope || 'global') === scope &&
+                (scope === 'global' || t.site_id === site_id)
+            );
+
+            // Generate unique name: include site name for site-scoped templates
+            let name = category.charAt(0).toUpperCase() + category.slice(1) + ' Standard';
+            if (scope === 'site') {
+                const site = topology?.sites?.find(s => s.id === site_id);
+                const siteName = site?.name || `Site-${site_id}`;
+                name = `${category.charAt(0).toUpperCase() + category.slice(1)} ${siteName}`;
             }
 
             try {
@@ -6551,8 +6589,9 @@
 
             modal.remove();
 
+            const scopeLabel = {all_aps: 'all APs', all_switches: 'all switches', all_cpes: 'all CPEs', all: 'all devices'}[scope] || scope;
             const confirmed = await showConfirmDialog(
-                `Push ${templateIds.length} template(s) to ${targets.length} target(s)?`,
+                `Push ${templateIds.length} template(s) to ${scopeLabel}?`,
                 {title: 'Confirm Config Push'}
             );
             if (!confirmed) return;
@@ -6615,6 +6654,18 @@
         // ── Config Auto-Enforce ──
 
         async function toggleConfigAutoEnforce(enabled) {
+            // Guard: confirm before enabling auto-enforce
+            if (enabled) {
+                const toggle = document.getElementById('configAutoEnforceToggle');
+                const confirmed = await showConfirmDialog(
+                    'Auto-enforce will automatically push config corrections to non-compliant devices on each poll cycle. Continue?',
+                    {title: 'Enable Auto-Enforce', confirmText: 'Enable'}
+                );
+                if (!confirmed) {
+                    if (toggle) toggle.checked = false;
+                    return;
+                }
+            }
             try {
                 await fetch('/api/settings', {
                     method: 'PUT',
@@ -6635,8 +6686,27 @@
                 const toggle = document.getElementById('configAutoEnforceToggle');
                 if (toggle) toggle.checked = data.enabled;
                 updateEnforceStatusUI(data);
+                // Show/hide cooldown input based on enabled state
+                const cooldownInput = document.getElementById('configEnforceCooldown');
+                const cooldownLabel = document.getElementById('configCooldownLabel');
+                if (cooldownInput) cooldownInput.style.display = data.enabled ? '' : 'none';
+                if (cooldownLabel) cooldownLabel.style.display = data.enabled ? '' : 'none';
             } catch (e) {
                 console.debug('Failed to load enforce status:', e);
+            }
+        }
+
+        async function updateEnforceCooldown(value) {
+            const mins = parseInt(value);
+            if (isNaN(mins) || mins < 1) return;
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({config_enforce_cooldown_minutes: String(mins)}),
+                });
+            } catch (e) {
+                console.debug('Failed to update cooldown:', e);
             }
         }
 
@@ -6689,6 +6759,8 @@
                 completed: msg.completed,
                 failure_count: 0,
             });
+            // Refresh enforce log when status changes (idle = completed/stopped)
+            if (msg.status !== 'running') loadEnforceLog();
         }
 
         function onConfigScopeChange() {
@@ -6707,6 +6779,65 @@
                         select.innerHTML += `<option value="site:${site.id}">Site: ${escapeHtml(site.name)}</option>`;
                     }
                 }
+            }
+        }
+
+        function reflectTemplateScopeInSelector(category) {
+            const select = document.getElementById('cfgScopeSelect');
+            if (!select) return;
+            const t = configTemplates.find(tpl => tpl.category === category);
+            if (t && t.scope === 'site' && t.site_id) {
+                select.value = `site:${t.site_id}`;
+            } else {
+                select.value = 'global';
+            }
+        }
+
+        function updateCategorySiteBadges() {
+            for (const cat of CONFIG_CATEGORIES) {
+                const btn = document.getElementById(`cfgCategoryBtn-${cat}`);
+                if (!btn) continue;
+                const existingBadge = btn.querySelector('.config-site-badge');
+                if (existingBadge) existingBadge.remove();
+                const siteOverrides = configTemplates.filter(
+                    t => t.category === cat && t.scope === 'site'
+                );
+                if (siteOverrides.length > 0) {
+                    const badge = document.createElement('span');
+                    badge.className = 'config-site-badge';
+                    badge.textContent = `+${siteOverrides.length} site${siteOverrides.length > 1 ? 's' : ''}`;
+                    btn.appendChild(badge);
+                }
+            }
+        }
+
+        async function loadEnforceLog() {
+            try {
+                const resp = await fetch('/api/config-enforce/log?limit=20');
+                const data = await resp.json();
+                const entries = data.entries || [];
+                const panel = document.getElementById('enforceLogPanel');
+                const countEl = document.getElementById('enforceLogCount');
+                if (!panel) return;
+                if (countEl) countEl.textContent = entries.length ? `(${entries.length})` : '';
+                if (!entries.length) {
+                    panel.innerHTML = '<div style="color:var(--text-dim);padding:8px;">No enforce log entries yet.</div>';
+                    return;
+                }
+                panel.innerHTML = entries.map(e => {
+                    const time = e.enforced_at ? new Date(e.enforced_at).toLocaleString() : '';
+                    const dotCls = e.status === 'success' ? 'success' : 'failed';
+                    const errorText = e.error ? ` — ${escapeHtml(e.error).substring(0, 60)}` : '';
+                    return `<div class="enforce-log-entry">
+                        <span class="enforce-log-dot ${dotCls}"></span>
+                        <span class="log-ip">${escapeHtml(e.ip)}</span>
+                        <span class="log-phase">${escapeHtml(e.phase || '')}</span>
+                        <span>${escapeHtml(e.status)}${errorText}</span>
+                        <span class="log-time">${escapeHtml(time)}</span>
+                    </div>`;
+                }).join('');
+            } catch (e) {
+                console.debug('Failed to load enforce log:', e);
             }
         }
 

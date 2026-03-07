@@ -1353,6 +1353,13 @@ def cleanup_old_radius_auth_log(max_age_days: int = 90):
         db.execute("DELETE FROM radius_auth_log WHERE occurred_at < ?", (cutoff,))
 
 
+def cleanup_old_config_enforce_log(max_age_days: int = 90):
+    """Remove config enforce log entries older than max_age_days."""
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as db:
+        db.execute("DELETE FROM config_enforce_log WHERE enforced_at < ?", (cutoff,))
+
+
 # Rollout operations
 def get_active_rollout() -> Optional[dict]:
     """Get the current active or paused rollout."""
@@ -2073,13 +2080,22 @@ def get_config_template(template_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def get_config_template_by_category(category: str) -> Optional[dict]:
-    """Get a config template by category (returns first match)."""
+def get_config_template_by_category(category: str, scope: str = None) -> Optional[dict]:
+    """Get a config template by category (returns first match).
+
+    If scope is provided, only matches templates with that scope.
+    """
     with get_db() as db:
-        row = db.execute(
-            "SELECT * FROM config_templates WHERE category = ? ORDER BY id LIMIT 1",
-            (category,)
-        ).fetchone()
+        if scope:
+            row = db.execute(
+                "SELECT * FROM config_templates WHERE category = ? AND scope = ? ORDER BY id LIMIT 1",
+                (category, scope)
+            ).fetchone()
+        else:
+            row = db.execute(
+                "SELECT * FROM config_templates WHERE category = ? ORDER BY id LIMIT 1",
+                (category,)
+            ).fetchone()
         return dict(row) if row else None
 
 
@@ -2132,16 +2148,40 @@ def get_config_templates_for_device(ip: str, site_id: int = None) -> list[dict]:
 
 
 def get_all_effective_templates() -> dict[str, list[dict]]:
-    """Return {ip: [templates]} for all devices, resolving global/site scope."""
+    """Return {ip: [templates]} for all devices, resolving global/site scope.
+
+    Single-query approach: fetch all templates and all devices once, then
+    resolve scope in memory instead of per-device DB calls.
+    """
     with get_db() as db:
         aps = db.execute("SELECT ip, tower_site_id FROM access_points WHERE enabled = 1").fetchall()
         switches = db.execute("SELECT ip, tower_site_id FROM switches WHERE enabled = 1").fetchall()
+        rows = db.execute(
+            "SELECT * FROM config_templates WHERE enabled = 1 ORDER BY category, id"
+        ).fetchall()
+
+    all_templates = [dict(row) for row in rows]
+
+    # Pre-sort templates by scope
+    global_by_cat: dict[str, dict] = {}
+    site_templates: dict[int, dict[str, dict]] = {}  # site_id -> {category -> template}
+    for t in all_templates:
+        scope = t.get("scope", "global")
+        if scope == "global":
+            global_by_cat[t["category"]] = t
+        elif scope == "site" and t.get("site_id") is not None:
+            site_templates.setdefault(t["site_id"], {})[t["category"]] = t
+
+    def _resolve(site_id):
+        site_by_cat = site_templates.get(site_id, {}) if site_id is not None else {}
+        effective = {}
+        for cat in set(list(global_by_cat.keys()) + list(site_by_cat.keys())):
+            effective[cat] = site_by_cat.get(cat, global_by_cat.get(cat))
+        return [t for t in effective.values() if t is not None]
 
     result = {}
     for row in list(aps) + list(switches):
-        ip = row["ip"]
-        site_id = row["tower_site_id"]
-        result[ip] = get_config_templates_for_device(ip, site_id)
+        result[row["ip"]] = _resolve(row["tower_site_id"])
     return result
 
 
