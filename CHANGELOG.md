@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- SLA/uptime tracking with automatic state transition detection in poller
+- Per-device and fleet-wide availability percentage calculations
+- Uptime API endpoints: /api/uptime/device, /api/uptime/fleet, /api/uptime/events
 - Device notes field for APs and switches
 - Bulk device operations: enable, disable, delete, move to site
 - OpenAPI documentation with tagged endpoints, Swagger UI at /docs, ReDoc at /redoc
