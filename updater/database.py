@@ -81,6 +81,14 @@ def _migrate(db):
                     (f.name, "2020-01-01T00:00:00", "legacy")
                 )
 
+    # Add notes column to access_points and switches
+    ap_columns = [row[1] for row in db.execute("PRAGMA table_info(access_points)").fetchall()]
+    if "notes" not in ap_columns:
+        db.execute("ALTER TABLE access_points ADD COLUMN notes TEXT DEFAULT NULL")
+    sw_columns = [row[1] for row in db.execute("PRAGMA table_info(switches)").fetchall()]
+    if "notes" not in sw_columns:
+        db.execute("ALTER TABLE switches ADD COLUMN notes TEXT DEFAULT NULL")
+
     # Encrypt any plaintext device passwords
     _migrate_encrypt_passwords(db)
 
@@ -647,7 +655,7 @@ def upsert_access_point(ip: str, username: str, password: str, tower_site_id: in
         if existing:
             # Update
             updates = {"username": username, "password": enc_password, "tower_site_id": tower_site_id}
-            allowed = {"system_name", "model", "mac", "firmware_version", "location", "last_seen", "last_error", "enabled"}
+            allowed = {"system_name", "model", "mac", "firmware_version", "location", "last_seen", "last_error", "enabled", "notes"}
             updates.update({k: v for k, v in kwargs.items() if k in allowed})
 
             set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
@@ -726,7 +734,7 @@ def upsert_switch(ip: str, username: str, password: str, tower_site_id: int = No
 
         if existing:
             updates = {"username": username, "password": enc_password, "tower_site_id": tower_site_id}
-            allowed = {"system_name", "model", "mac", "firmware_version", "location", "last_seen", "last_error", "enabled"}
+            allowed = {"system_name", "model", "mac", "firmware_version", "location", "last_seen", "last_error", "enabled", "notes"}
             updates.update({k: v for k, v in kwargs.items() if k in allowed})
 
             set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
@@ -765,6 +773,45 @@ def delete_switch(ip: str):
     """Delete a switch."""
     with get_db() as db:
         db.execute("DELETE FROM switches WHERE ip = ?", (ip,))
+
+
+def bulk_set_enabled(device_type: str, ips: list[str], enabled: bool) -> int:
+    """Enable or disable multiple devices. Returns count of affected rows."""
+    table = "access_points" if device_type == "ap" else "switches"
+    val = 1 if enabled else 0
+    with get_db() as conn:
+        placeholders = ",".join("?" for _ in ips)
+        cursor = conn.execute(
+            f"UPDATE {table} SET enabled = ? WHERE ip IN ({placeholders})",
+            [val] + list(ips),
+        )
+        return cursor.rowcount
+
+
+def bulk_delete_devices(device_type: str, ips: list[str]) -> int:
+    """Delete multiple devices. Returns count of deleted rows."""
+    table = "access_points" if device_type == "ap" else "switches"
+    with get_db() as conn:
+        placeholders = ",".join("?" for _ in ips)
+        if device_type == "ap":
+            conn.execute(f"DELETE FROM cpe_cache WHERE ap_ip IN ({placeholders})", list(ips))
+        cursor = conn.execute(
+            f"DELETE FROM {table} WHERE ip IN ({placeholders})",
+            list(ips),
+        )
+        return cursor.rowcount
+
+
+def bulk_move_to_site(device_type: str, ips: list[str], site_id: Optional[int]) -> int:
+    """Move multiple devices to a site. Returns count of affected rows."""
+    table = "access_points" if device_type == "ap" else "switches"
+    with get_db() as conn:
+        placeholders = ",".join("?" for _ in ips)
+        cursor = conn.execute(
+            f"UPDATE {table} SET tower_site_id = ? WHERE ip IN ({placeholders})",
+            [site_id] + list(ips),
+        )
+        return cursor.rowcount
 
 
 def update_device_credentials(device_type: str, ip: str, username: str, password: str):

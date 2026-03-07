@@ -1204,6 +1204,7 @@ async def update_ap(
     password: str = Form(None),
     tower_site_id: int = Form(None),
     enabled: bool = Form(None),
+    notes: str = Form(None),
     session: dict = Depends(require_role("admin", "operator")),
 ):
     """Update an access point."""
@@ -1230,7 +1231,12 @@ async def update_ap(
             logger.error(f"Failed to validate AP credentials for {ip}: {exc}")
             raise HTTPException(400, f"Cannot connect to {ip} with the supplied credentials")
 
-    db.upsert_access_point(ip, new_username, new_password, new_site_id, enabled=enabled)
+    kwargs = {}
+    if enabled is not None:
+        kwargs["enabled"] = enabled
+    if notes is not None:
+        kwargs["notes"] = notes
+    db.upsert_access_point(ip, new_username, new_password, new_site_id, **kwargs)
 
     if credentials_changed:
         poller = get_poller()
@@ -1321,6 +1327,7 @@ async def update_switch(
     password: str = Form(None),
     tower_site_id: int = Form(None),
     enabled: bool = Form(None),
+    notes: str = Form(None),
     session: dict = Depends(require_role("admin", "operator")),
 ):
     """Update a switch."""
@@ -1332,7 +1339,12 @@ async def update_switch(
     new_password = password if password else sw["password"]
     new_site_id = tower_site_id if tower_site_id is not None else sw["tower_site_id"]
 
-    db.upsert_switch(ip, new_username, new_password, new_site_id, enabled=enabled)
+    kwargs = {}
+    if enabled is not None:
+        kwargs["enabled"] = enabled
+    if notes is not None:
+        kwargs["notes"] = notes
+    db.upsert_switch(ip, new_username, new_password, new_site_id, **kwargs)
 
     if username or password:
         poller = get_poller()
@@ -1357,6 +1369,75 @@ async def delete_switch(ip: str, session: dict = Depends(require_role("admin", "
         await scheduler._broadcast_status()
 
     return {"success": True}
+
+
+# ============================================================================
+# Bulk Device Operations
+# ============================================================================
+
+@app.post("/api/devices/bulk-enable", tags=["devices"])
+async def bulk_enable_devices(
+    request: Request,
+    session: dict = Depends(require_role("admin", "operator")),
+):
+    """Enable multiple devices."""
+    body = await request.json()
+    device_type = body.get("device_type", "ap")
+    ips = body.get("ips", [])
+    if not ips or device_type not in ("ap", "switch"):
+        raise HTTPException(400, "Provide ips list and device_type (ap or switch)")
+    count = db.bulk_set_enabled(device_type, ips, True)
+    return {"success": True, "affected": count}
+
+
+@app.post("/api/devices/bulk-disable", tags=["devices"])
+async def bulk_disable_devices(
+    request: Request,
+    session: dict = Depends(require_role("admin", "operator")),
+):
+    """Disable multiple devices."""
+    body = await request.json()
+    device_type = body.get("device_type", "ap")
+    ips = body.get("ips", [])
+    if not ips or device_type not in ("ap", "switch"):
+        raise HTTPException(400, "Provide ips list and device_type (ap or switch)")
+    count = db.bulk_set_enabled(device_type, ips, False)
+    return {"success": True, "affected": count}
+
+
+@app.post("/api/devices/bulk-delete", tags=["devices"])
+async def bulk_delete_devices(
+    request: Request,
+    session: dict = Depends(require_role("admin")),
+):
+    """Delete multiple devices. Admin only."""
+    body = await request.json()
+    device_type = body.get("device_type", "ap")
+    ips = body.get("ips", [])
+    if not ips or device_type not in ("ap", "switch"):
+        raise HTTPException(400, "Provide ips list and device_type (ap or switch)")
+    poller = get_poller()
+    if poller:
+        for ip in ips:
+            poller.invalidate_client(ip)
+    count = db.bulk_delete_devices(device_type, ips)
+    return {"success": True, "deleted": count}
+
+
+@app.post("/api/devices/bulk-move", tags=["devices"])
+async def bulk_move_devices(
+    request: Request,
+    session: dict = Depends(require_role("admin", "operator")),
+):
+    """Move multiple devices to a site."""
+    body = await request.json()
+    device_type = body.get("device_type", "ap")
+    ips = body.get("ips", [])
+    site_id = body.get("site_id")
+    if not ips or device_type not in ("ap", "switch"):
+        raise HTTPException(400, "Provide ips list and device_type (ap or switch)")
+    count = db.bulk_move_to_site(device_type, ips, site_id)
+    return {"success": True, "affected": count}
 
 
 @app.post("/api/switches/{ip}/poll", tags=["devices"])

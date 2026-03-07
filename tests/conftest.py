@@ -48,6 +48,7 @@ def memory_db():
             bank2_version TEXT,
             active_bank INTEGER,
             last_firmware_update TEXT,
+            notes TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
         );
@@ -69,6 +70,7 @@ def memory_db():
             bank2_version TEXT,
             active_bank INTEGER,
             last_firmware_update TEXT,
+            notes TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
         );
