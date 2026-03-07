@@ -22,7 +22,7 @@
     <div class="header">
         <h1>SixtyOps</h1>
         <div class="header-right">
-            <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:#9ca3af;"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:#6b7280;"></span></span>
+            <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:var(--text-dim);"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:var(--text-muted);"></span></span>
             <div class="user-menu">
                 <button class="user-btn" onclick="document.getElementById('userDropdown').classList.toggle('open')">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -54,7 +54,7 @@
         <div class="top-section">
             <div class="card">
                 <h2>Add APs &amp; Switches</h2>
-                <p style="font-size:0.75rem;color:#9ca3af;margin-bottom:8px;">Devices are auto-classified as APs or switches based on model (TNA&nbsp;=&nbsp;AP, TNS&nbsp;=&nbsp;switch) and assigned to tower sites by their &ldquo;location&rdquo; field.</p>
+                <p style="font-size:0.75rem;color:var(--text-dim);margin-bottom:8px;">Devices are auto-classified as APs or switches based on model (TNA&nbsp;=&nbsp;AP, TNS&nbsp;=&nbsp;switch) and assigned to tower sites by their &ldquo;location&rdquo; field.</p>
                 <div class="discovery-form">
                     <textarea id="deviceIps" placeholder="Device IPs (one per line)&#10;192.168.1.1&#10;192.168.1.2"></textarea>
                     <div class="cred-row">
@@ -84,7 +84,7 @@
                         <span>Critical (&lt; &minus;75 dBm)</span>
                     </div>
                     <div class="legend-item">
-                        <div class="dot" style="background:#ef4444;border:2px solid #991b1b;width:10px;height:10px;border-radius:2px;"></div>
+                        <div class="dot u-dot-offline"></div>
                         <span>Offline</span>
                     </div>
                 </div>
@@ -180,7 +180,7 @@
                     <span class="stat-label">Non-Compliant</span>
                 </div>
                 <div class="stat">
-                    <div class="dot" style="background:#9ca3af;"></div>
+                    <div class="dot u-dot-neutral"></div>
                     <span class="stat-value" id="configUncheckedCount">0</span>
                     <span class="stat-label">Unchecked</span>
                 </div>
@@ -249,20 +249,20 @@
             <!-- Summary Cards -->
             <div id="analyticsSummary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px;">
                 <div class="table-card" style="padding:12px;text-align:center;">
-                    <div style="font-size:0.7rem;color:#9ca3af;text-transform:uppercase;">Total Jobs</div>
-                    <div id="analyticsJobs" style="font-size:1.4rem;font-weight:700;color:var(--text);">-</div>
+                    <div class="analytics-stat-label">Total Jobs</div>
+                    <div id="analyticsJobs" class="analytics-stat-value">-</div>
                 </div>
                 <div class="table-card" style="padding:12px;text-align:center;">
-                    <div style="font-size:0.7rem;color:#9ca3af;text-transform:uppercase;">Devices Updated</div>
-                    <div id="analyticsDevices" style="font-size:1.4rem;font-weight:700;color:var(--text);">-</div>
+                    <div class="analytics-stat-label">Devices Updated</div>
+                    <div id="analyticsDevices" class="analytics-stat-value">-</div>
                 </div>
                 <div class="table-card" style="padding:12px;text-align:center;">
-                    <div style="font-size:0.7rem;color:#9ca3af;text-transform:uppercase;">Success Rate</div>
-                    <div id="analyticsRate" style="font-size:1.4rem;font-weight:700;color:#10b981;">-</div>
+                    <div class="analytics-stat-label">Success Rate</div>
+                    <div id="analyticsRate" class="analytics-stat-value success">-</div>
                 </div>
                 <div class="table-card" style="padding:12px;text-align:center;">
-                    <div style="font-size:0.7rem;color:#9ca3af;text-transform:uppercase;">Avg Duration</div>
-                    <div id="analyticsDuration" style="font-size:1.4rem;font-weight:700;color:var(--text);">-</div>
+                    <div class="analytics-stat-label">Avg Duration</div>
+                    <div id="analyticsDuration" class="analytics-stat-value">-</div>
                 </div>
             </div>
 
@@ -428,8 +428,8 @@
                         <input type="number" id="drawerParallel" value="2" min="1" max="10">
                     </div>
                     <div>
-                        <label>Bandwidth Limit (KB/s)</label>
-                        <input type="number" id="drawerBandwidthLimit" value="0" min="0" max="1000000" placeholder="0 = unlimited">
+                        <label>Bandwidth Limit (KB/s per device)</label>
+                        <input type="number" id="drawerBandwidthLimit" value="0" min="0" max="100000" placeholder="0 = unlimited">
                     </div>
 
                     <div class="drawer-section-title">Options</div>
@@ -466,7 +466,7 @@
 
                     <div class="drawer-section-title">Canary</div>
                     <div style="grid-column: 2 / -1;">
-                        <div style="font-size:0.72rem;color:#6b7280;margin-bottom:8px;">Optional test devices that always run first during the canary phase. AP canaries bring their attached CPEs with them. Clicking the pending Canary pill can run only this phase outside the normal maintenance window.</div>
+                        <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;">Optional test devices that always run first during the canary phase. AP canaries bring their attached CPEs with them. Clicking the pending Canary pill can run only this phase outside the normal maintenance window.</div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
                             <div>
                                 <label>AP Canary Devices</label>
@@ -663,7 +663,7 @@
         <div class="backup-modal app-settings-modal">
             <div class="app-settings-header">
                 <h3 class="u-m0">App Settings</h3>
-                <button onclick="closeAppSettingsModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:1.2rem;line-height:1;padding:4px;">&times;</button>
+                <button onclick="closeAppSettingsModal()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.2rem;line-height:1;padding:4px;">&times;</button>
             </div>
 
             <!-- Tabs -->
@@ -682,16 +682,16 @@
                     <button class="toggle" id="appAutoUpdateToggle" type="button" aria-label="Toggle app auto-update" aria-pressed="false" onclick="toggleAppAutoUpdate()" style="flex-shrink:0;"></button>
                     <label style="margin:0;font-weight:500;">Auto Check and Install Updates</label>
                 </div>
-                <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 16px 0;">When enabled, the app will automatically check for new versions and install them when no firmware rollout is active.</p>
+                <p class="u-note-inline" style="margin-bottom:16px;">When enabled, the app will automatically check for new versions and install them when no firmware rollout is active.</p>
 
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
                     <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
                     <span id="appUpdateStatus" class="u-text-xs-muted"></span>
-                    <span id="appVersionDisplay" style="font-size:0.75rem;color:#6b7280;margin-left:auto;"></span>
+                    <span id="appVersionDisplay" class="u-text-xs-muted" style="margin-left:auto;"></span>
                 </div>
 
-                <div style="display:flex;align-items:center;gap:8px;padding-top:12px;border-top:1px solid #f3f4f6;">
-                    <label style="margin:0;font-size:0.75rem;color:#9ca3af;">Release Channel</label>
+                <div style="display:flex;align-items:center;gap:8px;padding-top:12px;border-top:1px solid var(--border-light);">
+                    <label class="u-text-xs-dim" style="margin:0;">Release Channel</label>
                     <select id="appReleaseChannel" onchange="saveReleaseChannel()" style="font-size:0.75rem;">
                         <option value="stable">Stable</option>
                         <option value="dev">Dev</option>
@@ -714,16 +714,16 @@
                 <!-- SFTP Backup Status -->
                 <div style="margin-bottom:16px;">
                     <label>Scheduled Backup</label>
-                    <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 6px 0;">Automatic nightly database backup via SFTP.</p>
-                    <div id="backupStatusInfo" style="font-size:0.75rem;color:#6b7280;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;">Loading...</div>
+                    <p class="u-note-inline">Automatic nightly database backup via SFTP.</p>
+                    <div id="backupStatusInfo" style="font-size:0.75rem;color:var(--text-muted);padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;">Loading...</div>
                     <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
                         <button class="backup-btn" onclick="runBackupNow()">Run Now</button>
-                        <a href="/backup-setup" class="backup-btn" style="text-decoration:none;text-align:center;background:#6b7280;color:#fff;">Configure</a>
-                        <span id="backupRunStatus" style="font-size:0.75rem;color:#6b7280;"></span>
+                        <a href="/backup-setup" class="backup-btn u-bg-muted-cta" style="text-decoration:none;text-align:center;">Configure</a>
+                        <span id="backupRunStatus" class="u-text-xs-muted"></span>
                     </div>
                 </div>
 
-                <div style="border-top:1px solid #e5e7eb;margin-bottom:16px;"></div>
+                <div style="border-top:1px solid var(--border);margin-bottom:16px;"></div>
 
                 <!-- Export -->
                 <div style="margin-bottom:16px;">
@@ -735,7 +735,7 @@
                     </div>
                 </div>
 
-                <div style="border-top:1px solid #e5e7eb;margin-bottom:16px;"></div>
+                <div style="border-top:1px solid var(--border);margin-bottom:16px;"></div>
 
                 <!-- Import -->
                 <div>
@@ -765,7 +765,7 @@
                     <input type="text" id="notifSlackWebhook" placeholder="https://hooks.slack.com/services/..." style="width:100%;font-size:0.8rem;">
                     <div class="u-flex-center-gap6">
                         <button class="backup-btn" onclick="saveSlackWebhook()">Save</button>
-                        <button class="backup-btn" onclick="testSlackWebhookModal()" style="background:#6b7280;">Test</button>
+                        <button class="backup-btn u-bg-muted-cta" onclick="testSlackWebhookModal()">Test</button>
                     </div>
                 </div>
 
@@ -778,25 +778,25 @@
                 <div class="u-flex-col-gap8">
                     <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
                         <input type="checkbox" id="snmpTrapsEnabled" onchange="toggleSnmpFields()">
-                        <span style="font-size:0.75rem;color:#6b7280;">Enable SNMP Traps</span>
+                        <span class="u-text-xs-muted">Enable SNMP Traps</span>
                     </label>
-                    <div id="snmpFields" style="display:grid;grid-template-columns:1fr 100px;gap:8px;">
+                    <div id="snmpFields" style="display:grid;grid-template-columns:1fr minmax(80px,100px);gap:8px;">
                         <div>
-                            <label style="font-size:0.7rem;color:#9ca3af;">Trap Host</label>
-                            <input type="text" id="snmpTrapHost" placeholder="192.168.1.100" style="width:100%;font-size:0.8rem;">
+                            <label class="snmp-field-label">Trap Host</label>
+                            <input type="text" id="snmpTrapHost" placeholder="192.168.1.100" class="snmp-field-input">
                         </div>
                         <div>
-                            <label style="font-size:0.7rem;color:#9ca3af;">Port</label>
-                            <input type="number" id="snmpTrapPort" value="162" min="1" max="65535" style="width:100%;font-size:0.8rem;">
+                            <label class="snmp-field-label">Port</label>
+                            <input type="number" id="snmpTrapPort" value="162" min="1" max="65535" class="snmp-field-input">
                         </div>
                         <div style="grid-column:1/-1;">
-                            <label style="font-size:0.7rem;color:#9ca3af;">Community String</label>
-                            <input type="text" id="snmpTrapCommunity" placeholder="public" style="width:100%;font-size:0.8rem;">
+                            <label class="snmp-field-label">Community String</label>
+                            <input type="text" id="snmpTrapCommunity" placeholder="public" class="snmp-field-input">
                         </div>
                     </div>
                     <div class="u-flex-center-gap6">
                         <button class="backup-btn" onclick="saveSnmpSettings()">Save</button>
-                        <button class="backup-btn" onclick="testSnmpTrap()" style="background:#6b7280;">Test Trap</button>
+                        <button class="backup-btn u-bg-muted-cta" onclick="testSnmpTrap()">Test Trap</button>
                     </div>
                 </div>
                 <div id="snmpStatus" class="u-status-line"></div>
@@ -811,46 +811,46 @@
                         <span id="authRadiusBadge" style="font-size:0.7rem;font-weight:600;padding:2px 8px;border-radius:999px;background:#e5e7eb;color:#4b5563;">Inactive</span>
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
                             <input type="checkbox" id="authRadiusEnabled" onchange="toggleRadiusFields()">
-                            <span style="font-size:0.75rem;color:#6b7280;">Enabled</span>
+                            <span class="u-text-xs-muted">Enabled</span>
                         </label>
                     </div>
-                    <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 10px 0;">Named admin accounts for APs, SMs, and switches authenticating back to this appliance. Reserved usernames <code>admin</code> and <code>root</code> are blocked.</p>
+                    <p class="u-note-block">Named admin accounts for APs, SMs, and switches authenticating back to this appliance. Reserved usernames <code>admin</code> and <code>root</code> are blocked.</p>
                     <div id="radiusFields" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 140px;gap:8px;">
                         <div>
-                            <label style="font-size:0.7rem;color:#6b7280;">Device Host</label>
-                            <input type="text" id="authRadiusHost" placeholder="radius.example.com" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                            <label class="u-label-compact">Device Host</label>
+                            <input type="text" id="authRadiusHost" placeholder="radius.example.com" class="u-input-compact">
                         </div>
                         <div>
-                            <label style="font-size:0.7rem;color:#6b7280;">Shared Secret</label>
-                            <input type="password" id="authRadiusSecret" placeholder="Enter shared secret" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                            <label class="u-label-compact">Shared Secret</label>
+                            <input type="password" id="authRadiusSecret" placeholder="Enter shared secret" class="u-input-compact">
                         </div>
                         <div>
-                            <label style="font-size:0.7rem;color:#6b7280;">UDP Port</label>
-                            <input type="number" id="authRadiusPort" min="1" max="65535" value="1812" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                            <label class="u-label-compact">UDP Port</label>
+                            <input type="number" id="authRadiusPort" min="1" max="65535" value="1812" class="u-input-compact">
                         </div>
                     </div>
                     <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
                         <button class="backup-btn" onclick="saveRadiusConfig()">Save RADIUS</button>
-                        <button class="backup-btn" onclick="testRadiusConfig()" style="background:#6b7280;color:#fff;">Test</button>
-                        <button class="backup-btn" onclick="refreshRadiusData()" style="background:#6b7280;color:#fff;">Refresh</button>
-                        <span id="radiusStatus" style="font-size:0.75rem;color:#6b7280;"></span>
+                        <button class="backup-btn u-bg-muted-cta" onclick="testRadiusConfig()">Test</button>
+                        <button class="backup-btn u-bg-muted-cta" onclick="refreshRadiusData()">Refresh</button>
+                        <span id="radiusStatus" class="u-text-xs-muted"></span>
                     </div>
 
                     <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px;">
-                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
-                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Last Rotated</div>
+                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
+                            <div class="settings-stat-label">Last Rotated</div>
                             <div id="radiusSecretRotated" style="font-size:0.9rem;font-weight:700;color:#111827;margin-top:4px;">Unknown</div>
                         </div>
-                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
-                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Secret Age</div>
+                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
+                            <div class="settings-stat-label">Secret Age</div>
                             <div id="radiusSecretAge" style="font-size:0.9rem;font-weight:700;color:#111827;margin-top:4px;">Unknown</div>
                         </div>
-                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
-                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Review Policy</div>
+                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
+                            <div class="settings-stat-label">Review Policy</div>
                             <div id="radiusSecretPolicy" style="font-size:0.9rem;font-weight:700;color:#111827;margin-top:4px;">365 days</div>
                         </div>
-                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
-                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Secret Status</div>
+                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
+                            <div class="settings-stat-label">Secret Status</div>
                             <div id="radiusSecretState" style="font-size:0.9rem;font-weight:700;color:#111827;margin-top:4px;">No Secret</div>
                         </div>
                     </div>
@@ -861,20 +861,20 @@
                     </div>
 
                     <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px;">
-                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
-                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Admin Accounts</div>
+                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
+                            <div class="settings-stat-label">Admin Accounts</div>
                             <div id="radiusStatUsers" style="font-size:1rem;font-weight:700;color:#111827;margin-top:4px;">0</div>
                         </div>
-                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
-                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Known Devices</div>
+                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
+                            <div class="settings-stat-label">Known Devices</div>
                             <div id="radiusStatDevices" style="font-size:1rem;font-weight:700;color:#111827;margin-top:4px;">0</div>
                         </div>
-                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
-                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Success Rate</div>
+                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
+                            <div class="settings-stat-label">Success Rate</div>
                             <div id="radiusStatSuccess" style="font-size:1rem;font-weight:700;color:#0D9488;margin-top:4px;">100%</div>
                         </div>
-                        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
-                            <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.04em;">Logins Today</div>
+                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
+                            <div class="settings-stat-label">Logins Today</div>
                             <div id="radiusStatToday" style="font-size:1rem;font-weight:700;color:#111827;margin-top:4px;">0</div>
                         </div>
                     </div>
@@ -884,61 +884,61 @@
                             <h5 style="margin:0;font-size:0.8rem;font-weight:600;">Device Radius Rollout</h5>
                             <div style="display:flex;gap:6px;">
                                 <button class="backup-btn" id="radiusRolloutStartBtn" onclick="startRadiusRollout()">Start Rollout</button>
-                                <button class="backup-btn" id="radiusRolloutResumeBtn" onclick="resumeRadiusRollout()" style="display:none;background:#6b7280;color:#fff;">Resume</button>
+                                <button class="backup-btn u-bg-muted-cta" id="radiusRolloutResumeBtn" onclick="resumeRadiusRollout()" style="display:none;">Resume</button>
                                 <button class="backup-btn" id="radiusRolloutCancelBtn" onclick="cancelRadiusRollout()" style="display:none;background:#dc2626;color:#fff;">Cancel</button>
                             </div>
                         </div>
-                        <p style="font-size:0.72rem;color:#9ca3af;margin:0 0 8px 0;">Rollout includes enabled APs, switches, and CPEs currently reachable with inherited parent AP credentials. Rollout start refreshes AP/CPE auth state first. If a CPE cannot log in with inherited credentials, fix the parent AP credentials here and resume.</p>
-                        <div id="radiusRolloutSummary" style="font-size:0.75rem;color:#6b7280;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;">No Radius rollout started.</div>
-                        <div id="radiusRolloutStatus" style="font-size:0.75rem;color:#6b7280;margin-top:8px;min-height:1.2em;"></div>
+                        <p class="u-note-inline" style="margin-bottom:8px;">Rollout includes enabled APs, switches, and CPEs currently reachable with inherited parent AP credentials. Rollout start refreshes AP/CPE auth state first. If a CPE cannot log in with inherited credentials, fix the parent AP credentials here and resume.</p>
+                        <div id="radiusRolloutSummary" style="font-size:0.75rem;color:var(--text-muted);padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;">No Radius rollout started.</div>
+                        <div id="radiusRolloutStatus" class="u-status-line" style="margin-top:8px;"></div>
                         <div id="radiusRolloutDevices" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;"></div>
                     </div>
 
                     <div style="margin-top:14px;">
                         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
                             <h5 style="margin:0;font-size:0.8rem;font-weight:600;">Admin Accounts</h5>
-                            <span style="font-size:0.72rem;color:#9ca3af;">Reserved: admin, root</span>
+                            <span class="u-text-sm-dim">Reserved: admin, root</span>
                         </div>
                         <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 80px auto;gap:8px;align-items:end;">
                             <div>
-                                <label style="font-size:0.7rem;color:#6b7280;">Username</label>
+                                <label class="u-label-compact">Username</label>
                                 <input type="text" id="radiusNewUsername" placeholder="jsmith" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
                             </div>
                             <div>
-                                <label style="font-size:0.7rem;color:#6b7280;">Password</label>
+                                <label class="u-label-compact">Password</label>
                                 <input type="password" id="radiusNewPassword" placeholder="Enter password" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
                             </div>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:0.75rem;color:#6b7280;padding-bottom:8px;">
+                            <label class="u-text-xs-muted" style="display:flex;align-items:center;gap:6px;padding-bottom:8px;">
                                 <input type="checkbox" id="radiusNewEnabled" checked>
                                 Enabled
                             </label>
                             <button class="backup-btn" onclick="createRadiusUser()">Add User</button>
                         </div>
-                        <div id="radiusUsersStatus" style="font-size:0.75rem;color:#6b7280;margin-top:8px;min-height:1.2em;"></div>
+                        <div id="radiusUsersStatus" class="u-status-line" style="margin-top:8px;"></div>
                         <div id="radiusUsersList" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;"></div>
                     </div>
 
                     <div style="margin-top:14px;">
                         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
                             <h5 style="margin:0;font-size:0.8rem;font-weight:600;">Manual Client Overrides</h5>
-                            <span style="font-size:0.72rem;color:#9ca3af;">Use when device source IPs are not covered by inventory</span>
+                            <span class="u-text-sm-dim">Use when device source IPs are not covered by inventory</span>
                         </div>
                         <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 80px auto;gap:8px;align-items:end;">
                             <div>
-                                <label style="font-size:0.7rem;color:#6b7280;">IP or CIDR</label>
+                                <label class="u-label-compact">IP or CIDR</label>
                                 <input type="text" id="radiusClientSpec" placeholder="10.0.0.5 or 10.0.0.0/24" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
                             </div>
                             <div>
-                                <label style="font-size:0.7rem;color:#6b7280;">Short Name</label>
+                                <label class="u-label-compact">Short Name</label>
                                 <input type="text" id="radiusClientShortname" placeholder="tower-subnet" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
                             </div>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:0.75rem;color:#6b7280;padding-bottom:8px;">
+                            <label class="u-text-xs-muted" style="display:flex;align-items:center;gap:6px;padding-bottom:8px;">
                                 <input type="checkbox" id="radiusClientEnabled" checked>
                                 Enabled
                             </label>
                             <button class="backup-btn" onclick="createRadiusClient()">Add Client</button>
                         </div>
-                        <div id="radiusClientsStatus" style="font-size:0.75rem;color:#6b7280;margin-top:8px;min-height:1.2em;"></div>
+                        <div id="radiusClientsStatus" class="u-status-line" style="margin-top:8px;"></div>
                         <div id="radiusClientsList" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;"></div>
                     </div>
 
@@ -1058,16 +1058,16 @@
                             <div id="radiusAddUserForm" style="display:none;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-bottom:8px;">
                                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;align-items:end;">
                                     <div>
-                                        <label style="font-size:0.65rem;color:#6b7280;">Username</label>
+                                        <label class="u-label-compact" style="font-size:0.65rem;">Username</label>
                                         <input type="text" id="radiusNewUsername" placeholder="username" class="u-input-sm">
                                     </div>
                                     <div>
-                                        <label style="font-size:0.65rem;color:#6b7280;">Password</label>
+                                        <label class="u-label-compact" style="font-size:0.65rem;">Password</label>
                                         <input type="password" id="radiusNewPassword" placeholder="password" class="u-input-sm">
                                     </div>
                                     <div style="display:flex;gap:4px;">
                                         <button class="backup-btn" onclick="addRadiusUser()" style="font-size:0.7rem;padding:4px 10px;">Save</button>
-                                        <button class="backup-btn" onclick="hideAddRadiusUser()" style="font-size:0.7rem;padding:4px 8px;background:#6b7280;color:#fff;">Cancel</button>
+                                        <button class="backup-btn" onclick="hideAddRadiusUser()" class="u-bg-muted-cta" style="font-size:0.7rem;padding:4px 8px;">Cancel</button>
                                     </div>
                                 </div>
                                 <span id="radiusAddStatus" style="font-size:0.7rem;color:#ef4444;"></span>
@@ -1122,14 +1122,14 @@
                             </div>
                             <button class="backup-btn" onclick="pushRadiusToDevices()" style="margin-top:14px;">Push to All Devices</button>
                         </div>
-                        <p style="font-size:0.68rem;color:#9ca3af;margin:4px 0 0 0;">Configures all managed devices to authenticate against this RADIUS server. Configuration is sent over an encrypted connection.</p>
+                        <p class="u-note-tight">Configures all managed devices to authenticate against this RADIUS server. Configuration is sent over an encrypted connection.</p>
                         <span id="radiusPushStatus" class="u-text-xs-muted"></span>
 
                         <!-- Auth Log -->
                         <div class="u-hr-soft-my12"></div>
                         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
                             <span style="font-size:0.75rem;font-weight:600;color:#374151;">Recent Auth Log</span>
-                            <button class="backup-btn" onclick="loadRadiusAuthLog()" style="font-size:0.65rem;padding:1px 6px;background:#6b7280;color:#fff;">Refresh</button>
+                            <button class="backup-btn" onclick="loadRadiusAuthLog()" class="u-bg-muted-cta" style="font-size:0.65rem;padding:1px 6px;">Refresh</button>
                         </div>
                         <div id="radiusAuthLogTable" style="font-size:0.72rem;max-height:150px;overflow-y:auto;">
                             <div class="u-muted-empty-sm">No auth log entries.</div>
@@ -1143,28 +1143,28 @@
                 <div id="licenseStatusSection">
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
                         <span id="licenseTierBadge" style="display:inline-flex;align-items:center;font-size:0.75rem;font-weight:700;padding:3px 10px;border-radius:4px;color:#0D9488;background:#ede9fe;">FREE</span>
-                        <span id="licenseStatusText" style="font-size:0.8rem;color:#6b7280;"></span>
+                        <span id="licenseStatusText" style="font-size:0.8rem;color:var(--text-muted);"></span>
                     </div>
-                    <div style="font-size:0.75rem;color:#6b7280;margin-bottom:16px;">
+                    <div class="u-text-xs-muted" style="margin-bottom:16px;">
                         <div>Billable devices (APs + Switches): <strong id="licenseBillableCount">0</strong></div>
                         <div id="licenseCustomerRow" class="hidden">Customer: <strong id="licenseCustomerName"></strong></div>
                         <div id="licenseExpiresRow" class="hidden">Expires: <strong id="licenseExpiresAt"></strong></div>
                         <div id="licenseValidatedRow" class="hidden">Last validated: <strong id="licenseLastValidated"></strong></div>
                     </div>
                 </div>
-                <div style="border-top:1px solid #e5e7eb;padding-top:12px;">
+                <div style="border-top:1px solid var(--border);padding-top:12px;">
                     <label class="u-text-xs-muted">License Key</label>
                     <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
                         <input type="text" id="licenseKeyInput" placeholder="XXXX-XXXX-XXXX-XXXX" style="flex:1;font-family:monospace;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
                         <button class="backup-btn" onclick="activateLicense()">Activate</button>
                     </div>
-                    <div id="licenseKeyStatus" style="font-size:0.75rem;color:#6b7280;margin-top:6px;min-height:1.2em;"></div>
+                    <div id="licenseKeyStatus" class="u-status-line" style="margin-top:6px;"></div>
                 </div>
-                <div id="licenseDeactivateSection" style="display:none;margin-top:12px;border-top:1px solid #e5e7eb;padding-top:12px;">
+                <div id="licenseDeactivateSection" style="display:none;margin-top:12px;border-top:1px solid var(--border);padding-top:12px;">
                     <button class="backup-btn" onclick="deactivateLicense()" style="background:#dc2626;">Remove License</button>
                     <a href="https://billing.sixtyops.net" target="_blank" style="font-size:0.75rem;color:#0D9488;margin-left:12px;">Manage Billing</a>
                 </div>
-                <div style="margin-top:16px;font-size:0.72rem;color:#9ca3af;">
+                <div class="u-text-sm-dim" style="margin-top:16px;">
                     <a href="https://sixtyops.net/#pricing" target="_blank" style="color:#0D9488;">View pricing</a> &middot;
                     <a href="https://docs.sixtyops.net/licensing" target="_blank" style="color:#0D9488;">Documentation</a> &middot;
                     <a href="mailto:support@sixtyops.net" style="color:#0D9488;">Support</a>
@@ -5999,7 +5999,7 @@
                     <div class="backup-modal" style="width:700px;max-height:80vh;display:flex;flex-direction:column;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                             <h3 class="u-m0">Config: ${escapeHtml(ip)}</h3>
-                            <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:1.2rem;">&times;</button>
+                            <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.2rem;">&times;</button>
                         </div>
                         <div style="display:flex;gap:16px;flex:1;overflow:hidden;">
                             <div style="flex:1;overflow:auto;">
