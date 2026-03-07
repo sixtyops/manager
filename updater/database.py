@@ -148,6 +148,12 @@ def init_db():
                 check_conn.close()
 
     with get_db() as db:
+        # Pre-schema migration: drop tables with incompatible schemas (pre-release)
+        for _tbl, _req in [("audit_log", {"username"}), ("api_tokens", {"user_id"})]:
+            _cols = {r[1] for r in db.execute(f"PRAGMA table_info({_tbl})").fetchall()}
+            if _cols and not _req.issubset(_cols):
+                db.execute(f"DROP TABLE {_tbl}")
+
         db.executescript("""
             CREATE TABLE IF NOT EXISTS tower_sites (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -465,6 +471,35 @@ def init_db():
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target_type TEXT,
+                target_id TEXT,
+                details TEXT,
+                ip_address TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(username, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+
+            CREATE TABLE IF NOT EXISTS api_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                token_prefix TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                scopes TEXT DEFAULT 'read',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_used_at TEXT,
+                expires_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
+            CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
         """)
 
         # Migrations: add columns if missing
@@ -2570,6 +2605,135 @@ def get_device_history_csv_rows(days: int = 30) -> list[dict]:
             (cutoff,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Audit log
+# ---------------------------------------------------------------------------
+
+def log_audit(username: str, action: str, target_type: str = None,
+              target_id: str = None, details: str = None, ip_address: str = None):
+    """Record an audit log entry."""
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO audit_log (username, action, target_type, target_id, details, ip_address)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (username, action, target_type, target_id, details, ip_address),
+        )
+
+
+def get_audit_log(limit: int = 100, offset: int = 0, username: str = None,
+                  action: str = None) -> list[dict]:
+    """Retrieve audit log entries with optional filters."""
+    with get_db() as conn:
+        clauses = []
+        params = []
+        if username:
+            clauses.append("username = ?")
+            params.append(username)
+        if action:
+            clauses.append("action = ?")
+            params.append(action)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.extend([max(1, min(limit, 500)), max(0, offset)])
+        rows = conn.execute(
+            f"SELECT * FROM audit_log {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_audit_log_count(username: str = None, action: str = None) -> int:
+    """Count audit log entries with optional filters."""
+    with get_db() as conn:
+        clauses = []
+        params = []
+        if username:
+            clauses.append("username = ?")
+            params.append(username)
+        if action:
+            clauses.append("action = ?")
+            params.append(action)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        row = conn.execute(f"SELECT COUNT(*) FROM audit_log {where}", params).fetchone()
+        return row[0]
+
+
+def cleanup_old_audit_log(max_age_days: int = 90):
+    """Delete audit log entries older than max_age_days."""
+    with get_db() as conn:
+        cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+        conn.execute("DELETE FROM audit_log WHERE created_at < ?", (cutoff,))
+
+
+# ---------------------------------------------------------------------------
+# API tokens
+# ---------------------------------------------------------------------------
+
+def create_api_token(name: str, token_hash: str, token_prefix: str,
+                     user_id: int, scopes: str = "read", expires_at: str = None) -> int:
+    """Create a new API token. Returns the token ID."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO api_tokens (name, token_hash, token_prefix, user_id, scopes, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (name, token_hash, token_prefix, user_id, scopes, expires_at),
+        )
+        return cursor.lastrowid
+
+
+def get_api_token_by_hash(token_hash: str) -> Optional[dict]:
+    """Look up a token by its hash."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM api_tokens WHERE token_hash = ?", (token_hash,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_api_tokens(user_id: int = None) -> list[dict]:
+    """List API tokens, optionally filtered by user."""
+    with get_db() as conn:
+        if user_id is not None:
+            rows = conn.execute(
+                "SELECT id, name, token_prefix, user_id, scopes, created_at, last_used_at, expires_at FROM api_tokens WHERE user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, name, token_prefix, user_id, scopes, created_at, last_used_at, expires_at FROM api_tokens ORDER BY created_at DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_api_token_last_used(token_id: int):
+    """Update the last_used_at timestamp for a token."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE api_tokens SET last_used_at = ? WHERE id = ?",
+            (datetime.now().isoformat(), token_id),
+        )
+
+
+def delete_api_token(token_id: int, user_id: int = None) -> bool:
+    """Delete an API token. If user_id is provided, only delete if owned by that user."""
+    with get_db() as conn:
+        if user_id is not None:
+            cursor = conn.execute(
+                "DELETE FROM api_tokens WHERE id = ? AND user_id = ?", (token_id, user_id)
+            )
+        else:
+            cursor = conn.execute("DELETE FROM api_tokens WHERE id = ?", (token_id,))
+        return cursor.rowcount > 0
+
+
+def cleanup_expired_api_tokens():
+    """Delete expired API tokens."""
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM api_tokens WHERE expires_at IS NOT NULL AND expires_at < ?",
+            (datetime.now().isoformat(),),
+        )
 
 
 # Initialize on import
