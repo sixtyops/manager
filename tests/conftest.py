@@ -284,6 +284,7 @@ def memory_db():
         );
         CREATE INDEX idx_uptime_ip ON device_uptime_events(ip);
         CREATE INDEX idx_uptime_occurred ON device_uptime_events(occurred_at);
+        CREATE INDEX idx_uptime_device_type ON device_uptime_events(device_type, occurred_at DESC);
 
         CREATE TABLE users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

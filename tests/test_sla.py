@@ -114,6 +114,28 @@ class TestUptimeDatabase:
         assert result[0]["ip"] == "10.0.0.1"
         assert result[0]["availability_pct"] < result[1]["availability_pct"]
 
+    def test_availability_clamps_to_window(self, mock_db):
+        """Downtime that started before the window should be clamped to window start."""
+        from updater.database import get_device_availability
+        now = datetime.now()
+        # Device went down 5 days ago and came back up 1 day ago
+        # With a 2-day window, only 1 day of downtime should count
+        mock_db.execute(
+            "INSERT INTO device_uptime_events (ip, device_type, event, occurred_at) VALUES (?, ?, ?, ?)",
+            ("10.0.0.1", "ap", "down", (now - timedelta(days=5)).isoformat()),
+        )
+        mock_db.execute(
+            "INSERT INTO device_uptime_events (ip, device_type, event, occurred_at) VALUES (?, ?, ?, ?)",
+            ("10.0.0.1", "ap", "up", (now - timedelta(days=1)).isoformat()),
+        )
+        mock_db.commit()
+        result = get_device_availability("10.0.0.1", days=2)
+        # Should be ~50% (1 day down out of 2 day window), not negative
+        assert result["availability_pct"] > 0
+        assert result["availability_pct"] <= 100
+        # Downtime should be clamped to ~1 day, not 4 days
+        assert result["downtime_seconds"] < 2 * 86400
+
     def test_cleanup_old_events(self, mock_db):
         from updater.database import cleanup_old_uptime_events
         old_date = (datetime.now() - timedelta(days=200)).isoformat()

@@ -409,6 +409,7 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_uptime_ip ON device_uptime_events(ip);
             CREATE INDEX IF NOT EXISTS idx_uptime_occurred ON device_uptime_events(occurred_at DESC);
             CREATE INDEX IF NOT EXISTS idx_uptime_ip_occurred ON device_uptime_events(ip, occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_uptime_device_type ON device_uptime_events(device_type, occurred_at DESC);
 
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1739,8 +1740,9 @@ def get_uptime_events(ip: str, days: int = 30, limit: int = 100) -> list[dict]:
 
 def get_device_availability(ip: str, days: int = 30) -> dict:
     """Calculate availability percentage for a device over a time window."""
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
     now = datetime.now()
+    window_start = now - timedelta(days=days)
+    cutoff = window_start.isoformat()
     window_seconds = days * 86400
 
     with get_db() as conn:
@@ -1760,7 +1762,8 @@ def get_device_availability(ip: str, days: int = 30) -> dict:
         ts = datetime.fromisoformat(row["occurred_at"])
         if event == "down":
             if last_down_at is None:
-                last_down_at = ts
+                # Clamp to window start so pre-window downtime isn't counted
+                last_down_at = max(ts, window_start)
         elif event == "up":
             if last_down_at is not None:
                 downtime += (ts - last_down_at).total_seconds()
@@ -1770,7 +1773,9 @@ def get_device_availability(ip: str, days: int = 30) -> dict:
     if last_down_at is not None:
         downtime += (now - last_down_at).total_seconds()
 
-    availability = max(0, (window_seconds - downtime) / window_seconds * 100)
+    # Clamp downtime to window size
+    downtime = min(downtime, window_seconds)
+    availability = (window_seconds - downtime) / window_seconds * 100
     return {
         "ip": ip,
         "availability_pct": round(availability, 3),
@@ -1782,20 +1787,60 @@ def get_device_availability(ip: str, days: int = 30) -> dict:
 
 def get_fleet_availability(device_type: str = None, days: int = 30) -> list[dict]:
     """Get availability for all devices with uptime events."""
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    now = datetime.now()
+    cutoff = (now - timedelta(days=days)).isoformat()
     with get_db() as conn:
         query = "SELECT DISTINCT ip, device_type FROM device_uptime_events WHERE occurred_at >= ?"
         params = [cutoff]
         if device_type:
             query += " AND device_type = ?"
             params.append(device_type)
-        ips = conn.execute(query, params).fetchall()
+        device_rows = conn.execute(query, params).fetchall()
+
+        # Batch-fetch all events in one query to avoid N+1
+        if not device_rows:
+            return []
+        all_ips = [r["ip"] for r in device_rows]
+        placeholders = ",".join("?" for _ in all_ips)
+        all_events = conn.execute(
+            f"SELECT ip, event, occurred_at FROM device_uptime_events WHERE ip IN ({placeholders}) AND occurred_at >= ? ORDER BY ip, occurred_at ASC",
+            all_ips + [cutoff],
+        ).fetchall()
+
+    # Group events by IP
+    events_by_ip: dict[str, list] = {}
+    for ev in all_events:
+        events_by_ip.setdefault(ev["ip"], []).append(ev)
+
+    window_start = now - timedelta(days=days)
+    window_seconds = days * 86400
 
     results = []
-    for row in ips:
-        avail = get_device_availability(row["ip"], days)
-        avail["device_type"] = row["device_type"]
-        results.append(avail)
+    device_type_map = {r["ip"]: r["device_type"] for r in device_rows}
+    for ip, events in events_by_ip.items():
+        downtime = 0.0
+        last_down_at = None
+        for ev in events:
+            ts = datetime.fromisoformat(ev["occurred_at"])
+            if ev["event"] == "down":
+                if last_down_at is None:
+                    last_down_at = max(ts, window_start)
+            elif ev["event"] == "up":
+                if last_down_at is not None:
+                    downtime += (ts - last_down_at).total_seconds()
+                    last_down_at = None
+        if last_down_at is not None:
+            downtime += (now - last_down_at).total_seconds()
+        downtime = min(downtime, window_seconds)
+        availability = (window_seconds - downtime) / window_seconds * 100
+        results.append({
+            "ip": ip,
+            "device_type": device_type_map.get(ip, "unknown"),
+            "availability_pct": round(availability, 3),
+            "downtime_seconds": round(downtime),
+            "events": len(events),
+            "window_days": days,
+        })
 
     results.sort(key=lambda x: x["availability_pct"])
     return results
