@@ -510,6 +510,15 @@ def init_db():
                 enabled INTEGER DEFAULT 1,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS device_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                filter_json TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # Migrations: add columns if missing
@@ -2706,6 +2715,21 @@ def create_api_token(name: str, token_hash: str, token_prefix: str,
 
 
 # ---------------------------------------------------------------------------
+# Device groups
+# ---------------------------------------------------------------------------
+
+def create_device_group(name: str, description: str = None,
+                        filter_json: str = None) -> int:
+    """Create a device group. Returns the group ID."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO device_groups (name, description, filter_json) VALUES (?, ?, ?)",
+            (name, description, filter_json),
+        )
+        return cursor.lastrowid
+
+
+# ---------------------------------------------------------------------------
 # Freeze windows
 # ---------------------------------------------------------------------------
 
@@ -2738,11 +2762,29 @@ def list_freeze_windows() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def list_device_groups() -> list[dict]:
+    """List all device groups."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM device_groups ORDER BY name"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def get_freeze_window(window_id: int) -> Optional[dict]:
     """Get a freeze window by ID."""
     with get_db() as conn:
         row = conn.execute(
             "SELECT * FROM freeze_windows WHERE id = ?", (window_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_device_group(group_id: int) -> Optional[dict]:
+    """Get a device group by ID."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM device_groups WHERE id = ?", (group_id,)
         ).fetchone()
         return dict(row) if row else None
 
@@ -2807,6 +2849,22 @@ def update_freeze_window(window_id: int, **kwargs) -> bool:
         return cursor.rowcount > 0
 
 
+def update_device_group(group_id: int, **kwargs) -> bool:
+    """Update a device group."""
+    allowed = {"name", "description", "filter_json"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return False
+    updates["updated_at"] = datetime.now().isoformat()
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    with get_db() as conn:
+        cursor = conn.execute(
+            f"UPDATE device_groups SET {set_clause} WHERE id = ?",
+            (*updates.values(), group_id),
+        )
+        return cursor.rowcount > 0
+
+
 def delete_freeze_window(window_id: int) -> bool:
     """Delete a freeze window."""
     with get_db() as conn:
@@ -2827,6 +2885,53 @@ def is_in_freeze_window(now_iso: str = None) -> Optional[dict]:
             (now_iso, now_iso),
         ).fetchone()
         return dict(row) if row else None
+
+
+def delete_device_group(group_id: int) -> bool:
+    """Delete a device group."""
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM device_groups WHERE id = ?", (group_id,))
+        return cursor.rowcount > 0
+
+
+def resolve_device_group(group_id: int) -> list[str]:
+    """Resolve a device group's filter to a list of device IPs.
+
+    filter_json format: {"site_ids": [1,2], "models": ["tna-303x"], "device_type": "ap"}
+    All filters are ANDed together.
+    """
+    group = get_device_group(group_id)
+    if not group or not group.get("filter_json"):
+        return []
+
+    import json
+    try:
+        filters = json.loads(group["filter_json"])
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+    with get_db() as conn:
+        device_type = filters.get("device_type", "ap")
+        table = "switches" if device_type == "switch" else "access_points"
+
+        clauses = ["enabled = 1"]
+        params = []
+
+        site_ids = filters.get("site_ids")
+        if site_ids:
+            placeholders = ",".join("?" * len(site_ids))
+            clauses.append(f"tower_site_id IN ({placeholders})")
+            params.extend(site_ids)
+
+        models = filters.get("models")
+        if models:
+            placeholders = ",".join("?" * len(models))
+            clauses.append(f"model IN ({placeholders})")
+            params.extend(models)
+
+        where = " AND ".join(clauses)
+        rows = conn.execute(f"SELECT ip FROM {table} WHERE {where}", params).fetchall()
+        return [r[0] for r in rows]
 
 
 # Initialize on import
