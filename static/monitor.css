@@ -382,6 +382,39 @@
         .history-status-badge.skipped { background: var(--border-light); color: var(--text-muted); }
         .history-status-badge.cancelled { background: #fef3c7; color: #d97706; }
 
+        /* Status badge variants for enforce status */
+        .status-badge-success { background: var(--success-bg, #dcfce7); color: var(--success, #16a34a); }
+        .status-badge-warning { background: #fef3c7; color: #d97706; }
+        .status-badge-info { background: #dbeafe; color: #2563eb; }
+
+        /* Config enforce log */
+        .enforce-log-panel {
+            margin-top: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 0.75rem;
+        }
+        .enforce-log-entry {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 3px 0;
+            border-bottom: 1px solid var(--border-light, #f3f4f6);
+        }
+        .enforce-log-entry .log-ip { font-weight: 500; min-width: 100px; }
+        .enforce-log-entry .log-phase { color: var(--text-dim, #9ca3af); min-width: 50px; }
+        .enforce-log-entry .log-time { color: var(--text-dim, #9ca3af); margin-left: auto; font-size: 0.65rem; }
+        .enforce-log-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+        .enforce-log-dot.success { background: var(--success, #10b981); }
+        .enforce-log-dot.failed { background: var(--danger-bright, #ef4444); }
+
+        /* Site override badge on category buttons */
+        .config-site-badge {
+            font-size: 0.6rem;
+            color: var(--text-dim, #9ca3af);
+            margin-left: 2px;
+        }
+
         .history-stage-pill {
             display: inline-block;
             font-size: 0.65rem;
