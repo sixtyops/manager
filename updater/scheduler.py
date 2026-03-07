@@ -223,6 +223,17 @@ class AutoUpdateScheduler:
         now = time_result
         logger.info("Time validation passed")
 
+        # Check freeze windows
+        freeze = db.is_in_freeze_window(now.isoformat())
+        if freeze:
+            if self._state != "frozen":
+                self._state = "frozen"
+                self._block_reason = f"Maintenance freeze: {freeze['name']}"
+                db.log_schedule_event("frozen", self._block_reason)
+                logger.info(f"Scheduler frozen: {freeze['name']} (until {freeze['end_date']})")
+                await self._broadcast_status()
+            return
+
         fw_30x = settings.get("selected_firmware_30x", "")
         allow_downgrade = settings.get("allow_downgrade", "false") == "true"
         if fw_30x:

@@ -500,6 +500,16 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
             CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
+
+            CREATE TABLE IF NOT EXISTS freeze_windows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                reason TEXT,
+                enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # Migrations: add columns if missing
@@ -2695,11 +2705,44 @@ def create_api_token(name: str, token_hash: str, token_prefix: str,
         return cursor.lastrowid
 
 
+# ---------------------------------------------------------------------------
+# Freeze windows
+# ---------------------------------------------------------------------------
+
+def create_freeze_window(name: str, start_date: str, end_date: str,
+                         reason: str = None) -> int:
+    """Create a maintenance freeze window. Returns the window ID."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO freeze_windows (name, start_date, end_date, reason) VALUES (?, ?, ?, ?)",
+            (name, start_date, end_date, reason),
+        )
+        return cursor.lastrowid
+
+
 def get_api_token_by_hash(token_hash: str) -> Optional[dict]:
     """Look up a token by its hash."""
     with get_db() as conn:
         row = conn.execute(
             "SELECT * FROM api_tokens WHERE token_hash = ?", (token_hash,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_freeze_windows() -> list[dict]:
+    """List all freeze windows."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM freeze_windows ORDER BY start_date DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_freeze_window(window_id: int) -> Optional[dict]:
+    """Get a freeze window by ID."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM freeze_windows WHERE id = ?", (window_id,)
         ).fetchone()
         return dict(row) if row else None
 
@@ -2747,6 +2790,43 @@ def cleanup_expired_api_tokens():
             "DELETE FROM api_tokens WHERE expires_at IS NOT NULL AND expires_at < ?",
             (datetime.now().isoformat(),),
         )
+
+
+def update_freeze_window(window_id: int, **kwargs) -> bool:
+    """Update a freeze window."""
+    allowed = {"name", "start_date", "end_date", "reason", "enabled"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return False
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    with get_db() as conn:
+        cursor = conn.execute(
+            f"UPDATE freeze_windows SET {set_clause} WHERE id = ?",
+            (*updates.values(), window_id),
+        )
+        return cursor.rowcount > 0
+
+
+def delete_freeze_window(window_id: int) -> bool:
+    """Delete a freeze window."""
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM freeze_windows WHERE id = ?", (window_id,))
+        return cursor.rowcount > 0
+
+
+def is_in_freeze_window(now_iso: str = None) -> Optional[dict]:
+    """Check if the current time falls within an active freeze window.
+
+    Returns the matching freeze window dict, or None if not frozen.
+    """
+    if now_iso is None:
+        now_iso = datetime.now().isoformat()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM freeze_windows WHERE enabled = 1 AND start_date <= ? AND end_date >= ? LIMIT 1",
+            (now_iso, now_iso),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 # Initialize on import
