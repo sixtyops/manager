@@ -23,6 +23,7 @@ jobs:
   validate-dispatch:
     if: github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, linux, x64, proxmox]
+    timeout-minutes: 5
     steps:
       - name: Validate confirmation
         run: |
@@ -41,6 +42,7 @@ jobs:
 
   test:
     runs-on: [self-hosted, linux, x64, proxmox]
+    timeout-minutes: 10
     if: always() && (needs.validate-dispatch.result == 'success' || needs.validate-dispatch.result == 'skipped')
     needs: [validate-dispatch]
     steps:
@@ -52,12 +54,13 @@ jobs:
           python3 -m venv .venv
           . .venv/bin/activate
           pip install -r requirements.txt
-          pytest -v
+          pytest -v --timeout=60
 
   release:
     needs: [test]
     if: always() && needs.test.result == 'success'
     runs-on: [self-hosted, linux, x64, proxmox]
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -92,6 +95,7 @@ jobs:
     needs: [release]
     if: always() && needs.release.result == 'success'
     runs-on: [self-hosted, linux, x64, proxmox]
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
