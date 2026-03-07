@@ -362,12 +362,19 @@ class TachyonClient:
         expected = " or ".join(patterns)
         return False, f"Firmware mismatch: model {model} requires firmware with '{expected}' in filename, but got '{filename}'"
 
-    async def upload_firmware(self, firmware_path: str) -> bool:
-        """Upload firmware file to device using PUT."""
+    async def upload_firmware(self, firmware_path: str, bandwidth_limit_kbps: int = 0) -> bool:
+        """Upload firmware file to device using PUT.
+
+        Args:
+            firmware_path: Path to firmware file.
+            bandwidth_limit_kbps: Maximum upload rate in KB/s. 0 means unlimited.
+        """
         logger.info(f"Uploading firmware to {self.ip}")
 
         url = f"{self._base_url}/cgi.lua/update"
         cmd = ["curl", "-s", "-m", "300"]  # 5 min timeout for upload
+        if bandwidth_limit_kbps and bandwidth_limit_kbps > 0:
+            cmd.extend(["--limit-rate", f"{bandwidth_limit_kbps}k"])
         if not VERIFY_SSL:
             cmd.append("-k")
         cmd.extend([
@@ -561,6 +568,7 @@ class TachyonClient:
         progress_callback: Callable[[str, str], None] = None,
         pass_number: int = 1,
         reboot_timeout: int = 300,
+        bandwidth_limit_kbps: int = 0,
     ) -> UpdateResult:
         """Perform complete firmware update cycle.
 
@@ -620,7 +628,7 @@ class TachyonClient:
 
             # Upload firmware
             progress("Uploading firmware...")
-            if not await self.upload_firmware(firmware_path):
+            if not await self.upload_firmware(firmware_path, bandwidth_limit_kbps=bandwidth_limit_kbps):
                 result.error = "Firmware upload failed"
                 return result
 

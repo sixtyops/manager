@@ -427,6 +427,10 @@
                         <label>Parallel Updates</label>
                         <input type="number" id="drawerParallel" value="2" min="1" max="10">
                     </div>
+                    <div>
+                        <label>Bandwidth Limit (KB/s)</label>
+                        <input type="number" id="drawerBandwidthLimit" value="0" min="0" max="1000000" placeholder="0 = unlimited">
+                    </div>
 
                     <div class="drawer-section-title">Options</div>
                     <div class="u-grid-col-main-row">
@@ -4968,6 +4972,7 @@
 
                 // Parallel
                 document.getElementById('drawerParallel').value = s.parallel_updates || '2';
+                document.getElementById('drawerBandwidthLimit').value = s.bandwidth_limit_kbps || '0';
 
                 // Beta
                 drawerBetaEnabled = s.firmware_beta_enabled === 'true';
@@ -5077,7 +5082,7 @@
         // Attach change listeners to drawer inputs
         document.addEventListener('DOMContentLoaded', () => {
             ['drawerStartHour', 'drawerEndHour', 'drawerBankMode',
-             'drawerParallel', 'drawerMinTemp', 'drawerZipCode',
+             'drawerParallel', 'drawerBandwidthLimit', 'drawerMinTemp', 'drawerZipCode',
              'drawerQuarantineDays'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.addEventListener('change', markDrawerDirty);
@@ -5109,6 +5114,7 @@
                 schedule_end_hour: document.getElementById('drawerEndHour').value,
                 bank_mode: document.getElementById('drawerBankMode').value,
                 parallel_updates: document.getElementById('drawerParallel').value,
+                bandwidth_limit_kbps: document.getElementById('drawerBandwidthLimit').value,
                 schedule_scope: 'all',
                 rollout_canary_aps: [...drawerCanaryAps].sort().join(','),
                 rollout_canary_switches: [...drawerCanarySwitches].sort().join(','),

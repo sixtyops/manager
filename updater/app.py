@@ -1566,7 +1566,8 @@ async def get_settings(session: dict = Depends(require_auth)):
 
 _SETTINGS_WRITABLE = {
     "schedule_enabled", "schedule_days", "schedule_start_hour", "schedule_end_hour",
-    "parallel_updates", "bank_mode", "allow_downgrade", "timezone", "zip_code",
+    "parallel_updates", "bandwidth_limit_kbps",
+    "bank_mode", "allow_downgrade", "timezone", "zip_code",
     "weather_check_enabled", "min_temperature_c", "temperature_unit",
     "schedule_scope", "schedule_scope_data",
     "rollout_canary_aps", "rollout_canary_switches",
@@ -1692,6 +1693,10 @@ def _validate_settings(filtered: dict):
         parallel = _parse_int_field(filtered["parallel_updates"], "parallel_updates")
         if parallel < 1 or parallel > 32:
             raise HTTPException(400, "parallel_updates must be between 1 and 32")
+    if "bandwidth_limit_kbps" in filtered:
+        bw = _parse_int_field(filtered["bandwidth_limit_kbps"], "bandwidth_limit_kbps")
+        if bw < 0 or bw > 1000000:
+            raise HTTPException(400, "bandwidth_limit_kbps must be between 0 and 1000000 (0 = unlimited)")
     if "firmware_quarantine_days" in filtered:
         hold_days = _parse_int_field(filtered["firmware_quarantine_days"], "firmware_quarantine_days")
         if hold_days < 0 or hold_days > 365:
@@ -4218,7 +4223,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         username, password = job.credentials[ip]
         client = TachyonClient(ip, username, password)
         reboot_timeout = TNS100_REBOOT_TIMEOUT if device_status.role == "switch" else AP_REBOOT_TIMEOUT
-        result = await client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout)
+        bw_limit = int(db.get_setting("bandwidth_limit_kbps", "0"))
+        result = await client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit)
     else:
         result = UpdateResult(ip=ip, success=False, error=f"Unsupported device type: {job.device_type}")
 

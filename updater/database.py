@@ -412,6 +412,7 @@ def init_db():
             "schedule_start_hour": "3",
             "schedule_end_hour": "4",
             "parallel_updates": "2",
+            "bandwidth_limit_kbps": "0",
             "bank_mode": "one",
             "allow_downgrade": "false",
             "timezone": "auto",
