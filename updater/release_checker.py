@@ -663,8 +663,10 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
             }
 
         # Store pending update info (persists through restart)
-        db.set_setting("autoupdate_pending_version", target_version)
-        db.set_setting("autoupdate_pending_at", datetime.now().isoformat())
+        db.set_settings({
+            "autoupdate_pending_version": target_version,
+            "autoupdate_pending_at": datetime.now().isoformat(),
+        })
 
         has_standalone = (compose_dir / "docker-compose.standalone.yml").exists()
 
@@ -828,9 +830,11 @@ async def apply_update() -> dict:
                 }
 
         # Store pending update info (persists in DB through restart)
-        db.set_setting("autoupdate_pending_version", target_version)
-        db.set_setting("autoupdate_pending_at", datetime.now().isoformat())
-        db.set_setting("autoupdate_rollback_ref", rollback_ref)
+        db.set_settings({
+            "autoupdate_pending_version": target_version,
+            "autoupdate_pending_at": datetime.now().isoformat(),
+            "autoupdate_rollback_ref": rollback_ref,
+        })
 
         # Discover host repo path for the watchdog container
         host_repo_dir = _get_host_repo_path()
@@ -897,9 +901,11 @@ async def verify_update_on_startup(broadcast_func: Optional[Callable] = None):
                     f"Update to v{pending} has been pending for {age_minutes:.0f} minutes "
                     f"without completing. Clearing stuck state."
                 )
-                db.set_setting("autoupdate_pending_version", "")
-                db.set_setting("autoupdate_pending_at", "")
-                db.set_setting("autoupdate_rollback_ref", "")
+                db.set_settings({
+                    "autoupdate_pending_version": "",
+                    "autoupdate_pending_at": "",
+                    "autoupdate_rollback_ref": "",
+                })
                 if broadcast_func:
                     await broadcast_func({
                         "type": "update_failed",
@@ -913,10 +919,12 @@ async def verify_update_on_startup(broadcast_func: Optional[Callable] = None):
 
     if pending == __version__:
         logger.info(f"App update to v{__version__} completed successfully")
-        db.set_setting("autoupdate_pending_version", "")
-        db.set_setting("autoupdate_pending_at", "")
-        db.set_setting("autoupdate_available_version", "")
-        db.set_setting("autoupdate_rollback_ref", "")
+        db.set_settings({
+            "autoupdate_pending_version": "",
+            "autoupdate_pending_at": "",
+            "autoupdate_available_version": "",
+            "autoupdate_rollback_ref": "",
+        })
         if broadcast_func:
             await broadcast_func({
                 "type": "update_completed",
@@ -928,9 +936,11 @@ async def verify_update_on_startup(broadcast_func: Optional[Callable] = None):
             f"App update to v{pending} may have been rolled back "
             f"(running v{__version__})"
         )
-        db.set_setting("autoupdate_pending_version", "")
-        db.set_setting("autoupdate_pending_at", "")
-        db.set_setting("autoupdate_rollback_ref", "")
+        db.set_settings({
+            "autoupdate_pending_version": "",
+            "autoupdate_pending_at": "",
+            "autoupdate_rollback_ref": "",
+        })
         if broadcast_func:
             await broadcast_func({
                 "type": "update_rolled_back",

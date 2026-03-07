@@ -446,6 +446,15 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_uptime_ip_occurred ON device_uptime_events(ip, occurred_at DESC);
             CREATE INDEX IF NOT EXISTS idx_uptime_device_type ON device_uptime_events(device_type, occurred_at DESC);
 
+            CREATE TABLE IF NOT EXISTS active_jobs (
+                job_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'running',
+                started_at TEXT,
+                device_ips_json TEXT,
+                firmware_name TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -486,6 +495,8 @@ def init_db():
             "admin_password_hash": "",
             "firmware_quarantine_days": "7",
             "slack_webhook_url": "",
+            # Notification health tracking
+            "notification_consecutive_failures": "0",
             # SNMP trap configuration
             "snmp_traps_enabled": "false",
             "snmp_trap_host": "",
@@ -616,6 +627,42 @@ def checkpoint_db():
         logger.error(f"Database WAL checkpoint failed: {e}")
 
 
+def periodic_maintenance():
+    """Reclaim disk space and checkpoint WAL. Safe to call while app is running."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=30)
+        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        conn.execute("PRAGMA incremental_vacuum(500)")
+        conn.close()
+        logger.info("Database maintenance: WAL checkpoint + incremental vacuum completed")
+    except Exception as e:
+        logger.error(f"Database maintenance failed: {e}")
+
+
+# Active job tracking for crash recovery
+def save_active_job(job_id: str, status: str, device_ips_json: str, firmware_name: str):
+    """Persist an active job so it can be recovered after a crash."""
+    with get_db() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO active_jobs (job_id, status, started_at, device_ips_json, firmware_name, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            (job_id, status, datetime.now().isoformat(), device_ips_json, firmware_name),
+        )
+
+
+def get_active_jobs() -> list[dict]:
+    """Get all active jobs (for crash recovery on startup)."""
+    with get_db() as db:
+        rows = db.execute("SELECT * FROM active_jobs WHERE status = 'running'").fetchall()
+        return [dict(row) for row in rows]
+
+
+def clear_active_job(job_id: str):
+    """Remove an active job after completion or recovery."""
+    with get_db() as db:
+        db.execute("DELETE FROM active_jobs WHERE job_id = ?", (job_id,))
+
+
 # Tower Site operations
 def get_tower_sites() -> list[dict]:
     """Get all tower sites."""
@@ -675,6 +722,14 @@ def get_all_device_ips() -> set:
     with get_db() as db:
         ap_rows = db.execute("SELECT ip FROM access_points").fetchall()
         sw_rows = db.execute("SELECT ip FROM switches").fetchall()
+        return {row["ip"] for row in ap_rows} | {row["ip"] for row in sw_rows}
+
+
+def get_enabled_device_ips() -> set:
+    """Get enabled device IPs (APs + switches) for cache eviction."""
+    with get_db() as conn:
+        ap_rows = conn.execute("SELECT ip FROM access_points WHERE enabled = 1").fetchall()
+        sw_rows = conn.execute("SELECT ip FROM switches WHERE enabled = 1").fetchall()
         return {row["ip"] for row in ap_rows} | {row["ip"] for row in sw_rows}
 
 

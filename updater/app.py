@@ -246,9 +246,6 @@ def _run_daily_data_housekeeping():
     """Run expensive data hygiene tasks once per day."""
     global _last_data_housekeeping_day
 
-    if os.environ.get("TACHYON_APPLIANCE") != "1":
-        return
-
     today = datetime.now().strftime("%Y-%m-%d")
     if _last_data_housekeeping_day == today:
         return
@@ -256,21 +253,29 @@ def _run_daily_data_housekeeping():
     removed = _prune_firmware_storage()
     if removed:
         logger.info(f"Firmware retention removed {removed} old file(s)")
-    _run_backup_git_gc()
+    if os.environ.get("TACHYON_APPLIANCE") == "1":
+        _run_backup_git_gc()
     _last_data_housekeeping_day = today
 
 
 async def _supervised_task(name: str, coro_func, *args, restart_delay: float = 10.0):
-    """Run a coroutine in a loop, restarting on unhandled exceptions."""
+    """Run a coroutine in a loop, restarting on unhandled exceptions with backoff."""
+    consecutive_failures = 0
     while True:
         try:
             await coro_func(*args)
+            consecutive_failures = 0
         except asyncio.CancelledError:
             logger.info(f"Background task '{name}' cancelled")
             raise
         except Exception:
-            logger.exception(f"Background task '{name}' crashed, restarting in {restart_delay}s")
-            await asyncio.sleep(restart_delay)
+            consecutive_failures += 1
+            delay = min(restart_delay * (2 ** (consecutive_failures - 1)), 300)
+            logger.exception(
+                f"Background task '{name}' crashed (failure #{consecutive_failures}), "
+                f"restarting in {delay:.0f}s"
+            )
+            await asyncio.sleep(delay)
 
 
 async def _periodic_cleanup():
@@ -291,6 +296,7 @@ async def _periodic_cleanup():
             db.cleanup_old_uptime_events(max_age_days=180)
             db.cleanup_old_config_enforce_log(max_age_days=90)
             _run_daily_data_housekeeping()
+            db.periodic_maintenance()
             logger.info("Periodic cleanup completed")
         except Exception as e:
             logger.error(f"Periodic cleanup error: {e}")
@@ -387,27 +393,30 @@ async def _radius_health_monitor():
 
 
 def _cleanup_completed_jobs(max_age_seconds: int = 600):
-    """Remove completed jobs from in-memory dict after they've been persisted."""
+    """Remove finished or stale jobs from in-memory dict."""
     now = datetime.now()
     stale_ids = []
     for job_id, job in update_jobs.items():
-        if job.status == "completed" and job.completed_at:
-            age = (now - job.completed_at).total_seconds()
-            if age > max_age_seconds:
+        if job.status in ("completed", "failed", "cancelled") and job.completed_at:
+            if (now - job.completed_at).total_seconds() > max_age_seconds:
                 stale_ids.append(job_id)
+        elif job.started_at and (now - job.started_at).total_seconds() > 86400:
+            # Safety net: any job older than 24 hours is stuck — force remove
+            logger.warning(f"Force-removing stuck job {job_id} (started {job.started_at})")
+            stale_ids.append(job_id)
     for job_id in stale_ids:
         del update_jobs[job_id]
-    # Cap total completed jobs in memory
-    max_completed = 20
-    completed = [(jid, j) for jid, j in update_jobs.items()
-                 if j.status == "completed" and j.completed_at]
-    if len(completed) > max_completed:
-        completed.sort(key=lambda x: x[1].completed_at)
-        for jid, _ in completed[:len(completed) - max_completed]:
+    # Cap total finished jobs in memory
+    max_finished = 20
+    finished = [(jid, j) for jid, j in update_jobs.items()
+                if j.status in ("completed", "failed", "cancelled") and j.completed_at]
+    if len(finished) > max_finished:
+        finished.sort(key=lambda x: x[1].completed_at)
+        for jid, _ in finished[:len(finished) - max_finished]:
             del update_jobs[jid]
             stale_ids.append(jid)
     if stale_ids:
-        logger.info(f"Cleaned up {len(stale_ids)} completed jobs from memory")
+        logger.info(f"Cleaned up {len(stale_ids)} jobs from memory")
 
 
 async def _websocket_health_check():
@@ -427,6 +436,33 @@ async def _websocket_health_check():
             logger.debug(f"Removed {len(dead)} dead WebSocket connection(s)")
 
 
+def _recover_crashed_device_jobs():
+    """On startup, mark any in-progress jobs from a previous crash as failed."""
+    active = db.get_active_jobs()
+    for job in active:
+        logger.warning(
+            f"Recovering crashed job {job['job_id']}: "
+            f"was updating {job.get('firmware_name', 'unknown')}"
+        )
+        try:
+            device_ips = json.loads(job.get("device_ips_json", "[]"))
+            now_iso = datetime.now().isoformat()
+            for ip in device_ips:
+                db.save_device_update_history(
+                    job_id=job["job_id"], ip=ip, role="unknown", pass_number=1,
+                    status="failed", old_version=None, new_version=None,
+                    model=None, error="App crashed during firmware update",
+                    failed_stage="crash_recovery", stages=[],
+                    duration_seconds=0, started_at=job.get("started_at", now_iso),
+                    completed_at=now_iso, action="firmware_update",
+                )
+        except Exception as e:
+            logger.error(f"Error recording crash recovery for {job['job_id']}: {e}")
+        db.clear_active_job(job["job_id"])
+    if active:
+        logger.warning(f"Recovered {len(active)} crashed job(s) from previous run")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
@@ -444,6 +480,7 @@ async def lifespan(app: FastAPI):
     checker = init_checker(broadcast)
     await checker.start()
     await verify_update_on_startup(broadcast)
+    _recover_crashed_device_jobs()
     license_validator = init_license_validator(broadcast)
     await license_validator.start()
     radius_svc = init_radius_service(broadcast)
@@ -472,6 +509,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    global _shutting_down
+    _shutting_down = True
     backup_task.cancel()
     cleanup_task.cancel()
     radius_sync_task.cancel()
@@ -559,8 +598,16 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 @app.get("/healthz")
 async def healthz():
-    """Lightweight health endpoint for container runtime checks."""
-    return {"status": "ok"}
+    """Health endpoint for container runtime checks — verifies DB connectivity."""
+    try:
+        db.get_setting("setup_completed")
+        result = {"status": "ok", "db": "ok"}
+        notif_failures = int(db.get_setting("notification_consecutive_failures", "0"))
+        if notif_failures > 5:
+            result["notifications"] = f"degraded ({notif_failures} consecutive failures)"
+        return result
+    except Exception as e:
+        return JSONResponse(status_code=503, content={"status": "degraded", "db": str(e)})
 
 
 # ============================================================================
@@ -3833,6 +3880,7 @@ async def _start_scheduled_update(
         job.devices[sw_ip] = DeviceStatus(ip=sw_ip, role="switch")
 
     update_jobs[job_id] = job
+    db.save_active_job(job_id, "running", json.dumps(list(job.devices.keys())), firmware_file)
 
     await broadcast({
         "type": "job_started",
@@ -4038,6 +4086,7 @@ async def start_update(
         job.devices[sw["ip"]] = DeviceStatus(ip=sw["ip"], role="switch")
 
     update_jobs[job_id] = job
+    db.save_active_job(job_id, "running", json.dumps(list(job.devices.keys())), firmware_file)
 
     await broadcast({
         "type": "job_started",
@@ -4169,6 +4218,7 @@ async def update_single_device_endpoint(
     )
 
     update_jobs[job_id] = job
+    db.save_active_job(job_id, "running", json.dumps([ip]), firmware_file)
 
     await broadcast({
         "type": "job_started",
@@ -4244,6 +4294,12 @@ async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
 async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1):
     """Update a single device within a job."""
     device_status = job.devices[ip]
+
+    # Graceful shutdown: skip pending devices when shutting down
+    if _shutting_down and device_status.status == "pending":
+        device_status.status = "cancelled"
+        device_status.progress_message = "Skipped: app shutting down"
+        return
 
     # Maintenance window cutoff for scheduled jobs
     if job.is_scheduled and job.enforce_window_cutoff and job.end_hour is not None and job.schedule_timezone:
@@ -4718,6 +4774,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
 
     job.completed_at = datetime.now()
     job.status = "completed"
+    db.clear_active_job(job.job_id)
 
     # Brief pause so final device_update broadcasts reach clients before job_completed
     await asyncio.sleep(0.5)

@@ -264,10 +264,19 @@ async def _send_with_retry(payload: dict, max_retries: int = 2):
     for attempt in range(max_retries + 1):
         success = await send_slack_notification(payload)
         if success:
+            try:
+                db.set_setting("notification_consecutive_failures", "0")
+            except Exception:
+                pass
             return
         if attempt < max_retries:
             await asyncio.sleep(2 ** attempt)  # Exponential backoff
     logger.warning("Failed to send Slack notification after retries")
+    try:
+        count = int(db.get_setting("notification_consecutive_failures", "0")) + 1
+        db.set_setting("notification_consecutive_failures", str(count))
+    except Exception:
+        pass
 
 
 async def send_test_notification() -> tuple[bool, str]:
