@@ -8,7 +8,7 @@ on:
 
 jobs:
   install-smoke:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, proxmox]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -64,5 +64,10 @@ jobs:
             sudo docker compose \
               -f /opt/tachyon-ci/docker-compose.yml \
               -f /opt/tachyon-ci/docker-compose.standalone.yml \
-              down -v || true
+              down -v --remove-orphans || true
+            sudo rm -rf /opt/tachyon-ci
           fi
+          sudo rm -f /etc/systemd/system/tachyon.service
+          sudo rm -rf /tmp/tachyon-origin.git
+          git config --global --unset user.email || true
+          git config --global --unset user.name || true

@@ -18,7 +18,7 @@ on:
 jobs:
   validate-dispatch:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, proxmox]
     steps:
       - name: Validate confirmation
         run: |
@@ -36,7 +36,7 @@ jobs:
           fi
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, proxmox]
     if: always() && (needs.validate-dispatch.result == 'success' || needs.validate-dispatch.result == 'skipped')
     needs: [validate-dispatch]
     steps:
@@ -44,24 +44,16 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: pip-
-
-      - run: pip install -r requirements.txt
-
-      - run: pytest -v
+      - run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install -r requirements.txt
+          pytest -v
 
   release:
     needs: [test]
     if: always() && needs.test.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, proxmox]
     permissions:
       contents: write
     steps:
@@ -95,7 +87,7 @@ jobs:
   docker-push:
     needs: [release]
     if: always() && needs.release.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, proxmox]
     permissions:
       contents: read
       packages: write
