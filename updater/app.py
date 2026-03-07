@@ -6515,6 +6515,81 @@ def _start_radius_rollout_task(rollout_id: int):
     _radius_rollout_task = asyncio.create_task(_run_radius_rollout(rollout_id))
 
 
+# ---------------------------------------------------------------------------
+# Reporting API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/reports/update-summary", tags=["reports"])
+async def report_update_summary(days: int = 30,
+                                session: dict = Depends(require_auth)):
+    if days < 1 or days > 365:
+        raise HTTPException(status_code=400, detail="days must be 1-365")
+    return db.get_update_summary(days)
+
+
+@app.get("/api/reports/fleet-status", tags=["reports"])
+async def report_fleet_status(session: dict = Depends(require_auth)):
+    return db.get_fleet_status()
+
+
+@app.get("/api/reports/export/jobs", tags=["reports"])
+async def export_jobs_csv(days: int = 30,
+                          session: dict = Depends(require_auth)):
+    import csv
+    import io
+
+    if days < 1 or days > 365:
+        raise HTTPException(status_code=400, detail="days must be 1-365")
+
+    rows = db.get_job_history_csv_rows(days)
+    if not rows:
+        return StreamingResponse(
+            iter(["No data for the selected period\n"]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=job_history.csv"},
+        )
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+    writer.writeheader()
+    writer.writerows(rows)
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=job_history.csv"},
+    )
+
+
+@app.get("/api/reports/export/devices", tags=["reports"])
+async def export_devices_csv(days: int = 30,
+                             session: dict = Depends(require_auth)):
+    import csv
+    import io
+
+    if days < 1 or days > 365:
+        raise HTTPException(status_code=400, detail="days must be 1-365")
+
+    rows = db.get_device_history_csv_rows(days)
+    if not rows:
+        return StreamingResponse(
+            iter(["No data for the selected period\n"]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=device_history.csv"},
+        )
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+    writer.writeheader()
+    writer.writerows(rows)
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=device_history.csv"},
+    )
+
+
 def main():
     """Run the application."""
     import uvicorn
