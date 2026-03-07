@@ -773,7 +773,7 @@
 
                 <hr style="border:none;border-top:1px solid var(--border);margin:16px 0;">
 
-                <label>SNMP Traps</label>
+                <label>SNMP Traps <span id="snmpProBadge" class="pro-badge" style="display:none;">PRO</span></label>
                 <p class="u-note-inline">Send SNMPv2c traps to your NMS when firmware update jobs complete. Configure your trap receiver host and community string below.</p>
                 <div class="u-flex-col-gap8">
                     <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -2081,11 +2081,13 @@
                 return '';
             }
             if (type === 'ap') {
-                return `<a class="action-link" onclick="pollAPNow('${id}');event.stopPropagation();">Refresh</a>
+                return `<a class="action-link" onclick="editDeviceNotes('ap','${id}');event.stopPropagation();">Notes</a>
+                    <a class="action-link" onclick="pollAPNow('${id}');event.stopPropagation();">Refresh</a>
                     ${deleteActionLink('ap', id)}`;
             }
             if (type === 'switch') {
-                return `${deleteActionLink('switch', id)}`;
+                return `<a class="action-link" onclick="editDeviceNotes('switch','${id}');event.stopPropagation();">Notes</a>
+                    ${deleteActionLink('switch', id)}`;
             }
             return '';
         }
@@ -2206,7 +2208,10 @@
                             <div class="name-cell" style="padding-left:28px;">
                                 <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
                                 <span class="device-icon ap">AP</span>
+                                <span>
                                 ${licenseState.features?.device_portal ? `<a href="/api/device-portal/${ap.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>` : `<span class="name-link" style="cursor:default">${escapeHtml(apName)}</span>`}
+                                ${ap.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(ap.notes)}">${escapeHtml(ap.notes)}</div>` : ''}
+                                </span>
                                 ${noLocation ? '<span class="no-location-tag">(no location)</span>' : ''}
                             </div>
                         </td>
@@ -2265,7 +2270,10 @@
                             <div class="name-cell" style="padding-left:28px;">
                                 <span class="expand-toggle hidden">&#9654;</span>
                                 <span class="device-icon ap">SW</span>
+                                <span>
                                 ${licenseState.features?.device_portal ? `<a href="/api/device-portal/${sw.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>` : `<span class="name-link" style="cursor:default">${escapeHtml(swName)}</span>`}
+                                ${sw.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(sw.notes)}">${escapeHtml(sw.notes)}</div>` : ''}
+                                </span>
                             </div>
                         </td>
                         <td>${sw.model || ''}</td>
@@ -2636,6 +2644,28 @@
 
         // ── Device Actions ──
 
+        async function editDeviceNotes(type, ip) {
+            const endpoint = type === 'ap' ? 'aps' : 'switches';
+            // Find current notes from topology data
+            let currentNotes = '';
+            for (const site of (topology?.sites || [])) {
+                const devices = type === 'ap' ? (site.aps || []) : (site.switches || []);
+                const dev = devices.find(d => d.ip === ip);
+                if (dev) { currentNotes = dev.notes || ''; break; }
+            }
+            const newNotes = prompt('Device notes:', currentNotes);
+            if (newNotes === null) return; // cancelled
+            try {
+                const formData = new FormData();
+                formData.set('notes', newNotes);
+                const resp = await fetch(`/api/${endpoint}/${encodeURIComponent(ip)}`, { method: 'PUT', body: formData });
+                if (!resp.ok) { const e = await resp.json(); showToast('Failed: ' + (e.detail || 'Error')); return; }
+                const topoResp = await fetch('/api/topology');
+                if (topoResp.ok) { topology = await topoResp.json(); rebuildTopologyIndex(); updateUI(); }
+                showToast('Notes updated');
+            } catch (e) { showToast('Error: ' + e.message); }
+        }
+
         async function pollAPNow(ip) {
             try {
                 const response = await fetch(`/api/aps/${encodeURIComponent(ip)}/poll`, { method: 'POST' });
@@ -2919,6 +2949,11 @@
                 document.getElementById('snmpTrapPort').value = data.settings.snmp_trap_port || '162';
                 document.getElementById('snmpTrapCommunity').value = data.settings.snmp_trap_community || 'public';
                 toggleSnmpFields();
+                // Show PRO badge if SNMP traps feature not available
+                const snmpBadge = document.getElementById('snmpProBadge');
+                if (snmpBadge && !(licenseState.is_pro || (licenseState.features||{}).snmp_traps)) {
+                    snmpBadge.style.display = 'inline';
+                }
             } catch (e) {}
         }
 
@@ -4757,6 +4792,11 @@
             const ctx = document.getElementById('analyticsTrendChart');
             if (!ctx) return;
             if (trendChart) trendChart.destroy();
+            if (!trends.length) {
+                trendChart = null;
+                ctx.parentElement.innerHTML = '<div class="empty-state" style="display:flex;align-items:center;justify-content:center;height:100%;color:#6b7280;">No update data yet</div>';
+                return;
+            }
             const labels = trends.map(t => t.date ? t.date.slice(5) : '');
             trendChart = new Chart(ctx, {
                 type: 'bar',
@@ -4803,8 +4843,9 @@
             if (!errors.length) { el.innerHTML = '<div class="empty-state">No failures</div>'; return; }
             let html = '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border);">Error</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border);">Stage</th><th style="text-align:right;padding:4px;border-bottom:1px solid var(--border);">Count</th></tr></thead><tbody>';
             for (const e of errors) {
-                const errText = (e.error || '').length > 60 ? e.error.slice(0, 60) + '...' : e.error;
-                html += `<tr><td style="padding:3px 4px;" title="${(e.error||'').replace(/"/g,'&quot;')}">${errText}</td><td style="padding:3px 4px;color:#9ca3af;">${e.stage}</td><td style="padding:3px 4px;text-align:right;font-weight:600;">${e.count}</td></tr>`;
+                const safeError = escapeHtml(e.error || '');
+                const errText = safeError.length > 60 ? safeError.slice(0, 60) + '...' : safeError;
+                html += `<tr><td style="padding:3px 4px;" title="${safeError}">${errText}</td><td style="padding:3px 4px;color:#9ca3af;">${escapeHtml(e.stage || '')}</td><td style="padding:3px 4px;text-align:right;font-weight:600;">${e.count}</td></tr>`;
             }
             html += '</tbody></table>';
             el.innerHTML = html;
@@ -4817,7 +4858,7 @@
             for (const d of devices) {
                 const rate = d.total > 0 ? (d.failed / d.total * 100).toFixed(0) : 0;
                 const color = rate > 30 ? '#ef4444' : rate > 10 ? '#f59e0b' : '#10b981';
-                html += `<tr><td style="padding:3px 4px;">${d.ip}</td><td style="padding:3px 4px;color:#9ca3af;">${d.model}</td><td style="padding:3px 4px;text-align:right;color:#10b981;">${d.success}</td><td style="padding:3px 4px;text-align:right;color:${color};font-weight:600;">${d.failed}</td></tr>`;
+                html += `<tr><td style="padding:3px 4px;">${escapeHtml(d.ip)}</td><td style="padding:3px 4px;color:#9ca3af;">${escapeHtml(d.model || '')}</td><td style="padding:3px 4px;text-align:right;color:#10b981;">${d.success}</td><td style="padding:3px 4px;text-align:right;color:${color};font-weight:600;">${d.failed}</td></tr>`;
             }
             html += '</tbody></table>';
             el.innerHTML = html;

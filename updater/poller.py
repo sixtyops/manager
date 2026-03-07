@@ -625,6 +625,7 @@ class NetworkPoller:
                 "last_error": ap["last_error"],
                 "enabled": bool(ap["enabled"]),
                 "last_firmware_update": ap.get("last_firmware_update"),
+                "notes": ap.get("notes"),
                 "cpes": [],
                 "cpe_count": 0,
                 "health_summary": {"green": 0, "yellow": 0, "red": 0},
@@ -689,6 +690,7 @@ class NetworkPoller:
                 "last_error": sw.get("last_error"),
                 "enabled": bool(sw.get("enabled", 1)),
                 "last_firmware_update": sw.get("last_firmware_update"),
+                "notes": sw.get("notes"),
             }
 
             if sw.get("tower_site_id"):
