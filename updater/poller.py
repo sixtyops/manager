@@ -98,9 +98,19 @@ class NetworkPoller:
                 "topology": topology,
             })
 
+    def _check_uptime_transition(self, ip: str, device_type: str, was_error, now_error):
+        """Record uptime event if device state changed."""
+        was_down = bool(was_error)
+        is_down = bool(now_error)
+        if was_down and not is_down:
+            db.record_uptime_event(ip, device_type, "up")
+        elif not was_down and is_down:
+            db.record_uptime_event(ip, device_type, "down", details=str(now_error)[:200] if now_error else None)
+
     async def _poll_ap(self, ap: dict):
         """Poll a single AP for CPE data."""
         ip = ap["ip"]
+        prev_error = ap.get("last_error")
 
         try:
             # Get or create authenticated client
@@ -108,6 +118,7 @@ class NetworkPoller:
 
             if not client:
                 db.update_ap_status(ip, last_error=error)
+                self._check_uptime_transition(ip, "ap", prev_error, error)
                 return
 
             # Get AP info
@@ -122,6 +133,7 @@ class NetworkPoller:
                 client, error = await self._get_client(ip, ap["username"], ap["password"])
                 if not client:
                     db.update_ap_status(ip, last_error=error)
+                    self._check_uptime_transition(ip, "ap", prev_error, error)
                     return
                 ap_info = await client.get_ap_info()
             location = ap_info.get("location")  # Don't fall back to zone
@@ -166,6 +178,7 @@ class NetworkPoller:
                 location=location,
                 **bank_kwargs,
             )
+            self._check_uptime_transition(ip, "ap", prev_error, None)
 
             # Get connected CPEs
             cpes = await client.get_connected_cpes()
@@ -220,6 +233,7 @@ class NetworkPoller:
         except Exception as e:
             logger.error(f"Error polling {ip}: {e}")
             db.update_ap_status(ip, last_error=str(e))
+            self._check_uptime_transition(ip, "ap", prev_error, str(e))
             # Remove cached client on error
             self._clients.pop(ip, None)
 
@@ -363,12 +377,14 @@ class NetworkPoller:
     async def _poll_switch(self, sw: dict):
         """Poll a single switch for status info."""
         ip = sw["ip"]
+        prev_error = sw.get("last_error")
 
         try:
             client, error = await self._get_client(ip, sw["username"], sw["password"])
 
             if not client:
                 db.update_switch_status(ip, last_error=error)
+                self._check_uptime_transition(ip, "switch", prev_error, error)
                 return
 
             ap_info = await client.get_ap_info()
@@ -380,6 +396,7 @@ class NetworkPoller:
                 client, error = await self._get_client(ip, sw["username"], sw["password"])
                 if not client:
                     db.update_switch_status(ip, last_error=error)
+                    self._check_uptime_transition(ip, "switch", prev_error, error)
                     return
                 ap_info = await client.get_ap_info()
 
@@ -421,11 +438,13 @@ class NetworkPoller:
                 **bank_kwargs,
             )
 
+            self._check_uptime_transition(ip, "switch", prev_error, None)
             logger.debug(f"Polled switch {ip}")
 
         except Exception as e:
             logger.error(f"Error polling switch {ip}: {e}")
             db.update_switch_status(ip, last_error=str(e))
+            self._check_uptime_transition(ip, "switch", prev_error, str(e))
             self._clients.pop(ip, None)
 
     async def poll_switch_now(self, ip: str) -> bool:

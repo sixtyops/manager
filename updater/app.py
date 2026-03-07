@@ -4913,6 +4913,35 @@ async def get_analytics_reliability(days: int = 90, limit: int = 20, session: di
     return {"devices": db.get_analytics_device_reliability(days, limit)}
 
 
+@app.get("/api/uptime/device", tags=["analytics"])
+async def get_device_uptime(ip: str, days: int = 30, session: dict = Depends(require_auth)):
+    """Get availability/uptime data for a specific device."""
+    if days < 1 or days > 365:
+        raise HTTPException(400, "days must be between 1 and 365")
+    result = db.get_device_availability(ip, days)
+    return result
+
+
+@app.get("/api/uptime/fleet", tags=["analytics"])
+async def get_fleet_uptime(device_type: str = None, days: int = 30, session: dict = Depends(require_auth)):
+    """Get fleet-wide availability stats, worst performers first."""
+    if days < 1 or days > 365:
+        raise HTTPException(400, "days must be between 1 and 365")
+    if device_type and device_type not in ("ap", "switch"):
+        raise HTTPException(400, "device_type must be 'ap' or 'switch'")
+    devices = db.get_fleet_availability(device_type, days)
+    return {"devices": devices}
+
+
+@app.get("/api/uptime/events", tags=["analytics"])
+async def get_uptime_events(ip: str, days: int = 30, limit: int = 100, session: dict = Depends(require_auth)):
+    """Get raw uptime events for a device."""
+    if days < 1 or days > 365:
+        raise HTTPException(400, "days must be between 1 and 365")
+    events = db.get_uptime_events(ip, days, limit)
+    return {"events": events}
+
+
 @app.get("/api/device-history", tags=["config"])
 async def get_device_history_api(
     ip: str = None, action: str = None, status: str = None,

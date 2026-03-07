@@ -398,6 +398,18 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_radius_auth_username ON radius_auth_log(username);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_radius_auth_unique ON radius_auth_log(occurred_at, username, client_ip, outcome);
 
+            CREATE TABLE IF NOT EXISTS device_uptime_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip TEXT NOT NULL,
+                device_type TEXT NOT NULL DEFAULT 'ap',
+                event TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                details TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_uptime_ip ON device_uptime_events(ip);
+            CREATE INDEX IF NOT EXISTS idx_uptime_occurred ON device_uptime_events(occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_uptime_ip_occurred ON device_uptime_events(ip, occurred_at DESC);
+
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -1677,6 +1689,99 @@ def get_analytics_device_reliability(days: int = 90, limit: int = 20) -> list[di
             (cutoff, limit)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# Uptime / SLA tracking
+
+def record_uptime_event(ip: str, device_type: str, event: str, details: str = None):
+    """Record an uptime state transition (up/down)."""
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO device_uptime_events (ip, device_type, event, occurred_at, details) VALUES (?, ?, ?, ?, ?)",
+            (ip, device_type, event, datetime.now().isoformat(), details),
+        )
+
+
+def get_uptime_events(ip: str, days: int = 30, limit: int = 100) -> list[dict]:
+    """Get recent uptime events for a device."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM device_uptime_events WHERE ip = ? AND occurred_at >= ? ORDER BY occurred_at DESC LIMIT ?",
+            (ip, cutoff, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_device_availability(ip: str, days: int = 30) -> dict:
+    """Calculate availability percentage for a device over a time window."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    now = datetime.now()
+    window_seconds = days * 86400
+
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT event, occurred_at FROM device_uptime_events WHERE ip = ? AND occurred_at >= ? ORDER BY occurred_at ASC",
+            (ip, cutoff),
+        ).fetchall()
+
+    if not rows:
+        return {"ip": ip, "availability_pct": 100.0, "downtime_seconds": 0, "events": 0, "window_days": days}
+
+    downtime = 0.0
+    last_down_at = None
+
+    for row in rows:
+        event = row["event"]
+        ts = datetime.fromisoformat(row["occurred_at"])
+        if event == "down":
+            if last_down_at is None:
+                last_down_at = ts
+        elif event == "up":
+            if last_down_at is not None:
+                downtime += (ts - last_down_at).total_seconds()
+                last_down_at = None
+
+    # If still down, count up to now
+    if last_down_at is not None:
+        downtime += (now - last_down_at).total_seconds()
+
+    availability = max(0, (window_seconds - downtime) / window_seconds * 100)
+    return {
+        "ip": ip,
+        "availability_pct": round(availability, 3),
+        "downtime_seconds": round(downtime),
+        "events": len(rows),
+        "window_days": days,
+    }
+
+
+def get_fleet_availability(device_type: str = None, days: int = 30) -> list[dict]:
+    """Get availability for all devices with uptime events."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        query = "SELECT DISTINCT ip, device_type FROM device_uptime_events WHERE occurred_at >= ?"
+        params = [cutoff]
+        if device_type:
+            query += " AND device_type = ?"
+            params.append(device_type)
+        ips = conn.execute(query, params).fetchall()
+
+    results = []
+    for row in ips:
+        avail = get_device_availability(row["ip"], days)
+        avail["device_type"] = row["device_type"]
+        results.append(avail)
+
+    results.sort(key=lambda x: x["availability_pct"])
+    return results
+
+
+def cleanup_old_uptime_events(max_age_days: int = 180):
+    """Remove uptime events older than max_age_days."""
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as conn:
+        conn.execute("DELETE FROM device_uptime_events WHERE occurred_at < ?", (cutoff,))
 
 
 # Device Update History operations

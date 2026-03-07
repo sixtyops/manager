@@ -274,6 +274,17 @@ def memory_db():
             UNIQUE(rollout_id, ip)
         );
 
+        CREATE TABLE device_uptime_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL,
+            device_type TEXT NOT NULL,
+            event TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            details TEXT
+        );
+        CREATE INDEX idx_uptime_ip ON device_uptime_events(ip);
+        CREATE INDEX idx_uptime_occurred ON device_uptime_events(occurred_at);
+
         CREATE TABLE users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE COLLATE NOCASE,
