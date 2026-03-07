@@ -4345,7 +4345,10 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         username, password = job.credentials[ip]
         client = TachyonClient(ip, username, password)
         reboot_timeout = TNS100_REBOOT_TIMEOUT if device_status.role == "switch" else AP_REBOOT_TIMEOUT
-        bw_limit = int(db.get_setting("bandwidth_limit_kbps", "0"))
+        try:
+            bw_limit = int(db.get_setting("bandwidth_limit_kbps", "0"))
+        except (ValueError, TypeError):
+            bw_limit = 0
         result = await client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit)
     else:
         result = UpdateResult(ip=ip, success=False, error=f"Unsupported device type: {job.device_type}")
@@ -4926,6 +4929,7 @@ async def get_analytics_errors(days: int = 90, limit: int = 10, session: dict = 
     """Get top error messages from failed updates."""
     if days < 1 or days > 365:
         raise HTTPException(400, "days must be between 1 and 365")
+    limit = max(1, min(limit, 200))
     return {"errors": db.get_analytics_errors(days, limit)}
 
 
@@ -4934,6 +4938,7 @@ async def get_analytics_reliability(days: int = 90, limit: int = 20, session: di
     """Get per-device reliability stats, worst performers first."""
     if days < 1 or days > 365:
         raise HTTPException(400, "days must be between 1 and 365")
+    limit = max(1, min(limit, 200))
     return {"devices": db.get_analytics_device_reliability(days, limit)}
 
 
@@ -4962,6 +4967,7 @@ async def get_uptime_events(ip: str, days: int = 30, limit: int = 100, session: 
     """Get raw uptime events for a device."""
     if days < 1 or days > 365:
         raise HTTPException(400, "days must be between 1 and 365")
+    limit = max(1, min(limit, 1000))
     events = db.get_uptime_events(ip, days, limit)
     return {"events": events}
 
