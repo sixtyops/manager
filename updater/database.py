@@ -547,6 +547,9 @@ def get_db():
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -676,11 +679,11 @@ def upsert_access_point(ip: str, username: str, password: str, tower_site_id: in
         else:
             # Insert
             db.execute(
-                """INSERT INTO access_points (ip, username, password, tower_site_id, system_name, model, mac, firmware_version, location)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO access_points (ip, username, password, tower_site_id, system_name, model, mac, firmware_version, location, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (ip, username, enc_password, tower_site_id,
                  kwargs.get("system_name"), kwargs.get("model"), kwargs.get("mac"),
-                 kwargs.get("firmware_version"), kwargs.get("location"))
+                 kwargs.get("firmware_version"), kwargs.get("location"), kwargs.get("notes"))
             )
             return db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -754,11 +757,11 @@ def upsert_switch(ip: str, username: str, password: str, tower_site_id: int = No
             return existing["id"]
         else:
             db.execute(
-                """INSERT INTO switches (ip, username, password, tower_site_id, system_name, model, mac, firmware_version, location)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO switches (ip, username, password, tower_site_id, system_name, model, mac, firmware_version, location, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (ip, username, enc_password, tower_site_id,
                  kwargs.get("system_name"), kwargs.get("model"), kwargs.get("mac"),
-                 kwargs.get("firmware_version"), kwargs.get("location"))
+                 kwargs.get("firmware_version"), kwargs.get("location"), kwargs.get("notes"))
             )
             return db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -787,41 +790,62 @@ def delete_switch(ip: str):
         db.execute("DELETE FROM switches WHERE ip = ?", (ip,))
 
 
+_BULK_TABLES = {"ap": "access_points", "switch": "switches"}
+_BULK_MAX_IPS = 500
+
+
+def _validate_bulk_args(device_type: str, ips: list[str]) -> tuple[str, list[str]]:
+    """Validate bulk operation arguments. Returns (table_name, ips)."""
+    table = _BULK_TABLES.get(device_type)
+    if not table:
+        raise ValueError(f"Invalid device_type: {device_type}")
+    if not ips:
+        raise ValueError("ips list must not be empty")
+    if len(ips) > _BULK_MAX_IPS:
+        raise ValueError(f"Too many IPs (max {_BULK_MAX_IPS})")
+    return table, list(ips)
+
+
 def bulk_set_enabled(device_type: str, ips: list[str], enabled: bool) -> int:
     """Enable or disable multiple devices. Returns count of affected rows."""
-    table = "access_points" if device_type == "ap" else "switches"
+    table, ips = _validate_bulk_args(device_type, ips)
     val = 1 if enabled else 0
     with get_db() as conn:
         placeholders = ",".join("?" for _ in ips)
         cursor = conn.execute(
             f"UPDATE {table} SET enabled = ? WHERE ip IN ({placeholders})",
-            [val] + list(ips),
+            [val] + ips,
         )
         return cursor.rowcount
 
 
 def bulk_delete_devices(device_type: str, ips: list[str]) -> int:
     """Delete multiple devices. Returns count of deleted rows."""
-    table = "access_points" if device_type == "ap" else "switches"
+    table, ips = _validate_bulk_args(device_type, ips)
     with get_db() as conn:
         placeholders = ",".join("?" for _ in ips)
         if device_type == "ap":
-            conn.execute(f"DELETE FROM cpe_cache WHERE ap_ip IN ({placeholders})", list(ips))
+            conn.execute(f"DELETE FROM cpe_cache WHERE ap_ip IN ({placeholders})", ips)
         cursor = conn.execute(
             f"DELETE FROM {table} WHERE ip IN ({placeholders})",
-            list(ips),
+            ips,
         )
         return cursor.rowcount
 
 
 def bulk_move_to_site(device_type: str, ips: list[str], site_id: Optional[int]) -> int:
     """Move multiple devices to a site. Returns count of affected rows."""
-    table = "access_points" if device_type == "ap" else "switches"
+    table, ips = _validate_bulk_args(device_type, ips)
+    if site_id is not None:
+        with get_db() as conn:
+            site = conn.execute("SELECT id FROM tower_sites WHERE id = ?", (site_id,)).fetchone()
+            if not site:
+                raise ValueError(f"Site {site_id} not found")
     with get_db() as conn:
         placeholders = ",".join("?" for _ in ips)
         cursor = conn.execute(
             f"UPDATE {table} SET tower_site_id = ? WHERE ip IN ({placeholders})",
-            [site_id] + list(ips),
+            [site_id] + ips,
         )
         return cursor.rowcount
 
