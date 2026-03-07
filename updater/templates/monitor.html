@@ -872,6 +872,59 @@
                 <div id="snmpStatus" class="u-status-line"></div>
             </div>
 
+                <label>Webhooks <span id="webhookProBadge" class="pro-badge" style="display:none;">PRO</span></label>
+                <p class="u-note-inline">Send HTTP webhooks to external services (PagerDuty, Teams, custom endpoints) for job completions and device alerts.</p>
+                <div class="u-flex-col-gap8">
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="checkbox" id="webhookEnabled" onchange="toggleWebhookFields()">
+                        <span style="font-size:0.75rem;color:#6b7280;">Enable Webhooks</span>
+                    </label>
+                    <div id="webhookFields" style="display:grid;grid-template-columns:1fr 100px;gap:8px;">
+                        <div style="grid-column:1/-1;">
+                            <label style="font-size:0.7rem;color:#9ca3af;">Webhook URL</label>
+                            <input type="text" id="webhookUrl" placeholder="https://example.com/webhook" style="width:100%;font-size:0.8rem;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.7rem;color:#9ca3af;">Method</label>
+                            <select id="webhookMethod" style="width:100%;font-size:0.8rem;padding:6px;">
+                                <option value="POST">POST</option>
+                                <option value="PUT">PUT</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.7rem;color:#9ca3af;">Secret (HMAC)</label>
+                            <input type="password" id="webhookSecret" placeholder="Optional" style="width:100%;font-size:0.8rem;">
+                        </div>
+                        <div style="grid-column:1/-1;">
+                            <label style="font-size:0.7rem;color:#9ca3af;">Custom Headers (JSON)</label>
+                            <input type="text" id="webhookHeaders" placeholder='{"Authorization": "Bearer ..."}' style="width:100%;font-size:0.8rem;">
+                        </div>
+                        <div style="grid-column:1/-1;">
+                            <label style="font-size:0.7rem;color:#9ca3af;">Events</label>
+                            <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                                <label style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:#6b7280;cursor:pointer;">
+                                    <input type="checkbox" id="webhookEvtJobCompleted" checked> job_completed
+                                </label>
+                                <label style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:#6b7280;cursor:pointer;">
+                                    <input type="checkbox" id="webhookEvtJobFailed" checked> job_failed
+                                </label>
+                                <label style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:#6b7280;cursor:pointer;">
+                                    <input type="checkbox" id="webhookEvtDeviceOffline" checked> device_offline
+                                </label>
+                                <label style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:#6b7280;cursor:pointer;">
+                                    <input type="checkbox" id="webhookEvtDeviceRecovered" checked> device_recovered
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="u-flex-center-gap6">
+                        <button class="backup-btn" onclick="saveWebhookSettings()">Save</button>
+                        <button class="backup-btn" onclick="testWebhook()" style="background:#6b7280;">Test Webhook</button>
+                    </div>
+                </div>
+                <div id="webhookStatus" class="u-status-line"></div>
+            </div>
+
             <!-- Authentication Panel -->
             <div class="settings-panel" id="settingsPanel-auth">
                 <!-- Built-in RADIUS Section -->
@@ -3026,6 +3079,22 @@
                 if (snmpBadge && !(licenseState.is_pro || (licenseState.features||{}).snmp_traps)) {
                     snmpBadge.style.display = 'inline';
                 }
+                // Webhook settings
+                document.getElementById('webhookEnabled').checked = data.settings.webhook_enabled === 'true';
+                document.getElementById('webhookUrl').value = data.settings.webhook_url || '';
+                document.getElementById('webhookMethod').value = data.settings.webhook_method || 'POST';
+                document.getElementById('webhookSecret').value = data.settings.webhook_secret || '';
+                document.getElementById('webhookHeaders').value = data.settings.webhook_headers || '';
+                const events = (data.settings.webhook_events || 'job_completed,job_failed,device_offline,device_recovered').split(',');
+                document.getElementById('webhookEvtJobCompleted').checked = events.includes('job_completed');
+                document.getElementById('webhookEvtJobFailed').checked = events.includes('job_failed');
+                document.getElementById('webhookEvtDeviceOffline').checked = events.includes('device_offline');
+                document.getElementById('webhookEvtDeviceRecovered').checked = events.includes('device_recovered');
+                toggleWebhookFields();
+                const webhookBadge = document.getElementById('webhookProBadge');
+                if (webhookBadge && !(licenseState.is_pro || (licenseState.features||{}).webhooks)) {
+                    webhookBadge.style.display = 'inline';
+                }
             } catch (e) {}
         }
 
@@ -3176,6 +3245,84 @@
                     statusEl.style.color = '#10b981';
                 } else {
                     statusEl.textContent = data.message || 'Failed to send test trap';
+                    statusEl.style.color = '#ef4444';
+                }
+            } catch (e) {
+                statusEl.textContent = 'Error: ' + e.message;
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        function toggleWebhookFields() {
+            const enabled = document.getElementById('webhookEnabled').checked;
+            const fields = document.getElementById('webhookFields');
+            if (fields) fields.style.opacity = enabled ? '1' : '0.5';
+        }
+
+        async function saveWebhookSettings() {
+            const statusEl = document.getElementById('webhookStatus');
+            const events = [];
+            if (document.getElementById('webhookEvtJobCompleted').checked) events.push('job_completed');
+            if (document.getElementById('webhookEvtJobFailed').checked) events.push('job_failed');
+            if (document.getElementById('webhookEvtDeviceOffline').checked) events.push('device_offline');
+            if (document.getElementById('webhookEvtDeviceRecovered').checked) events.push('device_recovered');
+            const headers = document.getElementById('webhookHeaders').value.trim();
+            if (headers) {
+                try { JSON.parse(headers); } catch (e) {
+                    statusEl.textContent = 'Invalid JSON in custom headers';
+                    statusEl.style.color = '#ef4444';
+                    return;
+                }
+            }
+            const settings = {
+                webhook_enabled: document.getElementById('webhookEnabled').checked ? 'true' : 'false',
+                webhook_url: document.getElementById('webhookUrl').value.trim(),
+                webhook_method: document.getElementById('webhookMethod').value,
+                webhook_secret: document.getElementById('webhookSecret').value,
+                webhook_headers: headers || '{}',
+                webhook_events: events.join(','),
+            };
+            try {
+                const resp = await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings),
+                });
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    throw new Error(err.detail || 'Save failed');
+                }
+                statusEl.textContent = 'Saved!';
+                statusEl.style.color = '#10b981';
+            } catch (e) {
+                statusEl.textContent = 'Failed to save: ' + e.message;
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function testWebhook() {
+            const statusEl = document.getElementById('webhookStatus');
+            if (!document.getElementById('webhookEnabled').checked) {
+                statusEl.textContent = 'Enable webhooks first';
+                statusEl.style.color = '#f59e0b';
+                return;
+            }
+            if (!document.getElementById('webhookUrl').value.trim()) {
+                statusEl.textContent = 'Enter a webhook URL first';
+                statusEl.style.color = '#f59e0b';
+                return;
+            }
+            await saveWebhookSettings();
+            statusEl.textContent = 'Sending test webhook...';
+            statusEl.style.color = '#6b7280';
+            try {
+                const resp = await fetch('/api/webhooks/test', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    statusEl.textContent = data.message || 'Test webhook sent!';
+                    statusEl.style.color = '#10b981';
+                } else {
+                    statusEl.textContent = data.message || 'Failed to send test webhook';
                     statusEl.style.color = '#ef4444';
                 }
             } catch (e) {

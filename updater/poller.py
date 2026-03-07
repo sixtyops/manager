@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import math
+import time
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -17,6 +18,11 @@ PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
 
 logger = logging.getLogger(__name__)
 
+_MAX_CLIENT_CACHE = 500
+_CLIENT_TTL_SECONDS = 600  # 10 minutes
+_BACKOFF_THRESHOLD = 3  # consecutive failures before backoff
+_MAX_BACKOFF_CYCLES = 16
+
 # Global poller instance
 _poller: Optional["NetworkPoller"] = None
 
@@ -29,8 +35,14 @@ class NetworkPoller:
         self.broadcast_func = broadcast_func
         self._running = False
         self._task: Optional[asyncio.Task] = None
-        self._clients: dict[str, TachyonClient] = {}  # IP -> authenticated client
+        self._clients: dict[str, tuple[TachyonClient, float]] = {}  # IP -> (client, last_used)
         self._last_config_poll: Optional[datetime] = None
+        self._poll_in_progress = False
+        # Circuit breaker state
+        self._failure_counts: dict[str, int] = {}
+        self._backoff_until: dict[str, float] = {}
+        # Alert cooldown tracking
+        self._last_alert_time: dict[str, float] = {}
         self._enforce_running = False
 
     async def start(self):
@@ -68,40 +80,97 @@ class NetworkPoller:
             await asyncio.sleep(self.poll_interval)
 
     def _evict_stale_clients(self):
-        """Remove cached clients for devices no longer in the database."""
+        """Remove cached clients for devices no longer in the database or expired by TTL."""
         known_ips = db.get_all_device_ips()
-        stale = [ip for ip in self._clients if ip not in known_ips]
+        now = time.time()
+        stale = []
+        for ip, (client, last_used) in self._clients.items():
+            if ip not in known_ips or (now - last_used) > _CLIENT_TTL_SECONDS:
+                stale.append(ip)
         for ip in stale:
             del self._clients[ip]
+        # Cap cache size by evicting oldest entries
+        if len(self._clients) > _MAX_CLIENT_CACHE:
+            sorted_by_age = sorted(self._clients.items(), key=lambda x: x[1][1])
+            excess = len(self._clients) - _MAX_CLIENT_CACHE
+            for ip, _ in sorted_by_age[:excess]:
+                del self._clients[ip]
+                stale.append(ip)
         if stale:
             logger.info(f"Evicted {len(stale)} stale client(s) from cache")
 
+    def _get_cached_client(self, ip: str) -> Optional[TachyonClient]:
+        """Get a cached client, updating its last-used timestamp."""
+        entry = self._clients.get(ip)
+        if entry:
+            client, _ = entry
+            self._clients[ip] = (client, time.time())
+            return client
+        return None
+
+    def _cache_client(self, ip: str, client: TachyonClient):
+        """Cache an authenticated client."""
+        self._clients[ip] = (client, time.time())
+
+    def _remove_cached_client(self, ip: str):
+        """Remove a client from the cache."""
+        self._clients.pop(ip, None)
+
+    def _is_backed_off(self, ip: str) -> bool:
+        """Check if a device is in backoff due to consecutive failures."""
+        until = self._backoff_until.get(ip, 0)
+        if time.time() < until:
+            return True
+        return False
+
+    def _record_poll_success(self, ip: str):
+        """Reset circuit breaker on successful poll."""
+        self._failure_counts.pop(ip, None)
+        self._backoff_until.pop(ip, None)
+
+    def _record_poll_failure(self, ip: str):
+        """Increment failure count and set backoff if threshold exceeded."""
+        count = self._failure_counts.get(ip, 0) + 1
+        self._failure_counts[ip] = count
+        if count >= _BACKOFF_THRESHOLD:
+            cycles = min(2 ** (count - _BACKOFF_THRESHOLD), _MAX_BACKOFF_CYCLES)
+            self._backoff_until[ip] = time.time() + (cycles * self.poll_interval)
+            logger.debug(f"Device {ip} backed off for {cycles} cycles after {count} consecutive failures")
+
     async def _poll_all_aps(self):
         """Poll all enabled APs."""
-        self._evict_stale_clients()
-        aps = db.get_access_points(enabled_only=True)
-
-        if not aps:
+        if self._poll_in_progress:
+            logger.warning("Previous poll cycle still running, skipping AP poll")
             return
 
-        logger.debug(f"Polling {len(aps)} APs")
+        self._poll_in_progress = True
+        try:
+            self._evict_stale_clients()
+            aps = db.get_access_points(enabled_only=True)
 
-        # Poll in parallel with concurrency limit
-        semaphore = asyncio.Semaphore(5)
+            if not aps:
+                return
 
-        async def poll_with_limit(ap):
-            async with semaphore:
-                await self._poll_ap(ap)
+            logger.debug(f"Polling {len(aps)} APs")
 
-        await asyncio.gather(*[poll_with_limit(ap) for ap in aps], return_exceptions=True)
+            concurrency = int(db.get_setting("poller_concurrency", "10"))
+            semaphore = asyncio.Semaphore(concurrency)
 
-        # Broadcast updated topology
-        if self.broadcast_func:
-            topology = self.get_topology()
-            await self.broadcast_func({
-                "type": "topology_update",
-                "topology": topology,
-            })
+            async def poll_with_limit(ap):
+                async with semaphore:
+                    await self._poll_ap(ap)
+
+            await asyncio.gather(*[poll_with_limit(ap) for ap in aps], return_exceptions=True)
+
+            # Broadcast updated topology
+            if self.broadcast_func:
+                topology = self.get_topology()
+                await self.broadcast_func({
+                    "type": "topology_update",
+                    "topology": topology,
+                })
+        finally:
+            self._poll_in_progress = False
 
     def _check_uptime_transition(self, ip: str, device_type: str, was_error, now_error):
         """Record uptime event if device state changed."""
@@ -109,13 +178,82 @@ class NetworkPoller:
         is_down = bool(now_error)
         if was_down and not is_down:
             db.record_uptime_event(ip, device_type, "up")
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._notify_device_recovered(ip, device_type))
+            except RuntimeError:
+                pass  # No event loop (e.g., in sync test context)
         elif not was_down and is_down:
             db.record_uptime_event(ip, device_type, "down", details=str(now_error)[:200] if now_error else None)
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._notify_device_offline(ip, device_type, str(now_error)[:200] if now_error else "Unknown error"))
+            except RuntimeError:
+                pass  # No event loop (e.g., in sync test context)
+
+    async def _notify_device_offline(self, ip: str, device_type: str, error: str):
+        """Send notifications when a device goes offline."""
+        try:
+            if db.get_setting("alert_device_offline_enabled", "true") != "true":
+                return
+            cooldown = int(db.get_setting("alert_device_offline_cooldown_minutes", "60")) * 60
+            last_alert = self._last_alert_time.get(ip, 0)
+            if time.time() - last_alert < cooldown:
+                return
+            self._last_alert_time[ip] = time.time()
+
+            from . import slack, snmp
+            try:
+                await slack.notify_device_offline(ip, device_type, error)
+            except Exception as e:
+                logger.debug(f"Slack device offline notification failed: {e}")
+            try:
+                await snmp.notify_device_offline(ip, device_type, error)
+            except Exception as e:
+                logger.debug(f"SNMP device offline notification failed: {e}")
+            try:
+                from . import webhooks
+                await webhooks.notify_device_offline(ip, device_type, error)
+            except Exception as e:
+                logger.debug(f"Webhook device offline notification failed: {e}")
+        except Exception as e:
+            logger.error(f"Device offline alert dispatch error: {e}")
+
+    async def _notify_device_recovered(self, ip: str, device_type: str):
+        """Send notifications when a device recovers."""
+        try:
+            if db.get_setting("alert_device_offline_enabled", "true") != "true":
+                return
+            # Only send recovery if we previously sent an offline alert
+            if ip not in self._last_alert_time:
+                return
+            self._last_alert_time.pop(ip, None)
+
+            from . import slack, snmp
+            try:
+                await slack.notify_device_recovered(ip, device_type)
+            except Exception as e:
+                logger.debug(f"Slack device recovered notification failed: {e}")
+            try:
+                await snmp.notify_device_recovered(ip, device_type)
+            except Exception as e:
+                logger.debug(f"SNMP device recovered notification failed: {e}")
+            try:
+                from . import webhooks
+                await webhooks.notify_device_recovered(ip, device_type)
+            except Exception as e:
+                logger.debug(f"Webhook device recovered notification failed: {e}")
+        except Exception as e:
+            logger.error(f"Device recovered alert dispatch error: {e}")
 
     async def _poll_ap(self, ap: dict):
         """Poll a single AP for CPE data."""
         ip = ap["ip"]
         prev_error = ap.get("last_error")
+
+        if self._is_backed_off(ip):
+            logger.debug(f"Skipping backed-off device {ip}")
+            return
 
         try:
             # Get or create authenticated client
@@ -134,7 +272,7 @@ class NetworkPoller:
             # client, re-authenticate, and retry once.
             if not ap_info.get("model") and not ap_info.get("firmware_version") and not ap_info.get("system_name"):
                 logger.info(f"Stale session detected for {ip}, re-authenticating")
-                self._clients.pop(ip, None)
+                self._remove_cached_client(ip)
                 client, error = await self._get_client(ip, ap["username"], ap["password"])
                 if not client:
                     db.update_ap_status(ip, last_error=error)
@@ -184,6 +322,7 @@ class NetworkPoller:
                 **bank_kwargs,
             )
             self._check_uptime_transition(ip, "ap", prev_error, None)
+            self._record_poll_success(ip)
 
             # Get connected CPEs
             cpes = await client.get_connected_cpes()
@@ -239,22 +378,23 @@ class NetworkPoller:
             logger.error(f"Error polling {ip}: {e}")
             db.update_ap_status(ip, last_error=str(e))
             self._check_uptime_transition(ip, "ap", prev_error, str(e))
-            # Remove cached client on error
-            self._clients.pop(ip, None)
+            self._record_poll_failure(ip)
+            self._remove_cached_client(ip)
 
     async def _get_client(self, ip: str, username: str, password: str) -> tuple:
         """Get authenticated client, reusing existing session if possible.
 
         Returns (client, None) on success or (None, error_string) on failure.
         """
-        if ip in self._clients:
-            return self._clients[ip], None
+        cached = self._get_cached_client(ip)
+        if cached:
+            return cached, None
 
         client = TachyonClient(ip, username, password)
 
         result = await client.login()
         if result is True:
-            self._clients[ip] = client
+            self._cache_client(ip, client)
             return client, None
 
         return None, result if isinstance(result, str) else "Login failed"
@@ -342,7 +482,7 @@ class NetworkPoller:
 
     def invalidate_client(self, ip: str):
         """Remove cached client (e.g., when credentials change)."""
-        self._clients.pop(ip, None)
+        self._remove_cached_client(ip)
 
     async def poll_ap_now(self, ip: str) -> bool:
         """Trigger immediate poll of a specific AP."""
@@ -371,7 +511,8 @@ class NetworkPoller:
 
         logger.debug(f"Polling {len(switches)} switches")
 
-        semaphore = asyncio.Semaphore(5)
+        concurrency = int(db.get_setting("poller_concurrency", "10"))
+        semaphore = asyncio.Semaphore(concurrency)
 
         async def poll_with_limit(sw):
             async with semaphore:
@@ -383,6 +524,10 @@ class NetworkPoller:
         """Poll a single switch for status info."""
         ip = sw["ip"]
         prev_error = sw.get("last_error")
+
+        if self._is_backed_off(ip):
+            logger.debug(f"Skipping backed-off switch {ip}")
+            return
 
         try:
             client, error = await self._get_client(ip, sw["username"], sw["password"])
@@ -397,7 +542,7 @@ class NetworkPoller:
             # Detect stale session (same logic as _poll_ap)
             if not ap_info.get("model") and not ap_info.get("firmware_version") and not ap_info.get("system_name"):
                 logger.info(f"Stale session detected for switch {ip}, re-authenticating")
-                self._clients.pop(ip, None)
+                self._remove_cached_client(ip)
                 client, error = await self._get_client(ip, sw["username"], sw["password"])
                 if not client:
                     db.update_switch_status(ip, last_error=error)
@@ -444,13 +589,15 @@ class NetworkPoller:
             )
 
             self._check_uptime_transition(ip, "switch", prev_error, None)
+            self._record_poll_success(ip)
             logger.debug(f"Polled switch {ip}")
 
         except Exception as e:
             logger.error(f"Error polling switch {ip}: {e}")
             db.update_switch_status(ip, last_error=str(e))
             self._check_uptime_transition(ip, "switch", prev_error, str(e))
-            self._clients.pop(ip, None)
+            self._record_poll_failure(ip)
+            self._remove_cached_client(ip)
 
     async def poll_switch_now(self, ip: str) -> bool:
         """Trigger immediate poll of a specific switch."""
@@ -509,10 +656,11 @@ class NetworkPoller:
             devices.append((ap["ip"], ap["username"], ap["password"], ap.get("model"), "ap"))
         for sw in switches:
             devices.append((sw["ip"], sw["username"], sw["password"], sw.get("model"), "switch"))
+        ap_dict = db.get_all_access_points_dict(enabled_only=False)
         for cpe in all_cpes:
             if cpe.get("auth_status") == "ok" and cpe.get("ip"):
-                # Use parent AP credentials for CPE
-                ap = db.get_access_point(cpe["ap_ip"])
+                # Use parent AP credentials for CPE (batch lookup)
+                ap = ap_dict.get(cpe["ap_ip"])
                 if ap:
                     devices.append((cpe["ip"], ap["username"], ap["password"], cpe.get("model"), "cpe"))
 

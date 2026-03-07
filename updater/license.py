@@ -40,6 +40,7 @@ class Feature(str, Enum):
     FIRMWARE_HOLD_CUSTOM = "firmware_hold_custom"
     RADIUS_SERVER = "radius_server"
     SNMP_TRAPS = "snmp_traps"
+    WEBHOOKS = "webhooks"
 
 
 class LicenseTier(str, Enum):

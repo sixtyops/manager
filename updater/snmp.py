@@ -33,6 +33,13 @@ OID_ROLLOUT_PHASE = f"{ENTERPRISE_OID}.2.11"
 OID_ROLLOUT_STATUS = f"{ENTERPRISE_OID}.2.12"
 OID_MESSAGE = f"{ENTERPRISE_OID}.2.99"
 
+# Device status trap OIDs
+OID_TRAP_DEVICE_OFFLINE = f"{ENTERPRISE_OID}.1.2"
+OID_TRAP_DEVICE_RECOVERED = f"{ENTERPRISE_OID}.1.3"
+OID_DEVICE_IP = f"{ENTERPRISE_OID}.3.1"
+OID_DEVICE_TYPE = f"{ENTERPRISE_OID}.3.2"
+OID_DEVICE_ERROR = f"{ENTERPRISE_OID}.3.3"
+
 DEFAULT_TRAP_PORT = 162
 DEFAULT_COMMUNITY = "public"
 
@@ -247,3 +254,32 @@ async def send_test_trap() -> tuple[bool, str]:
         return True, f"Test trap sent to {config['host']}:{config['port']}"
     else:
         return False, "Failed to send test trap - check host and network connectivity"
+
+
+async def notify_device_offline(ip: str, device_type: str, error: str):
+    """Send an SNMP trap when a device goes offline."""
+    config = _get_snmp_config()
+    if not config:
+        return
+
+    varbinds = [
+        (OID_DEVICE_IP, 's', ip),
+        (OID_DEVICE_TYPE, 's', device_type),
+        (OID_DEVICE_ERROR, 's', error[:200] if error else "Unknown"),
+    ]
+
+    asyncio.create_task(_send_with_retry(OID_TRAP_DEVICE_OFFLINE, varbinds, config=config))
+
+
+async def notify_device_recovered(ip: str, device_type: str):
+    """Send an SNMP trap when a device recovers from offline state."""
+    config = _get_snmp_config()
+    if not config:
+        return
+
+    varbinds = [
+        (OID_DEVICE_IP, 's', ip),
+        (OID_DEVICE_TYPE, 's', device_type),
+    ]
+
+    asyncio.create_task(_send_with_retry(OID_TRAP_DEVICE_RECOVERED, varbinds, config=config))

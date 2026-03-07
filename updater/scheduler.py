@@ -598,13 +598,15 @@ class AutoUpdateScheduler:
                 targets[fw_type] = "__unknown__"
         return targets
 
-    def _ap_or_children_need_update(self, ap: dict, target_versions: dict[str, str], allow_downgrade: bool) -> bool:
+    def _ap_or_children_need_update(self, ap: dict, target_versions: dict[str, str], allow_downgrade: bool,
+                                     cpes_by_ap: Optional[dict[str, list[dict]]] = None) -> bool:
         """Return True when an AP or any attached manageable CPE needs an update."""
         ap_target = target_versions.get(_firmware_type_for_model(ap.get("model")), "")
         if _device_needs_update(ap.get("firmware_version", ""), ap_target, allow_downgrade):
             return True
 
-        for cpe in db.get_cpes_for_ap(ap["ip"]):
+        cpes = cpes_by_ap.get(ap["ip"], []) if cpes_by_ap is not None else db.get_cpes_for_ap(ap["ip"])
+        for cpe in cpes:
             if cpe.get("auth_status") != "ok":
                 continue
             cpe_target = target_versions.get(_firmware_type_for_model(cpe.get("model")), "")
@@ -614,22 +616,25 @@ class AutoUpdateScheduler:
 
     def _filter_devices_needing_update(self, scope_ips: list[str], target_versions: dict[str, str], allow_downgrade: bool = False) -> list[str]:
         """Filter scope APs to those whose firmware differs from target."""
+        ap_dict = db.get_all_access_points_dict(enabled_only=False)
+        cpes_by_ap = db.get_all_cpes_grouped()
         needs_update = []
 
         for ip in scope_ips:
-            ap = db.get_access_point(ip)
+            ap = ap_dict.get(ip)
             if not ap:
                 continue
-            if self._ap_or_children_need_update(ap, target_versions, allow_downgrade):
+            if self._ap_or_children_need_update(ap, target_versions, allow_downgrade, cpes_by_ap=cpes_by_ap):
                 needs_update.append(ip)
         return needs_update
 
     def _filter_switches_needing_update(self, scope_ips: list[str], target_versions: dict[str, str], allow_downgrade: bool = False) -> list[str]:
         """Filter scope switches to those whose firmware differs from target."""
+        switch_dict = db.get_all_switches_dict(enabled_only=False)
         needs_update = []
 
         for ip in scope_ips:
-            switch = db.get_switch(ip)
+            switch = switch_dict.get(ip)
             if not switch:
                 continue
             target_version = target_versions.get(_firmware_type_for_model(switch.get("model")), "")
@@ -652,14 +657,16 @@ class AutoUpdateScheduler:
         existing_devices = db.get_rollout_devices(rollout_id)
         already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "pending")}
 
+        ap_dict = db.get_all_access_points_dict(enabled_only=False)
+        cpes_by_ap = db.get_all_cpes_grouped()
         candidates = []
         for ip in scope_ips:
             if ip in already_done:
                 continue
-            ap = db.get_access_point(ip)
+            ap = ap_dict.get(ip)
             if not ap:
                 continue
-            if self._ap_or_children_need_update(ap, target_versions, allow_downgrade):
+            if self._ap_or_children_need_update(ap, target_versions, allow_downgrade, cpes_by_ap=cpes_by_ap):
                 candidates.append(ip)
 
         preferred_canaries = self._preferred_canary_devices(settings, "rollout_canary_aps")
@@ -680,11 +687,12 @@ class AutoUpdateScheduler:
         existing_devices = db.get_rollout_devices(rollout_id)
         already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "pending")}
 
+        switch_dict = db.get_all_switches_dict(enabled_only=False)
         candidates = []
         for ip in scope_ips:
             if ip in already_done:
                 continue
-            switch = db.get_switch(ip)
+            switch = switch_dict.get(ip)
             if not switch:
                 continue
             target_version = target_versions.get(_firmware_type_for_model(switch.get("model")), "")
