@@ -5867,7 +5867,7 @@ async def get_radius_auth_log_api(
     """Get recent RADIUS authentication attempts."""
     with db.get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM radius_auth_log ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            "SELECT * FROM radius_auth_log ORDER BY occurred_at DESC LIMIT ? OFFSET ?",
             (min(limit, 200), offset),
         ).fetchall()
         total = conn.execute("SELECT COUNT(*) FROM radius_auth_log").fetchone()[0]
