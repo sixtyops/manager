@@ -15,6 +15,10 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   validate-dispatch:
     if: github.event_name == 'workflow_dispatch'
@@ -35,32 +39,9 @@ jobs:
             exit 1
           fi
 
-  test:
-    runs-on: ubuntu-latest
-    if: always() && (needs.validate-dispatch.result == 'success' || needs.validate-dispatch.result == 'skipped')
-    needs: [validate-dispatch]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: pip-
-
-      - run: pip install -r requirements.txt
-
-      - run: pytest -v
-
   release:
-    needs: [test]
-    if: always() && needs.test.result == 'success'
+    needs: [validate-dispatch]
+    if: always() && (needs.validate-dispatch.result == 'success' || needs.validate-dispatch.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write

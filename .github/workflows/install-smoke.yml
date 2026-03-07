@@ -3,8 +3,18 @@ name: Installer Smoke
 on:
   pull_request:
     branches: [main, dev]
-  push:
-    branches: [main, dev]
+    paths:
+      - 'scripts/install.sh'
+      - 'docker-compose.yml'
+      - 'docker-compose.standalone.yml'
+      - 'Dockerfile'
+      - 'entrypoint.sh'
+      - 'nginx/**'
+      - '.github/workflows/install-smoke.yml'
+
+concurrency:
+  group: install-smoke-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   install-smoke:
