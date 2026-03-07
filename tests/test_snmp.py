@@ -163,8 +163,16 @@ class TestNotifyJobCompleted:
 
 class TestSendTestTrap:
     @pytest.mark.asyncio
+    async def test_returns_error_when_pysnmp_missing(self):
+        with patch("updater.snmp.is_pysnmp_available", return_value=False):
+            success, message = await snmp.send_test_trap()
+            assert success is False
+            assert "pysnmp" in message.lower()
+
+    @pytest.mark.asyncio
     async def test_returns_error_when_not_configured(self):
-        with patch("updater.snmp._get_snmp_config", return_value=None):
+        with patch("updater.snmp.is_pysnmp_available", return_value=True), \
+             patch("updater.snmp._get_snmp_config", return_value=None):
             success, message = await snmp.send_test_trap()
             assert success is False
             assert "not configured" in message.lower()
@@ -172,7 +180,8 @@ class TestSendTestTrap:
     @pytest.mark.asyncio
     async def test_returns_error_for_invalid_host(self):
         config = {"host": "invalid host!", "port": 162, "community": "public", "version": "2c"}
-        with patch("updater.snmp._get_snmp_config", return_value=config):
+        with patch("updater.snmp.is_pysnmp_available", return_value=True), \
+             patch("updater.snmp._get_snmp_config", return_value=config):
             success, message = await snmp.send_test_trap()
             assert success is False
             assert "invalid" in message.lower()
@@ -180,19 +189,21 @@ class TestSendTestTrap:
     @pytest.mark.asyncio
     async def test_sends_test_trap_successfully(self):
         config = {"host": "192.168.1.100", "port": 162, "community": "public", "version": "2c"}
-        with patch("updater.snmp._get_snmp_config", return_value=config):
-            with patch("updater.snmp.send_snmp_trap", new_callable=AsyncMock, return_value=True):
-                success, message = await snmp.send_test_trap()
-                assert success is True
-                assert "192.168.1.100" in message
+        with patch("updater.snmp.is_pysnmp_available", return_value=True), \
+             patch("updater.snmp._get_snmp_config", return_value=config), \
+             patch("updater.snmp.send_snmp_trap", new_callable=AsyncMock, return_value=True):
+            success, message = await snmp.send_test_trap()
+            assert success is True
+            assert "192.168.1.100" in message
 
     @pytest.mark.asyncio
     async def test_sends_test_trap_failure(self):
         config = {"host": "192.168.1.100", "port": 162, "community": "public", "version": "2c"}
-        with patch("updater.snmp._get_snmp_config", return_value=config):
-            with patch("updater.snmp.send_snmp_trap", new_callable=AsyncMock, return_value=False):
-                success, message = await snmp.send_test_trap()
-                assert success is False
+        with patch("updater.snmp.is_pysnmp_available", return_value=True), \
+             patch("updater.snmp._get_snmp_config", return_value=config), \
+             patch("updater.snmp.send_snmp_trap", new_callable=AsyncMock, return_value=False):
+            success, message = await snmp.send_test_trap()
+            assert success is False
 
 
 class TestSendWithRetry:
