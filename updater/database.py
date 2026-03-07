@@ -2456,5 +2456,115 @@ def delete_sessions_for_user(username: str):
         db.execute("DELETE FROM sessions WHERE username = ?", (username,))
 
 
+# ---------------------------------------------------------------------------
+# Reporting helpers
+# ---------------------------------------------------------------------------
+
+def get_update_summary(days: int = 30) -> dict:
+    """Get update activity summary for the last N days."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        # Job-level stats
+        job_row = conn.execute(
+            "SELECT COUNT(*) as total_jobs, "
+            "SUM(success_count) as total_success, "
+            "SUM(failed_count) as total_failed, "
+            "SUM(skipped_count) as total_skipped "
+            "FROM job_history WHERE completed_at >= ?",
+            (cutoff,),
+        ).fetchone()
+
+        # Device-level stats
+        device_row = conn.execute(
+            "SELECT COUNT(*) as total_updates, "
+            "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success, "
+            "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed, "
+            "AVG(duration_seconds) as avg_duration "
+            "FROM device_update_history WHERE completed_at >= ?",
+            (cutoff,),
+        ).fetchone()
+
+        # Unique devices updated
+        unique_row = conn.execute(
+            "SELECT COUNT(DISTINCT ip) as unique_devices "
+            "FROM device_update_history WHERE completed_at >= ? AND status = 'success'",
+            (cutoff,),
+        ).fetchone()
+
+        return {
+            "period_days": days,
+            "total_jobs": job_row[0] or 0,
+            "total_device_success": int(job_row[1] or 0),
+            "total_device_failed": int(job_row[2] or 0),
+            "total_device_skipped": int(job_row[3] or 0),
+            "device_updates": device_row[0] or 0,
+            "device_success": device_row[1] or 0,
+            "device_failed": device_row[2] or 0,
+            "avg_duration_seconds": round(device_row[3] or 0, 1),
+            "unique_devices_updated": unique_row[0] or 0,
+        }
+
+
+def get_fleet_status() -> dict:
+    """Get current fleet firmware status breakdown."""
+    with get_db() as conn:
+        ap_total = conn.execute(
+            "SELECT COUNT(*) FROM access_points WHERE enabled = 1"
+        ).fetchone()[0]
+        ap_versions = conn.execute(
+            "SELECT firmware_version, COUNT(*) as cnt "
+            "FROM access_points WHERE enabled = 1 AND firmware_version IS NOT NULL "
+            "GROUP BY firmware_version ORDER BY cnt DESC"
+        ).fetchall()
+
+        sw_total = conn.execute(
+            "SELECT COUNT(*) FROM switches WHERE enabled = 1"
+        ).fetchone()[0]
+        sw_versions = conn.execute(
+            "SELECT firmware_version, COUNT(*) as cnt "
+            "FROM switches WHERE enabled = 1 AND firmware_version IS NOT NULL "
+            "GROUP BY firmware_version ORDER BY cnt DESC"
+        ).fetchall()
+
+        return {
+            "access_points": {
+                "total": ap_total,
+                "versions": [{"version": r[0], "count": r[1]} for r in ap_versions],
+            },
+            "switches": {
+                "total": sw_total,
+                "versions": [{"version": r[0], "count": r[1]} for r in sw_versions],
+            },
+        }
+
+
+def get_job_history_csv_rows(days: int = 30) -> list[dict]:
+    """Get job history rows formatted for CSV export."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT job_id, started_at, completed_at, duration, bank_mode, "
+            "success_count, failed_count, skipped_count, cancelled_count "
+            "FROM job_history WHERE completed_at >= ? ORDER BY completed_at DESC",
+            (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_device_history_csv_rows(days: int = 30) -> list[dict]:
+    """Get device update history rows formatted for CSV export."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT job_id, ip, role, action, pass_number, status, "
+            "old_version, new_version, model, error, failed_stage, "
+            "duration_seconds, started_at, completed_at "
+            "FROM device_update_history WHERE completed_at >= ? "
+            "ORDER BY completed_at DESC",
+            (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 # Initialize on import
 init_db()
