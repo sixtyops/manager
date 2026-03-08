@@ -1100,33 +1100,18 @@
             border-color: var(--primary);
         }
 
-        .drawer-canary-list {
-            max-height: 168px;
-            overflow-y: auto;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            background: #fff;
-            padding: 8px;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
+        .canary-check {
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+            accent-color: #f59e0b;
         }
-
-        .drawer-canary-option {
-            display: flex;
-            align-items: flex-start;
-            gap: 8px;
-            font-size: 0.76rem;
-            color: var(--text);
+        .canary-check:disabled {
+            cursor: not-allowed;
+            opacity: 0.4;
         }
-
-        .drawer-canary-option input {
-            margin-top: 2px;
-        }
-
-        .drawer-canary-meta {
-            font-size: 0.68rem;
-            color: var(--text-muted);
+        .tree-table .row-canary > td:first-child {
+            border-left: 3px solid #f59e0b;
         }
 
         .drawer-days {
@@ -1767,11 +1752,15 @@
             </div>
 
             <!-- Tree Table -->
+            <div id="canarySummary" style="font-size:0.72rem;color:#6b7280;padding:4px 12px;display:none;">
+                <span style="color:#f59e0b;">&#9679;</span> <span id="canarySummaryText"></span>
+            </div>
             <div class="table-card">
                 <div style="overflow-x:auto;">
                     <table class="tree-table" id="deviceTable">
                         <thead>
                             <tr>
+                                <th style="width:28px;" title="Canary devices for rollout"></th>
                                 <th data-sort="name" onclick="sortTable('name')">Name / IP <span class="sort-arrow"></span></th>
                                 <th data-sort="model" onclick="sortTable('model')">Model <span class="sort-arrow"></span></th>
                                 <th data-sort="firmware" onclick="sortTable('firmware')">Version <span class="sort-arrow"></span></th>
@@ -1784,7 +1773,7 @@
                             </tr>
                         </thead>
                         <tbody id="deviceTableBody">
-                            <tr><td colspan="9" class="empty-state">Enter AP IPs above to get started</td></tr>
+                            <tr><td colspan="10" class="empty-state">Enter AP IPs above to get started</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -2031,24 +2020,6 @@
                         </div>
                     </div>
 
-                    <div class="drawer-section-title">Canary</div>
-                    <div style="grid-column: 2 / -1;">
-                        <div style="font-size:0.72rem;color:#6b7280;margin-bottom:8px;">Optional test devices that always run first during the canary phase. AP canaries bring their attached CPEs with them. Clicking the pending Canary pill can run only this phase outside the normal maintenance window.</div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-                            <div>
-                                <label>AP Canary Devices</label>
-                                <div class="drawer-canary-list" id="drawerCanaryApList">
-                                    <div class="drawer-canary-meta">No APs loaded yet.</div>
-                                </div>
-                            </div>
-                            <div>
-                                <label>Switch Canary Devices</label>
-                                <div class="drawer-canary-list" id="drawerCanarySwitchList">
-                                    <div class="drawer-canary-meta">No switches loaded yet.</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
                 </div>
                 <div class="drawer-firmware">
                     <div style="flex:1;min-width:0;">
@@ -3095,7 +3066,6 @@
             document.getElementById('redCount').textContent = topology.overall_health.red;
 
             renderTable();
-            if (drawerSettingsLoaded) renderDrawerCanaryOptions();
             updateChart();
         }
 
@@ -3230,6 +3200,7 @@
                 if (switches.length > 0) badgeParts.push(`${switches.length} SW`);
 
                 html += `<tr class="row-site ${isSelected ? 'row-selected' : ''}" onclick="selectSite(${site.id !== null ? site.id : 'null'})">
+                    <td></td>
                     <td>
                         <div class="name-cell" style="padding-left:4px;">
                             <span class="expand-toggle ${siteExpanded ? 'expanded' : ''}" onclick="toggleExpand('${siteKey}',event)">&#9654;</span>
@@ -3260,7 +3231,12 @@
                     const noLocation = !ap.location && site.name === 'Unassigned';
                     const isApSelected = selectedNode?.type === 'ap' && selectedNode?.data?.ip === ap.ip;
 
-                    html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isApSelected ? 'row-selected' : ''}" onclick="selectAP('${ap.ip}')">
+                    const isApCanary = canaryAps.has(ap.ip);
+                    const apCanaryCell = canaryLoaded
+                        ? `<td style="text-align:center;"><input type="checkbox" class="canary-check" ${isApCanary ? 'checked' : ''} ${!ap.enabled ? 'disabled title="Device is disabled"' : 'title="Mark as canary device"'} onclick="event.stopPropagation();toggleCanary('ap','${ap.ip}',this.checked)"></td>`
+                        : '<td></td>';
+                    html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isApSelected ? 'row-selected' : ''} ${isApCanary ? 'row-canary' : ''}" onclick="selectAP('${ap.ip}')">
+                        ${apCanaryCell}
                         <td>
                             <div class="name-cell" style="padding-left:28px;">
                                 <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
@@ -3294,6 +3270,7 @@
                         const isCpeSelected = selectedNode?.type === 'cpe' && selectedNode?.data?.ip === cpe.ip;
 
                         html += `<tr class="row-cpe ${isCpeSelected ? 'row-selected' : ''}" onclick="selectCPE('${cpe.ip}')">
+                            <td></td>
                             <td>
                                 <div class="name-cell" style="padding-left:52px;">
                                     <span class="expand-toggle hidden">&#9654;</span>
@@ -3319,7 +3296,12 @@
                     const swName = sw.system_name || sw.ip;
                     const isSwSelected = selectedNode?.type === 'switch' && selectedNode?.data?.ip === sw.ip;
 
-                    html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isSwSelected ? 'row-selected' : ''}" onclick="selectSwitch('${sw.ip}')">
+                    const isSwCanary = canarySwitches.has(sw.ip);
+                    const swCanaryCell = canaryLoaded
+                        ? `<td style="text-align:center;"><input type="checkbox" class="canary-check" ${isSwCanary ? 'checked' : ''} ${!sw.enabled ? 'disabled title="Device is disabled"' : 'title="Mark as canary device"'} onclick="event.stopPropagation();toggleCanary('switch','${sw.ip}',this.checked)"></td>`
+                        : '<td></td>';
+                    html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isSwSelected ? 'row-selected' : ''} ${isSwCanary ? 'row-canary' : ''}" onclick="selectSwitch('${sw.ip}')">
+                        ${swCanaryCell}
                         <td>
                             <div class="name-cell" style="padding-left:28px;">
                                 <span class="expand-toggle hidden">&#9654;</span>
@@ -3342,7 +3324,7 @@
             }
 
             if (!html) {
-                html = '<tr><td colspan="9" class="empty-state">No devices found</td></tr>';
+                html = '<tr><td colspan="10" class="empty-state">No devices found</td></tr>';
             }
 
             tbody.innerHTML = html;
@@ -5452,9 +5434,10 @@
         }
 
         let drawerSettingsLoaded = false;
-        let drawerCanaryAps = new Set();
-        let drawerCanarySwitches = new Set();
-        let drawerCanaryInventory = [];
+        let canaryAps = new Set();
+        let canarySwitches = new Set();
+        let canaryLoaded = false;
+        let canarySaving = false;
 
         function parseIpSetting(value) {
             return (value || '')
@@ -5463,16 +5446,87 @@
                 .filter(Boolean);
         }
 
-        async function ensureDrawerCanaryInventoryLoaded() {
-            if (drawerCanaryInventory.length) return;
+        async function loadCanarySettings() {
             try {
-                const fleetResp = await fetch('/api/fleet-status');
-                if (fleetResp.ok) {
-                    const fleetData = await fleetResp.json();
-                    drawerCanaryInventory = fleetData.devices || [];
-                    return;
-                }
+                const resp = await fetch('/api/settings');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const s = data.settings;
+                canaryAps = new Set(parseIpSetting(s.rollout_canary_aps));
+                canarySwitches = new Set(parseIpSetting(s.rollout_canary_switches));
             } catch (e) {}
+            canaryLoaded = true;
+            renderTable();
+            updateCanarySummary();
+        }
+
+        function updateCanarySummary() {
+            const el = document.getElementById('canarySummary');
+            const text = document.getElementById('canarySummaryText');
+            if (!el || !text) return;
+            const apCount = canaryAps.size;
+            const swCount = canarySwitches.size;
+            if (apCount === 0 && swCount === 0) {
+                el.style.display = 'none';
+                return;
+            }
+            const parts = [];
+            if (apCount) parts.push(`${apCount} AP canary${apCount > 1 ? 's' : ''}`);
+            if (swCount) parts.push(`${swCount} switch canary${swCount > 1 ? 's' : ''}`);
+            text.textContent = parts.join(', ');
+            el.style.display = 'block';
+        }
+
+        let canarySaveQueue = null;
+        async function toggleCanary(role, ip, checked) {
+            const target = role === 'switch' ? canarySwitches : canaryAps;
+            if (checked) target.add(ip);
+            else target.delete(ip);
+            renderTable();
+            updateCanarySummary();
+
+            const key = role === 'switch' ? 'rollout_canary_switches' : 'rollout_canary_aps';
+            const value = [...target].sort().join(',');
+
+            if (canarySaving) {
+                canarySaveQueue = { key, value, role, ip, checked };
+                return;
+            }
+            await saveCanarySetting(key, value, role, ip, checked);
+        }
+
+        async function saveCanarySetting(key, value, role, ip, checked) {
+            canarySaving = true;
+            try {
+                const resp = await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ [key]: value }),
+                });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    const target = role === 'switch' ? canarySwitches : canaryAps;
+                    if (checked) target.delete(ip);
+                    else target.add(ip);
+                    renderTable();
+                    updateCanarySummary();
+                    alert(err.detail || 'Failed to save canary setting');
+                } else {
+                    showSavedIndicator();
+                }
+            } catch (e) {
+                const target = role === 'switch' ? canarySwitches : canaryAps;
+                if (checked) target.delete(ip);
+                else target.add(ip);
+                renderTable();
+                updateCanarySummary();
+            }
+            canarySaving = false;
+            if (canarySaveQueue) {
+                const queued = canarySaveQueue;
+                canarySaveQueue = null;
+                await saveCanarySetting(queued.key, queued.value, queued.role, queued.ip, queued.checked);
+            }
         }
 
         async function ensureDrawerTopologyLoaded() {
@@ -5485,85 +5539,11 @@
             } catch (e) {}
         }
 
-        function renderDrawerCanaryOptions() {
-            const apList = document.getElementById('drawerCanaryApList');
-            const switchList = document.getElementById('drawerCanarySwitchList');
-            if (!apList || !switchList) return;
-
-            const apOptions = [];
-            const switchOptions = [];
-            const cpeCounts = new Map();
-            for (const site of (topology?.sites || [])) {
-                for (const ap of (site.aps || [])) {
-                    cpeCounts.set(ap.ip, (ap.cpes || []).length);
-                }
-            }
-            for (const device of drawerCanaryInventory) {
-                if (!device.enabled) continue;
-                if (device.role === 'ap') {
-                    const cpeCount = cpeCounts.get(device.ip) || 0;
-                    apOptions.push({
-                        ip: device.ip,
-                        label: device.system_name || device.ip,
-                        meta: `${device.site_name || 'Unassigned'} • ${device.ip}${cpeCount ? ` • ${cpeCount} CPE` : ''}`,
-                    });
-                } else if (device.role === 'switch') {
-                    switchOptions.push({
-                        ip: device.ip,
-                        label: device.system_name || device.ip,
-                        meta: `${device.site_name || 'Unassigned'} • ${device.ip}`,
-                    });
-                }
-            }
-
-            apOptions.sort((a, b) => a.label.localeCompare(b.label));
-            switchOptions.sort((a, b) => a.label.localeCompare(b.label));
-
-            const renderOptions = (options, selected, role) => {
-                const rows = options.map(option => `
-                    <label class="drawer-canary-option">
-                        <input type="checkbox" ${selected.has(option.ip) ? 'checked' : ''} onchange="toggleDrawerCanary('${role}','${option.ip}',this.checked)">
-                        <span>
-                            <div>${escapeHtml(option.label)}</div>
-                            <div class="drawer-canary-meta">${escapeHtml(option.meta)}</div>
-                        </span>
-                    </label>
-                `);
-
-                const missing = [...selected].filter(ip => !options.some(option => option.ip === ip));
-                for (const ip of missing) {
-                    rows.push(`
-                        <label class="drawer-canary-option">
-                            <input type="checkbox" checked onchange="toggleDrawerCanary('${role}','${ip}',this.checked)">
-                            <span>
-                                <div>${escapeHtml(ip)}</div>
-                                <div class="drawer-canary-meta">Saved canary device not currently in topology.</div>
-                            </span>
-                        </label>
-                    `);
-                }
-                if (!rows.length) {
-                    rows.push('<div class="drawer-canary-meta">No enabled devices available.</div>');
-                }
-                return rows.join('');
-            };
-
-            apList.innerHTML = renderOptions(apOptions, drawerCanaryAps, 'ap');
-            switchList.innerHTML = renderOptions(switchOptions, drawerCanarySwitches, 'switch');
-        }
-
-        function toggleDrawerCanary(role, ip, enabled) {
-            const target = role === 'switch' ? drawerCanarySwitches : drawerCanaryAps;
-            if (enabled) target.add(ip);
-            else target.delete(ip);
-            markDrawerDirty();
-        }
 
         async function loadDrawerSettings() {
             if (drawerSettingsLoaded) return;
             try {
                 await ensureDrawerTopologyLoaded();
-                await ensureDrawerCanaryInventoryLoaded();
                 const resp = await fetch('/api/settings');
                 const data = await resp.json();
                 const s = data.settings;
@@ -5615,10 +5595,6 @@
 
                 // Quarantine
                 document.getElementById('drawerQuarantineDays').value = s.firmware_quarantine_days || '7';
-
-                drawerCanaryAps = new Set(parseIpSetting(s.rollout_canary_aps));
-                drawerCanarySwitches = new Set(parseIpSetting(s.rollout_canary_switches));
-                renderDrawerCanaryOptions();
 
                 drawerSettingsLoaded = true;
             } catch (e) {}
@@ -5718,8 +5694,6 @@
                 bank_mode: document.getElementById('drawerBankMode').value,
                 parallel_updates: document.getElementById('drawerParallel').value,
                 schedule_scope: 'all',
-                rollout_canary_aps: [...drawerCanaryAps].sort().join(','),
-                rollout_canary_switches: [...drawerCanarySwitches].sort().join(','),
                 min_temperature_c: String(storageTemp(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
                 zip_code: document.getElementById('drawerZipCode').value,
                 firmware_quarantine_days: document.getElementById('drawerQuarantineDays').value,
@@ -6009,7 +5983,6 @@
 
                 // Build lookup map for version status
                 fleetStatusMap.clear();
-                drawerCanaryInventory = data.devices || [];
                 for (const d of (data.devices || [])) {
                     fleetStatusMap.set(d.ip, {
                         target_version: d.target_version,
@@ -6019,7 +5992,6 @@
 
                 // Re-render table with version status
                 if (topology) renderTable();
-                if (drawerSettingsLoaded) renderDrawerCanaryOptions();
 
                 lastBehindCount = data.summary?.behind || 0;
                 lastFleetTotal = data.summary?.total || 0;
@@ -6136,6 +6108,7 @@
         connectWebSocket();
         loadTime(); tickClock(); setInterval(tickClock, 1000);
         loadAutoSettings();
+        loadCanarySettings();
         loadFleetStatus();
         renderIdlePhases();
         loadLicenseState();
