@@ -4,6 +4,7 @@ services:
     container_name: tachyon-management
     ports:
       - "8000:8000"
+      - "1812:1812/udp"
     volumes:
       # Persist firmware files
       - ./firmware:/app/firmware
@@ -23,14 +24,20 @@ services:
       # a password on first run via the web interface
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/login"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     mem_limit: 512m
     cpus: "1.0"
     restart: unless-stopped
+    stop_grace_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   radius:
     image: freeradius/freeradius-server:latest-3.2-alpine
@@ -50,6 +57,11 @@ services:
       retries: 3
       start_period: 20s
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   nginx:
     image: nginx:alpine
@@ -69,3 +81,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"

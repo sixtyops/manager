@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Global singleton
 _checker: Optional["ReleaseChecker"] = None
 
-GITHUB_REPO = os.environ.get("GITHUB_REPO", "isolson/firmware-updater")
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "isolson/tachyon-manager-releases")
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_API_RELEASES = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 CHECK_INTERVAL = int(os.environ.get("AUTOUPDATE_CHECK_INTERVAL", 604800))  # 7 days
@@ -141,9 +141,10 @@ class ReleaseChecker:
             tag_name = data.get("tag_name", "")
             # Strip leading 'v' if present (e.g., "v0.2.0" -> "0.2.0")
             latest = tag_name.lstrip("v")
+            full_release_notes = data.get("body", "")
             result["latest_version"] = latest
             result["release_url"] = data.get("html_url", "")
-            result["release_notes"] = data.get("body", "")[:2000]  # Truncate long notes
+            result["release_notes"] = full_release_notes[:2000]  # Truncate for UI payload
 
             # Compare versions (only flag upgrades, never downgrades)
             try:
@@ -155,7 +156,7 @@ class ReleaseChecker:
 
             # Check appliance compatibility if in appliance mode
             if APPLIANCE_MODE and result["update_available"]:
-                min_ver = parse_min_appliance_version(result["release_notes"])
+                min_ver = parse_min_appliance_version(full_release_notes)
                 current_appliance = get_appliance_version()
                 if min_ver and current_appliance:
                     try:
@@ -171,6 +172,7 @@ class ReleaseChecker:
             db.set_setting("autoupdate_available_version", latest if result["update_available"] else "")
             db.set_setting("autoupdate_release_url", result["release_url"] if result["update_available"] else "")
             db.set_setting("autoupdate_release_notes", result["release_notes"] if result["update_available"] else "")
+            db.set_setting("autoupdate_release_notes_full", full_release_notes if result["update_available"] else "")
 
             # Broadcast if update available
             if result["update_available"] and self.broadcast_func:
@@ -215,7 +217,7 @@ class ReleaseChecker:
 
         # Check if available update requires a newer appliance
         if APPLIANCE_MODE and status["update_available"]:
-            notes = status["release_notes"]
+            notes = db.get_setting("autoupdate_release_notes_full", "") or status["release_notes"]
             min_ver = parse_min_appliance_version(notes)
             current_appliance = get_appliance_version()
             if min_ver and current_appliance:
@@ -282,11 +284,20 @@ def _is_safe_to_update() -> tuple[bool, str]:
     settings = db.get_all_settings()
     if settings.get("schedule_enabled") == "true":
         schedule_days = [d.strip() for d in settings.get("schedule_days", "").split(",") if d.strip()]
-        start_hour = int(settings.get("schedule_start_hour", "3"))
-        end_hour = int(settings.get("schedule_end_hour", "4"))
+        try:
+            start_hour = int(settings.get("schedule_start_hour", "3"))
+        except (TypeError, ValueError):
+            start_hour = 3
+        try:
+            end_hour = int(settings.get("schedule_end_hour", "4"))
+        except (TypeError, ValueError):
+            end_hour = 4
 
         try:
-            time_info = services.get_current_time(settings.get("timezone", "auto"), settings.get("zip_code", ""))
+            tz = settings.get("timezone", "America/Chicago")
+            if tz == "auto":
+                tz = "America/Chicago"
+            time_info = services.get_current_time(tz)
             current_hour = time_info.get("hour", datetime.now().hour)
             current_day = time_info.get("day_of_week", datetime.now().strftime("%a").lower())
         except Exception:
@@ -652,8 +663,10 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
             }
 
         # Store pending update info (persists through restart)
-        db.set_setting("autoupdate_pending_version", target_version)
-        db.set_setting("autoupdate_pending_at", datetime.now().isoformat())
+        db.set_settings({
+            "autoupdate_pending_version": target_version,
+            "autoupdate_pending_at": datetime.now().isoformat(),
+        })
 
         has_standalone = (compose_dir / "docker-compose.standalone.yml").exists()
 
@@ -710,7 +723,7 @@ async def apply_update() -> dict:
 
     if APPLIANCE_MODE:
         # Check appliance compatibility before applying
-        release_notes = db.get_setting("autoupdate_release_notes", "")
+        release_notes = db.get_setting("autoupdate_release_notes_full", "") or db.get_setting("autoupdate_release_notes", "")
         min_ver = parse_min_appliance_version(release_notes)
         current_appliance = get_appliance_version()
         if min_ver and current_appliance:
@@ -817,9 +830,11 @@ async def apply_update() -> dict:
                 }
 
         # Store pending update info (persists in DB through restart)
-        db.set_setting("autoupdate_pending_version", target_version)
-        db.set_setting("autoupdate_pending_at", datetime.now().isoformat())
-        db.set_setting("autoupdate_rollback_ref", rollback_ref)
+        db.set_settings({
+            "autoupdate_pending_version": target_version,
+            "autoupdate_pending_at": datetime.now().isoformat(),
+            "autoupdate_rollback_ref": rollback_ref,
+        })
 
         # Discover host repo path for the watchdog container
         host_repo_dir = _get_host_repo_path()
@@ -886,9 +901,11 @@ async def verify_update_on_startup(broadcast_func: Optional[Callable] = None):
                     f"Update to v{pending} has been pending for {age_minutes:.0f} minutes "
                     f"without completing. Clearing stuck state."
                 )
-                db.set_setting("autoupdate_pending_version", "")
-                db.set_setting("autoupdate_pending_at", "")
-                db.set_setting("autoupdate_rollback_ref", "")
+                db.set_settings({
+                    "autoupdate_pending_version": "",
+                    "autoupdate_pending_at": "",
+                    "autoupdate_rollback_ref": "",
+                })
                 if broadcast_func:
                     await broadcast_func({
                         "type": "update_failed",
@@ -902,10 +919,12 @@ async def verify_update_on_startup(broadcast_func: Optional[Callable] = None):
 
     if pending == __version__:
         logger.info(f"App update to v{__version__} completed successfully")
-        db.set_setting("autoupdate_pending_version", "")
-        db.set_setting("autoupdate_pending_at", "")
-        db.set_setting("autoupdate_available_version", "")
-        db.set_setting("autoupdate_rollback_ref", "")
+        db.set_settings({
+            "autoupdate_pending_version": "",
+            "autoupdate_pending_at": "",
+            "autoupdate_available_version": "",
+            "autoupdate_rollback_ref": "",
+        })
         if broadcast_func:
             await broadcast_func({
                 "type": "update_completed",
@@ -917,9 +936,11 @@ async def verify_update_on_startup(broadcast_func: Optional[Callable] = None):
             f"App update to v{pending} may have been rolled back "
             f"(running v{__version__})"
         )
-        db.set_setting("autoupdate_pending_version", "")
-        db.set_setting("autoupdate_pending_at", "")
-        db.set_setting("autoupdate_rollback_ref", "")
+        db.set_settings({
+            "autoupdate_pending_version": "",
+            "autoupdate_pending_at": "",
+            "autoupdate_rollback_ref": "",
+        })
         if broadcast_func:
             await broadcast_func({
                 "type": "update_rolled_back",
