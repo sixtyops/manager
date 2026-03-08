@@ -151,6 +151,9 @@ def seed_database() -> None:
     # --- RADIUS users ---
     _seed_radius_users()
 
+    # --- Config templates ---
+    _seed_config_templates()
+
     logger.info("Dev mode: seeding complete")
 
 
@@ -324,6 +327,16 @@ def _seed_radius_users() -> None:
                 "INSERT INTO radius_auth_log (username, client_ip, outcome, occurred_at) VALUES (?, ?, ?, ?)",
                 (username, client_ip, outcome, _now_str(hours_ago)),
             )
+
+
+def _seed_config_templates() -> None:
+    templates = [
+        ("NTP Standard", "ntp", {"services": {"ntp": {"enabled": True, "server1": "time.google.com", "server2": "time.cloudflare.com"}}}),
+        ("SNMP Standard", "snmp", {"services": {"snmp": {"enabled": True, "community_ro": "public"}}}),
+        ("Discovery Standard", "discovery", {"services": {"lldp": {"enabled": True}, "cdp": {"enabled": False}}}),
+    ]
+    for name, category, fragment in templates:
+        db.save_config_template(name, category, json.dumps(fragment))
 
 
 # ---------------------------------------------------------------------------
