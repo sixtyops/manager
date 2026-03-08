@@ -6845,6 +6845,93 @@ async def export_devices_csv(days: int = 30,
     )
 
 
+# ---------------------------------------------------------------------------
+# Device Groups API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/device-groups", tags=["devices"])
+async def list_device_groups_api(session: dict = Depends(require_auth)):
+    groups = db.list_device_groups()
+    return {"groups": groups}
+
+
+@app.post("/api/device-groups", status_code=201, tags=["devices"])
+async def create_device_group_api(request: Request,
+                                  session: dict = Depends(require_role("admin", "operator"))):
+    data = await request.json()
+    name = data.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    description = data.get("description", "")
+    filter_json = data.get("filter_json")
+    if filter_json and isinstance(filter_json, dict):
+        filter_json = json.dumps(filter_json)
+    try:
+        group_id = db.create_device_group(name, description, filter_json)
+    except Exception as e:
+        if "UNIQUE" in str(e):
+            raise HTTPException(status_code=409, detail="Group name already exists")
+        raise
+    return {"id": group_id, "name": name}
+
+
+@app.get("/api/device-groups/{group_id}", tags=["devices"])
+async def get_device_group_api(group_id: int,
+                               session: dict = Depends(require_auth)):
+    group = db.get_device_group(group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return group
+
+
+@app.put("/api/device-groups/{group_id}", tags=["devices"])
+async def update_device_group_api(group_id: int, request: Request,
+                                  session: dict = Depends(require_role("admin", "operator"))):
+    data = await request.json()
+    kwargs = {}
+    if "name" in data:
+        name = data["name"].strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name cannot be empty")
+        kwargs["name"] = name
+    if "description" in data:
+        kwargs["description"] = data["description"]
+    if "filter_json" in data:
+        fj = data["filter_json"]
+        kwargs["filter_json"] = json.dumps(fj) if isinstance(fj, dict) else fj
+    if not kwargs:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    try:
+        ok = db.update_device_group(group_id, **kwargs)
+    except Exception as e:
+        if "UNIQUE" in str(e):
+            raise HTTPException(status_code=409, detail="Group name already exists")
+        raise
+    if not ok:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return {"ok": True}
+
+
+@app.delete("/api/device-groups/{group_id}", tags=["devices"])
+async def delete_device_group_api(group_id: int,
+                                  session: dict = Depends(require_role("admin", "operator"))):
+    ok = db.delete_device_group(group_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return {"ok": True}
+
+
+@app.get("/api/device-groups/{group_id}/resolve", tags=["devices"])
+async def resolve_device_group_api(group_id: int,
+                                   session: dict = Depends(require_auth)):
+    group = db.get_device_group(group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    ips = db.resolve_device_group(group_id)
+    return {"group_id": group_id, "name": group["name"], "device_ips": ips,
+            "count": len(ips)}
+
+
 def main():
     """Run the application."""
     import uvicorn
