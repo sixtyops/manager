@@ -503,6 +503,12 @@ def init_db():
             "snmp_trap_port": "162",
             "snmp_trap_community": "public",
             "snmp_trap_version": "2c",
+            # Syslog forwarding (app events to remote syslog)
+            "syslog_forward_enabled": "false",
+            "syslog_forward_host": "",
+            "syslog_forward_port": "514",
+            "syslog_forward_protocol": "udp",
+            "syslog_forward_facility": "local0",
             # RADIUS configuration for web authentication
             "radius_enabled": "",  # Empty = use env vars, "true"/"false" = explicit
             "radius_server": "",
