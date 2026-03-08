@@ -1575,6 +1575,18 @@
             color: white;
         }
 
+        .status-bar-phases .bar-phase-dot.locked {
+            background: var(--warning);
+            color: white;
+        }
+
+        .status-bar-phases .bar-phase-dot.locked .bar-phase-lock-info {
+            font-size: 0.55rem;
+            font-weight: 400;
+            opacity: 0.9;
+            display: block;
+        }
+
         .status-bar-phases .bar-phase-line {
             width: 12px;
             height: 2px;
@@ -5109,17 +5121,42 @@
             return dateParts.length ? dateParts.join(' · ') : '';
         }
 
+        function _formatLockLabel(quarantine) {
+            if (!quarantine || !quarantine.clears_at) return '';
+            const clearsAt = new Date(quarantine.clears_at);
+            if (isNaN(clearsAt.getTime())) return '';
+            const now = new Date();
+            if (clearsAt <= now) return 'Clearing soon\u2026';
+            const hoursLeft = (clearsAt - now) / 3600000;
+            if (hoursLeft < 24) {
+                return `Locked for ${Math.ceil(hoursLeft)}h`;
+            }
+            return 'Locked until ' + clearsAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+                   ', ' + clearsAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        }
+
         function renderIdlePhases() {
             const indicator = document.getElementById('barPhaseIndicator');
             const pred = lastPreRolloutPredictions;
+            const isQuarantine = lastSchedulerStatus && lastSchedulerStatus.state === 'blocked_quarantine';
+            const lockLabel = isQuarantine ? _formatLockLabel(lastSchedulerStatus.quarantine) : '';
             let html = '';
             for (let i = 0; i < PHASES.length; i++) {
                 const isCanaryTrigger = i === 0 && canTriggerManualCanary(pred);
                 const detail = _phaseDetail(pred, i);
                 const detailHtml = detail ? `<span class="bar-phase-detail">${detail}</span>` : '';
-                const dotClass = isCanaryTrigger ? 'bar-phase-dot clickable' : 'bar-phase-dot';
-                const onclick = isCanaryTrigger ? ' onclick="triggerCanaryNow(event)" title="Run canary now"' : '';
-                html += `<div class="${dotClass}"${onclick}>${PHASE_LABELS[PHASES[i]]}${detailHtml}</div>`;
+                let dotClass, onclick = '';
+                if (i === 0 && isQuarantine) {
+                    dotClass = 'bar-phase-dot locked';
+                } else if (isCanaryTrigger) {
+                    dotClass = 'bar-phase-dot clickable';
+                    onclick = ' onclick="triggerCanaryNow(event)" title="Run canary now"';
+                } else {
+                    dotClass = 'bar-phase-dot';
+                }
+                const lockHtml = (i === 0 && isQuarantine && lockLabel)
+                    ? `<span class="bar-phase-lock-info">${lockLabel}</span>` : '';
+                html += `<div class="${dotClass}"${onclick}>${PHASE_LABELS[PHASES[i]]}${detailHtml}${lockHtml}</div>`;
                 if (i < PHASES.length - 1) html += `<div class="bar-phase-line"></div>`;
             }
             indicator.innerHTML = html;
@@ -5164,6 +5201,8 @@
             const phaseIdx = PHASES.indexOf(rollout.phase);
             const indicator = document.getElementById('barPhaseIndicator');
             const pred = rollout.predictions;
+            const isQuarantine = lastSchedulerStatus && lastSchedulerStatus.state === 'blocked_quarantine';
+            const lockLabel = isQuarantine ? _formatLockLabel(lastSchedulerStatus.quarantine) : '';
             let phaseHtml = '';
             for (let i = 0; i < PHASES.length; i++) {
                 const phase = PHASES[i];
@@ -5174,12 +5213,18 @@
                     dotClass += ' completed';
                     lineClass += ' completed';
                 } else if (i === phaseIdx) {
-                    dotClass += rollout.status === 'paused' ? ' paused' : ' active';
+                    if (isQuarantine && phase === 'canary') {
+                        dotClass += ' locked';
+                    } else {
+                        dotClass += rollout.status === 'paused' ? ' paused' : ' active';
+                    }
                 }
 
                 const detail = _phaseDetail(pred, i);
                 const detailHtml = detail ? `<span class="bar-phase-detail">${detail}</span>` : '';
-                phaseHtml += `<div class="${dotClass}">${PHASE_LABELS[phase]}${detailHtml}</div>`;
+                const lockHtml = (i === phaseIdx && isQuarantine && phase === 'canary' && lockLabel)
+                    ? `<span class="bar-phase-lock-info">${lockLabel}</span>` : '';
+                phaseHtml += `<div class="${dotClass}">${PHASE_LABELS[phase]}${detailHtml}${lockHtml}</div>`;
                 if (i < PHASES.length - 1) phaseHtml += `<div class="${lineClass}"></div>`;
             }
             indicator.innerHTML = phaseHtml;
