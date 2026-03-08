@@ -817,13 +817,22 @@ async def websocket_endpoint(websocket: WebSocket):
         })
 
     # Send license state
-    _ls = get_license_state()
-    await websocket.send_json({
-        "type": "license_state",
-        **_ls.to_dict(),
-        **get_nag_info(),
-        "features": {f.value: _ls.is_feature_enabled(f) for f in Feature},
-    })
+    if _license_mod._FORCE_PRO:
+        await websocket.send_json({
+            "type": "license_state",
+            "tier": "pro", "status": "active", "is_pro": True,
+            "has_key": False, "customer_name": "Dev Mode",
+            "error": "", "should_nag": False, "billable_count": 0,
+            "features": {f.value: True for f in Feature},
+        })
+    else:
+        _ls = get_license_state()
+        await websocket.send_json({
+            "type": "license_state",
+            **_ls.to_dict(),
+            **get_nag_info(),
+            "features": {f.value: _ls.is_feature_enabled(f) for f in Feature},
+        })
 
     # Send scheduler status (includes rollout info)
     scheduler = get_scheduler()
