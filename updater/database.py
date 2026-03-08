@@ -438,6 +438,30 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_radius_auth_client_ip ON radius_auth_log(client_ip);
             CREATE INDEX IF NOT EXISTS idx_radius_auth_username ON radius_auth_log(username);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_radius_auth_unique ON radius_auth_log(occurred_at, username, client_ip, outcome);
+            CREATE TABLE IF NOT EXISTS config_push_rollouts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_ids TEXT NOT NULL,
+                template_names TEXT,
+                phase TEXT NOT NULL DEFAULT 'canary',
+                status TEXT NOT NULL DEFAULT 'active',
+                pause_reason TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_phase_completed_at TEXT,
+                completed_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS config_push_rollout_devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rollout_id INTEGER NOT NULL,
+                ip TEXT NOT NULL,
+                device_type TEXT NOT NULL,
+                phase_assigned TEXT,
+                status TEXT DEFAULT 'pending',
+                error TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (rollout_id) REFERENCES config_push_rollouts(id),
+                UNIQUE(rollout_id, ip)
+            );
 
             CREATE TABLE IF NOT EXISTS device_uptime_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2322,6 +2346,125 @@ def delete_config_template(template_id: int):
         db.execute("DELETE FROM config_templates WHERE id = ?", (template_id,))
 
 
+# ---------------------------------------------------------------------------
+# Config push rollouts
+# ---------------------------------------------------------------------------
+
+CONFIG_PUSH_PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
+
+
+def create_config_push_rollout(template_ids_json: str, template_names: str) -> int:
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO config_push_rollouts
+               (template_ids, template_names, phase, status, created_at, updated_at)
+               VALUES (?, ?, 'canary', 'active', ?, ?)""",
+            (template_ids_json, template_names, now, now),
+        )
+        return cursor.lastrowid
+
+
+def get_active_config_push_rollout() -> Optional[dict]:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM config_push_rollouts WHERE status IN ('active', 'paused') ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_current_config_push_rollout() -> Optional[dict]:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM config_push_rollouts ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_config_push_rollout(rollout_id: int) -> Optional[dict]:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM config_push_rollouts WHERE id = ?", (rollout_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def update_config_push_rollout_status(rollout_id: int, status: str, pause_reason: str = ""):
+    now = datetime.now().isoformat()
+    completed_at = now if status == "completed" else None
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE config_push_rollouts
+               SET status = ?, pause_reason = ?, updated_at = ?,
+                   completed_at = COALESCE(?, completed_at)
+               WHERE id = ?""",
+            (status, pause_reason or None, now, completed_at, rollout_id),
+        )
+
+
+def advance_config_push_rollout_phase(rollout_id: int):
+    """Advance to next phase or mark completed if on last phase."""
+    rollout = get_config_push_rollout(rollout_id)
+    if not rollout:
+        return
+    now = datetime.now().isoformat()
+    current = rollout["phase"]
+    if current in CONFIG_PUSH_PHASE_ORDER:
+        idx = CONFIG_PUSH_PHASE_ORDER.index(current)
+        if idx + 1 < len(CONFIG_PUSH_PHASE_ORDER):
+            next_phase = CONFIG_PUSH_PHASE_ORDER[idx + 1]
+            with get_db() as conn:
+                conn.execute(
+                    """UPDATE config_push_rollouts
+                       SET phase = ?, last_phase_completed_at = ?, updated_at = ?
+                       WHERE id = ?""",
+                    (next_phase, now, now, rollout_id),
+                )
+            return
+    # Last phase — mark completed
+    update_config_push_rollout_status(rollout_id, "completed")
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE config_push_rollouts SET last_phase_completed_at = ?, updated_at = ? WHERE id = ?",
+            (now, now, rollout_id),
+        )
+
+
+def assign_config_push_device(rollout_id: int, ip: str, device_type: str, phase: str):
+    with get_db() as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO config_push_rollout_devices
+               (rollout_id, ip, device_type, phase_assigned, status)
+               VALUES (?, ?, ?, ?, 'pending')""",
+            (rollout_id, ip, device_type, phase),
+        )
+
+
+def mark_config_push_device(rollout_id: int, ip: str, status: str, error: str = ""):
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE config_push_rollout_devices
+               SET status = ?, error = ?, updated_at = ?
+               WHERE rollout_id = ? AND ip = ?""",
+            (status, error or None, datetime.now().isoformat(), rollout_id, ip),
+        )
+
+
+def get_config_push_rollout_devices(rollout_id: int, phase: str = None) -> list[dict]:
+    with get_db() as conn:
+        if phase:
+            rows = conn.execute(
+                "SELECT * FROM config_push_rollout_devices WHERE rollout_id = ? AND phase_assigned = ? ORDER BY ip",
+                (rollout_id, phase),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM config_push_rollout_devices WHERE rollout_id = ? ORDER BY ip",
+                (rollout_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+
 def get_config_templates_for_device(ip: str, site_id: int = None) -> list[dict]:
     """Return effective templates for a device: global + site overrides (site wins per category)."""
     with get_db() as db:
@@ -2418,6 +2561,40 @@ def get_config_enforce_log(ip: str = None, limit: int = 50) -> list[dict]:
                 (limit,)
             ).fetchall()
         return [dict(row) for row in rows]
+
+
+def get_config_push_rollout_progress(rollout_id: int) -> dict:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS count FROM config_push_rollout_devices WHERE rollout_id = ? GROUP BY status",
+            (rollout_id,),
+        ).fetchall()
+    result = {"total": 0, "pending": 0, "updated": 0, "failed": 0, "skipped": 0}
+    for row in rows:
+        status = row["status"] or "pending"
+        count = row["count"] or 0
+        result["total"] += count
+        result[status] = count
+    return result
+
+
+def get_config_push_unassigned_count(rollout_id: int) -> int:
+    """Count devices targeted by this rollout that haven't been assigned to a phase yet."""
+    with get_db() as conn:
+        # Total devices = all APs + switches + authenticated CPEs
+        # Assigned = those in config_push_rollout_devices
+        assigned = conn.execute(
+            "SELECT COUNT(*) FROM config_push_rollout_devices WHERE rollout_id = ?",
+            (rollout_id,),
+        ).fetchone()[0]
+        rollout = get_config_push_rollout(rollout_id)
+        if not rollout:
+            return 0
+        total = conn.execute(
+            "SELECT COUNT(*) FROM config_push_rollout_devices WHERE rollout_id = ? AND phase_assigned IS NOT NULL",
+            (rollout_id,),
+        ).fetchone()[0]
+    return 0  # Devices are assigned on-demand in the execution loop
 
 
 def get_enforce_failures(since_hours: int = 24) -> list[dict]:

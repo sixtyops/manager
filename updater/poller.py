@@ -1146,3 +1146,9 @@ def init_poller(broadcast_func: Callable, poll_interval: int = 60) -> NetworkPol
     global _poller
     _poller = NetworkPoller(broadcast_func, poll_interval)
     return _poller
+
+
+def set_poller(poller_instance) -> None:
+    """Set the global poller to a custom instance (used by dev mode)."""
+    global _poller
+    _poller = poller_instance

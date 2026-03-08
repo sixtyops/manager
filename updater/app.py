@@ -28,7 +28,7 @@ from starlette.requests import Request
 from .tachyon import TachyonClient, UpdateResult
 from . import __version__
 from . import database as db
-from .poller import init_poller, get_poller
+from .poller import init_poller, get_poller, set_poller
 from .scheduler import init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTES
 from .firmware_fetcher import init_fetcher, get_fetcher
 from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
@@ -51,6 +51,7 @@ from .license import (
     is_feature_enabled, validate_license, clear_license,
     init_license_validator, require_feature,
 )
+from . import license as _license_mod
 from .radius_server import (
     init_radius_service, get_radius_service,
     get_radius_server_config, set_radius_server_config,
@@ -64,6 +65,8 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+DEV_MODE = os.environ.get("TACHYON_DEV_MODE") == "1"
 
 # Paths
 BASE_DIR = Path(__file__).parent
@@ -473,66 +476,97 @@ async def lifespan(app: FastAPI):
     # Startup
     ensure_admin_user()
     db.cleanup_expired_sessions()
-    radius_runtime = builtin_radius.get_runtime()
-    await radius_runtime.start()
-    poller = init_poller(broadcast, poll_interval=60)
-    await poller.start()
-    scheduler = init_scheduler(broadcast, _start_scheduled_update, check_interval=60)
-    await scheduler.start()
-    fetcher = init_fetcher(FIRMWARE_DIR, broadcast)
-    await fetcher.start()
-    checker = init_checker(broadcast)
-    await checker.start()
-    await verify_update_on_startup(broadcast)
-    _recover_crashed_device_jobs()
-    syslog_forwarder.reload_config()
-    license_validator = init_license_validator(broadcast)
-    await license_validator.start()
-    radius_svc = init_radius_service(broadcast)
-    radius_task = asyncio.create_task(
-        _supervised_task("radius_server", radius_svc.run_forever)
-    )
-    cleanup_task = asyncio.create_task(
-        _supervised_task("periodic_cleanup", _periodic_cleanup)
-    )
-    backup_task = asyncio.create_task(
-        _supervised_task("backup_scheduler", _backup_scheduler)
-    )
-    radius_sync_task = asyncio.create_task(
-        _supervised_task("radius_log_sync", _radius_log_sync)
-    )
-    radius_health_task = asyncio.create_task(
-        _supervised_task("radius_health_monitor", _radius_health_monitor)
-    )
-    ws_health_task = asyncio.create_task(
-        _supervised_task("ws_health_check", _websocket_health_check)
-    )
-    state = get_license_state()
-    logger.info(f"License: {state.status.value} (tier={state.tier.value})")
-    logger.info("Application started")
+
+    if DEV_MODE:
+        from .devmode import seed_database, DevModePoller
+        seed_database()
+        poller = DevModePoller(broadcast)
+        set_poller(poller)
+        await poller.start()
+        scheduler = init_scheduler(broadcast, _start_scheduled_update, check_interval=60)
+        await scheduler.start()
+        cleanup_task = asyncio.create_task(
+            _supervised_task("periodic_cleanup", _periodic_cleanup)
+        )
+        # Skip network-dependent services in dev mode
+        radius_runtime = fetcher = checker = license_validator = None
+        backup_task = radius_sync_task = radius_health_task = ws_health_task = None
+        radius_svc = radius_task = None
+        logger.info("Application started (DEV MODE — no network services)")
+    else:
+        radius_runtime = builtin_radius.get_runtime()
+        await radius_runtime.start()
+        poller = init_poller(broadcast, poll_interval=60)
+        await poller.start()
+        scheduler = init_scheduler(broadcast, _start_scheduled_update, check_interval=60)
+        await scheduler.start()
+        fetcher = init_fetcher(FIRMWARE_DIR, broadcast)
+        await fetcher.start()
+        checker = init_checker(broadcast)
+        await checker.start()
+        await verify_update_on_startup(broadcast)
+        _recover_crashed_device_jobs()
+        syslog_forwarder.reload_config()
+        license_validator = init_license_validator(broadcast)
+        await license_validator.start()
+        radius_svc = init_radius_service(broadcast)
+        radius_task = asyncio.create_task(
+            _supervised_task("radius_server", radius_svc.run_forever)
+        )
+        cleanup_task = asyncio.create_task(
+            _supervised_task("periodic_cleanup", _periodic_cleanup)
+        )
+        backup_task = asyncio.create_task(
+            _supervised_task("backup_scheduler", _backup_scheduler)
+        )
+        radius_sync_task = asyncio.create_task(
+            _supervised_task("radius_log_sync", _radius_log_sync)
+        )
+        radius_health_task = asyncio.create_task(
+            _supervised_task("radius_health_monitor", _radius_health_monitor)
+        )
+        ws_health_task = asyncio.create_task(
+            _supervised_task("ws_health_check", _websocket_health_check)
+        )
+        state = get_license_state()
+        logger.info(f"License: {state.status.value} (tier={state.tier.value})")
+        logger.info("Application started")
 
     yield
 
     # Shutdown
     global _shutting_down
     _shutting_down = True
-    backup_task.cancel()
+    bg_tasks = [cleanup_task]
+    if backup_task:
+        backup_task.cancel()
+        bg_tasks.append(backup_task)
+    if radius_sync_task:
+        radius_sync_task.cancel()
+        bg_tasks.append(radius_sync_task)
+    if radius_health_task:
+        radius_health_task.cancel()
+        bg_tasks.append(radius_health_task)
+    if ws_health_task:
+        ws_health_task.cancel()
+        bg_tasks.append(ws_health_task)
     cleanup_task.cancel()
-    radius_sync_task.cancel()
-    radius_health_task.cancel()
-    ws_health_task.cancel()
-    for task in [cleanup_task, backup_task, radius_sync_task, radius_health_task, ws_health_task]:
+    for task in bg_tasks:
         try:
             await task
         except asyncio.CancelledError:
             pass
-    await license_validator.stop()
-    await checker.stop()
-    await fetcher.stop()
+    if license_validator:
+        await license_validator.stop()
+    if checker:
+        await checker.stop()
+    if fetcher:
+        await fetcher.stop()
     await scheduler.stop()
     await poller.stop()
     db.checkpoint_db()
-    await radius_runtime.stop()
+    if radius_runtime:
+        await radius_runtime.stop()
     logger.info("Application stopped")
 
 
@@ -1094,13 +1128,22 @@ async def websocket_endpoint(websocket: WebSocket):
         })
 
     # Send license state
-    _ls = get_license_state()
-    await websocket.send_json({
-        "type": "license_state",
-        **_ls.to_dict(),
-        **get_nag_info(),
-        "features": {f.value: _ls.is_feature_enabled(f) for f in Feature},
-    })
+    if _license_mod._FORCE_PRO:
+        await websocket.send_json({
+            "type": "license_state",
+            "tier": "pro", "status": "active", "is_pro": True,
+            "has_key": False, "customer_name": "Dev Mode",
+            "error": "", "should_nag": False, "billable_count": 0,
+            "features": {f.value: True for f in Feature},
+        })
+    else:
+        _ls = get_license_state()
+        await websocket.send_json({
+            "type": "license_state",
+            **_ls.to_dict(),
+            **get_nag_info(),
+            "features": {f.value: _ls.is_feature_enabled(f) for f in Feature},
+        })
 
     # Send scheduler status (includes rollout info)
     scheduler = get_scheduler()
@@ -2104,6 +2147,14 @@ async def test_email(session: dict = Depends(require_role("admin"))):
 @app.get("/api/license", tags=["license"])
 async def get_license_status(session: dict = Depends(require_auth)):
     """Get current license state, features map, and device counts."""
+    if _license_mod._FORCE_PRO:
+        features = {f.value: True for f in Feature}
+        return {
+            "tier": "pro", "status": "active", "is_pro": True,
+            "has_key": False, "customer_name": "Dev Mode",
+            "error": "", "features": features,
+            "should_nag": False, "billable_count": 0,
+        }
     state = get_license_state()
     nag = get_nag_info()
     features = {f.value: state.is_feature_enabled(f) for f in Feature}
@@ -6131,6 +6182,416 @@ async def _run_config_push(job_id: str, device_list: list, templates: list):
         asyncio.create_task(poller.poll_configs_for_ips(affected_ips))
 
 
+# ---------------------------------------------------------------------------
+# Config push rollout (phased)
+# ---------------------------------------------------------------------------
+
+_config_push_rollout_task: Optional[asyncio.Task] = None
+_config_push_rollout_lock = asyncio.Lock()
+
+CONFIG_PUSH_PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
+
+
+def _resolve_config_push_targets(targets: list[dict]) -> list[dict]:
+    """Resolve target specs to device list with credentials (same as config-push)."""
+    device_list = []
+    seen_ips = set()
+    for target in targets:
+        target_type = target.get("type")
+        if target_type == "ap":
+            ap = db.get_access_point(target["ip"])
+            if ap and ap["ip"] not in seen_ips:
+                device_list.append({"ip": ap["ip"], "username": ap["username"], "password": ap["password"], "role": "ap", "model": ap.get("model")})
+                seen_ips.add(ap["ip"])
+        elif target_type == "switch":
+            sw = db.get_switch(target["ip"])
+            if sw and sw["ip"] not in seen_ips:
+                device_list.append({"ip": sw["ip"], "username": sw["username"], "password": sw["password"], "role": "switch", "model": sw.get("model")})
+                seen_ips.add(sw["ip"])
+        elif target_type == "cpe":
+            cpe = db.get_cpe_by_ip(target["ip"])
+            if cpe:
+                ap = db.get_access_point(cpe["ap_ip"])
+                if ap and cpe["ip"] not in seen_ips:
+                    device_list.append({"ip": cpe["ip"], "username": ap["username"], "password": ap["password"], "role": "cpe", "model": cpe.get("model")})
+                    seen_ips.add(cpe["ip"])
+        elif target_type == "site":
+            site_id = target.get("id")
+            for ap in db.get_access_points(tower_site_id=site_id):
+                if ap["ip"] not in seen_ips:
+                    device_list.append({"ip": ap["ip"], "username": ap["username"], "password": ap["password"], "role": "ap", "model": ap.get("model")})
+                    seen_ips.add(ap["ip"])
+                    for cpe in db.get_cpes_for_ap(ap["ip"]):
+                        if cpe["ip"] and cpe["ip"] not in seen_ips and cpe.get("auth_status") == "ok":
+                            device_list.append({"ip": cpe["ip"], "username": ap["username"], "password": ap["password"], "role": "cpe", "model": cpe.get("model")})
+                            seen_ips.add(cpe["ip"])
+            for sw in db.get_switches(tower_site_id=site_id):
+                if sw["ip"] not in seen_ips:
+                    device_list.append({"ip": sw["ip"], "username": sw["username"], "password": sw["password"], "role": "switch", "model": sw.get("model")})
+                    seen_ips.add(sw["ip"])
+    return device_list
+
+
+def _compute_phase_batch_size(phase: str, total_unassigned: int) -> int:
+    """Return how many devices to assign for the given phase."""
+    if phase == "canary":
+        return 1
+    elif phase == "pct10":
+        return max(1, math.ceil(total_unassigned * 0.1))
+    elif phase == "pct50":
+        return max(1, math.ceil(total_unassigned * 0.5))
+    else:  # pct100
+        return total_unassigned
+
+
+@app.get("/api/config-push/rollout")
+async def get_config_push_rollout_status(session: dict = Depends(require_auth)):
+    """Get current config push rollout status."""
+    rollout = db.get_current_config_push_rollout()
+    if not rollout:
+        return {"rollout": None}
+    progress = db.get_config_push_rollout_progress(rollout["id"])
+    devices = db.get_config_push_rollout_devices(rollout["id"])
+    # Count total target devices (assigned + not yet assigned)
+    total_target = rollout.get("_total_devices", progress["total"])
+    return {
+        "rollout": {
+            **rollout,
+            "progress": progress,
+            "devices": devices,
+            "total_target_devices": total_target,
+        }
+    }
+
+
+@app.post("/api/config-push/rollout/start")
+async def start_config_push_rollout(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
+    """Start a phased config push rollout."""
+    global _config_push_rollout_task
+
+    data = await request.json()
+    template_ids = data.get("template_ids", [])
+    targets = data.get("targets", [])
+
+    if not template_ids or not targets:
+        raise HTTPException(400, "template_ids and targets are required")
+
+    # Check no active rollout
+    active = db.get_active_config_push_rollout()
+    if active:
+        raise HTTPException(409, "A config push rollout is already active")
+
+    # Load and validate templates
+    templates = []
+    for tid in template_ids:
+        t = db.get_config_template(tid)
+        if not t:
+            raise HTTPException(404, f"Template {tid} not found")
+        fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
+        _validate_fragment_safety(fragment)
+        templates.append({"id": t["id"], "name": t["name"], "fragment": fragment})
+
+    # Resolve all target devices
+    device_list = _resolve_config_push_targets(targets)
+    if not device_list:
+        raise HTTPException(400, "No valid devices found for the given targets")
+
+    template_names = ", ".join(t["name"] for t in templates)
+    template_ids_json = json.dumps([t["id"] for t in templates])
+
+    # Create rollout record
+    rollout_id = db.create_config_push_rollout(template_ids_json, template_names)
+
+    # Pre-assign ALL devices to phases upfront
+    total = len(device_list)
+    remaining = list(device_list)
+    for phase in CONFIG_PUSH_PHASE_ORDER:
+        if not remaining:
+            break
+        batch_size = _compute_phase_batch_size(phase, len(remaining))
+        batch = remaining[:batch_size]
+        remaining = remaining[batch_size:]
+        for device in batch:
+            db.assign_config_push_device(rollout_id, device["ip"], device["role"], phase)
+
+    # Start canary phase automatically
+    _config_push_rollout_task = asyncio.create_task(
+        _run_config_push_phase(rollout_id, templates, device_list)
+    )
+
+    await _broadcast_config_push_rollout_state(rollout_id)
+
+    return {
+        "rollout_id": rollout_id,
+        "device_count": total,
+        "template_names": template_names,
+    }
+
+
+@app.post("/api/config-push/rollout/{rollout_id}/advance")
+async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+    """Manually advance to execute the next phase."""
+    global _config_push_rollout_task
+
+    rollout = db.get_config_push_rollout(rollout_id)
+    if not rollout:
+        raise HTTPException(404, "Rollout not found")
+    if rollout["status"] not in ("active",):
+        raise HTTPException(400, f"Cannot advance rollout in '{rollout['status']}' state")
+
+    # Check that current phase devices are all done
+    phase_devices = db.get_config_push_rollout_devices(rollout_id, rollout["phase"])
+    pending = [d for d in phase_devices if d["status"] == "pending"]
+    if pending:
+        raise HTTPException(400, "Current phase still has pending devices")
+
+    # Load templates for execution
+    template_ids = json.loads(rollout["template_ids"])
+    templates = []
+    for tid in template_ids:
+        t = db.get_config_template(tid)
+        if t:
+            fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
+            templates.append({"id": t["id"], "name": t["name"], "fragment": fragment})
+
+    # Advance phase
+    db.advance_config_push_rollout_phase(rollout_id)
+    rollout = db.get_config_push_rollout(rollout_id)
+
+    if rollout["status"] == "completed":
+        await _broadcast_config_push_rollout_state(rollout_id)
+        return {"status": "completed"}
+
+    # Resolve device credentials for this phase
+    all_devices = _resolve_all_rollout_device_credentials(rollout_id)
+
+    # Execute the new phase
+    _config_push_rollout_task = asyncio.create_task(
+        _run_config_push_phase(rollout_id, templates, all_devices)
+    )
+
+    await _broadcast_config_push_rollout_state(rollout_id)
+    return {"status": "advanced", "phase": rollout["phase"]}
+
+
+@app.post("/api/config-push/rollout/{rollout_id}/resume")
+async def resume_config_push_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+    """Resume a paused rollout (retries failed devices in current phase)."""
+    global _config_push_rollout_task
+
+    rollout = db.get_config_push_rollout(rollout_id)
+    if not rollout or rollout["status"] != "paused":
+        raise HTTPException(400, "Rollout is not paused")
+
+    db.update_config_push_rollout_status(rollout_id, "active")
+
+    # Reset failed devices in current phase to pending
+    phase_devices = db.get_config_push_rollout_devices(rollout_id, rollout["phase"])
+    for d in phase_devices:
+        if d["status"] == "failed":
+            db.mark_config_push_device(rollout_id, d["ip"], "pending")
+
+    # Load templates
+    template_ids = json.loads(rollout["template_ids"])
+    templates = []
+    for tid in template_ids:
+        t = db.get_config_template(tid)
+        if t:
+            fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
+            templates.append({"id": t["id"], "name": t["name"], "fragment": fragment})
+
+    all_devices = _resolve_all_rollout_device_credentials(rollout_id)
+
+    _config_push_rollout_task = asyncio.create_task(
+        _run_config_push_phase(rollout_id, templates, all_devices)
+    )
+
+    await _broadcast_config_push_rollout_state(rollout_id)
+    return {"status": "resumed"}
+
+
+@app.post("/api/config-push/rollout/{rollout_id}/cancel")
+async def cancel_config_push_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+    """Cancel an active or paused rollout."""
+    rollout = db.get_config_push_rollout(rollout_id)
+    if not rollout or rollout["status"] not in ("active", "paused"):
+        raise HTTPException(400, "Rollout is not active or paused")
+    db.update_config_push_rollout_status(rollout_id, "cancelled")
+    await _broadcast_config_push_rollout_state(rollout_id)
+    return {"status": "cancelled"}
+
+
+def _resolve_all_rollout_device_credentials(rollout_id: int) -> list[dict]:
+    """Build device list with credentials from the rollout's assigned devices."""
+    devices = db.get_config_push_rollout_devices(rollout_id)
+    result = []
+    for d in devices:
+        ip = d["ip"]
+        dtype = d["device_type"]
+        if dtype == "ap":
+            ap = db.get_access_point(ip)
+            if ap:
+                result.append({"ip": ip, "username": ap["username"], "password": ap["password"], "role": "ap", "model": ap.get("model")})
+        elif dtype == "switch":
+            sw = db.get_switch(ip)
+            if sw:
+                result.append({"ip": ip, "username": sw["username"], "password": sw["password"], "role": "switch", "model": sw.get("model")})
+        elif dtype == "cpe":
+            cpe = db.get_cpe_by_ip(ip)
+            if cpe:
+                ap = db.get_access_point(cpe["ap_ip"])
+                if ap:
+                    result.append({"ip": ip, "username": ap["username"], "password": ap["password"], "role": "cpe", "model": cpe.get("model")})
+    return result
+
+
+async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: list):
+    """Execute the current phase of a config push rollout."""
+    rollout = db.get_config_push_rollout(rollout_id)
+    if not rollout or rollout["status"] != "active":
+        return
+
+    phase = rollout["phase"]
+    phase_device_rows = db.get_config_push_rollout_devices(rollout_id, phase)
+    pending_devices = [d for d in phase_device_rows if d["status"] == "pending"]
+
+    if not pending_devices:
+        # Phase already complete, nothing to do
+        await _broadcast_config_push_rollout_state(rollout_id)
+        return
+
+    # Build credential lookup from all_devices
+    cred_lookup = {d["ip"]: d for d in all_devices}
+
+    sem = asyncio.Semaphore(5)
+    job_id = f"cpush-{rollout_id}-{phase}"
+    failed_any = False
+
+    async def push_one(device_row: dict):
+        nonlocal failed_any
+        ip = device_row["ip"]
+        creds = cred_lookup.get(ip)
+        if not creds:
+            db.mark_config_push_device(rollout_id, ip, "skipped", "Device not found in inventory")
+            return
+
+        started_at = datetime.now().isoformat()
+
+        async with _config_push_lock:
+            if ip in _config_pushing_ips:
+                db.mark_config_push_device(rollout_id, ip, "failed", "Push already in progress")
+                failed_any = True
+                return
+            _config_pushing_ips.add(ip)
+
+        try:
+            async with sem:
+                await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "connecting", "phase": phase})
+
+                client = TachyonClient(ip, creds["username"], creds["password"])
+                login_result = await client.login()
+                if login_result is not True:
+                    raise RuntimeError(f"Login failed: {login_result}")
+
+                await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "fetching_config", "phase": phase})
+
+                current_config = await client.get_config()
+                if current_config is None:
+                    raise RuntimeError("Failed to fetch current config")
+
+                # Save pre-push backup
+                pre_push_json = _canonical_config_json(current_config)
+                pre_push_hash = _compute_config_hash(current_config)
+                model = creds.get("model")
+                hardware_id = client.get_hardware_id(model)
+                db.save_device_config(ip, pre_push_json, pre_push_hash, model, hardware_id)
+
+                # Merge templates
+                merged = current_config
+                for t in templates:
+                    merged = deep_merge(merged, t["fragment"])
+
+                # Dry-run validation
+                await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "validating", "phase": phase})
+                dry_result = await client.apply_config(merged, dry_run=True)
+                if not dry_result.get("success"):
+                    error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run validation failed"))
+                    raise RuntimeError(f"Dry run rejected: {error_msg}")
+
+                # Apply
+                await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "applying", "phase": phase})
+                result = await client.apply_config(merged)
+                completed_at = datetime.now().isoformat()
+                duration = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()
+
+                if result.get("success"):
+                    db.mark_config_push_device(rollout_id, ip, "updated")
+                    db.save_device_update_history(
+                        job_id=job_id, ip=ip, role=creds["role"], pass_number=1,
+                        status="success", old_version=None, new_version=None,
+                        model=model, error=None, failed_stage=None,
+                        stages=[], duration_seconds=duration,
+                        started_at=started_at, completed_at=completed_at,
+                        action="config_push",
+                    )
+                    await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "success", "phase": phase})
+                else:
+                    error_msg = result.get("error", result.get("raw_response", "Unknown error"))
+                    raise RuntimeError(str(error_msg))
+
+        except Exception as e:
+            failed_any = True
+            completed_at = datetime.now().isoformat()
+            duration = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()
+            db.mark_config_push_device(rollout_id, ip, "failed", str(e))
+            db.save_device_update_history(
+                job_id=job_id, ip=ip, role=creds.get("role", "ap"), pass_number=1,
+                status="failed", old_version=None, new_version=None,
+                model=creds.get("model"), error=str(e), failed_stage="connect",
+                stages=[], duration_seconds=duration,
+                started_at=started_at, completed_at=completed_at,
+                action="config_push",
+            )
+            await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "failed", "phase": phase, "error": str(e)})
+        finally:
+            _config_pushing_ips.discard(ip)
+
+    await asyncio.gather(*[push_one(d) for d in pending_devices])
+
+    # Check result
+    rollout = db.get_config_push_rollout(rollout_id)
+    if not rollout or rollout["status"] != "active":
+        return
+
+    if failed_any:
+        db.update_config_push_rollout_status(rollout_id, "paused", "One or more devices failed")
+
+    # Re-poll configs for pushed devices
+    poller = get_poller()
+    if poller:
+        pushed_ips = [d["ip"] for d in pending_devices]
+        asyncio.create_task(poller.poll_configs_for_ips(pushed_ips))
+
+    await _broadcast_config_push_rollout_state(rollout_id)
+
+
+async def _broadcast_config_push_rollout_state(rollout_id: int):
+    """Broadcast current config push rollout state via WebSocket."""
+    rollout = db.get_config_push_rollout(rollout_id)
+    if not rollout:
+        return
+    progress = db.get_config_push_rollout_progress(rollout_id)
+    devices = db.get_config_push_rollout_devices(rollout_id)
+    await broadcast({
+        "type": "config_push_rollout_status",
+        "rollout": {
+            **rollout,
+            "progress": progress,
+            "devices": devices,
+        },
+    })
+
+
 # ============================================================================
 # RADIUS Server Management
 # ============================================================================
@@ -6489,6 +6950,7 @@ async def _run_radius_push(job_id: str, device_list: list[dict], config_fragment
         "success_count": success_count, "failed_count": failed_count,
         "template_names": ["RADIUS Server"],
     })
+
 _radius_rollout_task: Optional[asyncio.Task] = None
 _radius_rollout_lock = asyncio.Lock()
 

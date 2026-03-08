@@ -1980,6 +1980,7 @@
             <div id="drawerHandle-config" class="hidden u-flex-center-gap8 u-flex-1">
                 <span class="status-bar-label">Config Templates</span>
                 <span class="status-badge status-bar-badge" id="configTemplateBadge">0 active</span>
+                <div id="configPushRolloutPhases" style="display:flex;align-items:center;gap:0;margin-left:12px;"></div>
                 <label class="status-bar-toggle" onclick="event.stopPropagation();" title="Auto-enforce config compliance">
                     <input type="checkbox" id="configAutoEnforceToggle" onchange="toggleConfigAutoEnforce(this.checked)">
                     <span class="slider round"></span>
@@ -1994,6 +1995,8 @@
                 <div class="status-bar-phases" id="configEnforcePhases" style="display:none;"></div>
                 <span class="status-bar-muted" id="configEnforceProgress" style="display:none;"></span>
                 <div class="u-flex-center-gap6 u-ml-auto">
+                    <button class="btn btn-sm" id="configCancelBtn" onclick="cancelConfigPushRollout();event.stopPropagation();" style="display:none;">Cancel</button>
+                    <button class="btn btn-sm" id="configResumeBtn" onclick="resumeConfigPushRollout();event.stopPropagation();" style="display:none;">Resume</button>
                     <button class="btn btn-sm" onclick="checkCompliance();event.stopPropagation();">Check Compliance</button>
                     <button class="btn btn-sm btn-primary hidden" id="configPushBtn" onclick="showConfigPushDialog();event.stopPropagation();" >Push to Devices</button>
                 </div>
@@ -2987,6 +2990,13 @@
     </div>
 
     <script>
+        // Utility: format distance with km for >= 1000m
+        function formatDistance(meters) {
+            if (meters == null) return '';
+            if (meters >= 1000) return (meters / 1000).toFixed(1) + ' km';
+            return meters.toFixed(0) + ' m';
+        }
+
         // Role-based UI visibility
         let currentUserRole = 'viewer';
 
@@ -3438,6 +3448,11 @@
                     handleConfigPushUpdate(message);
                 } else if (message.type === 'config_push_complete') {
                     handleConfigPushComplete(message);
+                } else if (message.type === 'config_push_rollout_status') {
+                    configPushRollout = message.rollout;
+                    renderConfigPushRolloutUI();
+                } else if (message.type === 'config_push_rollout_update') {
+                    handleConfigPushUpdate(message);
                 } else if (message.type === 'config_enforce_status') {
                     handleConfigEnforceStatus(message);
                 } else if (message.type === 'radius_rollout_status') {
@@ -4020,7 +4035,7 @@
                             <td>${cpe.model || ''}</td>
                             <td>${versionCell(cpe)}</td>
                             <td class="${signalClass}">${signalVal != null ? signalVal.toFixed(1) + ' dBm' : ''}</td>
-                            <td>${cpe.link_distance != null ? cpe.link_distance.toFixed(0) + ' m' : ''}</td>
+                            <td>${formatDistance(cpe.link_distance)}</td>
                             <td>${statusCell(cpe.ip, false, health, cpe.auth_status, ap.ip)}</td>
                             <td>${updateCell('cpe', cpe.ip, ap.ip)}</td>
                             <td></td>
@@ -4374,9 +4389,9 @@
                     },
                     scales: {
                         x: {
-                            title: { display: true, text: 'Distance (meters)', color: '#6b7280' },
+                            title: { display: true, text: 'Distance', color: '#6b7280' },
                             grid: { color: '#e5e7eb' },
-                            ticks: { color: '#6b7280' },
+                            ticks: { color: '#6b7280', callback: (v) => formatDistance(v) },
                             beginAtZero: true,
                         },
                         y: {
@@ -4402,7 +4417,7 @@
                                     return [
                                         cpe.system_name || cpe.ip,
                                         `Signal: ${cpe.primary_signal?.toFixed(1) || 'N/A'} dBm`,
-                                        `Distance: ${cpe.link_distance?.toFixed(0) || 'N/A'} m`,
+                                        `Distance: ${cpe.link_distance != null ? formatDistance(cpe.link_distance) : 'N/A'}`,
                                     ];
                                 },
                             },
@@ -7636,6 +7651,7 @@
         let configTemplates = [];
         let configExpandState = new Map();
         let configPushingDevices = new Set();
+        let configPushRollout = null;  // Current config push rollout state
         const CONFIG_CATEGORIES = ['snmp', 'users', 'radius', 'ntp', 'syslog', 'watchdog', 'custom'];
         const CONFIG_PREFILL_CATEGORIES = ['snmp', 'users', 'radius', 'ntp', 'syslog', 'watchdog'];
         let activeConfigCategory = 'snmp';
@@ -7644,10 +7660,11 @@
 
         async function loadConfigData() {
             try {
-                const [compResp, cfgResp, tplResp] = await Promise.all([
+                const [compResp, cfgResp, tplResp, rolloutResp] = await Promise.all([
                     fetch('/api/config-compliance'),
                     fetch('/api/configs'),
                     fetch('/api/config-templates'),
+                    fetch('/api/config-push/rollout'),
                 ]);
                 // If any endpoint returns 403, config is pro-gated
                 if (compResp.status === 403 || cfgResp.status === 403 || tplResp.status === 403) {
@@ -7657,15 +7674,18 @@
                 const compData = await compResp.json();
                 const cfgData = await cfgResp.json();
                 const tplData = await tplResp.json();
+                const rolloutData = await rolloutResp.json();
 
                 configCompliance = compData.devices || {};
                 configSummary = cfgData.configs || {};
                 configTemplates = tplData.templates || [];
+                configPushRollout = rolloutData.rollout;
                 configLoaded = true;
 
                 renderConfigTable();
                 updateConfigStats();
                 loadConfigTemplateUI();
+                renderConfigPushRolloutUI();
                 loadEnforceStatus();
                 loadEnforceLog();
                 populateScopeSelector();
@@ -8409,6 +8429,12 @@
             const enabled = configTemplates.filter(t => t.enabled);
             if (!enabled.length) { showToast('No config templates saved. Save at least one section first.'); return; }
 
+            // Check if rollout is already active
+            if (configPushRollout && (configPushRollout.status === 'active' || configPushRollout.status === 'paused')) {
+                alert('A config push rollout is already in progress.');
+                return;
+            }
+
             const templateList = enabled.map(t =>
                 `<label style="display:block;margin-bottom:4px;"><input type="checkbox" class="push-tpl" value="${t.id}" checked> ${escapeHtml(t.name)}</label>`
             ).join('');
@@ -8419,6 +8445,7 @@
             modal.innerHTML = `
                 <div class="backup-modal" style="width:400px;">
                     <h3 style="margin:0 0 12px;">Push Config Templates</h3>
+                    <p style="font-size:0.8rem;color:#6b7280;margin:0 0 12px;">Pushes in phases: Canary (1 device) → 10% → 50% → 100%. You advance each phase manually.</p>
                     <div style="margin-bottom:12px;">
                         <label style="font-size:0.8rem;font-weight:500;display:block;margin-bottom:6px;">Templates to push:</label>
                         ${templateList}
@@ -8434,13 +8461,13 @@
                     </div>
                     <div style="display:flex;gap:8px;justify-content:flex-end;">
                         <button class="btn btn-sm" onclick="this.closest('.backup-overlay').remove()">Cancel</button>
-                        <button class="btn btn-sm btn-primary" onclick="executePush(this.closest('.backup-overlay'))">Push</button>
+                        <button class="btn btn-sm btn-primary" onclick="startConfigPushRollout(this.closest('.backup-overlay'))">Start Rollout</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
         }
 
-        async function executePush(modal) {
+        async function startConfigPushRollout(modal) {
             const templateIds = [...modal.querySelectorAll('.push-tpl:checked')].map(c => parseInt(c.value));
             if (!templateIds.length) { showToast('Select at least one template.'); return; }
 
@@ -8490,7 +8517,7 @@
             if (!confirmed) return;
 
             try {
-                const resp = await fetch('/api/config-push', {
+                const resp = await fetch('/api/config-push/rollout/start', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({template_ids: templateIds, targets}),
@@ -8526,6 +8553,112 @@
             }).then(r => r.json()).then(data => {
                 if (data.device_count) showToast(`Config push started for ${data.device_count} devices`);
             }).catch(e => showToast('Push failed: ' + e.message));
+        }
+
+        const CONFIG_PUSH_PHASES = ['canary', 'pct10', 'pct50', 'pct100'];
+        const CONFIG_PUSH_PHASE_LABELS = { canary: 'Canary', pct10: '10%', pct50: '50%', pct100: '100%' };
+
+        function renderConfigPushRolloutUI() {
+            const phasesEl = document.getElementById('configPushRolloutPhases');
+            const pushBtn = document.getElementById('configPushBtn');
+            const cancelBtn = document.getElementById('configCancelBtn');
+            const resumeBtn = document.getElementById('configResumeBtn');
+            if (!phasesEl) return;
+
+            const r = configPushRollout;
+            const isActive = r && (r.status === 'active' || r.status === 'paused');
+
+            // Toggle buttons (only hide push button during rollout; loadConfigTemplateUI handles showing it)
+            if (pushBtn && isActive) pushBtn.style.display = 'none';
+            else if (pushBtn && !isActive) { /* let loadConfigTemplateUI control visibility */ }
+            if (cancelBtn) cancelBtn.style.display = isActive ? '' : 'none';
+            if (resumeBtn) resumeBtn.style.display = (r && r.status === 'paused') ? '' : 'none';
+
+            if (!r || r.status === 'cancelled' || (!isActive && r.status !== 'completed')) {
+                phasesEl.innerHTML = '';
+                return;
+            }
+
+            const currentIdx = CONFIG_PUSH_PHASES.indexOf(r.phase);
+            const progress = r.progress || {};
+            const devices = r.devices || [];
+
+            let html = '';
+            for (let i = 0; i < CONFIG_PUSH_PHASES.length; i++) {
+                const phase = CONFIG_PUSH_PHASES[i];
+                const label = CONFIG_PUSH_PHASE_LABELS[phase];
+                const phaseDevices = devices.filter(d => d.phase_assigned === phase);
+                const phaseCount = phaseDevices.length;
+                const phaseDone = phaseDevices.filter(d => d.status === 'updated').length;
+                const phaseFailed = phaseDevices.filter(d => d.status === 'failed').length;
+
+                let dotClass = 'bar-phase-dot';
+                let detail = '';
+                let onclick = '';
+
+                if (r.status === 'completed') {
+                    dotClass += ' completed';
+                    if (phaseCount) detail = `<span class="bar-phase-detail">${phaseDone}/${phaseCount}</span>`;
+                } else if (i < currentIdx) {
+                    dotClass += ' completed';
+                    if (phaseCount) detail = `<span class="bar-phase-detail">${phaseDone}/${phaseCount}</span>`;
+                } else if (i === currentIdx) {
+                    if (r.status === 'paused') {
+                        dotClass += ' paused';
+                        detail = `<span class="bar-phase-detail">${phaseDone}/${phaseCount}${phaseFailed ? ` (${phaseFailed} failed)` : ''}</span>`;
+                    } else {
+                        const pending = phaseDevices.filter(d => d.status === 'pending').length;
+                        if (pending > 0) {
+                            dotClass += ' active';
+                            detail = `<span class="bar-phase-detail">${phaseDone}/${phaseCount}</span>`;
+                        } else {
+                            // Phase done, waiting for user to advance
+                            dotClass += ' completed clickable';
+                            onclick = ` onclick="advanceConfigPushRollout(${r.id});event.stopPropagation();" title="Advance to next phase"`;
+                            detail = `<span class="bar-phase-detail">${phaseDone}/${phaseCount} ✓</span>`;
+                        }
+                    }
+                } else {
+                    // Future phase
+                    if (phaseCount) detail = `<span class="bar-phase-detail">${phaseCount} devices</span>`;
+                }
+
+                html += `<div class="${dotClass}"${onclick}>${label}${detail}</div>`;
+                if (i < CONFIG_PUSH_PHASES.length - 1) html += `<div class="bar-phase-line"></div>`;
+            }
+
+            phasesEl.innerHTML = html;
+        }
+
+        async function advanceConfigPushRollout(rolloutId) {
+            try {
+                const resp = await fetch(`/api/config-push/rollout/${rolloutId}/advance`, { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok) alert('Advance failed: ' + (data.detail || 'Unknown error'));
+            } catch (e) {
+                alert('Failed to advance: ' + e.message);
+            }
+        }
+
+        async function resumeConfigPushRollout() {
+            if (!configPushRollout) return;
+            try {
+                const resp = await fetch(`/api/config-push/rollout/${configPushRollout.id}/resume`, { method: 'POST' });
+                if (!resp.ok) { const d = await resp.json(); alert('Resume failed: ' + (d.detail || 'Unknown error')); }
+            } catch (e) {
+                alert('Failed to resume: ' + e.message);
+            }
+        }
+
+        async function cancelConfigPushRollout() {
+            if (!configPushRollout) return;
+            if (!confirm('Cancel the config push rollout?')) return;
+            try {
+                const resp = await fetch(`/api/config-push/rollout/${configPushRollout.id}/cancel`, { method: 'POST' });
+                if (!resp.ok) { const d = await resp.json(); alert('Cancel failed: ' + (d.detail || 'Unknown error')); }
+            } catch (e) {
+                alert('Failed to cancel: ' + e.message);
+            }
         }
 
         function handleConfigPushUpdate(msg) {
