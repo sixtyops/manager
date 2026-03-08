@@ -26,7 +26,7 @@ from starlette.requests import Request
 from .tachyon import TachyonClient, UpdateResult
 from . import __version__
 from . import database as db
-from .poller import init_poller, get_poller
+from .poller import init_poller, get_poller, set_poller
 from .scheduler import init_scheduler, get_scheduler
 from .firmware_fetcher import init_fetcher, get_fetcher
 from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
@@ -45,6 +45,7 @@ from .license import (
     is_feature_enabled, validate_license, clear_license,
     init_license_validator, require_feature,
 )
+from . import license as _license_mod
 
 # Configure logging
 logging.basicConfig(
@@ -52,6 +53,8 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+DEV_MODE = os.environ.get("TACHYON_DEV_MODE") == "1"
 
 # Paths
 BASE_DIR = Path(__file__).parent
@@ -251,53 +254,81 @@ async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
     # Startup
     db.cleanup_expired_sessions()
-    radius_runtime = builtin_radius.get_runtime()
-    await radius_runtime.start()
-    poller = init_poller(broadcast, poll_interval=60)
-    await poller.start()
-    scheduler = init_scheduler(broadcast, _start_scheduled_update, check_interval=60)
-    await scheduler.start()
-    fetcher = init_fetcher(FIRMWARE_DIR, broadcast)
-    await fetcher.start()
-    checker = init_checker(broadcast)
-    await checker.start()
-    await verify_update_on_startup(broadcast)
-    license_validator = init_license_validator(broadcast)
-    await license_validator.start()
-    cleanup_task = asyncio.create_task(
-        _supervised_task("periodic_cleanup", _periodic_cleanup)
-    )
-    backup_task = asyncio.create_task(
-        _supervised_task("backup_scheduler", _backup_scheduler)
-    )
-    radius_sync_task = asyncio.create_task(
-        _supervised_task("radius_log_sync", _radius_log_sync)
-    )
-    radius_health_task = asyncio.create_task(
-        _supervised_task("radius_health_monitor", _radius_health_monitor)
-    )
-    state = get_license_state()
-    logger.info(f"License: {state.status.value} (tier={state.tier.value})")
-    logger.info("Application started")
+
+    if DEV_MODE:
+        from .devmode import seed_database, DevModePoller
+        seed_database()
+        poller = DevModePoller(broadcast)
+        set_poller(poller)
+        await poller.start()
+        scheduler = init_scheduler(broadcast, _start_scheduled_update, check_interval=60)
+        await scheduler.start()
+        cleanup_task = asyncio.create_task(
+            _supervised_task("periodic_cleanup", _periodic_cleanup)
+        )
+        # Skip network-dependent services in dev mode
+        radius_runtime = fetcher = checker = license_validator = None
+        backup_task = radius_sync_task = radius_health_task = None
+        logger.info("Application started (DEV MODE — no network services)")
+    else:
+        radius_runtime = builtin_radius.get_runtime()
+        await radius_runtime.start()
+        poller = init_poller(broadcast, poll_interval=60)
+        await poller.start()
+        scheduler = init_scheduler(broadcast, _start_scheduled_update, check_interval=60)
+        await scheduler.start()
+        fetcher = init_fetcher(FIRMWARE_DIR, broadcast)
+        await fetcher.start()
+        checker = init_checker(broadcast)
+        await checker.start()
+        await verify_update_on_startup(broadcast)
+        license_validator = init_license_validator(broadcast)
+        await license_validator.start()
+        cleanup_task = asyncio.create_task(
+            _supervised_task("periodic_cleanup", _periodic_cleanup)
+        )
+        backup_task = asyncio.create_task(
+            _supervised_task("backup_scheduler", _backup_scheduler)
+        )
+        radius_sync_task = asyncio.create_task(
+            _supervised_task("radius_log_sync", _radius_log_sync)
+        )
+        radius_health_task = asyncio.create_task(
+            _supervised_task("radius_health_monitor", _radius_health_monitor)
+        )
+        state = get_license_state()
+        logger.info(f"License: {state.status.value} (tier={state.tier.value})")
+        logger.info("Application started")
 
     yield
 
     # Shutdown
-    backup_task.cancel()
+    bg_tasks = [cleanup_task]
+    if backup_task:
+        backup_task.cancel()
+        bg_tasks.append(backup_task)
+    if radius_sync_task:
+        radius_sync_task.cancel()
+        bg_tasks.append(radius_sync_task)
+    if radius_health_task:
+        radius_health_task.cancel()
+        bg_tasks.append(radius_health_task)
     cleanup_task.cancel()
-    radius_sync_task.cancel()
-    radius_health_task.cancel()
-    for task in [cleanup_task, backup_task, radius_sync_task, radius_health_task]:
+    for task in bg_tasks:
         try:
             await task
         except asyncio.CancelledError:
             pass
-    await license_validator.stop()
-    await checker.stop()
-    await fetcher.stop()
+    if license_validator:
+        await license_validator.stop()
+    if checker:
+        await checker.stop()
+    if fetcher:
+        await fetcher.stop()
     await scheduler.stop()
     await poller.stop()
-    await radius_runtime.stop()
+    if radius_runtime:
+        await radius_runtime.stop()
     logger.info("Application stopped")
 
 
@@ -1523,6 +1554,14 @@ async def test_slack_webhook(session: dict = Depends(require_auth), _pro=Depends
 @app.get("/api/license")
 async def get_license_status(session: dict = Depends(require_auth)):
     """Get current license state, features map, and device counts."""
+    if _license_mod._FORCE_PRO:
+        features = {f.value: True for f in Feature}
+        return {
+            "tier": "pro", "status": "active", "is_pro": True,
+            "has_key": False, "customer_name": "Dev Mode",
+            "error": "", "features": features,
+            "should_nag": False, "billable_count": 0,
+        }
     state = get_license_state()
     nag = get_nag_info()
     features = {f.value: state.is_feature_enabled(f) for f in Feature}

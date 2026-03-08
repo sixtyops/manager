@@ -2606,6 +2606,13 @@
     </div>
 
     <script>
+        // Utility: format distance with km for >= 1000m
+        function formatDistance(meters) {
+            if (meters == null) return '';
+            if (meters >= 1000) return (meters / 1000).toFixed(1) + ' km';
+            return meters.toFixed(0) + ' m';
+        }
+
         // License state (loaded on init, updated via WebSocket)
         let licenseState = { tier: 'free', status: 'free', features: {}, billable_count: 0, should_nag: false, is_pro: false };
         let builtinRadiusSummary = null;
@@ -3304,7 +3311,7 @@
                             <td>${cpe.model || ''}</td>
                             <td>${versionCell(cpe)}</td>
                             <td class="${signalClass}">${signalVal != null ? signalVal.toFixed(1) + ' dBm' : ''}</td>
-                            <td>${cpe.link_distance != null ? cpe.link_distance.toFixed(0) + ' m' : ''}</td>
+                            <td>${formatDistance(cpe.link_distance)}</td>
                             <td>${statusCell(cpe.ip, false, health, cpe.auth_status, ap.ip)}</td>
                             <td>${updateCell('cpe', cpe.ip, ap.ip)}</td>
                             <td></td>
@@ -3644,9 +3651,9 @@
                     },
                     scales: {
                         x: {
-                            title: { display: true, text: 'Distance (meters)', color: '#6b7280' },
+                            title: { display: true, text: 'Distance', color: '#6b7280' },
                             grid: { color: '#e5e7eb' },
-                            ticks: { color: '#6b7280' },
+                            ticks: { color: '#6b7280', callback: (v) => formatDistance(v) },
                             beginAtZero: true,
                         },
                         y: {
@@ -3672,7 +3679,7 @@
                                     return [
                                         cpe.system_name || cpe.ip,
                                         `Signal: ${cpe.primary_signal?.toFixed(1) || 'N/A'} dBm`,
-                                        `Distance: ${cpe.link_distance?.toFixed(0) || 'N/A'} m`,
+                                        `Distance: ${cpe.link_distance != null ? formatDistance(cpe.link_distance) : 'N/A'}`,
                                     ];
                                 },
                             },
@@ -6849,8 +6856,8 @@
                 }
 
                 // Reload templates
-                const resp = await fetch('/api/config-templates');
-                const data = await resp.json();
+                const reloadResp = await fetch('/api/config-templates');
+                const data = await reloadResp.json();
                 configTemplates = data.templates || [];
                 loadConfigTemplateUI();
             } catch (e) {
