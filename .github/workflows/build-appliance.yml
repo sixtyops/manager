@@ -16,7 +16,8 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'release' && !github.event.release.prerelease)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, proxmox]
+    timeout-minutes: 60
     permissions:
       contents: write
       packages: read
@@ -39,22 +40,6 @@ jobs:
           echo "app_version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
           echo "ova_name=${OVA_NAME}" >> "$GITHUB_OUTPUT"
           echo "Building appliance: platform v${APPLIANCE_VERSION}, app ${APP_VERSION}"
-
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils ovmf
-
-      - name: Setup Packer
-        uses: hashicorp/setup-packer@main
-        with:
-          version: latest
 
       - name: Initialize Packer
         run: |
@@ -85,9 +70,13 @@ jobs:
             appliance/packer/output-tachyon/tachyon-appliance \
             -o ${{ steps.version.outputs.ova_name }}.ova \
             -n tachyon-appliance \
-            -v ${{ steps.version.outputs.app_version }}
+            -v ${{ steps.version.outputs.app_version }} \
+            --memory 1024 \
+            --disk-size 8G \
+            --cpus 2
 
       - name: Upload artifacts
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.version.outputs.ova_name }}
@@ -105,7 +94,7 @@ jobs:
             ${{ steps.version.outputs.ova_name }}.qcow2
           tag_name: ${{ github.event.release.tag_name }}
 
-      - name: Update latest-appliance release (private repo)
+      - name: Update latest-appliance release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -212,3 +201,10 @@ jobs:
           cp "$QCOW2" tachyon-appliance-latest.qcow2
           gh release upload appliance-latest tachyon-appliance-latest.ova --clobber --repo "$REPO"
           gh release upload appliance-latest tachyon-appliance-latest.qcow2 --clobber --repo "$REPO"
+
+      - name: Cleanup build artifacts
+        if: always()
+        run: |
+          rm -rf appliance/packer/output-tachyon
+          rm -f *.ova *.qcow2
+          rm -f tachyon-appliance-latest.ova tachyon-appliance-latest.qcow2

@@ -3,6 +3,7 @@
 import base64
 import csv
 import io
+import ipaddress
 import logging
 import os
 
@@ -157,6 +158,12 @@ def process_csv_import(csv_content: str, passphrase: str, conflict_mode: str = "
     for row in reader:
         ip = row.get("ip", "").strip()
         if not ip:
+            continue
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            results["devices"]["failed"] += 1
+            results["devices"]["errors"].append(f"{ip}: invalid IP address")
             continue
 
         # Decrypt password

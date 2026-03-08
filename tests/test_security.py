@@ -203,20 +203,24 @@ class TestTimingSafeAuth:
         with patch.dict(os.environ, {"ADMIN_USERNAME": "admin", "ADMIN_PASSWORD": "secret"}), \
              patch("updater.auth.db") as mock_db, \
              patch("updater.auth.hmac") as mock_hmac:
+            mock_db.get_user.return_value = None  # No user in DB
+            mock_db.count_admin_users.return_value = 0  # Trigger env fallback
             mock_db.get_setting.return_value = ""  # No DB hash, fall back to env
             mock_hmac.compare_digest.return_value = True
             from updater.auth import authenticate_local
             result = authenticate_local("admin", "secret")
             mock_hmac.compare_digest.assert_called_once_with("secret", "secret")
-            assert result is True
+            assert result is not None
 
     def test_plaintext_wrong_password(self):
         """Plaintext fallback still rejects wrong passwords."""
         from updater.auth import authenticate_local
         with patch.dict(os.environ, {"ADMIN_USERNAME": "admin", "ADMIN_PASSWORD": "secret"}), \
              patch("updater.auth.db") as mock_db:
+            mock_db.get_user.return_value = None
+            mock_db.count_admin_users.return_value = 0
             mock_db.get_setting.return_value = ""
-            assert authenticate_local("admin", "wrong") is False
+            assert authenticate_local("admin", "wrong") is None
 
 
 # =========================================================================

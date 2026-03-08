@@ -1,14 +1,58 @@
 #!/bin/sh
 # console-tui.sh — Whiptail-based console TUI for Tachyon appliance (tty1)
 
+# Prevent kernel/init messages from corrupting the TUI display
+dmesg -n 1 2>/dev/null || true
+
 # Colors and sizing
 TERM=linux
 export TERM
 ROWS=24
 COLS=78
 
+# Auto-detect primary network interface
+# Prefer interface with default route; fall back to first physical NIC
+detect_iface() {
+    _IFACE=$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+    if [ -n "$_IFACE" ]; then
+        echo "$_IFACE"
+        return
+    fi
+
+    # Boot-safe fallback: first non-virtual interface, even if not yet up.
+    for _IFACE in $(ls /sys/class/net 2>/dev/null); do
+        case "$_IFACE" in
+            lo|docker*|br-*|veth*|virbr*|tap*|tun*)
+                continue
+                ;;
+        esac
+        echo "$_IFACE"
+        return
+    done
+
+    if [ -z "$_IFACE" ]; then
+        _IFACE="eth0"
+    fi
+    echo "$_IFACE"
+}
+
+# Validate an IP address (IPv4 dotted quad with 0-255 octet ranges)
+validate_ip() {
+    echo "$1" | awk -F. '
+        NF != 4 { exit 1 }
+        {
+            for (i = 1; i <= 4; i++) {
+                if ($i !~ /^[0-9]+$/ || $i < 0 || $i > 255) exit 1
+            }
+        }
+        { exit 0 }
+    ' >/dev/null 2>&1
+}
+
 get_ip() {
-    ip -4 addr show eth0 2>/dev/null | grep -oP 'inet \K[\d.]+' || echo "No IP"
+    IFACE=$(detect_iface)
+    IP=$(ip -4 addr show "$IFACE" 2>/dev/null | awk '/inet /{split($2,a,"/"); print a[1]; exit}')
+    echo "${IP:-No IP}"
 }
 
 get_version() {
@@ -29,7 +73,7 @@ get_machine_id() {
 }
 
 get_uptime() {
-    uptime | sed 's/.*up\s*//' | sed 's/,\s*[0-9]* user.*//'
+    uptime | sed 's/.*up *//' | sed 's/, *[0-9]* user.*//'
 }
 
 get_disk_usage() {
@@ -74,10 +118,13 @@ show_main_menu() {
 }
 
 show_network_menu() {
+    clear
     CURRENT_MODE="DHCP"
     if [ -f /data/network/network.conf ]; then
-        . /data/network/network.conf
-        CURRENT_MODE=$(echo "$MODE" | tr '[:lower:]' '[:upper:]')
+        # Parse config safely without shell sourcing
+        CURRENT_MODE=$(grep '^MODE=' /data/network/network.conf | cut -d= -f2- | head -1)
+        CURRENT_MODE=$(echo "$CURRENT_MODE" | tr '[:lower:]' '[:upper:]')
+        CURRENT_MODE="${CURRENT_MODE:-DHCP}"
     fi
 
     CHOICE=$(whiptail --title "Network Configuration" \
@@ -94,12 +141,14 @@ show_network_menu() {
 }
 
 configure_dhcp() {
-    mount -o remount,rw / 2>/dev/null || true
     cat > /data/network/network.conf << 'EOF'
 MODE=dhcp
 EOF
-    /usr/local/bin/apply-network.sh
-    mount -o remount,ro / 2>/dev/null || true
+    whiptail --title "Network" --infobox "Applying network configuration..." 5 $COLS
+    if ! /usr/local/bin/apply-network.sh > /dev/null 2>&1; then
+        whiptail --title "Error" --msgbox "Network configuration failed.\nPrevious settings restored." 8 $COLS
+        return
+    fi
     whiptail --title "Network" --msgbox "DHCP configured. New IP: $(get_ip)" 8 $COLS
 }
 
@@ -114,7 +163,24 @@ configure_static() {
         return
     fi
 
-    mount -o remount,rw / 2>/dev/null || true
+    # Validate IP format before writing to config
+    if ! validate_ip "$ADDRESS"; then
+        whiptail --title "Error" --msgbox "Invalid IP address format: ${ADDRESS}" 8 $COLS
+        return
+    fi
+    if ! validate_ip "$NETMASK"; then
+        whiptail --title "Error" --msgbox "Invalid netmask format: ${NETMASK}" 8 $COLS
+        return
+    fi
+    if ! validate_ip "$GATEWAY"; then
+        whiptail --title "Error" --msgbox "Invalid gateway format: ${GATEWAY}" 8 $COLS
+        return
+    fi
+    if [ -n "$DNS" ] && ! validate_ip "$DNS"; then
+        whiptail --title "Error" --msgbox "Invalid DNS server format: ${DNS}" 8 $COLS
+        return
+    fi
+
     cat > /data/network/network.conf << EOF
 MODE=static
 ADDRESS=${ADDRESS}
@@ -122,12 +188,16 @@ NETMASK=${NETMASK}
 GATEWAY=${GATEWAY}
 DNS=${DNS}
 EOF
-    /usr/local/bin/apply-network.sh
-    mount -o remount,ro / 2>/dev/null || true
+    whiptail --title "Network" --infobox "Applying network configuration..." 5 $COLS
+    if ! /usr/local/bin/apply-network.sh > /dev/null 2>&1; then
+        whiptail --title "Error" --msgbox "Network configuration failed.\nPrevious settings restored." 8 $COLS
+        return
+    fi
     whiptail --title "Network" --msgbox "Static IP configured: ${ADDRESS}" 8 $COLS
 }
 
 show_logs() {
+    clear
     LOGFILE=$(mktemp /tmp/tachyon-logs.XXXXXX)
     timeout 10 docker logs --tail 100 tachyon-management > "$LOGFILE" 2>&1 || echo "(timed out fetching logs)" > "$LOGFILE"
     whiptail --title "Application Logs (last 100 lines)" --scrolltext --textbox "$LOGFILE" $ROWS $COLS
@@ -139,12 +209,12 @@ check_updates() {
     # Query the app API for update status
     RESULT=$(timeout 15 curl -sf http://localhost:8000/api/update-status 2>/dev/null)
     if [ $? -eq 0 ]; then
-        AVAILABLE=$(echo "$RESULT" | grep -o '"update_available":[a-z]*' | cut -d: -f2)
-        LATEST=$(echo "$RESULT" | grep -o '"latest_version":"[^"]*"' | cut -d'"' -f4)
-        APPLIANCE_UPGRADE=$(echo "$RESULT" | grep -o '"appliance_upgrade_required":[a-z]*' | cut -d: -f2)
+        AVAILABLE=$(echo "$RESULT" | jq -r '.update_available // false')
+        LATEST=$(echo "$RESULT" | jq -r '.latest_version // "unknown"')
+        APPLIANCE_UPGRADE=$(echo "$RESULT" | jq -r '.appliance_upgrade_required // false')
         if [ "$AVAILABLE" = "true" ]; then
             if [ "$APPLIANCE_UPGRADE" = "true" ]; then
-                MIN_VER=$(echo "$RESULT" | grep -o '"min_appliance_version":"[^"]*"' | cut -d'"' -f4)
+                MIN_VER=$(echo "$RESULT" | jq -r '.min_appliance_version // "unknown"')
                 whiptail --title "Appliance Upgrade Required" --msgbox \
                     "Update ${LATEST} requires appliance platform v${MIN_VER}.\n\nDownload the latest appliance OVA from:\nhttps://github.com/isolson/firmware-updater/releases/tag/appliance-latest\n\nDeploy the new OVA and migrate your data." \
                     12 $COLS
@@ -152,9 +222,23 @@ check_updates() {
                 whiptail --title "Update Available" --yesno "Update available: ${LATEST}\n\nApply update now?" 10 $COLS
                 if [ $? -eq 0 ]; then
                     whiptail --title "Updating" --infobox "Applying update to ${LATEST}...\nThis may take several minutes." 6 $COLS
-                    timeout 30 curl -sf -X POST http://localhost:8000/api/apply-update > /dev/null 2>&1
-                    sleep 5
-                    whiptail --title "Update" --msgbox "Update initiated. The appliance will restart automatically." 8 $COLS
+                    timeout 120 curl -sf -X POST http://localhost:8000/api/apply-update > /dev/null 2>&1
+                    # Poll for update completion (watchdog takes ~90s)
+                    for poll_i in $(seq 1 18); do
+                        sleep 10
+                        STATUS=$(timeout 5 curl -sf http://localhost:8000/api/update-status 2>/dev/null)
+                        if [ $? -ne 0 ]; then
+                            # App may be restarting
+                            whiptail --title "Updating" --infobox "Update in progress... (app restarting)" 5 $COLS
+                            continue
+                        fi
+                        PENDING=$(echo "$STATUS" | jq -r '.update_pending // false')
+                        if [ "$PENDING" = "false" ]; then
+                            break
+                        fi
+                        whiptail --title "Updating" --infobox "Update in progress... ($poll_i/18)" 5 $COLS
+                    done
+                    whiptail --title "Update" --msgbox "Update complete. Check version on the main screen." 8 $COLS
                 fi
             fi
         else
@@ -195,8 +279,15 @@ factory_reset() {
 
     whiptail --title "Factory Reset" --infobox "Performing factory reset..." 5 $COLS
 
-    # Stop the app
-    timeout 30 docker compose -f /opt/tachyon/docker-compose.yml down 2>/dev/null || true
+    # Stop the app (timeout must exceed stop_grace_period of 60s)
+    timeout 90 docker compose -f /opt/tachyon/docker-compose.yml down 2>/dev/null || {
+        echo "[factory-reset] Graceful shutdown timed out, force-killing containers..."
+        docker compose -f /opt/tachyon/docker-compose.yml kill 2>/dev/null || true
+        docker compose -f /opt/tachyon/docker-compose.yml down --timeout 5 2>/dev/null || true
+    }
+
+    # Brief pause to let Docker release volume mounts
+    sleep 2
 
     # Wipe data
     rm -rf /data/db/* /data/firmware/* /data/backups/* /data/certs/*
@@ -236,6 +327,8 @@ recovery_console() {
 }
 
 # Main loop
+clear
 while true; do
+    clear
     show_main_menu
 done

@@ -74,7 +74,7 @@ source "qemu" "tachyon" {
     "wget http://{{ .HTTPIP }}:{{ .HTTPPort }}/install.sh -O /tmp/install.sh && sh /tmp/install.sh<enter>",
     "<wait300>"
   ]
-  http_directory   = "http"
+  http_directory   = "${path.root}/http"
   ssh_username     = "root"
   ssh_password     = "tachyon-build"
   ssh_timeout      = "15m"
