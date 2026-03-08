@@ -3,38 +3,48 @@ name: CI
 on:
   push:
     branches: [main, dev]
+    paths-ignore:
+      - 'docs/**'
+      - 'website/**'
+      - '*.md'
+      - '.context/**'
+      - 'LICENSE'
   pull_request:
     branches: [main, dev]
+    paths-ignore:
+      - 'docs/**'
+      - 'website/**'
+      - '*.md'
+      - '.context/**'
+      - 'LICENSE'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, proxmox]
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: pip-
-
-      - run: pip install -r requirements.txt
-
-      - run: pytest -v
+      - run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install -r requirements.txt
+          pytest -v
 
   docker-build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, proxmox]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       - run: docker build -t firmware-updater:ci .
-
   appliance-check:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, proxmox]
+    timeout-minutes: 5
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4

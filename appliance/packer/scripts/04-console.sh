@@ -22,4 +22,14 @@ echo "[04-console] Configuring tty1 for TUI..."
 # Replace tty1 getty with console TUI in inittab
 sed -i 's|^tty1::.*|tty1::respawn:/usr/local/bin/console-tui|' /etc/inittab
 
+echo "[04-console] Adding serial console for headless Proxmox access..."
+# Run TUI on ttyS0 for Proxmox 'qm terminal' access (getty is unusable — all accounts are locked)
+if ! grep -q 'ttyS0' /etc/inittab; then
+    echo 'ttyS0::respawn:/usr/local/bin/console-tui' >> /etc/inittab
+fi
+# Add serial console to kernel cmdline for boot messages on serial port
+if [ -f /boot/extlinux.conf ]; then
+    sed -i '/^APPEND/ s/$/ console=tty0 console=ttyS0,115200/' /boot/extlinux.conf
+fi
+
 echo "[04-console] Done."

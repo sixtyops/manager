@@ -3,6 +3,7 @@
 import json
 import logging
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -19,6 +20,7 @@ DB_PATH = Path(__file__).parent.parent / "data" / "tachyon.db"
 # Settings cache — short TTL to reduce DB hits during poll cycles
 _settings_cache: Optional[dict] = None
 _settings_cache_time: float = 0
+_settings_cache_lock = threading.Lock()
 _SETTINGS_CACHE_TTL = 5  # seconds
 
 
@@ -81,6 +83,28 @@ def _migrate(db):
                     (f.name, "2020-01-01T00:00:00", "legacy")
                 )
 
+    # Add notes column to access_points and switches
+    ap_columns = [row[1] for row in db.execute("PRAGMA table_info(access_points)").fetchall()]
+    if "notes" not in ap_columns:
+        db.execute("ALTER TABLE access_points ADD COLUMN notes TEXT DEFAULT NULL")
+    sw_columns = [row[1] for row in db.execute("PRAGMA table_info(switches)").fetchall()]
+    if "notes" not in sw_columns:
+        db.execute("ALTER TABLE switches ADD COLUMN notes TEXT DEFAULT NULL")
+
+    # Add performance indexes for scaling
+    db.execute("CREATE INDEX IF NOT EXISTS idx_schedule_log_timestamp ON schedule_log(timestamp DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_device_durations_job ON device_durations(job_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_device_durations_created ON device_durations(created_at)")
+
+    # Add scope/site_id/device_types columns to config_templates
+    ct_columns = [row[1] for row in db.execute("PRAGMA table_info(config_templates)").fetchall()]
+    if "scope" not in ct_columns:
+        db.execute("ALTER TABLE config_templates ADD COLUMN scope TEXT DEFAULT 'global'")
+    if "site_id" not in ct_columns:
+        db.execute("ALTER TABLE config_templates ADD COLUMN site_id INTEGER REFERENCES tower_sites(id)")
+    if "device_types" not in ct_columns:
+        db.execute("ALTER TABLE config_templates ADD COLUMN device_types TEXT")
+
     # Encrypt any plaintext device passwords
     _migrate_encrypt_passwords(db)
 
@@ -124,6 +148,12 @@ def init_db():
                 check_conn.close()
 
     with get_db() as db:
+        # Pre-schema migration: drop tables with incompatible schemas (pre-release)
+        for _tbl, _req in [("audit_log", {"username"}), ("api_tokens", {"user_id"})]:
+            _cols = {r[1] for r in db.execute(f"PRAGMA table_info({_tbl})").fetchall()}
+            if _cols and not _req.issubset(_cols):
+                db.execute(f"DROP TABLE {_tbl}")
+
         db.executescript("""
             CREATE TABLE IF NOT EXISTS tower_sites (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -275,6 +305,10 @@ def init_db():
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE INDEX IF NOT EXISTS idx_schedule_log_timestamp ON schedule_log(timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_device_durations_job ON device_durations(job_id);
+            CREATE INDEX IF NOT EXISTS idx_device_durations_created ON device_durations(created_at);
+
             CREATE TABLE IF NOT EXISTS firmware_registry (
                 filename TEXT PRIMARY KEY,
                 added_at TEXT NOT NULL,
@@ -327,15 +361,32 @@ def init_db():
                 form_data TEXT,
                 description TEXT,
                 enabled INTEGER DEFAULT 1,
+                scope TEXT DEFAULT 'global',
+                site_id INTEGER REFERENCES tower_sites(id),
+                device_types TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS config_enforce_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip TEXT NOT NULL,
+                device_type TEXT,
+                phase TEXT,
+                status TEXT NOT NULL,
+                error TEXT,
+                template_ids TEXT,
+                enforced_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_config_enforce_ip ON config_enforce_log(ip, enforced_at DESC);
 
             CREATE TABLE IF NOT EXISTS radius_users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL UNIQUE COLLATE NOCASE,
                 password TEXT NOT NULL,
+                description TEXT DEFAULT '',
                 enabled INTEGER DEFAULT 1,
+                auth_count INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 last_auth_at TEXT
@@ -387,6 +438,87 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_radius_auth_client_ip ON radius_auth_log(client_ip);
             CREATE INDEX IF NOT EXISTS idx_radius_auth_username ON radius_auth_log(username);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_radius_auth_unique ON radius_auth_log(occurred_at, username, client_ip, outcome);
+
+            CREATE TABLE IF NOT EXISTS device_uptime_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip TEXT NOT NULL,
+                device_type TEXT NOT NULL DEFAULT 'ap',
+                event TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                details TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_uptime_ip ON device_uptime_events(ip);
+            CREATE INDEX IF NOT EXISTS idx_uptime_occurred ON device_uptime_events(occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_uptime_ip_occurred ON device_uptime_events(ip, occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_uptime_device_type ON device_uptime_events(device_type, occurred_at DESC);
+
+            CREATE TABLE IF NOT EXISTS active_jobs (
+                job_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'running',
+                started_at TEXT,
+                device_ips_json TEXT,
+                firmware_name TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                password_hash TEXT,
+                role TEXT NOT NULL DEFAULT 'viewer',
+                auth_method TEXT NOT NULL DEFAULT 'local',
+                enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target_type TEXT,
+                target_id TEXT,
+                details TEXT,
+                ip_address TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(username, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+
+            CREATE TABLE IF NOT EXISTS api_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                token_prefix TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                scopes TEXT DEFAULT 'read',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_used_at TEXT,
+                expires_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
+            CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
+
+            CREATE TABLE IF NOT EXISTS freeze_windows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                reason TEXT,
+                enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS device_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                filter_json TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # Migrations: add columns if missing
@@ -399,6 +531,7 @@ def init_db():
             "schedule_start_hour": "3",
             "schedule_end_hour": "4",
             "parallel_updates": "2",
+            "bandwidth_limit_kbps": "0",
             "bank_mode": "one",
             "allow_downgrade": "false",
             "timezone": "auto",
@@ -416,6 +549,29 @@ def init_db():
             "admin_password_hash": "",
             "firmware_quarantine_days": "7",
             "slack_webhook_url": "",
+            # Notification health tracking
+            "notification_consecutive_failures": "0",
+            # SNMP trap configuration
+            "snmp_traps_enabled": "false",
+            "snmp_trap_host": "",
+            "snmp_trap_port": "162",
+            "snmp_trap_community": "public",
+            "snmp_trap_version": "2c",
+            # Syslog forwarding (app events to remote syslog)
+            "syslog_forward_enabled": "false",
+            "syslog_forward_host": "",
+            "syslog_forward_port": "514",
+            "syslog_forward_protocol": "udp",
+            "syslog_forward_facility": "local0",
+            # Email notification configuration
+            "email_enabled": "false",
+            "email_smtp_host": "",
+            "email_smtp_port": "587",
+            "email_smtp_username": "",
+            "email_smtp_password": "",
+            "email_smtp_tls": "true",
+            "email_from_address": "",
+            "email_to_addresses": "",
             # RADIUS configuration for web authentication
             "radius_enabled": "",  # Empty = use env vars, "true"/"false" = explicit
             "radius_server": "",
@@ -463,9 +619,16 @@ def init_db():
             "autoupdate_release_notes": "",
             # Pre-update reboot
             "pre_update_reboot": "true",
+            # Smoke test strict mode: fail updates when smoke tests detect issues
+            "smoke_test_strict": "false",
+            # Auto-cancel rollout on canary failure
+            "canary_auto_cancel": "false",
             # Config polling
             "config_poll_enabled": "true",
             "config_poll_interval_hours": "24",
+            # Config auto-enforce
+            "config_auto_enforce": "false",
+            "config_enforce_cooldown_minutes": "10",
             # Vendor feature flags
             "mikrotik_enabled": "false",
             # License configuration
@@ -477,6 +640,29 @@ def init_db():
             "license_grace_until": "",
             "license_device_limit": "0",
             "license_error": "",
+            # Built-in RADIUS server
+            "radius_server_enabled": "false",
+            "radius_server_port": "1812",
+            "radius_server_secret": "",
+            "radius_server_auth_mode": "local",
+            "radius_server_advertised_address": "",
+            "radius_server_ldap_url": "",
+            "radius_server_ldap_bind_dn": "",
+            "radius_server_ldap_bind_password": "",
+            "radius_server_ldap_base_dn": "",
+            "radius_server_ldap_user_filter": "(&(objectClass=user)(sAMAccountName={username}))",
+            # Poller concurrency
+            "poller_concurrency": "10",
+            # Device alert configuration
+            "alert_device_offline_enabled": "true",
+            "alert_device_offline_cooldown_minutes": "60",
+            # Generic webhook configuration
+            "webhook_enabled": "false",
+            "webhook_url": "",
+            "webhook_method": "POST",
+            "webhook_headers": "{}",
+            "webhook_secret": "",
+            "webhook_events": "job_completed,job_failed,device_offline,device_recovered",
         }
         for key, value in defaults.items():
             db.execute(
@@ -496,8 +682,58 @@ def get_db():
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
+
+
+def checkpoint_db():
+    """Flush WAL to main database file for clean shutdown."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=10)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.close()
+        logger.info("Database WAL checkpoint completed")
+    except Exception as e:
+        logger.error(f"Database WAL checkpoint failed: {e}")
+
+
+def periodic_maintenance():
+    """Reclaim disk space and checkpoint WAL. Safe to call while app is running."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=30)
+        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        conn.execute("PRAGMA incremental_vacuum(500)")
+        conn.close()
+        logger.info("Database maintenance: WAL checkpoint + incremental vacuum completed")
+    except Exception as e:
+        logger.error(f"Database maintenance failed: {e}")
+
+
+# Active job tracking for crash recovery
+def save_active_job(job_id: str, status: str, device_ips_json: str, firmware_name: str):
+    """Persist an active job so it can be recovered after a crash."""
+    with get_db() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO active_jobs (job_id, status, started_at, device_ips_json, firmware_name, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            (job_id, status, datetime.now().isoformat(), device_ips_json, firmware_name),
+        )
+
+
+def get_active_jobs() -> list[dict]:
+    """Get all active jobs (for crash recovery on startup)."""
+    with get_db() as db:
+        rows = db.execute("SELECT * FROM active_jobs WHERE status = 'running'").fetchall()
+        return [dict(row) for row in rows]
+
+
+def clear_active_job(job_id: str):
+    """Remove an active job after completion or recovery."""
+    with get_db() as db:
+        db.execute("DELETE FROM active_jobs WHERE job_id = ?", (job_id,))
 
 
 # Tower Site operations
@@ -562,6 +798,14 @@ def get_all_device_ips() -> set:
         return {row["ip"] for row in ap_rows} | {row["ip"] for row in sw_rows}
 
 
+def get_enabled_device_ips() -> set:
+    """Get enabled device IPs (APs + switches) for cache eviction."""
+    with get_db() as conn:
+        ap_rows = conn.execute("SELECT ip FROM access_points WHERE enabled = 1").fetchall()
+        sw_rows = conn.execute("SELECT ip FROM switches WHERE enabled = 1").fetchall()
+        return {row["ip"] for row in ap_rows} | {row["ip"] for row in sw_rows}
+
+
 def _decrypt_device_row(row_dict: dict) -> dict:
     """Decrypt the password field in a device row if it's encrypted."""
     if row_dict and "password" in row_dict and row_dict["password"]:
@@ -605,7 +849,7 @@ def upsert_access_point(ip: str, username: str, password: str, tower_site_id: in
         if existing:
             # Update
             updates = {"username": username, "password": enc_password, "tower_site_id": tower_site_id}
-            allowed = {"system_name", "model", "mac", "firmware_version", "location", "last_seen", "last_error", "enabled"}
+            allowed = {"system_name", "model", "mac", "firmware_version", "location", "last_seen", "last_error", "enabled", "notes"}
             updates.update({k: v for k, v in kwargs.items() if k in allowed})
 
             set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
@@ -614,11 +858,11 @@ def upsert_access_point(ip: str, username: str, password: str, tower_site_id: in
         else:
             # Insert
             db.execute(
-                """INSERT INTO access_points (ip, username, password, tower_site_id, system_name, model, mac, firmware_version, location)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO access_points (ip, username, password, tower_site_id, system_name, model, mac, firmware_version, location, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (ip, username, enc_password, tower_site_id,
                  kwargs.get("system_name"), kwargs.get("model"), kwargs.get("mac"),
-                 kwargs.get("firmware_version"), kwargs.get("location"))
+                 kwargs.get("firmware_version"), kwargs.get("location"), kwargs.get("notes"))
             )
             return db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -684,7 +928,7 @@ def upsert_switch(ip: str, username: str, password: str, tower_site_id: int = No
 
         if existing:
             updates = {"username": username, "password": enc_password, "tower_site_id": tower_site_id}
-            allowed = {"system_name", "model", "mac", "firmware_version", "location", "last_seen", "last_error", "enabled"}
+            allowed = {"system_name", "model", "mac", "firmware_version", "location", "last_seen", "last_error", "enabled", "notes"}
             updates.update({k: v for k, v in kwargs.items() if k in allowed})
 
             set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
@@ -692,11 +936,11 @@ def upsert_switch(ip: str, username: str, password: str, tower_site_id: int = No
             return existing["id"]
         else:
             db.execute(
-                """INSERT INTO switches (ip, username, password, tower_site_id, system_name, model, mac, firmware_version, location)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO switches (ip, username, password, tower_site_id, system_name, model, mac, firmware_version, location, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (ip, username, enc_password, tower_site_id,
                  kwargs.get("system_name"), kwargs.get("model"), kwargs.get("mac"),
-                 kwargs.get("firmware_version"), kwargs.get("location"))
+                 kwargs.get("firmware_version"), kwargs.get("location"), kwargs.get("notes"))
             )
             return db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -723,6 +967,66 @@ def delete_switch(ip: str):
     """Delete a switch."""
     with get_db() as db:
         db.execute("DELETE FROM switches WHERE ip = ?", (ip,))
+
+
+_BULK_TABLES = {"ap": "access_points", "switch": "switches"}
+_BULK_MAX_IPS = 500
+
+
+def _validate_bulk_args(device_type: str, ips: list[str]) -> tuple[str, list[str]]:
+    """Validate bulk operation arguments. Returns (table_name, ips)."""
+    table = _BULK_TABLES.get(device_type)
+    if not table:
+        raise ValueError(f"Invalid device_type: {device_type}")
+    if not ips:
+        raise ValueError("ips list must not be empty")
+    if len(ips) > _BULK_MAX_IPS:
+        raise ValueError(f"Too many IPs (max {_BULK_MAX_IPS})")
+    return table, list(ips)
+
+
+def bulk_set_enabled(device_type: str, ips: list[str], enabled: bool) -> int:
+    """Enable or disable multiple devices. Returns count of affected rows."""
+    table, ips = _validate_bulk_args(device_type, ips)
+    val = 1 if enabled else 0
+    with get_db() as conn:
+        placeholders = ",".join("?" for _ in ips)
+        cursor = conn.execute(
+            f"UPDATE {table} SET enabled = ? WHERE ip IN ({placeholders})",
+            [val] + ips,
+        )
+        return cursor.rowcount
+
+
+def bulk_delete_devices(device_type: str, ips: list[str]) -> int:
+    """Delete multiple devices. Returns count of deleted rows."""
+    table, ips = _validate_bulk_args(device_type, ips)
+    with get_db() as conn:
+        placeholders = ",".join("?" for _ in ips)
+        if device_type == "ap":
+            conn.execute(f"DELETE FROM cpe_cache WHERE ap_ip IN ({placeholders})", ips)
+        cursor = conn.execute(
+            f"DELETE FROM {table} WHERE ip IN ({placeholders})",
+            ips,
+        )
+        return cursor.rowcount
+
+
+def bulk_move_to_site(device_type: str, ips: list[str], site_id: Optional[int]) -> int:
+    """Move multiple devices to a site. Returns count of affected rows."""
+    table, ips = _validate_bulk_args(device_type, ips)
+    if site_id is not None:
+        with get_db() as conn:
+            site = conn.execute("SELECT id FROM tower_sites WHERE id = ?", (site_id,)).fetchone()
+            if not site:
+                raise ValueError(f"Site {site_id} not found")
+    with get_db() as conn:
+        placeholders = ",".join("?" for _ in ips)
+        cursor = conn.execute(
+            f"UPDATE {table} SET tower_site_id = ? WHERE ip IN ({placeholders})",
+            [site_id] + ips,
+        )
+        return cursor.rowcount
 
 
 def update_device_credentials(device_type: str, ip: str, username: str, password: str):
@@ -795,6 +1099,39 @@ def get_cpe_by_ip(ip: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
+# Batch-fetch functions for scaling (eliminate N+1 queries)
+
+def get_all_access_points_dict(enabled_only: bool = True) -> dict[str, dict]:
+    """Get all APs as {ip: row_dict}. Single query, avoids N+1 lookups."""
+    with get_db() as conn:
+        query = "SELECT * FROM access_points"
+        if enabled_only:
+            query += " WHERE enabled = 1"
+        rows = conn.execute(query).fetchall()
+        return {row["ip"]: _decrypt_device_row(dict(row)) for row in rows}
+
+
+def get_all_switches_dict(enabled_only: bool = True) -> dict[str, dict]:
+    """Get all switches as {ip: row_dict}. Single query, avoids N+1 lookups."""
+    with get_db() as conn:
+        query = "SELECT * FROM switches"
+        if enabled_only:
+            query += " WHERE enabled = 1"
+        rows = conn.execute(query).fetchall()
+        return {row["ip"]: _decrypt_device_row(dict(row)) for row in rows}
+
+
+def get_all_cpes_grouped() -> dict[str, list[dict]]:
+    """Get all CPEs grouped by AP IP. Single query, avoids per-AP lookups."""
+    from collections import defaultdict
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM cpe_cache ORDER BY ap_ip, ip").fetchall()
+        result: dict[str, list[dict]] = defaultdict(list)
+        for row in rows:
+            result[row["ap_ip"]].append(dict(row))
+        return dict(result)
+
+
 def update_cpe_auth_status(ap_ip: str, cpe_ip: str, auth_status: str):
     """Update auth_status for a specific CPE."""
     with get_db() as db:
@@ -850,21 +1187,25 @@ def get_health_summary() -> dict:
 def _invalidate_settings_cache():
     """Invalidate the in-memory settings cache."""
     global _settings_cache, _settings_cache_time
-    _settings_cache = None
-    _settings_cache_time = 0
+    with _settings_cache_lock:
+        _settings_cache = None
+        _settings_cache_time = 0
 
 
 def _get_cached_settings() -> dict:
     """Get settings from cache or DB. Returns full settings dict."""
     global _settings_cache, _settings_cache_time
     now = time.monotonic()
-    if _settings_cache is not None and (now - _settings_cache_time) < _SETTINGS_CACHE_TTL:
-        return _settings_cache
+    with _settings_cache_lock:
+        if _settings_cache is not None and (now - _settings_cache_time) < _SETTINGS_CACHE_TTL:
+            return _settings_cache
     with get_db() as db:
         rows = db.execute("SELECT key, value FROM settings").fetchall()
-        _settings_cache = {row["key"]: row["value"] for row in rows}
-        _settings_cache_time = now
-        return _settings_cache
+        result = {row["key"]: row["value"] for row in rows}
+    with _settings_cache_lock:
+        _settings_cache = result
+        _settings_cache_time = time.monotonic()
+    return result
 
 
 def get_setting(key: str, default: str = None) -> Optional[str]:
@@ -1087,6 +1428,25 @@ def get_job_history(limit: int = 20) -> list[dict]:
         return results
 
 
+def get_job_history_paginated(page: int = 1, per_page: int = 50) -> tuple[list[dict], int]:
+    """Get paginated job history. Returns (items, total_count)."""
+    with get_db() as db:
+        total = db.execute("SELECT COUNT(*) FROM job_history").fetchone()[0]
+        offset = (page - 1) * per_page
+        rows = db.execute(
+            "SELECT * FROM job_history ORDER BY completed_at DESC LIMIT ? OFFSET ?",
+            (per_page, offset)
+        ).fetchall()
+        results = []
+        for row in rows:
+            d = dict(row)
+            d["devices"] = json.loads(d.pop("devices_json"))
+            d["ap_cpe_map"] = json.loads(d.pop("ap_cpe_map_json"))
+            d["device_roles"] = json.loads(d.pop("device_roles_json"))
+            results.append(d)
+        return results, total
+
+
 # Schedule Log operations
 def log_schedule_event(event: str, details: str = None, job_id: str = None):
     """Log a scheduler event."""
@@ -1131,6 +1491,12 @@ def delete_session(session_id: str):
     """Delete a session."""
     with get_db() as db:
         db.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+
+
+def delete_all_sessions():
+    """Delete all sessions."""
+    with get_db() as db:
+        db.execute("DELETE FROM sessions")
 
 
 def cleanup_expired_sessions():
@@ -1178,6 +1544,21 @@ def cleanup_old_device_durations(max_age_days: int = 180):
     cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
     with get_db() as db:
         db.execute("DELETE FROM device_durations WHERE created_at < ?", (cutoff,))
+
+
+def cleanup_old_radius_auth_log(max_age_days: int = 90):
+    """Remove RADIUS auth log entries older than max_age_days."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as db:
+        db.execute("DELETE FROM radius_auth_log WHERE occurred_at < ?", (cutoff,))
+
+
+def cleanup_old_config_enforce_log(max_age_days: int = 90):
+    """Remove config enforce log entries older than max_age_days."""
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as db:
+        db.execute("DELETE FROM config_enforce_log WHERE enforced_at < ?", (cutoff,))
 
 
 # Rollout operations
@@ -1474,6 +1855,245 @@ def get_avg_durations() -> dict:
     return result
 
 
+# Analytics queries
+
+def get_analytics_summary(days: int = 90) -> dict:
+    """Get aggregate update analytics over the given time window."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) as total_jobs,
+                      COALESCE(SUM(success_count), 0) as total_success,
+                      COALESCE(SUM(failed_count), 0) as total_failed,
+                      COALESCE(SUM(skipped_count), 0) as total_skipped,
+                      COALESCE(SUM(cancelled_count), 0) as total_cancelled,
+                      COALESCE(AVG(duration), 0) as avg_duration
+               FROM job_history WHERE completed_at >= ?""",
+            (cutoff,)
+        ).fetchone()
+        result = dict(row)
+        total_devices = result["total_success"] + result["total_failed"]
+        result["success_rate"] = round(
+            result["total_success"] / total_devices * 100, 1
+        ) if total_devices > 0 else 0.0
+        return result
+
+
+def get_analytics_trends(days: int = 30) -> list[dict]:
+    """Get daily success/failure counts over the given time window."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT DATE(completed_at) as date,
+                      COUNT(*) as jobs,
+                      COALESCE(SUM(success_count), 0) as success,
+                      COALESCE(SUM(failed_count), 0) as failed,
+                      COALESCE(SUM(skipped_count), 0) as skipped
+               FROM job_history
+               WHERE completed_at IS NOT NULL AND completed_at >= ?
+               GROUP BY DATE(completed_at)
+               ORDER BY date""",
+            (cutoff,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_analytics_by_model(days: int = 90) -> list[dict]:
+    """Get success/failure breakdown by device model."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT COALESCE(model, 'Unknown') as model,
+                      COUNT(*) as total,
+                      SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success,
+                      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+                      ROUND(AVG(duration_seconds), 1) as avg_duration
+               FROM device_update_history
+               WHERE completed_at >= ? AND action = 'firmware_update'
+               GROUP BY model
+               ORDER BY total DESC""",
+            (cutoff,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_analytics_errors(days: int = 90, limit: int = 10) -> list[dict]:
+    """Get top error messages from failed updates."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT COALESCE(error, 'Unknown error') as error,
+                      COALESCE(failed_stage, 'unknown') as stage,
+                      COUNT(*) as count
+               FROM device_update_history
+               WHERE completed_at >= ? AND status = 'failed'
+                     AND action = 'firmware_update'
+               GROUP BY error, failed_stage
+               ORDER BY count DESC
+               LIMIT ?""",
+            (cutoff, limit)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_analytics_device_reliability(days: int = 90, limit: int = 20) -> list[dict]:
+    """Get per-device success rates, ordered by worst performers."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT ip, role, COALESCE(model, 'Unknown') as model,
+                      COUNT(*) as total,
+                      SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success,
+                      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+                      ROUND(AVG(duration_seconds), 1) as avg_duration
+               FROM device_update_history
+               WHERE completed_at >= ? AND action = 'firmware_update'
+               GROUP BY ip
+               HAVING total >= 2
+               ORDER BY (CAST(failed AS REAL) / total) DESC, total DESC
+               LIMIT ?""",
+            (cutoff, limit)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# Uptime / SLA tracking
+
+def record_uptime_event(ip: str, device_type: str, event: str, details: str = None):
+    """Record an uptime state transition (up/down)."""
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO device_uptime_events (ip, device_type, event, occurred_at, details) VALUES (?, ?, ?, ?, ?)",
+            (ip, device_type, event, datetime.now().isoformat(), details),
+        )
+
+
+def get_uptime_events(ip: str, days: int = 30, limit: int = 100) -> list[dict]:
+    """Get recent uptime events for a device."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM device_uptime_events WHERE ip = ? AND occurred_at >= ? ORDER BY occurred_at DESC LIMIT ?",
+            (ip, cutoff, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_device_availability(ip: str, days: int = 30) -> dict:
+    """Calculate availability percentage for a device over a time window."""
+    now = datetime.now()
+    window_start = now - timedelta(days=days)
+    cutoff = window_start.isoformat()
+    window_seconds = days * 86400
+
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT event, occurred_at FROM device_uptime_events WHERE ip = ? AND occurred_at >= ? ORDER BY occurred_at ASC",
+            (ip, cutoff),
+        ).fetchall()
+
+    if not rows:
+        return {"ip": ip, "availability_pct": 100.0, "downtime_seconds": 0, "events": 0, "window_days": days}
+
+    downtime = 0.0
+    last_down_at = None
+
+    for row in rows:
+        event = row["event"]
+        ts = datetime.fromisoformat(row["occurred_at"])
+        if event == "down":
+            if last_down_at is None:
+                # Clamp to window start so pre-window downtime isn't counted
+                last_down_at = max(ts, window_start)
+        elif event == "up":
+            if last_down_at is not None:
+                downtime += (ts - last_down_at).total_seconds()
+                last_down_at = None
+
+    # If still down, count up to now
+    if last_down_at is not None:
+        downtime += (now - last_down_at).total_seconds()
+
+    # Clamp downtime to window size
+    downtime = min(downtime, window_seconds)
+    availability = (window_seconds - downtime) / window_seconds * 100
+    return {
+        "ip": ip,
+        "availability_pct": round(availability, 3),
+        "downtime_seconds": round(downtime),
+        "events": len(rows),
+        "window_days": days,
+    }
+
+
+def get_fleet_availability(device_type: str = None, days: int = 30) -> list[dict]:
+    """Get availability for all devices with uptime events."""
+    now = datetime.now()
+    cutoff = (now - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        query = "SELECT DISTINCT ip, device_type FROM device_uptime_events WHERE occurred_at >= ?"
+        params = [cutoff]
+        if device_type:
+            query += " AND device_type = ?"
+            params.append(device_type)
+        device_rows = conn.execute(query, params).fetchall()
+
+        # Batch-fetch all events in one query to avoid N+1
+        if not device_rows:
+            return []
+        all_ips = [r["ip"] for r in device_rows]
+        placeholders = ",".join("?" for _ in all_ips)
+        all_events = conn.execute(
+            f"SELECT ip, event, occurred_at FROM device_uptime_events WHERE ip IN ({placeholders}) AND occurred_at >= ? ORDER BY ip, occurred_at ASC",
+            all_ips + [cutoff],
+        ).fetchall()
+
+    # Group events by IP
+    events_by_ip: dict[str, list] = {}
+    for ev in all_events:
+        events_by_ip.setdefault(ev["ip"], []).append(ev)
+
+    window_start = now - timedelta(days=days)
+    window_seconds = days * 86400
+
+    results = []
+    device_type_map = {r["ip"]: r["device_type"] for r in device_rows}
+    for ip, events in events_by_ip.items():
+        downtime = 0.0
+        last_down_at = None
+        for ev in events:
+            ts = datetime.fromisoformat(ev["occurred_at"])
+            if ev["event"] == "down":
+                if last_down_at is None:
+                    last_down_at = max(ts, window_start)
+            elif ev["event"] == "up":
+                if last_down_at is not None:
+                    downtime += (ts - last_down_at).total_seconds()
+                    last_down_at = None
+        if last_down_at is not None:
+            downtime += (now - last_down_at).total_seconds()
+        downtime = min(downtime, window_seconds)
+        availability = (window_seconds - downtime) / window_seconds * 100
+        results.append({
+            "ip": ip,
+            "device_type": device_type_map.get(ip, "unknown"),
+            "availability_pct": round(availability, 3),
+            "downtime_seconds": round(downtime),
+            "events": len(events),
+            "window_days": days,
+        })
+
+    results.sort(key=lambda x: x["availability_pct"])
+    return results
+
+
+def cleanup_old_uptime_events(max_age_days: int = 180):
+    """Remove uptime events older than max_age_days."""
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    with get_db() as conn:
+        conn.execute("DELETE FROM device_uptime_events WHERE occurred_at < ?", (cutoff,))
+
+
 # Device Update History operations
 
 def save_device_update_history(job_id: Optional[str], ip: str, role: str, pass_number: int,
@@ -1627,13 +2247,16 @@ def cleanup_old_device_configs(max_per_device: int = 50):
 # Config Template operations
 
 def save_config_template(name: str, category: str, config_fragment: str,
-                         form_data: str = None, description: str = None) -> int:
+                         form_data: str = None, description: str = None,
+                         scope: str = "global", site_id: int = None,
+                         device_types: str = None) -> int:
     """Create a new config template. Returns the template ID."""
     with get_db() as db:
         cursor = db.execute(
-            """INSERT INTO config_templates (name, category, config_fragment, form_data, description)
-               VALUES (?, ?, ?, ?, ?)""",
-            (name, category, config_fragment, form_data, description)
+            """INSERT INTO config_templates
+               (name, category, config_fragment, form_data, description, scope, site_id, device_types)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (name, category, config_fragment, form_data, description, scope, site_id, device_types)
         )
         return cursor.lastrowid
 
@@ -1658,19 +2281,29 @@ def get_config_template(template_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def get_config_template_by_category(category: str) -> Optional[dict]:
-    """Get a config template by category (returns first match)."""
+def get_config_template_by_category(category: str, scope: str = None) -> Optional[dict]:
+    """Get a config template by category (returns first match).
+
+    If scope is provided, only matches templates with that scope.
+    """
     with get_db() as db:
-        row = db.execute(
-            "SELECT * FROM config_templates WHERE category = ? ORDER BY id LIMIT 1",
-            (category,)
-        ).fetchone()
+        if scope:
+            row = db.execute(
+                "SELECT * FROM config_templates WHERE category = ? AND scope = ? ORDER BY id LIMIT 1",
+                (category, scope)
+            ).fetchone()
+        else:
+            row = db.execute(
+                "SELECT * FROM config_templates WHERE category = ? ORDER BY id LIMIT 1",
+                (category,)
+            ).fetchone()
         return dict(row) if row else None
 
 
 def update_config_template(template_id: int, **kwargs):
     """Update a config template."""
-    allowed = {"name", "category", "config_fragment", "form_data", "description", "enabled"}
+    allowed = {"name", "category", "config_fragment", "form_data", "description",
+               "enabled", "scope", "site_id", "device_types"}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return
@@ -1687,6 +2320,618 @@ def delete_config_template(template_id: int):
     """Delete a config template."""
     with get_db() as db:
         db.execute("DELETE FROM config_templates WHERE id = ?", (template_id,))
+
+
+def get_config_templates_for_device(ip: str, site_id: int = None) -> list[dict]:
+    """Return effective templates for a device: global + site overrides (site wins per category)."""
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT * FROM config_templates WHERE enabled = 1 ORDER BY category, id"
+        ).fetchall()
+        templates = [dict(row) for row in rows]
+
+    # Separate global and site-scoped templates
+    global_by_cat: dict[str, dict] = {}
+    site_by_cat: dict[str, dict] = {}
+    for t in templates:
+        scope = t.get("scope", "global")
+        if scope == "global":
+            global_by_cat[t["category"]] = t
+        elif scope == "site" and t.get("site_id") == site_id and site_id is not None:
+            site_by_cat[t["category"]] = t
+
+    # Merge: site overrides global per category
+    effective = {}
+    for cat in set(list(global_by_cat.keys()) + list(site_by_cat.keys())):
+        effective[cat] = site_by_cat.get(cat, global_by_cat.get(cat))
+
+    return [t for t in effective.values() if t is not None]
+
+
+def get_all_effective_templates() -> dict[str, list[dict]]:
+    """Return {ip: [templates]} for all devices, resolving global/site scope.
+
+    Single-query approach: fetch all templates and all devices once, then
+    resolve scope in memory instead of per-device DB calls.
+    """
+    with get_db() as db:
+        aps = db.execute("SELECT ip, tower_site_id FROM access_points WHERE enabled = 1").fetchall()
+        switches = db.execute("SELECT ip, tower_site_id FROM switches WHERE enabled = 1").fetchall()
+        rows = db.execute(
+            "SELECT * FROM config_templates WHERE enabled = 1 ORDER BY category, id"
+        ).fetchall()
+
+    all_templates = [dict(row) for row in rows]
+
+    # Pre-sort templates by scope
+    global_by_cat: dict[str, dict] = {}
+    site_templates: dict[int, dict[str, dict]] = {}  # site_id -> {category -> template}
+    for t in all_templates:
+        scope = t.get("scope", "global")
+        if scope == "global":
+            global_by_cat[t["category"]] = t
+        elif scope == "site" and t.get("site_id") is not None:
+            site_templates.setdefault(t["site_id"], {})[t["category"]] = t
+
+    def _resolve(site_id):
+        site_by_cat = site_templates.get(site_id, {}) if site_id is not None else {}
+        effective = {}
+        for cat in set(list(global_by_cat.keys()) + list(site_by_cat.keys())):
+            effective[cat] = site_by_cat.get(cat, global_by_cat.get(cat))
+        return [t for t in effective.values() if t is not None]
+
+    result = {}
+    for row in list(aps) + list(switches):
+        result[row["ip"]] = _resolve(row["tower_site_id"])
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Config enforce log
+# ---------------------------------------------------------------------------
+
+def save_config_enforce_log(ip: str, device_type: str, phase: str,
+                            status: str, error: str = None,
+                            template_ids: list[int] = None):
+    """Record a config enforcement action."""
+    with get_db() as db:
+        db.execute(
+            """INSERT INTO config_enforce_log
+               (ip, device_type, phase, status, error, template_ids)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (ip, device_type, phase, status, error,
+             json.dumps(template_ids) if template_ids else None)
+        )
+
+
+def get_config_enforce_log(ip: str = None, limit: int = 50) -> list[dict]:
+    """Get config enforcement log entries."""
+    with get_db() as db:
+        if ip:
+            rows = db.execute(
+                "SELECT * FROM config_enforce_log WHERE ip = ? ORDER BY enforced_at DESC LIMIT ?",
+                (ip, limit)
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT * FROM config_enforce_log ORDER BY enforced_at DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_enforce_failures(since_hours: int = 24) -> list[dict]:
+    """Get recent enforcement failures."""
+    cutoff = (datetime.now() - timedelta(hours=since_hours)).isoformat()
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT * FROM config_enforce_log
+               WHERE status = 'failed' AND enforced_at >= ?
+               ORDER BY enforced_at DESC""",
+            (cutoff,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# User management (RBAC)
+# ---------------------------------------------------------------------------
+
+VALID_ROLES = ("admin", "operator", "viewer")
+
+
+def create_user(username: str, password_hash: Optional[str], role: str = "viewer",
+                auth_method: str = "local") -> int:
+    """Create a user. Returns the new user ID."""
+    if role not in VALID_ROLES:
+        raise ValueError(f"Invalid role: {role}")
+    with get_db() as db:
+        cursor = db.execute(
+            "INSERT INTO users (username, password_hash, role, auth_method) VALUES (?, ?, ?, ?)",
+            (username, password_hash, role, auth_method),
+        )
+        return cursor.lastrowid
+
+
+def get_user(username: str) -> Optional[dict]:
+    """Get a user by username (case-insensitive). Returns dict or None."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT id, username, password_hash, role, auth_method, enabled, "
+            "created_at, updated_at FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_id(user_id: int) -> Optional[dict]:
+    """Get a user by ID. Returns dict or None."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT id, username, password_hash, role, auth_method, enabled, "
+            "created_at, updated_at FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_users() -> list[dict]:
+    """List all users (without password hashes)."""
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id, username, role, auth_method, enabled, created_at, updated_at "
+            "FROM users ORDER BY username"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_user(user_id: int, **kwargs) -> bool:
+    """Update a user. Returns True if found and updated."""
+    allowed = {"role", "password_hash", "enabled"}
+    updates = {}
+    for key, value in kwargs.items():
+        if key not in allowed:
+            continue
+        if key == "role" and value not in VALID_ROLES:
+            raise ValueError(f"Invalid role: {value}")
+        if key == "enabled":
+            value = 1 if value else 0
+        updates[key] = value
+    if not updates:
+        return False
+    updates["updated_at"] = datetime.now().isoformat()
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    values = list(updates.values()) + [user_id]
+    with get_db() as db:
+        cursor = db.execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)
+        return cursor.rowcount > 0
+
+
+def delete_user(user_id: int) -> bool:
+    """Delete a user. Returns True if found and deleted."""
+    with get_db() as db:
+        cursor = db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        return cursor.rowcount > 0
+
+
+def count_admin_users() -> int:
+    """Count enabled admin users."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT COUNT(*) FROM users WHERE role = 'admin' AND enabled = 1"
+        ).fetchone()
+        return row[0]
+
+
+def delete_sessions_for_user(username: str):
+    """Delete all sessions for a given username."""
+    with get_db() as db:
+        db.execute("DELETE FROM sessions WHERE username = ?", (username,))
+
+
+# ---------------------------------------------------------------------------
+# Reporting helpers
+# ---------------------------------------------------------------------------
+
+def get_update_summary(days: int = 30) -> dict:
+    """Get update activity summary for the last N days."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        # Job-level stats
+        job_row = conn.execute(
+            "SELECT COUNT(*) as total_jobs, "
+            "SUM(success_count) as total_success, "
+            "SUM(failed_count) as total_failed, "
+            "SUM(skipped_count) as total_skipped "
+            "FROM job_history WHERE completed_at >= ?",
+            (cutoff,),
+        ).fetchone()
+
+        # Device-level stats
+        device_row = conn.execute(
+            "SELECT COUNT(*) as total_updates, "
+            "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success, "
+            "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed, "
+            "AVG(duration_seconds) as avg_duration "
+            "FROM device_update_history WHERE completed_at >= ?",
+            (cutoff,),
+        ).fetchone()
+
+        # Unique devices updated
+        unique_row = conn.execute(
+            "SELECT COUNT(DISTINCT ip) as unique_devices "
+            "FROM device_update_history WHERE completed_at >= ? AND status = 'success'",
+            (cutoff,),
+        ).fetchone()
+
+        return {
+            "period_days": days,
+            "total_jobs": job_row[0] or 0,
+            "total_device_success": int(job_row[1] or 0),
+            "total_device_failed": int(job_row[2] or 0),
+            "total_device_skipped": int(job_row[3] or 0),
+            "device_updates": device_row[0] or 0,
+            "device_success": device_row[1] or 0,
+            "device_failed": device_row[2] or 0,
+            "avg_duration_seconds": round(device_row[3] or 0, 1),
+            "unique_devices_updated": unique_row[0] or 0,
+        }
+
+
+def get_fleet_status() -> dict:
+    """Get current fleet firmware status breakdown."""
+    with get_db() as conn:
+        ap_total = conn.execute(
+            "SELECT COUNT(*) FROM access_points WHERE enabled = 1"
+        ).fetchone()[0]
+        ap_versions = conn.execute(
+            "SELECT firmware_version, COUNT(*) as cnt "
+            "FROM access_points WHERE enabled = 1 AND firmware_version IS NOT NULL "
+            "GROUP BY firmware_version ORDER BY cnt DESC"
+        ).fetchall()
+
+        sw_total = conn.execute(
+            "SELECT COUNT(*) FROM switches WHERE enabled = 1"
+        ).fetchone()[0]
+        sw_versions = conn.execute(
+            "SELECT firmware_version, COUNT(*) as cnt "
+            "FROM switches WHERE enabled = 1 AND firmware_version IS NOT NULL "
+            "GROUP BY firmware_version ORDER BY cnt DESC"
+        ).fetchall()
+
+        return {
+            "access_points": {
+                "total": ap_total,
+                "versions": [{"version": r[0], "count": r[1]} for r in ap_versions],
+            },
+            "switches": {
+                "total": sw_total,
+                "versions": [{"version": r[0], "count": r[1]} for r in sw_versions],
+            },
+        }
+
+
+def get_job_history_csv_rows(days: int = 30) -> list[dict]:
+    """Get job history rows formatted for CSV export."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT job_id, started_at, completed_at, duration, bank_mode, "
+            "success_count, failed_count, skipped_count, cancelled_count "
+            "FROM job_history WHERE completed_at >= ? ORDER BY completed_at DESC",
+            (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_device_history_csv_rows(days: int = 30) -> list[dict]:
+    """Get device update history rows formatted for CSV export."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT job_id, ip, role, action, pass_number, status, "
+            "old_version, new_version, model, error, failed_stage, "
+            "duration_seconds, started_at, completed_at "
+            "FROM device_update_history WHERE completed_at >= ? "
+            "ORDER BY completed_at DESC",
+            (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Audit log
+# ---------------------------------------------------------------------------
+
+def log_audit(username: str, action: str, target_type: str = None,
+              target_id: str = None, details: str = None, ip_address: str = None):
+    """Record an audit log entry."""
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO audit_log (username, action, target_type, target_id, details, ip_address)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (username, action, target_type, target_id, details, ip_address),
+        )
+
+
+def get_audit_log(limit: int = 100, offset: int = 0, username: str = None,
+                  action: str = None) -> list[dict]:
+    """Retrieve audit log entries with optional filters."""
+    with get_db() as conn:
+        clauses = []
+        params = []
+        if username:
+            clauses.append("username = ?")
+            params.append(username)
+        if action:
+            clauses.append("action = ?")
+            params.append(action)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.extend([max(1, min(limit, 500)), max(0, offset)])
+        rows = conn.execute(
+            f"SELECT * FROM audit_log {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_audit_log_count(username: str = None, action: str = None) -> int:
+    """Count audit log entries with optional filters."""
+    with get_db() as conn:
+        clauses = []
+        params = []
+        if username:
+            clauses.append("username = ?")
+            params.append(username)
+        if action:
+            clauses.append("action = ?")
+            params.append(action)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        row = conn.execute(f"SELECT COUNT(*) FROM audit_log {where}", params).fetchone()
+        return row[0]
+
+
+def cleanup_old_audit_log(max_age_days: int = 90):
+    """Delete audit log entries older than max_age_days."""
+    with get_db() as conn:
+        cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+        conn.execute("DELETE FROM audit_log WHERE created_at < ?", (cutoff,))
+
+
+# ---------------------------------------------------------------------------
+# API tokens
+# ---------------------------------------------------------------------------
+
+def create_api_token(name: str, token_hash: str, token_prefix: str,
+                     user_id: int, scopes: str = "read", expires_at: str = None) -> int:
+    """Create a new API token. Returns the token ID."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO api_tokens (name, token_hash, token_prefix, user_id, scopes, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (name, token_hash, token_prefix, user_id, scopes, expires_at),
+        )
+        return cursor.lastrowid
+
+
+# ---------------------------------------------------------------------------
+# Device groups
+# ---------------------------------------------------------------------------
+
+def create_device_group(name: str, description: str = None,
+                        filter_json: str = None) -> int:
+    """Create a device group. Returns the group ID."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO device_groups (name, description, filter_json) VALUES (?, ?, ?)",
+            (name, description, filter_json),
+        )
+        return cursor.lastrowid
+
+
+# ---------------------------------------------------------------------------
+# Freeze windows
+# ---------------------------------------------------------------------------
+
+def create_freeze_window(name: str, start_date: str, end_date: str,
+                         reason: str = None) -> int:
+    """Create a maintenance freeze window. Returns the window ID."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO freeze_windows (name, start_date, end_date, reason) VALUES (?, ?, ?, ?)",
+            (name, start_date, end_date, reason),
+        )
+        return cursor.lastrowid
+
+
+def get_api_token_by_hash(token_hash: str) -> Optional[dict]:
+    """Look up a token by its hash."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM api_tokens WHERE token_hash = ?", (token_hash,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_freeze_windows() -> list[dict]:
+    """List all freeze windows."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM freeze_windows ORDER BY start_date DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_device_groups() -> list[dict]:
+    """List all device groups."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM device_groups ORDER BY name"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_freeze_window(window_id: int) -> Optional[dict]:
+    """Get a freeze window by ID."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM freeze_windows WHERE id = ?", (window_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_device_group(group_id: int) -> Optional[dict]:
+    """Get a device group by ID."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM device_groups WHERE id = ?", (group_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_api_tokens(user_id: int = None) -> list[dict]:
+    """List API tokens, optionally filtered by user."""
+    with get_db() as conn:
+        if user_id is not None:
+            rows = conn.execute(
+                "SELECT id, name, token_prefix, user_id, scopes, created_at, last_used_at, expires_at FROM api_tokens WHERE user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, name, token_prefix, user_id, scopes, created_at, last_used_at, expires_at FROM api_tokens ORDER BY created_at DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_api_token_last_used(token_id: int):
+    """Update the last_used_at timestamp for a token."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE api_tokens SET last_used_at = ? WHERE id = ?",
+            (datetime.now().isoformat(), token_id),
+        )
+
+
+def delete_api_token(token_id: int, user_id: int = None) -> bool:
+    """Delete an API token. If user_id is provided, only delete if owned by that user."""
+    with get_db() as conn:
+        if user_id is not None:
+            cursor = conn.execute(
+                "DELETE FROM api_tokens WHERE id = ? AND user_id = ?", (token_id, user_id)
+            )
+        else:
+            cursor = conn.execute("DELETE FROM api_tokens WHERE id = ?", (token_id,))
+        return cursor.rowcount > 0
+
+
+def cleanup_expired_api_tokens():
+    """Delete expired API tokens."""
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM api_tokens WHERE expires_at IS NOT NULL AND expires_at < ?",
+            (datetime.now().isoformat(),),
+        )
+
+
+def update_freeze_window(window_id: int, **kwargs) -> bool:
+    """Update a freeze window."""
+    allowed = {"name", "start_date", "end_date", "reason", "enabled"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return False
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    with get_db() as conn:
+        cursor = conn.execute(
+            f"UPDATE freeze_windows SET {set_clause} WHERE id = ?",
+            (*updates.values(), window_id),
+        )
+        return cursor.rowcount > 0
+
+
+def update_device_group(group_id: int, **kwargs) -> bool:
+    """Update a device group."""
+    allowed = {"name", "description", "filter_json"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return False
+    updates["updated_at"] = datetime.now().isoformat()
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    with get_db() as conn:
+        cursor = conn.execute(
+            f"UPDATE device_groups SET {set_clause} WHERE id = ?",
+            (*updates.values(), group_id),
+        )
+        return cursor.rowcount > 0
+
+
+def delete_freeze_window(window_id: int) -> bool:
+    """Delete a freeze window."""
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM freeze_windows WHERE id = ?", (window_id,))
+        return cursor.rowcount > 0
+
+
+def is_in_freeze_window(now_iso: str = None) -> Optional[dict]:
+    """Check if the current time falls within an active freeze window.
+
+    Returns the matching freeze window dict, or None if not frozen.
+    """
+    if now_iso is None:
+        now_iso = datetime.now().isoformat()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM freeze_windows WHERE enabled = 1 AND start_date <= ? AND end_date >= ? LIMIT 1",
+            (now_iso, now_iso),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def delete_device_group(group_id: int) -> bool:
+    """Delete a device group."""
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM device_groups WHERE id = ?", (group_id,))
+        return cursor.rowcount > 0
+
+
+def resolve_device_group(group_id: int) -> list[str]:
+    """Resolve a device group's filter to a list of device IPs.
+
+    filter_json format: {"site_ids": [1,2], "models": ["tna-303x"], "device_type": "ap"}
+    All filters are ANDed together.
+    """
+    group = get_device_group(group_id)
+    if not group or not group.get("filter_json"):
+        return []
+
+    import json
+    try:
+        filters = json.loads(group["filter_json"])
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+    with get_db() as conn:
+        device_type = filters.get("device_type", "ap")
+        table = "switches" if device_type == "switch" else "access_points"
+
+        clauses = ["enabled = 1"]
+        params = []
+
+        site_ids = filters.get("site_ids")
+        if site_ids:
+            placeholders = ",".join("?" * len(site_ids))
+            clauses.append(f"tower_site_id IN ({placeholders})")
+            params.extend(site_ids)
+
+        models = filters.get("models")
+        if models:
+            placeholders = ",".join("?" * len(models))
+            clauses.append(f"model IN ({placeholders})")
+            params.extend(models)
+
+        where = " AND ".join(clauses)
+        rows = conn.execute(f"SELECT ip FROM {table} WHERE {where}", params).fetchall()
+        return [r[0] for r in rows]
 
 
 # Initialize on import

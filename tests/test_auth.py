@@ -13,35 +13,39 @@ from updater.auth import authenticate_local, authenticate
 class TestLocalAuth:
     def test_valid_creds(self):
         with patch.dict(os.environ, {"ADMIN_USERNAME": "admin", "ADMIN_PASSWORD": "secret"}):
-            assert authenticate_local("admin", "secret") is True
+            result = authenticate_local("admin", "secret")
+            assert result is not None
+            assert result["username"] == "admin"
+            assert result["role"] == "admin"
 
     def test_wrong_password(self):
         with patch.dict(os.environ, {"ADMIN_USERNAME": "admin", "ADMIN_PASSWORD": "secret"}):
-            assert authenticate_local("admin", "wrong") is False
+            assert authenticate_local("admin", "wrong") is None
 
     def test_wrong_username(self):
         with patch.dict(os.environ, {"ADMIN_USERNAME": "admin", "ADMIN_PASSWORD": "secret"}):
-            assert authenticate_local("notadmin", "secret") is False
+            assert authenticate_local("notadmin", "secret") is None
 
     def test_no_env_vars(self):
         env = os.environ.copy()
         env.pop("ADMIN_USERNAME", None)
         env.pop("ADMIN_PASSWORD", None)
         with patch.dict(os.environ, env, clear=True):
-            assert authenticate_local("admin", "secret") is False
+            assert authenticate_local("admin", "secret") is None
 
     def test_bcrypt_password(self):
         hashed = _bcrypt.hashpw(b"mysecret", _bcrypt.gensalt()).decode()
         with patch.dict(os.environ, {"ADMIN_USERNAME": "admin", "ADMIN_PASSWORD": hashed}):
-            assert authenticate_local("admin", "mysecret") is True
-            assert authenticate_local("admin", "wrong") is False
+            assert authenticate_local("admin", "mysecret") is not None
+            assert authenticate_local("admin", "wrong") is None
 
 
 class TestAuthenticate:
     def test_local_success(self):
         with patch.dict(os.environ, {"ADMIN_USERNAME": "admin", "ADMIN_PASSWORD": "pass123"}):
             result = authenticate("admin", "pass123")
-            assert result == "admin"
+            assert result is not None
+            assert result["username"] == "admin"
 
     def test_failure(self):
         with patch.dict(os.environ, {"ADMIN_USERNAME": "admin", "ADMIN_PASSWORD": "pass123"}):

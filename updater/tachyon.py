@@ -22,7 +22,7 @@ import logging
 import os
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable, List
 
@@ -85,6 +85,14 @@ class UpdateResult:
     bank2_version: Optional[str] = None
     active_bank: Optional[int] = None
     model: Optional[str] = None
+
+
+@dataclass
+class SmokeTestResult:
+    """Result of post-update smoke tests."""
+    passed: bool = True
+    warnings: list = field(default_factory=list)
+    checks: list = field(default_factory=list)
 
 
 class TachyonClient:
@@ -354,12 +362,19 @@ class TachyonClient:
         expected = " or ".join(patterns)
         return False, f"Firmware mismatch: model {model} requires firmware with '{expected}' in filename, but got '{filename}'"
 
-    async def upload_firmware(self, firmware_path: str) -> bool:
-        """Upload firmware file to device using PUT."""
+    async def upload_firmware(self, firmware_path: str, bandwidth_limit_kbps: int = 0) -> bool:
+        """Upload firmware file to device using PUT.
+
+        Args:
+            firmware_path: Path to firmware file.
+            bandwidth_limit_kbps: Maximum upload rate in KB/s. 0 means unlimited.
+        """
         logger.info(f"Uploading firmware to {self.ip}")
 
         url = f"{self._base_url}/cgi.lua/update"
         cmd = ["curl", "-s", "-m", "300"]  # 5 min timeout for upload
+        if bandwidth_limit_kbps and bandwidth_limit_kbps > 0:
+            cmd.extend(["--limit-rate", f"{bandwidth_limit_kbps}k"])
         if not VERIFY_SSL:
             cmd.append("-k")
         cmd.extend([
@@ -553,6 +568,7 @@ class TachyonClient:
         progress_callback: Callable[[str, str], None] = None,
         pass_number: int = 1,
         reboot_timeout: int = 300,
+        bandwidth_limit_kbps: int = 0,
     ) -> UpdateResult:
         """Perform complete firmware update cycle.
 
@@ -612,7 +628,7 @@ class TachyonClient:
 
             # Upload firmware
             progress("Uploading firmware...")
-            if not await self.upload_firmware(firmware_path):
+            if not await self.upload_firmware(firmware_path, bandwidth_limit_kbps=bandwidth_limit_kbps):
                 result.error = "Firmware upload failed"
                 return result
 
@@ -808,6 +824,85 @@ class TachyonClient:
                 return None
         logger.warning(f"Failed to get config from {self.ip}: HTTP {status}")
         return None
+
+    async def run_smoke_tests(self, role: str = "ap", pre_update_cpe_count: int = 0) -> SmokeTestResult:
+        """Run post-update smoke tests on a device.
+
+        Args:
+            role: Device role ("ap", "cpe", "switch").
+            pre_update_cpe_count: Number of CPEs connected before update (AP only).
+
+        Returns:
+            SmokeTestResult with pass/fail and any warnings.
+        """
+        result = SmokeTestResult()
+
+        # Check 1: Device responds to status query
+        try:
+            info = await self.get_device_info()
+            if info and info.current_version:
+                result.checks.append({"check": "device_responsive", "passed": True, "detail": f"Running {info.current_version}"})
+            else:
+                result.warnings.append("Device did not return valid status info")
+                result.checks.append({"check": "device_responsive", "passed": False, "detail": "No version info returned"})
+        except Exception as e:
+            result.warnings.append(f"Device status check failed: {e}")
+            result.checks.append({"check": "device_responsive", "passed": False, "detail": str(e)})
+
+        # Check 2: Configuration readable
+        try:
+            config = await self.get_config()
+            if config is not None:
+                result.checks.append({"check": "config_intact", "passed": True, "detail": "Config readable"})
+            else:
+                result.warnings.append("Could not read device configuration")
+                result.checks.append({"check": "config_intact", "passed": False, "detail": "Config returned None"})
+        except Exception as e:
+            result.warnings.append(f"Config check failed: {e}")
+            result.checks.append({"check": "config_intact", "passed": False, "detail": str(e)})
+
+        # Check 3: Connected CPEs (APs only)
+        if role == "ap":
+            try:
+                cpes = await self.get_connected_cpes()
+                cpe_count = len(cpes)
+
+                if pre_update_cpe_count > 0 and cpe_count == 0:
+                    result.warnings.append(f"AP had {pre_update_cpe_count} CPEs before update, now has 0")
+                    result.checks.append({"check": "cpe_connectivity", "passed": False, "detail": f"0/{pre_update_cpe_count} CPEs connected"})
+                elif pre_update_cpe_count > 0 and cpe_count < pre_update_cpe_count:
+                    result.warnings.append(f"CPE count dropped: {pre_update_cpe_count} -> {cpe_count}")
+                    result.checks.append({"check": "cpe_connectivity", "passed": False, "detail": f"{cpe_count}/{pre_update_cpe_count} CPEs connected"})
+                else:
+                    result.checks.append({"check": "cpe_connectivity", "passed": True, "detail": f"{cpe_count} CPEs connected"})
+
+                # Check 4: Signal levels on connected CPEs
+                low_signal_cpes = []
+                for cpe in cpes:
+                    signal = getattr(cpe, "combined_signal", None)
+                    if signal is None or signal == 0:
+                        signal = getattr(cpe, "last_local_rssi", None)
+                    if signal is not None and signal != 0:
+                        try:
+                            signal_val = float(signal)
+                            if signal_val < -80:
+                                low_signal_cpes.append(f"{getattr(cpe, 'ip', '?')} ({signal_val}dBm)")
+                        except (ValueError, TypeError):
+                            pass
+
+                if low_signal_cpes:
+                    result.warnings.append(f"Low signal CPEs: {', '.join(low_signal_cpes)}")
+                    result.checks.append({"check": "cpe_signal_levels", "passed": False, "detail": f"{len(low_signal_cpes)} CPEs with low signal"})
+                elif cpes:
+                    result.checks.append({"check": "cpe_signal_levels", "passed": True, "detail": "All signals OK"})
+            except Exception as e:
+                result.warnings.append(f"CPE connectivity check failed: {e}")
+                result.checks.append({"check": "cpe_connectivity", "passed": False, "detail": str(e)})
+
+        if result.warnings:
+            result.passed = False
+
+        return result
 
     async def apply_config(self, config: dict, dry_run: bool = False) -> dict:
         """Apply full config to device via POST /cgi.lua/apiv1/config.

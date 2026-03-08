@@ -2,7 +2,9 @@
 
 import asyncio
 import logging
+import re
 import subprocess
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
@@ -15,6 +17,43 @@ logger = logging.getLogger(__name__)
 LETSENCRYPT_DIR = Path("/etc/letsencrypt")
 NGINX_CONF_DIR = Path("/app/nginx-conf")
 CERTBOT_WEBROOT = Path("/var/www/certbot")
+
+
+async def _communicate_with_timeout(proc, timeout: float):
+    """Await subprocess communicate safely and cleanly on timeout."""
+    task = asyncio.create_task(proc.communicate())
+    try:
+        return await asyncio.wait_for(task, timeout=timeout)
+    except asyncio.TimeoutError:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        raise
+
+
+async def _kill_process(proc):
+    """Terminate a subprocess, supporting both sync and async mock methods."""
+    with suppress(Exception):
+        result = proc.kill()
+        if asyncio.iscoroutine(result):
+            await result
+
+
+def _validate_domain(domain: str) -> bool:
+    """Validate domain name per RFC 1123."""
+    if not domain or len(domain) > 253:
+        return False
+    if "." not in domain:
+        return False
+    labels = domain.rstrip(".").split(".")
+    for label in labels:
+        if not label or len(label) > 63:
+            return False
+        if label.startswith("-") or label.endswith("-"):
+            return False
+        if not re.match(r'^[a-zA-Z0-9-]+$', label):
+            return False
+    return True
 
 
 def get_ssl_status() -> dict:
@@ -194,11 +233,26 @@ async def obtain_certificate(domain: str, email: str) -> Tuple[bool, str]:
     if not email:
         return False, "Email is required"
 
-    # Validate domain format (basic check)
-    if not domain.replace(".", "").replace("-", "").isalnum():
-        return False, "Invalid domain format"
+    # Validate domain format (RFC 1123)
+    if not _validate_domain(domain):
+        return False, "Invalid domain format. Must be a valid hostname (e.g., firmware.example.com)"
 
     logger.info(f"Requesting certificate for {domain}")
+
+    # Verify certbot container is running before attempting certificate request
+    try:
+        check = await asyncio.create_subprocess_exec(
+            "docker", "inspect", "--format", "{{.State.Running}}", "tachyon-certbot",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_check, _ = await _communicate_with_timeout(check, timeout=10)
+        if check.returncode != 0 or stdout_check.decode().strip() != "true":
+            return False, (
+                "Let's Encrypt is not available: the certbot container is not running. "
+                "This feature requires the Tachyon appliance deployment."
+            )
+    except Exception:
+        return False, "Unable to check certbot container status."
 
     # Run certbot in webroot mode via docker exec (certbot runs in separate container)
     cmd = [
@@ -213,13 +267,14 @@ async def obtain_certificate(domain: str, email: str) -> Tuple[bool, str]:
         "--keep-until-expiring",
     ]
 
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        stdout, stderr = await _communicate_with_timeout(proc, timeout=120)
 
         output = stdout.decode() + stderr.decode()
 
@@ -253,6 +308,8 @@ async def obtain_certificate(domain: str, email: str) -> Tuple[bool, str]:
             return False, f"Certificate request failed: {output[:300]}"
 
     except asyncio.TimeoutError:
+        if proc is not None:
+            await _kill_process(proc)
         return False, "Certificate request timed out (120s)"
     except FileNotFoundError:
         return False, "docker not found - cannot reach certbot container"
@@ -276,13 +333,14 @@ async def renew_certificate() -> Tuple[bool, str]:
 
     cmd = ["docker", "exec", "tachyon-certbot", "certbot", "renew", "--non-interactive"]
 
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        stdout, stderr = await _communicate_with_timeout(proc, timeout=120)
 
         output = stdout.decode() + stderr.decode()
 
@@ -300,6 +358,8 @@ async def renew_certificate() -> Tuple[bool, str]:
             return False, f"Renewal failed: {output[:200]}"
 
     except asyncio.TimeoutError:
+        if proc is not None:
+            await _kill_process(proc)
         return False, "Renewal timed out"
     except Exception as e:
         logger.exception(f"Renewal error: {e}")
