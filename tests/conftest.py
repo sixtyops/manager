@@ -352,6 +352,16 @@ def memory_db():
         );
         CREATE INDEX idx_api_tokens_hash ON api_tokens(token_hash);
         CREATE INDEX idx_api_tokens_user ON api_tokens(user_id);
+
+        CREATE TABLE freeze_windows (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            reason TEXT,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     # Insert default settings
     defaults = {

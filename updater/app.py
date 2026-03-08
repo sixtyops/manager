@@ -3150,6 +3150,70 @@ async def trigger_canary_rollout(session: dict = Depends(require_role("admin", "
     return {"success": True, "status": scheduler.get_status()}
 
 
+# ---------------------------------------------------------------------------
+# Freeze windows API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/freeze-windows", tags=["system"])
+async def list_freeze_windows_api(session: dict = Depends(require_auth)):
+    """List all maintenance freeze windows."""
+    windows = db.list_freeze_windows()
+    active = db.is_in_freeze_window()
+    return {"windows": windows, "active_freeze": active}
+
+
+@app.post("/api/freeze-windows", tags=["system"])
+async def create_freeze_window_api(request: Request, session: dict = Depends(require_role("admin"))):
+    """Create a maintenance freeze window."""
+    data = await request.json()
+    name = data.get("name", "").strip()
+    start_date = data.get("start_date", "").strip()
+    end_date = data.get("end_date", "").strip()
+    reason = data.get("reason", "").strip()
+
+    if not name:
+        raise HTTPException(400, "Name is required")
+    if not start_date or not end_date:
+        raise HTTPException(400, "Start and end dates are required")
+    if end_date <= start_date:
+        raise HTTPException(400, "End date must be after start date")
+
+    window_id = db.create_freeze_window(name, start_date, end_date, reason or None)
+    return {"id": window_id, "name": name}
+
+
+@app.put("/api/freeze-windows/{window_id}", tags=["system"])
+async def update_freeze_window_api(window_id: int, request: Request, session: dict = Depends(require_role("admin"))):
+    """Update a freeze window."""
+    window = db.get_freeze_window(window_id)
+    if not window:
+        raise HTTPException(404, "Freeze window not found")
+
+    data = await request.json()
+    updates = {}
+    for field in ("name", "start_date", "end_date", "reason", "enabled"):
+        if field in data:
+            updates[field] = data[field]
+
+    if "start_date" in updates and "end_date" in updates:
+        if updates["end_date"] <= updates["start_date"]:
+            raise HTTPException(400, "End date must be after start date")
+
+    if not updates:
+        raise HTTPException(400, "No valid fields to update")
+
+    db.update_freeze_window(window_id, **updates)
+    return {"ok": True}
+
+
+@app.delete("/api/freeze-windows/{window_id}", tags=["system"])
+async def delete_freeze_window_api(window_id: int, session: dict = Depends(require_role("admin"))):
+    """Delete a freeze window."""
+    if not db.delete_freeze_window(window_id):
+        raise HTTPException(404, "Freeze window not found")
+    return {"ok": True}
+
+
 @app.get("/api/location", tags=["system"])
 async def get_location(session: dict = Depends(require_auth)):
     """Get detected location info."""
