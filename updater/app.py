@@ -33,7 +33,7 @@ from .scheduler import init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTE
 from .firmware_fetcher import init_fetcher, get_fetcher
 from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
 from . import services
-from .auth import require_auth, require_auth_ws, require_role, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user
+from .auth import require_auth, require_auth_ws, require_role, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user, generate_api_token
 from .backup import build_csv_export, process_csv_import
 from . import telemetry
 from . import slack
@@ -256,6 +256,8 @@ def _run_daily_data_housekeeping():
         logger.info(f"Firmware retention removed {removed} old file(s)")
     if os.environ.get("TACHYON_APPLIANCE") == "1":
         _run_backup_git_gc()
+    db.cleanup_old_audit_log()
+    db.cleanup_expired_api_tokens()
     _last_data_housekeeping_day = today
 
 
@@ -685,6 +687,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
 
     _clear_rate_limit_bucket(bucket)
     session_id = create_session(user["username"], ip_address)
+    db.log_audit(user["username"], "auth.login", None, None, None, ip_address)
 
     # Redirect to setup if password hasn't been changed from default
     redirect_url = "/setup" if is_setup_required() else "/"
@@ -801,6 +804,9 @@ async def logout(request: Request):
     """Handle logout."""
     session_id = request.cookies.get(SESSION_COOKIE_NAME)
     if session_id:
+        session = db.get_session(session_id)
+        if session:
+            db.log_audit(session["username"], "auth.logout", None, None, None, _client_ip(request))
         db.delete_session(session_id)
 
     response = RedirectResponse(url="/login", status_code=303)
@@ -1277,6 +1283,8 @@ async def add_device(
     if scheduler:
         await scheduler._broadcast_status()
 
+    db.log_audit(session["username"], "device.add", device_type, ip,
+                 f"model={model}", None)
     return {"id": device_id, "ip": ip, "device_type": device_type, "model": model}
 
 
@@ -1342,6 +1350,7 @@ async def delete_ap(ip: str, session: dict = Depends(require_role("admin", "oper
         poller.invalidate_client(ip)
 
     db.delete_access_point(ip)
+    db.log_audit(session["username"], "device.delete", "ap", ip, None, None)
 
     # Broadcast updated scheduler status so predictions reflect the removal
     scheduler = get_scheduler()
@@ -1445,6 +1454,7 @@ async def delete_switch(ip: str, session: dict = Depends(require_role("admin", "
         poller.invalidate_client(ip)
 
     db.delete_switch(ip)
+    db.log_audit(session["username"], "device.delete", "switch", ip, None, None)
 
     # Broadcast updated scheduler status so predictions reflect the removal
     scheduler = get_scheduler()
@@ -2015,6 +2025,8 @@ async def save_settings_and_reevaluate(request: Request, session: dict = Depends
 
     _validate_settings(filtered)
     db.set_settings(filtered)
+    db.log_audit(session["username"], "settings.update", "settings", None,
+                 f"Updated keys: {', '.join(sorted(filtered.keys()))}", _client_ip(request))
 
     fetcher = get_fetcher()
     if fetcher:
@@ -2806,8 +2818,8 @@ async def list_users_api():
     return {"users": db.list_users()}
 
 
-@app.post("/api/users", tags=["auth"], dependencies=[Depends(require_role("admin"))])
-async def create_user_api(request: Request):
+@app.post("/api/users", tags=["auth"])
+async def create_user_api(request: Request, session: dict = Depends(require_role("admin"))):
     """Create a new local user (admin only)."""
     data = await request.json()
     username = data.get("username", "").strip()
@@ -2825,6 +2837,8 @@ async def create_user_api(request: Request):
 
     password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
     user_id = db.create_user(username, password_hash, role, "local")
+    db.log_audit(session["username"], "user.create", "user", str(user_id),
+                 f"Created user '{username}' with role '{role}'", _client_ip(request))
     return {"id": user_id, "username": username, "role": role}
 
 
@@ -2866,11 +2880,14 @@ async def update_user_api(user_id: int, request: Request, session: dict = Depend
         raise HTTPException(400, "No valid fields to update")
 
     db.update_user(user_id, **updates)
+    changed = ", ".join(updates.keys())
+    db.log_audit(session["username"], "user.update", "user", str(user_id),
+                 f"Updated {changed} for '{user['username']}'", _client_ip(request))
     return {"ok": True}
 
 
 @app.delete("/api/users/{user_id}", tags=["auth"], dependencies=[Depends(require_role("admin"))])
-async def delete_user_api(user_id: int, session: dict = Depends(require_auth)):
+async def delete_user_api(user_id: int, request: Request, session: dict = Depends(require_auth)):
     """Delete a user (admin only)."""
     user = db.get_user_by_id(user_id)
     if not user:
@@ -2884,6 +2901,88 @@ async def delete_user_api(user_id: int, session: dict = Depends(require_auth)):
 
     db.delete_sessions_for_user(user["username"])
     db.delete_user(user_id)
+    db.log_audit(session["username"], "user.delete", "user", str(user_id),
+                 f"Deleted user '{user['username']}'", _client_ip(request))
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Audit log API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/audit-log", tags=["auth"], dependencies=[Depends(require_role("admin"))])
+async def get_audit_log_api(
+    limit: int = 100, offset: int = 0,
+    username: str = None, action: str = None,
+):
+    """Get audit log entries (admin only)."""
+    entries = db.get_audit_log(limit=limit, offset=offset, username=username, action=action)
+    total = db.get_audit_log_count(username=username, action=action)
+    return {"entries": entries, "total": total}
+
+
+# ---------------------------------------------------------------------------
+# API token management
+# ---------------------------------------------------------------------------
+
+@app.get("/api/tokens", tags=["auth"])
+async def list_tokens_api(session: dict = Depends(require_auth)):
+    """List API tokens for the current user (admins see all)."""
+    if session.get("role") == "admin":
+        tokens = db.list_api_tokens()
+    else:
+        tokens = db.list_api_tokens(user_id=session.get("user_id"))
+    return {"tokens": tokens}
+
+
+@app.post("/api/tokens", tags=["auth"])
+async def create_token_api(request: Request, session: dict = Depends(require_auth)):
+    """Create a new API token. Returns the token value (shown only once)."""
+    data = await request.json()
+    name = data.get("name", "").strip()
+    if not name:
+        raise HTTPException(400, "Token name is required")
+    if len(name) > 100:
+        raise HTTPException(400, "Token name too long")
+
+    scopes = data.get("scopes", "read")
+    if scopes not in ("read", "read,write"):
+        raise HTTPException(400, "Scopes must be 'read' or 'read,write'")
+
+    expires_days = data.get("expires_days")
+    expires_at = None
+    if expires_days:
+        expires_days = int(expires_days)
+        if expires_days < 1 or expires_days > 365:
+            raise HTTPException(400, "expires_days must be 1-365")
+        expires_at = (datetime.now() + timedelta(days=expires_days)).isoformat()
+
+    token, token_hash, token_prefix = generate_api_token()
+    token_id = db.create_api_token(
+        name=name,
+        token_hash=token_hash,
+        token_prefix=token_prefix,
+        user_id=session.get("user_id", 0),
+        scopes=scopes,
+        expires_at=expires_at,
+    )
+    db.log_audit(session["username"], "token.create", "api_token", str(token_id),
+                 f"Created token '{name}'", _client_ip(request))
+    return {"id": token_id, "token": token, "prefix": token_prefix, "name": name}
+
+
+@app.delete("/api/tokens/{token_id}", tags=["auth"])
+async def delete_token_api(token_id: int, request: Request, session: dict = Depends(require_auth)):
+    """Delete an API token."""
+    # Admins can delete any token; others can only delete their own
+    if session.get("role") == "admin":
+        deleted = db.delete_api_token(token_id)
+    else:
+        deleted = db.delete_api_token(token_id, user_id=session.get("user_id"))
+    if not deleted:
+        raise HTTPException(404, "Token not found")
+    db.log_audit(session["username"], "token.delete", "api_token", str(token_id),
+                 None, _client_ip(request))
     return {"ok": True}
 
 
@@ -3300,6 +3399,8 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
     logger.info(f"Firmware uploaded: {safe_filename} ({total_size:,} bytes)")
 
     db.register_firmware(safe_filename, source="manual")
+    db.log_audit(session["username"], "firmware.upload", "firmware", safe_filename,
+                 f"{total_size:,} bytes", None)
 
     return {
         "filename": safe_filename,
@@ -3361,6 +3462,7 @@ async def delete_firmware_file(filename: str, session: dict = Depends(require_ro
         raise HTTPException(404, "File not found")
     path.unlink()
     db.unregister_firmware(safe_filename)
+    db.log_audit(session["username"], "firmware.delete", "firmware", safe_filename, None, None)
     return {"success": True}
 
 
@@ -4109,6 +4211,8 @@ async def start_update(
 
     update_jobs[job_id] = job
     db.save_active_job(job_id, "running", json.dumps(list(job.devices.keys())), firmware_file)
+    db.log_audit(session["username"], "job.start", "job", job_id,
+                 f"{len(job.devices)} devices, firmware={firmware_file}", None)
 
     await broadcast({
         "type": "job_started",

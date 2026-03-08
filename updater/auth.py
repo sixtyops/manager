@@ -1,8 +1,10 @@
-"""Authentication module: local + OIDC SSO, session management, RBAC."""
+"""Authentication module: local + OIDC SSO, API tokens, session management, RBAC."""
 
+import hashlib
 import hmac
 import logging
 import os
+import secrets
 import threading
 import uuid
 from datetime import datetime, timedelta
@@ -246,17 +248,75 @@ def _enrich_session_with_role(session: dict) -> dict:
     return session
 
 
+def hash_api_token(token: str) -> str:
+    """Hash an API token for storage."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def generate_api_token() -> tuple[str, str, str]:
+    """Generate a new API token. Returns (full_token, token_hash, token_prefix)."""
+    token = f"tach_{secrets.token_urlsafe(32)}"
+    token_hash = hash_api_token(token)
+    token_prefix = token[:9] + "..."
+    return token, token_hash, token_prefix
+
+
+def _authenticate_bearer(request: Request) -> Optional[dict]:
+    """Check for Bearer token in Authorization header. Returns session-like dict or None."""
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+
+    token = auth_header[7:]
+    token_hash = hash_api_token(token)
+    token_row = db.get_api_token_by_hash(token_hash)
+    if not token_row:
+        return None
+
+    # Check expiry
+    if token_row["expires_at"]:
+        if token_row["expires_at"] < datetime.now().isoformat():
+            return None
+
+    # Look up the owning user
+    user = db.get_user_by_id(token_row["user_id"])
+    if not user or not user["enabled"]:
+        return None
+
+    # Update last used (fire-and-forget, don't block auth)
+    try:
+        db.update_api_token_last_used(token_row["id"])
+    except Exception:
+        pass
+
+    return {
+        "username": user["username"],
+        "role": user["role"],
+        "user_id": user["id"],
+        "auth_method": "api_token",
+        "token_id": token_row["id"],
+        "token_scopes": token_row.get("scopes", "read"),
+    }
+
+
 async def require_auth(request: Request) -> dict:
     """Dependency that enforces authentication on every route.
 
+    Checks (in order): session cookie, Bearer token.
     - Page requests (Accept: text/html) -> redirect to /login
     - API requests -> 401
     """
+    # 1. Session cookie
     session_id = request.cookies.get(SESSION_COOKIE_NAME)
     if session_id:
         session = db.get_session(session_id)
         if session:
             return _enrich_session_with_role(session)
+
+    # 2. Bearer token
+    token_session = _authenticate_bearer(request)
+    if token_session:
+        return token_session
 
     accept = request.headers.get("accept", "")
     if "text/html" in accept:
