@@ -22,14 +22,20 @@ passwd -l root
 passwd -l tachyon 2>/dev/null || true
 
 echo "[06-harden] Configuring read-only root filesystem..."
-# Add ro flag to root mount in fstab
-sed -i 's|\(.*\s/\s\+ext4\s\+\)defaults|\1defaults,ro|' /etc/fstab
+# Add ro flag to root mount in fstab (POSIX sed — BusyBox doesn't support \s or \+)
+sed -i '/[[:space:]]\/[[:space:]].*ext4/s/defaults/defaults,ro/' /etc/fstab
+echo "[06-harden] Verifying fstab read-only flag..."
+grep -q 'defaults,ro' /etc/fstab && echo "[06-harden] Root set to read-only: OK" || echo "[06-harden] WARNING: Failed to set root read-only"
 
 # Add tmpfs mounts for directories that need writes
 cat >> /etc/fstab << 'EOF'
-tmpfs  /tmp      tmpfs  defaults,nosuid,nodev,mode=1777,size=256M  0  0
-tmpfs  /var/log  tmpfs  defaults,nosuid,nodev,mode=0755,size=128M  0  0
-tmpfs  /run      tmpfs  defaults,nosuid,nodev,mode=0755,size=64M   0  0
+tmpfs  /tmp           tmpfs  defaults,nosuid,nodev,mode=1777,size=256M  0  0
+tmpfs  /var/log       tmpfs  defaults,nosuid,nodev,mode=0755,size=256M  0  0
+tmpfs  /run           tmpfs  defaults,nosuid,nodev,mode=0755,size=64M   0  0
+tmpfs  /etc/network   tmpfs  defaults,nosuid,nodev,mode=0755,size=1M    0  0
 EOF
+
+# Symlink resolv.conf to writable tmpfs so DHCP can update DNS
+ln -sf /tmp/resolv.conf /etc/resolv.conf
 
 echo "[06-harden] Done."

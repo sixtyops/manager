@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- Config auto-enforce: automatically detect config drift and push corrections in phases (canary → 10% → 50% → 100%)
+- Site-scoped config templates: site templates override global per category
+- Config enforce log: audit trail of all auto-enforcement actions
+- Syslog and Watchdog config template categories (replacing Discovery)
+- Config push confirmation dialog and "All Switches" scope option
+- SLA/uptime tracking with automatic state transition detection in poller
+- Per-device and fleet-wide availability percentage calculations
+- Uptime API endpoints: /api/uptime/device, /api/uptime/fleet, /api/uptime/events
+- Device notes field for APs and switches
+- Bulk device operations: enable, disable, delete, move to site
+- OpenAPI documentation with tagged endpoints, Swagger UI at /docs, ReDoc at /redoc
+- Bandwidth throttling for firmware uploads (configurable KB/s limit per device)
+- Update analytics dashboard with summary stats, daily trends, model breakdown, error analysis, and device reliability
+- SNMP trap notifications for firmware update job completion (SNMPv2c)
+- SNMP trap configuration UI in Settings > Notifications panel
+- Test trap button for verifying SNMP configuration
 - Inline release notes display in Settings > Updates panel
 - GitHub release notes categorization via `.github/release.yml`
 

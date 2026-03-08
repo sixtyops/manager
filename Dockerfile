@@ -40,8 +40,8 @@ RUN mkdir -p /app/firmware /app/data /app/backups /app/.ssh /app/nginx-conf \
     && chown -R appuser:appuser /app/firmware /app/data /app/backups /app/.ssh /app/nginx-conf \
     && chmod 700 /app/data /app/.ssh
 
-# Expose port
-EXPOSE 8000
+# Expose ports
+EXPOSE 8000 1812/udp
 
 # Entrypoint matches Docker socket GID then drops to appuser via gosu
 ENTRYPOINT ["/entrypoint.sh"]

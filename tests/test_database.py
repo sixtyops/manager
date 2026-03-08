@@ -1,6 +1,8 @@
 """Tests for updater.database."""
 
+import sqlite3
 from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -322,3 +324,63 @@ class TestSessions:
         # The expired one was cleaned up - verify by direct query
         row = mock_db.execute("SELECT * FROM sessions WHERE session_id = 'sess-old'").fetchone()
         assert row is None
+
+
+class TestCheckpointDB:
+    def test_checkpoint_runs_without_error(self, tmp_path):
+        """checkpoint_db should run PRAGMA wal_checkpoint on a real file."""
+        db_file = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db_file))
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE t (id INTEGER)")
+        conn.execute("INSERT INTO t VALUES (1)")
+        conn.commit()
+        conn.close()
+
+        with patch.object(db, "DB_PATH", db_file):
+            db.checkpoint_db()  # should not raise
+
+        # Verify data is intact
+        conn = sqlite3.connect(str(db_file))
+        row = conn.execute("SELECT id FROM t").fetchone()
+        assert row[0] == 1
+        conn.close()
+
+    def test_checkpoint_handles_missing_db(self, tmp_path):
+        """checkpoint_db should handle missing database gracefully."""
+        missing = tmp_path / "nonexistent.db"
+        with patch.object(db, "DB_PATH", missing):
+            db.checkpoint_db()  # should log error, not raise
+
+    def test_checkpoint_truncates_wal(self, tmp_path):
+        """After checkpoint(TRUNCATE), the WAL file should be empty."""
+        db_file = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db_file))
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE t (id INTEGER)")
+        conn.commit()
+
+        # Keep a reader connection open to prevent auto-checkpoint on close
+        reader = sqlite3.connect(str(db_file))
+        reader.execute("PRAGMA journal_mode=WAL")
+        reader.execute("SELECT * FROM t")
+
+        # Write data — WAL will accumulate since reader blocks checkpoint
+        for i in range(100):
+            conn.execute("INSERT INTO t VALUES (?)", (i,))
+        conn.commit()
+        conn.close()
+
+        wal_file = tmp_path / "test.db-wal"
+        assert wal_file.exists()
+        assert wal_file.stat().st_size > 0
+
+        # Close reader so checkpoint can proceed
+        reader.close()
+
+        with patch.object(db, "DB_PATH", db_file):
+            db.checkpoint_db()
+
+        # After TRUNCATE checkpoint, WAL should be empty
+        if wal_file.exists():
+            assert wal_file.stat().st_size == 0
