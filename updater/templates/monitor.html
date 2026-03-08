@@ -1015,19 +1015,16 @@
         .config-section {
             border: 1px solid var(--border);
             border-radius: 6px;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
         }
         .config-section-header {
             padding: 8px 12px;
-            cursor: pointer;
             font-size: 0.8rem;
             font-weight: 500;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            user-select: none;
         }
-        .config-section-header:hover { background: var(--hover); }
         .config-section-body {
             padding: 8px 12px 12px;
             border-top: 1px solid var(--border);
@@ -2156,169 +2153,183 @@
             </div><!-- /drawerContent-updates -->
 
             <!-- Config drawer content -->
-            <div id="drawerContent-config" class="hidden">
-                <div class="drawer-panel-inner">
-                    <div class="config-template-layout">
-                        <div class="config-category-list" id="cfgCategoryList">
-                            <button type="button" class="config-category-item active" id="cfgCategoryBtn-snmp" onclick="selectConfigCategory('snmp')">
-                                <span>SNMP</span>
-                                <span class="config-section-status" id="cfgStatus-snmp"></span>
-                            </button>
-                            <button type="button" class="config-category-item" id="cfgCategoryBtn-users" onclick="selectConfigCategory('users')">
-                                <span>Users</span>
-                                <span class="config-section-status" id="cfgStatus-users"></span>
-                            </button>
-                            <button type="button" class="config-category-item" id="cfgCategoryBtn-radius" onclick="selectConfigCategory('radius')">
-                                <span>RADIUS</span>
-                                <span class="config-section-status" id="cfgStatus-radius"></span>
-                            </button>
-                            <button type="button" class="config-category-item" id="cfgCategoryBtn-ntp" onclick="selectConfigCategory('ntp')">
-                                <span>NTP</span>
-                                <span class="config-section-status" id="cfgStatus-ntp"></span>
-                            </button>
-                            <button type="button" class="config-category-item" id="cfgCategoryBtn-syslog" onclick="selectConfigCategory('syslog')">
-                                <span>Syslog</span>
-                                <span class="config-section-status" id="cfgStatus-syslog"></span>
-                            </button>
-                            <button type="button" class="config-category-item" id="cfgCategoryBtn-watchdog" onclick="selectConfigCategory('watchdog')">
-                                <span>Watchdog</span>
-                                <span class="config-section-status" id="cfgStatus-watchdog"></span>
-                            </button>
-                            <button type="button" class="config-category-item" id="cfgCategoryBtn-custom" onclick="selectConfigCategory('custom')">
-                                <span>Custom JSON</span>
-                                <span class="config-section-status" id="cfgStatus-custom"></span>
-                            </button>
+            <div id="drawerContent-config" style="display:none;">
+                <div class="drawer-panel-inner" style="max-height:400px;overflow-y:auto;">
+                    <!-- SNMP Section -->
+                    <div class="config-section" id="cfgSection-snmp">
+                        <div class="config-section-header">
+                            <span>SNMP</span>
+                            <span class="config-section-status" id="cfgStatus-snmp"></span>
                         </div>
-
-                        <div class="config-category-editor">
-                            <div class="config-section config-category-panel" id="cfgPanel-snmp">
-                                <div class="config-section-body">
-                                    <div class="u-grid-2-gap8">
-                                        <div>
-                                            <label><input type="checkbox" id="cfgSnmpV2RoEnabled"> SNMPv2 Read-Only</label>
-                                            <input type="text" id="cfgSnmpV2RoCommunity" placeholder="RO community string" class="u-w-full u-mt-4">
-                                        </div>
-                                        <div>
-                                            <label><input type="checkbox" id="cfgSnmpV2RwEnabled"> SNMPv2 Read-Write</label>
-                                            <input type="text" id="cfgSnmpV2RwCommunity" placeholder="RW community string" class="u-w-full u-mt-4">
-                                        </div>
-                                    </div>
+                        <div class="config-section-body">
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                                <div>
+                                    <label><input type="checkbox" id="cfgSnmpV2RoEnabled"> SNMPv2 Read-Only</label>
+                                    <input type="text" id="cfgSnmpV2RoCommunity" placeholder="RO community string" style="width:100%;margin-top:4px;">
                                 </div>
-                            </div>
-
-                            <div class="config-section config-category-panel hidden" id="cfgPanel-users">
-                                <div class="config-section-body">
-                                    <div id="cfgUserRows"></div>
-                                    <button class="btn btn-sm" onclick="addConfigUserRow()" style="margin-top:6px;">+ Add User</button>
-                                </div>
-                            </div>
-
-                            <div class="config-section config-category-panel hidden" id="cfgPanel-radius">
-                                <div class="config-section-body">
-                                    <div style="margin-bottom:6px;">
-                                        <label>Auth Method</label>
-                                        <select id="cfgRadiusMethod" style="width:120px;">
-                                            <option value="local">Local</option>
-                                            <option value="radius">RADIUS</option>
-                                        </select>
-                                    </div>
-                                    <div style="display:grid;grid-template-columns:1fr 100px 1fr;gap:8px;">
-                                        <div>
-                                            <label>Auth Server</label>
-                                            <input type="text" id="cfgRadiusServer" placeholder="radius.example.com" class="u-w-full">
-                                        </div>
-                                        <div>
-                                            <label>Port</label>
-                                            <input type="number" id="cfgRadiusPort" value="1812" class="u-w-full">
-                                        </div>
-                                        <div>
-                                            <label>Secret</label>
-                                            <input type="password" id="cfgRadiusSecret" placeholder="shared secret" class="u-w-full">
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="config-section config-category-panel hidden" id="cfgPanel-ntp">
-                                <div class="config-section-body">
-                                    <label><input type="checkbox" id="cfgNtpEnabled" checked> Enable NTP</label>
-                                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
-                                        <div>
-                                            <label>Server 1</label>
-                                            <input type="text" id="cfgNtpServer1" placeholder="time.google.com" class="u-w-full">
-                                        </div>
-                                        <div>
-                                            <label>Server 2</label>
-                                            <input type="text" id="cfgNtpServer2" placeholder="time.cloudflare.com" class="u-w-full">
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="config-section config-category-panel hidden" id="cfgPanel-syslog">
-                                <div class="config-section-body">
-                                    <label><input type="checkbox" id="cfgSyslogEnabled"> Enable Remote Syslog</label>
-                                    <div style="display:grid;grid-template-columns:1fr 100px 100px;gap:8px;margin-top:6px;">
-                                        <div>
-                                            <label>Server IP</label>
-                                            <input type="text" id="cfgSyslogServer" placeholder="192.168.1.100" class="u-w-full">
-                                        </div>
-                                        <div>
-                                            <label>Port</label>
-                                            <input type="number" id="cfgSyslogPort" value="514" class="u-w-full">
-                                        </div>
-                                        <div>
-                                            <label>Protocol</label>
-                                            <select id="cfgSyslogProtocol" class="u-w-full">
-                                                <option value="udp">UDP</option>
-                                                <option value="tcp">TCP</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="config-section config-category-panel hidden" id="cfgPanel-watchdog">
-                                <div class="config-section-body">
-                                    <label><input type="checkbox" id="cfgWatchdogEnabled"> Enable Ping Watchdog</label>
-                                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:6px;">
-                                        <div>
-                                            <label>Interval (sec)</label>
-                                            <input type="number" id="cfgWatchdogInterval" value="300" class="u-w-full">
-                                        </div>
-                                        <div>
-                                            <label>Startup Delay (sec)</label>
-                                            <input type="number" id="cfgWatchdogStartupDelay" value="300" class="u-w-full">
-                                        </div>
-                                        <div>
-                                            <label>Failure Count</label>
-                                            <input type="number" id="cfgWatchdogFailureCount" value="3" class="u-w-full">
-                                        </div>
-                                    </div>
-                                    <div style="margin-top:6px;">
-                                        <label>Ping Targets (comma-separated IPs)</label>
-                                        <input type="text" id="cfgWatchdogPingTargets" placeholder="8.8.8.8, 1.1.1.1" class="u-w-full">
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="config-section config-category-panel hidden" id="cfgPanel-custom">
-                                <div class="config-section-body">
-                                    <textarea id="cfgCustomJson" rows="8" placeholder='{"services": {"ssh": {"enabled": true}}}' style="width:100%;font-family:monospace;font-size:0.75rem;"></textarea>
+                                <div>
+                                    <label><input type="checkbox" id="cfgSnmpV2RwEnabled"> SNMPv2 Read-Write</label>
+                                    <input type="text" id="cfgSnmpV2RwCommunity" placeholder="RW community string" style="width:100%;margin-top:4px;">
                                 </div>
                             </div>
                         </div>
                     </div>
-                    <div class="config-editor-actions">
-                        <span class="u-text-xs-muted" id="cfgEditorHint">Editing SNMP</span>
-                        <div style="display:flex;align-items:center;gap:6px;">
-                            <select id="cfgScopeSelect" style="font-size:0.75rem;padding:2px 6px;" onchange="onConfigScopeChange()">
-                                <option value="global">Global</option>
-                            </select>
-                            <select id="cfgSiteSelect" style="font-size:0.75rem;padding:2px 6px;display:none;">
-                            </select>
+
+                    <!-- Users Section -->
+                    <div class="config-section" id="cfgSection-users">
+                        <div class="config-section-header">
+                            <span>Users</span>
+                            <span class="config-section-status" id="cfgStatus-users"></span>
                         </div>
-                        <button class="btn btn-sm btn-primary" onclick="saveActiveConfigCategory(event)">Save Category</button>
+                        <div class="config-section-body">
+                            <div id="cfgUserRows"></div>
+                            <button class="btn btn-sm" onclick="addConfigUserRow()" style="margin-top:6px;">+ Add User</button>
+                        </div>
+                    </div>
+
+                    <!-- RADIUS Section -->
+                    <div class="config-section" id="cfgSection-radius">
+                        <div class="config-section-header">
+                            <span>RADIUS Authentication</span>
+                            <span class="config-section-status" id="cfgStatus-radius"></span>
+                        </div>
+                        <div class="config-section-body">
+                            <div style="margin-bottom:6px;">
+                                <label>Auth Method</label>
+                                <select id="cfgRadiusMethod" style="width:120px;">
+                                    <option value="local">Local</option>
+                                    <option value="radius">RADIUS</option>
+                                </select>
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 100px 1fr;gap:8px;">
+                                <div>
+                                    <label>Auth Server</label>
+                                    <input type="text" id="cfgRadiusServer" placeholder="radius.example.com" style="width:100%;">
+                                </div>
+                                <div>
+                                    <label>Port</label>
+                                    <input type="number" id="cfgRadiusPort" value="1812" style="width:100%;">
+                                </div>
+                                <div>
+                                    <label>Secret</label>
+                                    <input type="password" id="cfgRadiusSecret" placeholder="shared secret" style="width:100%;">
+                                </div>
+                            </div>
+                            <div style="margin-top:8px;font-size:0.72rem;color:#6b7280;">
+                                Built-in RADIUS for device logins is configured in Settings &gt; Authentication.
+                                <a class="action-link" onclick="prefillBuiltinRadiusConfig();event.stopPropagation();">Use this appliance</a>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- NTP Section -->
+                    <div class="config-section" id="cfgSection-ntp">
+                        <div class="config-section-header">
+                            <span>NTP</span>
+                            <span class="config-section-status" id="cfgStatus-ntp"></span>
+                        </div>
+                        <div class="config-section-body">
+                            <label><input type="checkbox" id="cfgNtpEnabled" checked> Enable NTP</label>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
+                                <div>
+                                    <label>Server 1</label>
+                                    <input type="text" id="cfgNtpServer1" placeholder="time.google.com" style="width:100%;">
+                                </div>
+                                <div>
+                                    <label>Server 2</label>
+                                    <input type="text" id="cfgNtpServer2" placeholder="time.cloudflare.com" style="width:100%;">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Discovery Section -->
+                    <div class="config-section" id="cfgSection-discovery">
+                        <div class="config-section-header">
+                            <span>Discovery Services</span>
+                            <span class="config-section-status" id="cfgStatus-discovery"></span>
+                        </div>
+                        <div class="config-section-body">
+                            <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                                <label><input type="checkbox" id="cfgDiscLldp"> LLDP</label>
+                                <label><input type="checkbox" id="cfgDiscMndp"> MNDP</label>
+                                <label><input type="checkbox" id="cfgDiscCdp"> CDP</label>
+                                <label><input type="checkbox" id="cfgDiscLldpServer"> LLDP Server</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Syslog Section -->
+                    <div class="config-section" id="cfgSection-syslog">
+                        <div class="config-section-header">
+                            <span>Syslog</span>
+                            <span class="config-section-status" id="cfgStatus-syslog"></span>
+                        </div>
+                        <div class="config-section-body">
+                            <label><input type="checkbox" id="cfgSyslogEnabled"> Enable Remote Syslog</label>
+                            <div style="display:grid;grid-template-columns:1fr 100px 100px;gap:8px;margin-top:6px;">
+                                <div>
+                                    <label>Server IP</label>
+                                    <input type="text" id="cfgSyslogServer" placeholder="192.168.1.100" style="width:100%;">
+                                </div>
+                                <div>
+                                    <label>Port</label>
+                                    <input type="number" id="cfgSyslogPort" value="514" style="width:100%;">
+                                </div>
+                                <div>
+                                    <label>Protocol</label>
+                                    <select id="cfgSyslogProtocol" style="width:100%;">
+                                        <option value="udp">UDP</option>
+                                        <option value="tcp">TCP</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Watchdog Section -->
+                    <div class="config-section" id="cfgSection-watchdog">
+                        <div class="config-section-header">
+                            <span>Watchdog</span>
+                            <span class="config-section-status" id="cfgStatus-watchdog"></span>
+                        </div>
+                        <div class="config-section-body">
+                            <label><input type="checkbox" id="cfgWatchdogEnabled"> Enable Ping Watchdog</label>
+                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:6px;">
+                                <div>
+                                    <label>Interval (sec)</label>
+                                    <input type="number" id="cfgWatchdogInterval" value="300" style="width:100%;">
+                                </div>
+                                <div>
+                                    <label>Startup Delay (sec)</label>
+                                    <input type="number" id="cfgWatchdogStartupDelay" value="300" style="width:100%;">
+                                </div>
+                                <div>
+                                    <label>Failure Count</label>
+                                    <input type="number" id="cfgWatchdogFailureCount" value="3" style="width:100%;">
+                                </div>
+                            </div>
+                            <div style="margin-top:6px;">
+                                <label>Ping Targets (comma-separated IPs)</label>
+                                <input type="text" id="cfgWatchdogPingTargets" placeholder="8.8.8.8, 1.1.1.1" style="width:100%;">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Custom JSON Section -->
+                    <div class="config-section" id="cfgSection-custom">
+                        <div class="config-section-header">
+                            <span>Custom JSON</span>
+                            <span class="config-section-status" id="cfgStatus-custom"></span>
+                        </div>
+                        <div class="config-section-body">
+                            <textarea id="cfgCustomJson" rows="6" placeholder='{"services": {"ssh": {"enabled": true}}}' style="width:100%;font-family:monospace;font-size:0.75rem;"></textarea>
+                        </div>
+                    </div>
+
+                    <!-- Save All -->
+                    <div style="margin-top:4px;display:flex;justify-content:flex-end;">
+                        <button class="btn btn-sm" onclick="saveAllConfigSections()">Save All</button>
                     </div>
                 </div>
             </div>
@@ -5315,7 +5326,8 @@
             }
 
             document.getElementById('cfgRadiusMethod').value = 'radius';
-            document.getElementById('cfgRadiusServer').value = builtinRadiusSummary.host || window.location.hostname || '';
+            const hostFallback = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname) ? '' : window.location.hostname;
+            document.getElementById('cfgRadiusServer').value = builtinRadiusSummary.host || hostFallback;
             document.getElementById('cfgRadiusPort').value = builtinRadiusSummary.port || 1812;
             const statusEl = document.getElementById('cfgStatus-radius');
             if (statusEl) {
@@ -8312,12 +8324,83 @@
                 }
 
                 // Reload templates
-                const templatesResp = await fetch('/api/config-templates');
-                const data = await templatesResp.json();
+                const reloadResp = await fetch('/api/config-templates');
+                const data = await reloadResp.json();
                 configTemplates = data.templates || [];
                 loadConfigTemplateUI();
             } catch (e) {
                 showToast('Failed to save template: ' + e.message);
+            }
+        }
+
+        function isSectionPopulated(category) {
+            const formData = collectFormData(category);
+            switch (category) {
+                case 'snmp': return formData.v2_ro_community || formData.v2_rw_community;
+                case 'ntp': return formData.server1 || formData.server2;
+                case 'radius': return formData.server || formData.secret;
+                case 'discovery': return formData.lldp || formData.mndp || formData.cdp || formData.lldp_server;
+                case 'users': return formData.users && formData.users.length > 0;
+                case 'syslog': return formData.server;
+                case 'watchdog': return formData.enabled || formData.ping_targets;
+                case 'custom': return formData.json && formData.json.trim();
+                default: return false;
+            }
+        }
+
+        async function saveAllConfigSections() {
+            const categories = ['snmp', 'users', 'radius', 'ntp', 'discovery', 'syslog', 'watchdog', 'custom'];
+            const errors = [];
+
+            for (const cat of categories) {
+                // Skip sections with no meaningful data and no existing template
+                const existing = configTemplates.find(t => t.category === cat);
+                if (!existing && !isSectionPopulated(cat)) continue;
+
+                const formData = collectFormData(cat);
+                const fragment = formDataToFragment(cat, formData);
+                if (!fragment) continue;
+
+                const name = cat.charAt(0).toUpperCase() + cat.slice(1) + ' Standard';
+                try {
+                    let resp;
+                    if (existing) {
+                        resp = await fetch(`/api/config-templates/${existing.id}`, {
+                            method: 'PUT',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({config_fragment: fragment, form_data: formData}),
+                        });
+                    } else {
+                        resp = await fetch('/api/config-templates', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({name, category: cat, config_fragment: fragment, form_data: formData}),
+                        });
+                    }
+
+                    const statusEl = document.getElementById(`cfgStatus-${cat}`);
+                    if (!resp.ok) {
+                        const errData = await resp.json().catch(() => ({}));
+                        errors.push(`${cat}: ${errData.detail || resp.status}`);
+                        if (statusEl) { statusEl.textContent = 'Error'; statusEl.classList.remove('saved'); }
+                    } else {
+                        if (statusEl) { statusEl.textContent = 'Saved'; statusEl.classList.add('saved'); }
+                    }
+                } catch (e) {
+                    errors.push(`${cat}: ${e.message}`);
+                }
+            }
+
+            // Reload templates
+            try {
+                const reloadResp = await fetch('/api/config-templates');
+                const data = await reloadResp.json();
+                configTemplates = data.templates || [];
+                loadConfigTemplateUI();
+            } catch (_) {}
+
+            if (errors.length) {
+                alert('Some sections failed to save:\n' + errors.join('\n'));
             }
         }
 
