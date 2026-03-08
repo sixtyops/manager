@@ -40,6 +40,7 @@ from . import slack
 from . import snmp
 from . import webhooks
 from . import syslog_forwarder
+from . import email_notifier
 from . import ssl_manager
 from . import sftp_backup
 from . import builtin_radius
@@ -1803,6 +1804,10 @@ _SETTINGS_WRITABLE = {
     # Syslog forwarding
     "syslog_forward_enabled", "syslog_forward_host", "syslog_forward_port",
     "syslog_forward_protocol", "syslog_forward_facility",
+    # Email notification settings
+    "email_enabled", "email_smtp_host", "email_smtp_port",
+    "email_smtp_username", "email_smtp_password", "email_smtp_tls",
+    "email_from_address", "email_to_addresses",
 }
 
 
@@ -2075,6 +2080,19 @@ async def get_syslog_status(session: dict = Depends(require_role("admin"))):
 async def test_syslog(session: dict = Depends(require_role("admin"))):
     """Send a test syslog message."""
     success, message = syslog_forwarder.test_connection()
+    return {"success": success, "message": message}
+
+
+@app.get("/api/email/status", tags=["notifications"])
+async def get_email_status(session: dict = Depends(require_role("admin"))):
+    """Get email notification configuration status."""
+    return email_notifier.get_status()
+
+
+@app.post("/api/email/test", tags=["notifications"])
+async def test_email(session: dict = Depends(require_role("admin"))):
+    """Send a test email to verify SMTP configuration."""
+    success, message = email_notifier.send_test_email()
     return {"success": success, "message": message}
 
 
@@ -5104,6 +5122,20 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         )
     except Exception as e:
         logger.error(f"Syslog notification failed for job {job.job_id}: {e}")
+
+    try:
+        await email_notifier.notify_job_completed(
+            job_id=job.job_id,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+            cancelled_count=cancelled_count,
+            duration_seconds=(job.completed_at - job.started_at).total_seconds(),
+            firmware_name=firmware_name,
+            is_scheduled=job.is_scheduled,
+        )
+    except Exception as e:
+        logger.error(f"Email notification failed for job {job.job_id}: {e}")
 
     logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped, {cancelled_count} cancelled")
 
