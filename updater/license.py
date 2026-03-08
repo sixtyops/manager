@@ -38,6 +38,9 @@ class Feature(str, Enum):
     TOWER_SITES = "tower_sites"
     BETA_FIRMWARE = "beta_firmware"
     FIRMWARE_HOLD_CUSTOM = "firmware_hold_custom"
+    RADIUS_SERVER = "radius_server"
+    SNMP_TRAPS = "snmp_traps"
+    WEBHOOKS = "webhooks"
 
 
 class LicenseTier(str, Enum):
@@ -254,6 +257,9 @@ async def validate_license(license_key: str = None) -> LicenseState:
         _save_to_db(_license_state)
         return _license_state
 
+    # Normalize: uppercase, strip whitespace (server enforces XXXX-XXXX-XXXX-XXXX)
+    key = key.strip().upper()
+
     device_count = get_billable_device_count()
 
     try:
@@ -266,6 +272,16 @@ async def validate_license(license_key: str = None) -> LicenseState:
                     "app_version": __version__,
                 },
             )
+            # 422 = malformed key (validation error), treat as invalid not server outage
+            if resp.status_code == 422:
+                _license_state = LicenseState(
+                    tier=LicenseTier.FREE,
+                    status=LicenseStatus.INVALID,
+                    license_key=key,
+                    error="Invalid license key format. Expected XXXX-XXXX-XXXX-XXXX.",
+                )
+                _save_to_db(_license_state)
+                return _license_state
             resp.raise_for_status()
             data = resp.json()
 
@@ -454,6 +470,23 @@ def get_license_validator() -> Optional[LicenseValidator]:
 # ---------------------------------------------------------------------------
 
 from fastapi import HTTPException
+
+_FEATURE_DISPLAY_NAMES = {
+    "update_single_device": "Manual updates",
+    "config_backup": "Config backup",
+    "config_templates": "Config templates",
+    "config_compliance": "Config compliance",
+    "config_push": "Config push",
+    "device_history": "Update history",
+    "beta_firmware": "Beta firmware",
+    "firmware_hold_custom": "Custom firmware hold",
+    "slack_notifications": "Slack notifications",
+    "sso_oidc": "SSO / OIDC",
+    "device_portal": "Device portal",
+    "tower_sites": "Tower sites",
+    "radius_server": "RADIUS server",
+    "snmp_traps": "SNMP traps",
+}
 
 
 async def require_pro():

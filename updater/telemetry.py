@@ -60,7 +60,7 @@ import hashlib
 import logging
 import os
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import aiohttp
@@ -198,7 +198,7 @@ def build_telemetry_payload(
 
     return {
         "event": "job_completed",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "install_id": _generate_anonymous_install_id(),
 
         # Job summary (no identifiers)

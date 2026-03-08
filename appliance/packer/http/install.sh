@@ -8,9 +8,9 @@ set -x
 printf 'tachyon-build\ntachyon-build\n' | ERASE_DISKS=/dev/vda setup-alpine -f /tmp/answers
 
 # Enable root SSH login on the installed system
-# Alpine creates: vda1=/boot, vda2=/ (with -s 0, no swap)
+# Use blkid to find ext4 partitions on vda, then check for sshd_config
 MOUNTED=false
-for p in /dev/vda2 /dev/vda3 /dev/vda1; do
+for p in $(blkid -o device -t TYPE=ext4 /dev/vda* 2>/dev/null) /dev/vda2 /dev/vda3; do
   if mount "$p" /mnt 2>/dev/null; then
     if [ -f /mnt/etc/ssh/sshd_config ]; then
       MOUNTED=true

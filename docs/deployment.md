@@ -172,7 +172,7 @@ python -c "from passlib.hash import bcrypt; print(bcrypt.hash('yourpassword'))"
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8000` | HTTP server port (inside the container) |
-| `GITHUB_REPO` | `isolson/firmware-updater` | GitHub repo for auto-update checks |
+| `GITHUB_REPO` | `isolson/tachyon-manager-releases` | GitHub repo for auto-update checks |
 | `AUTOUPDATE_CHECK_INTERVAL` | `604800` (7 days) | Seconds between release checks |
 
 Built-in Radius settings are managed in the web UI under `Settings > Authentication`, not by environment variables. New installs default the feature to enabled, but it will not authenticate devices until you set a shared secret and add Radius users.

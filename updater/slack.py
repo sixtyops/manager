@@ -264,10 +264,19 @@ async def _send_with_retry(payload: dict, max_retries: int = 2):
     for attempt in range(max_retries + 1):
         success = await send_slack_notification(payload)
         if success:
+            try:
+                db.set_setting("notification_consecutive_failures", "0")
+            except Exception:
+                pass
             return
         if attempt < max_retries:
             await asyncio.sleep(2 ** attempt)  # Exponential backoff
     logger.warning("Failed to send Slack notification after retries")
+    try:
+        count = int(db.get_setting("notification_consecutive_failures", "0")) + 1
+        db.set_setting("notification_consecutive_failures", str(count))
+    except Exception:
+        pass
 
 
 async def send_test_notification() -> tuple[bool, str]:
@@ -313,3 +322,76 @@ async def send_test_notification() -> tuple[bool, str]:
         return True, "Test notification sent successfully"
     else:
         return False, "Failed to send test notification - check webhook URL"
+
+
+async def notify_device_offline(ip: str, device_type: str, error: str):
+    """Send a Slack notification when a device goes offline."""
+    webhook_url = db.get_setting("slack_webhook_url", "")
+    if not webhook_url:
+        return
+
+    payload = {
+        "blocks": [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": ":red_circle: Device Offline",
+                    "emoji": True,
+                }
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Device:*\n`{ip}`"},
+                    {"type": "mrkdwn", "text": f"*Type:*\n{device_type.upper()}"},
+                    {"type": "mrkdwn", "text": f"*Error:*\n{error[:200]}"},
+                ]
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": f"Detected at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"}
+                ]
+            }
+        ],
+        "attachments": [{"color": "#ef4444", "blocks": []}]
+    }
+
+    asyncio.create_task(_send_with_retry(payload))
+
+
+async def notify_device_recovered(ip: str, device_type: str):
+    """Send a Slack notification when a device recovers."""
+    webhook_url = db.get_setting("slack_webhook_url", "")
+    if not webhook_url:
+        return
+
+    payload = {
+        "blocks": [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": ":large_green_circle: Device Recovered",
+                    "emoji": True,
+                }
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Device:*\n`{ip}`"},
+                    {"type": "mrkdwn", "text": f"*Type:*\n{device_type.upper()}"},
+                ]
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": f"Recovered at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"}
+                ]
+            }
+        ],
+        "attachments": [{"color": "#10b981", "blocks": []}]
+    }
+
+    asyncio.create_task(_send_with_retry(payload))

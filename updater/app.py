@@ -9,6 +9,7 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Dict, Optional, Set
 
 import aiofiles
+import bcrypt
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,14 +29,18 @@ from .tachyon import TachyonClient, UpdateResult
 from . import __version__
 from . import database as db
 from .poller import init_poller, get_poller
-from .scheduler import init_scheduler, get_scheduler
+from .scheduler import init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTES
 from .firmware_fetcher import init_fetcher, get_fetcher
 from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
 from . import services
-from .auth import require_auth, require_auth_ws, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup
+from .auth import require_auth, require_auth_ws, require_role, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user, generate_api_token
 from .backup import build_csv_export, process_csv_import
 from . import telemetry
 from . import slack
+from . import snmp
+from . import webhooks
+from . import syslog_forwarder
+from . import email_notifier
 from . import ssl_manager
 from . import sftp_backup
 from . import builtin_radius
@@ -45,6 +51,12 @@ from .license import (
     is_feature_enabled, validate_license, clear_license,
     init_license_validator, require_feature,
 )
+from .radius_server import (
+    init_radius_service, get_radius_service,
+    get_radius_server_config, set_radius_server_config,
+    RadiusServerConfig,
+)
+from . import radius_users
 
 # Configure logging
 logging.basicConfig(
@@ -99,22 +111,24 @@ DATA_DIR.mkdir(exist_ok=True)
 # Global state
 active_websockets: Set[WebSocket] = set()
 update_jobs: Dict[str, "UpdateJob"] = {}
+_last_data_housekeeping_day: Optional[str] = None
 
 
 async def broadcast(message: dict):
     """Broadcast message to all connected WebSocket clients."""
+    import json as _json
+    json_text = _json.dumps(message)
     disconnected = set()
     for ws in active_websockets:
         try:
-            await asyncio.wait_for(ws.send_json(message), timeout=5.0)
+            await asyncio.wait_for(ws.send_text(json_text), timeout=5.0)
         except asyncio.TimeoutError:
             logger.warning("WebSocket send timed out, disconnecting slow client")
             disconnected.add(ws)
         except Exception:
             disconnected.add(ws)
 
-    for ws in disconnected:
-        active_websockets.discard(ws)
+    active_websockets.difference_update(disconnected)
 
 
 def _cleanup_oidc_states():
@@ -123,17 +137,149 @@ def _cleanup_oidc_states():
     db.delete_expired_oidc_states(cutoff)
 
 
+def _parse_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Read bounded int from env, with safe fallback."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(f"Invalid {name}={raw!r}; using default {default}")
+        return default
+    if value < minimum:
+        return minimum
+    if value > maximum:
+        return maximum
+    return value
+
+
+def _selected_firmware_names() -> set[str]:
+    """Firmware files currently selected in settings and therefore protected from auto-prune."""
+    selected = set()
+    for key in ("selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100"):
+        value = (db.get_setting(key, "") or "").strip()
+        if value:
+            selected.add(Path(value).name)
+    return selected
+
+
+def _prune_firmware_storage() -> int:
+    """Trim old firmware files to keep storage bounded for long-lived appliances."""
+    max_files = _parse_int_env("FIRMWARE_RETENTION_MAX_FILES", default=300, minimum=50, maximum=5000)
+    max_age_days = _parse_int_env("FIRMWARE_RETENTION_MAX_AGE_DAYS", default=730, minimum=30, maximum=3650)
+    if max_files <= 0:
+        return 0
+
+    cutoff = datetime.now() - timedelta(days=max_age_days)
+    selected = _selected_firmware_names()
+    files = [p for p in FIRMWARE_DIR.iterdir() if p.is_file()]
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    removed = 0
+
+    # First pass: remove old unselected firmware.
+    for path in list(files):
+        if path.name in selected:
+            continue
+        try:
+            modified = datetime.fromtimestamp(path.stat().st_mtime)
+        except OSError:
+            continue
+        if modified >= cutoff:
+            continue
+        try:
+            path.unlink()
+            db.unregister_firmware(path.name)
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except Exception as exc:
+            logger.warning(f"Failed to delete old firmware {path.name}: {exc}")
+
+    # Second pass: enforce max file count by deleting oldest unselected files.
+    files = [p for p in FIRMWARE_DIR.iterdir() if p.is_file()]
+    files.sort(key=lambda p: p.stat().st_mtime)
+    while len(files) > max_files:
+        candidate = None
+        for path in files:
+            if path.name not in selected:
+                candidate = path
+                break
+        if candidate is None:
+            break
+        try:
+            candidate.unlink()
+            db.unregister_firmware(candidate.name)
+            removed += 1
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            logger.warning(f"Failed to enforce firmware count limit for {candidate.name}: {exc}")
+            break
+        files = [p for p in FIRMWARE_DIR.iterdir() if p.is_file()]
+        files.sort(key=lambda p: p.stat().st_mtime)
+
+    return removed
+
+
+def _run_backup_git_gc():
+    """Compact backup git repo history to prevent unbounded growth."""
+    backup_dir = Path("/app/backups")
+    if not (backup_dir / ".git").exists():
+        return
+
+    gc_days = _parse_int_env("BACKUP_GC_PRUNE_DAYS", default=90, minimum=7, maximum=3650)
+    expire = f"{gc_days}.days.ago"
+    commands = [
+        ["git", "-C", str(backup_dir), "reflog", "expire", f"--expire={expire}", f"--expire-unreachable={expire}", "--all"],
+        ["git", "-C", str(backup_dir), "gc", f"--prune={expire}", "--quiet"],
+    ]
+    for cmd in commands:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                logger.warning(f"Backup GC command failed ({' '.join(cmd)}): {stderr[:200]}")
+        except Exception as exc:
+            logger.warning(f"Backup GC command error ({' '.join(cmd)}): {exc}")
+
+
+def _run_daily_data_housekeeping():
+    """Run expensive data hygiene tasks once per day."""
+    global _last_data_housekeeping_day
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    if _last_data_housekeeping_day == today:
+        return
+
+    removed = _prune_firmware_storage()
+    if removed:
+        logger.info(f"Firmware retention removed {removed} old file(s)")
+    if os.environ.get("TACHYON_APPLIANCE") == "1":
+        _run_backup_git_gc()
+    db.cleanup_old_audit_log()
+    db.cleanup_expired_api_tokens()
+    _last_data_housekeeping_day = today
+
+
 async def _supervised_task(name: str, coro_func, *args, restart_delay: float = 10.0):
-    """Run a coroutine in a loop, restarting on unhandled exceptions."""
+    """Run a coroutine in a loop, restarting on unhandled exceptions with backoff."""
+    consecutive_failures = 0
     while True:
         try:
             await coro_func(*args)
+            consecutive_failures = 0
         except asyncio.CancelledError:
             logger.info(f"Background task '{name}' cancelled")
             raise
         except Exception:
-            logger.exception(f"Background task '{name}' crashed, restarting in {restart_delay}s")
-            await asyncio.sleep(restart_delay)
+            consecutive_failures += 1
+            delay = min(restart_delay * (2 ** (consecutive_failures - 1)), 300)
+            logger.exception(
+                f"Background task '{name}' crashed (failure #{consecutive_failures}), "
+                f"restarting in {delay:.0f}s"
+            )
+            await asyncio.sleep(delay)
 
 
 async def _periodic_cleanup():
@@ -147,11 +293,30 @@ async def _periodic_cleanup():
             db.cleanup_old_rollouts(max_age_days=180)
             db.cleanup_old_device_durations(max_age_days=180)
             db.cleanup_old_device_update_history(max_age_days=180)
+            db.cleanup_old_device_configs(max_per_device=50)
             _cleanup_completed_jobs(max_age_seconds=3600)
             _cleanup_oidc_states()
+            db.cleanup_old_radius_auth_log(max_age_days=90)
+            db.cleanup_old_uptime_events(max_age_days=180)
+            db.cleanup_old_config_enforce_log(max_age_days=90)
+            _run_daily_data_housekeeping()
+            db.periodic_maintenance()
             logger.info("Periodic cleanup completed")
         except Exception as e:
             logger.error(f"Periodic cleanup error: {e}")
+
+        # SSL certificate renewal check
+        try:
+            ssl_status = ssl_manager.get_ssl_status()
+            if ssl_status.get("needs_renewal") and ssl_status.get("using_letsencrypt"):
+                logger.info("SSL certificate needs renewal, attempting auto-renewal...")
+                success, message = await ssl_manager.renew_certificate()
+                if success:
+                    logger.info(f"SSL certificate renewed: {message}")
+                else:
+                    logger.warning(f"SSL certificate renewal failed: {message}")
+        except Exception as e:
+            logger.debug(f"SSL renewal check failed: {e}")
 
         # Disk space monitoring
         try:
@@ -231,25 +396,82 @@ async def _radius_health_monitor():
             logger.error(f"Background RADIUS health monitor error: {e}")
 
 
-def _cleanup_completed_jobs(max_age_seconds: int = 3600):
-    """Remove completed jobs from in-memory dict after they've been persisted."""
+def _cleanup_completed_jobs(max_age_seconds: int = 600):
+    """Remove finished or stale jobs from in-memory dict."""
     now = datetime.now()
     stale_ids = []
     for job_id, job in update_jobs.items():
-        if job.status == "completed" and job.completed_at:
-            age = (now - job.completed_at).total_seconds()
-            if age > max_age_seconds:
+        if job.status in ("completed", "failed", "cancelled") and job.completed_at:
+            if (now - job.completed_at).total_seconds() > max_age_seconds:
                 stale_ids.append(job_id)
+        elif job.started_at and (now - job.started_at).total_seconds() > 86400:
+            # Safety net: any job older than 24 hours is stuck — force remove
+            logger.warning(f"Force-removing stuck job {job_id} (started {job.started_at})")
+            stale_ids.append(job_id)
     for job_id in stale_ids:
         del update_jobs[job_id]
+    # Cap total finished jobs in memory
+    max_finished = 20
+    finished = [(jid, j) for jid, j in update_jobs.items()
+                if j.status in ("completed", "failed", "cancelled") and j.completed_at]
+    if len(finished) > max_finished:
+        finished.sort(key=lambda x: x[1].completed_at)
+        for jid, _ in finished[:len(finished) - max_finished]:
+            del update_jobs[jid]
+            stale_ids.append(jid)
     if stale_ids:
-        logger.info(f"Cleaned up {len(stale_ids)} completed jobs from memory")
+        logger.info(f"Cleaned up {len(stale_ids)} jobs from memory")
+
+
+async def _websocket_health_check():
+    """Periodically ping WebSocket clients and remove dead connections."""
+    while True:
+        await asyncio.sleep(30)
+        if not active_websockets:
+            continue
+        dead = set()
+        for ws in list(active_websockets):
+            try:
+                await asyncio.wait_for(ws.send_json({"type": "ping"}), timeout=5.0)
+            except Exception:
+                dead.add(ws)
+        if dead:
+            active_websockets.difference_update(dead)
+            logger.debug(f"Removed {len(dead)} dead WebSocket connection(s)")
+
+
+def _recover_crashed_device_jobs():
+    """On startup, mark any in-progress jobs from a previous crash as failed."""
+    active = db.get_active_jobs()
+    for job in active:
+        logger.warning(
+            f"Recovering crashed job {job['job_id']}: "
+            f"was updating {job.get('firmware_name', 'unknown')}"
+        )
+        try:
+            device_ips = json.loads(job.get("device_ips_json", "[]"))
+            now_iso = datetime.now().isoformat()
+            for ip in device_ips:
+                db.save_device_update_history(
+                    job_id=job["job_id"], ip=ip, role="unknown", pass_number=1,
+                    status="failed", old_version=None, new_version=None,
+                    model=None, error="App crashed during firmware update",
+                    failed_stage="crash_recovery", stages=[],
+                    duration_seconds=0, started_at=job.get("started_at", now_iso),
+                    completed_at=now_iso, action="firmware_update",
+                )
+        except Exception as e:
+            logger.error(f"Error recording crash recovery for {job['job_id']}: {e}")
+        db.clear_active_job(job["job_id"])
+    if active:
+        logger.warning(f"Recovered {len(active)} crashed job(s) from previous run")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
     # Startup
+    ensure_admin_user()
     db.cleanup_expired_sessions()
     radius_runtime = builtin_radius.get_runtime()
     await radius_runtime.start()
@@ -262,8 +484,14 @@ async def lifespan(app: FastAPI):
     checker = init_checker(broadcast)
     await checker.start()
     await verify_update_on_startup(broadcast)
+    _recover_crashed_device_jobs()
+    syslog_forwarder.reload_config()
     license_validator = init_license_validator(broadcast)
     await license_validator.start()
+    radius_svc = init_radius_service(broadcast)
+    radius_task = asyncio.create_task(
+        _supervised_task("radius_server", radius_svc.run_forever)
+    )
     cleanup_task = asyncio.create_task(
         _supervised_task("periodic_cleanup", _periodic_cleanup)
     )
@@ -276,6 +504,9 @@ async def lifespan(app: FastAPI):
     radius_health_task = asyncio.create_task(
         _supervised_task("radius_health_monitor", _radius_health_monitor)
     )
+    ws_health_task = asyncio.create_task(
+        _supervised_task("ws_health_check", _websocket_health_check)
+    )
     state = get_license_state()
     logger.info(f"License: {state.status.value} (tier={state.tier.value})")
     logger.info("Application started")
@@ -283,11 +514,14 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    global _shutting_down
+    _shutting_down = True
     backup_task.cancel()
     cleanup_task.cancel()
     radius_sync_task.cancel()
     radius_health_task.cancel()
-    for task in [cleanup_task, backup_task, radius_sync_task, radius_health_task]:
+    ws_health_task.cancel()
+    for task in [cleanup_task, backup_task, radius_sync_task, radius_health_task, ws_health_task]:
         try:
             await task
         except asyncio.CancelledError:
@@ -297,13 +531,44 @@ async def lifespan(app: FastAPI):
     await fetcher.stop()
     await scheduler.stop()
     await poller.stop()
+    db.checkpoint_db()
     await radius_runtime.stop()
     logger.info("Application stopped")
 
 
 # FastAPI app
-app = FastAPI(title="SixtyOps", lifespan=lifespan)
+app = FastAPI(
+    title="SixtyOps Firmware Updater",
+    description="Automated firmware update management for Tachyon wireless network devices (APs, CPEs, switches).",
+    version=__version__,
+    lifespan=lifespan,
+    openapi_tags=[
+        {"name": "devices", "description": "Device inventory management (APs, CPEs, switches)"},
+        {"name": "firmware", "description": "Firmware file management and updates"},
+        {"name": "jobs", "description": "Update job execution and monitoring"},
+        {"name": "settings", "description": "Application configuration"},
+        {"name": "analytics", "description": "Update analytics and trends"},
+        {"name": "notifications", "description": "Slack and SNMP notification configuration"},
+        {"name": "auth", "description": "Authentication, sessions, and user management"},
+        {"name": "license", "description": "License management and feature gating"},
+        {"name": "config", "description": "Device configuration backup and templates"},
+        {"name": "system", "description": "System health, updates, and maintenance"},
+    ],
+)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+def render_template(
+    request: Request,
+    template_name: str,
+    context: Optional[dict] = None,
+    status_code: int = 200,
+):
+    """Render template using the Request-first TemplateResponse signature."""
+    payload = {"request": request}
+    if context:
+        payload.update(context)
+    return templates.TemplateResponse(request, template_name, payload, status_code=status_code)
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +601,20 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+@app.get("/healthz")
+async def healthz():
+    """Health endpoint for container runtime checks — verifies DB connectivity."""
+    try:
+        db.get_setting("setup_completed")
+        result = {"status": "ok", "db": "ok"}
+        notif_failures = int(db.get_setting("notification_consecutive_failures", "0"))
+        if notif_failures > 5:
+            result["notifications"] = f"degraded ({notif_failures} consecutive failures)"
+        return result
+    except Exception as e:
+        return JSONResponse(status_code=503, content={"status": "degraded", "db": str(e)})
+
+
 # ============================================================================
 # Auth Routes (no auth dependency)
 # ============================================================================
@@ -346,8 +625,7 @@ async def login_page(request: Request, error: str = None):
     # First run with no password configured - redirect to setup
     if is_first_run():
         return RedirectResponse(url="/setup", status_code=302)
-    return templates.TemplateResponse("login.html", {
-        "request": request,
+    return render_template(request, "login.html", {
         "error": error,
         "oidc_enabled": oidc_config.is_oidc_enabled(),
     })
@@ -409,7 +687,8 @@ async def login(request: Request, username: str = Form(...), password: str = For
         )
 
     _clear_rate_limit_bucket(bucket)
-    session_id = create_session(user, ip_address)
+    session_id = create_session(user["username"], ip_address)
+    db.log_audit(user["username"], "auth.login", None, None, None, ip_address)
 
     # Redirect to setup if password hasn't been changed from default
     redirect_url = "/setup" if is_setup_required() else "/"
@@ -419,7 +698,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
         key=SESSION_COOKIE_NAME,
         value=session_id,
         httponly=True,
-        secure=True,
+        secure=is_request_secure(request),
         max_age=86400,
         samesite="lax",
     )
@@ -443,8 +722,7 @@ async def setup_page(request: Request):
     if not is_setup_required():
         return RedirectResponse(url="/", status_code=302)
 
-    return templates.TemplateResponse("setup.html", {
-        "request": request,
+    return render_template(request, "setup.html", {
         "error": None,
         "first_run": first_run,
     })
@@ -471,17 +749,24 @@ async def setup_submit(
         if not session:
             return RedirectResponse(url="/login", status_code=302)
 
+        # Rate-limit password verification to prevent brute-force
+        ip_address = request.client.host if request.client else "unknown"
+        if _check_login_rate_limit(ip_address):
+            return render_template(request, "setup.html", {
+                "error": "Too many attempts. Please wait and try again.",
+                "first_run": False,
+            }, status_code=429)
+
         if not current_password:
-            return templates.TemplateResponse("setup.html", {
-                "request": request,
+            return render_template(request, "setup.html", {
                 "error": "Current password is required.",
                 "first_run": False,
             }, status_code=400)
 
         user = authenticate(session["username"], current_password)
         if not user:
-            return templates.TemplateResponse("setup.html", {
-                "request": request,
+            _record_login_attempt(ip_address)
+            return render_template(request, "setup.html", {
                 "error": "Current password is incorrect.",
                 "first_run": False,
             }, status_code=400)
@@ -493,27 +778,26 @@ async def setup_submit(
         return RedirectResponse(url="/", status_code=302)
 
     if new_password != confirm_password:
-        return templates.TemplateResponse("setup.html", {
-            "request": request,
+        return render_template(request, "setup.html", {
             "error": "New passwords do not match.",
             "first_run": first_run,
         }, status_code=400)
 
-    if len(new_password) < 8:
-        return templates.TemplateResponse("setup.html", {
-            "request": request,
-            "error": "Password must be at least 8 characters.",
+    if len(new_password) < 12:
+        return render_template(request, "setup.html", {
+            "error": "Password must be at least 12 characters.",
             "first_run": first_run,
         }, status_code=400)
 
-    complete_setup(new_password)
+    if not complete_setup(new_password):
+        # Another request completed setup first (race condition)
+        return RedirectResponse(url="/login", status_code=303)
     logger.info(f"Admin password {'created' if first_run else 'changed'} by {username} during initial setup")
 
-    if first_run:
-        # First run - redirect to login so they can log in with the new password
-        return RedirectResponse(url="/login", status_code=303)
+    # Invalidate all existing sessions so old credentials can't be reused
+    db.delete_all_sessions()
 
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url="/login", status_code=303)
 
 
 @app.post("/logout")
@@ -521,6 +805,9 @@ async def logout(request: Request):
     """Handle logout."""
     session_id = request.cookies.get(SESSION_COOKIE_NAME)
     if session_id:
+        session = db.get_session(session_id)
+        if session:
+            db.log_audit(session["username"], "auth.logout", None, None, None, _client_ip(request))
         db.delete_session(session_id)
 
     response = RedirectResponse(url="/login", status_code=303)
@@ -537,13 +824,25 @@ def _is_wizard_needed() -> bool:
     return db.get_setting("setup_wizard_completed", "false") != "true"
 
 
+def _wizard_step_allowed(step: int) -> bool:
+    """Check if a wizard step is allowed based on prior step completion."""
+    if step >= 2 and db.get_setting("wizard_step_1_done", "false") != "true":
+        return False
+    if step >= 3 and db.get_setting("wizard_step_2_done", "false") != "true":
+        return False
+    return True
+
+
 @app.get("/setup-wizard", response_class=HTMLResponse)
 async def setup_wizard_page(request: Request, step: int = 1, session: dict = Depends(require_auth)):
     """Serve the setup wizard page."""
     if not _is_wizard_needed():
         return RedirectResponse(url="/", status_code=302)
-    return templates.TemplateResponse("setup_wizard.html", {
-        "request": request, "step": step,
+    # Enforce sequential step access
+    if not _wizard_step_allowed(step):
+        return RedirectResponse(url="/setup-wizard?step=1", status_code=302)
+    return render_template(request, "setup_wizard.html", {
+        "step": step,
         "ssl_status": ssl_manager.get_ssl_status(),
         "backup_status": sftp_backup.get_backup_status(),
         "error": None, "success": None,
@@ -561,6 +860,10 @@ async def setup_wizard_submit(
     session: dict = Depends(require_auth),
 ):
     """Handle setup wizard form submissions."""
+    # Enforce sequential step progression
+    if not _wizard_step_allowed(step):
+        return RedirectResponse(url="/setup-wizard?step=1", status_code=303)
+
     ssl_status = ssl_manager.get_ssl_status()
     backup_status = sftp_backup.get_backup_status()
 
@@ -568,12 +871,13 @@ async def setup_wizard_submit(
         if action == "configure" and ssl_domain and ssl_email:
             ok, msg = await ssl_manager.obtain_certificate(ssl_domain, ssl_email)
             if not ok:
-                return templates.TemplateResponse("setup_wizard.html", {
-                    "request": request, "step": 1, "ssl_status": ssl_status,
+                return render_template(request, "setup_wizard.html", {
+                    "step": 1, "ssl_status": ssl_status,
                     "backup_status": backup_status, "error": msg, "success": None,
                 })
-        return templates.TemplateResponse("setup_wizard.html", {
-            "request": request, "step": 2,
+        db.set_setting("wizard_step_1_done", "true")
+        return render_template(request, "setup_wizard.html", {
+            "step": 2,
             "ssl_status": ssl_manager.get_ssl_status(),
             "backup_status": backup_status, "error": None, "success": None,
         })
@@ -586,18 +890,22 @@ async def setup_wizard_submit(
                 retention_count=retention_count,
             )
             if not ok:
-                return templates.TemplateResponse("setup_wizard.html", {
-                    "request": request, "step": 2, "ssl_status": ssl_status,
+                return render_template(request, "setup_wizard.html", {
+                    "step": 2, "ssl_status": ssl_status,
                     "backup_status": backup_status, "error": msg, "success": None,
                 })
-        return templates.TemplateResponse("setup_wizard.html", {
-            "request": request, "step": 3,
+        db.set_setting("wizard_step_2_done", "true")
+        return render_template(request, "setup_wizard.html", {
+            "step": 3,
             "ssl_status": ssl_manager.get_ssl_status(),
             "backup_status": sftp_backup.get_backup_status(),
             "error": None, "success": None,
         })
     elif step == 3:
         db.set_setting("setup_wizard_completed", "true")
+        # Clean up step-tracking settings
+        db.set_setting("wizard_step_1_done", "false")
+        db.set_setting("wizard_step_2_done", "false")
         return RedirectResponse(url="/", status_code=303)
     return RedirectResponse(url="/setup-wizard", status_code=303)
 
@@ -605,8 +913,8 @@ async def setup_wizard_submit(
 @app.get("/ssl-setup", response_class=HTMLResponse)
 async def ssl_setup_page(request: Request, session: dict = Depends(require_auth)):
     """Serve the SSL setup page."""
-    return templates.TemplateResponse("ssl_setup.html", {
-        "request": request, "ssl_status": ssl_manager.get_ssl_status(),
+    return render_template(request, "ssl_setup.html", {
+        "ssl_status": ssl_manager.get_ssl_status(),
         "error": None, "success": None,
     })
 
@@ -614,19 +922,19 @@ async def ssl_setup_page(request: Request, session: dict = Depends(require_auth)
 @app.post("/ssl-setup")
 async def ssl_setup_submit(
     request: Request, domain: str = Form(...), email: str = Form(...),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin")),
 ):
     """Handle SSL certificate request."""
     success, message = await ssl_manager.obtain_certificate(domain, email)
     status = ssl_manager.get_ssl_status()
-    return templates.TemplateResponse("ssl_setup.html", {
-        "request": request, "ssl_status": status,
+    return render_template(request, "ssl_setup.html", {
+        "ssl_status": status,
         "error": None if success else message,
         "success": message if success else None,
     }, status_code=200 if success else 400)
 
 
-@app.get("/api/ssl/status")
+@app.get("/api/ssl/status", tags=["system"])
 async def get_ssl_status_api(session: dict = Depends(require_auth)):
     return ssl_manager.get_ssl_status()
 
@@ -651,7 +959,7 @@ async def backup_setup_submit(
     sftp_password: str = Form(None),
     ssh_key: str = Form(None),
     retention_count: int = Form(30),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin")),
 ):
     """Handle SFTP backup configuration."""
     success, message = await sftp_backup.configure_backup(
@@ -668,7 +976,7 @@ async def backup_setup_submit(
 
 
 @app.post("/backup-run")
-async def backup_run_now(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+async def backup_run_now(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Trigger an immediate backup."""
     success, message = await sftp_backup.run_backup()
     return templates.TemplateResponse("backup_setup.html", {
@@ -678,20 +986,20 @@ async def backup_run_now(request: Request, session: dict = Depends(require_auth)
     })
 
 
-@app.get("/api/backup/status")
+@app.get("/api/backup/status", tags=["config"])
 async def get_backup_status_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     return sftp_backup.get_backup_status()
 
 
-@app.post("/api/backup/run")
-async def api_backup_run_now(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+@app.post("/api/backup/run", tags=["config"])
+async def api_backup_run_now(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Trigger an immediate backup and return JSON result."""
     success, message = await sftp_backup.run_backup()
     return {"success": success, "message": message}
 
 
-@app.post("/api/backup/test-connection")
-async def test_backup_connection_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+@app.post("/api/backup/test-connection", tags=["config"])
+async def test_backup_connection_api(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Test SFTP backup connection."""
     success, message = await sftp_backup.test_backup_connection()
     return {"success": success, "message": message}
@@ -708,7 +1016,7 @@ async def index(request: Request, session: dict = Depends(require_auth)):
         return RedirectResponse(url="/setup", status_code=302)
     if _is_wizard_needed():
         return RedirectResponse(url="/setup-wizard", status_code=302)
-    return templates.TemplateResponse("monitor.html", {"request": request})
+    return render_template(request, "monitor.html")
 
 
 
@@ -838,20 +1146,20 @@ def _validate_ip(ip: str):
 # Tower Site API
 # ============================================================================
 
-@app.get("/api/sites")
+@app.get("/api/sites", tags=["devices"])
 async def list_sites(session: dict = Depends(require_auth)):
     """List all tower sites."""
     sites = db.get_tower_sites()
     return {"sites": sites}
 
 
-@app.post("/api/sites")
+@app.post("/api/sites", tags=["devices"])
 async def create_site(
     name: str = Form(...),
     location: str = Form(None),
     latitude: float = Form(None),
     longitude: float = Form(None),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.TOWER_SITES)),
 ):
     """Create a new tower site."""
@@ -865,14 +1173,14 @@ async def create_site(
         raise HTTPException(500, "Failed to create site")
 
 
-@app.put("/api/sites/{site_id}")
+@app.put("/api/sites/{site_id}", tags=["devices"])
 async def update_site(
     site_id: int,
     name: str = Form(None),
     location: str = Form(None),
     latitude: float = Form(None),
     longitude: float = Form(None),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.TOWER_SITES)),
 ):
     """Update a tower site."""
@@ -880,8 +1188,8 @@ async def update_site(
     return {"success": True}
 
 
-@app.delete("/api/sites/{site_id}")
-async def delete_site(site_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.TOWER_SITES))):
+@app.delete("/api/sites/{site_id}", tags=["devices"])
+async def delete_site(site_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.TOWER_SITES))):
     """Delete a tower site."""
     db.delete_tower_site(site_id)
     return {"success": True}
@@ -898,20 +1206,20 @@ def _strip_credentials(devices: list[dict]) -> list[dict]:
     return devices
 
 
-@app.get("/api/aps")
+@app.get("/api/aps", tags=["devices"])
 async def list_aps(site_id: int = None, session: dict = Depends(require_auth)):
     """List access points (credentials redacted)."""
     aps = db.get_access_points(tower_site_id=site_id, enabled_only=False)
     return {"aps": _strip_credentials(aps)}
 
 
-@app.post("/api/aps")
+@app.post("/api/aps", tags=["devices"])
 async def add_ap(
     ip: str = Form(...),
     username: str = Form(...),
     password: str = Form(...),
     tower_site_id: int = Form(None),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
 ):
     """Add a new access point."""
     _validate_ip(ip)
@@ -930,13 +1238,13 @@ async def add_ap(
     return {"id": ap_id, "ip": ip}
 
 
-@app.post("/api/devices")
+@app.post("/api/devices", tags=["devices"])
 async def add_device(
     ip: str = Form(...),
     username: str = Form(...),
     password: str = Form(...),
     tower_site_id: int = Form(None),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
 ):
     """Add a device, auto-classifying as AP or switch based on model.
 
@@ -976,17 +1284,20 @@ async def add_device(
     if scheduler:
         await scheduler._broadcast_status()
 
+    db.log_audit(session["username"], "device.add", device_type, ip,
+                 f"model={model}", None)
     return {"id": device_id, "ip": ip, "device_type": device_type, "model": model}
 
 
-@app.put("/api/aps/{ip}")
+@app.put("/api/aps/{ip}", tags=["devices"])
 async def update_ap(
     ip: str,
     username: str = Form(None),
     password: str = Form(None),
     tower_site_id: int = Form(None),
     enabled: bool = Form(None),
-    session: dict = Depends(require_auth),
+    notes: str = Form(None),
+    session: dict = Depends(require_role("admin", "operator")),
 ):
     """Update an access point."""
     ap = db.get_access_point(ip)
@@ -1012,7 +1323,12 @@ async def update_ap(
             logger.error(f"Failed to validate AP credentials for {ip}: {exc}")
             raise HTTPException(400, f"Cannot connect to {ip} with the supplied credentials")
 
-    db.upsert_access_point(ip, new_username, new_password, new_site_id, enabled=enabled)
+    kwargs = {}
+    if enabled is not None:
+        kwargs["enabled"] = enabled
+    if notes is not None:
+        kwargs["notes"] = notes
+    db.upsert_access_point(ip, new_username, new_password, new_site_id, **kwargs)
 
     if credentials_changed:
         poller = get_poller()
@@ -1027,14 +1343,15 @@ async def update_ap(
     return {"success": True}
 
 
-@app.delete("/api/aps/{ip}")
-async def delete_ap(ip: str, session: dict = Depends(require_auth)):
+@app.delete("/api/aps/{ip}", tags=["devices"])
+async def delete_ap(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Delete an access point."""
     poller = get_poller()
     if poller:
         poller.invalidate_client(ip)
 
     db.delete_access_point(ip)
+    db.log_audit(session["username"], "device.delete", "ap", ip, None, None)
 
     # Broadcast updated scheduler status so predictions reflect the removal
     scheduler = get_scheduler()
@@ -1044,8 +1361,8 @@ async def delete_ap(ip: str, session: dict = Depends(require_auth)):
     return {"success": True}
 
 
-@app.post("/api/aps/{ip}/poll")
-async def poll_ap(ip: str, session: dict = Depends(require_auth)):
+@app.post("/api/aps/{ip}/poll", tags=["devices"])
+async def poll_ap(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Trigger immediate poll of an AP."""
     poller = get_poller()
     if not poller:
@@ -1065,20 +1382,20 @@ async def poll_ap(ip: str, session: dict = Depends(require_auth)):
 # Switch API
 # ============================================================================
 
-@app.get("/api/switches")
+@app.get("/api/switches", tags=["devices"])
 async def list_switches(site_id: int = None, session: dict = Depends(require_auth)):
     """List switches (credentials redacted)."""
     switches = db.get_switches(tower_site_id=site_id, enabled_only=False)
     return {"switches": _strip_credentials(switches)}
 
 
-@app.post("/api/switches")
+@app.post("/api/switches", tags=["devices"])
 async def add_switch(
     ip: str = Form(...),
     username: str = Form(...),
     password: str = Form(...),
     tower_site_id: int = Form(None),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
 ):
     """Add a new switch."""
     _validate_ip(ip)
@@ -1096,14 +1413,15 @@ async def add_switch(
     return {"id": sw_id, "ip": ip}
 
 
-@app.put("/api/switches/{ip}")
+@app.put("/api/switches/{ip}", tags=["devices"])
 async def update_switch(
     ip: str,
     username: str = Form(None),
     password: str = Form(None),
     tower_site_id: int = Form(None),
     enabled: bool = Form(None),
-    session: dict = Depends(require_auth),
+    notes: str = Form(None),
+    session: dict = Depends(require_role("admin", "operator")),
 ):
     """Update a switch."""
     sw = db.get_switch(ip)
@@ -1114,7 +1432,12 @@ async def update_switch(
     new_password = password if password else sw["password"]
     new_site_id = tower_site_id if tower_site_id is not None else sw["tower_site_id"]
 
-    db.upsert_switch(ip, new_username, new_password, new_site_id, enabled=enabled)
+    kwargs = {}
+    if enabled is not None:
+        kwargs["enabled"] = enabled
+    if notes is not None:
+        kwargs["notes"] = notes
+    db.upsert_switch(ip, new_username, new_password, new_site_id, **kwargs)
 
     if username or password:
         poller = get_poller()
@@ -1124,14 +1447,15 @@ async def update_switch(
     return {"success": True}
 
 
-@app.delete("/api/switches/{ip}")
-async def delete_switch(ip: str, session: dict = Depends(require_auth)):
+@app.delete("/api/switches/{ip}", tags=["devices"])
+async def delete_switch(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Delete a switch."""
     poller = get_poller()
     if poller:
         poller.invalidate_client(ip)
 
     db.delete_switch(ip)
+    db.log_audit(session["username"], "device.delete", "switch", ip, None, None)
 
     # Broadcast updated scheduler status so predictions reflect the removal
     scheduler = get_scheduler()
@@ -1141,8 +1465,101 @@ async def delete_switch(ip: str, session: dict = Depends(require_auth)):
     return {"success": True}
 
 
-@app.post("/api/switches/{ip}/poll")
-async def poll_switch(ip: str, session: dict = Depends(require_auth)):
+# ============================================================================
+# Bulk Device Operations
+# ============================================================================
+
+@app.post("/api/devices/bulk-enable", tags=["devices"])
+async def bulk_enable_devices(
+    request: Request,
+    session: dict = Depends(require_role("admin", "operator")),
+):
+    """Enable multiple devices."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+    device_type = body.get("device_type", "ap")
+    ips = body.get("ips", [])
+    if not ips or device_type not in ("ap", "switch"):
+        raise HTTPException(400, "Provide ips list and device_type (ap or switch)")
+    try:
+        count = db.bulk_set_enabled(device_type, ips, True)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"success": True, "affected": count}
+
+
+@app.post("/api/devices/bulk-disable", tags=["devices"])
+async def bulk_disable_devices(
+    request: Request,
+    session: dict = Depends(require_role("admin", "operator")),
+):
+    """Disable multiple devices."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+    device_type = body.get("device_type", "ap")
+    ips = body.get("ips", [])
+    if not ips or device_type not in ("ap", "switch"):
+        raise HTTPException(400, "Provide ips list and device_type (ap or switch)")
+    try:
+        count = db.bulk_set_enabled(device_type, ips, False)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"success": True, "affected": count}
+
+
+@app.post("/api/devices/bulk-delete", tags=["devices"])
+async def bulk_delete_devices(
+    request: Request,
+    session: dict = Depends(require_role("admin")),
+):
+    """Delete multiple devices. Admin only."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+    device_type = body.get("device_type", "ap")
+    ips = body.get("ips", [])
+    if not ips or device_type not in ("ap", "switch"):
+        raise HTTPException(400, "Provide ips list and device_type (ap or switch)")
+    poller = get_poller()
+    if poller:
+        for ip in ips:
+            poller.invalidate_client(ip)
+    try:
+        count = db.bulk_delete_devices(device_type, ips)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"success": True, "deleted": count}
+
+
+@app.post("/api/devices/bulk-move", tags=["devices"])
+async def bulk_move_devices(
+    request: Request,
+    session: dict = Depends(require_role("admin", "operator")),
+):
+    """Move multiple devices to a site."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+    device_type = body.get("device_type", "ap")
+    ips = body.get("ips", [])
+    site_id = body.get("site_id")
+    if not ips or device_type not in ("ap", "switch"):
+        raise HTTPException(400, "Provide ips list and device_type (ap or switch)")
+    try:
+        count = db.bulk_move_to_site(device_type, ips, site_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"success": True, "affected": count}
+
+
+@app.post("/api/switches/{ip}/poll", tags=["devices"])
+async def poll_switch(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Trigger immediate poll of a switch."""
     poller = get_poller()
     if not poller:
@@ -1159,7 +1576,7 @@ async def poll_switch(ip: str, session: dict = Depends(require_auth)):
 # Topology API
 # ============================================================================
 
-@app.get("/api/topology")
+@app.get("/api/topology", tags=["devices"])
 async def get_topology(session: dict = Depends(require_auth)):
     """Get current network topology."""
     poller = get_poller()
@@ -1175,8 +1592,8 @@ async def get_topology(session: dict = Depends(require_auth)):
     }
 
 
-@app.post("/api/topology/refresh")
-async def refresh_topology(session: dict = Depends(require_auth)):
+@app.post("/api/topology/refresh", tags=["devices"])
+async def refresh_topology(session: dict = Depends(require_role("admin", "operator"))):
     """Trigger a full topology refresh."""
     poller = get_poller()
     if not poller:
@@ -1186,7 +1603,7 @@ async def refresh_topology(session: dict = Depends(require_auth)):
     return poller.get_topology()
 
 
-@app.get("/api/cpes")
+@app.get("/api/cpes", tags=["devices"])
 async def get_all_cpes(session: dict = Depends(require_auth)):
     """Get all CPEs."""
     cpes = db.get_all_cpes()
@@ -1252,7 +1669,7 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
 </html>"""
 
 
-@app.get("/api/device-portal/{ip}", response_class=HTMLResponse)
+@app.get("/api/device-portal/{ip}", tags=["devices"], response_class=HTMLResponse)
 async def device_portal(ip: str, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.DEVICE_PORTAL))):
     """Auto-login portal: authenticate to a device and redirect to its web UI."""
     _validate_ip(ip)
@@ -1301,13 +1718,13 @@ async def device_portal(ip: str, session: dict = Depends(require_auth), _pro=Dep
 # Quick Add (combines site + AP creation)
 # ============================================================================
 
-@app.post("/api/quick-add")
+@app.post("/api/quick-add", tags=["devices"])
 async def quick_add(
     ip: str = Form(...),
     username: str = Form(...),
     password: str = Form(...),
     site_name: str = Form(None),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
 ):
     """Quick add an AP, optionally creating a new site."""
     _validate_ip(ip)
@@ -1346,10 +1763,11 @@ async def quick_add(
 _SETTINGS_SENSITIVE = {
     "admin_password_hash", "oidc_client_secret",
     "device_default_password", "license_key",
+    "radius_server_secret", "radius_server_ldap_bind_password",
 }
 
 
-@app.get("/api/settings")
+@app.get("/api/settings", tags=["settings"])
 async def get_settings(session: dict = Depends(require_auth)):
     """Get all settings. Sensitive values are redacted."""
     settings = db.get_all_settings()
@@ -1364,15 +1782,50 @@ async def get_settings(session: dict = Depends(require_auth)):
 
 _SETTINGS_WRITABLE = {
     "schedule_enabled", "schedule_days", "schedule_start_hour", "schedule_end_hour",
-    "parallel_updates", "bank_mode", "allow_downgrade", "timezone", "zip_code",
+    "parallel_updates", "bandwidth_limit_kbps",
+    "bank_mode", "allow_downgrade", "timezone", "zip_code",
     "weather_check_enabled", "min_temperature_c", "temperature_unit",
     "schedule_scope", "schedule_scope_data",
     "rollout_canary_aps", "rollout_canary_switches",
     "firmware_beta_enabled", "firmware_quarantine_days",
-    "slack_webhook_url", "autoupdate_enabled", "release_channel",
+    "slack_webhook_url",
+    "snmp_traps_enabled", "snmp_trap_host", "snmp_trap_port",
+    "snmp_trap_community", "snmp_trap_version",
+    "autoupdate_enabled", "release_channel",
     "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
     "pre_update_reboot",
+    "smoke_test_strict", "canary_auto_cancel",
+    # Webhook settings
+    "webhook_enabled", "webhook_url", "webhook_method",
+    "webhook_headers", "webhook_secret", "webhook_events",
+    # Device alert settings
+    "alert_device_offline_enabled", "alert_device_offline_cooldown_minutes",
+    # Poller settings
+    "poller_concurrency",
+    # Syslog forwarding
+    "syslog_forward_enabled", "syslog_forward_host", "syslog_forward_port",
+    "syslog_forward_protocol", "syslog_forward_facility",
+    # Email notification settings
+    "email_enabled", "email_smtp_host", "email_smtp_port",
+    "email_smtp_username", "email_smtp_password", "email_smtp_tls",
+    "email_from_address", "email_to_addresses",
 }
+
+
+def _parse_int_field(value, field: str) -> int:
+    """Parse an integer field value or raise a 400."""
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"Invalid integer for {field}")
+
+
+def _parse_float_field(value, field: str) -> float:
+    """Parse a float field value or raise a 400."""
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"Invalid number for {field}")
 
 
 def _parse_ip_csv(value: str) -> list[str]:
@@ -1419,10 +1872,92 @@ def _validate_settings(filtered: dict):
     url = filtered.get("slack_webhook_url")
     if url and not slack.is_valid_slack_url(url):
         raise HTTPException(400, "Slack webhook URL must be a valid https://hooks.slack.com/ URL")
+
+    # Validate SNMP trap settings
+    trap_host = filtered.get("snmp_trap_host")
+    if trap_host and not snmp.is_valid_trap_host(trap_host):
+        raise HTTPException(400, "SNMP trap host must be a valid IP address or hostname")
+    if "snmp_trap_port" in filtered:
+        trap_port = _parse_int_field(filtered["snmp_trap_port"], "snmp_trap_port")
+        if not 1 <= trap_port <= 65535:
+            raise HTTPException(400, "snmp_trap_port must be between 1 and 65535")
+    if "snmp_trap_version" in filtered:
+        if filtered["snmp_trap_version"] not in ("2c",):
+            raise HTTPException(400, "snmp_trap_version must be '2c'")
+
+    # Validate enum/boolean-like fields
+    if "bank_mode" in filtered:
+        filtered["bank_mode"] = str(filtered["bank_mode"]).lower()
+    if "bank_mode" in filtered and filtered["bank_mode"] not in ("one", "both"):
+        raise HTTPException(400, "bank_mode must be 'one' or 'both'")
+    if "release_channel" in filtered:
+        filtered["release_channel"] = str(filtered["release_channel"]).lower()
+    if "release_channel" in filtered and filtered["release_channel"] not in ("stable", "dev"):
+        raise HTTPException(400, "release_channel must be 'stable' or 'dev'")
+    if "temperature_unit" in filtered:
+        filtered["temperature_unit"] = str(filtered["temperature_unit"]).lower()
+    if "temperature_unit" in filtered and filtered["temperature_unit"] not in ("auto", "c", "f"):
+        raise HTTPException(400, "temperature_unit must be 'auto', 'c', or 'f'")
+
+    bool_like = {
+        "schedule_enabled", "allow_downgrade", "weather_check_enabled",
+        "firmware_beta_enabled", "autoupdate_enabled", "pre_update_reboot",
+        "snmp_traps_enabled",
+    }
+    for key in bool_like:
+        if key in filtered:
+            value = str(filtered[key]).lower()
+            if value not in ("true", "false"):
+                raise HTTPException(400, f"{key} must be 'true' or 'false'")
+            filtered[key] = value
+
+    # Validate numeric fields and ranges
+    if "schedule_start_hour" in filtered:
+        start_hour = _parse_int_field(filtered["schedule_start_hour"], "schedule_start_hour")
+        if not 0 <= start_hour <= 23:
+            raise HTTPException(400, "schedule_start_hour must be between 0 and 23")
+    if "schedule_end_hour" in filtered:
+        end_hour = _parse_int_field(filtered["schedule_end_hour"], "schedule_end_hour")
+        if not 0 <= end_hour <= 23:
+            raise HTTPException(400, "schedule_end_hour must be between 0 and 23")
+    if "parallel_updates" in filtered:
+        parallel = _parse_int_field(filtered["parallel_updates"], "parallel_updates")
+        if parallel < 1 or parallel > 32:
+            raise HTTPException(400, "parallel_updates must be between 1 and 32")
+    if "bandwidth_limit_kbps" in filtered:
+        bw = _parse_int_field(filtered["bandwidth_limit_kbps"], "bandwidth_limit_kbps")
+        if bw < 0 or bw > 1000000:
+            raise HTTPException(400, "bandwidth_limit_kbps must be between 0 and 1000000 (0 = unlimited)")
+    if "firmware_quarantine_days" in filtered:
+        hold_days = _parse_int_field(filtered["firmware_quarantine_days"], "firmware_quarantine_days")
+        if hold_days < 0 or hold_days > 365:
+            raise HTTPException(400, "firmware_quarantine_days must be between 0 and 365")
+    if "min_temperature_c" in filtered:
+        min_temp = _parse_float_field(filtered["min_temperature_c"], "min_temperature_c")
+        if min_temp < -100 or min_temp > 100:
+            raise HTTPException(400, "min_temperature_c must be between -100 and 100")
+
+    # Validate schedule_days format
+    if "schedule_days" in filtered:
+        allowed_days = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+        day_values = [d.strip().lower() for d in str(filtered["schedule_days"]).split(",") if d.strip()]
+        if not all(d in allowed_days for d in day_values):
+            raise HTTPException(400, "schedule_days must be comma-separated day abbreviations (mon..sun)")
+
+    # Validate firmware filenames to prevent traversal via settings
+    for fw_key in ("selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100"):
+        if fw_key in filtered and filtered[fw_key]:
+            validate_firmware_filename(str(filtered[fw_key]))
+
     # License-gated settings
     if filtered.get("slack_webhook_url") and not is_feature_enabled(Feature.SLACK_NOTIFICATIONS):
         raise HTTPException(403, detail={"error": "feature_locked", "feature": "slack_notifications",
                                          "message": "Slack notifications require a Pro license."})
+    if filtered.get("snmp_traps_enabled") == "true" and not is_feature_enabled(Feature.SNMP_TRAPS):
+        raise HTTPException(403, detail={"error": "feature_locked", "feature": "snmp_traps",
+                                         "message": "SNMP trap notifications require a Pro license."})
+    if filtered.get("snmp_traps_enabled") == "true" and not snmp.is_pysnmp_available():
+        raise HTTPException(400, "Cannot enable SNMP traps: pysnmp-lextudio is not installed")
     if filtered.get("firmware_beta_enabled") == "true" and not is_feature_enabled(Feature.BETA_FIRMWARE):
         raise HTTPException(403, detail={"error": "feature_locked", "feature": "beta_firmware",
                                          "message": "Beta firmware channel requires a Pro license."})
@@ -1474,8 +2009,8 @@ def _validate_settings(filtered: dict):
             raise HTTPException(400, f"Invalid {label} canary selection ({'; '.join(parts)})")
 
 
-@app.put("/api/settings")
-async def update_settings(request: Request, session: dict = Depends(require_auth)):
+@app.put("/api/settings", tags=["settings"])
+async def update_settings(request: Request, session: dict = Depends(require_role("admin"))):
     """Update settings. Only whitelisted keys are accepted."""
     data = await request.json()
     filtered = {k: v for k, v in data.items() if k in _SETTINGS_WRITABLE}
@@ -1486,8 +2021,8 @@ async def update_settings(request: Request, session: dict = Depends(require_auth
     return {"success": True}
 
 
-@app.post("/api/settings/save")
-async def save_settings_and_reevaluate(request: Request, session: dict = Depends(require_auth)):
+@app.post("/api/settings/save", tags=["settings"])
+async def save_settings_and_reevaluate(request: Request, session: dict = Depends(require_role("admin"))):
     """Save settings, re-select firmware, and force scheduler re-evaluation."""
     data = await request.json()
     filtered = {k: v for k, v in data.items() if k in _SETTINGS_WRITABLE}
@@ -1496,6 +2031,8 @@ async def save_settings_and_reevaluate(request: Request, session: dict = Depends
 
     _validate_settings(filtered)
     db.set_settings(filtered)
+    db.log_audit(session["username"], "settings.update", "settings", None,
+                 f"Updated keys: {', '.join(sorted(filtered.keys()))}", _client_ip(request))
 
     fetcher = get_fetcher()
     if fetcher:
@@ -1506,13 +2043,57 @@ async def save_settings_and_reevaluate(request: Request, session: dict = Depends
     if scheduler:
         await scheduler.force_check()
 
+    # Reload syslog if syslog settings changed
+    if any(k.startswith("syslog_forward") for k in filtered):
+        syslog_forwarder.reload_config()
+
     return {"success": True}
 
 
-@app.post("/api/slack/test")
-async def test_slack_webhook(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.SLACK_NOTIFICATIONS))):
+@app.post("/api/slack/test", tags=["notifications"])
+async def test_slack_webhook(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SLACK_NOTIFICATIONS))):
     """Send a test notification to the configured Slack webhook."""
     success, message = await slack.send_test_notification()
+    return {"success": success, "message": message}
+
+
+@app.post("/api/snmp/test", tags=["notifications"])
+async def test_snmp_trap(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SNMP_TRAPS))):
+    """Send a test SNMP trap to verify configuration."""
+    success, message = await snmp.send_test_trap()
+    return {"success": success, "message": message}
+
+
+@app.post("/api/webhooks/test", tags=["notifications"])
+async def test_webhook(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.WEBHOOKS))):
+    """Send a test webhook to verify configuration."""
+    success, message = await webhooks.send_test_webhook()
+    return {"success": success, "message": message}
+
+
+@app.get("/api/syslog/status", tags=["notifications"])
+async def get_syslog_status(session: dict = Depends(require_role("admin"))):
+    """Get syslog forwarder status."""
+    return syslog_forwarder.get_status()
+
+
+@app.post("/api/syslog/test", tags=["notifications"])
+async def test_syslog(session: dict = Depends(require_role("admin"))):
+    """Send a test syslog message."""
+    success, message = syslog_forwarder.test_connection()
+    return {"success": success, "message": message}
+
+
+@app.get("/api/email/status", tags=["notifications"])
+async def get_email_status(session: dict = Depends(require_role("admin"))):
+    """Get email notification configuration status."""
+    return email_notifier.get_status()
+
+
+@app.post("/api/email/test", tags=["notifications"])
+async def test_email(session: dict = Depends(require_role("admin"))):
+    """Send a test email to verify SMTP configuration."""
+    success, message = email_notifier.send_test_email()
     return {"success": success, "message": message}
 
 
@@ -1520,7 +2101,7 @@ async def test_slack_webhook(session: dict = Depends(require_auth), _pro=Depends
 # License API
 # ============================================================================
 
-@app.get("/api/license")
+@app.get("/api/license", tags=["license"])
 async def get_license_status(session: dict = Depends(require_auth)):
     """Get current license state, features map, and device counts."""
     state = get_license_state()
@@ -1529,8 +2110,8 @@ async def get_license_status(session: dict = Depends(require_auth)):
     return {**state.to_dict(), **nag, "features": features}
 
 
-@app.post("/api/license/activate")
-async def activate_license(request: Request, session: dict = Depends(require_auth)):
+@app.post("/api/license/activate", tags=["license"])
+async def activate_license(request: Request, session: dict = Depends(require_role("admin"))):
     """Activate or update the license key."""
     data = await request.json()
     key = data.get("license_key", "").strip()
@@ -1541,15 +2122,15 @@ async def activate_license(request: Request, session: dict = Depends(require_aut
     return {**state.to_dict(), "success": state.status == LicenseStatus.ACTIVE}
 
 
-@app.post("/api/license/deactivate")
-async def deactivate_license(session: dict = Depends(require_auth)):
+@app.post("/api/license/deactivate", tags=["license"])
+async def deactivate_license(session: dict = Depends(require_role("admin"))):
     """Remove the license key and revert to free tier."""
     clear_license()
     return {"success": True, "status": "free"}
 
 
-@app.post("/api/license/validate")
-async def force_validate_license(session: dict = Depends(require_auth)):
+@app.post("/api/license/validate", tags=["license"])
+async def force_validate_license(session: dict = Depends(require_role("admin"))):
     """Force re-validate the current license with the server."""
     state = get_license_state()
     if not state.license_key:
@@ -1562,7 +2143,7 @@ async def force_validate_license(session: dict = Depends(require_auth)):
 # System / Appliance API
 # ============================================================================
 
-@app.get("/api/system/info")
+@app.get("/api/system/info", tags=["system"])
 async def get_system_info(session: dict = Depends(require_auth)):
     """Get system information (version, uptime, disk usage, machine ID)."""
     import shutil
@@ -1609,8 +2190,8 @@ async def get_system_info(session: dict = Depends(require_auth)):
     return info
 
 
-@app.post("/api/system/network")
-async def update_network_config(request: Request, session: dict = Depends(require_auth)):
+@app.post("/api/system/network", tags=["system"])
+async def update_network_config(request: Request, session: dict = Depends(require_role("admin"))):
     """Update network configuration (appliance mode only)."""
     if os.environ.get("TACHYON_APPLIANCE") != "1":
         raise HTTPException(404, "Not available in this deployment mode")
@@ -1657,7 +2238,7 @@ async def update_network_config(request: Request, session: dict = Depends(requir
 # Auto-Update API
 # ============================================================================
 
-@app.get("/api/updates")
+@app.get("/api/updates", tags=["jobs"])
 async def get_update_status(session: dict = Depends(require_auth)):
     """Get current update status."""
     checker = get_checker()
@@ -1666,8 +2247,8 @@ async def get_update_status(session: dict = Depends(require_auth)):
     return {"error": "Release checker not initialized"}
 
 
-@app.post("/api/updates/check")
-async def check_for_updates(session: dict = Depends(require_auth)):
+@app.post("/api/updates/check", tags=["jobs"])
+async def check_for_updates(session: dict = Depends(require_role("admin", "operator"))):
     """Manually trigger a check for updates."""
     checker = get_checker()
     if checker:
@@ -1676,8 +2257,8 @@ async def check_for_updates(session: dict = Depends(require_auth)):
     return {"error": "Release checker not initialized"}
 
 
-@app.post("/api/updates/apply")
-async def apply_app_update(session: dict = Depends(require_auth)):
+@app.post("/api/updates/apply", tags=["jobs"])
+async def apply_app_update(session: dict = Depends(require_role("admin"))):
     """Apply available update by pulling new Docker image and restarting."""
     result = await apply_update()
     if result.get("success"):
@@ -1690,13 +2271,13 @@ async def apply_app_update(session: dict = Depends(require_auth)):
 # Authentication Configuration API
 # ============================================================================
 
-@app.get("/api/auth/config")
+@app.get("/api/auth/config", tags=["auth"])
 async def get_auth_config(session: dict = Depends(require_auth)):
     """Get authentication configuration (secrets masked)."""
     return radius_config.get_auth_config_summary()
 
 
-@app.get("/api/auth/radius")
+@app.get("/api/auth/radius", tags=["auth"])
 async def get_builtin_radius_config(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Get built-in RADIUS server configuration and summary."""
     return {
@@ -1705,8 +2286,8 @@ async def get_builtin_radius_config(session: dict = Depends(require_auth), _pro=
     }
 
 
-@app.post("/api/auth/radius/test")
-async def test_builtin_radius(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+@app.post("/api/auth/radius/test", tags=["auth"])
+async def test_builtin_radius(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Test the built-in RADIUS server health."""
     try:
         success, message = builtin_radius.test_radius_server()
@@ -1715,8 +2296,8 @@ async def test_builtin_radius(session: dict = Depends(require_auth), _pro=Depend
         return {"success": False, "message": str(exc)}
 
 
-@app.put("/api/auth/radius")
-async def update_builtin_radius_config(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+@app.put("/api/auth/radius", tags=["auth"])
+async def update_builtin_radius_config(request: Request, session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Update built-in RADIUS server settings."""
     data = await request.json()
     try:
@@ -1744,14 +2325,14 @@ async def update_builtin_radius_config(request: Request, session: dict = Depends
     return builtin_radius.get_public_config_summary()
 
 
-@app.get("/api/auth/radius/users")
+@app.get("/api/auth/radius/users", tags=["auth"])
 async def list_builtin_radius_users(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """List built-in RADIUS users."""
     return {"users": builtin_radius.list_users()}
 
 
-@app.post("/api/auth/radius/users")
-async def create_builtin_radius_user(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+@app.post("/api/auth/radius/users", tags=["auth"])
+async def create_builtin_radius_user(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Create a built-in RADIUS user."""
     data = await request.json()
     try:
@@ -1766,8 +2347,8 @@ async def create_builtin_radius_user(request: Request, session: dict = Depends(r
     return user
 
 
-@app.put("/api/auth/radius/users/{user_id}")
-async def update_builtin_radius_user(user_id: int, request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+@app.put("/api/auth/radius/users/{user_id}", tags=["auth"])
+async def update_builtin_radius_user(user_id: int, request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Update a built-in RADIUS user."""
     data = await request.json()
     try:
@@ -1783,8 +2364,8 @@ async def update_builtin_radius_user(user_id: int, request: Request, session: di
     return user
 
 
-@app.delete("/api/auth/radius/users/{user_id}")
-async def delete_builtin_radius_user(user_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+@app.delete("/api/auth/radius/users/{user_id}", tags=["auth"])
+async def delete_builtin_radius_user(user_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Delete a built-in RADIUS user."""
     deleted = builtin_radius.delete_user(user_id)
     if not deleted:
@@ -1793,14 +2374,14 @@ async def delete_builtin_radius_user(user_id: int, session: dict = Depends(requi
     return {"success": True}
 
 
-@app.get("/api/auth/radius/clients")
+@app.get("/api/auth/radius/clients", tags=["auth"])
 async def list_builtin_radius_clients(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """List manual RADIUS client overrides."""
     return {"clients": builtin_radius.list_client_overrides()}
 
 
-@app.post("/api/auth/radius/clients")
-async def create_builtin_radius_client(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+@app.post("/api/auth/radius/clients", tags=["auth"])
+async def create_builtin_radius_client(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Create a manual RADIUS client override."""
     data = await request.json()
     try:
@@ -1815,8 +2396,8 @@ async def create_builtin_radius_client(request: Request, session: dict = Depends
     return client
 
 
-@app.put("/api/auth/radius/clients/{override_id}")
-async def update_builtin_radius_client(override_id: int, request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+@app.put("/api/auth/radius/clients/{override_id}", tags=["auth"])
+async def update_builtin_radius_client(override_id: int, request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Update a manual RADIUS client override."""
     data = await request.json()
     try:
@@ -1832,8 +2413,8 @@ async def update_builtin_radius_client(override_id: int, request: Request, sessi
     return client
 
 
-@app.delete("/api/auth/radius/clients/{override_id}")
-async def delete_builtin_radius_client(override_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+@app.delete("/api/auth/radius/clients/{override_id}", tags=["auth"])
+async def delete_builtin_radius_client(override_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Delete a manual RADIUS client override."""
     deleted = builtin_radius.delete_client_override(override_id)
     if not deleted:
@@ -1842,14 +2423,14 @@ async def delete_builtin_radius_client(override_id: int, session: dict = Depends
     return {"success": True}
 
 
-@app.get("/api/auth/radius/stats")
+@app.get("/api/auth/radius/stats", tags=["auth"])
 async def get_builtin_radius_stats(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Get built-in RADIUS server stats and recent auth events."""
     return builtin_radius.get_stats()
 
 
-@app.post("/api/auth/radius/secret-review")
-async def mark_builtin_radius_secret_reviewed(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+@app.post("/api/auth/radius/secret-review", tags=["auth"])
+async def mark_builtin_radius_secret_reviewed(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Mark a legacy built-in RADIUS secret as reviewed today without changing it."""
     try:
         builtin_radius.mark_secret_reviewed()
@@ -1858,7 +2439,7 @@ async def mark_builtin_radius_secret_reviewed(session: dict = Depends(require_au
     return builtin_radius.get_public_config_summary()
 
 
-@app.get("/api/auth/radius/rollout")
+@app.get("/api/auth/radius/rollout", tags=["auth"])
 async def get_builtin_radius_rollout(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Get current built-in Radius device migration rollout state."""
     rollout = builtin_radius.get_current_rollout()
@@ -1873,8 +2454,8 @@ async def get_builtin_radius_rollout(session: dict = Depends(require_auth), _pro
     }
 
 
-@app.post("/api/auth/radius/rollout/start")
-async def start_builtin_radius_rollout(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+@app.post("/api/auth/radius/rollout/start", tags=["auth"])
+async def start_builtin_radius_rollout(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Start staged Radius migration for managed devices."""
     if builtin_radius.get_active_rollout():
         raise HTTPException(400, "A Radius rollout is already active")
@@ -1902,8 +2483,8 @@ async def start_builtin_radius_rollout(session: dict = Depends(require_auth), _p
     return {"rollout": rollout}
 
 
-@app.post("/api/auth/radius/rollout/{rollout_id}/resume")
-async def resume_builtin_radius_rollout(rollout_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+@app.post("/api/auth/radius/rollout/{rollout_id}/resume", tags=["auth"])
+async def resume_builtin_radius_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Resume a paused Radius migration rollout."""
     rollout = builtin_radius.get_rollout(rollout_id)
     if not rollout:
@@ -1916,8 +2497,8 @@ async def resume_builtin_radius_rollout(rollout_id: int, session: dict = Depends
     return {"rollout": builtin_radius.get_rollout(rollout_id)}
 
 
-@app.post("/api/auth/radius/rollout/{rollout_id}/cancel")
-async def cancel_builtin_radius_rollout(rollout_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+@app.post("/api/auth/radius/rollout/{rollout_id}/cancel", tags=["auth"])
+async def cancel_builtin_radius_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Cancel an active or paused Radius migration rollout."""
     rollout = builtin_radius.get_rollout(rollout_id)
     if not rollout:
@@ -1929,8 +2510,8 @@ async def cancel_builtin_radius_rollout(rollout_id: int, session: dict = Depends
     return {"success": True}
 
 
-@app.put("/api/auth/device-defaults")
-async def update_device_auth_config(request: Request, session: dict = Depends(require_auth)):
+@app.put("/api/auth/device-defaults", tags=["auth"])
+async def update_device_auth_config(request: Request, session: dict = Depends(require_role("admin"))):
     """Update global default device credentials."""
     data = await request.json()
 
@@ -1949,7 +2530,7 @@ async def update_device_auth_config(request: Request, session: dict = Depends(re
     return {"success": True}
 
 
-@app.get("/api/auth/oidc")
+@app.get("/api/auth/oidc", tags=["auth"])
 async def get_oidc_config_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Get OIDC/SSO configuration (secret masked)."""
     config = oidc_config.get_oidc_config()
@@ -1964,8 +2545,8 @@ async def get_oidc_config_api(session: dict = Depends(require_auth), _pro=Depend
     }
 
 
-@app.put("/api/auth/oidc")
-async def update_oidc_config_api(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.SSO_OIDC))):
+@app.put("/api/auth/oidc", tags=["auth"])
+async def update_oidc_config_api(request: Request, session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Update OIDC/SSO configuration."""
     data = await request.json()
 
@@ -1994,8 +2575,8 @@ async def update_oidc_config_api(request: Request, session: dict = Depends(requi
     return {"success": True}
 
 
-@app.post("/api/auth/test-oidc")
-async def test_oidc_discovery(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.SSO_OIDC))):
+@app.post("/api/auth/test-oidc", tags=["auth"])
+async def test_oidc_discovery(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Test OIDC discovery endpoint reachability."""
     config = oidc_config.get_oidc_config()
     if not config.provider_url:
@@ -2215,27 +2796,216 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
         return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
 
     # Validate group membership
-    user = authenticate_oidc_user(email, groups)
-    if not user:
+    oidc_username = authenticate_oidc_user(email, groups)
+    if not oidc_username:
+        return RedirectResponse(url="/login?error=oidc_unauthorized", status_code=302)
+
+    # Ensure OIDC user exists in users table (auto-creates with default role)
+    db_user = ensure_oidc_user(oidc_username)
+    if db_user and not db_user.get("enabled", True):
         return RedirectResponse(url="/login?error=oidc_unauthorized", status_code=302)
 
     # Create session using existing infrastructure
     _clear_rate_limit_bucket(bucket)
-    session_id = create_session(user, ip_address)
+    session_id = create_session(oidc_username, ip_address)
 
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=session_id,
         httponly=True,
-        secure=True,
+        secure=is_request_secure(request),
         max_age=86400,
         samesite="lax",
     )
     return response
 
 
-@app.get("/api/time")
+# ---------------------------------------------------------------------------
+# User management API (RBAC)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/users/me", tags=["auth"])
+async def get_current_user(session: dict = Depends(require_auth)):
+    """Get current authenticated user info."""
+    return {"username": session["username"], "role": session.get("role", "viewer")}
+
+
+@app.get("/api/users", tags=["auth"], dependencies=[Depends(require_role("admin"))])
+async def list_users_api():
+    """List all users (admin only)."""
+    return {"users": db.list_users()}
+
+
+@app.post("/api/users", tags=["auth"])
+async def create_user_api(request: Request, session: dict = Depends(require_role("admin"))):
+    """Create a new local user (admin only)."""
+    data = await request.json()
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+    role = data.get("role", "viewer")
+
+    if not username:
+        raise HTTPException(400, "Username is required")
+    if not password or len(password) < 12:
+        raise HTTPException(400, "Password must be at least 12 characters")
+    if role not in db.VALID_ROLES:
+        raise HTTPException(400, f"Invalid role. Must be one of: {', '.join(db.VALID_ROLES)}")
+    if db.get_user(username):
+        raise HTTPException(409, "Username already exists")
+
+    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    user_id = db.create_user(username, password_hash, role, "local")
+    db.log_audit(session["username"], "user.create", "user", str(user_id),
+                 f"Created user '{username}' with role '{role}'", _client_ip(request))
+    return {"id": user_id, "username": username, "role": role}
+
+
+@app.put("/api/users/{user_id}", tags=["auth"], dependencies=[Depends(require_role("admin"))])
+async def update_user_api(user_id: int, request: Request, session: dict = Depends(require_auth)):
+    """Update a user (admin only)."""
+    user = db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    data = await request.json()
+    updates = {}
+
+    if "role" in data:
+        new_role = data["role"]
+        if new_role not in db.VALID_ROLES:
+            raise HTTPException(400, f"Invalid role. Must be one of: {', '.join(db.VALID_ROLES)}")
+        # Guard: cannot remove last admin
+        if user["role"] == "admin" and new_role != "admin" and db.count_admin_users() <= 1:
+            raise HTTPException(400, "Cannot remove the last admin user")
+        updates["role"] = new_role
+
+    if "password" in data and data["password"]:
+        if len(data["password"]) < 12:
+            raise HTTPException(400, "Password must be at least 12 characters")
+        updates["password_hash"] = bcrypt.hashpw(data["password"].encode(), bcrypt.gensalt()).decode()
+
+    if "enabled" in data:
+        enabled = bool(data["enabled"])
+        # Guard: cannot disable self
+        if not enabled and user["username"] == session["username"]:
+            raise HTTPException(400, "Cannot disable your own account")
+        # Guard: cannot disable last admin
+        if not enabled and user["role"] == "admin" and db.count_admin_users() <= 1:
+            raise HTTPException(400, "Cannot disable the last admin user")
+        updates["enabled"] = enabled
+
+    if not updates:
+        raise HTTPException(400, "No valid fields to update")
+
+    db.update_user(user_id, **updates)
+    changed = ", ".join(updates.keys())
+    db.log_audit(session["username"], "user.update", "user", str(user_id),
+                 f"Updated {changed} for '{user['username']}'", _client_ip(request))
+    return {"ok": True}
+
+
+@app.delete("/api/users/{user_id}", tags=["auth"], dependencies=[Depends(require_role("admin"))])
+async def delete_user_api(user_id: int, request: Request, session: dict = Depends(require_auth)):
+    """Delete a user (admin only)."""
+    user = db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    # Guard: cannot delete self
+    if user["username"] == session["username"]:
+        raise HTTPException(400, "Cannot delete your own account")
+    # Guard: cannot delete last admin
+    if user["role"] == "admin" and db.count_admin_users() <= 1:
+        raise HTTPException(400, "Cannot delete the last admin user")
+
+    db.delete_sessions_for_user(user["username"])
+    db.delete_user(user_id)
+    db.log_audit(session["username"], "user.delete", "user", str(user_id),
+                 f"Deleted user '{user['username']}'", _client_ip(request))
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Audit log API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/audit-log", tags=["auth"], dependencies=[Depends(require_role("admin"))])
+async def get_audit_log_api(
+    limit: int = 100, offset: int = 0,
+    username: str = None, action: str = None,
+):
+    """Get audit log entries (admin only)."""
+    entries = db.get_audit_log(limit=limit, offset=offset, username=username, action=action)
+    total = db.get_audit_log_count(username=username, action=action)
+    return {"entries": entries, "total": total}
+
+
+# ---------------------------------------------------------------------------
+# API token management
+# ---------------------------------------------------------------------------
+
+@app.get("/api/tokens", tags=["auth"])
+async def list_tokens_api(session: dict = Depends(require_auth)):
+    """List API tokens for the current user (admins see all)."""
+    if session.get("role") == "admin":
+        tokens = db.list_api_tokens()
+    else:
+        tokens = db.list_api_tokens(user_id=session.get("user_id"))
+    return {"tokens": tokens}
+
+
+@app.post("/api/tokens", tags=["auth"])
+async def create_token_api(request: Request, session: dict = Depends(require_auth)):
+    """Create a new API token. Returns the token value (shown only once)."""
+    data = await request.json()
+    name = data.get("name", "").strip()
+    if not name:
+        raise HTTPException(400, "Token name is required")
+    if len(name) > 100:
+        raise HTTPException(400, "Token name too long")
+
+    scopes = data.get("scopes", "read")
+    if scopes not in ("read", "read,write"):
+        raise HTTPException(400, "Scopes must be 'read' or 'read,write'")
+
+    expires_days = data.get("expires_days")
+    expires_at = None
+    if expires_days:
+        expires_days = int(expires_days)
+        if expires_days < 1 or expires_days > 365:
+            raise HTTPException(400, "expires_days must be 1-365")
+        expires_at = (datetime.now() + timedelta(days=expires_days)).isoformat()
+
+    token, token_hash, token_prefix = generate_api_token()
+    token_id = db.create_api_token(
+        name=name,
+        token_hash=token_hash,
+        token_prefix=token_prefix,
+        user_id=session.get("user_id", 0),
+        scopes=scopes,
+        expires_at=expires_at,
+    )
+    db.log_audit(session["username"], "token.create", "api_token", str(token_id),
+                 f"Created token '{name}'", _client_ip(request))
+    return {"id": token_id, "token": token, "prefix": token_prefix, "name": name}
+
+
+@app.delete("/api/tokens/{token_id}", tags=["auth"])
+async def delete_token_api(token_id: int, request: Request, session: dict = Depends(require_auth)):
+    """Delete an API token."""
+    # Admins can delete any token; others can only delete their own
+    if session.get("role") == "admin":
+        deleted = db.delete_api_token(token_id)
+    else:
+        deleted = db.delete_api_token(token_id, user_id=session.get("user_id"))
+    if not deleted:
+        raise HTTPException(404, "Token not found")
+    db.log_audit(session["username"], "token.delete", "api_token", str(token_id),
+                 None, _client_ip(request))
+    return {"ok": True}
+
+
+@app.get("/api/time", tags=["system"])
 async def get_current_time(session: dict = Depends(require_auth)):
     """Get current time info with timezone."""
     settings = db.get_all_settings()
@@ -2250,7 +3020,7 @@ async def get_current_time(session: dict = Depends(require_auth)):
     return time_info
 
 
-@app.get("/api/weather")
+@app.get("/api/weather", tags=["system"])
 async def get_weather(session: dict = Depends(require_auth)):
     """Get current weather."""
     settings = db.get_all_settings()
@@ -2268,7 +3038,7 @@ async def get_weather(session: dict = Depends(require_auth)):
     return weather
 
 
-@app.get("/api/scheduler/status")
+@app.get("/api/scheduler/status", tags=["system"])
 async def get_scheduler_status(session: dict = Depends(require_auth)):
     """Get current scheduler status."""
     scheduler = get_scheduler()
@@ -2277,7 +3047,7 @@ async def get_scheduler_status(session: dict = Depends(require_auth)):
     return scheduler.get_status()
 
 
-@app.get("/api/rollout/current")
+@app.get("/api/rollout/current", tags=["system"])
 async def get_current_rollout(session: dict = Depends(require_auth)):
     """Get the current active/paused rollout with progress."""
     rollout = db.get_active_rollout()
@@ -2305,8 +3075,8 @@ async def get_current_rollout(session: dict = Depends(require_auth)):
     }
 
 
-@app.post("/api/rollout/{rollout_id}/resume")
-async def resume_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+@app.post("/api/rollout/{rollout_id}/resume", tags=["system"])
+async def resume_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Resume a paused rollout."""
     rollout = db.get_rollout(rollout_id)
     if not rollout:
@@ -2325,8 +3095,8 @@ async def resume_rollout(rollout_id: int, session: dict = Depends(require_auth))
     return {"success": True}
 
 
-@app.post("/api/rollout/{rollout_id}/cancel")
-async def cancel_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+@app.post("/api/rollout/{rollout_id}/cancel", tags=["system"])
+async def cancel_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Cancel an active/paused rollout."""
     rollout = db.get_rollout(rollout_id)
     if not rollout:
@@ -2345,8 +3115,8 @@ async def cancel_rollout(rollout_id: int, session: dict = Depends(require_auth))
     return {"success": True}
 
 
-@app.post("/api/rollout/{rollout_id}/reset")
-async def reset_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+@app.post("/api/rollout/{rollout_id}/reset", tags=["system"])
+async def reset_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Reset a paused rollout - cancels it so a fresh rollout starts next window."""
     rollout = db.get_rollout(rollout_id)
     if not rollout:
@@ -2365,8 +3135,8 @@ async def reset_rollout(rollout_id: int, session: dict = Depends(require_auth)):
     return {"success": True}
 
 
-@app.post("/api/rollout/canary/trigger")
-async def trigger_canary_rollout(session: dict = Depends(require_auth)):
+@app.post("/api/rollout/canary/trigger", tags=["system"])
+async def trigger_canary_rollout(session: dict = Depends(require_role("admin", "operator"))):
     """Trigger the canary phase immediately, outside the maintenance window."""
     scheduler = get_scheduler()
     if not scheduler:
@@ -2380,7 +3150,71 @@ async def trigger_canary_rollout(session: dict = Depends(require_auth)):
     return {"success": True, "status": scheduler.get_status()}
 
 
-@app.get("/api/location")
+# ---------------------------------------------------------------------------
+# Freeze windows API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/freeze-windows", tags=["system"])
+async def list_freeze_windows_api(session: dict = Depends(require_auth)):
+    """List all maintenance freeze windows."""
+    windows = db.list_freeze_windows()
+    active = db.is_in_freeze_window()
+    return {"windows": windows, "active_freeze": active}
+
+
+@app.post("/api/freeze-windows", tags=["system"])
+async def create_freeze_window_api(request: Request, session: dict = Depends(require_role("admin"))):
+    """Create a maintenance freeze window."""
+    data = await request.json()
+    name = data.get("name", "").strip()
+    start_date = data.get("start_date", "").strip()
+    end_date = data.get("end_date", "").strip()
+    reason = data.get("reason", "").strip()
+
+    if not name:
+        raise HTTPException(400, "Name is required")
+    if not start_date or not end_date:
+        raise HTTPException(400, "Start and end dates are required")
+    if end_date <= start_date:
+        raise HTTPException(400, "End date must be after start date")
+
+    window_id = db.create_freeze_window(name, start_date, end_date, reason or None)
+    return {"id": window_id, "name": name}
+
+
+@app.put("/api/freeze-windows/{window_id}", tags=["system"])
+async def update_freeze_window_api(window_id: int, request: Request, session: dict = Depends(require_role("admin"))):
+    """Update a freeze window."""
+    window = db.get_freeze_window(window_id)
+    if not window:
+        raise HTTPException(404, "Freeze window not found")
+
+    data = await request.json()
+    updates = {}
+    for field in ("name", "start_date", "end_date", "reason", "enabled"):
+        if field in data:
+            updates[field] = data[field]
+
+    if "start_date" in updates and "end_date" in updates:
+        if updates["end_date"] <= updates["start_date"]:
+            raise HTTPException(400, "End date must be after start date")
+
+    if not updates:
+        raise HTTPException(400, "No valid fields to update")
+
+    db.update_freeze_window(window_id, **updates)
+    return {"ok": True}
+
+
+@app.delete("/api/freeze-windows/{window_id}", tags=["system"])
+async def delete_freeze_window_api(window_id: int, session: dict = Depends(require_role("admin"))):
+    """Delete a freeze window."""
+    if not db.delete_freeze_window(window_id):
+        raise HTTPException(404, "Freeze window not found")
+    return {"ok": True}
+
+
+@app.get("/api/location", tags=["system"])
 async def get_location(session: dict = Depends(require_auth)):
     """Get detected location info."""
     settings = db.get_all_settings()
@@ -2409,8 +3243,8 @@ async def get_location(session: dict = Depends(require_auth)):
 # Backup API
 # ============================================================================
 
-@app.post("/api/backup/export")
-async def export_backup(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+@app.post("/api/backup/export", tags=["config"])
+async def export_backup(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Export devices as CSV with encrypted passwords."""
     data = await request.json()
     passphrase = data.get("passphrase", "")
@@ -2431,12 +3265,12 @@ async def export_backup(request: Request, session: dict = Depends(require_auth),
     )
 
 
-@app.post("/api/backup/import")
+@app.post("/api/backup/import", tags=["config"])
 async def import_backup(
     file: UploadFile = File(...),
     passphrase: str = Form(...),
     conflict_mode: str = Form("skip"),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.CONFIG_BACKUP)),
 ):
     """Import devices from a CSV with encrypted passwords."""
@@ -2493,6 +3327,9 @@ class DeviceStatus:
     stage_history: list = field(default_factory=list)
     current_stage: Optional[str] = None
     current_stage_started: Optional[str] = None
+    # Smoke test results
+    smoke_warnings: Optional[list] = None
+    smoke_checks: Optional[list] = None
 
 
 @dataclass
@@ -2507,6 +3344,7 @@ class UpdateJob:
     devices: Dict[str, DeviceStatus] = field(default_factory=dict)
     bank_mode: str = "both"
     cancelled: bool = False
+    cancel_reason: Optional[str] = None
     ap_cpe_map: Dict[str, list] = field(default_factory=dict)  # AP IP -> [CPE IPs]
     device_roles: Dict[str, str] = field(default_factory=dict)  # IP -> "ap"/"cpe"
     device_parent: Dict[str, str] = field(default_factory=dict)  # CPE IP -> parent AP IP
@@ -2514,18 +3352,106 @@ class UpdateJob:
     completed_at: Optional[datetime] = None
     status: str = "pending"
     is_scheduled: bool = False
+    start_hour: Optional[int] = None
     end_hour: Optional[int] = None
+    schedule_days: list[str] = field(default_factory=list)
     schedule_timezone: Optional[str] = None
     pre_update_reboot: bool = True
     enforce_window_cutoff: bool = True
+
+
+async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
+    """Finalize a job if its task crashes unexpectedly."""
+    if job.status == "completed":
+        return
+
+    err_text = f"Internal job error: {error}"
+    for ds in job.devices.values():
+        if ds.status not in ("success", "failed", "skipped", "cancelled"):
+            ds.status = "failed"
+            ds.error = err_text
+            ds.progress_message = err_text
+
+    job.completed_at = datetime.now()
+    job.status = "completed"
+
+    success_count = sum(1 for d in job.devices.values() if d.status == "success")
+    failed_count = sum(1 for d in job.devices.values() if d.status == "failed")
+    skipped_count = sum(1 for d in job.devices.values() if d.status == "skipped")
+    cancelled_count = sum(1 for d in job.devices.values() if d.status == "cancelled")
+
+    resolved_tz = job.schedule_timezone
+    if not resolved_tz:
+        settings = db.get_all_settings()
+        tz_setting = settings.get("timezone", "auto")
+        resolved_tz = await services.get_timezone() if tz_setting == "auto" else tz_setting
+
+    await broadcast({
+        "type": "job_completed",
+        "job_id": job.job_id,
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "skipped_count": skipped_count,
+        "cancelled_count": cancelled_count,
+        "duration": (job.completed_at - job.started_at).total_seconds() if job.started_at else 0,
+        "timezone": resolved_tz,
+        "error": err_text,
+        "devices": {
+            ip: {
+                "status": ds.status,
+                "message": ds.progress_message,
+                "old_version": ds.old_version,
+                "new_version": ds.new_version,
+                "error": ds.error,
+                "bank1_version": ds.bank1_version,
+                "bank2_version": ds.bank2_version,
+                "active_bank": ds.active_bank,
+                "role": ds.role,
+                "parent_ap": ds.parent_ap,
+                "model": ds.model,
+            }
+            for ip, ds in job.devices.items()
+        },
+        "ap_cpe_map": job.ap_cpe_map,
+        "device_roles": job.device_roles,
+    })
+
+    if job.is_scheduled:
+        scheduler = get_scheduler()
+        if scheduler:
+            device_statuses = {ip: ds.status for ip, ds in job.devices.items()}
+            scheduler.on_job_completed(
+                job.job_id,
+                success_count,
+                failed_count if failed_count > 0 else 1,
+                learned_version=None,
+                device_statuses=device_statuses,
+                cancel_reason=job.cancel_reason,
+            )
+
+
+def _spawn_update_job(job: "UpdateJob", concurrency: int):
+    """Spawn update task with crash guard so scheduler state cannot get stuck."""
+    task = asyncio.create_task(run_update_job(job, concurrency))
+
+    def _on_done(done_task: asyncio.Task):
+        try:
+            exc = done_task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc:
+            logger.exception(f"Update job {job.job_id} crashed", exc_info=exc)
+            asyncio.create_task(_finalize_crashed_job(job, exc))
+
+    task.add_done_callback(_on_done)
 
 
 MAX_FIRMWARE_SIZE = 500 * 1024 * 1024   # 500 MB
 MAX_CSV_IMPORT_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
-@app.post("/api/upload-firmware")
-async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(require_auth)):
+@app.post("/api/upload-firmware", tags=["firmware"])
+async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(require_role("admin", "operator"))):
     """Upload a firmware file."""
     # Validate filename to prevent path traversal attacks
     safe_filename = validate_firmware_filename(file.filename)
@@ -2546,10 +3472,18 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
     except HTTPException:
         firmware_path.unlink(missing_ok=True)
         raise
+    except Exception as e:
+        firmware_path.unlink(missing_ok=True)
+        logger.error(f"Firmware upload failed for {safe_filename}: {e}")
+        raise HTTPException(500, "Failed to upload firmware")
+    finally:
+        await file.close()
 
     logger.info(f"Firmware uploaded: {safe_filename} ({total_size:,} bytes)")
 
     db.register_firmware(safe_filename, source="manual")
+    db.log_audit(session["username"], "firmware.upload", "firmware", safe_filename,
+                 f"{total_size:,} bytes", None)
 
     return {
         "filename": safe_filename,
@@ -2557,7 +3491,7 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
     }
 
 
-@app.get("/api/firmware-files")
+@app.get("/api/firmware-files", tags=["firmware"])
 async def list_firmware_files(session: dict = Depends(require_auth)):
     """List available firmware files."""
     import json as _json
@@ -2573,7 +3507,10 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
     except (ValueError, TypeError):
         channels = {}
 
-    quarantine_days = int(db.get_setting("firmware_quarantine_days", "7"))
+    try:
+        quarantine_days = int(db.get_setting("firmware_quarantine_days", "7"))
+    except (TypeError, ValueError):
+        quarantine_days = 7
     registry = {r["filename"]: r for r in db.get_firmware_registry()}
 
     files = []
@@ -2598,8 +3535,8 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
     }
 
 
-@app.delete("/api/firmware-files/{filename:path}")
-async def delete_firmware_file(filename: str, session: dict = Depends(require_auth)):
+@app.delete("/api/firmware-files/{filename:path}", tags=["firmware"])
+async def delete_firmware_file(filename: str, session: dict = Depends(require_role("admin", "operator"))):
     """Delete a firmware file."""
     # Validate filename to prevent path traversal attacks
     safe_filename = validate_firmware_filename(filename)
@@ -2608,11 +3545,12 @@ async def delete_firmware_file(filename: str, session: dict = Depends(require_au
         raise HTTPException(404, "File not found")
     path.unlink()
     db.unregister_firmware(safe_filename)
+    db.log_audit(session["username"], "firmware.delete", "firmware", safe_filename, None, None)
     return {"success": True}
 
 
-@app.post("/api/firmware-fetch")
-async def trigger_firmware_fetch(session: dict = Depends(require_auth)):
+@app.post("/api/firmware-fetch", tags=["firmware"])
+async def trigger_firmware_fetch(session: dict = Depends(require_role("admin", "operator"))):
     """Trigger an on-demand firmware check and download."""
     fetcher = get_fetcher()
     if not fetcher:
@@ -2621,8 +3559,8 @@ async def trigger_firmware_fetch(session: dict = Depends(require_auth)):
     return result
 
 
-@app.post("/api/firmware-reselect")
-async def firmware_reselect(session: dict = Depends(require_auth)):
+@app.post("/api/firmware-reselect", tags=["firmware"])
+async def firmware_reselect(session: dict = Depends(require_role("admin", "operator"))):
     """Re-run firmware auto-selection (e.g. after toggling beta)."""
     fetcher = get_fetcher()
     if not fetcher:
@@ -2639,7 +3577,7 @@ async def firmware_reselect(session: dict = Depends(require_auth)):
     return {"success": True}
 
 
-@app.get("/api/firmware-fetch/status")
+@app.get("/api/firmware-fetch/status", tags=["firmware"])
 async def firmware_fetch_status(session: dict = Depends(require_auth)):
     """Get firmware fetch status."""
     import json as _json
@@ -2657,7 +3595,7 @@ async def firmware_fetch_status(session: dict = Depends(require_auth)):
     }
 
 
-@app.get("/api/fleet-status")
+@app.get("/api/fleet-status", tags=["system"])
 async def get_fleet_status(session: dict = Depends(require_auth)):
     """Get firmware version status for all devices."""
     settings = db.get_all_settings()
@@ -2909,6 +3847,72 @@ def _parse_version(version: str) -> tuple:
     return tuple(parts) if parts else (0,)
 
 
+def _normalize_version(value: Optional[str]) -> str:
+    """Normalize firmware version strings for comparisons."""
+    if not value:
+        return ""
+    return str(value).strip().replace(".r", ".")
+
+
+def _get_active_inactive_bank_versions(device: dict) -> tuple[str, str]:
+    """Return (active_version, inactive_version) for a device record."""
+    bank1 = _normalize_version(device.get("bank1_version"))
+    bank2 = _normalize_version(device.get("bank2_version"))
+    firmware = _normalize_version(device.get("firmware_version"))
+
+    try:
+        active_bank = int(device.get("active_bank")) if device.get("active_bank") is not None else None
+    except (TypeError, ValueError):
+        active_bank = None
+
+    if active_bank == 1:
+        return (bank1 or firmware, bank2)
+    if active_bank == 2:
+        return (bank2 or firmware, bank1)
+    return (firmware, "")
+
+
+def _device_needs_update_for_bank_mode(
+    device: dict,
+    target_version: str,
+    bank_mode: str,
+    allow_downgrade: bool = False,
+) -> bool:
+    """Evaluate whether a device should be enrolled for update.
+
+    Rules:
+    - `bank_mode=one`: skip if active bank is already on target.
+    - `bank_mode=both`: include when active bank is on target but inactive bank differs.
+    """
+    target = _normalize_version(target_version)
+    if not target:
+        return True
+
+    active_version, inactive_version = _get_active_inactive_bank_versions(device)
+    if not active_version:
+        return True
+
+    target_parsed = _parse_version(target)
+    active_parsed = _parse_version(active_version)
+
+    if active_version == target:
+        if bank_mode == "both":
+            # Unknown inactive bank state -> don't force a dual-bank rewrite.
+            if not inactive_version:
+                return False
+            if inactive_version == target:
+                return False
+            if not allow_downgrade and _parse_version(inactive_version) > target_parsed:
+                return False
+            return True
+        return False
+
+    if not allow_downgrade and active_parsed > target_parsed:
+        return False
+
+    return True
+
+
 
 def _get_firmware_type_for_model(model: Optional[str]) -> Optional[str]:
     """Get the firmware type key for a device model."""
@@ -2954,33 +3958,41 @@ async def _start_scheduled_update(
     firmware_file_tns100: str = "",
     bank_mode: str = "both",
     concurrency: int = 2,
+    start_hour: int = None,
     end_hour: int = None,
+    schedule_days: list[str] = None,
     schedule_timezone: str = None,
     switch_ips: list[str] | None = None,
     enforce_window_cutoff: bool = True,
 ) -> str:
     """Start an update job from the scheduler (Python args, not Form data)."""
-    firmware_path = FIRMWARE_DIR / firmware_file
+    if concurrency < 1:
+        raise RuntimeError("parallel_updates must be >= 1")
+
+    safe_fw = validate_firmware_filename(firmware_file)
+    firmware_path = FIRMWARE_DIR / safe_fw
     if not firmware_path.exists():
-        raise RuntimeError(f"Firmware file not found: {firmware_file}")
+        raise RuntimeError(f"Firmware file not found: {safe_fw}")
 
     # Get downgrade setting
     allow_downgrade = db.get_setting("allow_downgrade", "false") == "true"
 
     firmware_files = {"tna-30x": str(firmware_path)}
-    firmware_names = {"tna-30x": firmware_file}
+    firmware_names = {"tna-30x": safe_fw}
 
     if firmware_file_303l:
-        path_303l = FIRMWARE_DIR / firmware_file_303l
+        safe_303l = validate_firmware_filename(firmware_file_303l)
+        path_303l = FIRMWARE_DIR / safe_303l
         if path_303l.exists():
             firmware_files["tna-303l"] = str(path_303l)
-            firmware_names["tna-303l"] = firmware_file_303l
+            firmware_names["tna-303l"] = safe_303l
 
     if firmware_file_tns100:
-        path_tns100 = FIRMWARE_DIR / firmware_file_tns100
+        safe_tns100 = validate_firmware_filename(firmware_file_tns100)
+        path_tns100 = FIRMWARE_DIR / safe_tns100
         if path_tns100.exists():
             firmware_files["tns-100"] = str(path_tns100)
-            firmware_names["tns-100"] = firmware_file_tns100
+            firmware_names["tns-100"] = safe_tns100
 
     credentials = {}
     ap_cpe_map = {}
@@ -3015,17 +4027,18 @@ async def _start_scheduled_update(
             cpe_model = cpe.get("model")
             cpe_fw = _select_firmware_for_model(cpe_model, firmware_files)
 
-            # Skip CPEs already at target (but always enroll if firmware type is missing)
-            missing_fw_type = (cpe_fw is None and _is_303l_model(cpe_model)) or (cpe_fw is None and _is_tns100_model(cpe_model))
-            if not missing_fw_type and cpe_fw is not None:
-                cpe_target = _extract_version_from_filename(Path(cpe_fw).name)
-                if not _device_needs_update(cpe, cpe_target, bank_mode, allow_downgrade):
-                    logger.info(f"Skipping CPE {cpe_ip}: already at target version {cpe_target}")
-                    continue
-            elif not missing_fw_type:
-                cpe_target = _extract_version_from_filename(Path(str(firmware_path)).name)
-                if not _device_needs_update(cpe, cpe_target, bank_mode, allow_downgrade):
-                    logger.info(f"Skipping CPE {cpe_ip}: already at target version {cpe_target}")
+            # Skip CPEs already satisfied by bank_mode/target policy
+            if cpe_fw:
+                target_version = _extract_version_from_filename(Path(cpe_fw).name)
+                if target_version and not _device_needs_update_for_bank_mode(
+                    cpe,
+                    target_version,
+                    bank_mode=bank_mode,
+                    allow_downgrade=allow_downgrade,
+                ):
+                    logger.info(
+                        f"Skipping CPE {cpe_ip}: bank_mode={bank_mode}, target={target_version} already satisfied"
+                    )
                     continue
 
             cpe_ips.append(cpe_ip)
@@ -3054,13 +4067,18 @@ async def _start_scheduled_update(
         sw_ip = sw["ip"]
         sw_fw = _select_firmware_for_model(sw.get("model"), firmware_files)
 
-        # Always enroll if firmware type is missing
-        missing_sw_fw = sw_fw is None and _is_tns100_model(sw.get("model"))
-        if not missing_sw_fw:
-            sw_fw_path = sw_fw if sw_fw is not None else str(firmware_path)
-            sw_target = _extract_version_from_filename(Path(sw_fw_path).name)
-            if not _device_needs_update(sw, sw_target, bank_mode, allow_downgrade):
-                logger.info(f"Skipping switch {sw_ip}: already at target version {sw_target}")
+        # Skip switches already satisfied by bank_mode/target policy
+        if sw_fw:
+            target_version = _extract_version_from_filename(Path(sw_fw).name)
+            if target_version and not _device_needs_update_for_bank_mode(
+                sw,
+                target_version,
+                bank_mode=bank_mode,
+                allow_downgrade=allow_downgrade,
+            ):
+                logger.info(
+                    f"Skipping switch {sw_ip}: bank_mode={bank_mode}, target={target_version} already satisfied"
+                )
                 continue
 
         valid_switches.append(sw_ip)
@@ -3093,7 +4111,9 @@ async def _start_scheduled_update(
         started_at=datetime.now(),
         status="running",
         is_scheduled=True,
+        start_hour=start_hour,
         end_hour=end_hour,
+        schedule_days=list(schedule_days or []),
         schedule_timezone=schedule_timezone,
         pre_update_reboot=pre_update_reboot,
         enforce_window_cutoff=enforce_window_cutoff,
@@ -3108,6 +4128,7 @@ async def _start_scheduled_update(
         job.devices[sw_ip] = DeviceStatus(ip=sw_ip, role="switch")
 
     update_jobs[job_id] = job
+    db.save_active_job(job_id, "running", json.dumps(list(job.devices.keys())), firmware_file)
 
     await broadcast({
         "type": "job_started",
@@ -3120,11 +4141,11 @@ async def _start_scheduled_update(
         "bank_mode": bank_mode,
     })
 
-    asyncio.create_task(run_update_job(job, concurrency))
+    _spawn_update_job(job, concurrency)
     return job_id
 
 
-@app.post("/api/start-update")
+@app.post("/api/start-update", tags=["jobs"])
 async def start_update(
     firmware_file: str = Form(...),
     device_type: str = Form(...),
@@ -3133,9 +4154,12 @@ async def start_update(
     firmware_file_303l: str = Form(""),
     firmware_file_tns100: str = Form(""),
     bank_mode: str = Form("both"),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
 ):
     """Start a firmware update job."""
+    if concurrency < 1 or concurrency > 32:
+        raise HTTPException(400, "concurrency must be between 1 and 32")
+
     ap_ips = []
     for line in ip_list.strip().split("\n"):
         line = line.strip()
@@ -3155,6 +4179,7 @@ async def start_update(
 
     firmware_files = {"tna-30x": str(firmware_path)}
     firmware_names = {"tna-30x": safe_fw}
+    allow_downgrade = db.get_setting("allow_downgrade", "false") == "true"
 
     if firmware_file_303l:
         safe_303l = validate_firmware_filename(firmware_file_303l)
@@ -3189,12 +4214,21 @@ async def start_update(
             continue
 
         ap_fw = _select_firmware_for_model(ap.get("model"), firmware_files) or str(firmware_path)
-        ap_target = _extract_version_from_filename(Path(ap_fw).name)
-
-        if _device_needs_update(ap, ap_target, bank_mode, allow_downgrade):
+        ap_target_version = _extract_version_from_filename(Path(ap_fw).name)
+        include_ap = _device_needs_update_for_bank_mode(
+            ap,
+            ap_target_version,
+            bank_mode=bank_mode,
+            allow_downgrade=allow_downgrade,
+        )
+        if include_ap:
             credentials[ip] = (ap["username"], ap["password"])
             device_roles[ip] = "ap"
             device_firmware_map[ip] = ap_fw
+        else:
+            logger.info(
+                f"Skipping AP {ip}: bank_mode={bank_mode}, target={ap_target_version or 'unknown'} already satisfied"
+            )
 
         # Always process CPEs regardless of AP status
         cpes = db.get_cpes_for_ap(ip)
@@ -3226,6 +4260,7 @@ async def start_update(
             device_parent[cpe_ip] = ip
             credentials[cpe_ip] = (ap["username"], ap["password"])
 
+
             if cpe_fw is None and _is_303l_model(cpe_model):
                 device_firmware_map[cpe_ip] = "__missing_303l__"
             elif cpe_fw is None:
@@ -3243,14 +4278,17 @@ async def start_update(
     for sw in switches:
         sw_ip = sw["ip"]
         sw_fw = _select_firmware_for_model(sw.get("model"), firmware_files)
-
-        # Always enroll if firmware type is missing (will get clear error at runtime)
-        missing_sw_fw = sw_fw is None and _is_tns100_model(sw.get("model"))
-        if not missing_sw_fw:
-            sw_fw_path = sw_fw if sw_fw is not None else str(firmware_path)
-            sw_target = _extract_version_from_filename(Path(sw_fw_path).name)
-            if not _device_needs_update(sw, sw_target, bank_mode, allow_downgrade):
-                continue
+        sw_target_version = _extract_version_from_filename(Path(sw_fw).name) if sw_fw else ""
+        if sw_target_version and not _device_needs_update_for_bank_mode(
+            sw,
+            sw_target_version,
+            bank_mode=bank_mode,
+            allow_downgrade=allow_downgrade,
+        ):
+            logger.info(
+                f"Skipping switch {sw_ip}: bank_mode={bank_mode}, target={sw_target_version} already satisfied"
+            )
+            continue
 
         credentials[sw_ip] = (sw["username"], sw["password"])
         device_roles[sw_ip] = "switch"
@@ -3262,7 +4300,10 @@ async def start_update(
             device_firmware_map[sw_ip] = sw_fw
 
     if not device_roles:
-        raise HTTPException(400, "All devices are already at the target firmware version")
+        raise HTTPException(
+            400,
+            f"No devices require update for bank_mode='{bank_mode}' and selected target firmware.",
+        )
 
     pre_update_reboot = db.get_setting("pre_update_reboot", "true") == "true"
 
@@ -3294,6 +4335,9 @@ async def start_update(
         job.devices[sw["ip"]] = DeviceStatus(ip=sw["ip"], role="switch")
 
     update_jobs[job_id] = job
+    db.save_active_job(job_id, "running", json.dumps(list(job.devices.keys())), firmware_file)
+    db.log_audit(session["username"], "job.start", "job", job_id,
+                 f"{len(job.devices)} devices, firmware={firmware_file}", None)
 
     await broadcast({
         "type": "job_started",
@@ -3306,19 +4350,19 @@ async def start_update(
         "bank_mode": bank_mode,
     })
 
-    asyncio.create_task(run_update_job(job, concurrency))
+    _spawn_update_job(job, concurrency)
 
     return {"job_id": job_id, "device_count": len(job.devices)}
 
 
-@app.post("/api/update-device")
+@app.post("/api/update-device", tags=["jobs"])
 async def update_single_device_endpoint(
     ip: str = Form(...),
     firmware_file: str = Form(...),
     firmware_file_303l: str = Form(""),
     firmware_file_tns100: str = Form(""),
     bank_mode: str = Form("both"),
-    session: dict = Depends(require_auth),
+    session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.UPDATE_SINGLE_DEVICE)),
 ):
     """Start a firmware update for a single device (AP, CPE, or switch)."""
@@ -3437,6 +4481,7 @@ async def update_single_device_endpoint(
     )
 
     update_jobs[job_id] = job
+    db.save_active_job(job_id, "running", json.dumps([ip]), firmware_file)
 
     await broadcast({
         "type": "job_started",
@@ -3449,14 +4494,75 @@ async def update_single_device_endpoint(
         "bank_mode": bank_mode,
     })
 
-    asyncio.create_task(run_update_job(job, concurrency=1))
+    _spawn_update_job(job, concurrency=1)
 
     return {"job_id": job_id, "device_count": 1}
+
+
+def _request_job_cancel(job: "UpdateJob", reason: str):
+    """Cancel a running job and preserve the first meaningful reason."""
+    job.cancelled = True
+    if not job.cancel_reason:
+        job.cancel_reason = reason
+
+
+def _minutes_until_window_end(now: datetime, start_hour: int, end_hour: int) -> int:
+    """Compute minutes remaining in the active schedule window."""
+    if start_hour < end_hour:
+        # Same-day window (e.g., 03:00-04:00)
+        return (end_hour - now.hour) * 60 - now.minute
+    # Overnight window (e.g., 20:00-04:00)
+    if now.hour >= start_hour:
+        return (24 - now.hour + end_hour) * 60 - now.minute
+    return (end_hour - now.hour) * 60 - now.minute
+
+
+async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
+    """Fail-safe runtime gate for scheduled jobs."""
+    if not job.is_scheduled:
+        return (True, "")
+
+    if (
+        job.start_hour is None
+        or job.end_hour is None
+        or not job.schedule_timezone
+        or not job.schedule_days
+    ):
+        return (False, "Scheduled update missing maintenance window metadata")
+
+    time_ok, time_result = await services.validate_time_sources(job.schedule_timezone)
+    if not time_ok:
+        return (False, f"Time anomaly: {time_result}")
+
+    if not isinstance(time_result, datetime):
+        return (False, "Time validation returned an invalid timestamp")
+
+    now = time_result
+    current_day = now.strftime("%a").lower()
+    if not services.is_in_schedule_window(
+        now.hour,
+        current_day,
+        job.schedule_days,
+        job.start_hour,
+        job.end_hour,
+    ):
+        return (False, "Outside maintenance window")
+
+    if _minutes_until_window_end(now, job.start_hour, job.end_hour) <= SCHEDULE_END_BUFFER_MINUTES:
+        return (False, "Maintenance window ending")
+
+    return (True, "")
 
 
 async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1):
     """Update a single device within a job."""
     device_status = job.devices[ip]
+
+    # Graceful shutdown: skip pending devices when shutting down
+    if _shutting_down and device_status.status == "pending":
+        device_status.status = "cancelled"
+        device_status.progress_message = "Skipped: app shutting down"
+        return
 
     # Maintenance window cutoff for scheduled jobs
     if job.is_scheduled and job.enforce_window_cutoff and job.end_hour is not None and job.schedule_timezone:
@@ -3498,6 +4604,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 return
         except Exception as e:
             logger.warning(f"Maintenance window check failed: {e}")
+
 
     device_start_time = datetime.now()
 
@@ -3564,6 +4671,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             "Installing firmware": "installing",
             "Rebooting": "rebooting",
             "Verifying": "verifying",
+            "Smoke testing": "smoke_testing",
             "Skipped": "skipped",
         }
         new_stage = None
@@ -3598,11 +4706,19 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             "parent_ap": device_status.parent_ap,
         }))
 
+    # Capture pre-update CPE count for smoke test comparison
+    pre_update_cpe_count = len(job.ap_cpe_map.get(ip, [])) if device_status.role == "ap" else 0
+
+    client = None
     if job.device_type in ("tachyon", "mixed"):
         username, password = job.credentials[ip]
         client = TachyonClient(ip, username, password)
         reboot_timeout = TNS100_REBOOT_TIMEOUT if device_status.role == "switch" else AP_REBOOT_TIMEOUT
-        result = await client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout)
+        try:
+            bw_limit = int(db.get_setting("bandwidth_limit_kbps", "0"))
+        except (ValueError, TypeError):
+            bw_limit = 0
+        result = await client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit)
     else:
         result = UpdateResult(ip=ip, success=False, error=f"Unsupported device type: {job.device_type}")
 
@@ -3624,6 +4740,49 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             db.save_device_duration(job.job_id, ip, device_status.role, duration_secs, job.bank_mode)
         except Exception as e:
             logger.warning(f"Failed to save device duration for {ip}: {e}")
+
+        # Post-update smoke tests
+        strict_mode = db.get_setting("smoke_test_strict", "false") == "true"
+        smoke_failed = False
+        if client:
+            try:
+                progress_callback(ip, "Smoke testing...")
+                smoke_result = await client.run_smoke_tests(
+                    role=device_status.role,
+                    pre_update_cpe_count=pre_update_cpe_count,
+                )
+                device_status.smoke_checks = smoke_result.checks
+                if not smoke_result.passed:
+                    device_status.smoke_warnings = smoke_result.warnings
+                    warning_summary = "; ".join(smoke_result.warnings[:3])
+                    if len(warning_summary) > 200:
+                        warning_summary = warning_summary[:197] + "..."
+                    if strict_mode:
+                        smoke_failed = True
+                        device_status.status = "failed"
+                        device_status.error = f"Smoke test failed: {warning_summary}"
+                        device_status.progress_message = f"{prefix}Updated to {result.new_version} (FAILED smoke tests: {warning_summary})"
+                        logger.warning(f"Smoke test STRICT FAILURE for {ip}: {smoke_result.warnings}")
+                    else:
+                        device_status.progress_message = f"{prefix}Updated to {result.new_version} (warnings: {warning_summary})"
+                        logger.warning(f"Smoke test warnings for {ip}: {smoke_result.warnings}")
+                else:
+                    device_status.progress_message = f"{prefix}Updated to {result.new_version} (smoke tests passed)"
+            except Exception as e:
+                logger.warning(f"Smoke test error for {ip} (non-fatal): {e}")
+                device_status.smoke_warnings = [f"Smoke test error: {e}"]
+            # Restore status unless strict mode failed it
+            if not smoke_failed:
+                device_status.status = "success"
+
+        # Canary auto-cancel: if this device was in the canary phase and failed,
+        # auto-cancel the rollout to prevent the issue from spreading
+        if smoke_failed and db.get_setting("canary_auto_cancel", "false") == "true":
+            rollout = db.get_current_rollout()
+            if rollout and rollout["phase"] == "canary" and rollout["status"] == "active":
+                logger.warning(f"Auto-cancelling rollout {rollout['id']}: canary device {ip} failed smoke tests")
+                db.pause_rollout(rollout["id"], f"Auto-cancelled: canary device {ip} failed smoke tests")
+                _request_job_cancel(job, f"Canary auto-cancel: {ip} failed smoke tests")
     else:
         device_status.status = "failed"
         device_status.error = result.error
@@ -3631,7 +4790,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
 
         # If device didn't come back online, cancel the job
         if result.error and "did not come back online" in result.error:
-            job.cancelled = True
+            _request_job_cancel(job, "Cancelled: device did not come back online")
 
     await broadcast({
         "type": "device_update",
@@ -3648,6 +4807,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         "role": device_status.role,
         "parent_ap": device_status.parent_ap,
         "model": device_status.model,
+        "smoke_warnings": device_status.smoke_warnings,
+        "smoke_checks": device_status.smoke_checks,
     })
 
     # Finalize stage tracking and persist device update history
@@ -3662,6 +4823,15 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             "success": is_success,
         })
     failed_stage = device_status.current_stage if device_status.status == "failed" else None
+
+    # Enrich smoke_testing stage with check details and warnings
+    for stage in device_status.stage_history:
+        if stage["stage"] == "smoke_testing":
+            stage["smoke_checks"] = device_status.smoke_checks or []
+            stage["smoke_warnings"] = device_status.smoke_warnings or []
+            stage["has_warnings"] = bool(device_status.smoke_warnings)
+            break
+
     duration_secs = (now - device_start_time).total_seconds()
     try:
         db.save_device_update_history(
@@ -3679,7 +4849,14 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
 
 async def run_update_job(job: UpdateJob, concurrency: int):
     """Run the firmware update job with phase-based ordering driven by bank_mode."""
-    semaphore = asyncio.Semaphore(concurrency)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    # For scheduled jobs, enforce maintenance window/time-source checks only at start.
+    # Once started, let the in-flight job complete even if it runs past window end.
+    is_allowed, block_reason = await _scheduled_job_guard(job)
+    if not is_allowed:
+        _request_job_cancel(job, block_reason)
+        logger.warning(f"Job {job.job_id} cancelled before start: {block_reason}")
 
     ap_ips = [ip for ip, role in job.device_roles.items() if role == "ap"]
     cpe_ips = [ip for ip, role in job.device_roles.items() if role == "cpe"]
@@ -3717,14 +4894,14 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                             ds.status = "failed"
                             ds.error = login_result if isinstance(login_result, str) else "Login failed"
                             ds.progress_message = f"Pre-reboot login failed: {ds.error}"
-                            job.cancelled = True
+                            _request_job_cancel(job, "Cancelled: another device failed to reboot")
                             return
                         timeout = TNS100_REBOOT_TIMEOUT if ds.role == "switch" else AP_REBOOT_TIMEOUT
                         if not await client.reboot(timeout=timeout):
                             ds.status = "failed"
                             ds.error = "Device did not come back online after pre-update reboot"
                             ds.progress_message = ds.error
-                            job.cancelled = True
+                            _request_job_cancel(job, "Cancelled: another device failed to reboot")
                             return
                         ds.status = "pending"
                         ds.progress_message = "Rebooted, waiting for update..."
@@ -3732,7 +4909,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                         ds.status = "failed"
                         ds.error = f"Pre-update reboot failed: {e}"
                         ds.progress_message = ds.error
-                        job.cancelled = True
+                        _request_job_cancel(job, "Cancelled: another device failed to reboot")
                         return
                     await broadcast({
                         "type": "device_update",
@@ -3750,12 +4927,13 @@ async def run_update_job(job: UpdateJob, concurrency: int):
             )
 
             if job.cancelled:
+                cancel_message = job.cancel_reason or "Cancelled: another device failed to reboot"
                 # Mark any remaining pending devices as cancelled
                 for ip in all_ips:
                     ds = job.devices.get(ip)
                     if ds and ds.status == "pending":
                         ds.status = "cancelled"
-                        ds.progress_message = "Cancelled: another device failed to reboot"
+                        ds.progress_message = cancel_message
                         await broadcast({
                             "type": "device_update",
                             "job_id": job.job_id,
@@ -3771,7 +4949,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                                 job_id=job.job_id, ip=ip, role=ds.role,
                                 pass_number=1, status="cancelled",
                                 old_version=None, new_version=None, model=None,
-                                error="Cancelled: another device failed to reboot",
+                                error=cancel_message,
                                 failed_stage=None, stages=[], duration_seconds=0,
                                 started_at=now_iso, completed_at=now_iso,
                             )
@@ -3798,11 +4976,12 @@ async def run_update_job(job: UpdateJob, concurrency: int):
 
     async def _mark_cancelled(ips):
         """Mark unstarted devices as cancelled."""
+        cancel_message = job.cancel_reason or "Cancelled: another device failed to reboot"
         for ip in ips:
             ds = job.devices.get(ip)
             if ds and ds.status == "pending":
                 ds.status = "cancelled"
-                ds.progress_message = "Cancelled: another device failed to reboot"
+                ds.progress_message = cancel_message
                 await broadcast({
                     "type": "device_update",
                     "job_id": job.job_id,
@@ -3818,7 +4997,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                         job_id=job.job_id, ip=ip, role=ds.role,
                         pass_number=1, status="cancelled",
                         old_version=None, new_version=None, model=None,
-                        error="Cancelled: another device failed to reboot",
+                        error=cancel_message,
                         failed_stage=None, stages=[], duration_seconds=0,
                         started_at=now_iso, completed_at=now_iso,
                     )
@@ -3877,6 +5056,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
 
     job.completed_at = datetime.now()
     job.status = "completed"
+    db.clear_active_job(job.job_id)
 
     # Brief pause so final device_update broadcasts reach clients before job_completed
     await asyncio.sleep(0.5)
@@ -3918,6 +5098,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                 "role": ds.role,
                 "parent_ap": ds.parent_ap,
                 "model": ds.model,
+                "smoke_warnings": ds.smoke_warnings,
             }
             for ip, ds in job.devices.items()
         },
@@ -3938,21 +5119,24 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         }
         for ip, ds in job.devices.items()
     }
-    db.save_job_history(
-        job_id=job.job_id,
-        started_at=job.started_at.isoformat() if job.started_at else None,
-        completed_at=job.completed_at.isoformat() if job.completed_at else None,
-        duration=(job.completed_at - job.started_at).total_seconds(),
-        bank_mode=job.bank_mode,
-        success_count=success_count,
-        failed_count=failed_count,
-        skipped_count=skipped_count,
-        cancelled_count=cancelled_count,
-        devices=devices_dict,
-        ap_cpe_map=job.ap_cpe_map,
-        device_roles=job.device_roles,
-        timezone=resolved_tz,
-    )
+    try:
+        db.save_job_history(
+            job_id=job.job_id,
+            started_at=job.started_at.isoformat() if job.started_at else None,
+            completed_at=job.completed_at.isoformat() if job.completed_at else None,
+            duration=(job.completed_at - job.started_at).total_seconds(),
+            bank_mode=job.bank_mode,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+            cancelled_count=cancelled_count,
+            devices=devices_dict,
+            ap_cpe_map=job.ap_cpe_map,
+            device_roles=job.device_roles,
+            timezone=resolved_tz,
+        )
+    except Exception as e:
+        logger.error(f"Failed to persist job history for {job.job_id}: {e}")
 
     # Send anonymized telemetry (non-blocking background task)
     asyncio.create_task(telemetry.send_telemetry_background(
@@ -3993,21 +5177,6 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                         "estimated_completion": predictions.get("estimated_completion_date"),
                     }
 
-    firmware_name = job.firmware_names.get("30x", "") or list(job.firmware_names.values())[0] if job.firmware_names else "Unknown"
-    await slack.notify_job_completed(
-        job_id=job.job_id,
-        success_count=success_count,
-        failed_count=failed_count,
-        skipped_count=skipped_count,
-        cancelled_count=cancelled_count,
-        duration_seconds=(job.completed_at - job.started_at).total_seconds(),
-        devices=devices_dict,
-        firmware_name=firmware_name,
-        is_scheduled=job.is_scheduled,
-        rollout_info=rollout_info,
-        next_job_info=next_job_info,
-    )
-
     # Notify scheduler if this was a scheduled job
     if job.is_scheduled:
         scheduler = get_scheduler()
@@ -4022,12 +5191,94 @@ async def run_update_job(job: UpdateJob, concurrency: int):
             device_statuses = {ip: ds.status for ip, ds in job.devices.items()}
             scheduler.on_job_completed(job.job_id, success_count, failed_count,
                                        learned_versions=learned_versions,
-                                       device_statuses=device_statuses)
+                                       device_statuses=device_statuses,
+                                       cancel_reason=job.cancel_reason)
+
+    firmware_name = (
+        job.firmware_names.get("tna-30x", "")
+        or list(job.firmware_names.values())[0]
+        if job.firmware_names else "Unknown"
+    )
+    try:
+        await slack.notify_job_completed(
+            job_id=job.job_id,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+            cancelled_count=cancelled_count,
+            duration_seconds=(job.completed_at - job.started_at).total_seconds(),
+            devices=devices_dict,
+            firmware_name=firmware_name,
+            is_scheduled=job.is_scheduled,
+            rollout_info=rollout_info,
+            next_job_info=next_job_info,
+        )
+    except Exception as e:
+        logger.error(f"Slack notification failed for job {job.job_id}: {e}")
+
+    try:
+        await snmp.notify_job_completed(
+            job_id=job.job_id,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+            cancelled_count=cancelled_count,
+            duration_seconds=(job.completed_at - job.started_at).total_seconds(),
+            devices=devices_dict,
+            firmware_name=firmware_name,
+            is_scheduled=job.is_scheduled,
+            rollout_info=rollout_info,
+            next_job_info=next_job_info,
+        )
+    except Exception as e:
+        logger.error(f"SNMP notification failed for job {job.job_id}: {e}")
+
+    try:
+        await webhooks.notify_job_completed(
+            job_id=job.job_id,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+            cancelled_count=cancelled_count,
+            duration_seconds=(job.completed_at - job.started_at).total_seconds(),
+            devices=devices_dict,
+            firmware_name=firmware_name,
+            is_scheduled=job.is_scheduled,
+        )
+    except Exception as e:
+        logger.error(f"Webhook notification failed for job {job.job_id}: {e}")
+
+    # Syslog notification
+    try:
+        duration = (job.completed_at - job.started_at).total_seconds()
+        severity = "info" if failed_count == 0 else "warning"
+        syslog_forwarder.send_event(
+            "job",
+            f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, "
+            f"{skipped_count} skipped, firmware={firmware_name}, duration={duration:.0f}s",
+            severity=severity,
+        )
+    except Exception as e:
+        logger.error(f"Syslog notification failed for job {job.job_id}: {e}")
+
+    try:
+        await email_notifier.notify_job_completed(
+            job_id=job.job_id,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+            cancelled_count=cancelled_count,
+            duration_seconds=(job.completed_at - job.started_at).total_seconds(),
+            firmware_name=firmware_name,
+            is_scheduled=job.is_scheduled,
+        )
+    except Exception as e:
+        logger.error(f"Email notification failed for job {job.job_id}: {e}")
 
     logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped, {cancelled_count} cancelled")
 
 
-@app.get("/api/job/{job_id}")
+@app.get("/api/job/{job_id}", tags=["jobs"])
 async def get_job_status(job_id: str, session: dict = Depends(require_auth)):
     """Get status of an update job."""
     if job_id not in update_jobs:
@@ -4037,6 +5288,8 @@ async def get_job_status(job_id: str, session: dict = Depends(require_auth)):
     return {
         "job_id": job.job_id,
         "status": job.status,
+        "cancelled": job.cancelled,
+        "cancel_reason": job.cancel_reason,
         "firmware_names": job.firmware_names,
         "device_type": job.device_type,
         "bank_mode": job.bank_mode,
@@ -4048,7 +5301,109 @@ async def get_job_status(job_id: str, session: dict = Depends(require_auth)):
     }
 
 
-@app.get("/api/device-history")
+@app.post("/api/job/{job_id}/cancel", tags=["jobs"])
+async def cancel_job(job_id: str, session: dict = Depends(require_role("admin", "operator"))):
+    """Request cancellation of an active update job."""
+    job = update_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+
+    if job.status == "completed":
+        raise HTTPException(400, "Job already completed")
+
+    if not job.cancelled:
+        _request_job_cancel(job, "Cancelled by user")
+        logger.info(f"User requested cancellation for job {job_id}")
+        await broadcast({
+            "type": "job_cancel_requested",
+            "job_id": job_id,
+            "message": job.cancel_reason,
+        })
+
+    return {
+        "job_id": job_id,
+        "cancelled": True,
+        "message": job.cancel_reason or "Cancellation requested",
+    }
+
+
+# ============================================================================
+# Analytics API
+# ============================================================================
+
+@app.get("/api/analytics/summary", tags=["analytics"])
+async def get_analytics_summary(days: int = 90, session: dict = Depends(require_auth)):
+    """Get aggregate update statistics over a time window."""
+    if days < 1 or days > 365:
+        raise HTTPException(400, "days must be between 1 and 365")
+    return db.get_analytics_summary(days)
+
+
+@app.get("/api/analytics/trends", tags=["analytics"])
+async def get_analytics_trends(days: int = 30, session: dict = Depends(require_auth)):
+    """Get daily success/failure trends."""
+    if days < 1 or days > 365:
+        raise HTTPException(400, "days must be between 1 and 365")
+    return {"trends": db.get_analytics_trends(days)}
+
+
+@app.get("/api/analytics/models", tags=["analytics"])
+async def get_analytics_models(days: int = 90, session: dict = Depends(require_auth)):
+    """Get update success/failure breakdown by device model."""
+    if days < 1 or days > 365:
+        raise HTTPException(400, "days must be between 1 and 365")
+    return {"models": db.get_analytics_by_model(days)}
+
+
+@app.get("/api/analytics/errors", tags=["analytics"])
+async def get_analytics_errors(days: int = 90, limit: int = 10, session: dict = Depends(require_auth)):
+    """Get top error messages from failed updates."""
+    if days < 1 or days > 365:
+        raise HTTPException(400, "days must be between 1 and 365")
+    limit = max(1, min(limit, 200))
+    return {"errors": db.get_analytics_errors(days, limit)}
+
+
+@app.get("/api/analytics/reliability", tags=["analytics"])
+async def get_analytics_reliability(days: int = 90, limit: int = 20, session: dict = Depends(require_auth)):
+    """Get per-device reliability stats, worst performers first."""
+    if days < 1 or days > 365:
+        raise HTTPException(400, "days must be between 1 and 365")
+    limit = max(1, min(limit, 200))
+    return {"devices": db.get_analytics_device_reliability(days, limit)}
+
+
+@app.get("/api/uptime/device", tags=["analytics"])
+async def get_device_uptime(ip: str, days: int = 30, session: dict = Depends(require_auth)):
+    """Get availability/uptime data for a specific device."""
+    if days < 1 or days > 365:
+        raise HTTPException(400, "days must be between 1 and 365")
+    result = db.get_device_availability(ip, days)
+    return result
+
+
+@app.get("/api/uptime/fleet", tags=["analytics"])
+async def get_fleet_uptime(device_type: str = None, days: int = 30, session: dict = Depends(require_auth)):
+    """Get fleet-wide availability stats, worst performers first."""
+    if days < 1 or days > 365:
+        raise HTTPException(400, "days must be between 1 and 365")
+    if device_type and device_type not in ("ap", "switch"):
+        raise HTTPException(400, "device_type must be 'ap' or 'switch'")
+    devices = db.get_fleet_availability(device_type, days)
+    return {"devices": devices}
+
+
+@app.get("/api/uptime/events", tags=["analytics"])
+async def get_uptime_events(ip: str, days: int = 30, limit: int = 100, session: dict = Depends(require_auth)):
+    """Get raw uptime events for a device."""
+    if days < 1 or days > 365:
+        raise HTTPException(400, "days must be between 1 and 365")
+    limit = max(1, min(limit, 1000))
+    events = db.get_uptime_events(ip, days, limit)
+    return {"events": events}
+
+
+@app.get("/api/device-history", tags=["config"])
 async def get_device_history_api(
     ip: str = None, action: str = None, status: str = None,
     limit: int = 100, offset: int = 0,
@@ -4083,67 +5438,16 @@ def _compute_config_hash(config: dict) -> str:
 
 
 # Top-level config keys that templates must never modify (prevents bricking devices)
-PROTECTED_CONFIG_KEYS = {"network", "ethernet"}
+from .config_utils import (
+    PROTECTED_CONFIG_KEYS,
+    validate_fragment_safety as _validate_fragment_safety,
+    deep_merge,
+    check_config_compliance as _check_config_compliance,
+    fragment_matches as _fragment_matches,
+)
 
 
-def _validate_fragment_safety(fragment: dict):
-    """Raise ValueError if fragment tries to modify protected config sections."""
-    if not isinstance(fragment, dict):
-        return
-    for key in PROTECTED_CONFIG_KEYS:
-        if key in fragment:
-            raise ValueError(
-                f"Config templates cannot modify the '{key}' section — "
-                f"this could make devices unreachable"
-            )
-
-
-def deep_merge(base: dict, overlay: dict) -> dict:
-    """Recursively merge overlay into base. Overlay values win for scalars.
-    Lists in overlay replace lists in base entirely."""
-    from copy import deepcopy
-    result = deepcopy(base)
-    for key, value in overlay.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = deep_merge(result[key], value)
-        else:
-            result[key] = deepcopy(value)
-    return result
-
-
-def _check_config_compliance(device_config: dict, templates: list[dict]) -> bool:
-    """Check if a device config matches all enabled templates.
-
-    For each template, extract the same key paths from the device config
-    and compare. Returns True if all templates match.
-    """
-    if not templates:
-        return True
-    config = device_config
-    if isinstance(config, str):
-        config = json.loads(config)
-
-    for template in templates:
-        fragment = json.loads(template["config_fragment"]) if isinstance(template["config_fragment"], str) else template["config_fragment"]
-        if not _fragment_matches(config, fragment):
-            return False
-    return True
-
-
-def _fragment_matches(config: dict, fragment: dict) -> bool:
-    """Check if all keys in fragment match corresponding values in config."""
-    for key, value in fragment.items():
-        if key not in config:
-            return False
-        if isinstance(value, dict) and isinstance(config[key], dict):
-            if not _fragment_matches(config[key], value):
-                return False
-        elif config[key] != value:
-            return False
-    return True
-
-
-@app.get("/api/configs")
+@app.get("/api/configs", tags=["config"])
 async def get_configs_summary(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """List all devices with their latest config summary."""
     all_configs = db.get_all_latest_configs()
@@ -4158,14 +5462,14 @@ async def get_configs_summary(session: dict = Depends(require_auth), _pro=Depend
     return {"configs": result}
 
 
-@app.get("/api/configs/{ip}")
+@app.get("/api/configs/{ip}", tags=["config"])
 async def get_config_history(ip: str, limit: int = 20, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Get config snapshot history for a device."""
     history = db.get_device_config_history(ip, limit=limit)
     return {"history": history}
 
 
-@app.get("/api/configs/{ip}/latest")
+@app.get("/api/configs/{ip}/latest", tags=["config"])
 async def get_latest_config(ip: str, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Get the latest config JSON for a device."""
     config = db.get_latest_device_config(ip)
@@ -4175,7 +5479,7 @@ async def get_latest_config(ip: str, session: dict = Depends(require_auth), _pro
     return config
 
 
-@app.get("/api/configs/{ip}/snapshot/{config_id}")
+@app.get("/api/configs/{ip}/snapshot/{config_id}", tags=["config"])
 async def get_config_snapshot(ip: str, config_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Get a specific config snapshot."""
     config = db.get_device_config_by_id(config_id)
@@ -4185,7 +5489,7 @@ async def get_config_snapshot(ip: str, config_id: int, session: dict = Depends(r
     return config
 
 
-@app.get("/api/configs/{ip}/download/{config_id}")
+@app.get("/api/configs/{ip}/download/{config_id}", tags=["config"])
 async def download_config_tar(ip: str, config_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Download a config snapshot as a .tar file with config.json + CONTROL."""
     import io
@@ -4229,8 +5533,8 @@ async def download_config_tar(ip: str, config_id: int, session: dict = Depends(r
     )
 
 
-@app.post("/api/configs/{ip}/poll")
-async def poll_device_config(ip: str, session: dict = Depends(require_auth)):
+@app.post("/api/configs/{ip}/poll", tags=["config"])
+async def poll_device_config(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Trigger immediate config fetch for one device."""
     # Find the device (AP, CPE, or switch)
     device = db.get_access_point(ip)
@@ -4273,8 +5577,8 @@ async def poll_device_config(ip: str, session: dict = Depends(require_auth)):
     return {"success": True, "changed": changed, "config_hash": config_hash}
 
 
-@app.post("/api/configs/poll")
-async def poll_all_configs(session: dict = Depends(require_auth)):
+@app.post("/api/configs/poll", tags=["config"])
+async def poll_all_configs(session: dict = Depends(require_role("admin", "operator"))):
     """Trigger config poll for all devices."""
     poller = get_poller()
     if poller:
@@ -4287,7 +5591,7 @@ async def poll_all_configs(session: dict = Depends(require_auth)):
 # Config Templates
 # ============================================================================
 
-@app.get("/api/config-templates")
+@app.get("/api/config-templates", tags=["config"])
 async def list_config_templates(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """List all config templates."""
     templates = db.get_config_templates()
@@ -4298,8 +5602,8 @@ async def list_config_templates(session: dict = Depends(require_auth), _pro=Depe
     return {"templates": templates}
 
 
-@app.post("/api/config-templates")
-async def create_config_template(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
+@app.post("/api/config-templates", tags=["config"])
+async def create_config_template(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """Create a new config template."""
     data = await request.json()
     name = data.get("name")
@@ -4322,6 +5626,19 @@ async def create_config_template(request: Request, session: dict = Depends(requi
     fragment_str = json.dumps(config_fragment)
     form_data_str = json.dumps(data["form_data"]) if data.get("form_data") else None
 
+    scope = data.get("scope", "global")
+    site_id = data.get("site_id")
+    device_types = data.get("device_types")
+
+    if scope == "site":
+        if not site_id:
+            raise HTTPException(400, "site_id required when scope is 'site'")
+        site = db.get_tower_site(site_id)
+        if not site:
+            raise HTTPException(400, f"Invalid site_id: {site_id}")
+
+    device_types_str = json.dumps(device_types) if device_types else None
+
     try:
         template_id = db.save_config_template(
             name=name,
@@ -4329,6 +5646,9 @@ async def create_config_template(request: Request, session: dict = Depends(requi
             config_fragment=fragment_str,
             form_data=form_data_str,
             description=data.get("description"),
+            scope=scope,
+            site_id=site_id,
+            device_types=device_types_str,
         )
     except Exception as e:
         if "UNIQUE" in str(e):
@@ -4338,8 +5658,8 @@ async def create_config_template(request: Request, session: dict = Depends(requi
     return {"id": template_id, "success": True}
 
 
-@app.put("/api/config-templates/{template_id}")
-async def update_config_template_api(template_id: int, request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
+@app.put("/api/config-templates/{template_id}", tags=["config"])
+async def update_config_template_api(template_id: int, request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """Update a config template."""
     existing = db.get_config_template(template_id)
     if not existing:
@@ -4369,13 +5689,23 @@ async def update_config_template_api(template_id: int, request: Request, session
         updates["description"] = data["description"]
     if "enabled" in data:
         updates["enabled"] = 1 if data["enabled"] else 0
+    if "scope" in data:
+        updates["scope"] = data["scope"]
+    if "site_id" in data:
+        if data.get("scope") == "site" and data["site_id"]:
+            site = db.get_tower_site(data["site_id"])
+            if not site:
+                raise HTTPException(400, f"Invalid site_id: {data['site_id']}")
+        updates["site_id"] = data["site_id"]
+    if "device_types" in data:
+        updates["device_types"] = json.dumps(data["device_types"]) if data["device_types"] else None
 
     db.update_config_template(template_id, **updates)
     return {"success": True}
 
 
-@app.delete("/api/config-templates/{template_id}")
-async def delete_config_template_api(template_id: int, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
+@app.delete("/api/config-templates/{template_id}", tags=["config"])
+async def delete_config_template_api(template_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """Delete a config template."""
     existing = db.get_config_template(template_id)
     if not existing:
@@ -4388,16 +5718,26 @@ async def delete_config_template_api(template_id: int, session: dict = Depends(r
 # Config Compliance
 # ============================================================================
 
-@app.get("/api/config-compliance")
+@app.get("/api/config-compliance", tags=["config"])
 async def get_config_compliance(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_COMPLIANCE))):
-    """Get per-device config compliance status."""
+    """Get per-device config compliance status using scoped templates."""
     all_configs = db.get_all_latest_configs()
-    templates = db.get_config_templates(enabled_only=True)
+    effective = db.get_all_effective_templates()
+
+    # For devices with configs but not in access_points/switches (e.g. CPEs),
+    # fall back to global templates
+    global_templates = None
 
     devices = {}
     for ip, cfg in all_configs.items():
         config_data = json.loads(cfg["config_json"]) if isinstance(cfg["config_json"], str) else cfg["config_json"]
-        compliant = _check_config_compliance(config_data, templates)
+        device_templates = effective.get(ip)
+        if device_templates is None:
+            # Device not in AP/switch tables — use global templates
+            if global_templates is None:
+                global_templates = db.get_config_templates_for_device(ip, site_id=None)
+            device_templates = global_templates
+        compliant = _check_config_compliance(config_data, device_templates)
         devices[ip] = {
             "compliant": compliant,
             "checked_at": cfg["fetched_at"],
@@ -4406,13 +5746,121 @@ async def get_config_compliance(session: dict = Depends(require_auth), _pro=Depe
     return {"devices": devices}
 
 
-@app.get("/api/config-prefill/{category}")
+# ============================================================================
+# Config Enforce Log
+# ============================================================================
+
+@app.get("/api/config-enforce/status", tags=["config"])
+async def get_config_enforce_status(session: dict = Depends(require_auth)):
+    """Get current auto-enforce status and recent log entries."""
+    poller = get_poller()
+    running = poller._enforce_running if poller else False
+    enabled = db.get_setting("config_auto_enforce", "false") == "true"
+    failures = db.get_enforce_failures(since_hours=24)
+    recent = db.get_config_enforce_log(limit=10)
+    return {
+        "enabled": enabled,
+        "running": running,
+        "failure_count": len(failures),
+        "recent": recent,
+    }
+
+
+@app.get("/api/config-enforce/log", tags=["config"])
+async def get_config_enforce_log_api(
+    ip: str = None,
+    limit: int = 50,
+    session: dict = Depends(require_auth),
+):
+    """Get config enforcement log entries."""
+    entries = db.get_config_enforce_log(ip=ip, limit=limit)
+    return {"entries": entries}
+
+
+def _strip_empty_prefill_value(value):
+    """Remove empty/default-like leaves from nested dict/list values."""
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, child in value.items():
+            normalized = _strip_empty_prefill_value(child)
+            if normalized is not None:
+                cleaned[key] = normalized
+        return cleaned or None
+    if isinstance(value, list):
+        cleaned = []
+        for child in value:
+            normalized = _strip_empty_prefill_value(child)
+            if normalized is not None:
+                cleaned.append(normalized)
+        return cleaned or None
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    if value is None or value is False:
+        return None
+    return value
+
+
+def _normalize_prefill_section(category: str, section):
+    """Return a normalized non-default section for prefill matching."""
+    if category == "users":
+        if not isinstance(section, list):
+            return None
+        users = []
+        for user in section:
+            if not isinstance(user, dict):
+                continue
+            username = str(user.get("username") or "").strip()
+            if not username:
+                continue
+            normalized_user = {"username": username}
+            if "level" in user:
+                normalized_user["level"] = user["level"]
+            users.append(normalized_user)
+        return users or None
+
+    if not isinstance(section, dict):
+        return None
+
+    if category == "ntp":
+        servers_raw = section.get("servers", [])
+        if not isinstance(servers_raw, list):
+            servers_raw = [servers_raw]
+        servers = [s.strip() for s in servers_raw if isinstance(s, str) and s.strip()]
+        enabled = section.get("enabled", True)
+        if enabled is True and not servers:
+            return None
+        normalized = {"enabled": bool(enabled)}
+        if servers:
+            normalized["servers"] = servers
+        return normalized
+
+    if category == "radius":
+        method = str(section.get("method", "local")).strip().lower() or "local"
+        radius = section.get("radius")
+        radius = radius if isinstance(radius, dict) else {}
+        normalized_radius = {}
+        for key, value in radius.items():
+            normalized = _strip_empty_prefill_value(value)
+            if normalized is not None:
+                normalized_radius[key] = normalized
+        if method == "local" and not normalized_radius:
+            return None
+        normalized = {"method": method}
+        if normalized_radius:
+            normalized["radius"] = normalized_radius
+        return normalized
+
+    return _strip_empty_prefill_value(section)
+
+
+@app.get("/api/config-prefill/{category}", tags=["config"])
 async def get_config_prefill(category: str, session: dict = Depends(require_auth)):
     """Get pre-fill data for a config category by analyzing fleet configs.
 
     Only returns data if no saved template exists for this category.
     """
-    existing = db.get_config_template_by_category(category)
+    existing = db.get_config_template_by_category(category, scope="global")
     if existing:
         return {"prefilled": False, "reason": "template_exists"}
 
@@ -4426,7 +5874,8 @@ async def get_config_prefill(category: str, session: dict = Depends(require_auth
         "ntp": ["services", "ntp"],
         "radius": ["system", "auth"],
         "users": ["system", "users"],
-        "discovery": ["services", "discovery"],
+        "syslog": ["services", "syslog"],
+        "watchdog": ["services", "watchdog"],
     }
 
     path = section_map.get(category)
@@ -4440,20 +5889,20 @@ async def get_config_prefill(category: str, session: dict = Depends(require_auth
         section = config_data
         for key in path:
             section = section.get(key, {}) if isinstance(section, dict) else {}
-        if section:
-            values.append(section)
+        normalized = _normalize_prefill_section(category, section)
+        if normalized is not None:
+            values.append(normalized)
 
     if not values:
-        return {"prefilled": False, "reason": "no_data"}
+        return {"prefilled": False, "reason": "no_non_default_data"}
 
-    # Find most common value (simple: use the first one if >80% match)
-    canonical = [json.dumps(v, sort_keys=True) for v in values]
+    # First-run suggestion rule: same non-default value on >2 devices.
+    canonical = [json.dumps(v, sort_keys=True, separators=(",", ":")) for v in values]
     from collections import Counter
     counts = Counter(canonical)
     most_common, count = counts.most_common(1)[0]
-    threshold = int(len(values) * 0.8)
 
-    if count >= threshold:
+    if count > 2:
         return {
             "prefilled": True,
             "data": json.loads(most_common),
@@ -4463,9 +5912,11 @@ async def get_config_prefill(category: str, session: dict = Depends(require_auth
 
     return {
         "prefilled": False,
-        "reason": "no_dominant_value",
+        "reason": "insufficient_matches",
+        "required_matches": 3,
         "unique_values": len(counts),
         "device_count": len(values),
+        "match_count": count,
     }
 
 
@@ -4473,8 +5924,8 @@ async def get_config_prefill(category: str, session: dict = Depends(require_auth
 # Config Push (Mass Operations)
 # ============================================================================
 
-@app.post("/api/config-push")
-async def push_config_templates(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
+@app.post("/api/config-push", tags=["config"])
+async def push_config_templates(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
     """Push config template(s) to devices.
 
     Body: {
@@ -4680,6 +6131,364 @@ async def _run_config_push(job_id: str, device_list: list, templates: list):
         asyncio.create_task(poller.poll_configs_for_ips(affected_ips))
 
 
+# ============================================================================
+# RADIUS Server Management
+# ============================================================================
+
+@app.get("/api/radius-server/config", tags=["auth"])
+async def get_radius_server_config_api(
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Get RADIUS server configuration (secrets omitted)."""
+    config = get_radius_server_config()
+    svc = get_radius_service()
+    return {
+        "enabled": config.enabled,
+        "auth_port": config.auth_port,
+        "has_secret": bool(config.shared_secret),
+        "auth_mode": config.auth_mode,
+        "advertised_address": config.advertised_address,
+        "ldap_url": config.ldap_url,
+        "ldap_bind_dn": config.ldap_bind_dn,
+        "ldap_has_password": bool(config.ldap_bind_password),
+        "ldap_base_dn": config.ldap_base_dn,
+        "ldap_user_filter": config.ldap_user_filter,
+        "running": svc.is_running if svc else False,
+        "error": svc.last_error if svc else "",
+    }
+
+
+@app.put("/api/radius-server/config", tags=["auth"])
+async def update_radius_server_config_api(
+    request: Request,
+    session: dict = Depends(require_role("admin")),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Update RADIUS server configuration."""
+    data = await request.json()
+    config = get_radius_server_config()
+
+    if "enabled" in data:
+        config.enabled = bool(data["enabled"])
+    if "auth_port" in data:
+        port = int(data["auth_port"])
+        if not (1024 <= port <= 65535):
+            raise HTTPException(400, "Port must be 1024-65535")
+        config.auth_port = port
+    if "shared_secret" in data and data["shared_secret"]:
+        secret = data["shared_secret"]
+        if len(secret) < 8:
+            raise HTTPException(400, "Shared secret must be at least 8 characters")
+        if len(set(secret)) == 1:
+            raise HTTPException(400, "Shared secret is too weak")
+        config.shared_secret = secret
+    if "auth_mode" in data:
+        if data["auth_mode"] not in ("local", "ldap"):
+            raise HTTPException(400, "auth_mode must be 'local' or 'ldap'")
+        config.auth_mode = data["auth_mode"]
+    if "advertised_address" in data:
+        config.advertised_address = data["advertised_address"].strip()
+    if "ldap_url" in data:
+        url = data["ldap_url"].strip()
+        if url and not (url.startswith("ldaps://") or url.startswith("ldap://")):
+            raise HTTPException(400, "LDAP URL must start with ldaps:// or ldap://")
+        config.ldap_url = url
+    if "ldap_bind_dn" in data:
+        config.ldap_bind_dn = data["ldap_bind_dn"].strip()
+    if "ldap_bind_password" in data and data["ldap_bind_password"]:
+        config.ldap_bind_password = data["ldap_bind_password"]
+    if "ldap_base_dn" in data:
+        config.ldap_base_dn = data["ldap_base_dn"].strip()
+    if "ldap_user_filter" in data:
+        config.ldap_user_filter = data["ldap_user_filter"].strip()
+
+    set_radius_server_config(config)
+
+    # Restart service so new config applies immediately, even if currently idle.
+    svc = get_radius_service()
+    if svc:
+        await svc.restart()
+
+    return {"status": "ok"}
+
+
+@app.post("/api/radius-server/restart", tags=["auth"])
+async def restart_radius_server_api(
+    session: dict = Depends(require_role("admin")),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Restart the RADIUS server."""
+    svc = get_radius_service()
+    if not svc:
+        raise HTTPException(500, "RADIUS service not initialized")
+    await svc.restart()
+    return {"status": "ok"}
+
+
+@app.get("/api/radius-server/status", tags=["auth"])
+async def get_radius_server_status_api(
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Get RADIUS server running status and stats."""
+    svc = get_radius_service()
+    if not svc:
+        return {"running": False, "error": "Not initialized", "stats": {}}
+    return svc.get_status()
+
+
+@app.get("/api/radius-server/users", tags=["auth"])
+async def list_radius_users_api(
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """List all RADIUS users."""
+    return radius_users.get_radius_users()
+
+
+@app.post("/api/radius-server/users", tags=["auth"])
+async def create_radius_user_api(
+    request: Request,
+    session: dict = Depends(require_role("admin", "operator")),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Create a RADIUS user."""
+    data = await request.json()
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+    description = data.get("description", "")
+    try:
+        user_id = radius_users.create_radius_user(username, password, description)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        if "UNIQUE constraint" in str(e):
+            raise HTTPException(409, f"Username '{username}' already exists")
+        raise
+    return {"id": user_id, "username": username}
+
+
+@app.put("/api/radius-server/users/{user_id}", tags=["auth"])
+async def update_radius_user_api(
+    user_id: int,
+    request: Request,
+    session: dict = Depends(require_role("admin", "operator")),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Update a RADIUS user."""
+    data = await request.json()
+    try:
+        updated = radius_users.update_radius_user(user_id, **data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        if "UNIQUE constraint" in str(e):
+            raise HTTPException(409, "Username already exists")
+        raise
+    if not updated:
+        raise HTTPException(404, "User not found")
+    return {"status": "ok"}
+
+
+@app.delete("/api/radius-server/users/{user_id}", tags=["auth"])
+async def delete_radius_user_api(
+    user_id: int,
+    session: dict = Depends(require_role("admin", "operator")),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Delete a RADIUS user."""
+    if not radius_users.delete_radius_user(user_id):
+        raise HTTPException(404, "User not found")
+    return {"status": "ok"}
+
+
+@app.get("/api/radius-server/auth-log", tags=["auth"])
+async def get_radius_auth_log_api(
+    limit: int = 50,
+    offset: int = 0,
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Get recent RADIUS authentication attempts."""
+    with db.get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM radius_auth_log ORDER BY occurred_at DESC LIMIT ? OFFSET ?",
+            (min(limit, 200), offset),
+        ).fetchall()
+        total = conn.execute("SELECT COUNT(*) FROM radius_auth_log").fetchone()[0]
+    return {"entries": [dict(r) for r in rows], "total": total}
+
+
+@app.post("/api/radius-server/test-ldap", tags=["auth"])
+async def test_ldap_connection_api(
+    request: Request,
+    session: dict = Depends(require_role("admin")),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Test LDAP connectivity with current configuration."""
+    data = await request.json()
+    test_username = data.get("test_username", "testuser")
+
+    config = get_radius_server_config()
+    # Override with any provided fields for testing
+    if data.get("ldap_url"):
+        config.ldap_url = data["ldap_url"]
+    if data.get("ldap_bind_dn"):
+        config.ldap_bind_dn = data["ldap_bind_dn"]
+    if data.get("ldap_bind_password"):
+        config.ldap_bind_password = data["ldap_bind_password"]
+    if data.get("ldap_base_dn"):
+        config.ldap_base_dn = data["ldap_base_dn"]
+
+    try:
+        import ldap3
+        from ldap3.utils.conv import escape_filter_chars
+    except ImportError:
+        return {"success": False, "error": "ldap3 library not installed"}
+
+    if not config.ldap_url:
+        return {"success": False, "error": "LDAP URL not configured"}
+
+    try:
+        url = config.ldap_url.strip()
+        if url.startswith("ldaps://"):
+            srv = ldap3.Server(url, use_ssl=True, connect_timeout=10)
+        else:
+            tls = ldap3.Tls(validate=2)
+            srv = ldap3.Server(url, use_ssl=False, tls=tls, connect_timeout=10)
+
+        conn = ldap3.Connection(
+            srv, user=config.ldap_bind_dn,
+            password=config.ldap_bind_password,
+            auto_bind=True, receive_timeout=5,
+        )
+        if url.startswith("ldap://"):
+            conn.start_tls()
+
+        # Search for test user
+        safe_username = escape_filter_chars(test_username)
+        search_filter = config.ldap_user_filter.replace("{username}", safe_username)
+        conn.search(config.ldap_base_dn, search_filter, attributes=["dn"])
+        found = len(conn.entries)
+        conn.unbind()
+
+        return {
+            "success": True,
+            "message": f"LDAP connection successful. Search for '{test_username}' found {found} result(s).",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/radius-server/push-to-devices", tags=["auth"])
+async def push_radius_to_devices_api(
+    request: Request,
+    session: dict = Depends(require_role("admin", "operator")),
+    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
+):
+    """Push this RADIUS server's config to managed devices."""
+    config = get_radius_server_config()
+    if not config.advertised_address:
+        raise HTTPException(400, "Advertised address must be configured before pushing to devices")
+    if not config.shared_secret:
+        raise HTTPException(400, "Shared secret must be configured before pushing to devices")
+
+    data = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    target_ips = data.get("target_ips")  # None = all devices
+
+    # Build RADIUS config fragment for devices
+    config_fragment = {
+        "system": {
+            "auth": {
+                "method": "radius",
+                "radius": {
+                    "auth_server1": config.advertised_address,
+                    "auth_port": config.auth_port,
+                    "auth_secret": config.shared_secret,
+                },
+            }
+        }
+    }
+
+    # Get target devices
+    with db.get_db() as conn:
+        if target_ips:
+            placeholders = ",".join("?" for _ in target_ips)
+            devices = conn.execute(
+                f"SELECT ip, username, password FROM access_points WHERE enabled = 1 AND ip IN ({placeholders})",
+                target_ips,
+            ).fetchall()
+            devices += conn.execute(
+                f"SELECT ip, username, password FROM switches WHERE enabled = 1 AND ip IN ({placeholders})",
+                target_ips,
+            ).fetchall()
+        else:
+            devices = conn.execute(
+                "SELECT ip, username, password FROM access_points WHERE enabled = 1"
+            ).fetchall()
+            devices += conn.execute(
+                "SELECT ip, username, password FROM switches WHERE enabled = 1"
+            ).fetchall()
+
+    if not devices:
+        raise HTTPException(404, "No target devices found")
+
+    device_list = []
+    for d in devices:
+        d = dict(d)
+        # Decrypt device password if encrypted
+        from .crypto import is_encrypted as _is_enc, decrypt_password as _dec_pw
+        if d.get("password") and _is_enc(d["password"]):
+            d["password"] = _dec_pw(d["password"])
+        device_list.append(d)
+
+    # Use the existing config push infrastructure
+    job_id = f"radius-push-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    asyncio.create_task(
+        _run_radius_push(job_id, device_list, config_fragment)
+    )
+
+    return {
+        "job_id": job_id,
+        "device_count": len(device_list),
+        "message": f"Pushing RADIUS config to {len(device_list)} device(s)",
+    }
+
+
+async def _run_radius_push(job_id: str, device_list: list[dict], config_fragment: dict):
+    """Push RADIUS config to devices using TachyonClient."""
+    from .tachyon import TachyonClient
+
+    success_count = 0
+    failed_count = 0
+
+    for d in device_list:
+        ip = d["ip"]
+        try:
+            client = TachyonClient(ip, d.get("username", "admin"), d.get("password", ""))
+            login_result = await client.login()
+            if login_result is not True:
+                raise Exception(f"Login failed: {login_result}")
+            result = await client.apply_config(config_fragment)
+            success_count += 1
+            await broadcast({
+                "type": "config_push_update", "job_id": job_id,
+                "ip": ip, "status": "success",
+            })
+        except Exception as e:
+            failed_count += 1
+            logger.warning("RADIUS config push failed for %s: %s", ip, e)
+            await broadcast({
+                "type": "config_push_update", "job_id": job_id,
+                "ip": ip, "status": "failed", "error": str(e),
+            })
+
+    await broadcast({
+        "type": "config_push_complete", "job_id": job_id,
+        "success_count": success_count, "failed_count": failed_count,
+        "template_names": ["RADIUS Server"],
+    })
 _radius_rollout_task: Optional[asyncio.Task] = None
 _radius_rollout_lock = asyncio.Lock()
 
@@ -5013,6 +6822,168 @@ def _start_radius_rollout_task(rollout_id: int):
     if _radius_rollout_task and not _radius_rollout_task.done():
         return
     _radius_rollout_task = asyncio.create_task(_run_radius_rollout(rollout_id))
+
+
+# ---------------------------------------------------------------------------
+# Reporting API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/reports/update-summary", tags=["reports"])
+async def report_update_summary(days: int = 30,
+                                session: dict = Depends(require_auth)):
+    if days < 1 or days > 365:
+        raise HTTPException(status_code=400, detail="days must be 1-365")
+    return db.get_update_summary(days)
+
+
+@app.get("/api/reports/fleet-status", tags=["reports"])
+async def report_fleet_status(session: dict = Depends(require_auth)):
+    return db.get_fleet_status()
+
+
+@app.get("/api/reports/export/jobs", tags=["reports"])
+async def export_jobs_csv(days: int = 30,
+                          session: dict = Depends(require_auth)):
+    import csv
+    import io
+
+    if days < 1 or days > 365:
+        raise HTTPException(status_code=400, detail="days must be 1-365")
+
+    rows = db.get_job_history_csv_rows(days)
+    if not rows:
+        return StreamingResponse(
+            iter(["No data for the selected period\n"]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=job_history.csv"},
+        )
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+    writer.writeheader()
+    writer.writerows(rows)
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=job_history.csv"},
+    )
+
+
+@app.get("/api/reports/export/devices", tags=["reports"])
+async def export_devices_csv(days: int = 30,
+                             session: dict = Depends(require_auth)):
+    import csv
+    import io
+
+    if days < 1 or days > 365:
+        raise HTTPException(status_code=400, detail="days must be 1-365")
+
+    rows = db.get_device_history_csv_rows(days)
+    if not rows:
+        return StreamingResponse(
+            iter(["No data for the selected period\n"]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=device_history.csv"},
+        )
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+    writer.writeheader()
+    writer.writerows(rows)
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=device_history.csv"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Device Groups API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/device-groups", tags=["devices"])
+async def list_device_groups_api(session: dict = Depends(require_auth)):
+    groups = db.list_device_groups()
+    return {"groups": groups}
+
+
+@app.post("/api/device-groups", status_code=201, tags=["devices"])
+async def create_device_group_api(request: Request,
+                                  session: dict = Depends(require_role("admin", "operator"))):
+    data = await request.json()
+    name = data.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    description = data.get("description", "")
+    filter_json = data.get("filter_json")
+    if filter_json and isinstance(filter_json, dict):
+        filter_json = json.dumps(filter_json)
+    try:
+        group_id = db.create_device_group(name, description, filter_json)
+    except Exception as e:
+        if "UNIQUE" in str(e):
+            raise HTTPException(status_code=409, detail="Group name already exists")
+        raise
+    return {"id": group_id, "name": name}
+
+
+@app.get("/api/device-groups/{group_id}", tags=["devices"])
+async def get_device_group_api(group_id: int,
+                               session: dict = Depends(require_auth)):
+    group = db.get_device_group(group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return group
+
+
+@app.put("/api/device-groups/{group_id}", tags=["devices"])
+async def update_device_group_api(group_id: int, request: Request,
+                                  session: dict = Depends(require_role("admin", "operator"))):
+    data = await request.json()
+    kwargs = {}
+    if "name" in data:
+        name = data["name"].strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name cannot be empty")
+        kwargs["name"] = name
+    if "description" in data:
+        kwargs["description"] = data["description"]
+    if "filter_json" in data:
+        fj = data["filter_json"]
+        kwargs["filter_json"] = json.dumps(fj) if isinstance(fj, dict) else fj
+    if not kwargs:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    try:
+        ok = db.update_device_group(group_id, **kwargs)
+    except Exception as e:
+        if "UNIQUE" in str(e):
+            raise HTTPException(status_code=409, detail="Group name already exists")
+        raise
+    if not ok:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return {"ok": True}
+
+
+@app.delete("/api/device-groups/{group_id}", tags=["devices"])
+async def delete_device_group_api(group_id: int,
+                                  session: dict = Depends(require_role("admin", "operator"))):
+    ok = db.delete_device_group(group_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return {"ok": True}
+
+
+@app.get("/api/device-groups/{group_id}/resolve", tags=["devices"])
+async def resolve_device_group_api(group_id: int,
+                                   session: dict = Depends(require_auth)):
+    group = db.get_device_group(group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    ips = db.resolve_device_group(group_id)
+    return {"group_id": group_id, "name": group["name"], "device_ips": ips,
+            "count": len(ips)}
 
 
 def main():
