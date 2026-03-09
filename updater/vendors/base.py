@@ -179,3 +179,22 @@ class VendorDriver(ABC):
     def get_hardware_id(self, model: str) -> str:
         """Get hardware ID for config downloads. Override per vendor."""
         return ""
+
+    def select_firmware_for_model(self, model: Optional[str], firmware_files: Dict[str, str]) -> Optional[str]:
+        """Select the correct firmware path for a device model.
+
+        Default implementation returns the first available firmware file.
+        Override per vendor for model-specific firmware selection.
+        """
+        if not firmware_files:
+            return None
+        return next(iter(firmware_files.values()), None)
+
+    def get_firmware_type_for_model(self, model: Optional[str]) -> Optional[str]:
+        """Get the firmware type key for a device model.
+
+        Default implementation returns the first firmware type key.
+        Override per vendor for model-specific type mapping.
+        """
+        types = self.get_firmware_types()
+        return types[0]["key"] if types else None

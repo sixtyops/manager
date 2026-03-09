@@ -119,6 +119,33 @@ class TachyonDriver(VendorDriver):
     def get_hardware_id(self, model: str) -> str:
         return self._client.get_hardware_id(model)
 
+    def select_firmware_for_model(self, model, firmware_files):
+        """Select correct firmware path for a Tachyon device model."""
+        if not firmware_files:
+            return None
+        if not model:
+            return firmware_files.get("tna-30x") or next(iter(firmware_files.values()), None)
+
+        model_lower = model.lower()
+        for model_key, patterns in TachyonClient.MODEL_FIRMWARE_PATTERNS.items():
+            if model_lower == model_key or model_lower.startswith(model_key):
+                for pattern in patterns:
+                    if pattern in firmware_files:
+                        return firmware_files[pattern]
+                return None  # Model known but no matching firmware provided
+        # Unknown model - use default
+        return firmware_files.get("tna-30x") or next(iter(firmware_files.values()), None)
+
+    def get_firmware_type_for_model(self, model):
+        """Get firmware type key for a Tachyon device model."""
+        if not model:
+            return "tna-30x"
+        model_lower = model.lower()
+        for model_key, patterns in TachyonClient.MODEL_FIRMWARE_PATTERNS.items():
+            if model_lower == model_key or model_lower.startswith(model_key):
+                return patterns[0] if patterns else None
+        return "tna-30x"
+
 
 # Register on import
 register_driver("tachyon", TachyonDriver)

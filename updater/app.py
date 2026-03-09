@@ -3582,6 +3582,7 @@ class UpdateJob:
     firmware_names: Dict[str, str] = field(default_factory=dict)  # pattern key -> display name
     device_firmware_map: Dict[str, str] = field(default_factory=dict)  # IP -> firmware path
     device_type: str = "tachyon"
+    device_vendor_map: Dict[str, str] = field(default_factory=dict)  # IP -> vendor ID
     credentials: Dict[str, tuple] = field(default_factory=dict)  # IP -> (username, password)
     devices: Dict[str, DeviceStatus] = field(default_factory=dict)
     bank_mode: str = "both"
@@ -4004,33 +4005,19 @@ def _device_needs_update(device: dict, target_version: str, bank_mode: str, allo
     return False
 
 
-def _select_firmware_for_model(model: Optional[str], firmware_files: Dict[str, str]) -> Optional[str]:
+def _select_firmware_for_model(model: Optional[str], firmware_files: Dict[str, str], vendor: str = "tachyon") -> Optional[str]:
     """Select the correct firmware path for a device model.
 
-    Args:
-        model: Device model string (e.g. "TNA-303L-65")
-        firmware_files: Dict of pattern key -> firmware path (e.g. {"tna-30x": "/path", "tna-303l": "/path"})
-
-    Returns:
-        Firmware path or None if no match.
+    Delegates to the vendor driver's firmware selection logic.
     """
-    if not model:
-        # No model info - use the default "tna-30x" firmware if available
-        return firmware_files.get("tna-30x") or next(iter(firmware_files.values()), None)
-
-    model_lower = model.lower()
-
-    # Check known model patterns
-    for model_key, patterns in TachyonClient.MODEL_FIRMWARE_PATTERNS.items():
-        if model_lower == model_key or model_lower.startswith(model_key):
-            # Found the model - look for matching firmware
-            for pattern in patterns:
-                if pattern in firmware_files:
-                    return firmware_files[pattern]
-            return None  # Model known but no matching firmware provided
-
-    # Unknown model - use default "tna-30x" firmware
-    return firmware_files.get("tna-30x") or next(iter(firmware_files.values()), None)
+    try:
+        driver_cls = get_driver(vendor)
+        # Use a temporary instance to access the method (no connection needed)
+        driver = object.__new__(driver_cls)
+        return driver.select_firmware_for_model(model, firmware_files)
+    except KeyError:
+        # Unknown vendor - return first available
+        return next(iter(firmware_files.values()), None) if firmware_files else None
 
 
 def _is_303l_model(model: Optional[str]) -> bool:
@@ -4156,15 +4143,14 @@ def _device_needs_update_for_bank_mode(
 
 
 
-def _get_firmware_type_for_model(model: Optional[str]) -> Optional[str]:
+def _get_firmware_type_for_model(model: Optional[str], vendor: str = "tachyon") -> Optional[str]:
     """Get the firmware type key for a device model."""
-    if not model:
-        return "tna-30x"
-    model_lower = model.lower()
-    for model_key, patterns in TachyonClient.MODEL_FIRMWARE_PATTERNS.items():
-        if model_lower == model_key or model_lower.startswith(model_key):
-            return patterns[0] if patterns else None
-    return "tna-30x"
+    try:
+        driver_cls = get_driver(vendor)
+        driver = object.__new__(driver_cls)
+        return driver.get_firmware_type_for_model(model)
+    except KeyError:
+        return None
 
 
 def _compare_versions(a: str, b: str) -> int:
@@ -4952,17 +4938,22 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     pre_update_cpe_count = len(job.ap_cpe_map.get(ip, [])) if device_status.role == "ap" else 0
 
     client = None
-    if job.device_type in ("tachyon", "mixed"):
+    vendor_id = job.device_vendor_map.get(ip, "tachyon")
+    try:
+        driver_cls = get_driver(vendor_id)
+    except KeyError:
+        result = UpdateResult(ip=ip, success=False, error=f"Unknown vendor: {vendor_id}")
+        driver_cls = None
+
+    if driver_cls:
         username, password = job.credentials[ip]
-        client = TachyonClient(ip, username, password)
-        reboot_timeout = TNS100_REBOOT_TIMEOUT if device_status.role == "switch" else AP_REBOOT_TIMEOUT
+        client = driver_cls(ip, username, password)
+        reboot_timeout = client.get_reboot_timeout(device_status.role)
         try:
             bw_limit = int(db.get_setting("bandwidth_limit_kbps", "0"))
         except (ValueError, TypeError):
             bw_limit = 0
         result = await client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit)
-    else:
-        result = UpdateResult(ip=ip, success=False, error=f"Unsupported device type: {job.device_type}")
 
     device_status.old_version = result.old_version
     device_status.new_version = result.new_version
@@ -5129,17 +5120,18 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                         "parent_ap": ds.parent_ap,
                     })
                     username, password = job.credentials.get(ip, ("", ""))
-                    client = TachyonClient(ip, username, password)
+                    v_id = job.device_vendor_map.get(ip, "tachyon")
+                    reboot_client = get_driver(v_id)(ip, username, password)
                     try:
-                        login_result = await client.login()
+                        login_result = await reboot_client.connect()
                         if login_result is not True:
                             ds.status = "failed"
                             ds.error = login_result if isinstance(login_result, str) else "Login failed"
                             ds.progress_message = f"Pre-reboot login failed: {ds.error}"
                             _request_job_cancel(job, "Cancelled: another device failed to reboot")
                             return
-                        timeout = TNS100_REBOOT_TIMEOUT if ds.role == "switch" else AP_REBOOT_TIMEOUT
-                        if not await client.reboot(timeout=timeout):
+                        timeout = reboot_client.get_reboot_timeout(ds.role)
+                        if not await reboot_client.reboot(timeout=timeout):
                             ds.status = "failed"
                             ds.error = "Device did not come back online after pre-update reboot"
                             ds.progress_message = ds.error

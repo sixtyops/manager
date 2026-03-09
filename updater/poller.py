@@ -11,7 +11,9 @@ from typing import Callable, Optional
 from . import database as db
 from . import radius_config
 from .config_utils import deep_merge, fragment_matches, check_config_compliance, validate_fragment_safety
-from .tachyon import TachyonClient
+from .tachyon import TachyonClient  # kept for fallback/type compat
+from .vendors import get_driver
+from .vendors.base import VendorDriver
 from .models import SignalHealth
 
 PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
@@ -35,7 +37,7 @@ class NetworkPoller:
         self.broadcast_func = broadcast_func
         self._running = False
         self._task: Optional[asyncio.Task] = None
-        self._clients: dict[str, tuple[TachyonClient, float]] = {}  # IP -> (client, last_used)
+        self._clients: dict[str, tuple[VendorDriver, float]] = {}  # IP -> (client, last_used)
         self._last_config_poll: Optional[datetime] = None
         self._poll_in_progress = False
         # Circuit breaker state
@@ -99,7 +101,7 @@ class NetworkPoller:
         if stale:
             logger.info(f"Evicted {len(stale)} stale client(s) from cache")
 
-    def _get_cached_client(self, ip: str) -> Optional[TachyonClient]:
+    def _get_cached_client(self, ip: str) -> Optional[VendorDriver]:
         """Get a cached client, updating its last-used timestamp."""
         entry = self._clients.get(ip)
         if entry:
@@ -108,7 +110,7 @@ class NetworkPoller:
             return client
         return None
 
-    def _cache_client(self, ip: str, client: TachyonClient):
+    def _cache_client(self, ip: str, client: VendorDriver):
         """Cache an authenticated client."""
         self._clients[ip] = (client, time.time())
 
@@ -381,7 +383,7 @@ class NetworkPoller:
             self._record_poll_failure(ip)
             self._remove_cached_client(ip)
 
-    async def _get_client(self, ip: str, username: str, password: str) -> tuple:
+    async def _get_client(self, ip: str, username: str, password: str, vendor: str = "tachyon") -> tuple:
         """Get authenticated client, reusing existing session if possible.
 
         Returns (client, None) on success or (None, error_string) on failure.
@@ -390,9 +392,14 @@ class NetworkPoller:
         if cached:
             return cached, None
 
-        client = TachyonClient(ip, username, password)
+        try:
+            driver_cls = get_driver(vendor)
+        except KeyError:
+            return None, f"Unknown vendor: {vendor}"
 
-        result = await client.login()
+        client = driver_cls(ip, username, password)
+
+        result = await client.connect()
         if result is True:
             self._cache_client(ip, client)
             return client, None
@@ -431,8 +438,8 @@ class NetworkPoller:
         effective_user, effective_pass = radius_config.get_device_credentials(username, password)
 
         try:
-            client = TachyonClient(cpe_ip, effective_user, effective_pass, timeout=10)
-            result = await client.login()
+            client = get_driver("tachyon")(cpe_ip, effective_user, effective_pass, timeout=10)
+            result = await client.connect()
             if result is True:
                 return "ok"
             if isinstance(result, str) and "not reachable" in result.lower():
@@ -443,8 +450,8 @@ class NetworkPoller:
                 default_config = radius_config.get_device_auth_config()
                 if default_config.username != username:  # Don't retry same creds
                     logger.debug(f"Trying global default credentials for CPE {cpe_ip}")
-                    client = TachyonClient(cpe_ip, default_config.username, default_config.password, timeout=10)
-                    result = await client.login()
+                    client = get_driver("tachyon")(cpe_ip, default_config.username, default_config.password, timeout=10)
+                    result = await client.connect()
                     if result is True:
                         return "ok"
 
@@ -463,8 +470,8 @@ class NetworkPoller:
                 if age < 86400:  # 24 hours
                     return
 
-            client = TachyonClient(cpe_ip, username, password, timeout=15)
-            result = await client.login()
+            client = get_driver("tachyon")(cpe_ip, username, password, timeout=15)
+            result = await client.connect()
             if result is not True:
                 return
 
@@ -716,10 +723,10 @@ class NetworkPoller:
         """Fetch config from a device and store if changed."""
         try:
             # Reuse cached client if available, otherwise create new
-            client = self._clients.get(ip)
+            client = self._get_cached_client(ip)
             if not client:
-                client = TachyonClient(ip, username, password, timeout=15)
-                login_result = await client.login()
+                client = get_driver("tachyon")(ip, username, password, timeout=15)
+                login_result = await client.connect()
                 if login_result is not True:
                     logger.debug(f"Config poll: login failed for {ip}: {login_result}")
                     return
@@ -739,9 +746,15 @@ class NetworkPoller:
                 logger.debug(f"Config poll: {ip} config unchanged")
                 return
 
-            hardware_id = TachyonClient.MODEL_HARDWARE_IDS.get(
-                (model or "").lower(), "tn-110-prs"
-            )
+            # Determine hardware_id via vendor driver if available
+            try:
+                driver_cls = get_driver("tachyon")
+                driver_inst = object.__new__(driver_cls)
+                hardware_id = driver_inst.get_hardware_id((model or "").lower())
+            except Exception:
+                hardware_id = TachyonClient.MODEL_HARDWARE_IDS.get(
+                    (model or "").lower(), "tn-110-prs"
+                )
             db.save_device_config(ip, config_json, config_hash, model, hardware_id)
             logger.info(f"Config poll: saved new config for {ip} (hash: {config_hash[:12]})")
 
@@ -937,8 +950,10 @@ class NetworkPoller:
                 if not device:
                     raise RuntimeError("Device not found in database")
 
-                client = TachyonClient(ip, device["username"], device["password"], timeout=15)
-                login_result = await client.login()
+                vendor = device.get("vendor", "tachyon")
+                driver_cls = get_driver(vendor)
+                client = driver_cls(ip, device["username"], device["password"], timeout=15)
+                login_result = await client.connect()
                 if login_result is not True:
                     raise RuntimeError(f"Login failed: {login_result}")
 
@@ -951,9 +966,7 @@ class NetworkPoller:
                 pre_json = json.dumps(current_config, sort_keys=True, separators=(",", ":"))
                 pre_hash = hashlib.sha256(pre_json.encode()).hexdigest()
                 model = device.get("model")
-                hardware_id = TachyonClient.MODEL_HARDWARE_IDS.get(
-                    (model or "").lower(), "tn-110-prs"
-                )
+                hardware_id = client.get_hardware_id((model or "").lower())
                 db.save_device_config(ip, pre_json, pre_hash, model, hardware_id)
 
                 # Merge all template fragments into current config
