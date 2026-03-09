@@ -38,7 +38,6 @@ class Feature(str, Enum):
     TOWER_SITES = "tower_sites"
     BETA_FIRMWARE = "beta_firmware"
     FIRMWARE_HOLD_CUSTOM = "firmware_hold_custom"
-    RADIUS_SERVER = "radius_server"
     SNMP_TRAPS = "snmp_traps"
     WEBHOOKS = "webhooks"
 
@@ -484,7 +483,7 @@ _FEATURE_DISPLAY_NAMES = {
     "sso_oidc": "SSO / OIDC",
     "device_portal": "Device portal",
     "tower_sites": "Tower sites",
-    "radius_server": "RADIUS server",
+    "radius_auth": "RADIUS authentication",
     "snmp_traps": "SNMP traps",
 }
 

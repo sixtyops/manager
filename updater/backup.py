@@ -6,6 +6,7 @@ import io
 import ipaddress
 import logging
 import os
+from datetime import datetime
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
@@ -91,13 +92,14 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
 
     # RADIUS users section
     try:
-        from . import builtin_radius
-        radius_users = builtin_radius.list_users_for_backup()
-        if radius_users:
+        from . import radius_users as ru
+        all_users = ru.get_radius_users_for_backup()
+        if all_users:
             buf.write("# section=radius_users\n")
             radius_writer = csv.DictWriter(buf, fieldnames=RADIUS_EXPORT_COLUMNS)
             radius_writer.writeheader()
-            for user in radius_users:
+            for user in all_users:
+                # Export the password (bcrypt hash or legacy) Fernet-wrapped for transport
                 radius_writer.writerow({
                     "username": user["username"],
                     "password": fernet.encrypt(user["password"].encode()).decode(),
@@ -208,7 +210,7 @@ def process_csv_import(csv_content: str, passphrase: str, conflict_mode: str = "
     # Import RADIUS users if present
     if radius_lines:
         try:
-            from . import builtin_radius
+            from . import radius_users as ru
             radius_reader = csv.DictReader(io.StringIO("".join(radius_lines)))
             for row in radius_reader:
                 username = (row.get("username") or "").strip()
@@ -222,15 +224,37 @@ def process_csv_import(csv_content: str, passphrase: str, conflict_mode: str = "
                     continue
 
                 enabled = row.get("enabled", "1") == "1"
-                existing = [u for u in builtin_radius.list_users() if u["username"].lower() == username.lower()]
+                existing = ru.get_radius_user_by_name(username)
                 try:
                     if existing and conflict_mode == "skip":
                         results["radius_users"]["skipped"] += 1
                     elif existing:
-                        builtin_radius.update_user(existing[0]["id"], username, password, enabled, _skip_length_check=True)
+                        # Password may be a bcrypt hash (from backup) or plaintext (legacy)
+                        update_kwargs = {"enabled": enabled}
+                        if not ru._is_bcrypt_hash(password):
+                            update_kwargs["password"] = password
+                        else:
+                            # Direct hash import: write bcrypt hash directly
+                            with db.get_db() as conn:
+                                conn.execute(
+                                    "UPDATE radius_users SET password = ?, enabled = ?, updated_at = ? WHERE id = ?",
+                                    (password, enabled, datetime.now().isoformat(), existing["id"]),
+                                )
                         results["radius_users"]["updated"] += 1
                     else:
-                        builtin_radius.create_user(username, password, enabled, _skip_length_check=True)
+                        if ru._is_bcrypt_hash(password):
+                            # Direct hash import
+                            with db.get_db() as conn:
+                                conn.execute(
+                                    "INSERT INTO radius_users (username, password, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                                    (username, password, enabled, datetime.now().isoformat(), datetime.now().isoformat()),
+                                )
+                        else:
+                            ru.create_radius_user(username, password)
+                            if not enabled:
+                                user = ru.get_radius_user_by_name(username)
+                                if user:
+                                    ru.update_radius_user(user["id"], enabled=False)
                         results["radius_users"]["added"] += 1
                 except Exception as e:
                     results["radius_users"]["failed"] += 1

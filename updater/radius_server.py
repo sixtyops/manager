@@ -4,7 +4,7 @@ Runs a pyrad-based RADIUS server in a background thread alongside the
 FastAPI application.  Supports PAP authentication against either a local
 user database (radius_users table) or an LDAP/AD directory.
 
-The server is gated behind Feature.RADIUS_SERVER (PRO license).
+The server is gated behind Feature.RADIUS_AUTH (PRO license).
 """
 
 import asyncio
@@ -140,9 +140,9 @@ def _log_auth_attempt(
         with db.get_db() as conn:
             conn.execute(
                 "INSERT INTO radius_auth_log "
-                "(username, nas_ip, result, reject_reason, auth_mode, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (username, nas_ip, result, reject_reason, auth_mode,
+                "(username, client_ip, outcome, reason, occurred_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (username, nas_ip, result, reject_reason,
                  datetime.now().isoformat()),
             )
     except Exception as e:
@@ -450,7 +450,7 @@ class RadiusService:
         if not (1024 <= config.auth_port <= 65535):
             return f"Invalid port {config.auth_port} (must be 1024-65535)"
         from .license import Feature, is_feature_enabled
-        if not is_feature_enabled(Feature.RADIUS_SERVER):
+        if not is_feature_enabled(Feature.RADIUS_AUTH):
             return "PRO license required"
         return None
 
@@ -611,7 +611,7 @@ class RadiusService:
             # Check license
             try:
                 from .license import Feature, is_feature_enabled
-                if not is_feature_enabled(Feature.RADIUS_SERVER):
+                if not is_feature_enabled(Feature.RADIUS_AUTH):
                     logger.warning("RADIUS server stopping: PRO license expired")
                     self._bind_error = "PRO license required"
                     self._server.stop()

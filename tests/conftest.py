@@ -512,11 +512,7 @@ def client(mock_db):
     mock_license_validator.stop = AsyncMock()
     mock_radius_svc = MagicMock()
     mock_radius_svc.run_forever = AsyncMock()
-    mock_radius_runtime = MagicMock()
-    mock_radius_runtime.start = AsyncMock()
-    mock_radius_runtime.stop = AsyncMock()
-    mock_radius_runtime.reload = AsyncMock()
-    mock_radius_runtime.ensure_healthy = AsyncMock()
+    # FreeRADIUS runtime removed — pyrad runs in-process
 
     async def _noop_supervised_task(name, coro_func, *args, **kwargs):
         """No-op replacement so supervised background loops don't spin."""
@@ -531,7 +527,6 @@ def client(mock_db):
          patch("updater.app.init_scheduler", return_value=mock_scheduler), \
          patch("updater.app.init_license_validator", return_value=mock_license_validator), \
          patch("updater.app.init_radius_service", return_value=mock_radius_svc), \
-         patch("updater.app.builtin_radius.get_runtime", return_value=mock_radius_runtime), \
          patch("updater.app.ensure_admin_user"), \
          patch("updater.app._recover_crashed_device_jobs"), \
          patch("updater.app._supervised_task", side_effect=_noop_supervised_task), \

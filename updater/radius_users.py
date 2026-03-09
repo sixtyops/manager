@@ -8,6 +8,7 @@ from typing import Optional
 import bcrypt
 
 from . import database as db
+from .crypto import decrypt_password, is_encrypted
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,16 @@ def get_radius_users() -> list[dict]:
             "SELECT id, username, description, enabled, last_auth_at, "
             "auth_count, created_at, updated_at FROM radius_users "
             "ORDER BY username"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_radius_users_for_backup() -> list[dict]:
+    """Get all RADIUS users with password hashes (for backup export)."""
+    with db.get_db() as conn:
+        rows = conn.execute(
+            "SELECT username, password, enabled FROM radius_users "
+            "ORDER BY username COLLATE NOCASE"
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -124,20 +135,68 @@ def delete_radius_user(user_id: int) -> bool:
         return cursor.rowcount > 0
 
 
+def _is_bcrypt_hash(value: str) -> bool:
+    """Check if a string looks like a bcrypt hash."""
+    return value.startswith("$2b$") or value.startswith("$2a$")
+
+
 def verify_radius_user(username: str, password: str) -> bool:
     """Verify credentials for a RADIUS user.
 
     Returns True if valid. Returns False for wrong password, unknown user,
     or disabled user — callers should not distinguish between these cases.
     Updates last_auth_at and auth_count on success.
+
+    Handles transparent migration from Fernet-encrypted passwords (legacy
+    builtin_radius format) to bcrypt hashes.
     """
     user = get_radius_user_by_name(username)
     if not user:
         return False
     if not user["enabled"]:
         return False
-    if not bcrypt.checkpw(password.encode(), user["password"].encode()):
-        return False
+
+    stored = user["password"]
+
+    if _is_bcrypt_hash(stored):
+        # Standard bcrypt verification
+        if not bcrypt.checkpw(password.encode(), stored.encode()):
+            return False
+    elif is_encrypted(stored):
+        # Legacy Fernet-encrypted password — decrypt and compare
+        try:
+            decrypted = decrypt_password(stored)
+        except Exception:
+            return False
+        if password != decrypted:
+            return False
+        # Migrate to bcrypt on successful verification
+        try:
+            new_hash = _hash_password(password)
+            with db.get_db() as conn:
+                conn.execute(
+                    "UPDATE radius_users SET password = ? WHERE id = ?",
+                    (new_hash, user["id"]),
+                )
+            logger.info("Migrated RADIUS user %s from Fernet to bcrypt", username)
+        except Exception:
+            logger.warning("Failed to migrate password for user %s", username)
+    else:
+        # Plaintext fallback (e.g., dev mode seeded data)
+        if password != stored:
+            return False
+        # Migrate to bcrypt
+        try:
+            new_hash = _hash_password(password)
+            with db.get_db() as conn:
+                conn.execute(
+                    "UPDATE radius_users SET password = ? WHERE id = ?",
+                    (new_hash, user["id"]),
+                )
+            logger.info("Migrated RADIUS user %s from plaintext to bcrypt", username)
+        except Exception:
+            logger.warning("Failed to migrate password for user %s", username)
+
     # Update auth stats on success
     with db.get_db() as conn:
         conn.execute(

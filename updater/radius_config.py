@@ -111,14 +111,30 @@ def get_auth_config_summary() -> dict:
 
     Note: Secrets are masked for security.
     """
-    from . import builtin_radius
+    from .radius_server import get_radius_server_config, get_radius_service
     from . import oidc_config
 
     device_auth = get_device_auth_config()
     oidc = oidc_config.get_oidc_config()
+    radius_cfg = get_radius_server_config()
+    radius_svc = get_radius_service()
 
     return {
-        "radius": builtin_radius.get_public_config_summary(),
+        "radius": {
+            "enabled": radius_cfg.enabled,
+            "advertised_address": radius_cfg.advertised_address,
+            "auth_port": radius_cfg.auth_port,
+            "secret_set": bool(radius_cfg.shared_secret),
+            "configured": bool(radius_cfg.shared_secret),
+            "auth_mode": radius_cfg.auth_mode,
+            "ldap_url": radius_cfg.ldap_url,
+            "ldap_bind_dn": radius_cfg.ldap_bind_dn,
+            "ldap_has_password": bool(radius_cfg.ldap_bind_password),
+            "ldap_base_dn": radius_cfg.ldap_base_dn,
+            "ldap_user_filter": radius_cfg.ldap_user_filter,
+            "running": radius_svc.is_running if radius_svc else False,
+            "error": radius_svc.last_error if radius_svc else "",
+        },
         "oidc": {
             "enabled": oidc.enabled,
             "provider_url": oidc.provider_url,

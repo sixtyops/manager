@@ -302,6 +302,7 @@ def _seed_device_configs() -> None:
 
 
 def _seed_radius_users() -> None:
+    from .radius_users import _hash_password
     with db.get_db() as conn:
         now = _now_str()
         for username, password, enabled in [
@@ -309,9 +310,10 @@ def _seed_radius_users() -> None:
             ("subscriber2", "securepass2", 1),
             ("testuser", "testpass", 0),
         ]:
+            hashed = _hash_password(password)
             conn.execute(
                 "INSERT OR IGNORE INTO radius_users (username, password, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (username, password, enabled, now, now),
+                (username, hashed, enabled, now, now),
             )
 
         # Auth log entries with distinct timestamps

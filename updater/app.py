@@ -20,7 +20,7 @@ from typing import Dict, Optional, Set
 import aiofiles
 import bcrypt
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, Depends
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -43,8 +43,8 @@ from . import syslog_forwarder
 from . import email_notifier
 from . import ssl_manager
 from . import sftp_backup
-from . import builtin_radius
 from . import radius_config
+from . import radius_rollout
 from . import oidc_config
 from .license import (
     Feature, get_license_state, get_nag_info, get_billable_device_count,
@@ -115,6 +115,7 @@ DATA_DIR.mkdir(exist_ok=True)
 active_websockets: Set[WebSocket] = set()
 update_jobs: Dict[str, "UpdateJob"] = {}
 _last_data_housekeeping_day: Optional[str] = None
+_shutting_down = False
 
 
 async def broadcast(message: dict):
@@ -377,28 +378,6 @@ async def _backup_scheduler():
             logger.error(f"Backup scheduler error: {e}")
 
 
-async def _radius_log_sync():
-    """Persist recent FreeRADIUS auth events in the background."""
-    while True:
-        await asyncio.sleep(300)
-        try:
-            error = builtin_radius.sync_auth_history(hours=24)
-            if error:
-                logger.debug("Background RADIUS sync skipped: %s", error)
-        except Exception as e:
-            logger.error(f"Background RADIUS log sync error: {e}")
-
-
-async def _radius_health_monitor():
-    """Keep the FreeRADIUS container healthy over long-running deployments."""
-    while True:
-        await asyncio.sleep(60)
-        try:
-            await builtin_radius.get_runtime().ensure_healthy()
-        except Exception as e:
-            logger.error(f"Background RADIUS health monitor error: {e}")
-
-
 def _cleanup_completed_jobs(max_age_seconds: int = 600):
     """Remove finished or stale jobs from in-memory dict."""
     now = datetime.now()
@@ -489,13 +468,11 @@ async def lifespan(app: FastAPI):
             _supervised_task("periodic_cleanup", _periodic_cleanup)
         )
         # Skip network-dependent services in dev mode
-        radius_runtime = fetcher = checker = license_validator = None
-        backup_task = radius_sync_task = radius_health_task = ws_health_task = None
+        fetcher = checker = license_validator = None
+        backup_task = ws_health_task = None
         radius_svc = radius_task = None
         logger.info("Application started (DEV MODE — no network services)")
     else:
-        radius_runtime = builtin_radius.get_runtime()
-        await radius_runtime.start()
         poller = init_poller(broadcast, poll_interval=60)
         await poller.start()
         scheduler = init_scheduler(broadcast, _start_scheduled_update, check_interval=60)
@@ -519,12 +496,6 @@ async def lifespan(app: FastAPI):
         backup_task = asyncio.create_task(
             _supervised_task("backup_scheduler", _backup_scheduler)
         )
-        radius_sync_task = asyncio.create_task(
-            _supervised_task("radius_log_sync", _radius_log_sync)
-        )
-        radius_health_task = asyncio.create_task(
-            _supervised_task("radius_health_monitor", _radius_health_monitor)
-        )
         ws_health_task = asyncio.create_task(
             _supervised_task("ws_health_check", _websocket_health_check)
         )
@@ -541,12 +512,6 @@ async def lifespan(app: FastAPI):
     if backup_task:
         backup_task.cancel()
         bg_tasks.append(backup_task)
-    if radius_sync_task:
-        radius_sync_task.cancel()
-        bg_tasks.append(radius_sync_task)
-    if radius_health_task:
-        radius_health_task.cancel()
-        bg_tasks.append(radius_health_task)
     if ws_health_task:
         ws_health_task.cancel()
         bg_tasks.append(ws_health_task)
@@ -565,8 +530,6 @@ async def lifespan(app: FastAPI):
     await scheduler.stop()
     await poller.stop()
     db.checkpoint_db()
-    if radius_runtime:
-        await radius_runtime.stop()
     logger.info("Application stopped")
 
 
@@ -785,7 +748,8 @@ async def setup_submit(
 
         # Rate-limit password verification to prevent brute-force
         ip_address = request.client.host if request.client else "unknown"
-        if _check_login_rate_limit(ip_address):
+        bucket = f"setup:{ip_address}"
+        if _check_rate_limit(bucket, LOGIN_RATE_LIMIT, AUTH_RATE_WINDOW):
             return render_template(request, "setup.html", {
                 "error": "Too many attempts. Please wait and try again.",
                 "first_run": False,
@@ -799,7 +763,7 @@ async def setup_submit(
 
         user = authenticate(session["username"], current_password)
         if not user:
-            _record_login_attempt(ip_address)
+            _record_rate_limit_event(bucket)
             return render_template(request, "setup.html", {
                 "error": "Current password is incorrect.",
                 "first_run": False,
@@ -1807,6 +1771,7 @@ _SETTINGS_SENSITIVE = {
     "admin_password_hash", "oidc_client_secret",
     "device_default_password", "license_key",
     "radius_server_secret", "radius_server_ldap_bind_password",
+    "email_smtp_password", "webhook_secret", "slack_webhook_url",
 }
 
 
@@ -2329,130 +2294,190 @@ async def get_auth_config(session: dict = Depends(require_auth)):
 
 
 @app.get("/api/auth/radius", tags=["auth"])
-async def get_builtin_radius_config(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
-    """Get built-in RADIUS server configuration and summary."""
+async def get_radius_config_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Get RADIUS server configuration, status, and stats."""
+    config = get_radius_server_config()
+    svc = get_radius_service()
     return {
-        **builtin_radius.get_public_config_summary(),
-        "stats": builtin_radius.get_stats(limit=5),
+        "enabled": config.enabled,
+        "auth_port": config.auth_port,
+        "has_secret": bool(config.shared_secret),
+        "secret_set": bool(config.shared_secret),
+        "configured": bool(config.shared_secret),
+        "auth_mode": config.auth_mode,
+        "advertised_address": config.advertised_address,
+        "ldap_url": config.ldap_url,
+        "ldap_bind_dn": config.ldap_bind_dn,
+        "ldap_has_password": bool(config.ldap_bind_password),
+        "ldap_base_dn": config.ldap_base_dn,
+        "ldap_user_filter": config.ldap_user_filter,
+        "running": svc.is_running if svc else False,
+        "error": svc.last_error if svc else "",
+        "stats": radius_rollout.get_auth_stats(limit=5),
+        **radius_rollout.get_secret_rotation_summary(),
     }
 
 
 @app.post("/api/auth/radius/test", tags=["auth"])
-async def test_builtin_radius(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
-    """Test the built-in RADIUS server health."""
-    try:
-        success, message = builtin_radius.test_radius_server()
-        return {"success": success, "message": message}
-    except Exception as exc:
-        return {"success": False, "message": str(exc)}
+async def test_radius_api(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Test RADIUS server health."""
+    svc = get_radius_service()
+    if not svc:
+        return {"success": False, "message": "RADIUS service not initialized"}
+    return {"success": svc.is_running, "message": "Running" if svc.is_running else (svc.last_error or "Not running")}
 
 
 @app.put("/api/auth/radius", tags=["auth"])
-async def update_builtin_radius_config(request: Request, session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
-    """Update built-in RADIUS server settings."""
+async def update_radius_config_api(request: Request, session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Update RADIUS server configuration."""
     data = await request.json()
-    try:
-        port = int(data.get("port", 1812) or 1812)
-    except (TypeError, ValueError):
-        raise HTTPException(400, "Port must be a number")
-    config = builtin_radius.BuiltinRadiusConfig(
-        enabled=bool(data.get("enabled", False)),
-        host=(data.get("host", "") or "").strip(),
-        port=port,
-        secret=data.get("secret", ""),
-    )
+    config = get_radius_server_config()
 
-    if not config.secret:
-        existing = builtin_radius.get_config()
-        config.secret = existing.secret
+    if "enabled" in data:
+        config.enabled = bool(data["enabled"])
+    if "auth_port" in data or "port" in data:
+        port = int(data.get("auth_port", data.get("port", config.auth_port)) or config.auth_port)
+        if not (1024 <= port <= 65535):
+            raise HTTPException(400, "Port must be 1024-65535")
+        config.auth_port = port
+    if "shared_secret" in data and data["shared_secret"]:
+        secret = data["shared_secret"]
+        if len(secret) < 8:
+            raise HTTPException(400, "Shared secret must be at least 8 characters")
+        config.shared_secret = secret
+    elif "secret" in data and data["secret"]:
+        config.shared_secret = data["secret"]
+    if "auth_mode" in data:
+        if data["auth_mode"] not in ("local", "ldap"):
+            raise HTTPException(400, "auth_mode must be 'local' or 'ldap'")
+        config.auth_mode = data["auth_mode"]
+    if "advertised_address" in data or "host" in data:
+        config.advertised_address = (data.get("advertised_address", data.get("host", "")) or "").strip()
+    if "ldap_url" in data:
+        url = data["ldap_url"].strip()
+        if url and not (url.startswith("ldaps://") or url.startswith("ldap://")):
+            raise HTTPException(400, "LDAP URL must start with ldaps:// or ldap://")
+        config.ldap_url = url
+    if "ldap_bind_dn" in data:
+        config.ldap_bind_dn = data["ldap_bind_dn"].strip()
+    if "ldap_bind_password" in data and data["ldap_bind_password"]:
+        config.ldap_bind_password = data["ldap_bind_password"]
+    if "ldap_base_dn" in data:
+        config.ldap_base_dn = data["ldap_base_dn"].strip()
+    if "ldap_user_filter" in data:
+        config.ldap_user_filter = data["ldap_user_filter"].strip()
 
-    if config.enabled and not config.host:
-        raise HTTPException(400, "Device host is required when built-in RADIUS is enabled")
-    if config.enabled and not config.secret:
-        raise HTTPException(400, "Shared secret is required when built-in RADIUS is enabled")
+    set_radius_server_config(config)
 
-    builtin_radius.set_config(config)
-    await builtin_radius.get_runtime().reload()
-    return builtin_radius.get_public_config_summary()
+    # Restart pyrad service so new config applies
+    svc = get_radius_service()
+    if svc:
+        await svc.restart()
+
+    return {"status": "ok"}
+
+
+@app.post("/api/auth/radius/restart", tags=["auth"])
+async def restart_radius_api(session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Restart the RADIUS server."""
+    svc = get_radius_service()
+    if not svc:
+        raise HTTPException(500, "RADIUS service not initialized")
+    await svc.restart()
+    return {"status": "ok"}
+
+
+@app.get("/api/auth/radius/status", tags=["auth"])
+async def get_radius_status_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Get RADIUS server running status and stats."""
+    svc = get_radius_service()
+    if not svc:
+        return {"running": False, "error": "Not initialized", "stats": {}}
+    return svc.get_status()
 
 
 @app.get("/api/auth/radius/users", tags=["auth"])
-async def list_builtin_radius_users(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
-    """List built-in RADIUS users."""
-    return {"users": builtin_radius.list_users()}
+async def list_radius_users_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """List RADIUS users."""
+    return {"users": radius_users.get_radius_users()}
 
 
 @app.post("/api/auth/radius/users", tags=["auth"])
-async def create_builtin_radius_user(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
-    """Create a built-in RADIUS user."""
+async def create_radius_user_api(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Create a RADIUS user."""
     data = await request.json()
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+    description = data.get("description", "")
     try:
-        user = builtin_radius.create_user(
-            username=data.get("username", ""),
-            password=data.get("password", ""),
-            enabled=bool(data.get("enabled", True)),
-        )
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    await builtin_radius.get_runtime().reload()
-    return user
+        user_id = radius_users.create_radius_user(username, password, description)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        if "UNIQUE constraint" in str(e):
+            raise HTTPException(409, f"Username '{username}' already exists")
+        raise
+    svc = get_radius_service()
+    if svc:
+        svc.refresh_clients()
+    return {"id": user_id, "username": username}
 
 
 @app.put("/api/auth/radius/users/{user_id}", tags=["auth"])
-async def update_builtin_radius_user(user_id: int, request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
-    """Update a built-in RADIUS user."""
+async def update_radius_user_api(user_id: int, request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Update a RADIUS user."""
     data = await request.json()
     try:
-        user = builtin_radius.update_user(
-            user_id=user_id,
-            username=data.get("username", ""),
-            password=data.get("password", ""),
-            enabled=bool(data.get("enabled", True)),
-        )
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    await builtin_radius.get_runtime().reload()
-    return user
+        updated = radius_users.update_radius_user(user_id, **data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        if "UNIQUE constraint" in str(e):
+            raise HTTPException(409, "Username already exists")
+        raise
+    if not updated:
+        raise HTTPException(404, "User not found")
+    return {"status": "ok"}
 
 
 @app.delete("/api/auth/radius/users/{user_id}", tags=["auth"])
-async def delete_builtin_radius_user(user_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
-    """Delete a built-in RADIUS user."""
-    deleted = builtin_radius.delete_user(user_id)
-    if not deleted:
+async def delete_radius_user_api(user_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Delete a RADIUS user."""
+    if not radius_users.delete_radius_user(user_id):
         raise HTTPException(404, "User not found")
-    await builtin_radius.get_runtime().reload()
     return {"success": True}
 
 
 @app.get("/api/auth/radius/clients", tags=["auth"])
-async def list_builtin_radius_clients(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def list_radius_clients_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """List manual RADIUS client overrides."""
-    return {"clients": builtin_radius.list_client_overrides()}
+    return {"clients": radius_rollout.list_client_overrides()}
 
 
 @app.post("/api/auth/radius/clients", tags=["auth"])
-async def create_builtin_radius_client(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def create_radius_client_api(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Create a manual RADIUS client override."""
     data = await request.json()
     try:
-        client = builtin_radius.create_client_override(
+        client = radius_rollout.create_client_override(
             client_spec=data.get("client_spec", ""),
             shortname=data.get("shortname", ""),
             enabled=bool(data.get("enabled", True)),
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    await builtin_radius.get_runtime().reload()
+    svc = get_radius_service()
+    if svc:
+        svc.refresh_clients()
     return client
 
 
 @app.put("/api/auth/radius/clients/{override_id}", tags=["auth"])
-async def update_builtin_radius_client(override_id: int, request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def update_radius_client_api(override_id: int, request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Update a manual RADIUS client override."""
     data = await request.json()
     try:
-        client = builtin_radius.update_client_override(
+        client = radius_rollout.update_client_override(
             override_id=override_id,
             client_spec=data.get("client_spec", ""),
             shortname=data.get("shortname", ""),
@@ -2460,104 +2485,262 @@ async def update_builtin_radius_client(override_id: int, request: Request, sessi
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    await builtin_radius.get_runtime().reload()
+    svc = get_radius_service()
+    if svc:
+        svc.refresh_clients()
     return client
 
 
 @app.delete("/api/auth/radius/clients/{override_id}", tags=["auth"])
-async def delete_builtin_radius_client(override_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def delete_radius_client_api(override_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Delete a manual RADIUS client override."""
-    deleted = builtin_radius.delete_client_override(override_id)
+    deleted = radius_rollout.delete_client_override(override_id)
     if not deleted:
         raise HTTPException(404, "Client override not found")
-    await builtin_radius.get_runtime().reload()
+    svc = get_radius_service()
+    if svc:
+        svc.refresh_clients()
     return {"success": True}
 
 
 @app.get("/api/auth/radius/stats", tags=["auth"])
-async def get_builtin_radius_stats(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
-    """Get built-in RADIUS server stats and recent auth events."""
-    return builtin_radius.get_stats()
+async def get_radius_stats_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Get RADIUS server stats and recent auth events."""
+    svc = get_radius_service()
+    stats = radius_rollout.get_auth_stats()
+    stats["running"] = svc.is_running if svc else False
+    stats["error"] = svc.last_error if svc else ""
+    stats.update(radius_rollout.get_secret_rotation_summary())
+    return stats
+
+
+@app.get("/api/auth/radius/auth-log", tags=["auth"])
+async def get_radius_auth_log_api(
+    limit: int = 50,
+    offset: int = 0,
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.RADIUS_AUTH)),
+):
+    """Get recent RADIUS authentication attempts."""
+    with db.get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM radius_auth_log ORDER BY occurred_at DESC LIMIT ? OFFSET ?",
+            (min(limit, 200), offset),
+        ).fetchall()
+        total = conn.execute("SELECT COUNT(*) FROM radius_auth_log").fetchone()[0]
+    return {"entries": [dict(r) for r in rows], "total": total}
 
 
 @app.post("/api/auth/radius/secret-review", tags=["auth"])
-async def mark_builtin_radius_secret_reviewed(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
-    """Mark a legacy built-in RADIUS secret as reviewed today without changing it."""
+async def mark_radius_secret_reviewed(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Mark a legacy RADIUS secret as reviewed today without changing it."""
     try:
-        builtin_radius.mark_secret_reviewed()
+        radius_rollout.mark_secret_reviewed()
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    return builtin_radius.get_public_config_summary()
+    return {"status": "ok", **radius_rollout.get_secret_rotation_summary()}
+
+
+@app.post("/api/auth/radius/test-ldap", tags=["auth"])
+async def test_ldap_connection_api(
+    request: Request,
+    session: dict = Depends(require_role("admin")),
+    _pro=Depends(require_feature(Feature.RADIUS_AUTH)),
+):
+    """Test LDAP connectivity with current configuration."""
+    data = await request.json()
+    test_username = data.get("test_username", "testuser")
+
+    config = get_radius_server_config()
+    if data.get("ldap_url"):
+        config.ldap_url = data["ldap_url"]
+    if data.get("ldap_bind_dn"):
+        config.ldap_bind_dn = data["ldap_bind_dn"]
+    if data.get("ldap_bind_password"):
+        config.ldap_bind_password = data["ldap_bind_password"]
+    if data.get("ldap_base_dn"):
+        config.ldap_base_dn = data["ldap_base_dn"]
+
+    try:
+        import ldap3
+        from ldap3.utils.conv import escape_filter_chars
+    except ImportError:
+        return {"success": False, "error": "ldap3 library not installed"}
+
+    if not config.ldap_url:
+        return {"success": False, "error": "LDAP URL not configured"}
+
+    try:
+        url = config.ldap_url.strip()
+        if url.startswith("ldaps://"):
+            srv = ldap3.Server(url, use_ssl=True, connect_timeout=10)
+        else:
+            tls = ldap3.Tls(validate=2)
+            srv = ldap3.Server(url, use_ssl=False, tls=tls, connect_timeout=10)
+
+        conn = ldap3.Connection(
+            srv, user=config.ldap_bind_dn,
+            password=config.ldap_bind_password,
+            auto_bind=True, receive_timeout=5,
+        )
+        if url.startswith("ldap://"):
+            conn.start_tls()
+
+        safe_username = escape_filter_chars(test_username)
+        search_filter = config.ldap_user_filter.replace("{username}", safe_username)
+        conn.search(config.ldap_base_dn, search_filter, attributes=["dn"])
+        found = len(conn.entries)
+        conn.unbind()
+
+        return {
+            "success": True,
+            "message": f"LDAP connection successful. Search for '{test_username}' found {found} result(s).",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/auth/radius/push-to-devices", tags=["auth"])
+async def push_radius_to_devices_api(
+    request: Request,
+    session: dict = Depends(require_role("admin", "operator")),
+    _pro=Depends(require_feature(Feature.RADIUS_AUTH)),
+):
+    """Push this RADIUS server's config to managed devices."""
+    config = get_radius_server_config()
+    if not config.advertised_address:
+        raise HTTPException(400, "Advertised address must be configured before pushing to devices")
+    if not config.shared_secret:
+        raise HTTPException(400, "Shared secret must be configured before pushing to devices")
+
+    data = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    target_ips = data.get("target_ips")
+
+    config_fragment = {
+        "system": {
+            "auth": {
+                "method": "radius",
+                "radius": {
+                    "auth_server1": config.advertised_address,
+                    "auth_port": config.auth_port,
+                    "auth_secret": config.shared_secret,
+                },
+            }
+        }
+    }
+
+    with db.get_db() as conn:
+        if target_ips:
+            placeholders = ",".join("?" for _ in target_ips)
+            devices = conn.execute(
+                f"SELECT ip, username, password FROM access_points WHERE enabled = 1 AND ip IN ({placeholders})",
+                target_ips,
+            ).fetchall()
+            devices += conn.execute(
+                f"SELECT ip, username, password FROM switches WHERE enabled = 1 AND ip IN ({placeholders})",
+                target_ips,
+            ).fetchall()
+        else:
+            devices = conn.execute(
+                "SELECT ip, username, password FROM access_points WHERE enabled = 1"
+            ).fetchall()
+            devices += conn.execute(
+                "SELECT ip, username, password FROM switches WHERE enabled = 1"
+            ).fetchall()
+
+    if not devices:
+        raise HTTPException(404, "No target devices found")
+
+    device_list = []
+    for d in devices:
+        d = dict(d)
+        from .crypto import is_encrypted as _is_enc, decrypt_password as _dec_pw
+        if d.get("password") and _is_enc(d["password"]):
+            d["password"] = _dec_pw(d["password"])
+        device_list.append(d)
+
+    job_id = f"radius-push-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    asyncio.create_task(
+        _run_radius_push(job_id, device_list, config_fragment)
+    )
+
+    return {
+        "job_id": job_id,
+        "device_count": len(device_list),
+        "message": f"Pushing RADIUS config to {len(device_list)} device(s)",
+    }
 
 
 @app.get("/api/auth/radius/rollout", tags=["auth"])
-async def get_builtin_radius_rollout(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
-    """Get current built-in Radius device migration rollout state."""
-    rollout = builtin_radius.get_current_rollout()
+async def get_radius_rollout_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Get current RADIUS device migration rollout state."""
+    rollout = radius_rollout.get_current_rollout()
     if not rollout:
         return {"rollout": None}
     return {
         "rollout": {
             **rollout,
-            "progress": builtin_radius.get_rollout_progress(rollout["id"]),
+            "progress": radius_rollout.get_rollout_progress(rollout["id"]),
             "devices": _serialize_radius_rollout_devices(rollout["id"]),
         }
     }
 
 
 @app.post("/api/auth/radius/rollout/start", tags=["auth"])
-async def start_builtin_radius_rollout(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
-    """Start staged Radius migration for managed devices."""
-    if builtin_radius.get_active_rollout():
-        raise HTTPException(400, "A Radius rollout is already active")
+async def start_radius_rollout_api(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Start staged RADIUS migration for managed devices."""
+    if radius_rollout.get_active_rollout():
+        raise HTTPException(400, "A RADIUS rollout is already active")
 
-    config = builtin_radius.get_config()
-    if not config.enabled or not config.secret or not config.host:
-        raise HTTPException(400, "Built-in Radius must be enabled with a device host and shared secret before rollout")
+    config = get_radius_server_config()
+    if not config.enabled or not config.shared_secret or not config.advertised_address:
+        raise HTTPException(400, "RADIUS must be enabled with an advertised address and shared secret before rollout")
 
     try:
         await _refresh_radius_rollout_inventory()
         template = _get_radius_rollout_template()
         _validate_radius_rollout_template(template, config)
-        template["fragment"] = _apply_builtin_radius_settings_to_fragment(template["fragment"], config)
+        template["fragment"] = _apply_radius_settings_to_fragment(template["fragment"], config)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     devices = _radius_rollout_targets()
     if not devices:
-        raise HTTPException(400, "No enabled APs, switches, or verified CPEs available for Radius rollout")
+        raise HTTPException(400, "No enabled APs, switches, or verified CPEs available for RADIUS rollout")
 
-    service_username, _ = builtin_radius.get_management_service_credentials(create_if_missing=True)
-    await builtin_radius.get_runtime().reload()
-    rollout_id = builtin_radius.create_rollout(template["id"], service_username)
+    service_username, _ = radius_rollout.get_management_service_credentials(create_if_missing=True)
+    svc = get_radius_service()
+    if svc:
+        svc.refresh_clients()
+    rollout_id = radius_rollout.create_rollout(template["id"], service_username)
     _start_radius_rollout_task(rollout_id)
-    rollout = builtin_radius.get_rollout(rollout_id)
+    rollout = radius_rollout.get_rollout(rollout_id)
     return {"rollout": rollout}
 
 
 @app.post("/api/auth/radius/rollout/{rollout_id}/resume", tags=["auth"])
-async def resume_builtin_radius_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
-    """Resume a paused Radius migration rollout."""
-    rollout = builtin_radius.get_rollout(rollout_id)
+async def resume_radius_rollout_api(rollout_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Resume a paused RADIUS migration rollout."""
+    rollout = radius_rollout.get_rollout(rollout_id)
     if not rollout:
-        raise HTTPException(404, "Radius rollout not found")
+        raise HTTPException(404, "RADIUS rollout not found")
     if rollout["status"] != "paused":
-        raise HTTPException(400, "Radius rollout is not paused")
+        raise HTTPException(400, "RADIUS rollout is not paused")
 
-    builtin_radius.update_rollout_status(rollout_id, "active")
+    radius_rollout.update_rollout_status(rollout_id, "active")
     _start_radius_rollout_task(rollout_id)
-    return {"rollout": builtin_radius.get_rollout(rollout_id)}
+    return {"rollout": radius_rollout.get_rollout(rollout_id)}
 
 
 @app.post("/api/auth/radius/rollout/{rollout_id}/cancel", tags=["auth"])
-async def cancel_builtin_radius_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
-    """Cancel an active or paused Radius migration rollout."""
-    rollout = builtin_radius.get_rollout(rollout_id)
+async def cancel_radius_rollout_api(rollout_id: int, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+    """Cancel an active or paused RADIUS migration rollout."""
+    rollout = radius_rollout.get_rollout(rollout_id)
     if not rollout:
-        raise HTTPException(404, "Radius rollout not found")
+        raise HTTPException(404, "RADIUS rollout not found")
     if rollout["status"] not in ("active", "paused"):
-        raise HTTPException(400, "Radius rollout cannot be cancelled")
+        raise HTTPException(400, "RADIUS rollout cannot be cancelled")
 
-    builtin_radius.update_rollout_status(rollout_id, "cancelled")
+    radius_rollout.update_rollout_status(rollout_id, "cancelled")
     return {"success": True}
 
 
@@ -6593,363 +6776,9 @@ async def _broadcast_config_push_rollout_state(rollout_id: int):
 
 
 # ============================================================================
-# RADIUS Server Management
+# RADIUS Rollout Helpers
 # ============================================================================
 
-@app.get("/api/radius-server/config", tags=["auth"])
-async def get_radius_server_config_api(
-    session: dict = Depends(require_auth),
-    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
-):
-    """Get RADIUS server configuration (secrets omitted)."""
-    config = get_radius_server_config()
-    svc = get_radius_service()
-    return {
-        "enabled": config.enabled,
-        "auth_port": config.auth_port,
-        "has_secret": bool(config.shared_secret),
-        "auth_mode": config.auth_mode,
-        "advertised_address": config.advertised_address,
-        "ldap_url": config.ldap_url,
-        "ldap_bind_dn": config.ldap_bind_dn,
-        "ldap_has_password": bool(config.ldap_bind_password),
-        "ldap_base_dn": config.ldap_base_dn,
-        "ldap_user_filter": config.ldap_user_filter,
-        "running": svc.is_running if svc else False,
-        "error": svc.last_error if svc else "",
-    }
-
-
-@app.put("/api/radius-server/config", tags=["auth"])
-async def update_radius_server_config_api(
-    request: Request,
-    session: dict = Depends(require_role("admin")),
-    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
-):
-    """Update RADIUS server configuration."""
-    data = await request.json()
-    config = get_radius_server_config()
-
-    if "enabled" in data:
-        config.enabled = bool(data["enabled"])
-    if "auth_port" in data:
-        port = int(data["auth_port"])
-        if not (1024 <= port <= 65535):
-            raise HTTPException(400, "Port must be 1024-65535")
-        config.auth_port = port
-    if "shared_secret" in data and data["shared_secret"]:
-        secret = data["shared_secret"]
-        if len(secret) < 8:
-            raise HTTPException(400, "Shared secret must be at least 8 characters")
-        if len(set(secret)) == 1:
-            raise HTTPException(400, "Shared secret is too weak")
-        config.shared_secret = secret
-    if "auth_mode" in data:
-        if data["auth_mode"] not in ("local", "ldap"):
-            raise HTTPException(400, "auth_mode must be 'local' or 'ldap'")
-        config.auth_mode = data["auth_mode"]
-    if "advertised_address" in data:
-        config.advertised_address = data["advertised_address"].strip()
-    if "ldap_url" in data:
-        url = data["ldap_url"].strip()
-        if url and not (url.startswith("ldaps://") or url.startswith("ldap://")):
-            raise HTTPException(400, "LDAP URL must start with ldaps:// or ldap://")
-        config.ldap_url = url
-    if "ldap_bind_dn" in data:
-        config.ldap_bind_dn = data["ldap_bind_dn"].strip()
-    if "ldap_bind_password" in data and data["ldap_bind_password"]:
-        config.ldap_bind_password = data["ldap_bind_password"]
-    if "ldap_base_dn" in data:
-        config.ldap_base_dn = data["ldap_base_dn"].strip()
-    if "ldap_user_filter" in data:
-        config.ldap_user_filter = data["ldap_user_filter"].strip()
-
-    set_radius_server_config(config)
-
-    # Restart service so new config applies immediately, even if currently idle.
-    svc = get_radius_service()
-    if svc:
-        await svc.restart()
-
-    return {"status": "ok"}
-
-
-@app.post("/api/radius-server/restart", tags=["auth"])
-async def restart_radius_server_api(
-    session: dict = Depends(require_role("admin")),
-    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
-):
-    """Restart the RADIUS server."""
-    svc = get_radius_service()
-    if not svc:
-        raise HTTPException(500, "RADIUS service not initialized")
-    await svc.restart()
-    return {"status": "ok"}
-
-
-@app.get("/api/radius-server/status", tags=["auth"])
-async def get_radius_server_status_api(
-    session: dict = Depends(require_auth),
-    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
-):
-    """Get RADIUS server running status and stats."""
-    svc = get_radius_service()
-    if not svc:
-        return {"running": False, "error": "Not initialized", "stats": {}}
-    return svc.get_status()
-
-
-@app.get("/api/radius-server/users", tags=["auth"])
-async def list_radius_users_api(
-    session: dict = Depends(require_auth),
-    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
-):
-    """List all RADIUS users."""
-    return radius_users.get_radius_users()
-
-
-@app.post("/api/radius-server/users", tags=["auth"])
-async def create_radius_user_api(
-    request: Request,
-    session: dict = Depends(require_role("admin", "operator")),
-    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
-):
-    """Create a RADIUS user."""
-    data = await request.json()
-    username = data.get("username", "").strip()
-    password = data.get("password", "")
-    description = data.get("description", "")
-    try:
-        user_id = radius_users.create_radius_user(username, password, description)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        if "UNIQUE constraint" in str(e):
-            raise HTTPException(409, f"Username '{username}' already exists")
-        raise
-    return {"id": user_id, "username": username}
-
-
-@app.put("/api/radius-server/users/{user_id}", tags=["auth"])
-async def update_radius_user_api(
-    user_id: int,
-    request: Request,
-    session: dict = Depends(require_role("admin", "operator")),
-    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
-):
-    """Update a RADIUS user."""
-    data = await request.json()
-    try:
-        updated = radius_users.update_radius_user(user_id, **data)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        if "UNIQUE constraint" in str(e):
-            raise HTTPException(409, "Username already exists")
-        raise
-    if not updated:
-        raise HTTPException(404, "User not found")
-    return {"status": "ok"}
-
-
-@app.delete("/api/radius-server/users/{user_id}", tags=["auth"])
-async def delete_radius_user_api(
-    user_id: int,
-    session: dict = Depends(require_role("admin", "operator")),
-    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
-):
-    """Delete a RADIUS user."""
-    if not radius_users.delete_radius_user(user_id):
-        raise HTTPException(404, "User not found")
-    return {"status": "ok"}
-
-
-@app.get("/api/radius-server/auth-log", tags=["auth"])
-async def get_radius_auth_log_api(
-    limit: int = 50,
-    offset: int = 0,
-    session: dict = Depends(require_auth),
-    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
-):
-    """Get recent RADIUS authentication attempts."""
-    with db.get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM radius_auth_log ORDER BY occurred_at DESC LIMIT ? OFFSET ?",
-            (min(limit, 200), offset),
-        ).fetchall()
-        total = conn.execute("SELECT COUNT(*) FROM radius_auth_log").fetchone()[0]
-    return {"entries": [dict(r) for r in rows], "total": total}
-
-
-@app.post("/api/radius-server/test-ldap", tags=["auth"])
-async def test_ldap_connection_api(
-    request: Request,
-    session: dict = Depends(require_role("admin")),
-    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
-):
-    """Test LDAP connectivity with current configuration."""
-    data = await request.json()
-    test_username = data.get("test_username", "testuser")
-
-    config = get_radius_server_config()
-    # Override with any provided fields for testing
-    if data.get("ldap_url"):
-        config.ldap_url = data["ldap_url"]
-    if data.get("ldap_bind_dn"):
-        config.ldap_bind_dn = data["ldap_bind_dn"]
-    if data.get("ldap_bind_password"):
-        config.ldap_bind_password = data["ldap_bind_password"]
-    if data.get("ldap_base_dn"):
-        config.ldap_base_dn = data["ldap_base_dn"]
-
-    try:
-        import ldap3
-        from ldap3.utils.conv import escape_filter_chars
-    except ImportError:
-        return {"success": False, "error": "ldap3 library not installed"}
-
-    if not config.ldap_url:
-        return {"success": False, "error": "LDAP URL not configured"}
-
-    try:
-        url = config.ldap_url.strip()
-        if url.startswith("ldaps://"):
-            srv = ldap3.Server(url, use_ssl=True, connect_timeout=10)
-        else:
-            tls = ldap3.Tls(validate=2)
-            srv = ldap3.Server(url, use_ssl=False, tls=tls, connect_timeout=10)
-
-        conn = ldap3.Connection(
-            srv, user=config.ldap_bind_dn,
-            password=config.ldap_bind_password,
-            auto_bind=True, receive_timeout=5,
-        )
-        if url.startswith("ldap://"):
-            conn.start_tls()
-
-        # Search for test user
-        safe_username = escape_filter_chars(test_username)
-        search_filter = config.ldap_user_filter.replace("{username}", safe_username)
-        conn.search(config.ldap_base_dn, search_filter, attributes=["dn"])
-        found = len(conn.entries)
-        conn.unbind()
-
-        return {
-            "success": True,
-            "message": f"LDAP connection successful. Search for '{test_username}' found {found} result(s).",
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.post("/api/radius-server/push-to-devices", tags=["auth"])
-async def push_radius_to_devices_api(
-    request: Request,
-    session: dict = Depends(require_role("admin", "operator")),
-    _pro=Depends(require_feature(Feature.RADIUS_SERVER)),
-):
-    """Push this RADIUS server's config to managed devices."""
-    config = get_radius_server_config()
-    if not config.advertised_address:
-        raise HTTPException(400, "Advertised address must be configured before pushing to devices")
-    if not config.shared_secret:
-        raise HTTPException(400, "Shared secret must be configured before pushing to devices")
-
-    data = await request.json() if request.headers.get("content-type") == "application/json" else {}
-    target_ips = data.get("target_ips")  # None = all devices
-
-    # Build RADIUS config fragment for devices
-    config_fragment = {
-        "system": {
-            "auth": {
-                "method": "radius",
-                "radius": {
-                    "auth_server1": config.advertised_address,
-                    "auth_port": config.auth_port,
-                    "auth_secret": config.shared_secret,
-                },
-            }
-        }
-    }
-
-    # Get target devices
-    with db.get_db() as conn:
-        if target_ips:
-            placeholders = ",".join("?" for _ in target_ips)
-            devices = conn.execute(
-                f"SELECT ip, username, password FROM access_points WHERE enabled = 1 AND ip IN ({placeholders})",
-                target_ips,
-            ).fetchall()
-            devices += conn.execute(
-                f"SELECT ip, username, password FROM switches WHERE enabled = 1 AND ip IN ({placeholders})",
-                target_ips,
-            ).fetchall()
-        else:
-            devices = conn.execute(
-                "SELECT ip, username, password FROM access_points WHERE enabled = 1"
-            ).fetchall()
-            devices += conn.execute(
-                "SELECT ip, username, password FROM switches WHERE enabled = 1"
-            ).fetchall()
-
-    if not devices:
-        raise HTTPException(404, "No target devices found")
-
-    device_list = []
-    for d in devices:
-        d = dict(d)
-        # Decrypt device password if encrypted
-        from .crypto import is_encrypted as _is_enc, decrypt_password as _dec_pw
-        if d.get("password") and _is_enc(d["password"]):
-            d["password"] = _dec_pw(d["password"])
-        device_list.append(d)
-
-    # Use the existing config push infrastructure
-    job_id = f"radius-push-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    asyncio.create_task(
-        _run_radius_push(job_id, device_list, config_fragment)
-    )
-
-    return {
-        "job_id": job_id,
-        "device_count": len(device_list),
-        "message": f"Pushing RADIUS config to {len(device_list)} device(s)",
-    }
-
-
-async def _run_radius_push(job_id: str, device_list: list[dict], config_fragment: dict):
-    """Push RADIUS config to devices using TachyonClient."""
-    from .tachyon import TachyonClient
-
-    success_count = 0
-    failed_count = 0
-
-    for d in device_list:
-        ip = d["ip"]
-        try:
-            client = TachyonClient(ip, d.get("username", "admin"), d.get("password", ""))
-            login_result = await client.login()
-            if login_result is not True:
-                raise Exception(f"Login failed: {login_result}")
-            result = await client.apply_config(config_fragment)
-            success_count += 1
-            await broadcast({
-                "type": "config_push_update", "job_id": job_id,
-                "ip": ip, "status": "success",
-            })
-        except Exception as e:
-            failed_count += 1
-            logger.warning("RADIUS config push failed for %s: %s", ip, e)
-            await broadcast({
-                "type": "config_push_update", "job_id": job_id,
-                "ip": ip, "status": "failed", "error": str(e),
-            })
-
-    await broadcast({
-        "type": "config_push_complete", "job_id": job_id,
-        "success_count": success_count, "failed_count": failed_count,
-        "template_names": ["RADIUS Server"],
-    })
 
 _radius_rollout_task: Optional[asyncio.Task] = None
 _radius_rollout_lock = asyncio.Lock()
@@ -7058,30 +6887,30 @@ def _get_radius_rollout_template() -> dict:
     }
 
 
-def _validate_radius_rollout_template(template: dict, config: builtin_radius.BuiltinRadiusConfig):
+def _validate_radius_rollout_template(template: dict, config: "RadiusServerConfig"):
     form_data = template.get("form_data") or {}
-    if not config.host:
-        raise ValueError("Set the built-in Radius device host before starting rollout")
-    if (form_data.get("server") or "").strip() != config.host:
-        raise ValueError("Saved Radius config template server does not match the built-in Radius device host")
+    if not config.advertised_address:
+        raise ValueError("Set the RADIUS advertised address before starting rollout")
+    if (form_data.get("server") or "").strip() != config.advertised_address:
+        raise ValueError("Saved Radius config template server does not match the RADIUS advertised address")
     try:
-        template_port = int(form_data.get("port", config.port) or config.port)
+        template_port = int(form_data.get("port", config.auth_port) or config.auth_port)
     except (TypeError, ValueError):
         raise ValueError("Saved Radius config template port is invalid")
-    if template_port != config.port:
-        raise ValueError("Saved Radius config template port does not match the built-in Radius port")
-    if (form_data.get("secret") or "") != config.secret:
-        raise ValueError("Saved Radius config template secret does not match the built-in Radius secret")
+    if template_port != config.auth_port:
+        raise ValueError("Saved Radius config template port does not match the RADIUS auth port")
+    if (form_data.get("secret") or "") != config.shared_secret:
+        raise ValueError("Saved Radius config template secret does not match the RADIUS shared secret")
 
 
-def _apply_builtin_radius_settings_to_fragment(fragment: dict, config: builtin_radius.BuiltinRadiusConfig) -> dict:
+def _apply_radius_settings_to_fragment(fragment: dict, config: "RadiusServerConfig") -> dict:
     system = fragment.setdefault("system", {})
     auth = system.setdefault("auth", {})
     radius = auth.setdefault("radius", {})
     auth["method"] = "radius"
-    radius["auth_server1"] = config.host
-    radius["auth_port"] = config.port
-    radius["auth_secret"] = config.secret
+    radius["auth_server1"] = config.advertised_address
+    radius["auth_port"] = config.auth_port
+    radius["auth_secret"] = config.shared_secret
     return fragment
 
 
@@ -7096,7 +6925,7 @@ def _radius_rollout_batch_size(phase: str, candidate_count: int) -> int:
 
 
 def _resolve_radius_rollout_phase_devices(rollout: dict, devices: list[dict]) -> list[dict]:
-    existing = builtin_radius.get_rollout_devices(rollout["id"])
+    existing = radius_rollout.get_rollout_devices(rollout["id"])
     existing_by_ip = {row["ip"]: row for row in existing}
     current_by_ip = {device["ip"]: device for device in devices}
 
@@ -7111,7 +6940,7 @@ def _resolve_radius_rollout_phase_devices(rollout: dict, devices: list[dict]) ->
             if device:
                 resolved.append(device)
             else:
-                builtin_radius.mark_rollout_device(
+                radius_rollout.mark_rollout_device(
                     rollout["id"],
                     row["ip"],
                     "skipped",
@@ -7126,12 +6955,12 @@ def _resolve_radius_rollout_phase_devices(rollout: dict, devices: list[dict]) ->
     batch_size = _radius_rollout_batch_size(rollout["phase"], len(unassigned))
     batch = unassigned[:batch_size]
     for device in batch:
-        builtin_radius.assign_device_to_rollout(rollout["id"], device["ip"], device["role"], rollout["phase"])
+        radius_rollout.assign_device_to_rollout(rollout["id"], device["ip"], device["role"], rollout["phase"])
     return batch
 
 
 def _serialize_radius_rollout_devices(rollout_id: int) -> list[dict]:
-    rows = builtin_radius.get_rollout_devices(rollout_id)
+    rows = radius_rollout.get_rollout_devices(rollout_id)
     serialized = []
     for row in rows:
         entry = dict(row)
@@ -7169,7 +6998,7 @@ async def _refresh_radius_rollout_inventory():
 
 async def _push_radius_to_device(rollout_id: int, device: dict, fragment: dict, service_username: str, service_password: str) -> tuple[bool, str]:
     ip = device["ip"]
-    builtin_radius.mark_rollout_device(rollout_id, ip, "pending")
+    radius_rollout.mark_rollout_device(rollout_id, ip, "pending")
     try:
         client = TachyonClient(ip, device["username"], device["password"])
         login_result = await client.login()
@@ -7204,20 +7033,20 @@ async def _push_radius_to_device(rollout_id: int, device: dict, fragment: dict, 
 
         if device["role"] in ("ap", "switch"):
             db.update_device_credentials(device["role"], ip, service_username, service_password)
-        builtin_radius.mark_rollout_device(rollout_id, ip, "updated")
+        radius_rollout.mark_rollout_device(rollout_id, ip, "updated")
         return True, ""
     except Exception as exc:
-        builtin_radius.mark_rollout_device(rollout_id, ip, "failed", str(exc))
+        radius_rollout.mark_rollout_device(rollout_id, ip, "failed", str(exc))
         return False, str(exc)
 
 
 def _broadcast_radius_rollout_state():
-    rollout = builtin_radius.get_current_rollout()
+    rollout = radius_rollout.get_current_rollout()
     payload = {"type": "radius_rollout_status", "rollout": None}
     if rollout:
         payload["rollout"] = {
             **rollout,
-            "progress": builtin_radius.get_rollout_progress(rollout["id"]),
+            "progress": radius_rollout.get_rollout_progress(rollout["id"]),
             "devices": _serialize_radius_rollout_devices(rollout["id"]),
         }
     return broadcast(payload)
@@ -7227,13 +7056,13 @@ async def _run_radius_rollout(rollout_id: int):
     async with _radius_rollout_lock:
         try:
             template = _get_radius_rollout_template()
-            current_config = builtin_radius.get_config()
+            current_config = get_radius_server_config()
             _validate_radius_rollout_template(template, current_config)
-            template["fragment"] = _apply_builtin_radius_settings_to_fragment(template["fragment"], current_config)
-            service_username, service_password = builtin_radius.get_management_service_credentials(create_if_missing=True)
+            template["fragment"] = _apply_radius_settings_to_fragment(template["fragment"], current_config)
+            service_username, service_password = radius_rollout.get_management_service_credentials(create_if_missing=True)
 
             while True:
-                rollout = builtin_radius.get_rollout(rollout_id)
+                rollout = radius_rollout.get_rollout(rollout_id)
                 if not rollout or rollout["status"] != "active":
                     await _broadcast_radius_rollout_state()
                     return
@@ -7241,8 +7070,8 @@ async def _run_radius_rollout(rollout_id: int):
                 devices = _radius_rollout_targets()
                 phase_devices = _resolve_radius_rollout_phase_devices(rollout, devices)
                 if not phase_devices:
-                    builtin_radius.complete_rollout_phase(rollout_id)
-                    refreshed = builtin_radius.get_rollout(rollout_id)
+                    radius_rollout.complete_rollout_phase(rollout_id)
+                    refreshed = radius_rollout.get_rollout(rollout_id)
                     await _broadcast_radius_rollout_state()
                     if not refreshed or refreshed["status"] == "completed":
                         return
@@ -7260,7 +7089,7 @@ async def _run_radius_rollout(rollout_id: int):
                 ])
                 failures = [error for ok, error in results if not ok]
                 if failures:
-                    builtin_radius.update_rollout_status(
+                    radius_rollout.update_rollout_status(
                         rollout_id,
                         "paused",
                         f"{len(failures)} device(s) failed during {rollout['phase']} phase",
@@ -7268,14 +7097,14 @@ async def _run_radius_rollout(rollout_id: int):
                     await _broadcast_radius_rollout_state()
                     return
 
-                builtin_radius.complete_rollout_phase(rollout_id)
+                radius_rollout.complete_rollout_phase(rollout_id)
                 await _broadcast_radius_rollout_state()
-                refreshed = builtin_radius.get_rollout(rollout_id)
+                refreshed = radius_rollout.get_rollout(rollout_id)
                 if not refreshed or refreshed["status"] == "completed":
                     return
         except Exception as exc:
             logger.exception("Radius rollout %s failed", rollout_id)
-            builtin_radius.update_rollout_status(rollout_id, "paused", str(exc))
+            radius_rollout.update_rollout_status(rollout_id, "paused", str(exc))
             await _broadcast_radius_rollout_state()
 
 

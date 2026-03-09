@@ -2579,25 +2579,66 @@
                             <span class="u-text-xs-muted">Enabled</span>
                         </label>
                     </div>
-                    <p class="u-note-block">Named admin accounts for APs, SMs, and switches authenticating back to this appliance. Reserved usernames <code>admin</code> and <code>root</code> are blocked.</p>
-                    <div id="radiusFields" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 140px;gap:8px;">
-                        <div>
-                            <label class="u-label-compact">Device Host</label>
-                            <input type="text" id="authRadiusHost" placeholder="radius.example.com" class="u-input-compact">
+                    <p class="u-note-block">Centralized RADIUS authentication for Tachyon device management logins. Devices authenticate admin sessions against this server instead of local credentials. Reserved usernames <code>admin</code> and <code>root</code> are blocked.</p>
+                    <div id="radiusFields">
+                        <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 140px 160px;gap:8px;">
+                            <div>
+                                <label class="u-label-compact">Advertised Address</label>
+                                <input type="text" id="authRadiusHost" placeholder="e.g. 10.0.0.50" class="u-input-compact">
+                            </div>
+                            <div>
+                                <label class="u-label-compact">Shared Secret</label>
+                                <input type="password" id="authRadiusSecret" placeholder="Enter shared secret" class="u-input-compact">
+                            </div>
+                            <div>
+                                <label class="u-label-compact">UDP Port</label>
+                                <input type="number" id="authRadiusPort" min="1" max="65535" value="1812" class="u-input-compact">
+                            </div>
+                            <div>
+                                <label class="u-label-compact">Auth Mode</label>
+                                <select id="authRadiusAuthMode" onchange="toggleRadiusAuthMode()" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;background:#fff;">
+                                    <option value="local">Local Users</option>
+                                    <option value="ldap">LDAP / Active Directory</option>
+                                </select>
+                            </div>
                         </div>
-                        <div>
-                            <label class="u-label-compact">Shared Secret</label>
-                            <input type="password" id="authRadiusSecret" placeholder="Enter shared secret" class="u-input-compact">
-                        </div>
-                        <div>
-                            <label class="u-label-compact">UDP Port</label>
-                            <input type="number" id="authRadiusPort" min="1" max="65535" value="1812" class="u-input-compact">
+
+                        <!-- LDAP Config (hidden by default) -->
+                        <div id="radiusLdapSection" class="hidden" style="margin-top:10px;">
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                                <div style="grid-column:span 2;">
+                                    <label class="u-label-compact">LDAP URL</label>
+                                    <input type="text" id="radiusLdapUrl" placeholder="ldaps://ad.example.com" class="u-input-compact">
+                                </div>
+                                <div>
+                                    <label class="u-label-compact">Bind DN</label>
+                                    <input type="text" id="radiusLdapBindDn" placeholder="CN=svc_radius,OU=Service Accounts,DC=example,DC=com" class="u-input-compact">
+                                </div>
+                                <div>
+                                    <label class="u-label-compact">Bind Password</label>
+                                    <input type="password" id="radiusLdapPassword" placeholder="Enter password" class="u-input-compact">
+                                </div>
+                                <div style="grid-column:span 2;">
+                                    <label class="u-label-compact">Base DN</label>
+                                    <input type="text" id="radiusLdapBaseDn" placeholder="DC=example,DC=com" class="u-input-compact">
+                                </div>
+                                <div style="grid-column:span 2;">
+                                    <label class="u-label-compact">User Filter</label>
+                                    <input type="text" id="radiusLdapUserFilter" placeholder="(&(objectClass=user)(sAMAccountName={username}))" class="u-input-compact">
+                                </div>
+                            </div>
+                            <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
+                                <button class="backup-btn u-bg-muted-cta" onclick="testRadiusLdap()">Test LDAP</button>
+                                <span id="radiusLdapStatus" class="u-text-xs-muted"></span>
+                            </div>
                         </div>
                     </div>
                     <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
                         <button class="backup-btn" onclick="saveRadiusConfig()">Save RADIUS</button>
+                        <button class="backup-btn u-bg-muted-cta" onclick="restartRadiusServer()">Restart</button>
                         <button class="backup-btn u-bg-muted-cta" onclick="testRadiusConfig()">Test</button>
                         <button class="backup-btn u-bg-muted-cta" onclick="refreshRadiusData()">Refresh</button>
+                        <button class="backup-btn u-bg-muted-cta" onclick="pushRadiusToDevices()">Push to Devices</button>
                         <span id="radiusStatus" class="u-text-xs-muted"></span>
                     </div>
 
@@ -2711,6 +2752,16 @@
                         <h5 style="margin:0 0 8px 0;font-size:0.8rem;font-weight:600;">Recent Admin Logins</h5>
                         <div id="radiusRecentLogins" style="display:flex;flex-direction:column;gap:6px;"></div>
                     </div>
+
+                    <div style="margin-top:14px;">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                            <h5 style="margin:0;font-size:0.8rem;font-weight:600;">Auth Log</h5>
+                            <button class="backup-btn u-bg-muted-cta" onclick="loadRadiusAuthLog()" style="font-size:0.65rem;padding:1px 6px;">Refresh</button>
+                        </div>
+                        <div id="radiusAuthLogTable" style="font-size:0.72rem;max-height:150px;overflow-y:auto;">
+                            <div class="u-muted-empty-sm">No auth log entries.</div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- SSO / OIDC Section (hidden until tested) -->
@@ -2783,8 +2834,8 @@
 
                 <div class="u-hr-my16"></div>
 
-                <!-- Built-in RADIUS Server Section -->
-                <div id="radiusServerSection">
+                <!-- Built-in RADIUS Server Section (removed — consolidated above) -->
+                <div id="radiusServerSection" style="display:none;">
                     <div class="u-flex-center-gap8-mb8">
                         <h4 class="u-title-compact">Built-in RADIUS Server</h4>
                         <span class="pro-badge" style="font-size:0.6rem;background:#ede9fe;color:#7c3aed;padding:1px 6px;border-radius:3px;font-weight:700;">PRO</span>
@@ -4772,14 +4823,27 @@
                 builtinRadiusSummary = data.radius || null;
                 const radiusEnabled = data.radius?.enabled || false;
                 document.getElementById('authRadiusEnabled').checked = radiusEnabled;
-                document.getElementById('authRadiusHost').value = data.radius?.host || '';
-                document.getElementById('authRadiusPort').value = data.radius?.port || 1812;
+                document.getElementById('authRadiusHost').value = data.radius?.advertised_address || data.radius?.host || '';
+                document.getElementById('authRadiusPort').value = data.radius?.auth_port || data.radius?.port || 1812;
                 const radiusSecretEl = document.getElementById('authRadiusSecret');
                 radiusSecretEl.value = '';
                 radiusSecretEl.placeholder = data.radius?.secret_set ? '(unchanged)' : 'Enter shared secret';
+                document.getElementById('authRadiusAuthMode').value = data.radius?.auth_mode || 'local';
+                // LDAP fields
+                const ldapUrlEl = document.getElementById('radiusLdapUrl');
+                if (ldapUrlEl) ldapUrlEl.value = data.radius?.ldap_url || '';
+                const ldapBindDnEl = document.getElementById('radiusLdapBindDn');
+                if (ldapBindDnEl) ldapBindDnEl.value = data.radius?.ldap_bind_dn || '';
+                const ldapPwEl = document.getElementById('radiusLdapPassword');
+                if (ldapPwEl) { ldapPwEl.value = ''; ldapPwEl.placeholder = data.radius?.ldap_has_password ? '(unchanged)' : 'Enter password'; }
+                const ldapBaseDnEl = document.getElementById('radiusLdapBaseDn');
+                if (ldapBaseDnEl) ldapBaseDnEl.value = data.radius?.ldap_base_dn || '';
+                const ldapFilterEl = document.getElementById('radiusLdapUserFilter');
+                if (ldapFilterEl) ldapFilterEl.value = data.radius?.ldap_user_filter || '';
                 setRadiusBadge(data.radius);
                 renderRadiusSecretHealth(data.radius || {});
                 toggleRadiusFields();
+                toggleRadiusAuthMode();
 
                 // OIDC/SSO
                 const oidcEnabled = data.oidc?.enabled || false;
@@ -4802,8 +4866,8 @@
                 pwEl.placeholder = data.device_defaults?.has_password ? '(unchanged)' : 'Enter password';
                 toggleDeviceFields();
 
-                // RADIUS server
-                loadRadiusConfig();
+                // RADIUS server data (users, clients, stats, auth log)
+                refreshRadiusData();
             } catch (e) {
                 document.getElementById('oidcStatus').textContent = 'Failed to load config';
                 document.getElementById('oidcStatus').style.color = '#ef4444';
@@ -5075,7 +5139,13 @@
             const enabled = document.getElementById('authRadiusEnabled').checked;
             const fields = document.getElementById('radiusFields');
             fields.style.opacity = enabled ? '1' : '0.5';
-            fields.querySelectorAll('input').forEach(el => el.disabled = !enabled);
+            fields.querySelectorAll('input, select, button').forEach(el => el.disabled = !enabled);
+        }
+
+        function toggleRadiusAuthMode() {
+            const mode = document.getElementById('authRadiusAuthMode').value;
+            const ldapSection = document.getElementById('radiusLdapSection');
+            if (ldapSection) ldapSection.classList.toggle('hidden', mode !== 'ldap');
         }
 
         function toggleOidcFields() {
@@ -5327,11 +5397,94 @@
 
         async function refreshRadiusData() {
             try {
-                await Promise.all([loadRadiusUsers(), loadRadiusClients(), loadRadiusStats(), loadRadiusRollout()]);
+                await Promise.all([loadRadiusUsers(), loadRadiusClients(), loadRadiusStats(), loadRadiusRollout(), loadRadiusAuthLog()]);
             } catch (e) {
                 document.getElementById('radiusStatus').textContent = e.message || 'Failed to refresh RADIUS data';
                 document.getElementById('radiusStatus').style.color = '#ef4444';
             }
+        }
+
+        async function restartRadiusServer() {
+            const statusEl = document.getElementById('radiusStatus');
+            statusEl.textContent = 'Restarting...';
+            statusEl.style.color = '#6b7280';
+            try {
+                await fetch('/api/auth/radius/restart', { method: 'POST' });
+                statusEl.textContent = 'Restart triggered';
+                statusEl.style.color = '#10b981';
+            } catch (e) {
+                statusEl.textContent = 'Restart failed';
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function testRadiusLdap() {
+            const statusEl = document.getElementById('radiusLdapStatus');
+            statusEl.textContent = 'Testing LDAP connection...';
+            statusEl.style.color = '#6b7280';
+            try {
+                const resp = await fetch('/api/auth/radius/test-ldap', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ldap_url: document.getElementById('radiusLdapUrl').value.trim(),
+                        ldap_bind_dn: document.getElementById('radiusLdapBindDn').value.trim(),
+                        ldap_bind_password: document.getElementById('radiusLdapPassword').value,
+                        ldap_base_dn: document.getElementById('radiusLdapBaseDn').value.trim(),
+                    }),
+                });
+                const data = await resp.json();
+                statusEl.textContent = data.success ? data.message : (data.error || 'Test failed');
+                statusEl.style.color = data.success ? '#10b981' : '#ef4444';
+            } catch (e) {
+                statusEl.textContent = 'Error: ' + e.message;
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function pushRadiusToDevices() {
+            const statusEl = document.getElementById('radiusStatus');
+            const addr = document.getElementById('authRadiusHost').value.trim();
+            if (!addr) { statusEl.textContent = 'Enter an advertised address first'; statusEl.style.color = '#f59e0b'; return; }
+            statusEl.textContent = 'Pushing RADIUS config to devices...';
+            statusEl.style.color = '#6b7280';
+            try {
+                const resp = await fetch('/api/auth/radius/push-to-devices', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({}),
+                });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    statusEl.textContent = data.message;
+                    statusEl.style.color = '#10b981';
+                } else {
+                    const err = await resp.json();
+                    statusEl.textContent = extractDetail(err.detail);
+                    statusEl.style.color = '#ef4444';
+                }
+            } catch (e) {
+                statusEl.textContent = 'Error: ' + e.message;
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function loadRadiusAuthLog() {
+            try {
+                const resp = await fetch('/api/auth/radius/auth-log?limit=20');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const el = document.getElementById('radiusAuthLogTable');
+                if (!data.entries || !data.entries.length) {
+                    el.innerHTML = '<div class="u-muted-empty-sm">No auth log entries.</div>';
+                    return;
+                }
+                let html = '<table style="width:100%;border-collapse:collapse;"><tr style="border-bottom:1px solid #e5e7eb;color:#6b7280;font-size:0.65rem;"><th style="text-align:left;padding:3px;">Time</th><th style="text-align:left;padding:3px;">Username</th><th style="text-align:left;padding:3px;">Client IP</th><th style="padding:3px;">Result</th></tr>';
+                for (const e of data.entries) {
+                    const t = e.occurred_at ? new Date(e.occurred_at).toLocaleString() : '';
+                    const color = e.outcome === 'accept' ? '#10b981' : '#ef4444';
+                    html += `<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:3px;color:#9ca3af;">${t}</td><td style="padding:3px;">${escapeHtml(e.username || '')}</td><td style="padding:3px;color:#9ca3af;">${escapeHtml(e.client_ip || '')}</td><td style="padding:3px;text-align:center;color:${color};font-weight:600;">${escapeHtml(e.outcome || '')}</td></tr>`;
+                }
+                el.innerHTML = html + '</table>';
+            } catch (e) {}
         }
 
         function prefillBuiltinRadiusConfig() {
@@ -5342,8 +5495,8 @@
 
             document.getElementById('cfgRadiusMethod').value = 'radius';
             const hostFallback = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname) ? '' : window.location.hostname;
-            document.getElementById('cfgRadiusServer').value = builtinRadiusSummary.host || hostFallback;
-            document.getElementById('cfgRadiusPort').value = builtinRadiusSummary.port || 1812;
+            document.getElementById('cfgRadiusServer').value = builtinRadiusSummary.advertised_address || builtinRadiusSummary.host || hostFallback;
+            document.getElementById('cfgRadiusPort').value = builtinRadiusSummary.auth_port || builtinRadiusSummary.port || 1812;
             const statusEl = document.getElementById('cfgStatus-radius');
             if (statusEl) {
                 statusEl.textContent = 'Server and port filled from this appliance. Enter the shared secret.';
@@ -5374,38 +5527,44 @@
             const secretEl = document.getElementById('authRadiusSecret');
             const secret = secretEl.value;
             const secretAlreadySet = secretEl.placeholder === '(unchanged)';
-
-            if (enabled && !host) {
-                statusEl.textContent = 'Device host required when built-in RADIUS is enabled';
-                statusEl.style.color = '#f59e0b';
-                return;
-            }
+            const authMode = document.getElementById('authRadiusAuthMode').value;
 
             if (enabled && !secret && !secretAlreadySet) {
-                statusEl.textContent = 'Shared secret required when built-in RADIUS is enabled';
+                statusEl.textContent = 'Shared secret required when RADIUS is enabled';
                 statusEl.style.color = '#f59e0b';
                 return;
             }
+
+            const body = { enabled, host, port, auth_mode: authMode };
+            if (secret) body.secret = secret;
+
+            // LDAP fields
+            const ldapUrl = document.getElementById('radiusLdapUrl');
+            if (ldapUrl) body.ldap_url = ldapUrl.value.trim();
+            const ldapBindDn = document.getElementById('radiusLdapBindDn');
+            if (ldapBindDn) body.ldap_bind_dn = ldapBindDn.value.trim();
+            const ldapPw = document.getElementById('radiusLdapPassword');
+            if (ldapPw && ldapPw.value) body.ldap_bind_password = ldapPw.value;
+            const ldapBaseDn = document.getElementById('radiusLdapBaseDn');
+            if (ldapBaseDn) body.ldap_base_dn = ldapBaseDn.value.trim();
+            const ldapFilter = document.getElementById('radiusLdapUserFilter');
+            if (ldapFilter) body.ldap_user_filter = ldapFilter.value.trim();
 
             try {
                 const resp = await fetch('/api/auth/radius', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled, host, port, secret }),
+                    body: JSON.stringify(body),
                 });
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to save');
                 builtinRadiusSummary = data;
                 secretEl.value = '';
                 secretEl.placeholder = data.secret_set ? '(unchanged)' : 'Enter shared secret';
+                if (ldapPw) { ldapPw.value = ''; ldapPw.placeholder = '(unchanged)'; }
                 setRadiusBadge(data);
-                if (data.running && data.healthy === false) {
-                    statusEl.textContent = `RADIUS config saved, but container health is ${data.health_status || 'unknown'}`;
-                    statusEl.style.color = '#ef4444';
-                } else {
-                    statusEl.textContent = data.running ? `RADIUS listening on UDP ${data.port}` : 'RADIUS config saved';
-                    statusEl.style.color = data.running ? '#10b981' : '#6b7280';
-                }
+                statusEl.textContent = 'RADIUS config saved';
+                statusEl.style.color = '#10b981';
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to save RADIUS config';
@@ -5760,255 +5919,6 @@
                 }
             } catch (e) {
                 statusEl.textContent = 'Failed to save device credentials';
-                statusEl.style.color = '#ef4444';
-            }
-        }
-
-        // ===== RADIUS Server Functions =====
-
-        function toggleRadiusFields() {
-            const enabled = document.getElementById('radiusEnabled').checked;
-            const fields = document.getElementById('radiusFields');
-            fields.style.opacity = enabled ? '1' : '0.5';
-            fields.querySelectorAll('input, select, button').forEach(el => el.disabled = !enabled);
-        }
-
-        function toggleRadiusAuthMode() {
-            const mode = document.getElementById('radiusAuthMode').value;
-            setHidden('radiusLocalSection', mode !== 'local');
-            setHidden('radiusLdapSection', mode !== 'ldap');
-        }
-
-        function showAddRadiusUser() { setHidden('radiusAddUserForm', false); }
-        function hideAddRadiusUser() {
-            setHidden('radiusAddUserForm', true);
-            document.getElementById('radiusNewUsername').value = '';
-            document.getElementById('radiusNewPassword').value = '';
-            document.getElementById('radiusAddStatus').textContent = '';
-        }
-
-        async function loadRadiusConfig() {
-            try {
-                const resp = await fetch('/api/radius-server/config');
-                if (resp.status === 403) return; // Not licensed
-                const data = await resp.json();
-                document.getElementById('radiusEnabled').checked = data.enabled;
-                document.getElementById('radiusPort').value = data.auth_port || 1812;
-                const secretEl = document.getElementById('radiusSecret');
-                secretEl.value = '';
-                secretEl.placeholder = data.has_secret ? '(unchanged)' : 'Enter shared secret';
-                document.getElementById('radiusAuthMode').value = data.auth_mode || 'local';
-                document.getElementById('radiusAdvertisedAddr').value = data.advertised_address || '';
-                // LDAP fields
-                document.getElementById('radiusLdapUrl').value = data.ldap_url || '';
-                document.getElementById('radiusLdapBindDn').value = data.ldap_bind_dn || '';
-                const ldapPwEl = document.getElementById('radiusLdapPassword');
-                ldapPwEl.value = '';
-                ldapPwEl.placeholder = data.ldap_has_password ? '(unchanged)' : 'Enter password';
-                document.getElementById('radiusLdapBaseDn').value = data.ldap_base_dn || '';
-                document.getElementById('radiusLdapUserFilter').value = data.ldap_user_filter || '';
-                toggleRadiusFields();
-                toggleRadiusAuthMode();
-                updateRadiusStatusBadge(data.running, data.error);
-                loadRadiusUsers();
-                loadRadiusAuthLog();
-            } catch (e) {}
-        }
-
-        function updateRadiusStatusBadge(running, error) {
-            const badge = document.getElementById('radiusRunningBadge');
-            if (!badge) return;
-            if (running) {
-                setHidden(badge, false);
-                badge.textContent = 'Running';
-                badge.style.background = '#d1fae5';
-                badge.style.color = '#065f46';
-            } else if (error && error !== 'Disabled') {
-                setHidden(badge, false);
-                badge.textContent = error;
-                badge.style.background = '#fee2e2';
-                badge.style.color = '#991b1b';
-            } else {
-                setHidden(badge, true);
-            }
-        }
-
-        async function saveRadiusConfig() {
-            const statusEl = document.getElementById('radiusConfigStatus');
-            const body = {
-                enabled: document.getElementById('radiusEnabled').checked,
-                auth_port: parseInt(document.getElementById('radiusPort').value) || 1812,
-                auth_mode: document.getElementById('radiusAuthMode').value,
-                advertised_address: document.getElementById('radiusAdvertisedAddr').value.trim(),
-                ldap_url: document.getElementById('radiusLdapUrl').value.trim(),
-                ldap_bind_dn: document.getElementById('radiusLdapBindDn').value.trim(),
-                ldap_base_dn: document.getElementById('radiusLdapBaseDn').value.trim(),
-                ldap_user_filter: document.getElementById('radiusLdapUserFilter').value.trim(),
-            };
-            const secret = document.getElementById('radiusSecret').value;
-            if (secret) body.shared_secret = secret;
-            const ldapPw = document.getElementById('radiusLdapPassword').value;
-            if (ldapPw) body.ldap_bind_password = ldapPw;
-
-            try {
-                const resp = await fetch('/api/radius-server/config', {
-                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                });
-                if (resp.ok) {
-                    statusEl.textContent = 'RADIUS config saved!';
-                    statusEl.style.color = '#10b981';
-                    setTimeout(() => loadRadiusConfig(), 1000);
-                } else {
-                    const err = await resp.json();
-                    statusEl.textContent = extractDetail(err.detail);
-                    statusEl.style.color = '#ef4444';
-                }
-            } catch (e) {
-                statusEl.textContent = 'Error: ' + e.message;
-                statusEl.style.color = '#ef4444';
-            }
-        }
-
-        async function restartRadiusServer() {
-            const statusEl = document.getElementById('radiusConfigStatus');
-            statusEl.textContent = 'Restarting...';
-            statusEl.style.color = '#6b7280';
-            try {
-                await fetch('/api/radius-server/restart', { method: 'POST' });
-                statusEl.textContent = 'Restart triggered';
-                statusEl.style.color = '#10b981';
-                setTimeout(() => loadRadiusConfig(), 2000);
-            } catch (e) {
-                statusEl.textContent = 'Restart failed';
-                statusEl.style.color = '#ef4444';
-            }
-        }
-
-        async function loadRadiusUsers() {
-            try {
-                const resp = await fetch('/api/radius-server/users');
-                if (!resp.ok) return;
-                const users = await resp.json();
-                const el = document.getElementById('radiusUsersTable');
-                if (!users.length) {
-                    el.innerHTML = '<div class="u-muted-empty">No RADIUS users configured.</div>';
-                    return;
-                }
-                let html = '<table style="width:100%;border-collapse:collapse;"><tr style="border-bottom:1px solid #e5e7eb;color:#6b7280;font-size:0.7rem;"><th style="text-align:left;padding:4px;">Username</th><th style="text-align:left;padding:4px;">Last Auth</th><th style="padding:4px;">Enabled</th><th style="padding:4px;">Actions</th></tr>';
-                for (const u of users) {
-                    const lastAuth = u.last_auth_at ? new Date(u.last_auth_at).toLocaleString() : 'never';
-                    html += `<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:4px;">${u.username}</td><td style="padding:4px;color:#9ca3af;">${lastAuth}</td><td style="padding:4px;text-align:center;">${u.enabled ? '✓' : '—'}</td><td style="padding:4px;text-align:center;"><button onclick="toggleRadiusUser(${u.id},${!u.enabled})" style="font-size:0.65rem;padding:1px 6px;border:1px solid #d1d5db;border-radius:3px;background:#fff;cursor:pointer;">${u.enabled ? 'Disable' : 'Enable'}</button> <button onclick="deleteRadiusUser(${u.id},'${u.username}')" style="font-size:0.65rem;padding:1px 6px;border:1px solid #fca5a5;border-radius:3px;background:#fff;color:#ef4444;cursor:pointer;">Delete</button></td></tr>`;
-                }
-                el.innerHTML = html + '</table>';
-            } catch (e) {}
-        }
-
-        async function addRadiusUser() {
-            const statusEl = document.getElementById('radiusAddStatus');
-            const username = document.getElementById('radiusNewUsername').value.trim();
-            const password = document.getElementById('radiusNewPassword').value;
-            if (!username || !password) { statusEl.textContent = 'Username and password required'; return; }
-            try {
-                const resp = await fetch('/api/radius-server/users', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password }),
-                });
-                if (resp.ok) {
-                    hideAddRadiusUser();
-                    loadRadiusUsers();
-                } else {
-                    const err = await resp.json();
-                    statusEl.textContent = extractDetail(err.detail);
-                }
-            } catch (e) { statusEl.textContent = 'Error: ' + e.message; }
-        }
-
-        async function toggleRadiusUser(id, enable) {
-            await fetch('/api/radius-server/users/' + id, {
-                method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: enable }),
-            });
-            loadRadiusUsers();
-        }
-
-        async function deleteRadiusUser(id, username) {
-            if (!await showConfirmDialog(`Delete RADIUS user "${username}"?`, {
-                title: 'Delete RADIUS User',
-                confirmText: 'Delete',
-                danger: true,
-            })) return;
-            await fetch('/api/radius-server/users/' + id, { method: 'DELETE' });
-            loadRadiusUsers();
-        }
-
-        async function loadRadiusAuthLog() {
-            try {
-                const resp = await fetch('/api/radius-server/auth-log?limit=20');
-                if (!resp.ok) return;
-                const data = await resp.json();
-                const el = document.getElementById('radiusAuthLogTable');
-                if (!data.entries.length) {
-                    el.innerHTML = '<div class="u-muted-empty-sm">No auth log entries.</div>';
-                    return;
-                }
-                let html = '<table style="width:100%;border-collapse:collapse;"><tr style="border-bottom:1px solid #e5e7eb;color:#6b7280;font-size:0.65rem;"><th style="text-align:left;padding:3px;">Time</th><th style="text-align:left;padding:3px;">Username</th><th style="text-align:left;padding:3px;">NAS IP</th><th style="padding:3px;">Result</th></tr>';
-                for (const e of data.entries) {
-                    const t = new Date(e.timestamp).toLocaleString();
-                    const color = e.result === 'accept' ? '#10b981' : '#ef4444';
-                    html += `<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:3px;color:#9ca3af;">${t}</td><td style="padding:3px;">${e.username}</td><td style="padding:3px;color:#9ca3af;">${e.nas_ip || ''}</td><td style="padding:3px;text-align:center;color:${color};font-weight:600;">${e.result}</td></tr>`;
-                }
-                el.innerHTML = html + '</table>';
-            } catch (e) {}
-        }
-
-        async function testRadiusLdap() {
-            const statusEl = document.getElementById('radiusLdapStatus');
-            statusEl.textContent = 'Testing LDAP connection...';
-            statusEl.style.color = '#6b7280';
-            try {
-                const resp = await fetch('/api/radius-server/test-ldap', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        ldap_url: document.getElementById('radiusLdapUrl').value.trim(),
-                        ldap_bind_dn: document.getElementById('radiusLdapBindDn').value.trim(),
-                        ldap_bind_password: document.getElementById('radiusLdapPassword').value,
-                        ldap_base_dn: document.getElementById('radiusLdapBaseDn').value.trim(),
-                    }),
-                });
-                const data = await resp.json();
-                statusEl.textContent = data.success ? data.message : (data.error || 'Test failed');
-                statusEl.style.color = data.success ? '#10b981' : '#ef4444';
-            } catch (e) {
-                statusEl.textContent = 'Error: ' + e.message;
-                statusEl.style.color = '#ef4444';
-            }
-        }
-
-        async function pushRadiusToDevices() {
-            const statusEl = document.getElementById('radiusPushStatus');
-            const addr = document.getElementById('radiusAdvertisedAddr').value.trim();
-            if (!addr) { statusEl.textContent = 'Enter a server address first'; statusEl.style.color = '#f59e0b'; return; }
-            // Save the address first
-            await saveRadiusConfig();
-            statusEl.textContent = 'Pushing RADIUS config to devices...';
-            statusEl.style.color = '#6b7280';
-            try {
-                const resp = await fetch('/api/radius-server/push-to-devices', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({}),
-                });
-                if (resp.ok) {
-                    const data = await resp.json();
-                    statusEl.textContent = data.message;
-                    statusEl.style.color = '#10b981';
-                } else {
-                    const err = await resp.json();
-                    statusEl.textContent = extractDetail(err.detail);
-                    statusEl.style.color = '#ef4444';
-                }
-            } catch (e) {
-                statusEl.textContent = 'Error: ' + e.message;
                 statusEl.style.color = '#ef4444';
             }
         }
