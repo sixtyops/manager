@@ -105,15 +105,108 @@ def _migrate(db):
     if "device_types" not in ct_columns:
         db.execute("ALTER TABLE config_templates ADD COLUMN device_types TEXT")
 
+    # Add vendor column to cpe_cache
+    if "vendor" not in columns:
+        db.execute("ALTER TABLE cpe_cache ADD COLUMN vendor TEXT DEFAULT 'tachyon'")
+
+    # Add vendor column to firmware_registry
+    fr_columns = [row[1] for row in db.execute("PRAGMA table_info(firmware_registry)").fetchall()]
+    if "vendor" not in fr_columns:
+        db.execute("ALTER TABLE firmware_registry ADD COLUMN vendor TEXT DEFAULT 'tachyon'")
+
+    # Add vendor column to device_update_history
+    duh_columns = [row[1] for row in db.execute("PRAGMA table_info(device_update_history)").fetchall()]
+    if "vendor" not in duh_columns:
+        db.execute("ALTER TABLE device_update_history ADD COLUMN vendor TEXT DEFAULT 'tachyon'")
+
+    # Add vendor and firmware_files_json to rollouts
+    if "vendor" not in rollout_columns:
+        db.execute("ALTER TABLE rollouts ADD COLUMN vendor TEXT DEFAULT 'tachyon'")
+    if "firmware_files_json" not in rollout_columns:
+        db.execute("ALTER TABLE rollouts ADD COLUMN firmware_files_json TEXT")
+
+    # Migrate data from access_points/switches into unified devices table
+    _migrate_to_devices_table(db)
+
     # Encrypt any plaintext device passwords
     _migrate_encrypt_passwords(db)
+
+
+def _migrate_to_devices_table(db):
+    """One-time migration: copy data from access_points/switches to unified devices table."""
+    # Check if devices table already has data
+    count = db.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
+    if count > 0:
+        return  # Already migrated
+
+    # Check if there's data to migrate
+    ap_count = db.execute("SELECT COUNT(*) FROM access_points").fetchone()[0]
+    sw_count = db.execute("SELECT COUNT(*) FROM switches").fetchone()[0]
+    if ap_count == 0 and sw_count == 0:
+        return  # Nothing to migrate
+
+    # Get column lists for access_points (may or may not have bank/notes columns from previous migrations)
+    ap_cols = [row[1] for row in db.execute("PRAGMA table_info(access_points)").fetchall()]
+
+    # Copy APs
+    if ap_count > 0:
+        ap_rows = db.execute("SELECT * FROM access_points").fetchall()
+        for row in ap_rows:
+            row_dict = dict(row)
+            db.execute(
+                """INSERT OR IGNORE INTO devices
+                   (ip, vendor, role, tower_site_id, username, password, system_name,
+                    model, mac, firmware_version, location, last_seen, last_error,
+                    enabled, bank1_version, bank2_version, active_bank,
+                    last_firmware_update, notes, created_at)
+                   VALUES (?, 'tachyon', 'ap', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (row_dict["ip"], row_dict.get("tower_site_id"),
+                 row_dict["username"], row_dict["password"],
+                 row_dict.get("system_name"), row_dict.get("model"),
+                 row_dict.get("mac"), row_dict.get("firmware_version"),
+                 row_dict.get("location"), row_dict.get("last_seen"),
+                 row_dict.get("last_error"), row_dict.get("enabled", 1),
+                 row_dict.get("bank1_version"), row_dict.get("bank2_version"),
+                 row_dict.get("active_bank"), row_dict.get("last_firmware_update"),
+                 row_dict.get("notes"), row_dict.get("created_at"))
+            )
+
+    # Copy switches
+    if sw_count > 0:
+        sw_rows = db.execute("SELECT * FROM switches").fetchall()
+        for row in sw_rows:
+            row_dict = dict(row)
+            db.execute(
+                """INSERT OR IGNORE INTO devices
+                   (ip, vendor, role, tower_site_id, username, password, system_name,
+                    model, mac, firmware_version, location, last_seen, last_error,
+                    enabled, bank1_version, bank2_version, active_bank,
+                    last_firmware_update, notes, created_at)
+                   VALUES (?, 'tachyon', 'switch', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (row_dict["ip"], row_dict.get("tower_site_id"),
+                 row_dict["username"], row_dict["password"],
+                 row_dict.get("system_name"), row_dict.get("model"),
+                 row_dict.get("mac"), row_dict.get("firmware_version"),
+                 row_dict.get("location"), row_dict.get("last_seen"),
+                 row_dict.get("last_error"), row_dict.get("enabled", 1),
+                 row_dict.get("bank1_version"), row_dict.get("bank2_version"),
+                 row_dict.get("active_bank"), row_dict.get("last_firmware_update"),
+                 row_dict.get("notes"), row_dict.get("created_at"))
+            )
+
+    migrated = ap_count + sw_count
+    if migrated:
+        logger.info(f"Migrated {ap_count} APs and {sw_count} switches to unified devices table")
 
 
 def _migrate_encrypt_passwords(db):
     """One-time migration: encrypt any plaintext device passwords in-place."""
     migrated = 0
-    for table in ("access_points", "switches"):
-        rows = db.execute(f"SELECT ip, password FROM {table}").fetchall()
+    for table in ("devices", "access_points", "switches"):
+        try:
+            rows = db.execute(f"SELECT ip, password FROM {table}").fetchall()
+        except Exception:
+            continue
         for row in rows:
             pw = row[1]
             if pw and not is_encrypted(pw):
@@ -163,6 +256,34 @@ def init_db():
                 longitude REAL,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip TEXT NOT NULL UNIQUE,
+                vendor TEXT NOT NULL DEFAULT 'tachyon',
+                role TEXT NOT NULL DEFAULT 'ap',
+                tower_site_id INTEGER,
+                username TEXT NOT NULL,
+                password TEXT NOT NULL,
+                system_name TEXT,
+                model TEXT,
+                mac TEXT,
+                firmware_version TEXT,
+                location TEXT,
+                last_seen TEXT,
+                last_error TEXT,
+                enabled INTEGER DEFAULT 1,
+                bank1_version TEXT,
+                bank2_version TEXT,
+                active_bank INTEGER,
+                last_firmware_update TEXT,
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_devices_vendor ON devices(vendor);
+            CREATE INDEX IF NOT EXISTS idx_devices_role ON devices(role);
+            CREATE INDEX IF NOT EXISTS idx_devices_site ON devices(tower_site_id);
 
             CREATE TABLE IF NOT EXISTS access_points (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -543,6 +664,96 @@ def init_db():
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            -- Sync triggers: legacy tables → devices (bidirectional sync during transition)
+            CREATE TRIGGER IF NOT EXISTS trg_ap_to_devices_insert AFTER INSERT ON access_points
+            BEGIN
+                INSERT OR REPLACE INTO devices (ip, vendor, role, tower_site_id, username, password,
+                    system_name, model, mac, firmware_version, location, last_seen, last_error,
+                    enabled, bank1_version, bank2_version, active_bank, last_firmware_update, notes, created_at)
+                VALUES (NEW.ip, 'tachyon', 'ap', NEW.tower_site_id, NEW.username, NEW.password,
+                    NEW.system_name, NEW.model, NEW.mac, NEW.firmware_version, NEW.location,
+                    NEW.last_seen, NEW.last_error, NEW.enabled, NEW.bank1_version, NEW.bank2_version,
+                    NEW.active_bank, NEW.last_firmware_update, NEW.notes, NEW.created_at);
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_ap_to_devices_update AFTER UPDATE ON access_points
+            BEGIN
+                UPDATE devices SET tower_site_id=NEW.tower_site_id, username=NEW.username,
+                    password=NEW.password, system_name=NEW.system_name, model=NEW.model,
+                    mac=NEW.mac, firmware_version=NEW.firmware_version, location=NEW.location,
+                    last_seen=NEW.last_seen, last_error=NEW.last_error, enabled=NEW.enabled,
+                    bank1_version=NEW.bank1_version, bank2_version=NEW.bank2_version,
+                    active_bank=NEW.active_bank, last_firmware_update=NEW.last_firmware_update, notes=NEW.notes
+                WHERE ip = NEW.ip;
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_ap_to_devices_delete AFTER DELETE ON access_points
+            BEGIN DELETE FROM devices WHERE ip = OLD.ip; END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_sw_to_devices_insert AFTER INSERT ON switches
+            BEGIN
+                INSERT OR REPLACE INTO devices (ip, vendor, role, tower_site_id, username, password,
+                    system_name, model, mac, firmware_version, location, last_seen, last_error,
+                    enabled, bank1_version, bank2_version, active_bank, last_firmware_update, notes, created_at)
+                VALUES (NEW.ip, 'tachyon', 'switch', NEW.tower_site_id, NEW.username, NEW.password,
+                    NEW.system_name, NEW.model, NEW.mac, NEW.firmware_version, NEW.location,
+                    NEW.last_seen, NEW.last_error, NEW.enabled, NEW.bank1_version, NEW.bank2_version,
+                    NEW.active_bank, NEW.last_firmware_update, NEW.notes, NEW.created_at);
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_sw_to_devices_update AFTER UPDATE ON switches
+            BEGIN
+                UPDATE devices SET tower_site_id=NEW.tower_site_id, username=NEW.username,
+                    password=NEW.password, system_name=NEW.system_name, model=NEW.model,
+                    mac=NEW.mac, firmware_version=NEW.firmware_version, location=NEW.location,
+                    last_seen=NEW.last_seen, last_error=NEW.last_error, enabled=NEW.enabled,
+                    bank1_version=NEW.bank1_version, bank2_version=NEW.bank2_version,
+                    active_bank=NEW.active_bank, last_firmware_update=NEW.last_firmware_update, notes=NEW.notes
+                WHERE ip = NEW.ip;
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_sw_to_devices_delete AFTER DELETE ON switches
+            BEGIN DELETE FROM devices WHERE ip = OLD.ip; END;
+
+            -- Reverse sync: devices → legacy tables (for Tachyon vendor only)
+            CREATE TRIGGER IF NOT EXISTS trg_devices_to_legacy_insert AFTER INSERT ON devices
+            WHEN NEW.vendor = 'tachyon'
+            BEGIN
+                INSERT OR IGNORE INTO access_points (ip, tower_site_id, username, password,
+                    system_name, model, mac, firmware_version, location, last_seen, last_error,
+                    enabled, last_firmware_update, created_at)
+                SELECT NEW.ip, NEW.tower_site_id, NEW.username, NEW.password,
+                    NEW.system_name, NEW.model, NEW.mac, NEW.firmware_version, NEW.location,
+                    NEW.last_seen, NEW.last_error, NEW.enabled, NEW.last_firmware_update, NEW.created_at
+                WHERE NEW.role = 'ap';
+                INSERT OR IGNORE INTO switches (ip, tower_site_id, username, password,
+                    system_name, model, mac, firmware_version, location, last_seen, last_error,
+                    enabled, bank1_version, bank2_version, active_bank, last_firmware_update, created_at)
+                SELECT NEW.ip, NEW.tower_site_id, NEW.username, NEW.password,
+                    NEW.system_name, NEW.model, NEW.mac, NEW.firmware_version, NEW.location,
+                    NEW.last_seen, NEW.last_error, NEW.enabled, NEW.bank1_version, NEW.bank2_version,
+                    NEW.active_bank, NEW.last_firmware_update, NEW.created_at
+                WHERE NEW.role = 'switch';
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_devices_to_legacy_update AFTER UPDATE ON devices
+            WHEN NEW.vendor = 'tachyon'
+            BEGIN
+                UPDATE access_points SET tower_site_id=NEW.tower_site_id, username=NEW.username,
+                    password=NEW.password, system_name=NEW.system_name, model=NEW.model,
+                    mac=NEW.mac, firmware_version=NEW.firmware_version, location=NEW.location,
+                    last_seen=NEW.last_seen, last_error=NEW.last_error, enabled=NEW.enabled,
+                    last_firmware_update=NEW.last_firmware_update, notes=NEW.notes
+                WHERE ip = NEW.ip AND NEW.role = 'ap';
+                UPDATE switches SET tower_site_id=NEW.tower_site_id, username=NEW.username,
+                    password=NEW.password, system_name=NEW.system_name, model=NEW.model,
+                    mac=NEW.mac, firmware_version=NEW.firmware_version, location=NEW.location,
+                    last_seen=NEW.last_seen, last_error=NEW.last_error, enabled=NEW.enabled,
+                    bank1_version=NEW.bank1_version, bank2_version=NEW.bank2_version,
+                    active_bank=NEW.active_bank, last_firmware_update=NEW.last_firmware_update
+                WHERE ip = NEW.ip AND NEW.role = 'switch';
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_devices_to_legacy_delete AFTER DELETE ON devices
+            BEGIN
+                DELETE FROM access_points WHERE ip = OLD.ip;
+                DELETE FROM switches WHERE ip = OLD.ip;
+            END;
         """)
 
         # Migrations: add columns if missing
@@ -807,27 +1018,27 @@ def update_tower_site(site_id: int, **kwargs):
 
 
 def delete_tower_site(site_id: int):
-    """Delete a tower site (APs and switches will have tower_site_id set to NULL)."""
+    """Delete a tower site (devices will have tower_site_id set to NULL)."""
     with get_db() as db:
+        db.execute("UPDATE devices SET tower_site_id = NULL WHERE tower_site_id = ?", (site_id,))
+        # Keep legacy tables in sync during transition
         db.execute("UPDATE access_points SET tower_site_id = NULL WHERE tower_site_id = ?", (site_id,))
         db.execute("UPDATE switches SET tower_site_id = NULL WHERE tower_site_id = ?", (site_id,))
         db.execute("DELETE FROM tower_sites WHERE id = ?", (site_id,))
 
 
 def get_all_device_ips() -> set:
-    """Get all device IPs (APs + switches) without decrypting passwords."""
+    """Get all device IPs from unified devices table."""
     with get_db() as db:
-        ap_rows = db.execute("SELECT ip FROM access_points").fetchall()
-        sw_rows = db.execute("SELECT ip FROM switches").fetchall()
-        return {row["ip"] for row in ap_rows} | {row["ip"] for row in sw_rows}
+        rows = db.execute("SELECT ip FROM devices").fetchall()
+        return {row["ip"] for row in rows}
 
 
 def get_enabled_device_ips() -> set:
-    """Get enabled device IPs (APs + switches) for cache eviction."""
-    with get_db() as conn:
-        ap_rows = conn.execute("SELECT ip FROM access_points WHERE enabled = 1").fetchall()
-        sw_rows = conn.execute("SELECT ip FROM switches WHERE enabled = 1").fetchall()
-        return {row["ip"] for row in ap_rows} | {row["ip"] for row in sw_rows}
+    """Get enabled device IPs from unified devices table."""
+    with get_db() as db:
+        rows = db.execute("SELECT ip FROM devices WHERE enabled = 1").fetchall()
+        return {row["ip"] for row in rows}
 
 
 def _decrypt_device_row(row_dict: dict) -> dict:
@@ -838,185 +1049,190 @@ def _decrypt_device_row(row_dict: dict) -> dict:
     return row_dict
 
 
-# Access Point operations
-def get_access_points(tower_site_id: int = None, enabled_only: bool = True) -> list[dict]:
-    """Get access points, optionally filtered by tower site."""
-    with get_db() as db:
-        query = "SELECT * FROM access_points WHERE 1=1"
-        params = []
+_UNSET = object()
 
+# ─── Unified Device operations (reads/writes to `devices` table) ───
+
+def get_devices(role: str = None, vendor: str = None, tower_site_id: int = None,
+                enabled_only: bool = True) -> list[dict]:
+    """Get devices from the unified table with optional filters."""
+    with get_db() as db:
+        query = "SELECT * FROM devices WHERE 1=1"
+        params = []
+        if role is not None:
+            query += " AND role = ?"
+            params.append(role)
+        if vendor is not None:
+            query += " AND vendor = ?"
+            params.append(vendor)
         if tower_site_id is not None:
             query += " AND tower_site_id = ?"
             params.append(tower_site_id)
-
         if enabled_only:
             query += " AND enabled = 1"
-
         query += " ORDER BY ip"
         rows = db.execute(query, params).fetchall()
         return [_decrypt_device_row(dict(row)) for row in rows]
+
+
+def get_device(ip: str) -> Optional[dict]:
+    """Get a device by IP from the unified table."""
+    with get_db() as db:
+        row = db.execute("SELECT * FROM devices WHERE ip = ?", (ip,)).fetchone()
+        return _decrypt_device_row(dict(row)) if row else None
+
+
+def upsert_device(ip: str, role: str, username: str, password: str,
+                  vendor: str = "tachyon", tower_site_id: int = None, **kwargs) -> int:
+    """Create or update a device in the unified table."""
+    enc_password = encrypt_password(password) if not is_encrypted(password) else password
+    with get_db() as db:
+        existing = db.execute("SELECT id FROM devices WHERE ip = ?", (ip,)).fetchone()
+        if existing:
+            updates = {"username": username, "password": enc_password,
+                       "tower_site_id": tower_site_id, "vendor": vendor, "role": role}
+            allowed = {"system_name", "model", "mac", "firmware_version", "location",
+                       "last_seen", "last_error", "enabled", "notes",
+                       "bank1_version", "bank2_version", "active_bank"}
+            updates.update({k: v for k, v in kwargs.items() if k in allowed})
+            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+            db.execute(f"UPDATE devices SET {set_clause} WHERE ip = ?", (*updates.values(), ip))
+            return existing["id"]
+        else:
+            db.execute(
+                """INSERT INTO devices (ip, vendor, role, username, password, tower_site_id,
+                   system_name, model, mac, firmware_version, location, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (ip, vendor, role, username, enc_password, tower_site_id,
+                 kwargs.get("system_name"), kwargs.get("model"), kwargs.get("mac"),
+                 kwargs.get("firmware_version"), kwargs.get("location"), kwargs.get("notes"))
+            )
+            return db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def update_device_status(ip: str, last_seen: str = None, last_error: str = _UNSET, **kwargs):
+    """Update device status after a poll (unified table)."""
+    with get_db() as db:
+        updates = {}
+        if last_seen:
+            updates["last_seen"] = last_seen
+        if last_error is not _UNSET:
+            updates["last_error"] = last_error
+        allowed = {"system_name", "model", "mac", "firmware_version", "location",
+                   "bank1_version", "bank2_version", "active_bank"}
+        updates.update({k: v for k, v in kwargs.items() if k in allowed})
+        if updates:
+            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+            db.execute(f"UPDATE devices SET {set_clause} WHERE ip = ?", (*updates.values(), ip))
+
+
+def delete_device(ip: str):
+    """Delete a device from the unified table (and cached CPEs if AP)."""
+    with get_db() as db:
+        row = db.execute("SELECT role FROM devices WHERE ip = ?", (ip,)).fetchone()
+        if row and row["role"] == "ap":
+            db.execute("DELETE FROM cpe_cache WHERE ap_ip = ?", (ip,))
+        db.execute("DELETE FROM devices WHERE ip = ?", (ip,))
+
+
+def get_devices_dict(role: str = None, vendor: str = None,
+                     enabled_only: bool = True) -> dict[str, dict]:
+    """Get devices as {ip: row_dict}. Single query, avoids N+1 lookups."""
+    with get_db() as db:
+        query = "SELECT * FROM devices WHERE 1=1"
+        params = []
+        if role is not None:
+            query += " AND role = ?"
+            params.append(role)
+        if vendor is not None:
+            query += " AND vendor = ?"
+            params.append(vendor)
+        if enabled_only:
+            query += " AND enabled = 1"
+        rows = db.execute(query, params).fetchall()
+        return {row["ip"]: _decrypt_device_row(dict(row)) for row in rows}
+
+
+# ─── Legacy AP/Switch wrappers (delegate to unified `devices` table) ───
+# These maintain backward compatibility while the codebase transitions.
+
+# Access Point operations (wrappers to unified devices table)
+def get_access_points(tower_site_id: int = None, enabled_only: bool = True) -> list[dict]:
+    """Get access points (delegates to unified devices table)."""
+    return get_devices(role="ap", tower_site_id=tower_site_id, enabled_only=enabled_only)
 
 
 def get_access_point(ip: str) -> Optional[dict]:
-    """Get an access point by IP."""
-    with get_db() as db:
-        row = db.execute("SELECT * FROM access_points WHERE ip = ?", (ip,)).fetchone()
-        return _decrypt_device_row(dict(row)) if row else None
+    """Get an access point by IP (delegates to unified devices table)."""
+    return get_device(ip)
 
 
 def upsert_access_point(ip: str, username: str, password: str, tower_site_id: int = None, **kwargs) -> int:
-    """Create or update an access point."""
-    enc_password = encrypt_password(password) if not is_encrypted(password) else password
-    with get_db() as db:
-        existing = db.execute("SELECT id FROM access_points WHERE ip = ?", (ip,)).fetchone()
+    """Create or update an access point (delegates to unified devices table)."""
+    return upsert_device(ip, role="ap", username=username, password=password,
+                         vendor="tachyon", tower_site_id=tower_site_id, **kwargs)
 
-        if existing:
-            # Update
-            updates = {"username": username, "password": enc_password, "tower_site_id": tower_site_id}
-            allowed = {"system_name", "model", "mac", "firmware_version", "location", "last_seen", "last_error", "enabled", "notes"}
-            updates.update({k: v for k, v in kwargs.items() if k in allowed})
-
-            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-            db.execute(f"UPDATE access_points SET {set_clause} WHERE ip = ?", (*updates.values(), ip))
-            return existing["id"]
-        else:
-            # Insert
-            db.execute(
-                """INSERT INTO access_points (ip, username, password, tower_site_id, system_name, model, mac, firmware_version, location, notes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (ip, username, enc_password, tower_site_id,
-                 kwargs.get("system_name"), kwargs.get("model"), kwargs.get("mac"),
-                 kwargs.get("firmware_version"), kwargs.get("location"), kwargs.get("notes"))
-            )
-            return db.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-
-_UNSET = object()
 
 def update_ap_status(ip: str, last_seen: str = None, last_error: str = _UNSET, **kwargs):
-    """Update AP status after a poll."""
-    with get_db() as db:
-        updates = {}
-        if last_seen:
-            updates["last_seen"] = last_seen
-        if last_error is not _UNSET:
-            updates["last_error"] = last_error
-
-        allowed = {"system_name", "model", "mac", "firmware_version", "location",
-                   "bank1_version", "bank2_version", "active_bank"}
-        updates.update({k: v for k, v in kwargs.items() if k in allowed})
-
-        if updates:
-            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-            db.execute(f"UPDATE access_points SET {set_clause} WHERE ip = ?", (*updates.values(), ip))
+    """Update AP status after a poll (delegates to unified devices table)."""
+    update_device_status(ip, last_seen=last_seen, last_error=last_error, **kwargs)
 
 
 def delete_access_point(ip: str):
-    """Delete an access point and its cached CPEs."""
-    with get_db() as db:
-        db.execute("DELETE FROM cpe_cache WHERE ap_ip = ?", (ip,))
-        db.execute("DELETE FROM access_points WHERE ip = ?", (ip,))
+    """Delete an access point and its cached CPEs (delegates to unified devices table)."""
+    delete_device(ip)
 
 
-# Switch operations
+# Switch operations (wrappers to unified devices table)
 def get_switches(tower_site_id: int = None, enabled_only: bool = True) -> list[dict]:
-    """Get switches, optionally filtered by tower site."""
-    with get_db() as db:
-        query = "SELECT * FROM switches WHERE 1=1"
-        params = []
-
-        if tower_site_id is not None:
-            query += " AND tower_site_id = ?"
-            params.append(tower_site_id)
-
-        if enabled_only:
-            query += " AND enabled = 1"
-
-        query += " ORDER BY ip"
-        rows = db.execute(query, params).fetchall()
-        return [_decrypt_device_row(dict(row)) for row in rows]
+    """Get switches (delegates to unified devices table)."""
+    return get_devices(role="switch", tower_site_id=tower_site_id, enabled_only=enabled_only)
 
 
 def get_switch(ip: str) -> Optional[dict]:
-    """Get a switch by IP."""
-    with get_db() as db:
-        row = db.execute("SELECT * FROM switches WHERE ip = ?", (ip,)).fetchone()
-        return _decrypt_device_row(dict(row)) if row else None
+    """Get a switch by IP (delegates to unified devices table)."""
+    return get_device(ip)
 
 
 def upsert_switch(ip: str, username: str, password: str, tower_site_id: int = None, **kwargs) -> int:
-    """Create or update a switch."""
-    enc_password = encrypt_password(password) if not is_encrypted(password) else password
-    with get_db() as db:
-        existing = db.execute("SELECT id FROM switches WHERE ip = ?", (ip,)).fetchone()
-
-        if existing:
-            updates = {"username": username, "password": enc_password, "tower_site_id": tower_site_id}
-            allowed = {"system_name", "model", "mac", "firmware_version", "location", "last_seen", "last_error", "enabled", "notes"}
-            updates.update({k: v for k, v in kwargs.items() if k in allowed})
-
-            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-            db.execute(f"UPDATE switches SET {set_clause} WHERE ip = ?", (*updates.values(), ip))
-            return existing["id"]
-        else:
-            db.execute(
-                """INSERT INTO switches (ip, username, password, tower_site_id, system_name, model, mac, firmware_version, location, notes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (ip, username, enc_password, tower_site_id,
-                 kwargs.get("system_name"), kwargs.get("model"), kwargs.get("mac"),
-                 kwargs.get("firmware_version"), kwargs.get("location"), kwargs.get("notes"))
-            )
-            return db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    """Create or update a switch (delegates to unified devices table)."""
+    return upsert_device(ip, role="switch", username=username, password=password,
+                         vendor="tachyon", tower_site_id=tower_site_id, **kwargs)
 
 
 def update_switch_status(ip: str, last_seen: str = None, last_error: str = _UNSET, **kwargs):
-    """Update switch status after a poll."""
-    with get_db() as db:
-        updates = {}
-        if last_seen:
-            updates["last_seen"] = last_seen
-        if last_error is not _UNSET:
-            updates["last_error"] = last_error
-
-        allowed = {"system_name", "model", "mac", "firmware_version", "location",
-                   "bank1_version", "bank2_version", "active_bank"}
-        updates.update({k: v for k, v in kwargs.items() if k in allowed})
-
-        if updates:
-            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-            db.execute(f"UPDATE switches SET {set_clause} WHERE ip = ?", (*updates.values(), ip))
+    """Update switch status after a poll (delegates to unified devices table)."""
+    update_device_status(ip, last_seen=last_seen, last_error=last_error, **kwargs)
 
 
 def delete_switch(ip: str):
-    """Delete a switch."""
-    with get_db() as db:
-        db.execute("DELETE FROM switches WHERE ip = ?", (ip,))
+    """Delete a switch (delegates to unified devices table)."""
+    delete_device(ip)
 
 
-_BULK_TABLES = {"ap": "access_points", "switch": "switches"}
+_BULK_TABLES = {"ap": "devices", "switch": "devices"}
 _BULK_MAX_IPS = 500
 
 
 def _validate_bulk_args(device_type: str, ips: list[str]) -> tuple[str, list[str]]:
     """Validate bulk operation arguments. Returns (table_name, ips)."""
-    table = _BULK_TABLES.get(device_type)
-    if not table:
+    if device_type not in ("ap", "switch"):
         raise ValueError(f"Invalid device_type: {device_type}")
     if not ips:
         raise ValueError("ips list must not be empty")
     if len(ips) > _BULK_MAX_IPS:
         raise ValueError(f"Too many IPs (max {_BULK_MAX_IPS})")
-    return table, list(ips)
+    return "devices", list(ips)
 
 
 def bulk_set_enabled(device_type: str, ips: list[str], enabled: bool) -> int:
     """Enable or disable multiple devices. Returns count of affected rows."""
-    table, ips = _validate_bulk_args(device_type, ips)
+    _validate_bulk_args(device_type, ips)
     val = 1 if enabled else 0
     with get_db() as conn:
         placeholders = ",".join("?" for _ in ips)
         cursor = conn.execute(
-            f"UPDATE {table} SET enabled = ? WHERE ip IN ({placeholders})",
+            f"UPDATE devices SET enabled = ? WHERE ip IN ({placeholders})",
             [val] + ips,
         )
         return cursor.rowcount
@@ -1024,13 +1240,13 @@ def bulk_set_enabled(device_type: str, ips: list[str], enabled: bool) -> int:
 
 def bulk_delete_devices(device_type: str, ips: list[str]) -> int:
     """Delete multiple devices. Returns count of deleted rows."""
-    table, ips = _validate_bulk_args(device_type, ips)
+    _validate_bulk_args(device_type, ips)
     with get_db() as conn:
         placeholders = ",".join("?" for _ in ips)
         if device_type == "ap":
             conn.execute(f"DELETE FROM cpe_cache WHERE ap_ip IN ({placeholders})", ips)
         cursor = conn.execute(
-            f"DELETE FROM {table} WHERE ip IN ({placeholders})",
+            f"DELETE FROM devices WHERE ip IN ({placeholders})",
             ips,
         )
         return cursor.rowcount
@@ -1038,7 +1254,7 @@ def bulk_delete_devices(device_type: str, ips: list[str]) -> int:
 
 def bulk_move_to_site(device_type: str, ips: list[str], site_id: Optional[int]) -> int:
     """Move multiple devices to a site. Returns count of affected rows."""
-    table, ips = _validate_bulk_args(device_type, ips)
+    _validate_bulk_args(device_type, ips)
     if site_id is not None:
         with get_db() as conn:
             site = conn.execute("SELECT id FROM tower_sites WHERE id = ?", (site_id,)).fetchone()
@@ -1047,19 +1263,18 @@ def bulk_move_to_site(device_type: str, ips: list[str], site_id: Optional[int]) 
     with get_db() as conn:
         placeholders = ",".join("?" for _ in ips)
         cursor = conn.execute(
-            f"UPDATE {table} SET tower_site_id = ? WHERE ip IN ({placeholders})",
+            f"UPDATE devices SET tower_site_id = ? WHERE ip IN ({placeholders})",
             [site_id] + ips,
         )
         return cursor.rowcount
 
 
 def update_device_credentials(device_type: str, ip: str, username: str, password: str):
-    """Update stored credentials for an AP or switch."""
+    """Update stored credentials for a device."""
     enc_password = encrypt_password(password) if not is_encrypted(password) else password
-    table = "access_points" if device_type == "ap" else "switches"
     with get_db() as db:
         db.execute(
-            f"UPDATE {table} SET username = ?, password = ? WHERE ip = ?",
+            "UPDATE devices SET username = ?, password = ? WHERE ip = ?",
             (username, enc_password, ip),
         )
 
@@ -1126,23 +1341,13 @@ def get_cpe_by_ip(ip: str) -> Optional[dict]:
 # Batch-fetch functions for scaling (eliminate N+1 queries)
 
 def get_all_access_points_dict(enabled_only: bool = True) -> dict[str, dict]:
-    """Get all APs as {ip: row_dict}. Single query, avoids N+1 lookups."""
-    with get_db() as conn:
-        query = "SELECT * FROM access_points"
-        if enabled_only:
-            query += " WHERE enabled = 1"
-        rows = conn.execute(query).fetchall()
-        return {row["ip"]: _decrypt_device_row(dict(row)) for row in rows}
+    """Get all APs as {ip: row_dict} (delegates to unified devices table)."""
+    return get_devices_dict(role="ap", enabled_only=enabled_only)
 
 
 def get_all_switches_dict(enabled_only: bool = True) -> dict[str, dict]:
-    """Get all switches as {ip: row_dict}. Single query, avoids N+1 lookups."""
-    with get_db() as conn:
-        query = "SELECT * FROM switches"
-        if enabled_only:
-            query += " WHERE enabled = 1"
-        rows = conn.execute(query).fetchall()
-        return {row["ip"]: _decrypt_device_row(dict(row)) for row in rows}
+    """Get all switches as {ip: row_dict} (delegates to unified devices table)."""
+    return get_devices_dict(role="switch", enabled_only=enabled_only)
 
 
 def get_all_cpes_grouped() -> dict[str, list[dict]]:
@@ -1762,15 +1967,10 @@ def mark_rollout_device(rollout_id: int, ip: str, status: str):
             "UPDATE rollout_devices SET status = ?, updated_at = ? WHERE rollout_id = ? AND ip = ?",
             (status, now, rollout_id, ip)
         )
-        # If successfully updated, record the timestamp on the device itself
+        # If successfully updated, record the timestamp on the device
         if status == "updated":
-            # Try access_points first, then switches
             db.execute(
-                "UPDATE access_points SET last_firmware_update = ? WHERE ip = ?",
-                (now, ip)
-            )
-            db.execute(
-                "UPDATE switches SET last_firmware_update = ? WHERE ip = ?",
+                "UPDATE devices SET last_firmware_update = ? WHERE ip = ?",
                 (now, ip)
             )
 
@@ -1785,20 +1985,15 @@ def mark_rollout_phase_devices(rollout_id: int, phase: str, status: str):
         )
         # If successfully updated, record the timestamp on the devices themselves
         if status == "updated":
-            # Get the IPs for this phase
+            # Get the IPs for this phase and update devices table
             rows = db.execute(
                 "SELECT ip FROM rollout_devices WHERE rollout_id = ? AND phase_assigned = ?",
                 (rollout_id, phase)
             ).fetchall()
             for row in rows:
-                ip = row[0]
                 db.execute(
-                    "UPDATE access_points SET last_firmware_update = ? WHERE ip = ?",
-                    (now, ip)
-                )
-                db.execute(
-                    "UPDATE switches SET last_firmware_update = ? WHERE ip = ?",
-                    (now, ip)
+                    "UPDATE devices SET last_firmware_update = ? WHERE ip = ?",
+                    (now, row[0])
                 )
 
 
@@ -3089,10 +3284,10 @@ def resolve_device_group(group_id: int) -> list[str]:
 
     with get_db() as conn:
         device_type = filters.get("device_type", "ap")
-        table = "switches" if device_type == "switch" else "access_points"
+        role = "switch" if device_type == "switch" else "ap"
 
-        clauses = ["enabled = 1"]
-        params = []
+        clauses = ["enabled = 1", "role = ?"]
+        params = [role]
 
         site_ids = filters.get("site_ids")
         if site_ids:
@@ -3107,7 +3302,7 @@ def resolve_device_group(group_id: int) -> list[str]:
             params.extend(models)
 
         where = " AND ".join(clauses)
-        rows = conn.execute(f"SELECT ip FROM {table} WHERE {where}", params).fetchall()
+        rows = conn.execute(f"SELECT ip FROM devices WHERE {where}", params).fetchall()
         return [r[0] for r in rows]
 
 

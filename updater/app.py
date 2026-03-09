@@ -26,6 +26,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from .tachyon import TachyonClient, UpdateResult
+from .vendors import init_vendors, get_driver, list_vendors
 from . import __version__
 from . import database as db
 from .poller import init_poller, get_poller, set_poller
@@ -453,6 +454,7 @@ def _recover_crashed_device_jobs():
 async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
     # Startup
+    init_vendors()
     ensure_admin_user()
     db.cleanup_expired_sessions()
 
@@ -1773,6 +1775,12 @@ _SETTINGS_SENSITIVE = {
     "radius_server_secret", "radius_server_ldap_bind_password",
     "email_smtp_password", "webhook_secret", "slack_webhook_url",
 }
+
+
+@app.get("/api/vendors", tags=["vendors"])
+async def get_vendors(session: dict = Depends(require_auth)):
+    """Get registered vendor drivers and their firmware type metadata."""
+    return list_vendors()
 
 
 @app.get("/api/settings", tags=["settings"])

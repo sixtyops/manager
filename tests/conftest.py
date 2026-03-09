@@ -30,6 +30,34 @@ def memory_db():
             longitude REAL,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE devices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL UNIQUE,
+            vendor TEXT NOT NULL DEFAULT 'tachyon',
+            role TEXT NOT NULL DEFAULT 'ap',
+            tower_site_id INTEGER,
+            username TEXT NOT NULL,
+            password TEXT NOT NULL,
+            system_name TEXT,
+            model TEXT,
+            mac TEXT,
+            firmware_version TEXT,
+            location TEXT,
+            last_seen TEXT,
+            last_error TEXT,
+            enabled INTEGER DEFAULT 1,
+            bank1_version TEXT,
+            bank2_version TEXT,
+            active_bank INTEGER,
+            last_firmware_update TEXT,
+            notes TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
+        );
+        CREATE INDEX idx_devices_vendor ON devices(vendor);
+        CREATE INDEX idx_devices_role ON devices(role);
+        CREATE INDEX idx_devices_site ON devices(tower_site_id);
+
         CREATE TABLE access_points (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ip TEXT NOT NULL UNIQUE,
@@ -371,6 +399,94 @@ def memory_db():
             enabled INTEGER DEFAULT 1,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+
+        -- Sync triggers: legacy tables → devices
+        CREATE TRIGGER trg_ap_to_devices_insert AFTER INSERT ON access_points
+        BEGIN
+            INSERT OR REPLACE INTO devices (ip, vendor, role, tower_site_id, username, password,
+                system_name, model, mac, firmware_version, location, last_seen, last_error,
+                enabled, bank1_version, bank2_version, active_bank, last_firmware_update, notes, created_at)
+            VALUES (NEW.ip, 'tachyon', 'ap', NEW.tower_site_id, NEW.username, NEW.password,
+                NEW.system_name, NEW.model, NEW.mac, NEW.firmware_version, NEW.location,
+                NEW.last_seen, NEW.last_error, NEW.enabled, NEW.bank1_version, NEW.bank2_version,
+                NEW.active_bank, NEW.last_firmware_update, NEW.notes, NEW.created_at);
+        END;
+        CREATE TRIGGER trg_ap_to_devices_update AFTER UPDATE ON access_points
+        BEGIN
+            UPDATE devices SET tower_site_id=NEW.tower_site_id, username=NEW.username,
+                password=NEW.password, system_name=NEW.system_name, model=NEW.model,
+                mac=NEW.mac, firmware_version=NEW.firmware_version, location=NEW.location,
+                last_seen=NEW.last_seen, last_error=NEW.last_error, enabled=NEW.enabled,
+                bank1_version=NEW.bank1_version, bank2_version=NEW.bank2_version,
+                active_bank=NEW.active_bank, last_firmware_update=NEW.last_firmware_update, notes=NEW.notes
+            WHERE ip = NEW.ip;
+        END;
+        CREATE TRIGGER trg_ap_to_devices_delete AFTER DELETE ON access_points
+        BEGIN DELETE FROM devices WHERE ip = OLD.ip; END;
+
+        CREATE TRIGGER trg_sw_to_devices_insert AFTER INSERT ON switches
+        BEGIN
+            INSERT OR REPLACE INTO devices (ip, vendor, role, tower_site_id, username, password,
+                system_name, model, mac, firmware_version, location, last_seen, last_error,
+                enabled, bank1_version, bank2_version, active_bank, last_firmware_update, notes, created_at)
+            VALUES (NEW.ip, 'tachyon', 'switch', NEW.tower_site_id, NEW.username, NEW.password,
+                NEW.system_name, NEW.model, NEW.mac, NEW.firmware_version, NEW.location,
+                NEW.last_seen, NEW.last_error, NEW.enabled, NEW.bank1_version, NEW.bank2_version,
+                NEW.active_bank, NEW.last_firmware_update, NEW.notes, NEW.created_at);
+        END;
+        CREATE TRIGGER trg_sw_to_devices_update AFTER UPDATE ON switches
+        BEGIN
+            UPDATE devices SET tower_site_id=NEW.tower_site_id, username=NEW.username,
+                password=NEW.password, system_name=NEW.system_name, model=NEW.model,
+                mac=NEW.mac, firmware_version=NEW.firmware_version, location=NEW.location,
+                last_seen=NEW.last_seen, last_error=NEW.last_error, enabled=NEW.enabled,
+                bank1_version=NEW.bank1_version, bank2_version=NEW.bank2_version,
+                active_bank=NEW.active_bank, last_firmware_update=NEW.last_firmware_update, notes=NEW.notes
+            WHERE ip = NEW.ip;
+        END;
+        CREATE TRIGGER trg_sw_to_devices_delete AFTER DELETE ON switches
+        BEGIN DELETE FROM devices WHERE ip = OLD.ip; END;
+
+        -- Reverse sync: devices → legacy tables
+        CREATE TRIGGER trg_devices_to_legacy_insert AFTER INSERT ON devices WHEN NEW.vendor = 'tachyon'
+        BEGIN
+            INSERT OR IGNORE INTO access_points (ip, tower_site_id, username, password,
+                system_name, model, mac, firmware_version, location, last_seen, last_error,
+                enabled, last_firmware_update, created_at)
+            SELECT NEW.ip, NEW.tower_site_id, NEW.username, NEW.password,
+                NEW.system_name, NEW.model, NEW.mac, NEW.firmware_version, NEW.location,
+                NEW.last_seen, NEW.last_error, NEW.enabled, NEW.last_firmware_update, NEW.created_at
+            WHERE NEW.role = 'ap';
+            INSERT OR IGNORE INTO switches (ip, tower_site_id, username, password,
+                system_name, model, mac, firmware_version, location, last_seen, last_error,
+                enabled, bank1_version, bank2_version, active_bank, last_firmware_update, created_at)
+            SELECT NEW.ip, NEW.tower_site_id, NEW.username, NEW.password,
+                NEW.system_name, NEW.model, NEW.mac, NEW.firmware_version, NEW.location,
+                NEW.last_seen, NEW.last_error, NEW.enabled, NEW.bank1_version, NEW.bank2_version,
+                NEW.active_bank, NEW.last_firmware_update, NEW.created_at
+            WHERE NEW.role = 'switch';
+        END;
+        CREATE TRIGGER trg_devices_to_legacy_update AFTER UPDATE ON devices WHEN NEW.vendor = 'tachyon'
+        BEGIN
+            UPDATE access_points SET tower_site_id=NEW.tower_site_id, username=NEW.username,
+                password=NEW.password, system_name=NEW.system_name, model=NEW.model,
+                mac=NEW.mac, firmware_version=NEW.firmware_version, location=NEW.location,
+                last_seen=NEW.last_seen, last_error=NEW.last_error, enabled=NEW.enabled,
+                last_firmware_update=NEW.last_firmware_update, notes=NEW.notes
+            WHERE ip = NEW.ip AND NEW.role = 'ap';
+            UPDATE switches SET tower_site_id=NEW.tower_site_id, username=NEW.username,
+                password=NEW.password, system_name=NEW.system_name, model=NEW.model,
+                mac=NEW.mac, firmware_version=NEW.firmware_version, location=NEW.location,
+                last_seen=NEW.last_seen, last_error=NEW.last_error, enabled=NEW.enabled,
+                bank1_version=NEW.bank1_version, bank2_version=NEW.bank2_version,
+                active_bank=NEW.active_bank, last_firmware_update=NEW.last_firmware_update, notes=NEW.notes
+            WHERE ip = NEW.ip AND NEW.role = 'switch';
+        END;
+        CREATE TRIGGER trg_devices_to_legacy_delete AFTER DELETE ON devices
+        BEGIN
+            DELETE FROM access_points WHERE ip = OLD.ip;
+            DELETE FROM switches WHERE ip = OLD.ip;
+        END;
     """)
     # Insert default settings
     defaults = {
