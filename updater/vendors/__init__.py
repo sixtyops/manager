@@ -49,7 +49,7 @@ def list_vendors() -> List[dict]:
             firmware_types = []
 
         vendors.append({
-            "id": vendor_id,
+            "vendor_id": vendor_id,
             "name": driver_class.VENDOR_NAME,
             "protocols": driver_class.SUPPORTED_PROTOCOLS,
             "has_dual_bank": driver_class.HAS_DUAL_BANK,

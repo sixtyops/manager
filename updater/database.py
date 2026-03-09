@@ -1511,10 +1511,16 @@ def register_firmware(filename: str, source: str = "manual"):
         )
 
 
-def get_firmware_registry() -> list[dict]:
-    """Get all registered firmware entries."""
+def get_firmware_registry(vendor: str = None) -> list[dict]:
+    """Get registered firmware entries, optionally filtered by vendor."""
     with get_db() as conn:
-        rows = conn.execute("SELECT * FROM firmware_registry ORDER BY added_at DESC").fetchall()
+        if vendor:
+            rows = conn.execute(
+                "SELECT * FROM firmware_registry WHERE vendor = ? ORDER BY added_at DESC",
+                (vendor,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM firmware_registry ORDER BY added_at DESC").fetchall()
         return [dict(row) for row in rows]
 
 

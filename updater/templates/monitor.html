@@ -7019,6 +7019,7 @@
         let drawerFwFiles = [];
         let drawerFwSelected = {}; // { 'tna-30x': 'file.bin', 'tna-303l': 'file.bin' }
         let drawerBetaEnabled = false;
+        let vendorFwTypes = []; // Loaded from /api/vendors
 
         function fwExtractVersion(name) {
             const m = name.match(/(\d+\.\d+\.\d+)/);
@@ -7050,6 +7051,15 @@
 
         function fwDetectType(name) {
             const lower = name.toLowerCase();
+            // Use vendor firmware type patterns if loaded
+            for (const ft of vendorFwTypes) {
+                if (ft.pattern) {
+                    try {
+                        if (new RegExp(ft.pattern, 'i').test(name)) return ft.key;
+                    } catch(e) {}
+                }
+            }
+            // Fallback to hardcoded Tachyon patterns
             if (lower.includes('tns-100') || lower.includes('tns100')) return 'tns-100';
             if (lower.includes('303l')) return 'tna-303l';
             if (lower.includes('300') || lower.includes('30x') || lower.includes('tna-3')) return 'tna-30x';
@@ -7058,18 +7068,27 @@
 
         async function loadDrawerFirmware() {
             try {
-                const [fwResp, settResp] = await Promise.all([
+                const [fwResp, settResp, vendorResp] = await Promise.all([
                     fetch('/api/firmware-files'),
                     fetch('/api/settings'),
+                    fetch('/api/vendors'),
                 ]);
                 const fwData = await fwResp.json();
                 const settData = await settResp.json();
+                const vendorData = await vendorResp.json();
                 drawerFwFiles = fwData.files || [];
                 drawerFwSelected = {
                     'tna-30x': settData.settings.selected_firmware_30x || '',
                     'tna-303l': settData.settings.selected_firmware_303l || '',
                     'tns-100': settData.settings.selected_firmware_tns100 || '',
                 };
+                // Build firmware type data from vendor registry
+                vendorFwTypes = [];
+                for (const v of vendorData) {
+                    for (const ft of (v.firmware_types || [])) {
+                        vendorFwTypes.push({ key: ft.key, label: ft.label, pattern: ft.pattern, vendor: v.vendor_id });
+                    }
+                }
                 // Sync beta enabled state from settings
                 drawerBetaEnabled = settData.settings.firmware_beta_enabled === 'true';
                 const betaToggle = document.getElementById('drawerBetaToggle');
@@ -7103,8 +7122,17 @@
                 groups[type].sort((a, b) => fwCompareVersions(a.name, b.name));
             }
 
-            const typeOrder = ['tna-30x', 'tna-303l', 'tns-100', 'unknown'];
-            const typeLabels = { 'tna-30x': '30x', 'tna-303l': '303L', 'tns-100': 'TNS100', 'unknown': 'Other' };
+            // Build type order and labels dynamically from vendor data
+            const typeOrder = vendorFwTypes.length > 0
+                ? vendorFwTypes.map(ft => ft.key).concat(['unknown'])
+                : ['tna-30x', 'tna-303l', 'tns-100', 'unknown'];
+            const typeLabels = { 'unknown': 'Other' };
+            for (const ft of vendorFwTypes) {
+                typeLabels[ft.key] = ft.label;
+            }
+            if (!vendorFwTypes.length) {
+                Object.assign(typeLabels, { 'tna-30x': '30x', 'tna-303l': '303L', 'tns-100': 'TNS100' });
+            }
 
             let html = '';
             const hasBeta = drawerFwFiles.some(f => f.channel === 'beta');
