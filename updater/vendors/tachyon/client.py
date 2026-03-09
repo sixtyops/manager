@@ -369,51 +369,66 @@ class TachyonClient:
             firmware_path: Path to firmware file.
             bandwidth_limit_kbps: Maximum upload rate in KB/s. 0 means unlimited.
         """
-        logger.info(f"Uploading firmware to {self.ip}")
-
         url = f"{self._base_url}/cgi.lua/update"
-        cmd = ["curl", "-s", "-m", "300"]  # 5 min timeout for upload
-        if bandwidth_limit_kbps and bandwidth_limit_kbps > 0:
-            cmd.extend(["--limit-rate", f"{bandwidth_limit_kbps}k"])
-        if not VERIFY_SSL:
-            cmd.append("-k")
-        cmd.extend([
-            "-X", "PUT",
-            "-F", f"fw=@{firmware_path}",
-            "-F", "force=false",
-        ])
+        max_attempts = 3
+        backoff_delays = [0, 30, 60]  # seconds: no delay, 30s, 60s
 
-        if self._token:
-            cmd.extend(["-H", f"Cookie: token={self._token}"])
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                delay = backoff_delays[attempt]
+                logger.info(f"Retrying firmware upload to {self.ip} in {delay}s (attempt {attempt + 1}/{max_attempts})")
+                await asyncio.sleep(delay)
 
-        cmd.append(url)
+            logger.info(f"Uploading firmware to {self.ip}{f' (attempt {attempt + 1}/{max_attempts})' if attempt > 0 else ''}")
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
+            cmd = ["curl", "-s", "-m", "300"]  # 5 min timeout for upload
+            if bandwidth_limit_kbps and bandwidth_limit_kbps > 0:
+                cmd.extend(["--limit-rate", f"{bandwidth_limit_kbps}k"])
+            if not VERIFY_SSL:
+                cmd.append("-k")
+            cmd.extend([
+                "-X", "PUT",
+                "-F", f"fw=@{firmware_path}",
+                "-F", "force=false",
+            ])
 
-        if proc.returncode != 0:
-            logger.error(f"Firmware upload failed for {self.ip}: {stderr.decode()}")
-            return False
+            if self._token:
+                cmd.extend(["-H", f"Cookie: token={self._token}"])
 
-        response = stdout.decode("utf-8", errors="ignore")
-        logger.debug(f"Upload response from {self.ip}: {response}")
+            cmd.append(url)
 
-        # Check for error in response
-        try:
-            data = json.loads(response)
-            if isinstance(data, dict):
-                if data.get("error") or data.get("statusCode", 200) >= 400:
-                    logger.error(f"Upload error from {self.ip}: {data}")
-                    return False
-        except json.JSONDecodeError:
-            pass
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
 
-        logger.info(f"Firmware uploaded to {self.ip}")
-        return True
+            if proc.returncode != 0:
+                logger.error(f"Firmware upload failed for {self.ip}: {stderr.decode()}")
+                # Transport error — retry if attempts remain
+                if attempt < max_attempts - 1:
+                    continue
+                return False
+
+            response = stdout.decode("utf-8", errors="ignore")
+            logger.debug(f"Upload response from {self.ip}: {response}")
+
+            # Check for error in response
+            try:
+                data = json.loads(response)
+                if isinstance(data, dict):
+                    if data.get("error") or data.get("statusCode", 200) >= 400:
+                        logger.error(f"Upload error from {self.ip}: {data}")
+                        # Device-side rejection — don't retry
+                        return False
+            except json.JSONDecodeError:
+                pass
+
+            logger.info(f"Firmware uploaded to {self.ip}")
+            return True
+
+        return False  # Should not reach here
 
     async def trigger_update(self) -> bool:
         """Trigger firmware installation (device will reboot)."""
@@ -694,6 +709,8 @@ class TachyonClient:
             result.error = str(e)
             logger.exception(f"Update failed for {self.ip}")
 
+        # NOTE: Post-update verification is version-string only. Future enhancement:
+        # query device firmware hash if supported and compare against known-good checksum.
         return result
 
     async def get_connected_cpes(self) -> List[Dict[str, Any]]:

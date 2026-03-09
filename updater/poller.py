@@ -781,6 +781,12 @@ class NetworkPoller:
 
     async def _run_enforce_phases(self):
         """Core enforce loop: find non-compliant devices, push in phases."""
+        # Skip if a manual config push rollout is active
+        active_rollout = db.get_active_config_push_rollout()
+        if active_rollout:
+            logger.info("Config enforce: skipping — a config push rollout is active")
+            return
+
         # Get effective templates per device (global + site overrides resolved)
         effective = db.get_all_effective_templates()
         if not effective:
@@ -854,8 +860,8 @@ class NetworkPoller:
                     })
                 return
 
-            # Select batch for this phase
-            batch_size = self._phase_batch_size(phase, len(non_compliant))
+            # Select batch for this phase (use remaining count for correct percentages)
+            batch_size = self._phase_batch_size(phase, len(remaining))
             batch = remaining[:batch_size]
 
             logger.info(f"Config enforce phase {phase}: {len(batch)} device(s)")
@@ -891,21 +897,22 @@ class NetworkPoller:
             remaining = [(ip, dt, t) for ip, dt, t in remaining
                          if ip not in batch_ips]
 
-            # If canary phase failed, warn loudly but continue (skip-on-failure design)
+            # If canary phase failed, stop the enforce run to protect the fleet
             if phase == "canary" and batch_failures > 0 and batch_successes == 0:
                 logger.warning(
-                    "Config enforce: canary device failed — continuing with caution"
+                    "Config enforce: canary device failed — stopping enforce run"
                 )
                 if self.broadcast_func:
                     await self.broadcast_func({
                         "type": "config_enforce_status",
-                        "status": "running",
+                        "status": "idle",
                         "phase": phase,
                         "total": len(non_compliant),
                         "completed": len(non_compliant) - len(remaining),
-                        "message": "Canary failed — proceeding with remaining devices",
+                        "message": "Canary failed — enforce stopped. Investigate before next cycle.",
                         "canary_failed": True,
                     })
+                return
 
             # Cooldown between phases (skip after last phase)
             if remaining and phase != PHASE_ORDER[-1]:

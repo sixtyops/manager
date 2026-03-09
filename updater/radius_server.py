@@ -134,16 +134,17 @@ def set_radius_server_config(config: RadiusServerConfig):
 def _log_auth_attempt(
     username: str, nas_ip: str, result: str,
     reject_reason: str = "", auth_mode: str = "local",
+    client_name: str = "", client_model: str = "",
 ):
     """Record an authentication attempt in the radius_auth_log table."""
     try:
         with db.get_db() as conn:
             conn.execute(
                 "INSERT INTO radius_auth_log "
-                "(username, client_ip, outcome, reason, occurred_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (username, nas_ip, result, reject_reason,
-                 datetime.now().isoformat()),
+                "(username, client_ip, client_name, client_model, outcome, reason, occurred_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (username, nas_ip, client_name, client_model, result,
+                 reject_reason, datetime.now().isoformat()),
             )
     except Exception as e:
         logger.warning("Failed to log RADIUS auth attempt: %s", e)
@@ -281,9 +282,36 @@ class TachyonRadiusServer(server.Server):
         for ip in stale:
             del self._rate_attempts[ip]
 
+    def _resolve_nas_info(self, nas_ip: str) -> tuple[str, str]:
+        """Resolve NAS client name and device model from hosts dict and DB."""
+        client_name = ""
+        client_model = ""
+        host = self.hosts.get(nas_ip)
+        if host:
+            name = getattr(host, "name", "")
+            if name and name != nas_ip:
+                client_name = name
+        if not client_name or not client_model:
+            try:
+                with db.get_db() as conn:
+                    for table in ("access_points", "switches"):
+                        row = conn.execute(
+                            f"SELECT system_name, model FROM {table} WHERE ip = ?",
+                            (nas_ip,),
+                        ).fetchone()
+                        if row:
+                            if not client_name:
+                                client_name = row["system_name"] or ""
+                            client_model = row["model"] or ""
+                            break
+            except Exception:
+                pass
+        return client_name, client_model
+
     def HandleAuthPacket(self, pkt):
         """Process an Access-Request packet."""
         nas_ip = pkt.source[0] if pkt.source else "unknown"
+        client_name, client_model = self._resolve_nas_info(nas_ip)
 
         try:
             username = pkt.get("User-Name", [b""])[0]
@@ -295,7 +323,7 @@ class TachyonRadiusServer(server.Server):
         # Rate limit check
         if self._check_rate_limit(nas_ip):
             _log_auth_attempt(username, nas_ip, "reject", "rate_limited",
-                              self._config.auth_mode)
+                              self._config.auth_mode, client_name, client_model)
             reply = self.CreateReplyPacket(pkt, **{"code": packet.AccessReject})
             self.SendReplyPacket(pkt.fd, reply)
             return
@@ -313,7 +341,8 @@ class TachyonRadiusServer(server.Server):
         if not username or not password:
             self._record_failed_attempt(nas_ip)
             _log_auth_attempt(username or "(empty)", nas_ip, "reject",
-                              "empty_credentials", self._config.auth_mode)
+                              "empty_credentials", self._config.auth_mode,
+                              client_name, client_model)
             reply = self.CreateReplyPacket(pkt, **{"code": packet.AccessReject})
             self.SendReplyPacket(pkt.fd, reply)
             return
@@ -355,12 +384,13 @@ class TachyonRadiusServer(server.Server):
 
         # Send response — uniform rejection (no user enumeration)
         if success:
-            _log_auth_attempt(username, nas_ip, "accept", "", self._config.auth_mode)
+            _log_auth_attempt(username, nas_ip, "accept", "",
+                              self._config.auth_mode, client_name, client_model)
             reply = self.CreateReplyPacket(pkt, **{"code": packet.AccessAccept})
         else:
             self._record_failed_attempt(nas_ip)
             _log_auth_attempt(username, nas_ip, "reject", reject_reason,
-                              self._config.auth_mode)
+                              self._config.auth_mode, client_name, client_model)
             reply = self.CreateReplyPacket(pkt, **{"code": packet.AccessReject})
 
         self.SendReplyPacket(pkt.fd, reply)
@@ -455,7 +485,7 @@ class RadiusService:
         return None
 
     def _build_hosts(self, config: RadiusServerConfig) -> dict:
-        """Build pyrad hosts dict from managed devices."""
+        """Build pyrad hosts dict from managed devices and client overrides."""
         hosts = {}
         secret = config.shared_secret.encode()
         try:
@@ -470,6 +500,17 @@ class RadiusService:
                         hosts[ip] = server.RemoteHost(
                             address=ip, secret=secret, name=name,
                         )
+                # Include manual client overrides
+                overrides = conn.execute(
+                    "SELECT client_spec, shortname FROM radius_client_overrides WHERE enabled = 1"
+                ).fetchall()
+                for ov in overrides:
+                    spec = ov["client_spec"]
+                    name = ov["shortname"] or spec
+                    if spec not in hosts:
+                        hosts[spec] = server.RemoteHost(
+                            address=spec, secret=secret, name=name,
+                        )
         except Exception as e:
             logger.warning("Error building NAS client list: %s", e)
         if not hosts:
@@ -481,11 +522,16 @@ class RadiusService:
         return hosts
 
     def refresh_clients(self):
-        """Rebuild the NAS client list from the device database."""
+        """Rebuild the NAS client list from the device database.
+
+        Builds the new dict first, then does an atomic swap so the packet
+        handler thread never sees a partially-built dict.
+        """
         if not self._server:
             return
         config = get_radius_server_config()
-        self._server.hosts = self._build_hosts(config)
+        new_hosts = self._build_hosts(config)
+        self._server.hosts = new_hosts
 
     async def _sleep_until_restart(self):
         """Sleep without spinning, but allow immediate wake on restart."""

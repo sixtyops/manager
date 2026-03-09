@@ -352,6 +352,7 @@
         .history-status-badge.failed { background: #fef2f2; color: #dc2626; }
         .history-status-badge.skipped { background: #f3f4f6; color: #6b7280; }
         .history-status-badge.cancelled { background: #fef3c7; color: #d97706; }
+        .history-status-badge.deferred { background: #ede9fe; color: #7c3aed; }
 
         .history-stage-pill {
             display: inline-block;
@@ -368,6 +369,14 @@
             background: var(--bg-secondary);
             border-top: none;
         }
+
+        .u-history-row { cursor: pointer; }
+        .u-history-row:hover td { background: var(--bg-secondary); }
+        .u-history-cell-mono { font-family: var(--font-mono, monospace); font-size: 0.8rem; }
+        .u-history-cell-time { font-size: 0.75rem; color: var(--text-dim); white-space: nowrap; }
+        .u-history-cell-failed.error { color: #dc2626; }
+        .u-history-error { color: #dc2626; font-size: 0.8rem; margin-top: 4px; word-break: break-word; }
+        .u-history-pass { font-size: 0.7rem; color: var(--text-dim); margin-left: 8px; }
 
         .settings-panel {
             display: none;
@@ -880,6 +889,15 @@
             color: var(--danger-text);
         }
 
+        .update-action {
+            background: none; border: none; cursor: pointer;
+            font-size: 1.1rem; padding: 2px 6px; border-radius: 4px;
+            color: var(--warning); transition: background 0.15s; line-height: 1;
+        }
+        .update-action:hover { background: var(--warning-bg); }
+        .update-action.scheduled { color: var(--primary); }
+        .update-action.scheduled:hover { background: var(--primary-bg); }
+
         /* Connection status */
         .connection-status {
             display: none;
@@ -977,7 +995,7 @@
             padding: 20px 24px;
             gap: 16px;
             font-size: 0.85rem;
-            min-height: 96px;
+            min-height: 64px;
             flex-wrap: wrap;
             cursor: pointer;
             user-select: none;
@@ -1097,16 +1115,6 @@
             border-color: var(--primary);
         }
 
-        .canary-check {
-            width: 14px;
-            height: 14px;
-            cursor: pointer;
-            accent-color: #f59e0b;
-        }
-        .canary-check:disabled {
-            cursor: not-allowed;
-            opacity: 0.4;
-        }
         .tree-table .row-canary > td:first-child {
             border-left: 3px solid #f59e0b;
         }
@@ -1394,6 +1402,8 @@
             cursor: pointer;
             transition: background 0.2s;
             flex-shrink: 0;
+            border: none;
+            padding: 0;
         }
 
         .status-bar-toggle::after {
@@ -1645,6 +1655,102 @@
         }
         .nag-banner a { color: #7c3aed; font-weight: 500; text-decoration: none; }
         .nag-banner a:hover { text-decoration: underline; }
+
+        /* Utility classes */
+        .hidden { display: none !important; }
+        .u-flex-center-gap8 { display: flex; align-items: center; gap: 8px; }
+        .u-flex-center-gap6 { display: flex; align-items: center; gap: 6px; }
+        .u-flex-center-gap8-mb8 { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+        .u-flex-col-gap8 { display: flex; flex-direction: column; gap: 8px; }
+        .u-flex-1 { flex: 1; min-width: 0; }
+        .u-ml-auto { margin-left: auto; }
+        .u-overflow-x-auto { overflow-x: auto; }
+        .u-dot-neutral { background: var(--text-dim); }
+        .u-saved-indicator { font-size: 0.7rem; color: var(--success); }
+        .u-transition-opacity { transition: opacity 0.3s; }
+        .u-status-note { font-size: 0.7rem; }
+
+        /* Table filter toolbar */
+        .table-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            font-size: 0.8rem;
+            flex-wrap: wrap;
+        }
+        .table-toolbar input[type="text"] {
+            padding: 4px 8px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 0.8rem;
+            background: var(--input-bg);
+            color: var(--text);
+            min-width: 160px;
+            flex: 1;
+            max-width: 280px;
+        }
+        .table-toolbar input[type="text"]:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+        .table-filter-summary {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            margin-left: auto;
+        }
+
+        /* Per-column filter dropdowns */
+        .col-filter-wrapper { display: inline-block; margin-left: 2px; }
+        .col-filter-btn {
+            background: none; border: none; cursor: pointer; padding: 0 2px;
+            font-size: 0.6rem; color: var(--text-dim); line-height: 1; vertical-align: middle;
+        }
+        .col-filter-btn:hover, .col-filter-btn.active { color: var(--primary); }
+        .col-filter-dropdown {
+            z-index: 100;
+            background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15); padding: 6px 0; min-width: 150px; max-height: 240px;
+            overflow-y: auto; font-size: 0.75rem;
+        }
+        .col-filter-dropdown label {
+            display: flex; align-items: center; gap: 6px; padding: 3px 10px; cursor: pointer;
+            white-space: nowrap;
+        }
+        .col-filter-dropdown label:hover { background: var(--border-light); }
+        .col-filter-dropdown .col-filter-actions {
+            display: flex; justify-content: space-between; padding: 4px 10px; border-top: 1px solid var(--border);
+            margin-top: 4px;
+        }
+        .col-filter-dropdown .col-filter-actions a {
+            font-size: 0.7rem; color: var(--primary); cursor: pointer; text-decoration: none;
+        }
+
+        /* Mobile responsive - drawer and filters */
+        @media (max-width: 768px) {
+            .drawer-handle {
+                padding: 12px 16px;
+                gap: 8px;
+                min-height: auto;
+            }
+            .status-bar-section {
+                flex-wrap: wrap;
+            }
+            .status-bar-rollout {
+                margin-left: 0;
+                width: 100%;
+            }
+            .status-bar-phases {
+                flex-wrap: wrap;
+            }
+            .table-toolbar {
+                flex-wrap: wrap;
+            }
+            .table-toolbar input[type="text"] {
+                max-width: 100%;
+                width: 100%;
+            }
+        }
     </style>
 </head>
 <body>
@@ -1735,7 +1841,6 @@
             <button class="main-tab active" data-tab="updates" onclick="switchMainTab('updates')">Updates</button>
             <button class="main-tab" data-tab="config" onclick="switchMainTab('config')">Config</button>
             <button class="main-tab" data-tab="history" onclick="switchMainTab('history')">History <span class="pro-badge pro-badge-history">PRO</span></button>
-            <button class="main-tab" data-tab="analytics" onclick="switchMainTab('analytics')">Analytics</button>
         </div>
 
         <!-- Updates Tab Panel -->
@@ -1768,35 +1873,25 @@
             <div class="table-card">
                 <div class="table-toolbar">
                     <input type="text" id="deviceFilterQuery" placeholder="Filter by name, IP, or site">
-                    <select id="deviceFilterStatus">
-                        <option value="all">All statuses</option>
-                        <option value="behind">Needs update</option>
-                        <option value="current">Current</option>
-                        <option value="offline">Offline / auth failed</option>
-                    </select>
-                    <select id="deviceFilterModel">
-                        <option value="all">All models</option>
-                    </select>
                     <span class="table-filter-summary" id="deviceFilterSummary"></span>
                 </div>
                 <div class="u-overflow-x-auto">
                     <table class="tree-table" id="deviceTable">
                         <thead>
                             <tr>
-                                <th style="width:28px;" title="Canary devices for rollout"></th>
                                 <th data-sort="name" onclick="sortTable('name')">Name / IP <span class="sort-arrow"></span></th>
-                                <th data-sort="model" onclick="sortTable('model')">Model <span class="sort-arrow"></span></th>
-                                <th data-sort="firmware" onclick="sortTable('firmware')">Version <span class="sort-arrow"></span></th>
+                                <th data-sort="model" onclick="sortTable('model')">Model <span class="sort-arrow"></span> <span class="col-filter-wrapper"><button class="col-filter-btn" onclick="event.stopPropagation();toggleColumnFilter('model',this)" title="Filter">&#9660;</button></span></th>
+                                <th data-sort="firmware" onclick="sortTable('firmware')">Version <span class="sort-arrow"></span> <span class="col-filter-wrapper"><button class="col-filter-btn" onclick="event.stopPropagation();toggleColumnFilter('firmware',this)" title="Filter">&#9660;</button></span></th>
                                 <th data-sort="signal" onclick="sortTable('signal')">Signal <span class="sort-arrow"></span></th>
                                 <th data-sort="distance" onclick="sortTable('distance')">Distance <span class="sort-arrow"></span></th>
-                                <th data-sort="status" onclick="sortTable('status')">Status <span class="sort-arrow"></span></th>
+                                <th data-sort="status" onclick="sortTable('status')">Status <span class="sort-arrow"></span> <span class="col-filter-wrapper"><button class="col-filter-btn" onclick="event.stopPropagation();toggleColumnFilter('status',this)" title="Filter">&#9660;</button></span></th>
                                 <th data-sort="update" onclick="sortTable('update')">Update <span class="sort-arrow"></span></th>
                                 <th data-sort="lastseen" onclick="sortTable('lastseen')">Last Updated <span class="sort-arrow"></span></th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="deviceTableBody">
-                            <tr><td colspan="10" class="empty-state">Enter AP IPs above to get started</td></tr>
+                            <tr><td colspan="9" class="empty-state">Enter AP IPs above to get started</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -1862,7 +1957,11 @@
 
         <!-- History Tab Panel -->
         <div id="tabPanel-history" class="hidden">
-            <div class="table-card">
+            <div style="display:flex;gap:8px;margin-bottom:8px;">
+                <button class="btn btn-sm btn-primary" id="historyViewDevices" onclick="switchHistoryView('devices')">Devices</button>
+                <button class="btn btn-sm" id="historyViewJobs" onclick="switchHistoryView('jobs')">Jobs</button>
+            </div>
+            <div class="table-card" id="historyDevicesView">
                 <div class="u-overflow-x-auto">
                     <table class="tree-table" id="historyTable">
                         <thead>
@@ -1886,67 +1985,30 @@
                     <button class="btn btn-sm" onclick="loadMoreHistory()">Load More</button>
                 </div>
             </div>
-        </div>
-
-        <!-- Analytics Tab Panel -->
-        <div id="tabPanel-analytics" class="hidden">
-            <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
-                <h3 style="margin:0;font-size:0.95rem;font-weight:600;">Update Analytics</h3>
-                <select id="analyticsDaysSelect" onchange="loadAnalytics()" style="font-size:0.75rem;padding:2px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);">
-                    <option value="7">Last 7 days</option>
-                    <option value="30" selected>Last 30 days</option>
-                    <option value="90">Last 90 days</option>
-                </select>
-            </div>
-
-            <!-- Summary Cards -->
-            <div id="analyticsSummary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px;">
-                <div class="table-card" style="padding:12px;text-align:center;">
-                    <div class="analytics-stat-label">Total Jobs</div>
-                    <div id="analyticsJobs" class="analytics-stat-value">-</div>
-                </div>
-                <div class="table-card" style="padding:12px;text-align:center;">
-                    <div class="analytics-stat-label">Devices Updated</div>
-                    <div id="analyticsDevices" class="analytics-stat-value">-</div>
-                </div>
-                <div class="table-card" style="padding:12px;text-align:center;">
-                    <div class="analytics-stat-label">Success Rate</div>
-                    <div id="analyticsRate" class="analytics-stat-value success">-</div>
-                </div>
-                <div class="table-card" style="padding:12px;text-align:center;">
-                    <div class="analytics-stat-label">Avg Duration</div>
-                    <div id="analyticsDuration" class="analytics-stat-value">-</div>
-                </div>
-            </div>
-
-            <!-- Charts Row -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
-                <div class="table-card" style="padding:12px;">
-                    <h4 style="margin:0 0 8px;font-size:0.8rem;font-weight:600;">Daily Trends</h4>
-                    <canvas id="analyticsTrendChart" height="200"></canvas>
-                </div>
-                <div class="table-card" style="padding:12px;">
-                    <h4 style="margin:0 0 8px;font-size:0.8rem;font-weight:600;">By Model</h4>
-                    <canvas id="analyticsModelChart" height="200"></canvas>
-                </div>
-            </div>
-
-            <!-- Tables Row -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-                <div class="table-card" style="padding:12px;">
-                    <h4 style="margin:0 0 8px;font-size:0.8rem;font-weight:600;">Top Errors</h4>
-                    <div id="analyticsErrors" style="font-size:0.75rem;">
-                        <div class="empty-state">No data</div>
-                    </div>
-                </div>
-                <div class="table-card" style="padding:12px;">
-                    <h4 style="margin:0 0 8px;font-size:0.8rem;font-weight:600;">Device Reliability (worst first)</h4>
-                    <div id="analyticsReliability" style="font-size:0.75rem;">
-                        <div class="empty-state">No data</div>
-                    </div>
+            <div class="table-card hidden" id="historyJobsView">
+                <div class="u-overflow-x-auto">
+                    <table class="tree-table" id="jobHistoryTable">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Job ID</th>
+                                <th>Duration</th>
+                                <th>Success</th>
+                                <th>Failed</th>
+                                <th>Skipped</th>
+                                <th>Bank Mode</th>
+                            </tr>
+                        </thead>
+                        <tbody id="jobHistoryTableBody">
+                            <tr><td colspan="7" class="empty-state">No jobs yet</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
+
+
+
     </div>
 
     <!-- Bottom Drawer -->
@@ -1983,7 +2045,6 @@
                 <div id="configPushRolloutPhases" style="display:flex;align-items:center;gap:0;margin-left:12px;"></div>
                 <label class="status-bar-toggle" onclick="event.stopPropagation();" title="Auto-enforce config compliance">
                     <input type="checkbox" id="configAutoEnforceToggle" onchange="toggleConfigAutoEnforce(this.checked)">
-                    <span class="slider round"></span>
                 </label>
                 <span class="status-bar-muted" style="font-size:0.7rem;">Auto-Enforce</span>
                 <input type="number" id="configEnforceCooldown" min="1" max="60" value="10"
@@ -2353,6 +2414,7 @@
                                 <option value="failed">Failed</option>
                                 <option value="skipped">Skipped</option>
                                 <option value="cancelled">Cancelled</option>
+                                <option value="deferred">Deferred</option>
                             </select>
                         </div>
                         <div>
@@ -2363,7 +2425,16 @@
                                 <option value="config_push">Config Push</option>
                             </select>
                         </div>
+                        <div>
+                            <label class="u-label-xs">From</label>
+                            <input type="date" id="historyFilterFrom" style="width:140px;">
+                        </div>
+                        <div>
+                            <label class="u-label-xs">To</label>
+                            <input type="date" id="historyFilterTo" style="width:140px;">
+                        </div>
                         <button class="btn btn-sm" onclick="loadHistory()">Apply Filters</button>
+                        <button class="btn btn-sm" onclick="exportHistoryCsv()">Export CSV</button>
                     </div>
                 </div>
             </div>
@@ -3480,6 +3551,7 @@
                     updateSchedulerUI(message);
                 } else if (message.type === 'rollout_status') {
                     updateRolloutUI(message);
+                    if (historyLoaded) loadHistory();
                 } else if (message.type === 'update_started') {
                     localStorage.setItem('systemUpdateInProgress', String(Date.now()));
                     showSystemUpdateOverlay('System update starting...');
@@ -3499,6 +3571,7 @@
                     handleConfigPushUpdate(message);
                 } else if (message.type === 'config_push_complete') {
                     handleConfigPushComplete(message);
+                    if (historyLoaded) loadHistory();
                 } else if (message.type === 'config_push_rollout_status') {
                     configPushRollout = message.rollout;
                     renderConfigPushRolloutUI();
@@ -3513,6 +3586,18 @@
                     applyLicenseGating();
                 } else if (message.type === 'radius_status') {
                     updateRadiusStatusBadge(message.running, message.error);
+                } else if (message.type === 'radius_push_complete') {
+                    const el = document.getElementById('radiusStatus');
+                    if (el) {
+                        if (message.failed > 0) {
+                            el.textContent = `Push complete: ${message.succeeded} succeeded, ${message.failed} failed out of ${message.total}`;
+                            el.style.color = '#f59e0b';
+                        } else {
+                            el.textContent = `Push complete: ${message.succeeded}/${message.total} devices updated`;
+                            el.style.color = '#10b981';
+                        }
+                    }
+                    refreshRadiusData();
                 }
             };
         }
@@ -3684,7 +3769,6 @@
             document.getElementById('yellowCount').textContent = topology.overall_health?.yellow || 0;
             document.getElementById('redCount').textContent = topology.overall_health?.red || 0;
 
-            updateDeviceFilterModelOptions();
             renderTable();
             updateChart();
         }
@@ -3717,40 +3801,114 @@
             }
         }
 
+        const columnFilters = {};  // { model: Set(['TNA-301']), firmware: Set([...]), status: Set([...]) }
+
         function readDeviceFilterState() {
             const queryEl = document.getElementById('deviceFilterQuery');
-            const statusEl = document.getElementById('deviceFilterStatus');
-            const modelEl = document.getElementById('deviceFilterModel');
             deviceFilterState.query = (queryEl?.value || '').trim().toLowerCase();
-            deviceFilterState.status = statusEl?.value || 'all';
-            deviceFilterState.model = modelEl?.value || 'all';
+            // Derive status/model from column filters for backward compat
+            deviceFilterState.status = 'all';
+            deviceFilterState.model = 'all';
         }
 
-        function updateDeviceFilterModelOptions() {
-            const select = document.getElementById('deviceFilterModel');
-            if (!select || !topology?.sites) return;
-            const prior = select.value || 'all';
-            const models = new Set();
+        function getColumnValues(column) {
+            const values = new Set();
+            if (!topology?.sites) return values;
             for (const site of topology.sites) {
                 for (const ap of (site.aps || [])) {
-                    if (ap.model) models.add(ap.model);
+                    values.add(getDeviceColumnValue(ap, 'ap', column));
                     for (const cpe of (ap.cpes || [])) {
-                        if (cpe.model) models.add(cpe.model);
+                        values.add(getDeviceColumnValue(cpe, 'cpe', column, ap.ip));
                     }
                 }
                 for (const sw of (site.switches || [])) {
-                    if (sw.model) models.add(sw.model);
+                    values.add(getDeviceColumnValue(sw, 'switch', column));
                 }
             }
-            const ordered = Array.from(models).sort((a, b) => a.localeCompare(b));
-            select.innerHTML = '<option value="all">All models</option>' +
-                ordered.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
-            if (ordered.includes(prior)) {
-                select.value = prior;
-            } else {
-                select.value = 'all';
-                deviceFilterState.model = 'all';
+            values.delete('');
+            return values;
+        }
+
+        let openColumnFilterEl = null;
+        function toggleColumnFilter(column, btn) {
+            // Close any existing dropdown
+            closeColumnFilter();
+            const values = getColumnValues(column);
+            if (values.size === 0) return;
+
+            const activeSet = columnFilters[column] || new Set();
+            const dropdown = document.createElement('div');
+            dropdown.className = 'col-filter-dropdown';
+            dropdown.onclick = e => e.stopPropagation();
+
+            const sorted = Array.from(values).sort();
+            const statusLabels = { behind: 'Needs update', current: 'Current', offline: 'Offline', unknown: 'Unknown', updating: 'Updating' };
+
+            for (const val of sorted) {
+                const label = document.createElement('label');
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = activeSet.size === 0 || activeSet.has(val);
+                cb.dataset.value = val;
+                const displayVal = column === 'status' ? (statusLabels[val] || val) : val;
+                label.appendChild(cb);
+                label.appendChild(document.createTextNode(displayVal));
+                dropdown.appendChild(label);
             }
+
+            const actions = document.createElement('div');
+            actions.className = 'col-filter-actions';
+            const selectAll = document.createElement('a');
+            selectAll.textContent = 'All';
+            selectAll.onclick = () => { dropdown.querySelectorAll('input').forEach(c => c.checked = true); };
+            const clearAll = document.createElement('a');
+            clearAll.textContent = 'None';
+            clearAll.onclick = () => { dropdown.querySelectorAll('input').forEach(c => c.checked = false); };
+            const apply = document.createElement('a');
+            apply.textContent = 'Apply';
+            apply.style.fontWeight = '600';
+            apply.onclick = () => {
+                const checked = new Set();
+                dropdown.querySelectorAll('input:checked').forEach(c => checked.add(c.dataset.value));
+                if (checked.size === sorted.length) {
+                    delete columnFilters[column];
+                    btn.classList.remove('active');
+                } else {
+                    columnFilters[column] = checked;
+                    btn.classList.add('active');
+                }
+                closeColumnFilter();
+                renderTable();
+            };
+            actions.appendChild(selectAll);
+            actions.appendChild(clearAll);
+            actions.appendChild(apply);
+            dropdown.appendChild(actions);
+
+            document.body.appendChild(dropdown);
+            const rect = btn.getBoundingClientRect();
+            dropdown.style.position = 'fixed';
+            dropdown.style.top = (rect.bottom + 2) + 'px';
+            dropdown.style.left = rect.left + 'px';
+            openColumnFilterEl = dropdown;
+            btn.classList.add('active');
+
+            // Close on outside click
+            setTimeout(() => document.addEventListener('click', closeColumnFilter, { once: true }), 0);
+        }
+
+        function closeColumnFilter() {
+            if (openColumnFilterEl) {
+                openColumnFilterEl.remove();
+                openColumnFilterEl = null;
+            }
+            // Clear active class from buttons that don't have an active filter
+            document.querySelectorAll('.col-filter-btn.active').forEach(btn => {
+                const col = btn.closest('th')?.dataset?.sort;
+                if (!col || !columnFilters[col] || columnFilters[col].size === 0) {
+                    btn.classList.remove('active');
+                }
+            });
         }
 
         function getDeviceStatusForFilter(device, kind, parentApIp) {
@@ -3764,16 +3922,24 @@
             return 'unknown';
         }
 
+        function getDeviceColumnValue(device, kind, column, parentApIp) {
+            switch (column) {
+                case 'model': return device.model || '';
+                case 'firmware': return device.firmware_version || '';
+                case 'status': return getDeviceStatusForFilter(device, kind, parentApIp);
+                default: return '';
+            }
+        }
+
         function matchesDeviceFilters(device, siteName, kind, parentApIp) {
             if (!device) return false;
-            const query = deviceFilterState.query;
-            const status = deviceFilterState.status;
-            const model = deviceFilterState.model;
-            if (model !== 'all' && (device.model || '') !== model) return false;
-            if (status !== 'all') {
-                const rowStatus = getDeviceStatusForFilter(device, kind, parentApIp);
-                if (status !== rowStatus) return false;
+            // Check column filters
+            for (const [col, allowedSet] of Object.entries(columnFilters)) {
+                if (!allowedSet || allowedSet.size === 0) continue;
+                const val = getDeviceColumnValue(device, kind, col, parentApIp);
+                if (!allowedSet.has(val)) return false;
             }
+            const query = deviceFilterState.query;
             if (!query) return true;
             const haystack = [
                 siteName || '',
@@ -3793,9 +3959,8 @@
                 summaryEl.textContent = '';
                 return;
             }
-            const filtersActive = !!deviceFilterState.query ||
-                deviceFilterState.status !== 'all' ||
-                deviceFilterState.model !== 'all';
+            const colFiltersActive = Object.values(columnFilters).some(s => s && s.size > 0);
+            const filtersActive = !!deviceFilterState.query || colFiltersActive;
             if (!filtersActive) {
                 summaryEl.textContent = `${totalRows} device${totalRows === 1 ? '' : 's'}`;
                 return;
@@ -3882,7 +4047,7 @@
             if (vs === 'behind') {
                 const title = autoUpdateEnabled ? 'Auto-update scheduled \u2013 click to update now' : 'Update available \u2013 click to update now';
                 const cls = autoUpdateEnabled ? 'scheduled' : 'behind';
-                return `<button class="update-action ${cls}" title="${title}" onclick="triggerUpdate('${type}','${ip}');event.stopPropagation();">Update</button>`;
+                return `<button class="update-action ${cls}" title="${title}" onclick="triggerUpdate('${type}','${ip}');event.stopPropagation();">&#8593;</button>`;
             }
             return '';
         }
@@ -3899,7 +4064,7 @@
             }
             const title = autoUpdateEnabled ? 'Auto-update scheduled \u2013 click to update now' : 'Update available \u2013 click to update now';
             const cls = autoUpdateEnabled ? 'scheduled' : 'behind';
-            return `<button class="update-action ${cls}" title="${title}" onclick="triggerUpdate('site','${siteId}');event.stopPropagation();">Update</button>`;
+            return `<button class="update-action ${cls}" title="${title}" onclick="triggerUpdate('site','${siteId}');event.stopPropagation();">&#8593;</button>`;
         }
 
         function actionsCell(type, id, name) {
@@ -3910,12 +4075,20 @@
                 return '';
             }
             if (type === 'ap') {
-                return `<a class="action-link" onclick="editDeviceNotes('ap','${id}');event.stopPropagation();">Notes</a>
+                const isCanary = canaryAps.has(id);
+                const canaryTitle = isCanary ? 'Remove canary' : 'Set as canary';
+                const canaryStyle = isCanary ? 'color:#f59e0b;' : '';
+                const canaryLink = canaryLoaded ? `<a class="action-link" style="${canaryStyle}" title="${canaryTitle}" onclick="toggleCanary('ap','${id}',${!isCanary});event.stopPropagation();">&#x1F426;</a>` : '';
+                return `${canaryLink}<a class="action-link" onclick="editDeviceNotes('ap','${id}');event.stopPropagation();">Notes</a>
                     <a class="action-link" onclick="pollAPNow('${id}');event.stopPropagation();">Refresh</a>
                     ${deleteActionLink('ap', id)}`;
             }
             if (type === 'switch') {
-                return `<a class="action-link" onclick="editDeviceNotes('switch','${id}');event.stopPropagation();">Notes</a>
+                const isCanary = canarySwitches.has(id);
+                const canaryTitle = isCanary ? 'Remove canary' : 'Set as canary';
+                const canaryStyle = isCanary ? 'color:#f59e0b;' : '';
+                const canaryLink = canaryLoaded ? `<a class="action-link" style="${canaryStyle}" title="${canaryTitle}" onclick="toggleCanary('switch','${id}',${!isCanary});event.stopPropagation();">&#x1F426;</a>` : '';
+                return `${canaryLink}<a class="action-link" onclick="editDeviceNotes('switch','${id}');event.stopPropagation();">Notes</a>
                     ${deleteActionLink('switch', id)}`;
             }
             return '';
@@ -3949,9 +4122,8 @@
                 const rawAps = site.aps || [];
                 const rawSwitches = site.switches || [];
                 const siteName = site.name || '';
-                const queryOnlySiteFilter = !!deviceFilterState.query &&
-                    deviceFilterState.status === 'all' &&
-                    deviceFilterState.model === 'all' &&
+                const colFiltersActive = Object.values(columnFilters).some(s => s && s.size > 0);
+                const queryOnlySiteFilter = !!deviceFilterState.query && !colFiltersActive &&
                     siteName.toLowerCase().includes(deviceFilterState.query);
 
                 const aps = [];
@@ -4002,7 +4174,6 @@
                 if (switches.length > 0) badgeParts.push(`${switches.length} SW`);
 
                 html += `<tr class="row-site ${isSelected ? 'row-selected' : ''}" onclick="selectSite(${site.id !== null ? site.id : 'null'})">
-                    <td></td>
                     <td>
                         <div class="name-cell" style="padding-left:4px;">
                             <span class="expand-toggle ${siteExpanded ? 'expanded' : ''}" onclick="toggleExpand('${siteKey}',event)">&#9654;</span>
@@ -4034,11 +4205,7 @@
                     const isApSelected = selectedNode?.type === 'ap' && selectedNode?.data?.ip === ap.ip;
 
                     const isApCanary = canaryAps.has(ap.ip);
-                    const apCanaryCell = canaryLoaded
-                        ? `<td style="text-align:center;"><input type="checkbox" class="canary-check" ${isApCanary ? 'checked' : ''} ${!ap.enabled ? 'disabled title="Device is disabled"' : 'title="Mark as canary device"'} onclick="event.stopPropagation();toggleCanary('ap','${ap.ip}',this.checked)"></td>`
-                        : '<td></td>';
                     html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isApSelected ? 'row-selected' : ''} ${isApCanary ? 'row-canary' : ''}" onclick="selectAP('${ap.ip}')">
-                        ${apCanaryCell}
                         <td>
                             <div class="name-cell" style="padding-left:28px;">
                                 <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
@@ -4075,7 +4242,6 @@
                         const isCpeSelected = selectedNode?.type === 'cpe' && selectedNode?.data?.ip === cpe.ip;
 
                         html += `<tr class="row-cpe ${isCpeSelected ? 'row-selected' : ''}" onclick="selectCPE('${cpe.ip}')">
-                            <td></td>
                             <td>
                                 <div class="name-cell" style="padding-left:52px;">
                                     <span class="expand-toggle hidden">&#9654;</span>
@@ -4102,11 +4268,7 @@
                     const isSwSelected = selectedNode?.type === 'switch' && selectedNode?.data?.ip === sw.ip;
 
                     const isSwCanary = canarySwitches.has(sw.ip);
-                    const swCanaryCell = canaryLoaded
-                        ? `<td style="text-align:center;"><input type="checkbox" class="canary-check" ${isSwCanary ? 'checked' : ''} ${!sw.enabled ? 'disabled title="Device is disabled"' : 'title="Mark as canary device"'} onclick="event.stopPropagation();toggleCanary('switch','${sw.ip}',this.checked)"></td>`
-                        : '<td></td>';
                     html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isSwSelected ? 'row-selected' : ''} ${isSwCanary ? 'row-canary' : ''}" onclick="selectSwitch('${sw.ip}')">
-                        ${swCanaryCell}
                         <td>
                             <div class="name-cell" style="padding-left:28px;">
                                 <span class="expand-toggle hidden">&#9654;</span>
@@ -4132,7 +4294,7 @@
             }
 
             if (!html) {
-                html = '<tr><td colspan="10" class="empty-state">No devices found</td></tr>';
+                html = '<tr><td colspan="9" class="empty-state">No devices found</td></tr>';
             }
 
             tbody.innerHTML = html;
@@ -5301,7 +5463,11 @@
                 return;
             }
 
-            devicesEl.innerHTML = devices.slice(0, 12).map(device => {
+            const sortedDevices = [...devices].sort((a, b) => {
+                const order = { failed: 0, pending: 1, updated: 2, skipped: 3 };
+                return (order[a.status] ?? 4) - (order[b.status] ?? 4);
+            });
+            devicesEl.innerHTML = sortedDevices.map(device => {
                 const repairTarget = device.repair_target_ip || device.parent_ap_ip || '';
                 const repairKey = repairTarget.replace(/[^a-zA-Z0-9_-]/g, '-');
                 const canRepair = device.status === 'failed' && device.device_type === 'cpe' && repairTarget;
@@ -6441,7 +6607,8 @@
             updateDrawerForTab(tab);
             if (tab === 'history' && !historyLoaded) loadHistory();
             if (tab === 'config' && !configLoaded) loadConfigData();
-            if (tab === 'analytics' && !analyticsLoaded) loadAnalytics();
+
+
         }
 
         function updateDrawerForTab(tab) {
@@ -6458,16 +6625,21 @@
 
         let historyOffset = 0;
         let historyLoaded = false;
+        let historyTotal = 0;
 
         async function loadHistory(append) {
             if (!append) historyOffset = 0;
             const ip = document.getElementById('historyFilterIp').value.trim();
             const status = document.getElementById('historyFilterStatus').value;
             const action = document.getElementById('historyFilterAction').value;
+            const fromDate = document.getElementById('historyFilterFrom').value;
+            const toDate = document.getElementById('historyFilterTo').value;
             const params = new URLSearchParams({limit: '100', offset: String(historyOffset)});
             if (ip) params.set('ip', ip);
             if (status) params.set('status', status);
             if (action) params.set('action', action);
+            if (fromDate) params.set('from_date', fromDate);
+            if (toDate) params.set('to_date', toDate + 'T23:59:59');
 
             const tbody = document.getElementById('historyTableBody');
             if (!append) tbody.innerHTML = '<tr><td colspan="8" class="empty-state">Loading...</td></tr>';
@@ -6482,13 +6654,14 @@
                 if (!resp.ok) throw new Error('Failed to load');
                 const data = await resp.json();
                 historyLoaded = true;
+                historyTotal = data.total || 0;
 
                 if (!append) tbody.innerHTML = '';
 
                 if (data.history.length === 0 && historyOffset === 0) {
                     tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No update history yet</td></tr>';
                     setHidden('historyLoadMore', true);
-                    updateHistorySummary(0);
+                    updateHistorySummary(0, 0);
                     return;
                 }
 
@@ -6519,8 +6692,8 @@
                 }
 
                 historyOffset += data.history.length;
-                setHidden('historyLoadMore', !(data.history.length >= 100));
-                if (!append) updateHistorySummary(data.history.length);
+                setHidden('historyLoadMore', historyOffset < historyTotal);
+                updateHistorySummary(historyOffset, historyTotal);
             } catch (e) {
                 if (!append) tbody.innerHTML = `<tr><td colspan="8" class="empty-state u-text-danger">Error loading history</td></tr>`;
             }
@@ -6528,6 +6701,111 @@
 
         function loadMoreHistory() {
             loadHistory(true);
+        }
+
+        function exportHistoryCsv() {
+            window.location.href = '/api/reports/export/devices?days=365';
+        }
+
+        let jobHistoryLoaded = false;
+
+        function switchHistoryView(view) {
+            const devBtn = document.getElementById('historyViewDevices');
+            const jobBtn = document.getElementById('historyViewJobs');
+            const devView = document.getElementById('historyDevicesView');
+            const jobView = document.getElementById('historyJobsView');
+            if (view === 'jobs') {
+                devBtn.classList.remove('btn-primary');
+                jobBtn.classList.add('btn-primary');
+                setHidden(devView, true);
+                setHidden(jobView, false);
+                if (!jobHistoryLoaded) loadJobHistory();
+            } else {
+                jobBtn.classList.remove('btn-primary');
+                devBtn.classList.add('btn-primary');
+                setHidden(jobView, true);
+                setHidden(devView, false);
+            }
+        }
+
+        async function loadJobHistory() {
+            const tbody = document.getElementById('jobHistoryTableBody');
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Loading...</td></tr>';
+            try {
+                const resp = await fetch('/api/job-history?per_page=100');
+                if (resp.status === 403) {
+                    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Job history requires a Pro subscription.</td></tr>';
+                    return;
+                }
+                if (!resp.ok) throw new Error('Failed to load');
+                const data = await resp.json();
+                jobHistoryLoaded = true;
+                if (!data.jobs || data.jobs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No job history yet</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = '';
+                for (const job of data.jobs) {
+                    const row = document.createElement('tr');
+                    row.className = 'u-history-row';
+                    row.onclick = function() { toggleJobDetail(this, job); };
+                    const d = job.completed_at ? new Date(job.completed_at) : null;
+                    const timeStr = d && !isNaN(d.getTime()) ? d.toLocaleString() : '-';
+                    const durStr = job.duration ? Math.round(job.duration) + 's' : '-';
+                    row.innerHTML = `
+                        <td class="u-history-cell-time">${escapeHtml(timeStr)}</td>
+                        <td class="u-history-cell-mono">${escapeHtml(job.job_id || '-')}</td>
+                        <td class="u-history-cell">${durStr}</td>
+                        <td class="u-history-cell" style="color:#16a34a;">${job.success_count || 0}</td>
+                        <td class="u-history-cell" style="color:${job.failed_count ? '#dc2626' : 'inherit'};">${job.failed_count || 0}</td>
+                        <td class="u-history-cell">${job.skipped_count || 0}</td>
+                        <td class="u-history-cell">${escapeHtml(job.bank_mode || '-')}</td>
+                    `;
+                    tbody.appendChild(row);
+                }
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty-state u-text-danger">Error loading job history</td></tr>';
+            }
+        }
+
+        async function toggleJobDetail(row, job) {
+            const next = row.nextElementSibling;
+            if (next && next.classList.contains('history-detail-row')) {
+                next.remove();
+                return;
+            }
+            row.closest('tbody').querySelectorAll('.history-detail-row').forEach(r => r.remove());
+            const detailRow = document.createElement('tr');
+            detailRow.className = 'history-detail-row';
+            detailRow.innerHTML = '<td colspan="7" class="u-history-detail-cell">Loading devices...</td>';
+            row.after(detailRow);
+            try {
+                const resp = await fetch(`/api/job-history/${encodeURIComponent(job.job_id)}/devices`);
+                if (!resp.ok) throw new Error('Failed');
+                const data = await resp.json();
+                if (!data.devices || data.devices.length === 0) {
+                    detailRow.innerHTML = '<td colspan="7" class="u-history-detail-cell">No device records for this job</td>';
+                    return;
+                }
+                let html = '<td colspan="7" class="u-history-detail-cell"><div style="max-height:300px;overflow-y:auto;">';
+                html += '<table style="width:100%;font-size:0.8rem;"><tr><th>Device</th><th>Role</th><th>Status</th><th>Version</th><th>Duration</th><th>Error</th></tr>';
+                for (const d of data.devices) {
+                    const verStr = d.old_version && d.new_version ? `${d.old_version} → ${d.new_version}` : d.new_version || '-';
+                    const durStr = d.duration_seconds ? Math.round(d.duration_seconds) + 's' : '-';
+                    html += `<tr>
+                        <td class="u-history-cell-mono">${escapeHtml(d.ip)}</td>
+                        <td>${escapeHtml(d.role || '-')}</td>
+                        <td><span class="history-status-badge ${d.status}">${d.status}</span></td>
+                        <td>${escapeHtml(verStr)}</td>
+                        <td>${durStr}</td>
+                        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(d.error || '')}">${escapeHtml((d.error || '').substring(0, 60))}</td>
+                    </tr>`;
+                }
+                html += '</table></div></td>';
+                detailRow.innerHTML = html;
+            } catch (e) {
+                detailRow.innerHTML = '<td colspan="7" class="u-history-detail-cell u-text-danger">Failed to load device details</td>';
+            }
         }
 
         function toggleHistoryDetail(row, entry) {
@@ -6567,129 +6845,16 @@
             row.after(detailRow);
         }
 
-        function updateHistorySummary(count) {
+        function updateHistorySummary(loaded, total) {
             const el = document.getElementById('barHistorySummary');
-            if (el) el.textContent = count > 0 ? `${count} entries` : 'No entries';
-        }
-
-        // ── Analytics ──
-
-        let analyticsLoaded = false;
-        let trendChart = null;
-        let modelChart = null;
-
-        async function loadAnalytics() {
-            const days = parseInt(document.getElementById('analyticsDaysSelect').value) || 30;
-            try {
-                const [summaryResp, trendsResp, modelsResp, errorsResp, reliabilityResp] = await Promise.all([
-                    fetch(`/api/analytics/summary?days=${days}`),
-                    fetch(`/api/analytics/trends?days=${days}`),
-                    fetch(`/api/analytics/models?days=${days}`),
-                    fetch(`/api/analytics/errors?days=${days}`),
-                    fetch(`/api/analytics/reliability?days=${days}`),
-                ]);
-                const summary = await summaryResp.json();
-                const trends = await trendsResp.json();
-                const models = await modelsResp.json();
-                const errors = await errorsResp.json();
-                const reliability = await reliabilityResp.json();
-
-                renderAnalyticsSummary(summary);
-                renderTrendChart(trends.trends);
-                renderModelChart(models.models);
-                renderErrorsTable(errors.errors);
-                renderReliabilityTable(reliability.devices);
-                analyticsLoaded = true;
-            } catch (e) {
-                console.error('Failed to load analytics:', e);
+            if (!el) return;
+            if (total === 0) {
+                el.textContent = 'No entries';
+            } else if (loaded >= total) {
+                el.textContent = `${total} entries`;
+            } else {
+                el.textContent = `${loaded} of ${total} entries`;
             }
-        }
-
-        function renderAnalyticsSummary(s) {
-            document.getElementById('analyticsJobs').textContent = s.total_jobs || 0;
-            document.getElementById('analyticsDevices').textContent = (s.total_success || 0) + (s.total_failed || 0);
-            const rate = s.success_rate || 0;
-            const rateEl = document.getElementById('analyticsRate');
-            rateEl.textContent = rate.toFixed(1) + '%';
-            rateEl.style.color = rate >= 95 ? '#10b981' : rate >= 80 ? '#f59e0b' : '#ef4444';
-            const dur = s.avg_duration || 0;
-            document.getElementById('analyticsDuration').textContent = dur < 60 ? Math.round(dur) + 's' : Math.round(dur / 60) + 'm';
-        }
-
-        function renderTrendChart(trends) {
-            const ctx = document.getElementById('analyticsTrendChart');
-            if (!ctx) return;
-            if (trendChart) trendChart.destroy();
-            if (!trends.length) {
-                trendChart = null;
-                ctx.parentElement.innerHTML = '<div class="empty-state" style="display:flex;align-items:center;justify-content:center;height:100%;color:#6b7280;">No update data yet</div>';
-                return;
-            }
-            const labels = trends.map(t => t.date ? t.date.slice(5) : '');
-            trendChart = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels,
-                    datasets: [
-                        { label: 'Success', data: trends.map(t => t.success), backgroundColor: '#10b981', borderRadius: 3 },
-                        { label: 'Failed', data: trends.map(t => t.failed), backgroundColor: '#ef4444', borderRadius: 3 },
-                    ]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } } },
-                    scales: { x: { stacked: true, ticks: { font: { size: 9 } } }, y: { stacked: true, beginAtZero: true, ticks: { font: { size: 9 } } } }
-                }
-            });
-        }
-
-        function renderModelChart(models) {
-            const ctx = document.getElementById('analyticsModelChart');
-            if (!ctx) return;
-            if (modelChart) modelChart.destroy();
-            if (!models.length) { modelChart = null; return; }
-            const labels = models.map(m => m.model);
-            modelChart = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels,
-                    datasets: [
-                        { label: 'Success', data: models.map(m => m.success), backgroundColor: '#10b981', borderRadius: 3 },
-                        { label: 'Failed', data: models.map(m => m.failed), backgroundColor: '#ef4444', borderRadius: 3 },
-                    ]
-                },
-                options: {
-                    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } } },
-                    scales: { x: { stacked: true, beginAtZero: true, ticks: { font: { size: 9 } } }, y: { stacked: true, ticks: { font: { size: 9 } } } }
-                }
-            });
-        }
-
-        function renderErrorsTable(errors) {
-            const el = document.getElementById('analyticsErrors');
-            if (!errors.length) { el.innerHTML = '<div class="empty-state">No failures</div>'; return; }
-            let html = '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border);">Error</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border);">Stage</th><th style="text-align:right;padding:4px;border-bottom:1px solid var(--border);">Count</th></tr></thead><tbody>';
-            for (const e of errors) {
-                const safeError = escapeHtml(e.error || '');
-                const errText = safeError.length > 60 ? safeError.slice(0, 60) + '...' : safeError;
-                html += `<tr><td style="padding:3px 4px;" title="${safeError}">${errText}</td><td style="padding:3px 4px;color:#9ca3af;">${escapeHtml(e.stage || '')}</td><td style="padding:3px 4px;text-align:right;font-weight:600;">${e.count}</td></tr>`;
-            }
-            html += '</tbody></table>';
-            el.innerHTML = html;
-        }
-
-        function renderReliabilityTable(devices) {
-            const el = document.getElementById('analyticsReliability');
-            if (!devices.length) { el.innerHTML = '<div class="empty-state">Not enough data</div>'; return; }
-            let html = '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border);">Device</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border);">Model</th><th style="text-align:right;padding:4px;border-bottom:1px solid var(--border);">Pass</th><th style="text-align:right;padding:4px;border-bottom:1px solid var(--border);">Fail</th></tr></thead><tbody>';
-            for (const d of devices) {
-                const rate = d.total > 0 ? (d.failed / d.total * 100).toFixed(0) : 0;
-                const color = rate > 30 ? '#ef4444' : rate > 10 ? '#f59e0b' : '#10b981';
-                html += `<tr><td style="padding:3px 4px;">${escapeHtml(d.ip)}</td><td style="padding:3px 4px;color:#9ca3af;">${escapeHtml(d.model || '')}</td><td style="padding:3px 4px;text-align:right;color:#10b981;">${d.success}</td><td style="padding:3px 4px;text-align:right;color:${color};font-weight:600;">${d.failed}</td></tr>`;
-            }
-            html += '</tbody></table>';
-            el.innerHTML = html;
         }
 
         // ── Drawer ──
@@ -6951,12 +7116,8 @@
                 if (el) el.addEventListener('change', markDrawerDirty);
             });
 
-            ['deviceFilterQuery', 'deviceFilterStatus', 'deviceFilterModel'].forEach(id => {
-                const el = document.getElementById(id);
-                if (!el) return;
-                const eventName = id === 'deviceFilterQuery' ? 'input' : 'change';
-                el.addEventListener(eventName, () => renderTable());
-            });
+            const filterQueryEl = document.getElementById('deviceFilterQuery');
+            if (filterQueryEl) filterQueryEl.addEventListener('input', () => renderTable());
         });
 
         async function saveDrawerSettings() {
@@ -8792,11 +8953,12 @@
                     const time = e.enforced_at ? new Date(e.enforced_at).toLocaleString() : '';
                     const dotCls = e.status === 'success' ? 'success' : 'failed';
                     const errorText = e.error ? ` — ${escapeHtml(e.error).substring(0, 60)}` : '';
+                    const fullError = e.error ? escapeHtml(e.error) : '';
                     return `<div class="enforce-log-entry">
                         <span class="enforce-log-dot ${dotCls}"></span>
                         <span class="log-ip">${escapeHtml(e.ip)}</span>
                         <span class="log-phase">${escapeHtml(e.phase || '')}</span>
-                        <span>${escapeHtml(e.status)}${errorText}</span>
+                        <span title="${fullError}">${escapeHtml(e.status)}${errorText}</span>
                         <span class="log-time">${escapeHtml(time)}</span>
                     </div>`;
                 }).join('');

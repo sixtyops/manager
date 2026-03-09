@@ -41,6 +41,8 @@ def create_radius_user(
     username = validate_username(username)
     if not password:
         raise ValueError("Password is required")
+    if len(password) < 8:
+        raise ValueError("Password must be at least 8 characters")
     hashed = _hash_password(password)
     with db.get_db() as conn:
         cursor = conn.execute(
@@ -105,6 +107,8 @@ def update_radius_user(user_id: int, **kwargs) -> bool:
             updates["username"] = value
         elif key == "password":
             if value:
+                if len(value) < 8:
+                    raise ValueError("Password must be at least 8 characters")
                 updates["password"] = _hash_password(value)
         elif key == "enabled":
             updates["enabled"] = 1 if value else 0

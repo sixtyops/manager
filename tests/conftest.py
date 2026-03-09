@@ -264,6 +264,32 @@ def memory_db():
         );
         CREATE INDEX IF NOT EXISTS idx_config_enforce_ip ON config_enforce_log(ip, enforced_at DESC);
 
+        CREATE TABLE config_push_rollouts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            template_ids TEXT NOT NULL,
+            template_names TEXT,
+            templates_snapshot TEXT,
+            phase TEXT NOT NULL DEFAULT 'canary',
+            status TEXT NOT NULL DEFAULT 'active',
+            pause_reason TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_phase_completed_at TEXT,
+            completed_at TEXT
+        );
+        CREATE TABLE config_push_rollout_devices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rollout_id INTEGER NOT NULL,
+            ip TEXT NOT NULL,
+            device_type TEXT NOT NULL,
+            phase_assigned TEXT,
+            status TEXT DEFAULT 'pending',
+            error TEXT,
+            updated_at TEXT,
+            FOREIGN KEY (rollout_id) REFERENCES config_push_rollouts(id),
+            UNIQUE(rollout_id, ip)
+        );
+
         CREATE TABLE radius_users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE COLLATE NOCASE,

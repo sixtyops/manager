@@ -156,7 +156,7 @@ class TestCSVExport:
         rows = db.get_device_history_csv_rows(30)
         assert len(rows) == 1
         assert rows[0]["ip"] == "10.0.0.1"
-        assert "stages_json" not in rows[0]
+        assert "stages_json" in rows[0]
 
 
 # ---------------------------------------------------------------------------

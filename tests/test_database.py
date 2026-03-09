@@ -144,16 +144,18 @@ class TestDeviceUpdateHistory:
             duration_seconds=120.5,
             started_at="2026-01-01T00:00:00", completed_at="2026-01-01T00:02:00",
         )
-        history = db.get_device_update_history(ip="10.0.0.1")
+        history, total = db.get_device_update_history(ip="10.0.0.1")
         assert len(history) == 1
+        assert total == 1
         assert history[0]["status"] == "success"
         assert history[0]["ip"] == "10.0.0.1"
         assert history[0]["stages"][0]["stage"] == "connecting"
         assert history[0]["model"] == "TNA-30X"
 
     def test_get_empty(self, mock_db):
-        history = db.get_device_update_history(ip="10.0.0.99")
+        history, total = db.get_device_update_history(ip="10.0.0.99")
         assert history == []
+        assert total == 0
 
     def test_filter_by_status(self, mock_db):
         db.save_device_update_history(
@@ -170,10 +172,10 @@ class TestDeviceUpdateHistory:
             stages=[], duration_seconds=300,
             started_at="2026-01-02T00:00:00", completed_at="2026-01-02T00:05:00",
         )
-        failed = db.get_device_update_history(status="failed")
+        failed, _ = db.get_device_update_history(status="failed")
         assert len(failed) == 1
         assert failed[0]["failed_stage"] == "rebooting"
-        success = db.get_device_update_history(status="success")
+        success, _ = db.get_device_update_history(status="success")
         assert len(success) == 1
 
     def test_filter_by_action(self, mock_db):
@@ -191,9 +193,9 @@ class TestDeviceUpdateHistory:
             duration_seconds=5, started_at="2026-01-02T00:00:00",
             completed_at="2026-01-02T00:00:05", action="config_push",
         )
-        fw = db.get_device_update_history(action="firmware_update")
+        fw, _ = db.get_device_update_history(action="firmware_update")
         assert len(fw) == 1
-        cfg = db.get_device_update_history(action="config_push")
+        cfg, _ = db.get_device_update_history(action="config_push")
         assert len(cfg) == 1
 
     def test_ordering_newest_first(self, mock_db):
@@ -211,8 +213,9 @@ class TestDeviceUpdateHistory:
             duration_seconds=60, started_at="2026-01-02T00:00:00",
             completed_at="2026-01-02T00:01:00",
         )
-        history = db.get_device_update_history(ip="10.0.0.1")
+        history, total = db.get_device_update_history(ip="10.0.0.1")
         assert len(history) == 2
+        assert total == 2
         assert history[0]["job_id"] == "job-new"  # newest first
 
     def test_pagination(self, mock_db):
@@ -225,9 +228,10 @@ class TestDeviceUpdateHistory:
                 started_at=f"2026-01-0{i+1}T00:00:00",
                 completed_at=f"2026-01-0{i+1}T00:01:00",
             )
-        page1 = db.get_device_update_history(limit=2, offset=0)
+        page1, total = db.get_device_update_history(limit=2, offset=0)
         assert len(page1) == 2
-        page2 = db.get_device_update_history(limit=2, offset=2)
+        assert total == 5
+        page2, _ = db.get_device_update_history(limit=2, offset=2)
         assert len(page2) == 2
         assert page1[0]["job_id"] != page2[0]["job_id"]
 
@@ -267,7 +271,7 @@ class TestDeviceUpdateHistory:
             completed_at="2026-01-01T00:01:00",
         )
         db.cleanup_old_device_update_history(max_age_days=180)
-        remaining = db.get_device_update_history()
+        remaining, _ = db.get_device_update_history()
         assert len(remaining) == 1
         assert remaining[0]["job_id"] == "job-new"
 

@@ -124,6 +124,16 @@ def _migrate(db):
         db.execute("ALTER TABLE rollouts ADD COLUMN vendor TEXT DEFAULT 'tachyon'")
     if "firmware_files_json" not in rollout_columns:
         db.execute("ALTER TABLE rollouts ADD COLUMN firmware_files_json TEXT")
+    if "settings_json" not in rollout_columns:
+        db.execute("ALTER TABLE rollouts ADD COLUMN settings_json TEXT")
+
+    # Add templates_snapshot to config_push_rollouts
+    try:
+        cpr_columns = [row[1] for row in db.execute("PRAGMA table_info(config_push_rollouts)").fetchall()]
+        if cpr_columns and "templates_snapshot" not in cpr_columns:
+            db.execute("ALTER TABLE config_push_rollouts ADD COLUMN templates_snapshot TEXT")
+    except Exception:
+        pass  # Table may not exist yet
 
     # Migrate data from access_points/switches into unified devices table
     _migrate_to_devices_table(db)
@@ -563,6 +573,7 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 template_ids TEXT NOT NULL,
                 template_names TEXT,
+                templates_snapshot TEXT,
                 phase TEXT NOT NULL DEFAULT 'canary',
                 status TEXT NOT NULL DEFAULT 'active',
                 pause_reason TEXT,
@@ -1690,6 +1701,33 @@ def log_schedule_event(event: str, details: str = None, job_id: str = None):
             "INSERT INTO schedule_log (timestamp, event, details, job_id) VALUES (?, ?, ?, ?)",
             (datetime.now().isoformat(), event, details, job_id)
         )
+    cleanup_old_logs()
+
+
+_last_log_cleanup: Optional[str] = None
+
+
+def cleanup_old_logs(retention_days: int = 30):
+    """Remove schedule log entries older than retention_days. Runs at most once per day."""
+    global _last_log_cleanup
+    today = datetime.now().strftime("%Y-%m-%d")
+    if _last_log_cleanup == today:
+        return
+    _last_log_cleanup = today
+    cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
+    with get_db() as conn:
+        deleted = conn.execute(
+            "DELETE FROM schedule_log WHERE timestamp < ?", (cutoff,)
+        ).rowcount
+        if deleted:
+            logger.info(f"Cleaned up {deleted} schedule log entries older than {retention_days} days")
+        # Also clean old device_update_history (keep 90 days)
+        history_cutoff = (datetime.now() - timedelta(days=90)).isoformat()
+        hist_deleted = conn.execute(
+            "DELETE FROM device_update_history WHERE completed_at < ?", (history_cutoff,)
+        ).rowcount
+        if hist_deleted:
+            logger.info(f"Cleaned up {hist_deleted} device update history entries older than 90 days")
 
 
 def get_schedule_log(limit: int = 50) -> list[dict]:
@@ -1740,7 +1778,7 @@ def cleanup_expired_sessions():
         db.execute("DELETE FROM sessions WHERE expires_at <= ?", (datetime.now().isoformat(),))
 
 
-def cleanup_old_job_history(max_age_days: int = 90):
+def cleanup_old_job_history(max_age_days: int = 180):
     """Remove job history entries older than max_age_days."""
     from datetime import timedelta
     cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
@@ -1953,6 +1991,26 @@ def set_rollout_job_id(rollout_id: int, job_id: str):
             "UPDATE rollouts SET last_job_id = ?, updated_at = ? WHERE id = ?",
             (job_id, now, rollout_id)
         )
+
+
+def set_rollout_settings_snapshot(rollout_id: int, settings: dict):
+    """Save a snapshot of update-relevant settings for a rollout."""
+    import json
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE rollouts SET settings_json = ? WHERE id = ?",
+            (json.dumps(settings), rollout_id)
+        )
+
+
+def get_rollout_settings_snapshot(rollout_id: int) -> Optional[dict]:
+    """Get the settings snapshot for a rollout, or None if not set."""
+    import json
+    with get_db() as conn:
+        row = conn.execute("SELECT settings_json FROM rollouts WHERE id = ?", (rollout_id,)).fetchone()
+        if row and row["settings_json"]:
+            return json.loads(row["settings_json"])
+        return None
 
 
 def assign_device_to_rollout(rollout_id: int, ip: str, device_type: str, phase: str):
@@ -2343,29 +2401,41 @@ def save_device_update_history(job_id: Optional[str], ip: str, role: str, pass_n
 
 def get_device_update_history(ip: Optional[str] = None, action: Optional[str] = None,
                               status: Optional[str] = None,
-                              limit: int = 100, offset: int = 0) -> list[dict]:
-    """Get device update history with optional filters, newest first."""
+                              from_date: Optional[str] = None, to_date: Optional[str] = None,
+                              limit: int = 100, offset: int = 0) -> tuple[list[dict], int]:
+    """Get device update history with optional filters, newest first.
+    Returns (results, total_count)."""
     with get_db() as db:
-        query = "SELECT * FROM device_update_history WHERE 1=1"
+        where = " WHERE 1=1"
         params = []
         if ip:
-            query += " AND ip = ?"
+            where += " AND ip = ?"
             params.append(ip)
         if action:
-            query += " AND action = ?"
+            where += " AND action = ?"
             params.append(action)
         if status:
-            query += " AND status = ?"
+            where += " AND status = ?"
             params.append(status)
-        query += " ORDER BY completed_at DESC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
-        rows = db.execute(query, params).fetchall()
+        if from_date:
+            where += " AND completed_at >= ?"
+            params.append(from_date)
+        if to_date:
+            where += " AND completed_at <= ?"
+            params.append(to_date)
+
+        # Get total count
+        count_row = db.execute(f"SELECT COUNT(*) as cnt FROM device_update_history{where}", params).fetchone()
+        total = count_row["cnt"] if count_row else 0
+
+        query = f"SELECT * FROM device_update_history{where} ORDER BY completed_at DESC LIMIT ? OFFSET ?"
+        rows = db.execute(query, params + [limit, offset]).fetchall()
         results = []
         for row in rows:
             d = dict(row)
             d["stages"] = json.loads(d.pop("stages_json")) if d.get("stages_json") else []
             results.append(d)
-        return results
+        return results, total
 
 
 def get_device_update_history_by_job(job_id: str) -> list[dict]:
@@ -2554,14 +2624,14 @@ def delete_config_template(template_id: int):
 CONFIG_PUSH_PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
 
 
-def create_config_push_rollout(template_ids_json: str, template_names: str) -> int:
+def create_config_push_rollout(template_ids_json: str, template_names: str, templates_snapshot: str = None) -> int:
     now = datetime.now().isoformat()
     with get_db() as conn:
         cursor = conn.execute(
             """INSERT INTO config_push_rollouts
-               (template_ids, template_names, phase, status, created_at, updated_at)
-               VALUES (?, ?, 'canary', 'active', ?, ?)""",
-            (template_ids_json, template_names, now, now),
+               (template_ids, template_names, templates_snapshot, phase, status, created_at, updated_at)
+               VALUES (?, ?, ?, 'canary', 'active', ?, ?)""",
+            (template_ids_json, template_names, templates_snapshot, now, now),
         )
         return cursor.lastrowid
 
@@ -3009,7 +3079,7 @@ def get_device_history_csv_rows(days: int = 30) -> list[dict]:
         rows = conn.execute(
             "SELECT job_id, ip, role, action, pass_number, status, "
             "old_version, new_version, model, error, failed_stage, "
-            "duration_seconds, started_at, completed_at "
+            "stages_json, duration_seconds, started_at, completed_at "
             "FROM device_update_history WHERE completed_at >= ? "
             "ORDER BY completed_at DESC",
             (cutoff,),

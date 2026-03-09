@@ -213,15 +213,28 @@ class AutoUpdateScheduler:
 
         time_ok, time_result = await services.validate_time_sources(tz_str)
         if not time_ok:
-            self._state = "blocked_time"
-            self._block_reason = str(time_result)
-            db.log_schedule_event("blocked_time", self._block_reason)
-            logger.warning(f"Scheduler blocked: {self._block_reason}")
-            await self._broadcast_status()
-            return
-
-        now = time_result
-        logger.info("Time validation passed")
+            # Fall back to system clock with a warning instead of hard-blocking
+            from zoneinfo import ZoneInfo
+            try:
+                tz = ZoneInfo(tz_str)
+            except Exception:
+                tz = ZoneInfo("America/Chicago")
+            now = datetime.now(tz)
+            # Only hard-block if the error is clock drift (not just unreachable)
+            if "drift" in str(time_result).lower():
+                self._state = "blocked_time"
+                self._block_reason = str(time_result)
+                db.log_schedule_event("blocked_time", self._block_reason)
+                logger.warning(f"Scheduler blocked: {self._block_reason}")
+                await self._broadcast_status()
+                return
+            # External time unreachable — use system clock with degraded confidence
+            logger.warning(f"Time source unavailable ({time_result}), falling back to system clock")
+            if self._state == "blocked_time":
+                db.log_schedule_event("time_fallback", "Using system clock — external time source unavailable")
+        else:
+            now = time_result
+        logger.info(f"Time validation: {'passed' if time_ok else 'degraded (system clock)'}")
 
         # Check freeze windows
         freeze = db.is_in_freeze_window(now.isoformat())
@@ -389,6 +402,12 @@ class AutoUpdateScheduler:
 
             rollout_id = db.create_rollout(fw_30x, fw_303l if fw_303l else None, fw_tns100 if fw_tns100 else None)
             rollout = db.get_rollout(rollout_id)
+            # Snapshot update-relevant settings for rollout consistency
+            snapshot_keys = ["bank_mode", "parallel_updates", "allow_downgrade", "pre_update_reboot",
+                             "bandwidth_limit_kbps", "schedule_start_hour", "schedule_end_hour",
+                             "schedule_days", "schedule_timezone"]
+            snapshot = {k: settings.get(k, "") for k in snapshot_keys}
+            db.set_rollout_settings_snapshot(rollout_id, snapshot)
             db.log_schedule_event("rollout_created", f"Rollout {rollout_id} for {fw_30x}")
             logger.info(f"Created rollout {rollout_id} for firmware {fw_30x}")
 
@@ -443,8 +462,10 @@ class AutoUpdateScheduler:
         self._block_reason = None
         await self._broadcast_status()
 
-        bank_mode = settings.get("bank_mode", "both")
-        concurrency = _as_int(settings.get("parallel_updates", "2"), 2)
+        # Use snapshotted settings if available, fall back to current
+        rollout_settings = db.get_rollout_settings_snapshot(rollout["id"]) or settings
+        bank_mode = rollout_settings.get("bank_mode", settings.get("bank_mode", "both"))
+        concurrency = _as_int(rollout_settings.get("parallel_updates", settings.get("parallel_updates", "2")), 2)
         phase = rollout["phase"]
         db.log_schedule_event(
             "job_starting",
@@ -680,7 +701,7 @@ class AutoUpdateScheduler:
         target_versions = self._target_versions(settings or db.get_all_settings(), rollout)
 
         existing_devices = db.get_rollout_devices(rollout_id)
-        already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "pending")}
+        already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "pending", "failed")}
 
         ap_dict = db.get_all_access_points_dict(enabled_only=False)
         cpes_by_ap = db.get_all_cpes_grouped()
@@ -710,7 +731,7 @@ class AutoUpdateScheduler:
         target_versions = self._target_versions(settings or db.get_all_settings(), rollout)
 
         existing_devices = db.get_rollout_devices(rollout_id)
-        already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "pending")}
+        already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "pending", "failed")}
 
         switch_dict = db.get_all_switches_dict(enabled_only=False)
         candidates = []
@@ -810,27 +831,51 @@ class AutoUpdateScheduler:
 
                 if device_statuses:
                     for ip, status in device_statuses.items():
+                        # Map window-cutoff skips to "deferred" so they retry next window
                         rollout_status = "updated" if status == "success" else status
                         db.mark_rollout_device(rollout["id"], ip, rollout_status)
                 else:
                     db.mark_rollout_phase_devices(rollout["id"], rollout["phase"], "updated")
 
-                db.complete_rollout_phase(rollout["id"])
-
-                refreshed = db.get_rollout(rollout["id"])
-                if refreshed and refreshed["status"] == "completed":
-                    self._last_run_result = f"Rollout completed ({success_count} devices this phase)"
-                    db.log_schedule_event("rollout_completed", f"Rollout {rollout['id']} completed", job_id=job_id)
+                # Canary safety: if canary phase completed with 0 actual updates, pause
+                if rollout["phase"] == "canary" and success_count == 0:
+                    reason = "Canary phase had no eligible devices — verify canary device availability"
+                    db.pause_rollout(rollout["id"], reason)
+                    self._last_run_result = f"Rollout paused: {reason}"
+                    db.log_schedule_event("rollout_paused", reason, job_id=job_id)
+                    logger.warning(f"Rollout {rollout['id']} paused: {reason}")
                 else:
-                    self._last_run_result = (
-                        f"Phase {rollout['phase']} done ({success_count} devices), "
-                        f"next: {refreshed['phase'] if refreshed else '?'}"
-                    )
-                    db.log_schedule_event(
-                        "phase_completed",
-                        f"Phase {rollout['phase']} -> {refreshed['phase'] if refreshed else '?'}",
-                        job_id=job_id,
-                    )
+                    # Check if any devices were deferred (window cutoff) — don't advance phase
+                    phase_devices = db.get_rollout_devices(rollout["id"], phase=rollout["phase"])
+                    deferred_count = sum(1 for d in phase_devices if d["status"] == "deferred")
+                    if deferred_count > 0:
+                        self._last_run_result = (
+                            f"Phase {rollout['phase']}: {success_count} updated, "
+                            f"{deferred_count} deferred (will retry next window)"
+                        )
+                        db.log_schedule_event(
+                            "phase_deferred",
+                            f"Phase {rollout['phase']}: {deferred_count} device(s) deferred",
+                            job_id=job_id,
+                        )
+                        logger.info(f"Rollout {rollout['id']} phase {rollout['phase']} has {deferred_count} deferred device(s)")
+                    else:
+                        db.complete_rollout_phase(rollout["id"])
+
+                        refreshed = db.get_rollout(rollout["id"])
+                        if refreshed and refreshed["status"] == "completed":
+                            self._last_run_result = f"Rollout completed ({success_count} devices this phase)"
+                            db.log_schedule_event("rollout_completed", f"Rollout {rollout['id']} completed", job_id=job_id)
+                        else:
+                            self._last_run_result = (
+                                f"Phase {rollout['phase']} done ({success_count} devices), "
+                                f"next: {refreshed['phase'] if refreshed else '?'}"
+                            )
+                            db.log_schedule_event(
+                                "phase_completed",
+                                f"Phase {rollout['phase']} -> {refreshed['phase'] if refreshed else '?'}",
+                                job_id=job_id,
+                            )
         else:
             if failed_count > 0:
                 self._last_run_result = f"Completed with {failed_count} failure(s)"

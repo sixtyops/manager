@@ -124,15 +124,25 @@ created. To ensure high-quality notes:
 ## Development
 
 ```bash
-# Local dev
+# Local dev (no Docker)
 uvicorn updater.app:app --reload --port 8000
 
 # Run tests
 pytest -v
 
-# Docker
-docker compose up -d --build
+# Docker (always use SEED_DATA=1 and TACHYON_FORCE_PRO=1 for local rebuilds)
+SEED_DATA=1 TACHYON_FORCE_PRO=1 docker compose up -d --build
+
+# Fresh rebuild (wipe DB first)
+docker compose down && rm -f data/tachyon.db && SEED_DATA=1 TACHYON_FORCE_PRO=1 docker compose up -d --build
 ```
+
+Seed script (`scripts/seed_dev_data.py`) inserts sample sites, devices, CPEs,
+config templates, and job history. It's idempotent — skips if data exists.
+Runs automatically in the entrypoint when `SEED_DATA=1` is set.
+
+If Docker socket errors appear, start Colima: `colima start`.
+If port conflicts persist after `docker compose down`: `colima restart`.
 
 ## Rules
 

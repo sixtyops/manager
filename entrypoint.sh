@@ -17,4 +17,20 @@ if [ -d /app/repo/.git ]; then
     git config --global --add safe.directory /app/repo
 fi
 
+# Seed dev data after app creates the DB (local development only)
+if [ "${SEED_DATA:-}" = "1" ] && [ -f /app/repo/scripts/seed_dev_data.py ]; then
+    (
+        # Wait for the app to create the DB and become healthy
+        echo "entrypoint: waiting for app to initialise before seeding..."
+        for i in $(seq 1 30); do
+            if [ -f /app/data/tachyon.db ]; then
+                sleep 1
+                python3 /app/repo/scripts/seed_dev_data.py && break
+                break
+            fi
+            sleep 1
+        done
+    ) &
+fi
+
 exec gosu appuser "$@"

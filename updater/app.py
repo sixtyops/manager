@@ -1818,6 +1818,8 @@ _SETTINGS_WRITABLE = {
     "alert_device_offline_enabled", "alert_device_offline_cooldown_minutes",
     # Poller settings
     "poller_concurrency",
+    # Config enforce settings
+    "config_auto_enforce", "config_enforce_cooldown_minutes",
     # Syslog forwarding
     "syslog_forward_enabled", "syslog_forward_host", "syslog_forward_port",
     "syslog_forward_protocol", "syslog_forward_facility",
@@ -1952,6 +1954,15 @@ def _validate_settings(filtered: dict):
         min_temp = _parse_float_field(filtered["min_temperature_c"], "min_temperature_c")
         if min_temp < -100 or min_temp > 100:
             raise HTTPException(400, "min_temperature_c must be between -100 and 100")
+    if "config_enforce_cooldown_minutes" in filtered:
+        cooldown = _parse_int_field(filtered["config_enforce_cooldown_minutes"], "config_enforce_cooldown_minutes")
+        if cooldown < 1 or cooldown > 60:
+            raise HTTPException(400, "config_enforce_cooldown_minutes must be between 1 and 60")
+    if "config_auto_enforce" in filtered:
+        value = str(filtered["config_auto_enforce"]).lower()
+        if value not in ("true", "false"):
+            raise HTTPException(400, "config_auto_enforce must be 'true' or 'false'")
+        filtered["config_auto_enforce"] = value
 
     # Validate schedule_days format
     if "schedule_days" in filtered:
@@ -2354,7 +2365,10 @@ async def update_radius_config_api(request: Request, session: dict = Depends(req
             raise HTTPException(400, "Shared secret must be at least 8 characters")
         config.shared_secret = secret
     elif "secret" in data and data["secret"]:
-        config.shared_secret = data["secret"]
+        secret = data["secret"]
+        if len(secret) < 8:
+            raise HTTPException(400, "Shared secret must be at least 8 characters")
+        config.shared_secret = secret
     if "auth_mode" in data:
         if data["auth_mode"] not in ("local", "ldap"):
             raise HTTPException(400, "auth_mode must be 'local' or 'ldap'")
@@ -2608,6 +2622,9 @@ async def test_ldap_connection_api(
         return {"success": False, "error": str(e)}
 
 
+_radius_push_task: Optional[asyncio.Task] = None
+
+
 @app.post("/api/auth/radius/push-to-devices", tags=["auth"])
 async def push_radius_to_devices_api(
     request: Request,
@@ -2615,6 +2632,13 @@ async def push_radius_to_devices_api(
     _pro=Depends(require_feature(Feature.RADIUS_AUTH)),
 ):
     """Push this RADIUS server's config to managed devices."""
+    global _radius_push_task
+
+    if radius_rollout.get_active_rollout():
+        raise HTTPException(409, "Cannot push while a RADIUS rollout is active")
+    if _radius_push_task and not _radius_push_task.done():
+        raise HTTPException(409, "A RADIUS push is already in progress")
+
     config = get_radius_server_config()
     if not config.advertised_address:
         raise HTTPException(400, "Advertised address must be configured before pushing to devices")
@@ -2668,7 +2692,7 @@ async def push_radius_to_devices_api(
         device_list.append(d)
 
     job_id = f"radius-push-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    asyncio.create_task(
+    _radius_push_task = asyncio.create_task(
         _run_radius_push(job_id, device_list, config_fragment)
     )
 
@@ -2749,6 +2773,8 @@ async def cancel_radius_rollout_api(rollout_id: int, session: dict = Depends(req
         raise HTTPException(400, "RADIUS rollout cannot be cancelled")
 
     radius_rollout.update_rollout_status(rollout_id, "cancelled")
+    if _radius_rollout_task and not _radius_rollout_task.done():
+        _radius_rollout_task.cancel()
     return {"success": True}
 
 
@@ -4388,6 +4414,11 @@ async def start_update(
     if concurrency < 1 or concurrency > 32:
         raise HTTPException(400, "concurrency must be between 1 and 32")
 
+    # Guard: prevent concurrent update jobs (check DB for active jobs, which is cleaned up properly)
+    active_db_jobs = db.get_active_jobs()
+    if active_db_jobs:
+        raise HTTPException(409, "Another update job is already running. Wait for it to complete or cancel it first.")
+
     ap_ips = []
     for line in ip_list.strip().split("\n"):
         line = line.strip()
@@ -4806,8 +4837,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 # Overnight: end is tomorrow morning
                 minutes_until_end = (24 - now.hour + job.end_hour) * 60 - now.minute
             if minutes_until_end < 10:
-                device_status.status = "skipped"
-                device_status.progress_message = "Maintenance window ending"
+                device_status.status = "deferred"
+                device_status.progress_message = "Deferred: maintenance window ending (will retry next window)"
                 await broadcast({
                     "type": "device_update",
                     "job_id": job.job_id,
@@ -4821,9 +4852,9 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 try:
                     db.save_device_update_history(
                         job_id=job.job_id, ip=ip, role=device_status.role,
-                        pass_number=pass_number, status="skipped",
+                        pass_number=pass_number, status="deferred",
                         old_version=None, new_version=None, model=None,
-                        error="Maintenance window ending", failed_stage=None,
+                        error="Deferred: maintenance window ending", failed_stage=None,
                         stages=[], duration_seconds=0,
                         started_at=now_iso, completed_at=now_iso,
                     )
@@ -5128,14 +5159,12 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                             ds.status = "failed"
                             ds.error = login_result if isinstance(login_result, str) else "Login failed"
                             ds.progress_message = f"Pre-reboot login failed: {ds.error}"
-                            _request_job_cancel(job, "Cancelled: another device failed to reboot")
                             return
                         timeout = reboot_client.get_reboot_timeout(ds.role)
                         if not await reboot_client.reboot(timeout=timeout):
                             ds.status = "failed"
                             ds.error = "Device did not come back online after pre-update reboot"
                             ds.progress_message = ds.error
-                            _request_job_cancel(job, "Cancelled: another device failed to reboot")
                             return
                         ds.status = "pending"
                         ds.progress_message = "Rebooted, waiting for update..."
@@ -5143,7 +5172,6 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                         ds.status = "failed"
                         ds.error = f"Pre-update reboot failed: {e}"
                         ds.progress_message = ds.error
-                        _request_job_cancel(job, "Cancelled: another device failed to reboot")
                         return
                     await broadcast({
                         "type": "device_update",
@@ -5160,9 +5188,11 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                 return_exceptions=True,
             )
 
-            if job.cancelled:
-                cancel_message = job.cancel_reason or "Cancelled: another device failed to reboot"
-                # Mark any remaining pending devices as cancelled
+            # Check if too many devices failed pre-reboot (>50% threshold)
+            reboot_failed = sum(1 for ip in all_ips if job.devices.get(ip) and job.devices[ip].status == "failed")
+            if reboot_failed > len(all_ips) / 2:
+                _request_job_cancel(job, f"Cancelled: {reboot_failed}/{len(all_ips)} devices failed pre-update reboot")
+                cancel_message = job.cancel_reason
                 for ip in all_ips:
                     ds = job.devices.get(ip)
                     if ds and ds.status == "pending":
@@ -5189,6 +5219,24 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                             )
                         except Exception as e:
                             logger.warning(f"Failed to save cancelled device history for {ip}: {e}")
+            elif reboot_failed > 0:
+                # Some devices failed but under threshold — exclude them from update, continue with rest
+                for ip in all_ips:
+                    ds = job.devices.get(ip)
+                    if ds and ds.status == "failed":
+                        now_iso = datetime.now().isoformat()
+                        try:
+                            db.save_device_update_history(
+                                job_id=job.job_id, ip=ip, role=ds.role,
+                                pass_number=1, status="failed",
+                                old_version=None, new_version=None, model=None,
+                                error=ds.error or "Pre-update reboot failed",
+                                failed_stage="pre_reboot", stages=[], duration_seconds=0,
+                                started_at=now_iso, completed_at=now_iso,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to save device history for {ip}: {e}")
+                logger.warning(f"Job {job.job_id}: {reboot_failed}/{len(all_ips)} devices failed pre-reboot, continuing with rest")
 
     # Build phase list based on bank_mode
     # Switches always run last, after all APs and CPEs complete
@@ -5640,13 +5688,40 @@ async def get_uptime_events(ip: str, days: int = 30, limit: int = 100, session: 
 @app.get("/api/device-history", tags=["config"])
 async def get_device_history_api(
     ip: str = None, action: str = None, status: str = None,
+    from_date: str = None, to_date: str = None,
     limit: int = 100, offset: int = 0,
     session: dict = Depends(require_auth),
     _pro=Depends(require_feature(Feature.DEVICE_HISTORY)),
 ):
     """Get filterable device update/config history."""
-    history = db.get_device_update_history(ip=ip, action=action, status=status, limit=limit, offset=offset)
-    return {"history": history}
+    history, total = db.get_device_update_history(
+        ip=ip, action=action, status=status,
+        from_date=from_date, to_date=to_date,
+        limit=limit, offset=offset,
+    )
+    return {"history": history, "total": total}
+
+
+@app.get("/api/job-history", tags=["config"])
+async def get_job_history_api(
+    page: int = 1, per_page: int = 50,
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.DEVICE_HISTORY)),
+):
+    """Get paginated job history summaries."""
+    items, total = db.get_job_history_paginated(page=page, per_page=per_page)
+    return {"jobs": items, "total": total, "page": page, "per_page": per_page}
+
+
+@app.get("/api/job-history/{job_id}/devices", tags=["config"])
+async def get_job_devices_api(
+    job_id: str,
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.DEVICE_HISTORY)),
+):
+    """Get device-level history for a specific job."""
+    devices = db.get_device_update_history_by_job(job_id)
+    return {"devices": devices}
 
 
 # ============================================================================
@@ -5656,6 +5731,8 @@ async def get_device_history_api(
 # Tracks IPs currently being pushed to, preventing overlapping pushes
 _config_pushing_ips: set = set()
 _config_push_lock = asyncio.Lock()
+# Tracks immediate config push jobs for status/cancellation
+_config_push_jobs: dict = {}  # {job_id: {"task": Task, "cancelled": bool, "success": 0, "failed": 0, "total": 0, "done": bool}}
 
 # ============================================================================
 # ============================================================================
@@ -6178,6 +6255,11 @@ async def push_config_templates(request: Request, session: dict = Depends(requir
     if not template_ids or not targets:
         raise HTTPException(400, "template_ids and targets are required")
 
+    # Block if a phased rollout is active
+    active_rollout = db.get_active_config_push_rollout()
+    if active_rollout:
+        raise HTTPException(409, "A config push rollout is already active. Cancel it before starting an immediate push.")
+
     # Load templates
     templates = []
     for tid in template_ids:
@@ -6235,10 +6317,13 @@ async def push_config_templates(request: Request, session: dict = Depends(requir
     if not device_list:
         raise HTTPException(400, "No valid devices found for the given targets")
 
-    # Run config push in background
+    # Run config push in background with job tracking
     job_id = str(uuid.uuid4())[:8]
     template_names = ", ".join(t["name"] for t in templates)
-    asyncio.create_task(_run_config_push(job_id, device_list, templates))
+    job_info = {"cancelled": False, "success": 0, "failed": 0, "total": len(device_list), "done": False}
+    task = asyncio.create_task(_run_config_push(job_id, device_list, templates, job_info))
+    job_info["task"] = task
+    _config_push_jobs[job_id] = job_info
 
     return {
         "job_id": job_id,
@@ -6247,7 +6332,7 @@ async def push_config_templates(request: Request, session: dict = Depends(requir
     }
 
 
-async def _run_config_push(job_id: str, device_list: list, templates: list):
+async def _run_config_push(job_id: str, device_list: list, templates: list, job_info: dict = None):
     """Execute config push to devices concurrently."""
     sem = asyncio.Semaphore(5)
     success_count = 0
@@ -6257,6 +6342,11 @@ async def _run_config_push(job_id: str, device_list: list, templates: list):
     async def push_to_device(device: dict):
         nonlocal success_count, failed_count
         ip = device["ip"]
+
+        # Check if job was cancelled
+        if job_info and job_info.get("cancelled"):
+            return
+
         started_at = datetime.now().isoformat()
 
         # Acquire push lock for this IP
@@ -6350,6 +6440,12 @@ async def _run_config_push(job_id: str, device_list: list, templates: list):
 
     await asyncio.gather(*[push_to_device(d) for d in device_list])
 
+    # Update job tracker
+    if job_info:
+        job_info["success"] = success_count
+        job_info["failed"] = failed_count
+        job_info["done"] = True
+
     await broadcast({
         "type": "config_push_complete",
         "job_id": job_id,
@@ -6363,6 +6459,85 @@ async def _run_config_push(job_id: str, device_list: list, templates: list):
     if poller:
         affected_ips = [d["ip"] for d in device_list]
         asyncio.create_task(poller.poll_configs_for_ips(affected_ips))
+
+
+@app.get("/api/config-push/jobs/{job_id}", tags=["config"])
+async def get_config_push_job(job_id: str, session: dict = Depends(require_auth)):
+    """Get status of an immediate config push job."""
+    job = _config_push_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Config push job not found")
+    return {
+        "job_id": job_id,
+        "total": job["total"],
+        "success": job["success"],
+        "failed": job["failed"],
+        "cancelled": job["cancelled"],
+        "done": job["done"],
+    }
+
+
+@app.post("/api/config-push/jobs/{job_id}/cancel", tags=["config"])
+async def cancel_config_push_job(job_id: str, session: dict = Depends(require_auth)):
+    """Cancel a running immediate config push job."""
+    job = _config_push_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Config push job not found")
+    if job["done"]:
+        raise HTTPException(400, "Job already completed")
+    job["cancelled"] = True
+    return {"status": "cancelled"}
+
+
+@app.post("/api/config-push/rollback/{ip}", tags=["config"])
+async def rollback_device_config(ip: str, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
+    """Rollback a device to its previous config snapshot (pre-push backup)."""
+    # Get the two most recent config snapshots — current and pre-push
+    history = db.get_device_config_history(ip, limit=2)
+    if len(history) < 2:
+        raise HTTPException(400, "No previous config snapshot available for rollback")
+
+    # The second entry is the pre-push backup
+    prev_snapshot = db.get_device_config_by_id(history[1]["id"])
+    if not prev_snapshot or not prev_snapshot.get("config_json"):
+        raise HTTPException(400, "Previous config snapshot is empty")
+
+    try:
+        rollback_config = json.loads(prev_snapshot["config_json"])
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(400, "Previous config snapshot is corrupt")
+
+    # Get device credentials
+    device = db.get_access_point(ip)
+    role = "ap"
+    if not device:
+        device = db.get_switch(ip)
+        role = "switch"
+    if not device:
+        raise HTTPException(404, "Device not found")
+
+    # Connect and apply with dry-run first
+    client = TachyonClient(ip, device["username"], device["password"])
+    login_result = await client.login()
+    if login_result is not True:
+        raise HTTPException(502, f"Login failed: {login_result}")
+
+    dry_result = await client.apply_config(rollback_config, dry_run=True)
+    if not dry_result.get("success"):
+        error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run failed"))
+        raise HTTPException(400, f"Rollback dry-run rejected: {error_msg}")
+
+    result = await client.apply_config(rollback_config)
+    if not result.get("success"):
+        error_msg = result.get("error", result.get("raw_response", "Apply failed"))
+        raise HTTPException(502, f"Rollback failed: {error_msg}")
+
+    # Re-poll config to verify
+    poller = get_poller()
+    if poller:
+        asyncio.create_task(poller.poll_configs_for_ips([ip]))
+
+    return {"status": "success", "ip": ip, "rolled_back_to": prev_snapshot["fetched_at"]}
 
 
 # ---------------------------------------------------------------------------
@@ -6413,6 +6588,25 @@ def _resolve_config_push_targets(targets: list[dict]) -> list[dict]:
                     device_list.append({"ip": sw["ip"], "username": sw["username"], "password": sw["password"], "role": "switch", "model": sw.get("model")})
                     seen_ips.add(sw["ip"])
     return device_list
+
+
+def _load_rollout_templates(rollout: dict) -> list:
+    """Load templates from rollout snapshot, falling back to DB if no snapshot."""
+    snapshot = rollout.get("templates_snapshot")
+    if snapshot:
+        try:
+            return json.loads(snapshot)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    # Fallback: load from DB by template IDs
+    template_ids = json.loads(rollout["template_ids"])
+    templates = []
+    for tid in template_ids:
+        t = db.get_config_template(tid)
+        if t:
+            fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
+            templates.append({"id": t["id"], "name": t["name"], "fragment": fragment})
+    return templates
 
 
 def _compute_phase_batch_size(phase: str, total_unassigned: int) -> int:
@@ -6481,9 +6675,10 @@ async def start_config_push_rollout(request: Request, session: dict = Depends(re
 
     template_names = ", ".join(t["name"] for t in templates)
     template_ids_json = json.dumps([t["id"] for t in templates])
+    templates_snapshot = json.dumps(templates)
 
-    # Create rollout record
-    rollout_id = db.create_config_push_rollout(template_ids_json, template_names)
+    # Create rollout record with template snapshot
+    rollout_id = db.create_config_push_rollout(template_ids_json, template_names, templates_snapshot)
 
     # Pre-assign ALL devices to phases upfront
     total = len(device_list)
@@ -6528,14 +6723,13 @@ async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(r
     if pending:
         raise HTTPException(400, "Current phase still has pending devices")
 
-    # Load templates for execution
-    template_ids = json.loads(rollout["template_ids"])
-    templates = []
-    for tid in template_ids:
-        t = db.get_config_template(tid)
-        if t:
-            fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
-            templates.append({"id": t["id"], "name": t["name"], "fragment": fragment})
+    # Require at least one successful device before advancing (Gap 7)
+    updated = [d for d in phase_devices if d["status"] == "updated"]
+    if not updated:
+        raise HTTPException(400, "Cannot advance: no devices succeeded in the current phase")
+
+    # Load templates from snapshot (or fallback to DB)
+    templates = _load_rollout_templates(rollout)
 
     # Advance phase
     db.advance_config_push_rollout_phase(rollout_id)
@@ -6574,14 +6768,8 @@ async def resume_config_push_rollout(rollout_id: int, session: dict = Depends(re
         if d["status"] == "failed":
             db.mark_config_push_device(rollout_id, d["ip"], "pending")
 
-    # Load templates
-    template_ids = json.loads(rollout["template_ids"])
-    templates = []
-    for tid in template_ids:
-        t = db.get_config_template(tid)
-        if t:
-            fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
-            templates.append({"id": t["id"], "name": t["name"], "fragment": fragment})
+    # Load templates from snapshot (or fallback to DB)
+    templates = _load_rollout_templates(rollout)
 
     all_devices = _resolve_all_rollout_device_credentials(rollout_id)
 
@@ -6600,6 +6788,9 @@ async def cancel_config_push_rollout(rollout_id: int, session: dict = Depends(re
     if not rollout or rollout["status"] not in ("active", "paused"):
         raise HTTPException(400, "Rollout is not active or paused")
     db.update_config_push_rollout_status(rollout_id, "cancelled")
+    # Stop the running async task if it exists
+    if _config_push_rollout_task and not _config_push_rollout_task.done():
+        _config_push_rollout_task.cancel()
     await _broadcast_config_push_rollout_state(rollout_id)
     return {"status": "cancelled"}
 
@@ -6653,6 +6844,12 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
     async def push_one(device_row: dict):
         nonlocal failed_any
         ip = device_row["ip"]
+
+        # Check if rollout was cancelled before starting this device
+        r = db.get_config_push_rollout(rollout_id)
+        if not r or r["status"] != "active":
+            return
+
         creds = cred_lookup.get(ip)
         if not creds:
             db.mark_config_push_device(rollout_id, ip, "skipped", "Device not found in inventory")
@@ -6773,6 +6970,47 @@ async def _broadcast_config_push_rollout_state(rollout_id: int):
             "devices": devices,
         },
     })
+
+
+# ============================================================================
+# RADIUS Push (non-rollout)
+# ============================================================================
+
+
+async def _run_radius_push(job_id: str, device_list: list[dict], config_fragment: dict):
+    """Push RADIUS config fragment to a list of devices."""
+    succeeded = 0
+    failed = 0
+    for device in device_list:
+        ip = device["ip"]
+        try:
+            client = TachyonClient(ip, device["username"], device["password"])
+            login_result = await client.login()
+            if login_result is not True:
+                raise RuntimeError(f"Login failed: {login_result}")
+            current_config = await client.get_config()
+            if current_config is None:
+                raise RuntimeError("Failed to fetch current config")
+            merged = deep_merge(current_config, config_fragment)
+            dry_result = await client.apply_config(merged, dry_run=True)
+            if not dry_result.get("success"):
+                raise RuntimeError(f"Dry run rejected: {dry_result.get('error', 'validation failed')}")
+            apply_result = await client.apply_config(merged)
+            if not apply_result.get("success"):
+                raise RuntimeError(f"Config apply failed: {apply_result.get('error', 'unknown')}")
+            succeeded += 1
+        except Exception as exc:
+            logger.warning("RADIUS push to %s failed: %s", ip, exc)
+            failed += 1
+    await broadcast({
+        "type": "radius_push_complete",
+        "job_id": job_id,
+        "succeeded": succeeded,
+        "failed": failed,
+        "total": len(device_list),
+    })
+    logger.info("RADIUS push %s complete: %d succeeded, %d failed out of %d",
+                job_id, succeeded, failed, len(device_list))
 
 
 # ============================================================================
@@ -7134,7 +7372,8 @@ async def report_fleet_status(session: dict = Depends(require_auth)):
 
 @app.get("/api/reports/export/jobs", tags=["reports"])
 async def export_jobs_csv(days: int = 30,
-                          session: dict = Depends(require_auth)):
+                          session: dict = Depends(require_auth),
+                          _pro=Depends(require_feature(Feature.DEVICE_HISTORY))):
     import csv
     import io
 
@@ -7163,7 +7402,8 @@ async def export_jobs_csv(days: int = 30,
 
 @app.get("/api/reports/export/devices", tags=["reports"])
 async def export_devices_csv(days: int = 30,
-                             session: dict = Depends(require_auth)):
+                             session: dict = Depends(require_auth),
+                             _pro=Depends(require_feature(Feature.DEVICE_HISTORY))):
     import csv
     import io
 

@@ -397,9 +397,15 @@ def get_auth_stats(limit: int = 10) -> dict:
             """,
             (last_24h,),
         ).fetchone()[0]
-        known_clients = conn.execute(
+        override_count = conn.execute(
             "SELECT COUNT(*) FROM radius_client_overrides WHERE enabled = 1"
         ).fetchone()[0]
+        device_count = 0
+        for table in ("access_points", "switches"):
+            device_count += conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE enabled = 1"
+            ).fetchone()[0]
+        known_clients = device_count + override_count
 
     total = totals["total"] or 0
     accepts = totals["accepts"] or 0
