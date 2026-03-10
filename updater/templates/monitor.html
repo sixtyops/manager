@@ -43,6 +43,27 @@
             --indigo-text: #3730a3;
             --indigo-bg: #e0e7ff;
             --toggle-off: #d1d5db;
+            /* Spacing scale */
+            --space-1: 2px;
+            --space-2: 4px;
+            --space-3: 6px;
+            --space-4: 8px;
+            --space-5: 12px;
+            --space-6: 16px;
+            --space-7: 20px;
+            --space-8: 24px;
+            /* Typography scale */
+            --text-2xs: 0.625rem;
+            --text-xs: 0.6875rem;
+            --text-sm: 0.75rem;
+            --text-base: 0.8125rem;
+            --text-md: 0.875rem;
+            --text-lg: 1rem;
+            --text-xl: 1.125rem;
+            /* Tree indentation */
+            --tree-indent-0: 4px;
+            --tree-indent-1: 28px;
+            --tree-indent-2: 52px;
         }
 
         * {
@@ -255,36 +276,59 @@
             opacity: 0.8;
         }
 
-        /* Toggle switch */
+        /* Toggle switch — standard (36x20) */
         .toggle {
             position: relative;
-            width: 44px;
-            height: 24px;
+            width: 36px;
+            height: 20px;
             background: var(--toggle-off);
-            border-radius: 12px;
+            border-radius: 10px;
             cursor: pointer;
             transition: background 0.2s;
+            flex-shrink: 0;
+            border: none;
+            padding: 0;
         }
-
-        .toggle.active {
-            background: #3b82f6;
-        }
-
+        .toggle.active { background: var(--primary); }
         .toggle::after {
             content: '';
             position: absolute;
             top: 2px;
             left: 2px;
-            width: 20px;
-            height: 20px;
+            width: 16px;
+            height: 16px;
             background: white;
             border-radius: 50%;
             transition: transform 0.2s;
         }
+        .toggle.active::after { transform: translateX(16px); }
 
-        .toggle.active::after {
-            transform: translateX(20px);
+        /* Toggle switch — compact (28x16) */
+        .toggle-sm {
+            position: relative;
+            width: 28px;
+            height: 16px;
+            background: var(--toggle-off);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+            flex-shrink: 0;
+            border: none;
+            padding: 0;
         }
+        .toggle-sm.active { background: var(--primary); }
+        .toggle-sm::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 12px;
+            height: 12px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.2s;
+        }
+        .toggle-sm.active::after { transform: translateX(12px); }
 
         /* Settings tabs */
         .settings-tabs {
@@ -472,48 +516,84 @@
         }
 
         .btn {
-            padding: 8px 16px;
-            background: var(--danger);
-            color: white;
-            border: none;
+            padding: var(--space-4) var(--space-6);
+            background: var(--bg-card);
+            color: var(--text);
+            border: 1px solid var(--border);
             border-radius: 6px;
-            font-size: 0.85rem;
+            font-size: var(--text-base);
             cursor: pointer;
-            transition: background 0.2s;
+            transition: background 0.15s, border-color 0.15s, color 0.15s;
             font-family: inherit;
         }
-
         .btn:hover {
-            background: var(--danger-hover);
+            background: var(--border-light);
+            border-color: var(--toggle-off);
         }
-
         .btn:disabled {
-            background: var(--toggle-off);
+            background: var(--border-light);
+            color: var(--text-dim);
+            border-color: var(--border);
             cursor: not-allowed;
+            opacity: 0.7;
         }
-
-        .btn-danger {
-            background: transparent;
-            border: 1px solid var(--danger);
-            color: var(--danger);
-        }
-
-        .btn-danger:hover {
-            background: var(--danger);
-            color: white;
-        }
-
-        .btn-sm {
-            padding: 4px 10px;
-            font-size: 0.75rem;
-        }
-
         .btn-primary {
-            background: var(--brand);
+            background: var(--primary);
             color: white;
+            border-color: var(--primary);
         }
         .btn-primary:hover {
-            background: var(--brand-hover);
+            background: var(--primary-hover);
+            border-color: var(--primary-hover);
+        }
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+            border-color: var(--danger);
+        }
+        .btn-danger:hover {
+            background: var(--danger-hover);
+            border-color: var(--danger-hover);
+        }
+        .btn-success {
+            background: var(--success);
+            color: white;
+            border-color: var(--success);
+        }
+        .btn-success:hover { background: #059669; border-color: #059669; }
+        .btn-secondary {
+            background: var(--border-light);
+            color: var(--text-muted);
+            border-color: var(--border);
+        }
+        .btn-secondary:hover { background: var(--toggle-off); color: var(--text); }
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-muted);
+            border-color: transparent;
+        }
+        .btn-ghost:hover { background: var(--border-light); color: var(--text); }
+        .btn-warning {
+            background: var(--warning);
+            color: #000;
+            border-color: var(--warning);
+        }
+        .btn-warning:hover { background: var(--warning-hover); border-color: var(--warning-hover); }
+        .btn-outline-danger {
+            background: transparent;
+            color: var(--danger);
+            border-color: var(--danger);
+        }
+        .btn-outline-danger:hover { background: var(--danger); color: white; }
+        .btn-outline-secondary {
+            background: transparent;
+            color: var(--text-muted);
+            border-color: var(--border);
+        }
+        .btn-outline-secondary:hover { background: var(--border-light); color: var(--text); }
+        .btn-sm {
+            padding: var(--space-2) var(--space-5);
+            font-size: var(--text-sm);
         }
 
         /* Shared color dot */
@@ -992,10 +1072,10 @@
         .drawer-handle {
             display: flex;
             align-items: center;
-            padding: 20px 24px;
-            gap: 16px;
-            font-size: 0.85rem;
-            min-height: 64px;
+            padding: 12px 24px;
+            gap: 12px;
+            font-size: var(--text-base);
+            min-height: 48px;
             flex-wrap: wrap;
             cursor: pointer;
             user-select: none;
@@ -1022,7 +1102,8 @@
         }
 
         .bottom-drawer.open .drawer-panel {
-            max-height: 500px;
+            max-height: 800px;
+            overflow-y: auto;
         }
 
         .drawer-panel-inner {
@@ -1035,39 +1116,51 @@
             border-radius: 6px;
             margin-bottom: 6px;
         }
+        /* Inside card columns, flatten config-section borders */
+        .drawer-col .config-section,
+        .drawer-col-wide .config-section {
+            border: none;
+            border-radius: 0;
+            margin-bottom: 0;
+        }
+        .drawer-col .config-section + .config-section,
+        .drawer-col-wide .config-section + .config-section {
+            border-top: 1px solid var(--border-light);
+            padding-top: 6px;
+        }
         .config-section-header {
-            padding: 8px 12px;
-            font-size: 0.8rem;
-            font-weight: 500;
+            padding: 4px 0;
+            font-size: var(--text-sm);
+            font-weight: 600;
             display: flex;
-            justify-content: space-between;
             align-items: center;
+            gap: 6px;
+        }
+        .config-section-header .config-section-status {
+            margin-left: auto;
         }
         .config-section-body {
-            padding: 8px 12px 12px;
-            border-top: 1px solid var(--border);
-            font-size: 0.75rem;
+            padding: 6px 0 8px;
+            font-size: var(--text-sm);
         }
-        .config-section-body label { font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 2px; }
+        .config-section-body label { font-size: var(--text-sm); color: var(--text-muted); display: block; margin-bottom: 2px; }
         .config-section-body input[type="text"],
         .config-section-body input[type="password"],
         .config-section-body input[type="number"],
         .config-section-body select,
         .config-section-body textarea {
-            font-size: 0.75rem;
+            font-size: var(--text-sm);
             padding: 4px 8px;
             border: 1px solid var(--border);
             border-radius: 6px;
             background: var(--input-bg);
         }
-        .config-section-body .btn { background: var(--brand); }
-        .config-section-body .btn:hover { background: var(--brand-hover); }
         .config-section-status {
-            font-size: 0.7rem;
+            font-size: var(--text-xs);
             padding: 1px 6px;
             border-radius: 8px;
-            background: #f3f4f6;
-            color: #6b7280;
+            background: var(--border-light);
+            color: var(--text-muted);
         }
         .config-section-status.saved { background: var(--brand-bg); color: var(--brand-text); }
         .config-user-row {
@@ -1082,17 +1175,28 @@
         .config-compliance-unknown { color: #9ca3af; }
 
         .drawer-settings-grid {
-            display: grid;
-            grid-template-columns: auto 1fr 1fr 1fr 1fr;
-            gap: 12px 16px;
-            align-items: start;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
             margin-top: 16px;
+        }
+        .drawer-settings-grid .drawer-col,
+        .drawer-settings-grid .drawer-col-wide {
+            flex: 1 1 200px;
+            min-width: 160px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 12px;
+            background: var(--bg-card);
+        }
+        .drawer-settings-grid .drawer-col-wide {
+            flex: 1 1 240px;
         }
 
         .drawer-settings-grid label {
-            font-size: 0.75rem;
+            font-size: var(--text-xs);
             color: var(--text-muted);
-            margin-bottom: 4px;
+            margin-bottom: 2px;
             display: block;
         }
 
@@ -1100,12 +1204,12 @@
         .drawer-settings-grid input[type="number"],
         .drawer-settings-grid input[type="text"] {
             width: 100%;
-            padding: 6px 8px;
+            padding: 4px 6px;
             background: var(--input-bg);
             border: 1px solid var(--border);
-            border-radius: 6px;
+            border-radius: 5px;
             color: var(--text);
-            font-size: 0.8rem;
+            font-size: var(--text-sm);
             font-family: inherit;
         }
 
@@ -1121,17 +1225,17 @@
 
         .drawer-days {
             display: flex;
-            gap: 4px;
-            flex-wrap: wrap;
+            gap: 3px;
+            flex-wrap: nowrap;
         }
 
         .drawer-day-btn {
-            padding: 4px 8px;
+            padding: 3px 6px;
             border-radius: 4px;
             border: 1px solid var(--border);
             background: var(--border-light);
             color: var(--text-muted);
-            font-size: 0.7rem;
+            font-size: var(--text-2xs);
             font-weight: 500;
             cursor: pointer;
             transition: all 0.15s;
@@ -1144,65 +1248,38 @@
             border-color: var(--brand);
         }
 
-        .drawer-toggle-row {
+        .toggle-sm-row {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
+            margin-bottom: 5px;
+        }
+        .toggle-sm-row input[type="number"],
+        .toggle-sm-row input[type="text"] {
+            width: auto;
+            flex: none;
         }
 
-        .drawer-toggle {
-            width: 32px;
-            height: 18px;
-            background: var(--toggle-off);
-            border-radius: 9px;
-            position: relative;
-            cursor: pointer;
-            transition: background 0.2s;
-            flex-shrink: 0;
-        }
-
-        .drawer-toggle::after {
-            content: '';
-            position: absolute;
-            top: 2px;
-            left: 2px;
-            width: 14px;
-            height: 14px;
-            background: white;
-            border-radius: 50%;
-            transition: left 0.2s;
-        }
-
-        .drawer-toggle.active {
-            background: var(--brand);
-        }
-
-        .drawer-toggle.active::after {
-            left: 16px;
-        }
-
-        .drawer-toggle-label {
-            font-size: 0.78rem;
+        .toggle-sm-label {
+            font-size: var(--text-xs);
             color: var(--text-subtle);
             font-weight: 500;
         }
 
         .drawer-section-title {
-            font-size: 0.7rem;
+            font-size: var(--text-2xs);
             color: var(--text-dim);
             text-transform: uppercase;
             font-weight: 600;
             letter-spacing: 0.5px;
-            padding-top: 4px;
+            padding-top: 2px;
+            margin-bottom: 4px;
         }
 
-        .drawer-firmware {
-            margin-top: 14px;
-            padding-top: 14px;
-            border-top: 1px solid var(--border);
+        .drawer-firmware-card {
             display: flex;
-            gap: 16px;
-            align-items: flex-start;
+            flex-direction: column;
+            gap: 8px;
         }
 
         .drawer-fw-list {
@@ -1317,8 +1394,8 @@
 
         .drawer-upload {
             flex-shrink: 0;
-            width: 140px;
-            height: 52px;
+            width: 100%;
+            height: 48px;
             border: 1.5px dashed var(--toggle-off);
             border-radius: 6px;
             display: flex;
@@ -1393,43 +1470,12 @@
             border-left: 1px solid var(--border);
         }
 
-        .status-bar-toggle {
-            width: 36px;
-            height: 20px;
-            background: var(--toggle-off);
-            border-radius: 10px;
-            position: relative;
-            cursor: pointer;
-            transition: background 0.2s;
-            flex-shrink: 0;
-            border: none;
-            padding: 0;
-        }
-
-        .status-bar-toggle::after {
-            content: '';
-            position: absolute;
-            top: 2px;
-            left: 2px;
-            width: 16px;
-            height: 16px;
-            background: white;
-            border-radius: 50%;
-            transition: left 0.2s;
-        }
-
-        .status-bar-toggle.active {
-            background: var(--brand);
-        }
-
-        .status-bar-toggle.active::after {
-            left: 18px;
-        }
+        /* status-bar-toggle replaced by .toggle */
 
         .status-bar-label {
             color: var(--text);
             font-weight: 600;
-            font-size: 0.95rem;
+            font-size: var(--text-base);
             white-space: nowrap;
         }
 
@@ -1518,6 +1564,8 @@
             display: flex;
             align-items: center;
             gap: 4px;
+            flex-wrap: nowrap;
+            white-space: nowrap;
         }
 
         .status-bar-phases .bar-phase-dot {
@@ -1599,23 +1647,7 @@
             font-size: 0.75rem;
         }
 
-        .btn-warning {
-            background: var(--warning);
-            color: #000;
-        }
-        .btn-warning:hover {
-            background: var(--warning-hover);
-        }
-
-        .btn-outline-secondary {
-            background: transparent;
-            border: 1px solid var(--border-light);
-            color: var(--text-muted);
-        }
-        .btn-outline-secondary:hover {
-            background: var(--border-light);
-            color: var(--text);
-        }
+        /* btn-warning, btn-outline-secondary defined in main button system above */
 
         @keyframes pulse {
             0%, 100% { opacity: 1; }
@@ -1726,11 +1758,85 @@
             font-size: 0.7rem; color: var(--primary); cursor: pointer; text-decoration: none;
         }
 
+        /* Filter chip in toolbar */
+        .filter-chip {
+            display: inline-flex; align-items: center; gap: 2px;
+            background: var(--primary-bg); color: var(--primary);
+            padding: 2px 8px; border-radius: 12px; font-size: 0.72rem;
+            white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis;
+        }
+        .filter-chip a { color: var(--primary); text-decoration: none; font-size: 0.85rem; line-height: 1; }
+
+        /* Selection action bar */
+        .selection-action-bar {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 12px; background: var(--primary-bg); border-bottom: 1px solid var(--border);
+            font-size: 0.78rem;
+        }
+        .selection-action-bar .btn { font-weight: 500; }
+
+        /* Checkbox column */
+        .tree-table .name-cell input[type="checkbox"] { margin-right: 4px; flex-shrink: 0; }
+        .tree-table input[type="checkbox"] { cursor: pointer; }
+
+        /* Tree indentation classes */
+        .tree-indent-0 { padding-left: var(--tree-indent-0); }
+        .tree-indent-1 { padding-left: var(--tree-indent-1); }
+        .tree-indent-2 { padding-left: var(--tree-indent-2); }
+
+        /* Utility classes */
+        .u-w-48 { width: 56px !important; flex: none; }
+        .u-w-56 { width: 100px !important; flex: none; }
+        .u-text-xs-muted { font-size: var(--text-xs); color: var(--text-muted); }
+        .u-text-sm-muted { font-size: var(--text-xs); color: var(--text-muted); }
+        .u-text-xxs-dim { font-size: var(--text-2xs); color: var(--text-dim); }
+        .u-gap-4 { gap: 4px; }
+
+        /* Confirm dialog */
+        .confirm-modal { max-width: 400px; }
+        .confirm-modal h3 { margin: 0 0 10px 0; }
+        .confirm-message { font-size: var(--text-base); color: var(--text-muted); line-height: 1.5; white-space: pre-line; }
+        .confirm-actions { display: flex; justify-content: flex-end; gap: var(--space-4); margin-top: var(--space-6); }
+
+        /* Tablet - drawer stacks */
+        @media (max-width: 1024px) {
+            .drawer-settings-grid { flex-direction: column; }
+            .drawer-settings-grid .drawer-col,
+            .drawer-settings-grid .drawer-col-wide { flex: 1 1 100%; min-width: 0; }
+        }
+
+        /* Narrow - drawer handle becomes two rows */
+        @media (max-width: 900px) {
+            .drawer-handle {
+                gap: 8px 12px;
+            }
+            .drawer-handle .u-flex-center-gap8 {
+                flex-wrap: wrap;
+            }
+            .status-bar-rollout {
+                margin-left: 0;
+                flex-basis: 100%;
+                order: 10;
+            }
+            .status-bar-section + .status-bar-section.status-bar-rollout {
+                padding-left: 0;
+                border-left: none;
+                padding-top: 6px;
+                border-top: 1px solid var(--border-light);
+            }
+            #drawerHandle-config .u-ml-auto {
+                margin-left: 0;
+                flex-basis: 100%;
+                padding-top: 6px;
+                border-top: 1px solid var(--border-light);
+            }
+        }
+
         /* Mobile responsive - drawer and filters */
         @media (max-width: 768px) {
             .drawer-handle {
-                padding: 12px 16px;
-                gap: 8px;
+                padding: 10px 16px;
+                gap: 6px 8px;
                 min-height: auto;
             }
             .status-bar-section {
@@ -1738,10 +1844,10 @@
             }
             .status-bar-rollout {
                 margin-left: 0;
-                width: 100%;
+                flex-basis: 100%;
             }
             .status-bar-phases {
-                flex-wrap: wrap;
+                flex-wrap: nowrap;
             }
             .table-toolbar {
                 flex-wrap: wrap;
@@ -1806,7 +1912,7 @@
                         <input type="text" id="username" placeholder="Username" value="root">
                         <input type="password" id="password" placeholder="Password">
                     </div>
-                    <button class="btn" id="addDeviceBtn" onclick="addDevices()">Add APs &amp; Switches</button>
+                    <button class="btn btn-primary" id="addDeviceBtn" onclick="addDevices()">Add APs &amp; Switches</button>
                 </div>
             </div>
 
@@ -1872,19 +1978,29 @@
             </div>
             <div class="table-card">
                 <div class="table-toolbar">
-                    <input type="text" id="deviceFilterQuery" placeholder="Filter by name, IP, or site">
+                    <input type="text" id="deviceFilterQuery" placeholder="Filter by name, IP, or site (comma for multiple)">
+                    <span id="activeFilterChip" class="filter-chip" style="display:none;">
+                        <span id="activeFilterChipText"></span>
+                        <a onclick="clearAllColumnFilters()" title="Clear filter">&times;</a>
+                    </span>
                     <span class="table-filter-summary" id="deviceFilterSummary"></span>
+                </div>
+                <div id="selectionActionBar" class="selection-action-bar" style="display:none;">
+                    <span id="selectionCount" style="font-weight:500;">0 selected</span>
+                    <button class="btn btn-sm btn-warning" onclick="setCanaryForSelected()">Set Canary</button>
+                    <button class="btn btn-sm btn-primary" onclick="updateFirmwareForSelected()">Update Firmware</button>
+                    <button class="btn btn-sm btn-ghost" onclick="clearChecked()">Clear</button>
                 </div>
                 <div class="u-overflow-x-auto">
                     <table class="tree-table" id="deviceTable">
                         <thead>
                             <tr>
-                                <th data-sort="name" onclick="sortTable('name')">Name / IP <span class="sort-arrow"></span></th>
-                                <th data-sort="model" onclick="sortTable('model')">Model <span class="sort-arrow"></span> <span class="col-filter-wrapper"><button class="col-filter-btn" onclick="event.stopPropagation();toggleColumnFilter('model',this)" title="Filter">&#9660;</button></span></th>
-                                <th data-sort="firmware" onclick="sortTable('firmware')">Version <span class="sort-arrow"></span> <span class="col-filter-wrapper"><button class="col-filter-btn" onclick="event.stopPropagation();toggleColumnFilter('firmware',this)" title="Filter">&#9660;</button></span></th>
+                                <th data-sort="name" onclick="sortTable('name')"><input type="checkbox" id="checkAllBox" onclick="toggleCheckAll(event);event.stopPropagation();" style="margin-right:6px;vertical-align:middle;"> Name / IP <span class="sort-arrow"></span></th>
+                                <th data-sort="model" data-filterable="model" onclick="handleHeaderClick('model',this,event)">Model <span class="sort-arrow"></span></th>
+                                <th data-sort="firmware" data-filterable="firmware" onclick="handleHeaderClick('firmware',this,event)">Version <span class="sort-arrow"></span></th>
                                 <th data-sort="signal" onclick="sortTable('signal')">Signal <span class="sort-arrow"></span></th>
                                 <th data-sort="distance" onclick="sortTable('distance')">Distance <span class="sort-arrow"></span></th>
-                                <th data-sort="status" onclick="sortTable('status')">Status <span class="sort-arrow"></span> <span class="col-filter-wrapper"><button class="col-filter-btn" onclick="event.stopPropagation();toggleColumnFilter('status',this)" title="Filter">&#9660;</button></span></th>
+                                <th data-sort="status" data-filterable="status" onclick="handleHeaderClick('status',this,event)">Status <span class="sort-arrow"></span></th>
                                 <th data-sort="update" onclick="sortTable('update')">Update <span class="sort-arrow"></span></th>
                                 <th data-sort="lastseen" onclick="sortTable('lastseen')">Last Updated <span class="sort-arrow"></span></th>
                                 <th>Actions</th>
@@ -1982,7 +2098,7 @@
                     </table>
                 </div>
                 <div id="historyLoadMore" class="hidden" style="text-align:center;padding:12px;">
-                    <button class="btn btn-sm" onclick="loadMoreHistory()">Load More</button>
+                    <button class="btn btn-sm btn-secondary" onclick="loadMoreHistory()">Load More</button>
                 </div>
             </div>
             <div class="table-card hidden" id="historyJobsView">
@@ -2017,7 +2133,7 @@
             <!-- Updates handle content -->
             <div id="drawerHandle-updates" class="u-flex-center-gap8 u-flex-1">
                 <div class="status-bar-section">
-                    <button class="status-bar-toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-pressed="false" onclick="toggleAutoSchedule(event)"></button>
+                    <button class="toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-pressed="false" onclick="toggleAutoSchedule(event)"></button>
                     <span class="status-bar-label">Auto-Update</span>
                     <span class="status-badge status-bar-badge" id="barStateBadge">Off</span>
                     <span class="status-bar-reason" id="barBlockReason"></span>
@@ -2040,26 +2156,32 @@
             </div>
             <!-- Config handle content -->
             <div id="drawerHandle-config" class="hidden u-flex-center-gap8 u-flex-1">
-                <span class="status-bar-label">Config Templates</span>
-                <span class="status-badge status-bar-badge" id="configTemplateBadge">0 active</span>
-                <div id="configPushRolloutPhases" style="display:flex;align-items:center;gap:0;margin-left:12px;"></div>
-                <label class="status-bar-toggle" onclick="event.stopPropagation();" title="Auto-enforce config compliance">
-                    <input type="checkbox" id="configAutoEnforceToggle" onchange="toggleConfigAutoEnforce(this.checked)">
-                </label>
-                <span class="status-bar-muted" style="font-size:0.7rem;">Auto-Enforce</span>
-                <input type="number" id="configEnforceCooldown" min="1" max="60" value="10"
-                    style="width:36px;font-size:0.65rem;padding:1px 3px;display:none;"
-                    title="Cooldown minutes between phases"
-                    onchange="updateEnforceCooldown(this.value)" onclick="event.stopPropagation();">
-                <span id="configCooldownLabel" style="font-size:0.6rem;color:var(--text-dim);display:none;">min cooldown</span>
-                <span class="status-badge" id="configEnforceStatusBadge" style="display:none;font-size:0.65rem;"></span>
-                <div class="status-bar-phases" id="configEnforcePhases" style="display:none;"></div>
-                <span class="status-bar-muted" id="configEnforceProgress" style="display:none;"></span>
-                <div class="u-flex-center-gap6 u-ml-auto">
-                    <button class="btn btn-sm" id="configCancelBtn" onclick="cancelConfigPushRollout();event.stopPropagation();" style="display:none;">Cancel</button>
-                    <button class="btn btn-sm" id="configResumeBtn" onclick="resumeConfigPushRollout();event.stopPropagation();" style="display:none;">Resume</button>
-                    <button class="btn btn-sm" onclick="checkCompliance();event.stopPropagation();">Check Compliance</button>
-                    <button class="btn btn-sm btn-primary hidden" id="configPushBtn" onclick="showConfigPushDialog();event.stopPropagation();" >Push to Devices</button>
+                <div class="status-bar-section">
+                    <span class="status-bar-label">Config Templates</span>
+                    <span class="status-badge status-bar-badge" id="configTemplateBadge">0 active</span>
+                </div>
+                <div class="status-bar-section">
+                    <button class="toggle" id="configAutoEnforceToggle" type="button"
+                            aria-label="Toggle auto-enforce" aria-pressed="false"
+                            onclick="toggleConfigAutoEnforce(!this.classList.contains('active'));event.stopPropagation();"></button>
+                    <span class="status-bar-label">Auto-Enforce</span>
+                    <span class="status-badge" id="configEnforceStatusBadge" style="display:none;"></span>
+                    <input type="number" id="configEnforceCooldown" class="u-w-48"
+                           min="1" max="60" value="10" style="display:none;"
+                           title="Cooldown minutes between phases"
+                           onchange="updateEnforceCooldown(this.value)" onclick="event.stopPropagation();">
+                    <span id="configCooldownLabel" class="u-text-xxs-dim" style="display:none;">min cooldown</span>
+                </div>
+                <div class="status-bar-section status-bar-rollout u-ml-auto" id="configRolloutSection">
+                    <div class="status-bar-phases" id="configPushRolloutPhases"></div>
+                    <div class="status-bar-phases" id="configEnforcePhases" style="display:none;"></div>
+                    <span class="status-bar-muted" id="configEnforceProgress" style="display:none;"></span>
+                    <div class="status-bar-actions">
+                        <button class="btn btn-sm btn-ghost" id="configCancelBtn" onclick="cancelConfigPushRollout();event.stopPropagation();" style="display:none;">Cancel</button>
+                        <button class="btn btn-sm btn-warning" id="configResumeBtn" onclick="resumeConfigPushRollout();event.stopPropagation();" style="display:none;">Resume</button>
+                        <button class="btn btn-sm btn-secondary" onclick="checkCompliance();event.stopPropagation();">Check Compliance</button>
+                        <button class="btn btn-sm btn-primary hidden" id="configPushBtn" onclick="showConfigPushDialog();event.stopPropagation();">Push to Devices</button>
+                    </div>
                 </div>
             </div>
             <!-- History handle content -->
@@ -2074,8 +2196,8 @@
             <div id="drawerContent-updates">
             <div class="drawer-panel-inner">
                 <div class="drawer-settings-grid">
-                    <div class="drawer-section-title">Schedule</div>
-                    <div class="u-grid-col-main-row">
+                    <div class="drawer-col">
+                        <div class="drawer-section-title">Schedule</div>
                         <label>Days</label>
                         <div class="drawer-days" id="drawerDays">
                             <button class="drawer-day-btn" data-day="mon" onclick="toggleDrawerDay(this)">Mon</button>
@@ -2086,126 +2208,85 @@
                             <button class="drawer-day-btn" data-day="sat" onclick="toggleDrawerDay(this)">Sat</button>
                             <button class="drawer-day-btn" data-day="sun" onclick="toggleDrawerDay(this)">Sun</button>
                         </div>
+                        <div style="display:flex;gap:8px;margin-top:8px;">
+                            <div style="flex:1;"><label>Start</label><select id="drawerStartHour">
+                                <option value="0">12 AM</option><option value="1">1 AM</option><option value="2">2 AM</option>
+                                <option value="3">3 AM</option><option value="4">4 AM</option><option value="5">5 AM</option>
+                                <option value="6">6 AM</option><option value="7">7 AM</option><option value="8">8 AM</option>
+                                <option value="9">9 AM</option><option value="10">10 AM</option><option value="11">11 AM</option>
+                                <option value="12">12 PM</option><option value="13">1 PM</option><option value="14">2 PM</option>
+                                <option value="15">3 PM</option><option value="16">4 PM</option><option value="17">5 PM</option>
+                                <option value="18">6 PM</option><option value="19">7 PM</option><option value="20">8 PM</option>
+                                <option value="21">9 PM</option><option value="22">10 PM</option><option value="23">11 PM</option>
+                            </select></div>
+                            <div style="flex:1;"><label>End</label><select id="drawerEndHour">
+                                <option value="1">1 AM</option><option value="2">2 AM</option><option value="3">3 AM</option>
+                                <option value="4">4 AM</option><option value="5">5 AM</option><option value="6">6 AM</option>
+                                <option value="7">7 AM</option><option value="8">8 AM</option><option value="9">9 AM</option>
+                                <option value="10">10 AM</option><option value="11">11 AM</option><option value="12">12 PM</option>
+                                <option value="13">1 PM</option><option value="14">2 PM</option><option value="15">3 PM</option>
+                                <option value="16">4 PM</option><option value="17">5 PM</option><option value="18">6 PM</option>
+                                <option value="19">7 PM</option><option value="20">8 PM</option><option value="21">9 PM</option>
+                                <option value="22">10 PM</option><option value="23">11 PM</option>
+                            </select></div>
+                        </div>
                     </div>
 
-                    <div class="drawer-section-title">Window</div>
-                    <div>
-                        <label>Maintenance Start</label>
-                        <select id="drawerStartHour">
-                            <option value="0">12 AM</option>
-                            <option value="1">1 AM</option>
-                            <option value="2">2 AM</option>
-                            <option value="3">3 AM</option>
-                            <option value="4">4 AM</option>
-                            <option value="5">5 AM</option>
-                            <option value="6">6 AM</option>
-                            <option value="7">7 AM</option>
-                            <option value="8">8 AM</option>
-                            <option value="9">9 AM</option>
-                            <option value="10">10 AM</option>
-                            <option value="11">11 AM</option>
-                            <option value="12">12 PM</option>
-                            <option value="13">1 PM</option>
-                            <option value="14">2 PM</option>
-                            <option value="15">3 PM</option>
-                            <option value="16">4 PM</option>
-                            <option value="17">5 PM</option>
-                            <option value="18">6 PM</option>
-                            <option value="19">7 PM</option>
-                            <option value="20">8 PM</option>
-                            <option value="21">9 PM</option>
-                            <option value="22">10 PM</option>
-                            <option value="23">11 PM</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label>Maintenance End</label>
-                        <select id="drawerEndHour">
-                            <option value="1">1 AM</option>
-                            <option value="2">2 AM</option>
-                            <option value="3">3 AM</option>
-                            <option value="4">4 AM</option>
-                            <option value="5">5 AM</option>
-                            <option value="6">6 AM</option>
-                            <option value="7">7 AM</option>
-                            <option value="8">8 AM</option>
-                            <option value="9">9 AM</option>
-                            <option value="10">10 AM</option>
-                            <option value="11">11 AM</option>
-                            <option value="12">12 PM</option>
-                            <option value="13">1 PM</option>
-                            <option value="14">2 PM</option>
-                            <option value="15">3 PM</option>
-                            <option value="16">4 PM</option>
-                            <option value="17">5 PM</option>
-                            <option value="18">6 PM</option>
-                            <option value="19">7 PM</option>
-                            <option value="20">8 PM</option>
-                            <option value="21">9 PM</option>
-                            <option value="22">10 PM</option>
-                            <option value="23">11 PM</option>
-                        </select>
-                    </div>
-                    <div>
+                    <div class="drawer-col">
+                        <div class="drawer-section-title">Settings</div>
                         <label>Update Mode</label>
                         <select id="drawerBankMode">
                             <option value="one">Single Bank (recommended)</option>
                             <option value="both">Both Banks</option>
                         </select>
-                    </div>
-                    <div>
-                        <label>Parallel Updates</label>
-                        <input type="number" id="drawerParallel" value="2" min="1" max="10">
-                    </div>
-                    <div>
-                        <label>Bandwidth Limit (KB/s per device)</label>
-                        <input type="number" id="drawerBandwidthLimit" value="0" min="0" max="100000" placeholder="0 = unlimited">
+                        <div style="margin-top:8px;">
+                            <label>Parallel</label><input type="number" id="drawerParallel" value="2" min="1" max="10">
+                        </div>
                     </div>
 
-                    <div class="drawer-section-title">Options</div>
-                    <div class="u-grid-col-main-row">
-                        <div class="drawer-toggle-row">
-                            <button class="drawer-toggle active" id="drawerPreRebootToggle" type="button" aria-label="Toggle pre-update reboot" aria-pressed="true" onclick="toggleDrawerPreReboot()"></button>
-                            <span class="drawer-toggle-label">Pre-update Reboot</span>
+                    <div class="drawer-col-wide">
+                        <div class="drawer-section-title">Options</div>
+                        <div class="toggle-sm-row">
+                            <button class="toggle-sm active" id="drawerPreRebootToggle" type="button" aria-label="Toggle pre-update reboot" aria-pressed="true" onclick="toggleDrawerPreReboot()"></button>
+                            <span class="toggle-sm-label">Pre-update Reboot</span>
                         </div>
-                        <div class="drawer-toggle-row">
-                            <button class="drawer-toggle" id="drawerBetaToggle" type="button" aria-label="Toggle beta firmware" aria-pressed="false" onclick="toggleDrawerBeta()"></button>
-                            <span class="drawer-toggle-label">Beta Firmware</span>
+                        <div class="toggle-sm-row">
+                            <button class="toggle-sm" id="drawerDowngradeToggle" type="button" aria-label="Toggle allow downgrade" aria-pressed="false" onclick="toggleDrawerDowngrade()"></button>
+                            <span class="toggle-sm-label">Allow Downgrade</span>
                         </div>
-                        <div class="drawer-toggle-row">
-                            <button class="drawer-toggle" id="drawerDowngradeToggle" type="button" aria-label="Toggle allow downgrade" aria-pressed="false" onclick="toggleDrawerDowngrade()"></button>
-                            <span class="drawer-toggle-label">Allow Downgrade</span>
-                        </div>
-                        <div class="drawer-toggle-row">
-                            <button class="drawer-toggle" id="drawerWeatherToggle" type="button" aria-label="Toggle weather lockout" aria-pressed="false" onclick="toggleDrawerWeather()"></button>
-                            <span class="drawer-toggle-label">Disable updates below</span>
+                        <div class="toggle-sm-row">
+                            <button class="toggle-sm" id="drawerWeatherToggle" type="button" aria-label="Toggle weather lockout" aria-pressed="false" onclick="toggleDrawerWeather()"></button>
+                            <span class="toggle-sm-label">Disable updates below</span>
                             <input type="number" id="drawerMinTemp" value="14" min="-40" max="120" class="u-w-48">
                             <span id="drawerTempUnit" class="u-text-xs-muted">&deg;F</span>
                             <span id="drawerWeatherTemp" class="u-text-sm-muted"></span>
                         </div>
-                        <div class="drawer-toggle-row u-gap-4">
+                        <div class="toggle-sm-row u-gap-4">
                             <label class="u-text-xxs-dim">Postal</label>
                             <input type="text" id="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56">
                         </div>
-                        <div class="drawer-toggle-row u-gap-4">
+                        <div class="toggle-sm-row u-gap-4">
                             <label class="u-text-xxs-dim">Auto-download hold</label>
                             <input type="number" id="drawerQuarantineDays" value="7" min="0" max="90" class="u-w-48">
                             <span class="u-text-xxs-dim">days</span>
                         </div>
                     </div>
 
-                </div>
-                <div class="drawer-firmware">
-                    <div class="u-flex-1" style="min-width:0;">
+                    <div class="drawer-col-wide drawer-firmware-card">
+                        <div class="drawer-section-title">Firmware</div>
+                        <div class="toggle-sm-row">
+                            <button class="toggle-sm" id="drawerBetaToggle" type="button" aria-label="Toggle beta firmware" aria-pressed="false" onclick="toggleDrawerBeta()"></button>
+                            <span class="toggle-sm-label">Beta Firmware</span>
+                        </div>
                         <div class="drawer-fw-list" id="drawerFwList">
                             <span class="drawer-fw-empty">No firmware files</span>
                         </div>
                         <div class="drawer-fw-meta" id="drawerFwMeta"></div>
-                    </div>
-                    <div class="drawer-upload" id="drawerUpload">
-                        <input type="file" id="drawerFwInput" accept=".bin,.img,.npk,.tar,.gz" class="hidden">
-                        <span>Drop or browse</span>
-                        <span class="drawer-upload-status" id="drawerUploadStatus"></span>
+                        <div class="drawer-upload" id="drawerUpload">
+                            <input type="file" id="drawerFwInput" accept=".bin,.img,.npk,.tar,.gz" class="hidden">
+                            <span>Drop or browse</span>
+                            <span class="drawer-upload-status" id="drawerUploadStatus"></span>
+                        </div>
                     </div>
                 </div>
 
@@ -2217,184 +2298,148 @@
             </div><!-- /drawerContent-updates -->
 
             <!-- Config drawer content -->
-            <div id="drawerContent-config" style="display:none;">
-                <div class="drawer-panel-inner" style="max-height:400px;overflow-y:auto;">
-                    <!-- SNMP Section -->
-                    <div class="config-section" id="cfgSection-snmp">
-                        <div class="config-section-header">
-                            <span>SNMP</span>
-                            <span class="config-section-status" id="cfgStatus-snmp"></span>
-                        </div>
-                        <div class="config-section-body">
-                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                                <div>
-                                    <label><input type="checkbox" id="cfgSnmpV2RoEnabled"> SNMPv2 Read-Only</label>
-                                    <input type="text" id="cfgSnmpV2RoCommunity" placeholder="RO community string" style="width:100%;margin-top:4px;">
+            <div id="drawerContent-config" class="hidden">
+                <div class="drawer-panel-inner">
+                <div class="drawer-settings-grid">
+                    <!-- Column 1: Network -->
+                    <div class="drawer-col">
+                        <div class="drawer-section-title">Network</div>
+
+                        <div class="config-section" id="cfgSection-snmp">
+                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-snmp" type="button" data-category="snmp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>SNMP</span><span class="config-section-status" id="cfgStatus-snmp"></span></div>
+                            <div class="config-section-body">
+                                <label><input type="checkbox" id="cfgSnmpEnabled"> Enabled</label>
+                                <fieldset style="border:1px solid var(--border-light);border-radius:4px;padding:6px;margin-top:6px;">
+                                    <legend style="font-size:var(--text-xs);font-weight:600;padding:0 4px;">SNMPv2</legend>
+                                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                                        <div><label><input type="checkbox" id="cfgSnmpV2RoEnabled"> RO</label><input type="text" id="cfgSnmpV2RoCommunity" placeholder="public" style="width:100%;"></div>
+                                        <div><label><input type="checkbox" id="cfgSnmpV2RwEnabled"> RW</label><input type="text" id="cfgSnmpV2RwCommunity" placeholder="private" style="width:100%;"></div>
+                                    </div>
+                                </fieldset>
+                                <fieldset style="border:1px solid var(--border-light);border-radius:4px;padding:6px;margin-top:6px;">
+                                    <legend style="font-size:var(--text-xs);font-weight:600;padding:0 4px;">SNMPv3</legend>
+                                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                                        <div>
+                                            <label><input type="checkbox" id="cfgSnmpV3RoEnabled"> RO</label>
+                                            <input type="text" id="cfgSnmpV3RoUser" placeholder="User" style="width:100%;">
+                                            <input type="password" id="cfgSnmpV3RoPass" placeholder="Password" style="width:100%;margin-top:4px;">
+                                        </div>
+                                        <div>
+                                            <label><input type="checkbox" id="cfgSnmpV3RwEnabled"> RW</label>
+                                            <input type="text" id="cfgSnmpV3RwUser" placeholder="User" style="width:100%;">
+                                            <input type="password" id="cfgSnmpV3RwPass" placeholder="Password" style="width:100%;margin-top:4px;">
+                                        </div>
+                                    </div>
+                                </fieldset>
+                                <div style="margin-top:6px;">
+                                    <label><input type="checkbox" id="cfgSnmpHwUptime"> Use hardware uptime</label>
                                 </div>
-                                <div>
-                                    <label><input type="checkbox" id="cfgSnmpV2RwEnabled"> SNMPv2 Read-Write</label>
-                                    <input type="text" id="cfgSnmpV2RwCommunity" placeholder="RW community string" style="width:100%;margin-top:4px;">
+                            </div>
+                        </div>
+
+                        <div class="config-section" id="cfgSection-ntp">
+                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-ntp" type="button" data-category="ntp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>NTP</span><span class="config-section-status" id="cfgStatus-ntp"></span></div>
+                            <div class="config-section-body">
+                                <label><input type="checkbox" id="cfgNtpEnabled" checked> Enable NTP</label>
+                                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
+                                    <div><label>Server 1</label><input type="text" id="cfgNtpServer1" placeholder="time.google.com" style="width:100%;"></div>
+                                    <div><label>Server 2</label><input type="text" id="cfgNtpServer2" placeholder="time.cloudflare.com" style="width:100%;"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="config-section" id="cfgSection-discovery">
+                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-discovery" type="button" data-category="discovery" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Discovery</span><span class="config-section-status" id="cfgStatus-discovery"></span></div>
+                            <div class="config-section-body">
+                                <label><input type="checkbox" id="cfgDiscEnabled" checked> Enabled</label>
+                                <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;">
+                                    <label><input type="checkbox" id="cfgDiscLldp"> LLDP</label>
+                                    <label><input type="checkbox" id="cfgDiscMndp"> MNDP</label>
+                                    <label><input type="checkbox" id="cfgDiscCdp"> CDP</label>
+                                    <label><input type="checkbox" id="cfgDiscLldpServer"> LLDP Server</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="config-section" id="cfgSection-syslog">
+                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-syslog" type="button" data-category="syslog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Syslog</span><span class="config-section-status" id="cfgStatus-syslog"></span></div>
+                            <div class="config-section-body">
+                                <label><input type="checkbox" id="cfgSyslogEnabled"> Enable Remote Syslog</label>
+                                <div style="display:grid;grid-template-columns:1fr 80px 80px;gap:6px;margin-top:6px;">
+                                    <div><label>Server</label><input type="text" id="cfgSyslogServer" placeholder="192.168.1.100" style="width:100%;"></div>
+                                    <div><label>Port</label><input type="number" id="cfgSyslogPort" value="514" style="width:100%;"></div>
+                                    <div><label>Proto</label><select id="cfgSyslogProtocol" style="width:100%;"><option value="udp">UDP</option><option value="tcp">TCP</option></select></div>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Users Section -->
-                    <div class="config-section" id="cfgSection-users">
-                        <div class="config-section-header">
-                            <span>Users</span>
-                            <span class="config-section-status" id="cfgStatus-users"></span>
-                        </div>
-                        <div class="config-section-body">
-                            <div id="cfgUserRows"></div>
-                            <button class="btn btn-sm" onclick="addConfigUserRow()" style="margin-top:6px;">+ Add User</button>
-                        </div>
-                    </div>
+                    <!-- Column 2: Security -->
+                    <div class="drawer-col">
+                        <div class="drawer-section-title">Security</div>
 
-                    <!-- RADIUS Section -->
-                    <div class="config-section" id="cfgSection-radius">
-                        <div class="config-section-header">
-                            <span>RADIUS Authentication</span>
-                            <span class="config-section-status" id="cfgStatus-radius"></span>
-                        </div>
-                        <div class="config-section-body">
-                            <div style="margin-bottom:6px;">
-                                <label>Auth Method</label>
-                                <select id="cfgRadiusMethod" style="width:120px;">
-                                    <option value="local">Local</option>
-                                    <option value="radius">RADIUS</option>
-                                </select>
-                            </div>
-                            <div style="display:grid;grid-template-columns:1fr 100px 1fr;gap:8px;">
-                                <div>
-                                    <label>Auth Server</label>
-                                    <input type="text" id="cfgRadiusServer" placeholder="radius.example.com" style="width:100%;">
-                                </div>
-                                <div>
-                                    <label>Port</label>
-                                    <input type="number" id="cfgRadiusPort" value="1812" style="width:100%;">
-                                </div>
-                                <div>
-                                    <label>Secret</label>
-                                    <input type="password" id="cfgRadiusSecret" placeholder="shared secret" style="width:100%;">
-                                </div>
-                            </div>
-                            <div style="margin-top:8px;font-size:0.72rem;color:#6b7280;">
-                                Built-in RADIUS for device logins is configured in Settings &gt; Authentication.
-                                <a class="action-link" onclick="prefillBuiltinRadiusConfig();event.stopPropagation();">Use this appliance</a>
+                        <div class="config-section" id="cfgSection-users">
+                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-users" type="button" data-category="users" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Users</span><span class="config-section-status" id="cfgStatus-users"></span></div>
+                            <div class="config-section-body">
+                                <div id="cfgUserRows"></div>
+                                <button class="btn btn-sm btn-secondary" onclick="addConfigUserRow()" style="margin-top:6px;">+ Add User</button>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- NTP Section -->
-                    <div class="config-section" id="cfgSection-ntp">
-                        <div class="config-section-header">
-                            <span>NTP</span>
-                            <span class="config-section-status" id="cfgStatus-ntp"></span>
-                        </div>
-                        <div class="config-section-body">
-                            <label><input type="checkbox" id="cfgNtpEnabled" checked> Enable NTP</label>
-                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
-                                <div>
-                                    <label>Server 1</label>
-                                    <input type="text" id="cfgNtpServer1" placeholder="time.google.com" style="width:100%;">
-                                </div>
-                                <div>
-                                    <label>Server 2</label>
-                                    <input type="text" id="cfgNtpServer2" placeholder="time.cloudflare.com" style="width:100%;">
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Discovery Section -->
-                    <div class="config-section" id="cfgSection-discovery">
-                        <div class="config-section-header">
-                            <span>Discovery Services</span>
-                            <span class="config-section-status" id="cfgStatus-discovery"></span>
-                        </div>
-                        <div class="config-section-body">
-                            <div style="display:flex;gap:12px;flex-wrap:wrap;">
-                                <label><input type="checkbox" id="cfgDiscLldp"> LLDP</label>
-                                <label><input type="checkbox" id="cfgDiscMndp"> MNDP</label>
-                                <label><input type="checkbox" id="cfgDiscCdp"> CDP</label>
-                                <label><input type="checkbox" id="cfgDiscLldpServer"> LLDP Server</label>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Syslog Section -->
-                    <div class="config-section" id="cfgSection-syslog">
-                        <div class="config-section-header">
-                            <span>Syslog</span>
-                            <span class="config-section-status" id="cfgStatus-syslog"></span>
-                        </div>
-                        <div class="config-section-body">
-                            <label><input type="checkbox" id="cfgSyslogEnabled"> Enable Remote Syslog</label>
-                            <div style="display:grid;grid-template-columns:1fr 100px 100px;gap:8px;margin-top:6px;">
-                                <div>
-                                    <label>Server IP</label>
-                                    <input type="text" id="cfgSyslogServer" placeholder="192.168.1.100" style="width:100%;">
-                                </div>
-                                <div>
-                                    <label>Port</label>
-                                    <input type="number" id="cfgSyslogPort" value="514" style="width:100%;">
-                                </div>
-                                <div>
-                                    <label>Protocol</label>
-                                    <select id="cfgSyslogProtocol" style="width:100%;">
-                                        <option value="udp">UDP</option>
-                                        <option value="tcp">TCP</option>
+                        <div class="config-section" id="cfgSection-radius">
+                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-radius" type="button" data-category="radius" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>RADIUS</span><span class="config-section-status" id="cfgStatus-radius"></span></div>
+                            <div class="config-section-body">
+                                <div style="margin-bottom:6px;">
+                                    <label>Auth Method</label>
+                                    <select id="cfgRadiusMethod" style="width:100%;">
+                                        <option value="local">Local</option>
+                                        <option value="radius">RADIUS</option>
                                     </select>
                                 </div>
+                                <div><label>Auth Server</label><input type="text" id="cfgRadiusServer" placeholder="radius.example.com" style="width:100%;"></div>
+                                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;">
+                                    <div><label>Port</label><input type="number" id="cfgRadiusPort" value="1812" style="width:100%;"></div>
+                                    <div><label>Secret</label><input type="password" id="cfgRadiusSecret" placeholder="shared secret" style="width:100%;"></div>
+                                </div>
+                                <div style="margin-top:6px;font-size:var(--text-xs);color:var(--text-dim);">
+                                    <a class="action-link" onclick="prefillBuiltinRadiusConfig();event.stopPropagation();">Use this appliance's RADIUS</a>
+                                </div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Watchdog Section -->
-                    <div class="config-section" id="cfgSection-watchdog">
-                        <div class="config-section-header">
-                            <span>Watchdog</span>
-                            <span class="config-section-status" id="cfgStatus-watchdog"></span>
-                        </div>
-                        <div class="config-section-body">
-                            <label><input type="checkbox" id="cfgWatchdogEnabled"> Enable Ping Watchdog</label>
-                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:6px;">
-                                <div>
-                                    <label>Interval (sec)</label>
-                                    <input type="number" id="cfgWatchdogInterval" value="300" style="width:100%;">
+                    <!-- Column 3: System -->
+                    <div class="drawer-col">
+                        <div class="drawer-section-title">System</div>
+
+                        <div class="config-section" id="cfgSection-watchdog">
+                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-watchdog" type="button" data-category="watchdog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Watchdog</span><span class="config-section-status" id="cfgStatus-watchdog"></span></div>
+                            <div class="config-section-body">
+                                <label><input type="checkbox" id="cfgWatchdogEnabled"> Enable Ping Watchdog</label>
+                                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:6px;">
+                                    <div><label>Interval</label><input type="number" id="cfgWatchdogInterval" value="300" style="width:100%;"></div>
+                                    <div><label>Delay</label><input type="number" id="cfgWatchdogStartupDelay" value="300" style="width:100%;"></div>
+                                    <div><label>Failures</label><input type="number" id="cfgWatchdogFailureCount" value="3" style="width:100%;"></div>
                                 </div>
-                                <div>
-                                    <label>Startup Delay (sec)</label>
-                                    <input type="number" id="cfgWatchdogStartupDelay" value="300" style="width:100%;">
-                                </div>
-                                <div>
-                                    <label>Failure Count</label>
-                                    <input type="number" id="cfgWatchdogFailureCount" value="3" style="width:100%;">
+                                <div style="margin-top:6px;">
+                                    <label>Ping Targets</label>
+                                    <input type="text" id="cfgWatchdogPingTargets" placeholder="8.8.8.8, 1.1.1.1" style="width:100%;">
                                 </div>
                             </div>
-                            <div style="margin-top:6px;">
-                                <label>Ping Targets (comma-separated IPs)</label>
-                                <input type="text" id="cfgWatchdogPingTargets" placeholder="8.8.8.8, 1.1.1.1" style="width:100%;">
+                        </div>
+
+                        <div class="config-section" id="cfgSection-custom">
+                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-custom" type="button" data-category="custom" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Custom JSON</span><span class="config-section-status" id="cfgStatus-custom"></span></div>
+                            <div class="config-section-body">
+                                <textarea id="cfgCustomJson" rows="5" placeholder='{"services": {"ssh": {"enabled": true}}}' style="width:100%;font-family:monospace;font-size:var(--text-sm);"></textarea>
                             </div>
                         </div>
                     </div>
+                </div>
 
-                    <!-- Custom JSON Section -->
-                    <div class="config-section" id="cfgSection-custom">
-                        <div class="config-section-header">
-                            <span>Custom JSON</span>
-                            <span class="config-section-status" id="cfgStatus-custom"></span>
-                        </div>
-                        <div class="config-section-body">
-                            <textarea id="cfgCustomJson" rows="6" placeholder='{"services": {"ssh": {"enabled": true}}}' style="width:100%;font-family:monospace;font-size:0.75rem;"></textarea>
-                        </div>
-                    </div>
-
-                    <!-- Save All -->
-                    <div style="margin-top:4px;display:flex;justify-content:flex-end;">
-                        <button class="btn btn-sm" onclick="saveAllConfigSections()">Save All</button>
-                    </div>
+                <div class="drawer-save-row">
+                    <button class="drawer-save-btn" onclick="saveAllConfigSections()">Save All</button>
+                </div>
                 </div>
             </div>
 
@@ -2433,8 +2478,8 @@
                             <label class="u-label-xs">To</label>
                             <input type="date" id="historyFilterTo" style="width:140px;">
                         </div>
-                        <button class="btn btn-sm" onclick="loadHistory()">Apply Filters</button>
-                        <button class="btn btn-sm" onclick="exportHistoryCsv()">Export CSV</button>
+                        <button class="btn btn-sm btn-primary" onclick="loadHistory()">Apply Filters</button>
+                        <button class="btn btn-sm btn-secondary" onclick="exportHistoryCsv()">Export CSV</button>
                     </div>
                 </div>
             </div>
@@ -3102,10 +3147,10 @@
 
     <div class="backup-overlay" id="confirmOverlay" onclick="if(event.target===this)closeConfirmDialog(false)">
         <div class="backup-modal confirm-modal">
-            <h3 id="confirmTitle" style="margin:0 0 10px 0;">Confirm Action</h3>
+            <h3 id="confirmTitle">Confirm Action</h3>
             <p class="confirm-message" id="confirmMessage"></p>
             <div class="confirm-actions">
-                <button class="btn btn-sm" type="button" onclick="closeConfirmDialog(false)">Cancel</button>
+                <button class="btn btn-sm btn-ghost" type="button" onclick="closeConfirmDialog(false)">Cancel</button>
                 <button class="btn btn-sm btn-danger" type="button" id="confirmAcceptBtn" onclick="closeConfirmDialog(true)">Confirm</button>
             </div>
         </div>
@@ -3409,10 +3454,11 @@
         let lastPreRolloutPredictions = null; // Pre-rollout estimate
         let lastAutoState = '';        // Last auto-update state (idle, waiting, running, etc.)
 
-        // Expand/collapse + sort state
+        // Expand/collapse + sort + selection state
         const expandState = new Map();
         let sortColumn = 'name';
         let sortDirection = 'asc';
+        const checkedDevices = new Set();
         const pendingDeleteByKey = new Map();
         const DELETE_CONFIRM_MS = 4500;
         const deviceFilterState = {
@@ -3872,12 +3918,12 @@
                 dropdown.querySelectorAll('input:checked').forEach(c => checked.add(c.dataset.value));
                 if (checked.size === sorted.length) {
                     delete columnFilters[column];
-                    btn.classList.remove('active');
                 } else {
                     columnFilters[column] = checked;
-                    btn.classList.add('active');
                 }
                 closeColumnFilter();
+                _openFilterColumn = null;
+                updateFilterChip();
                 renderTable();
             };
             actions.appendChild(selectAll);
@@ -3902,13 +3948,230 @@
                 openColumnFilterEl.remove();
                 openColumnFilterEl = null;
             }
-            // Clear active class from buttons that don't have an active filter
-            document.querySelectorAll('.col-filter-btn.active').forEach(btn => {
-                const col = btn.closest('th')?.dataset?.sort;
-                if (!col || !columnFilters[col] || columnFilters[col].size === 0) {
-                    btn.classList.remove('active');
+        }
+
+        let _openFilterColumn = null;
+        function handleHeaderClick(column, thEl, event) {
+            event.stopPropagation();
+            // If filter dropdown is open for this column, close it and sort
+            if (openColumnFilterEl && _openFilterColumn === column) {
+                closeColumnFilter();
+                _openFilterColumn = null;
+                sortTable(column);
+                return;
+            }
+            // Open filter dropdown anchored to the th
+            closeColumnFilter();
+            _openFilterColumn = column;
+            toggleColumnFilter(column, thEl);
+        }
+
+        function updateFilterChip() {
+            const chip = document.getElementById('activeFilterChip');
+            const text = document.getElementById('activeFilterChipText');
+            if (!chip || !text) return;
+            const statusLabels = { behind: 'Needs update', current: 'Current', offline: 'Offline', unknown: 'Unknown', updating: 'Updating' };
+            const colNames = { model: 'Model', firmware: 'Version', status: 'Status' };
+            const parts = [];
+            for (const [col, valSet] of Object.entries(columnFilters)) {
+                if (!valSet || valSet.size === 0) continue;
+                const vals = [...valSet].map(v => col === 'status' ? (statusLabels[v] || v) : v);
+                parts.push(`${colNames[col] || col}: ${vals.join(', ')}`);
+            }
+            if (parts.length === 0) {
+                chip.style.display = 'none';
+            } else {
+                text.textContent = parts.join(' | ');
+                chip.style.display = 'inline-flex';
+            }
+        }
+
+        function clearAllColumnFilters() {
+            for (const key of Object.keys(columnFilters)) {
+                delete columnFilters[key];
+            }
+            closeColumnFilter();
+            _openFilterColumn = null;
+            updateFilterChip();
+            renderTable();
+        }
+
+        // ── Checkbox selection ──
+
+        function toggleCheck(ip, event) {
+            event.stopPropagation();
+            if (checkedDevices.has(ip)) checkedDevices.delete(ip);
+            else checkedDevices.add(ip);
+            renderTable();
+        }
+
+        function toggleCheckAP(apIp, event) {
+            event.stopPropagation();
+            const result = findAP(apIp);
+            if (!result) { toggleCheck(apIp, event); return; }
+            const cpes = result.ap.cpes || [];
+            const allIps = [apIp, ...cpes.map(c => c.ip).filter(Boolean)];
+            const allChecked = allIps.every(ip => checkedDevices.has(ip));
+            for (const ip of allIps) {
+                if (allChecked) checkedDevices.delete(ip);
+                else checkedDevices.add(ip);
+            }
+            renderTable();
+        }
+
+        function toggleCheckSite(siteId, event) {
+            event.stopPropagation();
+            const site = siteId === null
+                ? topology?.sites?.find(s => s.id === null)
+                : findSite(typeof siteId === 'string' ? parseInt(siteId) : siteId);
+            if (!site) return;
+            const allIps = [];
+            for (const ap of (site.aps || [])) {
+                allIps.push(ap.ip);
+                for (const cpe of (ap.cpes || [])) {
+                    if (cpe.ip) allIps.push(cpe.ip);
                 }
+            }
+            for (const sw of (site.switches || [])) {
+                allIps.push(sw.ip);
+            }
+            const allChecked = allIps.length > 0 && allIps.every(ip => checkedDevices.has(ip));
+            for (const ip of allIps) {
+                if (allChecked) checkedDevices.delete(ip);
+                else checkedDevices.add(ip);
+            }
+            renderTable();
+        }
+
+        function toggleCheckAll(event) {
+            event.stopPropagation();
+            const allIps = [];
+            if (topology?.sites) {
+                for (const site of topology.sites) {
+                    for (const ap of (site.aps || [])) {
+                        allIps.push(ap.ip);
+                        for (const cpe of (ap.cpes || [])) {
+                            if (cpe.ip) allIps.push(cpe.ip);
+                        }
+                    }
+                    for (const sw of (site.switches || [])) {
+                        allIps.push(sw.ip);
+                    }
+                }
+            }
+            const allChecked = allIps.length > 0 && allIps.every(ip => checkedDevices.has(ip));
+            for (const ip of allIps) {
+                if (allChecked) checkedDevices.delete(ip);
+                else checkedDevices.add(ip);
+            }
+            renderTable();
+        }
+
+        function clearChecked() {
+            checkedDevices.clear();
+            renderTable();
+        }
+
+        function getSiteCheckState(site) {
+            const allIps = [];
+            for (const ap of (site.aps || [])) {
+                allIps.push(ap.ip);
+                for (const cpe of (ap.cpes || [])) { if (cpe.ip) allIps.push(cpe.ip); }
+            }
+            for (const sw of (site.switches || [])) { allIps.push(sw.ip); }
+            if (allIps.length === 0) return { checked: false, indeterminate: false };
+            const count = allIps.filter(ip => checkedDevices.has(ip)).length;
+            if (count === 0) return { checked: false, indeterminate: false };
+            if (count === allIps.length) return { checked: true, indeterminate: false };
+            return { checked: false, indeterminate: true };
+        }
+
+        function getApCheckState(ap) {
+            const cpes = (ap.cpes || []).filter(c => c.ip);
+            const allIps = [ap.ip, ...cpes.map(c => c.ip)];
+            const count = allIps.filter(ip => checkedDevices.has(ip)).length;
+            if (count === 0) return { checked: false, indeterminate: false };
+            if (count === allIps.length) return { checked: true, indeterminate: false };
+            return { checked: false, indeterminate: true };
+        }
+
+        function updateCheckboxStates() {
+            // Set indeterminate on site/AP checkboxes (can't do via HTML)
+            document.querySelectorAll('[data-check-site]').forEach(cb => {
+                const siteId = cb.dataset.checkSite;
+                const site = siteId === 'null'
+                    ? topology?.sites?.find(s => s.id === null)
+                    : findSite(parseInt(siteId));
+                if (!site) return;
+                const state = getSiteCheckState(site);
+                cb.checked = state.checked;
+                cb.indeterminate = state.indeterminate;
             });
+            document.querySelectorAll('[data-check-ap]').forEach(cb => {
+                const ip = cb.dataset.checkAp;
+                const result = findAP(ip);
+                if (!result) return;
+                const state = getApCheckState(result.ap);
+                cb.checked = state.checked;
+                cb.indeterminate = state.indeterminate;
+            });
+            // Update header "check all"
+            const allBox = document.getElementById('checkAllBox');
+            if (allBox && topology?.sites) {
+                let total = 0, checked = 0;
+                for (const site of topology.sites) {
+                    for (const ap of (site.aps || [])) {
+                        total++; if (checkedDevices.has(ap.ip)) checked++;
+                        for (const cpe of (ap.cpes || [])) {
+                            if (cpe.ip) { total++; if (checkedDevices.has(cpe.ip)) checked++; }
+                        }
+                    }
+                    for (const sw of (site.switches || [])) {
+                        total++; if (checkedDevices.has(sw.ip)) checked++;
+                    }
+                }
+                allBox.checked = total > 0 && checked === total;
+                allBox.indeterminate = checked > 0 && checked < total;
+            }
+        }
+
+        function updateSelectionBar() {
+            const bar = document.getElementById('selectionActionBar');
+            const countEl = document.getElementById('selectionCount');
+            if (!bar) return;
+            const count = checkedDevices.size;
+            if (count === 0) { bar.style.display = 'none'; return; }
+            bar.style.display = 'flex';
+            countEl.textContent = `${count} selected`;
+        }
+
+        function setCanaryForSelected() {
+            let changed = false;
+            for (const ip of checkedDevices) {
+                if (_apIndex.has(ip) && !canaryAps.has(ip)) {
+                    toggleCanary('ap', ip, true);
+                    changed = true;
+                } else if (_switchIndex.has(ip) && !canarySwitches.has(ip)) {
+                    toggleCanary('switch', ip, true);
+                    changed = true;
+                }
+            }
+            if (!changed) showToast('No APs or switches in selection to set as canary');
+        }
+
+        function updateFirmwareForSelected() {
+            const ips = [];
+            for (const ip of checkedDevices) {
+                if (versionStatus(ip) === 'behind') ips.push(ip);
+            }
+            if (ips.length === 0) {
+                showToast('No selected devices need updating');
+                return;
+            }
+            if (!confirm(`Update firmware on ${ips.length} device(s)?`)) return;
+            for (const ip of ips) {
+                triggerUpdate(ip);
+            }
         }
 
         function getDeviceStatusForFilter(device, kind, parentApIp) {
@@ -3949,7 +4212,9 @@
                 device.model || '',
                 kind,
             ].join(' ').toLowerCase();
-            return haystack.includes(query);
+            const terms = query.split(',').map(t => t.trim()).filter(Boolean);
+            if (terms.length === 0) return true;
+            return terms.some(term => haystack.includes(term));
         }
 
         function updateDeviceFilterSummary(visibleRows, totalRows) {
@@ -4075,20 +4340,12 @@
                 return '';
             }
             if (type === 'ap') {
-                const isCanary = canaryAps.has(id);
-                const canaryTitle = isCanary ? 'Remove canary' : 'Set as canary';
-                const canaryStyle = isCanary ? 'color:#f59e0b;' : '';
-                const canaryLink = canaryLoaded ? `<a class="action-link" style="${canaryStyle}" title="${canaryTitle}" onclick="toggleCanary('ap','${id}',${!isCanary});event.stopPropagation();">&#x1F426;</a>` : '';
-                return `${canaryLink}<a class="action-link" onclick="editDeviceNotes('ap','${id}');event.stopPropagation();">Notes</a>
+                return `<a class="action-link" onclick="editDeviceNotes('ap','${id}');event.stopPropagation();">Notes</a>
                     <a class="action-link" onclick="pollAPNow('${id}');event.stopPropagation();">Refresh</a>
                     ${deleteActionLink('ap', id)}`;
             }
             if (type === 'switch') {
-                const isCanary = canarySwitches.has(id);
-                const canaryTitle = isCanary ? 'Remove canary' : 'Set as canary';
-                const canaryStyle = isCanary ? 'color:#f59e0b;' : '';
-                const canaryLink = canaryLoaded ? `<a class="action-link" style="${canaryStyle}" title="${canaryTitle}" onclick="toggleCanary('switch','${id}',${!isCanary});event.stopPropagation();">&#x1F426;</a>` : '';
-                return `${canaryLink}<a class="action-link" onclick="editDeviceNotes('switch','${id}');event.stopPropagation();">Notes</a>
+                return `<a class="action-link" onclick="editDeviceNotes('switch','${id}');event.stopPropagation();">Notes</a>
                     ${deleteActionLink('switch', id)}`;
             }
             return '';
@@ -4123,8 +4380,9 @@
                 const rawSwitches = site.switches || [];
                 const siteName = site.name || '';
                 const colFiltersActive = Object.values(columnFilters).some(s => s && s.size > 0);
-                const queryOnlySiteFilter = !!deviceFilterState.query && !colFiltersActive &&
-                    siteName.toLowerCase().includes(deviceFilterState.query);
+                const queryTerms = deviceFilterState.query ? deviceFilterState.query.split(',').map(t => t.trim()).filter(Boolean) : [];
+                const queryOnlySiteFilter = queryTerms.length > 0 && !colFiltersActive &&
+                    queryTerms.some(term => siteName.toLowerCase().includes(term));
 
                 const aps = [];
                 for (const ap of rawAps) {
@@ -4175,7 +4433,8 @@
 
                 html += `<tr class="row-site ${isSelected ? 'row-selected' : ''}" onclick="selectSite(${site.id !== null ? site.id : 'null'})">
                     <td>
-                        <div class="name-cell" style="padding-left:4px;">
+                        <div class="name-cell tree-indent-0">
+                            <input type="checkbox" data-check-site="${site.id}" onclick="toggleCheckSite(${site.id !== null ? site.id : 'null'},event);event.stopPropagation();">
                             <span class="expand-toggle ${siteExpanded ? 'expanded' : ''}" onclick="toggleExpand('${siteKey}',event)">&#9654;</span>
                             <span class="device-icon site">T</span>
                             ${escapeHtml(site.name)}
@@ -4207,7 +4466,8 @@
                     const isApCanary = canaryAps.has(ap.ip);
                     html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isApSelected ? 'row-selected' : ''} ${isApCanary ? 'row-canary' : ''}" onclick="selectAP('${ap.ip}')">
                         <td>
-                            <div class="name-cell" style="padding-left:28px;">
+                            <div class="name-cell tree-indent-1">
+                                <input type="checkbox" data-check-ap="${ap.ip}" ${checkedDevices.has(ap.ip) ? 'checked' : ''} onclick="toggleCheckAP('${ap.ip}',event);event.stopPropagation();">
                                 <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
                                 <span class="device-icon ap">AP</span>
                                 <span>
@@ -4243,7 +4503,8 @@
 
                         html += `<tr class="row-cpe ${isCpeSelected ? 'row-selected' : ''}" onclick="selectCPE('${cpe.ip}')">
                             <td>
-                                <div class="name-cell" style="padding-left:52px;">
+                                <div class="name-cell tree-indent-2">
+                                    <input type="checkbox" ${checkedDevices.has(cpe.ip) ? 'checked' : ''} onclick="toggleCheck('${cpe.ip}',event);event.stopPropagation();">
                                     <span class="expand-toggle hidden">&#9654;</span>
                                     <span class="device-icon cpe ${health}"></span>
                                     ${cpeIp ? (licenseState.features?.device_portal ? `<a href="/api/device-portal/${cpeIp}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : `<span class="name-link" style="cursor:default">${escapeHtml(cpeName)}</span>`) : escapeHtml(cpeName)}
@@ -4270,7 +4531,8 @@
                     const isSwCanary = canarySwitches.has(sw.ip);
                     html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isSwSelected ? 'row-selected' : ''} ${isSwCanary ? 'row-canary' : ''}" onclick="selectSwitch('${sw.ip}')">
                         <td>
-                            <div class="name-cell" style="padding-left:28px;">
+                            <div class="name-cell tree-indent-1">
+                                <input type="checkbox" ${checkedDevices.has(sw.ip) ? 'checked' : ''} onclick="toggleCheck('${sw.ip}',event);event.stopPropagation();">
                                 <span class="expand-toggle hidden">&#9654;</span>
                                 <span class="device-icon ap">SW</span>
                                 <span>
@@ -4298,6 +4560,8 @@
             }
 
             tbody.innerHTML = html;
+            updateCheckboxStates();
+            updateSelectionBar();
             updateDeviceFilterSummary(visibleRows, totalRows);
         }
 
@@ -5551,6 +5815,21 @@
             } else if (data.enabled && data.running) {
                 document.getElementById('radiusStatus').textContent = `RADIUS listening on UDP ${data.port}`;
                 document.getElementById('radiusStatus').style.color = '#10b981';
+            }
+        }
+
+        function updateRadiusStatusBadge(running, error) {
+            const el = document.getElementById('radiusStatus');
+            if (!el) return;
+            if (error) {
+                el.textContent = error;
+                el.style.color = '#ef4444';
+            } else if (running) {
+                el.textContent = 'RADIUS running';
+                el.style.color = '#10b981';
+            } else {
+                el.textContent = 'RADIUS stopped';
+                el.style.color = '#ef4444';
             }
         }
 
@@ -6861,7 +7140,7 @@
 
         function toggleDrawer(event) {
             // Don't toggle if clicking a toggle switch or button inside the handle
-            if (event.target.closest('.status-bar-toggle, .btn, .status-bar-actions')) return;
+            if (event.target.closest('.toggle, .btn, .status-bar-actions')) return;
             const drawer = document.getElementById('bottomDrawer');
             const opening = !drawer.classList.contains('open');
             drawer.classList.toggle('open');
@@ -7004,7 +7283,7 @@
 
                 // Parallel
                 document.getElementById('drawerParallel').value = s.parallel_updates || '2';
-                document.getElementById('drawerBandwidthLimit').value = s.bandwidth_limit_kbps || '0';
+
 
                 // Beta
                 drawerBetaEnabled = s.firmware_beta_enabled === 'true';
@@ -7110,7 +7389,7 @@
         // Attach change listeners to drawer inputs
         document.addEventListener('DOMContentLoaded', () => {
             ['drawerStartHour', 'drawerEndHour', 'drawerBankMode',
-             'drawerParallel', 'drawerBandwidthLimit', 'drawerMinTemp', 'drawerZipCode',
+             'drawerParallel', 'drawerMinTemp', 'drawerZipCode',
              'drawerQuarantineDays'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.addEventListener('change', markDrawerDirty);
@@ -7138,7 +7417,6 @@
                 schedule_end_hour: document.getElementById('drawerEndHour').value,
                 bank_mode: document.getElementById('drawerBankMode').value,
                 parallel_updates: document.getElementById('drawerParallel').value,
-                bandwidth_limit_kbps: document.getElementById('drawerBandwidthLimit').value,
                 schedule_scope: 'all',
                 min_temperature_c: String(storageTemp(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
                 zip_code: document.getElementById('drawerZipCode').value,
@@ -7522,24 +7800,11 @@
                 const resp = await fetch('/api/settings');
                 const data = await resp.json();
                 const s = data.settings;
-                const toggle = document.getElementById('barAutoToggle');
-                setToggleActive(toggle, s.schedule_enabled === 'true');
-                // Resolve temperature unit before rendering weather
+                // Toggle + badge state driven by updateSchedulerUI() via WebSocket
+                // Temperature display also driven by scheduler_status WebSocket
+                // Only resolve the unit preference here
                 tempUnit = data.resolved_temperature_unit || s.temperature_unit || 'f';
                 if (tempUnit === 'auto') tempUnit = 'f';
-            } catch (e) {}
-            // Fetch current weather to populate header temp immediately
-            try {
-                const resp = await fetch('/api/weather');
-                const data = await resp.json();
-                if (data.temperature_c !== undefined && data.temperature_c !== null) {
-                    const tempDisplay = displayTemp(data.temperature_c);
-                    const unit = tempUnit === 'f' ? '\u00B0F' : '\u00B0C';
-                    const headerTemp = document.getElementById('headerTemp');
-                    if (headerTemp) headerTemp.textContent = ` \u00B7 ${tempDisplay}${unit}`;
-                    const drawerTemp = document.getElementById('drawerWeatherTemp');
-                    if (drawerTemp) drawerTemp.textContent = `(currently ${tempDisplay}${unit})`;
-                }
             } catch (e) {}
         }
 
@@ -7877,7 +8142,7 @@
 
                 html += `<tr class="row-site">
                     <td>
-                        <div class="name-cell" style="padding-left:4px;">
+                        <div class="name-cell tree-indent-0">
                             <span class="expand-toggle ${siteExpanded ? 'expanded' : ''}" onclick="toggleConfigExpand('${siteKey}',event)">&#9654;</span>
                             <span class="device-icon site">T</span>
                             ${escapeHtml(site.name)}
@@ -7903,7 +8168,7 @@
 
                     html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''}">
                         <td>
-                            <div class="name-cell" style="padding-left:28px;">
+                            <div class="name-cell tree-indent-1">
                                 <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleConfigExpand('${apKey}',event)">&#9654;</span>
                                 <span class="device-icon ap">AP</span>
                                 <a href="http://${ap.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>
@@ -7925,7 +8190,7 @@
 
                         html += `<tr class="row-cpe">
                             <td>
-                                <div class="name-cell" style="padding-left:52px;">
+                                <div class="name-cell tree-indent-2">
                                     <span class="expand-toggle hidden">&#9654;</span>
                                     <span class="device-icon cpe ${cpe.signal_health || 'red'}"></span>
                                     ${cpeIp ? `<a href="http://${cpeIp}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : escapeHtml(cpeName)}
@@ -7945,7 +8210,7 @@
 
                     html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''}">
                         <td>
-                            <div class="name-cell" style="padding-left:28px;">
+                            <div class="name-cell tree-indent-1">
                                 <span class="expand-toggle hidden">&#9654;</span>
                                 <span class="device-icon ap">SW</span>
                                 <a href="http://${sw.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>
@@ -8081,14 +8346,23 @@
                 if (!statusEl) continue;
                 statusEl.textContent = '';
                 statusEl.classList.remove('saved', 'suggested');
+                // Hide enable toggle until template is saved
+                const toggle = document.getElementById(`cfgToggle-${cat}`);
+                if (toggle) { toggle.classList.add('hidden'); setToggleActive(toggle, false); }
             }
 
-            // Populate form fields from saved templates
+            // Populate form fields and enable toggles from saved templates
             for (const t of configTemplates) {
                 const statusEl = document.getElementById(`cfgStatus-${t.category}`);
                 if (statusEl) {
                     statusEl.textContent = 'Saved';
                     statusEl.classList.add('saved');
+                }
+                // Show and set the enable toggle
+                const toggle = document.getElementById(`cfgToggle-${t.category}`);
+                if (toggle) {
+                    toggle.classList.remove('hidden');
+                    setToggleActive(toggle, !!t.enabled);
                 }
                 if (t.form_data) {
                     populateConfigForm(t.category, t.form_data);
@@ -8120,10 +8394,18 @@
             if (typeof formData === 'string') formData = JSON.parse(formData);
             switch (category) {
                 case 'snmp':
+                    if (formData.enabled !== undefined) document.getElementById('cfgSnmpEnabled').checked = formData.enabled;
                     if (formData.v2_ro_enabled !== undefined) document.getElementById('cfgSnmpV2RoEnabled').checked = formData.v2_ro_enabled;
                     if (formData.v2_ro_community) document.getElementById('cfgSnmpV2RoCommunity').value = formData.v2_ro_community;
                     if (formData.v2_rw_enabled !== undefined) document.getElementById('cfgSnmpV2RwEnabled').checked = formData.v2_rw_enabled;
                     if (formData.v2_rw_community) document.getElementById('cfgSnmpV2RwCommunity').value = formData.v2_rw_community;
+                    if (formData.v3_ro_enabled !== undefined) document.getElementById('cfgSnmpV3RoEnabled').checked = formData.v3_ro_enabled;
+                    if (formData.v3_ro_user) document.getElementById('cfgSnmpV3RoUser').value = formData.v3_ro_user;
+                    if (formData.v3_ro_pass) document.getElementById('cfgSnmpV3RoPass').value = formData.v3_ro_pass;
+                    if (formData.v3_rw_enabled !== undefined) document.getElementById('cfgSnmpV3RwEnabled').checked = formData.v3_rw_enabled;
+                    if (formData.v3_rw_user) document.getElementById('cfgSnmpV3RwUser').value = formData.v3_rw_user;
+                    if (formData.v3_rw_pass) document.getElementById('cfgSnmpV3RwPass').value = formData.v3_rw_pass;
+                    if (formData.hw_uptime !== undefined) document.getElementById('cfgSnmpHwUptime').checked = formData.hw_uptime;
                     break;
                 case 'ntp':
                     if (formData.enabled !== undefined) document.getElementById('cfgNtpEnabled').checked = formData.enabled;
@@ -8136,18 +8418,25 @@
                     if (formData.port) document.getElementById('cfgRadiusPort').value = formData.port;
                     if (formData.secret) document.getElementById('cfgRadiusSecret').value = formData.secret;
                     break;
+                case 'discovery':
+                    if (formData.enabled !== undefined) document.getElementById('cfgDiscEnabled').checked = formData.enabled;
+                    if (formData.lldp !== undefined) document.getElementById('cfgDiscLldp').checked = formData.lldp;
+                    if (formData.mndp !== undefined) document.getElementById('cfgDiscMndp').checked = formData.mndp;
+                    if (formData.cdp !== undefined) document.getElementById('cfgDiscCdp').checked = formData.cdp;
+                    if (formData.lldp_server !== undefined) document.getElementById('cfgDiscLldpServer').checked = formData.lldp_server;
+                    break;
                 case 'syslog':
                     if (formData.enabled !== undefined) document.getElementById('cfgSyslogEnabled').checked = formData.enabled;
                     if (formData.server) document.getElementById('cfgSyslogServer').value = formData.server;
                     if (formData.port) document.getElementById('cfgSyslogPort').value = formData.port;
-                    if (formData.protocol) document.getElementById('cfgSyslogProtocol').value = formData.protocol;
+                    if (formData.proto) document.getElementById('cfgSyslogProtocol').value = formData.proto;
                     break;
                 case 'watchdog':
                     if (formData.enabled !== undefined) document.getElementById('cfgWatchdogEnabled').checked = formData.enabled;
                     if (formData.interval) document.getElementById('cfgWatchdogInterval').value = formData.interval;
-                    if (formData.startup_delay) document.getElementById('cfgWatchdogStartupDelay').value = formData.startup_delay;
-                    if (formData.failure_count) document.getElementById('cfgWatchdogFailureCount').value = formData.failure_count;
-                    if (formData.ping_targets) document.getElementById('cfgWatchdogPingTargets').value = Array.isArray(formData.ping_targets) ? formData.ping_targets.join(', ') : formData.ping_targets;
+                    if (formData.delay) document.getElementById('cfgWatchdogStartupDelay').value = formData.delay;
+                    if (formData.failure) document.getElementById('cfgWatchdogFailureCount').value = formData.failure;
+                    if (formData.addresses) document.getElementById('cfgWatchdogPingTargets').value = Array.isArray(formData.addresses) ? formData.addresses.join(', ') : formData.addresses;
                     break;
                 case 'users':
                     const container = document.getElementById('cfgUserRows');
@@ -8172,16 +8461,30 @@
                 const prefillData = data.data;
                 switch (category) {
                     case 'snmp':
+                        if (prefillData.enabled !== undefined) document.getElementById('cfgSnmpEnabled').checked = prefillData.enabled;
                         if (prefillData.v2) {
                             if (prefillData.v2.ro) {
-                                document.getElementById('cfgSnmpV2RoEnabled').checked = prefillData.v2.ro.enabled !== false;
+                                if (prefillData.v2.ro.enabled !== undefined) document.getElementById('cfgSnmpV2RoEnabled').checked = prefillData.v2.ro.enabled;
                                 if (prefillData.v2.ro.community) document.getElementById('cfgSnmpV2RoCommunity').value = prefillData.v2.ro.community;
                             }
                             if (prefillData.v2.rw) {
-                                document.getElementById('cfgSnmpV2RwEnabled').checked = prefillData.v2.rw.enabled !== false;
+                                if (prefillData.v2.rw.enabled !== undefined) document.getElementById('cfgSnmpV2RwEnabled').checked = prefillData.v2.rw.enabled;
                                 if (prefillData.v2.rw.community) document.getElementById('cfgSnmpV2RwCommunity').value = prefillData.v2.rw.community;
                             }
                         }
+                        if (prefillData.v3) {
+                            if (prefillData.v3.ro) {
+                                if (prefillData.v3.ro.enabled !== undefined) document.getElementById('cfgSnmpV3RoEnabled').checked = prefillData.v3.ro.enabled;
+                                if (prefillData.v3.ro.user) document.getElementById('cfgSnmpV3RoUser').value = prefillData.v3.ro.user;
+                                if (prefillData.v3.ro.password) document.getElementById('cfgSnmpV3RoPass').value = prefillData.v3.ro.password;
+                            }
+                            if (prefillData.v3.rw) {
+                                if (prefillData.v3.rw.enabled !== undefined) document.getElementById('cfgSnmpV3RwEnabled').checked = prefillData.v3.rw.enabled;
+                                if (prefillData.v3.rw.user) document.getElementById('cfgSnmpV3RwUser').value = prefillData.v3.rw.user;
+                                if (prefillData.v3.rw.password) document.getElementById('cfgSnmpV3RwPass').value = prefillData.v3.rw.password;
+                            }
+                        }
+                        if (prefillData.use_hw_uptime !== undefined) document.getElementById('cfgSnmpHwUptime').checked = prefillData.use_hw_uptime;
                         break;
                     case 'ntp':
                         if (prefillData.enabled !== undefined) document.getElementById('cfgNtpEnabled').checked = prefillData.enabled;
@@ -8210,18 +8513,25 @@
                         }
                         break;
                     }
+                    case 'discovery':
+                        if (prefillData.enabled !== undefined) document.getElementById('cfgDiscEnabled').checked = prefillData.enabled;
+                        if (prefillData.lldp !== undefined) document.getElementById('cfgDiscLldp').checked = prefillData.lldp;
+                        if (prefillData.mndp !== undefined) document.getElementById('cfgDiscMndp').checked = prefillData.mndp;
+                        if (prefillData.cdp !== undefined) document.getElementById('cfgDiscCdp').checked = prefillData.cdp;
+                        if (prefillData.lldp_server !== undefined) document.getElementById('cfgDiscLldpServer').checked = prefillData.lldp_server;
+                        break;
                     case 'syslog':
                         if (prefillData.enabled !== undefined) document.getElementById('cfgSyslogEnabled').checked = prefillData.enabled;
                         if (prefillData.server) document.getElementById('cfgSyslogServer').value = prefillData.server;
                         if (prefillData.port) document.getElementById('cfgSyslogPort').value = prefillData.port;
-                        if (prefillData.protocol) document.getElementById('cfgSyslogProtocol').value = prefillData.protocol;
+                        if (prefillData.proto) document.getElementById('cfgSyslogProtocol').value = prefillData.proto;
                         break;
                     case 'watchdog':
                         if (prefillData.enabled !== undefined) document.getElementById('cfgWatchdogEnabled').checked = prefillData.enabled;
                         if (prefillData.interval) document.getElementById('cfgWatchdogInterval').value = prefillData.interval;
-                        if (prefillData.startup_delay) document.getElementById('cfgWatchdogStartupDelay').value = prefillData.startup_delay;
-                        if (prefillData.failure_count) document.getElementById('cfgWatchdogFailureCount').value = prefillData.failure_count;
-                        if (prefillData.ping_targets) document.getElementById('cfgWatchdogPingTargets').value = Array.isArray(prefillData.ping_targets) ? prefillData.ping_targets.join(', ') : prefillData.ping_targets;
+                        if (prefillData.delay) document.getElementById('cfgWatchdogStartupDelay').value = prefillData.delay;
+                        if (prefillData.failure) document.getElementById('cfgWatchdogFailureCount').value = prefillData.failure;
+                        if (prefillData.addresses) document.getElementById('cfgWatchdogPingTargets').value = Array.isArray(prefillData.addresses) ? prefillData.addresses.join(', ') : prefillData.addresses;
                         break;
                 }
                 configSuggestedCategories.add(category);
@@ -8267,10 +8577,18 @@
         function collectFormData(category) {
             switch (category) {
                 case 'snmp': return {
+                    enabled: document.getElementById('cfgSnmpEnabled').checked,
                     v2_ro_enabled: document.getElementById('cfgSnmpV2RoEnabled').checked,
                     v2_ro_community: document.getElementById('cfgSnmpV2RoCommunity').value,
                     v2_rw_enabled: document.getElementById('cfgSnmpV2RwEnabled').checked,
                     v2_rw_community: document.getElementById('cfgSnmpV2RwCommunity').value,
+                    v3_ro_enabled: document.getElementById('cfgSnmpV3RoEnabled').checked,
+                    v3_ro_user: document.getElementById('cfgSnmpV3RoUser').value,
+                    v3_ro_pass: document.getElementById('cfgSnmpV3RoPass').value,
+                    v3_rw_enabled: document.getElementById('cfgSnmpV3RwEnabled').checked,
+                    v3_rw_user: document.getElementById('cfgSnmpV3RwUser').value,
+                    v3_rw_pass: document.getElementById('cfgSnmpV3RwPass').value,
+                    hw_uptime: document.getElementById('cfgSnmpHwUptime').checked,
                 };
                 case 'ntp': return {
                     enabled: document.getElementById('cfgNtpEnabled').checked,
@@ -8283,11 +8601,18 @@
                     port: document.getElementById('cfgRadiusPort').value,
                     secret: document.getElementById('cfgRadiusSecret').value,
                 };
+                case 'discovery': return {
+                    enabled: document.getElementById('cfgDiscEnabled').checked,
+                    lldp: document.getElementById('cfgDiscLldp').checked,
+                    mndp: document.getElementById('cfgDiscMndp').checked,
+                    cdp: document.getElementById('cfgDiscCdp').checked,
+                    lldp_server: document.getElementById('cfgDiscLldpServer').checked,
+                };
                 case 'syslog': return {
                     enabled: document.getElementById('cfgSyslogEnabled').checked,
                     server: document.getElementById('cfgSyslogServer').value,
                     port: parseInt(document.getElementById('cfgSyslogPort').value) || 514,
-                    protocol: document.getElementById('cfgSyslogProtocol').value,
+                    proto: document.getElementById('cfgSyslogProtocol').value,
                 };
                 case 'watchdog': {
                     const ipPattern = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
@@ -8299,9 +8624,9 @@
                     return {
                         enabled: document.getElementById('cfgWatchdogEnabled').checked,
                         interval: parseInt(document.getElementById('cfgWatchdogInterval').value) || 300,
-                        startup_delay: parseInt(document.getElementById('cfgWatchdogStartupDelay').value) || 300,
-                        failure_count: parseInt(document.getElementById('cfgWatchdogFailureCount').value) || 3,
-                        ping_targets: rawTargets.filter(t => ipPattern.test(t)),
+                        delay: parseInt(document.getElementById('cfgWatchdogStartupDelay').value) || 300,
+                        failure: parseInt(document.getElementById('cfgWatchdogFailureCount').value) || 3,
+                        addresses: rawTargets.filter(t => ipPattern.test(t)),
                     };
                 }
                 case 'users': {
@@ -8324,18 +8649,33 @@
 
         function formDataToFragment(category, formData) {
             switch (category) {
-                case 'snmp': return {services: {snmp: {
-                    v2: {
-                        ro: {enabled: formData.v2_ro_enabled, community: formData.v2_ro_community},
-                        rw: {enabled: formData.v2_rw_enabled, community: formData.v2_rw_community},
-                    }
-                }}};
+                case 'snmp': {
+                    return {services: {snmp: {
+                        enabled: formData.enabled,
+                        v2: {
+                            ro: {enabled: formData.v2_ro_enabled, community: formData.v2_ro_community},
+                            rw: {enabled: formData.v2_rw_enabled, community: formData.v2_rw_community},
+                        },
+                        v3: {
+                            ro: {enabled: formData.v3_ro_enabled, user: formData.v3_ro_user, password: formData.v3_ro_pass},
+                            rw: {enabled: formData.v3_rw_enabled, user: formData.v3_rw_user, password: formData.v3_rw_pass},
+                        },
+                        use_hw_uptime: formData.hw_uptime,
+                    }}};
+                }
                 case 'ntp': {
                     const servers = [];
                     if (formData.server1) servers.push(formData.server1);
                     if (formData.server2) servers.push(formData.server2);
                     return {services: {ntp: {enabled: formData.enabled, servers}}};
                 }
+                case 'discovery': return {services: {discovery: {
+                    enabled: formData.enabled,
+                    lldp: formData.lldp,
+                    mndp: formData.mndp,
+                    cdp: formData.cdp,
+                    lldp_server: formData.lldp_server,
+                }}};
                 case 'radius': return {system: {auth: {
                     method: formData.method,
                     radius: {
@@ -8344,18 +8684,18 @@
                         auth_secret: formData.secret,
                     }
                 }}};
-                case 'syslog': return {services: {syslog: {
+                case 'syslog': return {services: {remote_syslog: {
                     enabled: formData.enabled,
                     server: formData.server,
                     port: formData.port,
-                    protocol: formData.protocol,
+                    proto: formData.proto,
                 }}};
-                case 'watchdog': return {services: {watchdog: {
+                case 'watchdog': return {services: {ping_watchdog: {
                     enabled: formData.enabled,
                     interval: formData.interval,
-                    startup_delay: formData.startup_delay,
-                    failure_count: formData.failure_count,
-                    ping_targets: formData.ping_targets,
+                    delay: formData.delay,
+                    failure: formData.failure,
+                    addresses: formData.addresses,
                 }}};
                 case 'users': return {system: {users: (formData.users || []).map(u => ({
                     username: u.username,
@@ -8455,15 +8795,44 @@
         function isSectionPopulated(category) {
             const formData = collectFormData(category);
             switch (category) {
-                case 'snmp': return formData.v2_ro_community || formData.v2_rw_community;
+                case 'snmp': return formData.v2_ro_community || formData.v2_rw_community || formData.v3_ro_user || formData.v3_rw_user;
                 case 'ntp': return formData.server1 || formData.server2;
                 case 'radius': return formData.server || formData.secret;
                 case 'discovery': return formData.lldp || formData.mndp || formData.cdp || formData.lldp_server;
                 case 'users': return formData.users && formData.users.length > 0;
                 case 'syslog': return formData.server;
-                case 'watchdog': return formData.enabled || formData.ping_targets;
+                case 'watchdog': return formData.enabled || (formData.addresses && formData.addresses.length > 0);
                 case 'custom': return formData.json && formData.json.trim();
                 default: return false;
+            }
+        }
+
+        async function toggleConfigEnabled(toggleEl) {
+            const cat = toggleEl.dataset.category;
+            const template = configTemplates.find(t => t.category === cat);
+            if (!template) return;
+            const newEnabled = !toggleEl.classList.contains('active');
+            setToggleActive(toggleEl, newEnabled);
+            try {
+                const resp = await fetch(`/api/config-templates/${template.id}`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled: newEnabled}),
+                });
+                if (resp.ok) {
+                    template.enabled = newEnabled ? 1 : 0;
+                    const badge = document.getElementById('configTemplateBadge');
+                    const enabled = configTemplates.filter(t => t.enabled);
+                    badge.textContent = `${enabled.length} active`;
+                    const pushBtn = document.getElementById('configPushBtn');
+                    setHidden(pushBtn, enabled.length === 0);
+                } else {
+                    setToggleActive(toggleEl, !newEnabled);
+                    showToast('Failed to update template');
+                }
+            } catch (e) {
+                setToggleActive(toggleEl, !newEnabled);
+                showToast('Failed to update template: ' + e.message);
             }
         }
 
@@ -8559,7 +8928,7 @@
                         </select>
                     </div>
                     <div style="display:flex;gap:8px;justify-content:flex-end;">
-                        <button class="btn btn-sm" onclick="this.closest('.backup-overlay').remove()">Cancel</button>
+                        <button class="btn btn-sm btn-ghost" onclick="this.closest('.backup-overlay').remove()">Cancel</button>
                         <button class="btn btn-sm btn-primary" onclick="startConfigPushRollout(this.closest('.backup-overlay'))">Start Rollout</button>
                     </div>
                 </div>`;
@@ -8787,7 +9156,7 @@
                     {title: 'Enable Auto-Enforce', confirmText: 'Enable'}
                 );
                 if (!confirmed) {
-                    if (toggle) toggle.checked = false;
+                    if (toggle) setToggleActive(toggle, false);
                     return;
                 }
             }
@@ -8809,7 +9178,7 @@
                 const resp = await fetch('/api/config-enforce/status');
                 const data = await resp.json();
                 const toggle = document.getElementById('configAutoEnforceToggle');
-                if (toggle) toggle.checked = data.enabled;
+                if (toggle) setToggleActive(toggle, data.enabled);
                 updateEnforceStatusUI(data);
                 // Show/hide cooldown input based on enabled state
                 const cooldownInput = document.getElementById('configEnforceCooldown');

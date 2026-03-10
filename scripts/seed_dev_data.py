@@ -11,6 +11,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import bcrypt
+
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "tachyon.db"
 
 
@@ -140,12 +142,42 @@ def seed():
             )
     db.commit()
 
+    # ── Admin user + setup complete ──
+    admin_pw = "admin123"
+    pw_hash = bcrypt.hashpw(admin_pw.encode(), bcrypt.gensalt()).decode()
+    db.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        ("admin_password_hash", pw_hash),
+    )
+    db.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        ("setup_completed", "true"),
+    )
+    db.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        ("schedule_enabled", "true"),
+    )
+    db.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        ("autoupdate_enabled", "true"),
+    )
+    # Create admin user in users table
+    existing = db.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()
+    if not existing:
+        db.execute(
+            """INSERT INTO users (username, password_hash, role, auth_method, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            ("admin", pw_hash, "admin", "local", 1, now, now),
+        )
+    db.commit()
+
     dev_count = db.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
     cpe_count = db.execute("SELECT COUNT(*) FROM cpe_cache").fetchone()[0]
     site_count = db.execute("SELECT COUNT(*) FROM tower_sites").fetchone()[0]
     tmpl_count = db.execute("SELECT COUNT(*) FROM config_templates").fetchone()[0]
     hist_count = db.execute("SELECT COUNT(*) FROM job_history").fetchone()[0]
     print(f"seed: inserted {site_count} sites, {dev_count} devices, {cpe_count} CPEs, {tmpl_count} templates, {hist_count} jobs")
+    print(f"seed: admin user created (username: admin, password: {admin_pw})")
     db.close()
 
 

@@ -99,13 +99,11 @@ class TachyonClient:
     """Client for Tachyon device firmware updates."""
 
     # CONTROL file content per hardware model (for config .tar downloads)
-    # TODO: Verify these values for each model - defaulting to "tn-110-prs"
     MODEL_HARDWARE_IDS = {
         "tna-301": "tn-110-prs",
         "tna-302": "tn-110-prs",
         "tna-303x": "tn-110-prs",
-        "tna-303l": "tn-110-prs",
-        "tna-303l-65": "tn-110-prs",
+        "tna-303l-65": "tam-110-prs",
         "tns-100": "tn-110-prs",
     }
 

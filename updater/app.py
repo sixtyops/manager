@@ -6185,8 +6185,9 @@ async def get_config_prefill(category: str, session: dict = Depends(require_auth
         "ntp": ["services", "ntp"],
         "radius": ["system", "auth"],
         "users": ["system", "users"],
-        "syslog": ["services", "syslog"],
-        "watchdog": ["services", "watchdog"],
+        "syslog": ["services", "remote_syslog"],
+        "watchdog": ["services", "ping_watchdog"],
+        "discovery": ["services", "discovery"],
     }
 
     path = section_map.get(category)
