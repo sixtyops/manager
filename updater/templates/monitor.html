@@ -360,28 +360,6 @@
             border-bottom-color: #3b82f6;
         }
 
-        /* Main page tabs */
-        .main-tabs {
-            display: flex;
-            gap: 0;
-            border-bottom: 1px solid var(--border);
-            margin: 12px 0 0 0;
-            padding: 0;
-        }
-        .main-tab {
-            padding: 10px 20px;
-            border: none;
-            background: none;
-            color: #6b7280;
-            font-size: 0.82rem;
-            font-weight: 500;
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
-            margin-bottom: -1px;
-            transition: color 0.15s, border-color 0.15s;
-        }
-        .main-tab:hover { color: #374151; }
-        .main-tab.active { color: #3b82f6; border-bottom-color: #3b82f6; }
 
         /* History table styles */
         .history-status-badge {
@@ -1057,6 +1035,7 @@
             position: fixed;
             bottom: 0;
             left: 0;
+            z-index: 100;
             right: 0;
             z-index: 100;
             background: var(--bg-card);
@@ -1080,6 +1059,106 @@
             cursor: pointer;
             user-select: none;
         }
+        .drawer-handle-half {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+            padding: 4px 8px;
+            flex-wrap: wrap;
+        }
+        .drawer-handle-half.active { display: flex; }
+        .drawer-mode-tabs {
+            display: flex;
+            position: absolute;
+            bottom: calc(100% - 1px);
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 2;
+            gap: 6px;
+        }
+        .mode-tab-btn {
+            position: relative;
+            font-size: 0.82rem;
+            padding: 7px 22px;
+            border: 1px solid var(--border);
+            border-bottom: none;
+            border-radius: 10px 10px 0 0;
+            background: var(--bg);
+            color: var(--text-muted);
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+            letter-spacing: 0.01em;
+            box-shadow: 0 -4px 12px rgba(0,0,0,0.10);
+        }
+        .mode-tab-btn::before,
+        .mode-tab-btn::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            width: 8px;
+            height: 8px;
+        }
+        .mode-tab-btn::before {
+            left: -9px;
+            border-radius: 0 0 8px 0;
+            box-shadow: 4px 0 0 0 var(--bg);
+            border-right: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+        }
+        .mode-tab-btn::after {
+            right: -9px;
+            border-radius: 0 0 0 8px;
+            box-shadow: -4px 0 0 0 var(--bg);
+            border-left: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+        }
+        .mode-tab-btn:hover {
+            color: var(--text);
+            background: var(--bg-card);
+        }
+        .mode-tab-btn:hover::before { box-shadow: 4px 0 0 0 var(--bg-card); }
+        .mode-tab-btn:hover::after { box-shadow: -4px 0 0 0 var(--bg-card); }
+        .mode-tab-btn.active {
+            background: var(--bg-card);
+            color: var(--text);
+            font-weight: 600;
+            box-shadow: 0 -6px 16px rgba(0,0,0,0.12);
+            z-index: 1;
+        }
+        .mode-tab-btn.active::before { box-shadow: 4px 0 0 0 var(--bg-card); }
+        .mode-tab-btn.active::after { box-shadow: -4px 0 0 0 var(--bg-card); }
+        .mode-tab-badge {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            min-width: 18px;
+            height: 18px;
+            padding: 0 5px;
+            border-radius: 9px;
+            background: var(--danger);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            line-height: 18px;
+            text-align: center;
+            display: none;
+        }
+        .header-icon-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 6px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+        }
+        .header-icon-btn:hover {
+            color: var(--text);
+            background: var(--border-light);
+        }
 
         .drawer-chevron {
             display: flex;
@@ -1102,7 +1181,7 @@
         }
 
         .bottom-drawer.open .drawer-panel {
-            max-height: 800px;
+            max-height: 50vh;
             overflow-y: auto;
         }
 
@@ -1139,6 +1218,16 @@
         .config-section-header .config-section-status {
             margin-left: auto;
         }
+        .cfg-save-btn {
+            font-size: 11px;
+            padding: 1px 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg);
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+        .cfg-save-btn:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
         .config-section-body {
             padding: 6px 0 8px;
             font-size: var(--text-sm);
@@ -1163,6 +1252,13 @@
             color: var(--text-muted);
         }
         .config-section-status.saved { background: var(--brand-bg); color: var(--brand-text); }
+        .config-section-status.enforced { background: #dbeafe; color: #1d4ed8; }
+        .config-section.enforced {
+            border: 2px solid var(--primary) !important;
+            border-radius: 6px;
+            padding: 2px 6px;
+        }
+        .toggle-sm.not-saved { opacity: 0.35; cursor: pointer; }
         .config-user-row {
             display: grid;
             grid-template-columns: 1fr 1fr 100px 40px;
@@ -1805,13 +1901,10 @@
             .drawer-settings-grid .drawer-col-wide { flex: 1 1 100%; min-width: 0; }
         }
 
-        /* Narrow - drawer handle becomes two rows */
+        /* Narrow - rollout wraps to full width */
         @media (max-width: 900px) {
             .drawer-handle {
                 gap: 8px 12px;
-            }
-            .drawer-handle .u-flex-center-gap8 {
-                flex-wrap: wrap;
             }
             .status-bar-rollout {
                 margin-left: 0;
@@ -1821,12 +1914,6 @@
             .status-bar-section + .status-bar-section.status-bar-rollout {
                 padding-left: 0;
                 border-left: none;
-                padding-top: 6px;
-                border-top: 1px solid var(--border-light);
-            }
-            #drawerHandle-config .u-ml-auto {
-                margin-left: 0;
-                flex-basis: 100%;
                 padding-top: 6px;
                 border-top: 1px solid var(--border-light);
             }
@@ -1874,6 +1961,11 @@
         <h1>SixtyOps</h1>
         <div class="header-right">
             <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:var(--text-dim);"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:var(--text-muted);"></span></span>
+            <button class="header-icon-btn" onclick="openHistoryModal()" title="Job History">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                </svg>
+            </button>
             <div class="user-menu">
                 <button class="user-btn" onclick="document.getElementById('userDropdown').classList.toggle('open')">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1942,186 +2034,97 @@
             </div>
         </div>
 
-        <!-- Main Tabs -->
-        <div class="main-tabs" id="mainTabs">
-            <button class="main-tab active" data-tab="updates" onclick="switchMainTab('updates')">Updates</button>
-            <button class="main-tab" data-tab="config" onclick="switchMainTab('config')">Config</button>
-            <button class="main-tab" data-tab="history" onclick="switchMainTab('history')">History <span class="pro-badge pro-badge-history">PRO</span></button>
-        </div>
-
-        <!-- Updates Tab Panel -->
-        <div id="tabPanel-updates">
-            <!-- Stats -->
-            <div class="stats-bar" id="statsBar">
-                <div class="stat">
-                    <div class="dot primary"></div>
-                    <span class="stat-value" id="apCount">0</span>
-                    <span class="stat-label">APs</span>
-                </div>
-                <div class="stat">
-                    <div class="dot success"></div>
-                    <span class="stat-value" id="greenCount">0</span>
-                </div>
-                <div class="stat">
-                    <div class="dot warning"></div>
-                    <span class="stat-value" id="yellowCount">0</span>
-                </div>
-                <div class="stat">
-                    <div class="dot danger"></div>
-                    <span class="stat-value" id="redCount">0</span>
-                </div>
+        <!-- Firmware Stats -->
+        <div class="stats-bar" id="statsBar">
+            <div class="stat">
+                <div class="dot primary"></div>
+                <span class="stat-value" id="apCount">0</span>
+                <span class="stat-label">APs</span>
             </div>
-
-            <!-- Tree Table -->
-            <div id="canarySummary" style="font-size:0.72rem;color:#6b7280;padding:4px 12px;display:none;">
-                <span style="color:#f59e0b;">&#9679;</span> <span id="canarySummaryText"></span>
+            <div class="stat">
+                <div class="dot success"></div>
+                <span class="stat-value" id="greenCount">0</span>
+                <span class="stat-label">Up to date</span>
             </div>
-            <div class="table-card">
-                <div class="table-toolbar">
-                    <input type="text" id="deviceFilterQuery" placeholder="Filter by name, IP, or site (comma for multiple)">
-                    <span id="activeFilterChip" class="filter-chip" style="display:none;">
-                        <span id="activeFilterChipText"></span>
-                        <a onclick="clearAllColumnFilters()" title="Clear filter">&times;</a>
-                    </span>
-                    <span class="table-filter-summary" id="deviceFilterSummary"></span>
-                </div>
-                <div id="selectionActionBar" class="selection-action-bar" style="display:none;">
-                    <span id="selectionCount" style="font-weight:500;">0 selected</span>
-                    <button class="btn btn-sm btn-warning" onclick="setCanaryForSelected()">Set Canary</button>
-                    <button class="btn btn-sm btn-primary" onclick="updateFirmwareForSelected()">Update Firmware</button>
-                    <button class="btn btn-sm btn-ghost" onclick="clearChecked()">Clear</button>
-                </div>
-                <div class="u-overflow-x-auto">
-                    <table class="tree-table" id="deviceTable">
-                        <thead>
-                            <tr>
-                                <th data-sort="name" onclick="sortTable('name')"><input type="checkbox" id="checkAllBox" onclick="toggleCheckAll(event);event.stopPropagation();" style="margin-right:6px;vertical-align:middle;"> Name / IP <span class="sort-arrow"></span></th>
-                                <th data-sort="model" data-filterable="model" onclick="handleHeaderClick('model',this,event)">Model <span class="sort-arrow"></span></th>
-                                <th data-sort="firmware" data-filterable="firmware" onclick="handleHeaderClick('firmware',this,event)">Version <span class="sort-arrow"></span></th>
-                                <th data-sort="signal" onclick="sortTable('signal')">Signal <span class="sort-arrow"></span></th>
-                                <th data-sort="distance" onclick="sortTable('distance')">Distance <span class="sort-arrow"></span></th>
-                                <th data-sort="status" data-filterable="status" onclick="handleHeaderClick('status',this,event)">Status <span class="sort-arrow"></span></th>
-                                <th data-sort="update" onclick="sortTable('update')">Update <span class="sort-arrow"></span></th>
-                                <th data-sort="lastseen" onclick="sortTable('lastseen')">Last Updated <span class="sort-arrow"></span></th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="deviceTableBody">
-                            <tr><td colspan="9" class="empty-state">Enter AP IPs above to get started</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+            <div class="stat">
+                <div class="dot warning"></div>
+                <span class="stat-value" id="yellowCount">0</span>
+                <span class="stat-label">Update available</span>
+            </div>
+            <div class="stat">
+                <div class="dot danger"></div>
+                <span class="stat-value" id="redCount">0</span>
+                <span class="stat-label">Offline / Error</span>
             </div>
         </div>
 
-        <!-- Config Tab Panel -->
-        <div id="tabPanel-config" class="hidden">
-            <!-- Config Stats -->
-            <div class="stats-bar" id="configStatsBar">
-                <div class="stat">
-                    <div class="dot primary"></div>
-                    <span class="stat-value" id="configDeviceCount">0</span>
-                    <span class="stat-label">Devices</span>
-                </div>
-                <div class="stat">
-                    <div class="dot success"></div>
-                    <span class="stat-value" id="configCompliantCount">0</span>
-                    <span class="stat-label">Compliant</span>
-                </div>
-                <div class="stat">
-                    <div class="dot warning"></div>
-                    <span class="stat-value" id="configNonCompliantCount">0</span>
-                    <span class="stat-label">Non-Compliant</span>
-                </div>
-                <div class="stat">
-                    <div class="dot u-dot-neutral"></div>
-                    <span class="stat-value" id="configUncheckedCount">0</span>
-                    <span class="stat-label">Unchecked</span>
-                </div>
+        <!-- Config Stats -->
+        <div class="stats-bar hidden" id="configStatsBar">
+            <div class="stat">
+                <div class="dot primary"></div>
+                <span class="stat-value" id="configDeviceCount">0</span>
+                <span class="stat-label">Devices</span>
             </div>
-
-            <!-- Config Device Tree -->
-            <div class="table-card">
-                <div class="u-overflow-x-auto">
-                    <table class="tree-table" id="configTable">
-                        <thead>
-                            <tr>
-                                <th>Name / IP</th>
-                                <th>Model</th>
-                                <th>Config Status</th>
-                                <th>Last Backup</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="configTableBody">
-                            <tr><td colspan="5" class="empty-state">Loading config data...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+            <div class="stat">
+                <div class="dot success"></div>
+                <span class="stat-value" id="configCompliantCount">0</span>
+                <span class="stat-label">Compliant</span>
             </div>
-
-            <!-- Config Enforce Log (collapsible) -->
-            <details id="enforceLogDetails" style="margin-top:4px;">
-                <summary style="font-size:0.75rem;font-weight:500;cursor:pointer;padding:4px 8px;color:var(--text-muted);">
-                    Enforce Log <span id="enforceLogCount" style="color:var(--text-dim);font-weight:400;"></span>
-                </summary>
-                <div class="enforce-log-panel" id="enforceLogPanel">
-                    <div style="color:var(--text-dim);padding:8px;">No enforce log entries yet.</div>
-                </div>
-            </details>
-        </div>
-
-        <!-- History Tab Panel -->
-        <div id="tabPanel-history" class="hidden">
-            <div style="display:flex;gap:8px;margin-bottom:8px;">
-                <button class="btn btn-sm btn-primary" id="historyViewDevices" onclick="switchHistoryView('devices')">Devices</button>
-                <button class="btn btn-sm" id="historyViewJobs" onclick="switchHistoryView('jobs')">Jobs</button>
+            <div class="stat">
+                <div class="dot warning"></div>
+                <span class="stat-value" id="configNonCompliantCount">0</span>
+                <span class="stat-label">Non-Compliant</span>
             </div>
-            <div class="table-card" id="historyDevicesView">
-                <div class="u-overflow-x-auto">
-                    <table class="tree-table" id="historyTable">
-                        <thead>
-                            <tr>
-                                <th>Time</th>
-                                <th>Device</th>
-                                <th>Role</th>
-                                <th>Action</th>
-                                <th>Version</th>
-                                <th>Status</th>
-                                <th>Failed Stage</th>
-                                <th>Duration</th>
-                            </tr>
-                        </thead>
-                        <tbody id="historyTableBody">
-                            <tr><td colspan="8" class="empty-state">No history yet</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-                <div id="historyLoadMore" class="hidden" style="text-align:center;padding:12px;">
-                    <button class="btn btn-sm btn-secondary" onclick="loadMoreHistory()">Load More</button>
-                </div>
-            </div>
-            <div class="table-card hidden" id="historyJobsView">
-                <div class="u-overflow-x-auto">
-                    <table class="tree-table" id="jobHistoryTable">
-                        <thead>
-                            <tr>
-                                <th>Time</th>
-                                <th>Job ID</th>
-                                <th>Duration</th>
-                                <th>Success</th>
-                                <th>Failed</th>
-                                <th>Skipped</th>
-                                <th>Bank Mode</th>
-                            </tr>
-                        </thead>
-                        <tbody id="jobHistoryTableBody">
-                            <tr><td colspan="7" class="empty-state">No jobs yet</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+            <div class="stat">
+                <div class="dot u-dot-neutral"></div>
+                <span class="stat-value" id="configUncheckedCount">0</span>
+                <span class="stat-label">Unchecked</span>
             </div>
         </div>
+
+        <!-- Device Table (unified — columns change based on active mode) -->
+        <div id="canarySummary" style="font-size:0.72rem;color:#6b7280;padding:4px 12px;display:none;">
+            <span style="color:#f59e0b;">&#9679;</span> <span id="canarySummaryText"></span>
+        </div>
+        <div class="table-card">
+            <div class="table-toolbar">
+                <input type="text" id="deviceFilterQuery" placeholder="Filter by name, IP, or site (comma for multiple)">
+                <span id="activeFilterChip" class="filter-chip" style="display:none;">
+                    <span id="activeFilterChipText"></span>
+                    <a onclick="clearAllColumnFilters()" title="Clear filter">&times;</a>
+                </span>
+                <span class="table-filter-summary" id="deviceFilterSummary"></span>
+            </div>
+            <div id="selectionActionBar" class="selection-action-bar" style="display:none;">
+                <span id="selectionCount" style="font-weight:500;">0 selected</span>
+                <button class="btn btn-sm btn-warning" id="btnSetCanary" onclick="setCanaryForSelected()">Set Canary</button>
+                <button class="btn btn-sm btn-primary" id="btnUpdateFirmware" onclick="updateFirmwareForSelected()">Update Firmware</button>
+                <button class="btn btn-sm btn-primary hidden" id="btnPushConfig" onclick="pushConfigForSelected()">Push Config</button>
+                <button class="btn btn-sm btn-secondary hidden" id="btnCheckCompliance" onclick="checkComplianceForSelected()">Check Compliance</button>
+                <button class="btn btn-sm btn-ghost" onclick="clearChecked()">Clear</button>
+            </div>
+            <div class="u-overflow-x-auto">
+                <table class="tree-table" id="deviceTable">
+                    <thead>
+                        <tr id="deviceTableHead">
+                        </tr>
+                    </thead>
+                    <tbody id="deviceTableBody">
+                        <tr><td colspan="9" class="empty-state">Enter AP IPs above to get started</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Config Enforce Log (visible in config mode) -->
+        <details id="enforceLogDetails" class="hidden" style="margin-top:4px;">
+            <summary style="font-size:0.75rem;font-weight:500;cursor:pointer;padding:4px 8px;color:var(--text-muted);">
+                Enforce Log <span id="enforceLogCount" style="color:var(--text-dim);font-weight:400;"></span>
+            </summary>
+            <div class="enforce-log-panel" id="enforceLogPanel">
+                <div style="color:var(--text-dim);padding:8px;">No enforce log entries yet.</div>
+            </div>
+        </details>
 
 
 
@@ -2129,9 +2132,14 @@
 
     <!-- Bottom Drawer -->
     <div class="bottom-drawer" id="bottomDrawer">
+        <!-- Mode tabs above the bar -->
+        <div class="drawer-mode-tabs">
+            <button class="mode-tab-btn active" id="modeTabFw" onclick="handleTabClick('firmware')">Updates<span class="mode-tab-badge" id="modeTabFwBadge"></span></button>
+            <button class="mode-tab-btn" id="modeTabCfg" onclick="handleTabClick('config')">Config<span class="mode-tab-badge" id="modeTabCfgBadge"></span></button>
+        </div>
         <div class="drawer-handle" id="drawerHandle" onclick="toggleDrawer(event)">
-            <!-- Updates handle content -->
-            <div id="drawerHandle-updates" class="u-flex-center-gap8 u-flex-1">
+            <!-- Firmware/Updates bar (shown when firmware mode active) -->
+            <div class="drawer-handle-half active" id="drawerHandleLeft">
                 <div class="status-bar-section">
                     <button class="toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-pressed="false" onclick="toggleAutoSchedule(event)"></button>
                     <span class="status-bar-label">Auto-Update</span>
@@ -2147,25 +2155,28 @@
                     <span class="status-bar-muted u-status-note" id="barRolloutPrediction"></span>
                     <div id="barRolloutFailedDevices" style="display:none;flex-wrap:wrap;gap:4px;"></div>
                     <div class="status-bar-actions" id="barRolloutActions">
-                        <button class="btn btn-sm btn-warning hidden" id="barResumeBtn" onclick="resumeRollout();event.stopPropagation();" >Resume</button>
-                        <button class="btn btn-sm btn-danger hidden" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();" >Cancel</button>
+                        <button class="btn btn-sm btn-warning hidden" id="barResumeBtn" onclick="resumeRollout();event.stopPropagation();">Resume</button>
+                        <button class="btn btn-sm btn-danger hidden" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();">Cancel</button>
                     </div>
                 </div>
                 <span class="drawer-unsaved-dot" id="drawerUnsavedDot" title="Unsaved changes"></span>
                 <span id="drawerSavedIndicator" class="u-saved-indicator u-transition-opacity">Saved</span>
             </div>
-            <!-- Config handle content -->
-            <div id="drawerHandle-config" class="hidden u-flex-center-gap8 u-flex-1">
+            <!-- Config bar (shown when config mode active) -->
+            <div class="drawer-handle-half" id="drawerHandleRight">
                 <div class="status-bar-section">
-                    <span class="status-bar-label">Config Templates</span>
-                    <span class="status-badge status-bar-badge" id="configTemplateBadge">0 active</span>
+                    <span class="status-bar-label">Config Policies</span>
+                    <span class="status-badge status-bar-badge" id="configTemplateBadge">0 enforced</span>
                 </div>
                 <div class="status-bar-section">
                     <button class="toggle" id="configAutoEnforceToggle" type="button"
                             aria-label="Toggle auto-enforce" aria-pressed="false"
                             onclick="toggleConfigAutoEnforce(!this.classList.contains('active'));event.stopPropagation();"></button>
-                    <span class="status-bar-label">Auto-Enforce</span>
+                    <span class="status-bar-label" title="Checks compliance and pushes corrections daily">Auto-Enforce</span>
                     <span class="status-badge" id="configEnforceStatusBadge" style="display:none;"></span>
+                    <select id="configEnforceHour" class="u-w-64" style="display:none;font-size:var(--text-xs);"
+                            title="Daily enforce time"
+                            onchange="updateEnforceHour(this.value)" onclick="event.stopPropagation();"></select>
                     <input type="number" id="configEnforceCooldown" class="u-w-48"
                            min="1" max="60" value="10" style="display:none;"
                            title="Cooldown minutes between phases"
@@ -2183,11 +2194,6 @@
                         <button class="btn btn-sm btn-primary hidden" id="configPushBtn" onclick="showConfigPushDialog();event.stopPropagation();">Push to Devices</button>
                     </div>
                 </div>
-            </div>
-            <!-- History handle content -->
-            <div id="drawerHandle-history" class="hidden u-flex-center-gap8 u-flex-1">
-                <span class="status-bar-label">Filters</span>
-                <span class="status-bar-muted" id="barHistorySummary"></span>
             </div>
             <div class="drawer-chevron" id="drawerChevron">&#9650;</div>
         </div>
@@ -2266,10 +2272,14 @@
                             <input type="text" id="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56">
                         </div>
                         <div class="toggle-sm-row u-gap-4">
-                            <label class="u-text-xxs-dim">Auto-download hold</label>
+                            <label class="u-text-xxs-dim">New firmware canary soak test</label>
                             <input type="number" id="drawerQuarantineDays" value="7" min="0" max="90" class="u-w-48">
                             <span class="u-text-xxs-dim">days</span>
                         </div>
+                        <!-- TODO: Add per-device firmware update cooldown (default 30 days).
+                             Prevents rapidly re-updating a device after a firmware update.
+                             Needs backend support: track last_firmware_update per device,
+                             skip device in auto-update if updated within cooldown window. -->
                     </div>
 
                     <div class="drawer-col-wide drawer-firmware-card">
@@ -2298,15 +2308,16 @@
             </div><!-- /drawerContent-updates -->
 
             <!-- Config drawer content -->
-            <div id="drawerContent-config" class="hidden">
+            <div id="drawerContent-config" class="hidden" autocomplete="off" data-1p-ignore>
                 <div class="drawer-panel-inner">
-                <div class="drawer-settings-grid">
+                <p style="margin:0 0 8px;font-size:11px;color:var(--text-muted);line-height:1.4;">Enforced policies fully replace the matching config section on each device — existing settings, users, and servers in that section are cleared and overwritten.</p>
+                <div class="drawer-settings-grid" autocomplete="off">
                     <!-- Column 1: Network -->
                     <div class="drawer-col">
                         <div class="drawer-section-title">Network</div>
 
                         <div class="config-section" id="cfgSection-snmp">
-                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-snmp" type="button" data-category="snmp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>SNMP</span><span class="config-section-status" id="cfgStatus-snmp"></span></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-snmp" type="button" data-category="snmp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>SNMP</span><span class="config-section-status" id="cfgStatus-snmp"></span><button class="cfg-save-btn" id="cfgSave-snmp" onclick="saveConfigSection('snmp');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgSnmpEnabled"> Enabled</label>
                                 <fieldset style="border:1px solid var(--border-light);border-radius:4px;padding:6px;margin-top:6px;">
@@ -2321,13 +2332,13 @@
                                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
                                         <div>
                                             <label><input type="checkbox" id="cfgSnmpV3RoEnabled"> RO</label>
-                                            <input type="text" id="cfgSnmpV3RoUser" placeholder="User" style="width:100%;">
-                                            <input type="password" id="cfgSnmpV3RoPass" placeholder="Password" style="width:100%;margin-top:4px;">
+                                            <input type="text" id="cfgSnmpV3RoUser" placeholder="User" autocomplete="off" data-1p-ignore style="width:100%;">
+                                            <input type="password" id="cfgSnmpV3RoPass" placeholder="Password" autocomplete="off" data-1p-ignore style="width:100%;margin-top:4px;">
                                         </div>
                                         <div>
                                             <label><input type="checkbox" id="cfgSnmpV3RwEnabled"> RW</label>
-                                            <input type="text" id="cfgSnmpV3RwUser" placeholder="User" style="width:100%;">
-                                            <input type="password" id="cfgSnmpV3RwPass" placeholder="Password" style="width:100%;margin-top:4px;">
+                                            <input type="text" id="cfgSnmpV3RwUser" placeholder="User" autocomplete="off" data-1p-ignore style="width:100%;">
+                                            <input type="password" id="cfgSnmpV3RwPass" placeholder="Password" autocomplete="off" data-1p-ignore style="width:100%;margin-top:4px;">
                                         </div>
                                     </div>
                                 </fieldset>
@@ -2338,7 +2349,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-ntp">
-                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-ntp" type="button" data-category="ntp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>NTP</span><span class="config-section-status" id="cfgStatus-ntp"></span></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-ntp" type="button" data-category="ntp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>NTP</span><span class="config-section-status" id="cfgStatus-ntp"></span><button class="cfg-save-btn" id="cfgSave-ntp" onclick="saveConfigSection('ntp');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgNtpEnabled" checked> Enable NTP</label>
                                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
@@ -2349,7 +2360,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-discovery">
-                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-discovery" type="button" data-category="discovery" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Discovery</span><span class="config-section-status" id="cfgStatus-discovery"></span></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-discovery" type="button" data-category="discovery" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Discovery</span><span class="config-section-status" id="cfgStatus-discovery"></span><button class="cfg-save-btn" id="cfgSave-discovery" onclick="saveConfigSection('discovery');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgDiscEnabled" checked> Enabled</label>
                                 <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;">
@@ -2362,7 +2373,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-syslog">
-                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-syslog" type="button" data-category="syslog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Syslog</span><span class="config-section-status" id="cfgStatus-syslog"></span></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-syslog" type="button" data-category="syslog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Syslog</span><span class="config-section-status" id="cfgStatus-syslog"></span><button class="cfg-save-btn" id="cfgSave-syslog" onclick="saveConfigSection('syslog');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgSyslogEnabled"> Enable Remote Syslog</label>
                                 <div style="display:grid;grid-template-columns:1fr 80px 80px;gap:6px;margin-top:6px;">
@@ -2379,7 +2390,7 @@
                         <div class="drawer-section-title">Security</div>
 
                         <div class="config-section" id="cfgSection-users">
-                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-users" type="button" data-category="users" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Users</span><span class="config-section-status" id="cfgStatus-users"></span></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-users" type="button" data-category="users" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Users</span><span class="config-section-status" id="cfgStatus-users"></span><button class="cfg-save-btn" id="cfgSave-users" onclick="saveConfigSection('users');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <div id="cfgUserRows"></div>
                                 <button class="btn btn-sm btn-secondary" onclick="addConfigUserRow()" style="margin-top:6px;">+ Add User</button>
@@ -2387,7 +2398,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-radius">
-                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-radius" type="button" data-category="radius" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>RADIUS</span><span class="config-section-status" id="cfgStatus-radius"></span></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-radius" type="button" data-category="radius" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>RADIUS</span><span class="config-section-status" id="cfgStatus-radius"></span><button class="cfg-save-btn" id="cfgSave-radius" onclick="saveConfigSection('radius');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <div style="margin-bottom:6px;">
                                     <label>Auth Method</label>
@@ -2399,7 +2410,7 @@
                                 <div><label>Auth Server</label><input type="text" id="cfgRadiusServer" placeholder="radius.example.com" style="width:100%;"></div>
                                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;">
                                     <div><label>Port</label><input type="number" id="cfgRadiusPort" value="1812" style="width:100%;"></div>
-                                    <div><label>Secret</label><input type="password" id="cfgRadiusSecret" placeholder="shared secret" style="width:100%;"></div>
+                                    <div><label>Secret</label><input type="password" id="cfgRadiusSecret" placeholder="shared secret" autocomplete="off" data-1p-ignore style="width:100%;"></div>
                                 </div>
                                 <div style="margin-top:6px;font-size:var(--text-xs);color:var(--text-dim);">
                                     <a class="action-link" onclick="prefillBuiltinRadiusConfig();event.stopPropagation();">Use this appliance's RADIUS</a>
@@ -2413,7 +2424,7 @@
                         <div class="drawer-section-title">System</div>
 
                         <div class="config-section" id="cfgSection-watchdog">
-                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-watchdog" type="button" data-category="watchdog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Watchdog</span><span class="config-section-status" id="cfgStatus-watchdog"></span></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-watchdog" type="button" data-category="watchdog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Watchdog</span><span class="config-section-status" id="cfgStatus-watchdog"></span><button class="cfg-save-btn" id="cfgSave-watchdog" onclick="saveConfigSection('watchdog');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgWatchdogEnabled"> Enable Ping Watchdog</label>
                                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:6px;">
@@ -2429,7 +2440,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-custom">
-                            <div class="config-section-header"><button class="toggle-sm hidden" id="cfgToggle-custom" type="button" data-category="custom" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Custom JSON</span><span class="config-section-status" id="cfgStatus-custom"></span></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-custom" type="button" data-category="custom" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Custom JSON</span><span class="config-section-status" id="cfgStatus-custom"></span><button class="cfg-save-btn" id="cfgSave-custom" onclick="saveConfigSection('custom');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <textarea id="cfgCustomJson" rows="5" placeholder='{"services": {"ssh": {"enabled": true}}}' style="width:100%;font-family:monospace;font-size:var(--text-sm);"></textarea>
                             </div>
@@ -2437,52 +2448,10 @@
                     </div>
                 </div>
 
-                <div class="drawer-save-row">
-                    <button class="drawer-save-btn" onclick="saveAllConfigSections()">Save All</button>
-                </div>
                 </div>
             </div>
 
             <!-- History drawer content (filters) -->
-            <div id="drawerContent-history" class="hidden">
-                <div class="drawer-panel-inner">
-                    <div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap;">
-                        <div>
-                            <label class="u-label-xs">Device IP</label>
-                            <input type="text" id="historyFilterIp" placeholder="All devices" style="width:140px;">
-                        </div>
-                        <div>
-                            <label class="u-label-xs">Status</label>
-                            <select id="historyFilterStatus">
-                                <option value="">All</option>
-                                <option value="success">Success</option>
-                                <option value="failed">Failed</option>
-                                <option value="skipped">Skipped</option>
-                                <option value="cancelled">Cancelled</option>
-                                <option value="deferred">Deferred</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="u-label-xs">Action</label>
-                            <select id="historyFilterAction">
-                                <option value="">All</option>
-                                <option value="firmware_update">Firmware Update</option>
-                                <option value="config_push">Config Push</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="u-label-xs">From</label>
-                            <input type="date" id="historyFilterFrom" style="width:140px;">
-                        </div>
-                        <div>
-                            <label class="u-label-xs">To</label>
-                            <input type="date" id="historyFilterTo" style="width:140px;">
-                        </div>
-                        <button class="btn btn-sm btn-primary" onclick="loadHistory()">Apply Filters</button>
-                        <button class="btn btn-sm btn-secondary" onclick="exportHistoryCsv()">Export CSV</button>
-                    </div>
-                </div>
-            </div>
         </div>
     </div>
 
@@ -3815,8 +3784,45 @@
             document.getElementById('yellowCount').textContent = topology.overall_health?.yellow || 0;
             document.getElementById('redCount').textContent = topology.overall_health?.red || 0;
 
+            updateTabBadges();
             renderTable();
             updateChart();
+        }
+
+        function updateTabBadges() {
+            // Updates badge: devices with available updates (yellow count)
+            const fwBadge = document.getElementById('modeTabFwBadge');
+            const updatesCount = (topology?.overall_health?.yellow || 0) + (topology?.overall_health?.red || 0);
+            if (updatesCount > 0) {
+                fwBadge.textContent = updatesCount;
+                fwBadge.style.display = '';
+            } else {
+                fwBadge.style.display = 'none';
+            }
+            // Config badge: non-compliant devices
+            const cfgBadge = document.getElementById('modeTabCfgBadge');
+            let nonCompliant = 0;
+            for (const site of (topology?.sites || [])) {
+                for (const ap of (site.aps || [])) {
+                    const c = configCompliance[ap.ip];
+                    if (c && !c.compliant) nonCompliant++;
+                    for (const cpe of (ap.cpes || [])) {
+                        if (!cpe.ip) continue;
+                        const cc = configCompliance[cpe.ip];
+                        if (cc && !cc.compliant) nonCompliant++;
+                    }
+                }
+                for (const sw of (site.switches || [])) {
+                    const c = configCompliance[sw.ip];
+                    if (c && !c.compliant) nonCompliant++;
+                }
+            }
+            if (nonCompliant > 0) {
+                cfgBadge.textContent = nonCompliant;
+                cfgBadge.style.display = '';
+            } else {
+                cfgBadge.style.display = 'none';
+            }
         }
 
         // ── Tree Table ──
@@ -4143,6 +4149,11 @@
             if (count === 0) { bar.style.display = 'none'; return; }
             bar.style.display = 'flex';
             countEl.textContent = `${count} selected`;
+            // Show/hide mode-specific buttons
+            setHidden(document.getElementById('btnSetCanary'), activeColumnMode !== 'firmware');
+            setHidden(document.getElementById('btnUpdateFirmware'), activeColumnMode !== 'firmware');
+            setHidden(document.getElementById('btnPushConfig'), activeColumnMode !== 'config');
+            setHidden(document.getElementById('btnCheckCompliance'), activeColumnMode !== 'config');
         }
 
         function setCanaryForSelected() {
@@ -4362,9 +4373,34 @@
             return `<span class="last-updated-text" title="${d.toLocaleString()}">${dateText}</span>`;
         }
 
+        function renderTableHeader() {
+            const thead = document.getElementById('deviceTableHead');
+            if (!thead) return;
+            if (activeColumnMode === 'firmware') {
+                thead.innerHTML = `
+                    <th data-sort="name" onclick="sortTable('name')"><input type="checkbox" id="checkAllBox" onclick="toggleCheckAll(event);event.stopPropagation();" style="margin-right:6px;vertical-align:middle;"> Name / IP <span class="sort-arrow"></span></th>
+                    <th data-sort="model" data-filterable="model" onclick="handleHeaderClick('model',this,event)">Model <span class="sort-arrow"></span></th>
+                    <th data-sort="firmware" data-filterable="firmware" onclick="handleHeaderClick('firmware',this,event)">Version <span class="sort-arrow"></span></th>
+                    <th data-sort="signal" onclick="sortTable('signal')">Signal <span class="sort-arrow"></span></th>
+                    <th data-sort="distance" onclick="sortTable('distance')">Distance <span class="sort-arrow"></span></th>
+                    <th data-sort="status" data-filterable="status" onclick="handleHeaderClick('status',this,event)">Status <span class="sort-arrow"></span></th>
+                    <th data-sort="update" onclick="sortTable('update')">Update <span class="sort-arrow"></span></th>
+                    <th data-sort="lastseen" onclick="sortTable('lastseen')">Last Updated <span class="sort-arrow"></span></th>
+                    <th>Actions</th>`;
+            } else {
+                thead.innerHTML = `
+                    <th data-sort="name" onclick="sortTable('name')"><input type="checkbox" id="checkAllBox" onclick="toggleCheckAll(event);event.stopPropagation();" style="margin-right:6px;vertical-align:middle;"> Name / IP <span class="sort-arrow"></span></th>
+                    <th data-sort="model" data-filterable="model" onclick="handleHeaderClick('model',this,event)">Model <span class="sort-arrow"></span></th>
+                    <th>Config Status</th>
+                    <th>Last Backup</th>
+                    <th>Actions</th>`;
+            }
+        }
+
         function renderTable() {
             if (!topology || !topology.sites) return;
 
+            renderTableHeader();
             readDeviceFilterState();
             const tbody = document.getElementById('deviceTableBody');
             let html = '';
@@ -4431,6 +4467,12 @@
                 let badgeParts = [`${aps.length} AP${aps.length!==1?'s':''}`, `${totalCpes} CPE${totalCpes!==1?'s':''}`];
                 if (switches.length > 0) badgeParts.push(`${switches.length} SW`);
 
+                const siteEmptyTds = activeColumnMode === 'firmware'
+                    ? `<td></td><td></td><td></td><td></td><td></td><td>${siteUpdateCell(site.id, aps)}</td><td></td>`
+                    : `<td></td><td></td>`;
+                const siteActions = activeColumnMode === 'firmware'
+                    ? `${actionsCell('site', site.id, site.name)}${site.id !== null && aps.length === 0 && switches.length === 0 ? deleteActionLink('site', site.id) : ''}`
+                    : (site.id !== null ? `<a class="action-link" onclick="pushConfigToSite(${site.id});event.stopPropagation();">Push Templates</a>` : '');
                 html += `<tr class="row-site ${isSelected ? 'row-selected' : ''}" onclick="selectSite(${site.id !== null ? site.id : 'null'})">
                     <td>
                         <div class="name-cell tree-indent-0">
@@ -4441,13 +4483,8 @@
                             <span class="tree-badge">${badgeParts.join(', ')}</span>
                         </div>
                     </td>
-                    <td></td><td></td><td></td><td></td><td></td>
-                    <td>${siteUpdateCell(site.id, aps)}</td>
-                    <td></td>
-                    <td><div class="actions-cell">
-                        ${actionsCell('site', site.id, site.name)}
-                        ${site.id !== null && aps.length === 0 && switches.length === 0 ? deleteActionLink('site', site.id) : ''}
-                    </div></td>
+                    ${siteEmptyTds}
+                    <td><div class="actions-cell">${siteActions}</div></td>
                 </tr>`;
 
                 if (!siteExpanded) continue;
@@ -4478,6 +4515,7 @@
                             </div>
                         </td>
                         <td>${ap.model || ''}</td>
+                        ${activeColumnMode === 'firmware' ? `
                         <td>${versionCell(ap)}</td>
                         <td></td>
                         <td></td>
@@ -4485,6 +4523,11 @@
                         <td>${updateCell('ap', ap.ip)}</td>
                         <td>${lastUpdatedCell(ap.last_firmware_update)}</td>
                         <td><div class="actions-cell">${actionsCell('ap', ap.ip, apName)}</div></td>
+                        ` : `
+                        <td>${configStatusCell(ap.ip)}</td>
+                        <td>${configLastBackupCell(ap.ip)}</td>
+                        <td><div class="actions-cell">${configActionsCell(ap.ip)}</div></td>
+                        `}
                     </tr>`;
 
                     if (!apExpanded) continue;
@@ -4511,6 +4554,7 @@
                                 </div>
                             </td>
                             <td>${cpe.model || ''}</td>
+                            ${activeColumnMode === 'firmware' ? `
                             <td>${versionCell(cpe)}</td>
                             <td class="${signalClass}">${signalVal != null ? signalVal.toFixed(1) + ' dBm' : ''}</td>
                             <td>${formatDistance(cpe.link_distance)}</td>
@@ -4518,6 +4562,11 @@
                             <td>${updateCell('cpe', cpe.ip, ap.ip)}</td>
                             <td></td>
                             <td><div class="actions-cell">${actionsCell('cpe', cpe.ip, cpeName)}</div></td>
+                            ` : `
+                            <td>${cpeIp ? configStatusCell(cpeIp) : ''}</td>
+                            <td>${cpeIp ? configLastBackupCell(cpeIp) : ''}</td>
+                            <td><div class="actions-cell">${cpeIp ? configActionsCell(cpeIp) : ''}</div></td>
+                            `}
                         </tr>`;
                     }
                 }
@@ -4542,21 +4591,26 @@
                             </div>
                         </td>
                         <td>${sw.model || ''}</td>
+                        ${activeColumnMode === 'firmware' ? `
                         <td>${versionCell(sw)}</td>
                         <td></td>
                         <td></td>
                         <td>${statusCell(sw.ip, isOffline, null)}</td>
                         <td>${updateCell('switch', sw.ip)}</td>
                         <td>${lastUpdatedCell(sw.last_firmware_update)}</td>
-                        <td><div class="actions-cell">
-                            ${actionsCell('switch', sw.ip, swName)}
-                        </div></td>
+                        <td><div class="actions-cell">${actionsCell('switch', sw.ip, swName)}</div></td>
+                        ` : `
+                        <td>${configStatusCell(sw.ip)}</td>
+                        <td>${configLastBackupCell(sw.ip)}</td>
+                        <td><div class="actions-cell">${configActionsCell(sw.ip)}</div></td>
+                        `}
                     </tr>`;
                 }
             }
 
+            const colCount = activeColumnMode === 'firmware' ? 9 : 5;
             if (!html) {
-                html = '<tr><td colspan="9" class="empty-state">No devices found</td></tr>';
+                html = `<tr><td colspan="${colCount}" class="empty-state">No devices found</td></tr>`;
             }
 
             tbody.innerHTML = html;
@@ -6873,30 +6927,69 @@
             } catch (e) {}
         }
 
-        // ── Main Tabs ──
+        // ── Column Mode (firmware / config) ──
 
-        let currentMainTab = 'updates';
+        let activeColumnMode = localStorage.getItem('columnMode') || 'firmware';
 
-        function switchMainTab(tab) {
-            currentMainTab = tab;
-            document.querySelectorAll('.main-tab').forEach(t =>
-                t.classList.toggle('active', t.dataset.tab === tab));
-            document.querySelectorAll('[id^="tabPanel-"]').forEach(p =>
-                setHidden(p, p.id !== `tabPanel-${tab}`));
-            updateDrawerForTab(tab);
-            if (tab === 'history' && !historyLoaded) loadHistory();
-            if (tab === 'config' && !configLoaded) loadConfigData();
-
-
+        function switchColumnMode(mode) {
+            activeColumnMode = mode;
+            localStorage.setItem('columnMode', mode);
+            // Update tab buttons
+            document.getElementById('modeTabFw').classList.toggle('active', mode === 'firmware');
+            document.getElementById('modeTabCfg').classList.toggle('active', mode === 'config');
+            // Show only the active bar content
+            document.getElementById('drawerHandleLeft').classList.toggle('active', mode === 'firmware');
+            document.getElementById('drawerHandleRight').classList.toggle('active', mode === 'config');
+            // Switch stats bar
+            setHidden(document.getElementById('statsBar'), mode !== 'firmware');
+            setHidden(document.getElementById('configStatsBar'), mode !== 'config');
+            // Switch drawer content
+            setHidden(document.getElementById('drawerContent-updates'), mode !== 'firmware');
+            setHidden(document.getElementById('drawerContent-config'), mode !== 'config');
+            // Show/hide enforce log
+            setHidden(document.getElementById('enforceLogDetails'), mode !== 'config');
+            // Show/hide canary summary
+            if (mode !== 'firmware') {
+                const cs = document.getElementById('canarySummary');
+                if (cs) cs.style.display = 'none';
+            }
+            // Reset sort if current column doesn't exist in new mode
+            const fwOnlyCols = ['firmware', 'signal', 'distance', 'status', 'update', 'lastseen'];
+            if (mode === 'config' && fwOnlyCols.includes(sortColumn)) {
+                sortColumn = 'name';
+                sortDirection = 'asc';
+            }
+            // Update selection bar buttons
+            updateSelectionBar();
+            // Re-render table with new columns
+            renderTable();
+            // Lazy-load config data on first switch
+            if (mode === 'config' && !configLoaded) loadConfigData();
+            // Update body padding for new bar height
+            requestAnimationFrame(() => {
+                const drawer = document.getElementById('bottomDrawer');
+                document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
+            });
         }
 
-        function updateDrawerForTab(tab) {
-            // Switch drawer handle sections
-            ['updates', 'config', 'history'].forEach(t => {
-                const handle = document.getElementById(`drawerHandle-${t}`);
-                setHidden(handle, t !== tab);
-                const content = document.getElementById(`drawerContent-${t}`);
-                setHidden(content, t !== tab);
+        function handleTabClick(mode) {
+            const drawer = document.getElementById('bottomDrawer');
+            if (activeColumnMode === mode) {
+                // Same tab — toggle drawer open/close
+                drawer.classList.toggle('open');
+                if (drawer.classList.contains('open') && mode === 'firmware') loadDrawerSettings();
+            } else {
+                // Different tab — switch mode, open drawer
+                switchColumnMode(mode);
+                if (!drawer.classList.contains('open')) {
+                    drawer.classList.add('open');
+                    if (mode === 'firmware') loadDrawerSettings();
+                }
+            }
+            requestAnimationFrame(() => {
+                setTimeout(() => {
+                    document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
+                }, 320);
             });
         }
 
@@ -6905,6 +6998,94 @@
         let historyOffset = 0;
         let historyLoaded = false;
         let historyTotal = 0;
+
+        function openHistoryModal() {
+            let overlay = document.getElementById('historyOverlay');
+            if (overlay) { overlay.remove(); return; }
+            overlay = document.createElement('div');
+            overlay.id = 'historyOverlay';
+            overlay.className = 'backup-overlay';
+            overlay.style.zIndex = '250';
+            overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+            overlay.innerHTML = `
+                <div class="backup-modal" style="width:960px;max-width:95vw;max-height:80vh;overflow-y:auto;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                        <h3 style="margin:0;">Job History</h3>
+                        <button class="btn btn-sm btn-ghost" onclick="this.closest('.backup-overlay').remove()">&times;</button>
+                    </div>
+                    <div style="display:flex;gap:8px;margin-bottom:8px;">
+                        <button class="btn btn-sm btn-primary" id="historyViewDevices" onclick="switchHistoryView('devices')">Devices</button>
+                        <button class="btn btn-sm" id="historyViewJobs" onclick="switchHistoryView('jobs')">Jobs</button>
+                    </div>
+                    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;">
+                        <div>
+                            <label class="u-label-xs">Device IP</label>
+                            <input type="text" id="historyFilterIp" placeholder="All devices" style="width:140px;">
+                        </div>
+                        <div>
+                            <label class="u-label-xs">Status</label>
+                            <select id="historyFilterStatus">
+                                <option value="">All</option>
+                                <option value="success">Success</option>
+                                <option value="failed">Failed</option>
+                                <option value="skipped">Skipped</option>
+                                <option value="cancelled">Cancelled</option>
+                                <option value="deferred">Deferred</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="u-label-xs">Action</label>
+                            <select id="historyFilterAction">
+                                <option value="">All</option>
+                                <option value="firmware_update">Firmware Update</option>
+                                <option value="config_push">Config Push</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="u-label-xs">From</label>
+                            <input type="date" id="historyFilterFrom" style="width:140px;">
+                        </div>
+                        <div>
+                            <label class="u-label-xs">To</label>
+                            <input type="date" id="historyFilterTo" style="width:140px;">
+                        </div>
+                        <button class="btn btn-sm btn-primary" onclick="loadHistory()">Apply</button>
+                        <button class="btn btn-sm btn-secondary" onclick="exportHistoryCsv()">Export CSV</button>
+                    </div>
+                    <div class="table-card" id="historyDevicesView">
+                        <div class="u-overflow-x-auto">
+                            <table class="tree-table" id="historyTable">
+                                <thead><tr>
+                                    <th>Time</th><th>Device</th><th>Role</th><th>Action</th>
+                                    <th>Version</th><th>Status</th><th>Failed Stage</th><th>Duration</th>
+                                </tr></thead>
+                                <tbody id="historyTableBody">
+                                    <tr><td colspan="8" class="empty-state">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div id="historyLoadMore" class="hidden" style="text-align:center;padding:12px;">
+                            <button class="btn btn-sm btn-secondary" onclick="loadMoreHistory()">Load More</button>
+                        </div>
+                    </div>
+                    <div class="table-card hidden" id="historyJobsView">
+                        <div class="u-overflow-x-auto">
+                            <table class="tree-table" id="jobHistoryTable">
+                                <thead><tr>
+                                    <th>Time</th><th>Job ID</th><th>Duration</th>
+                                    <th>Success</th><th>Failed</th><th>Skipped</th><th>Bank Mode</th>
+                                </tr></thead>
+                                <tbody id="jobHistoryTableBody">
+                                    <tr><td colspan="7" class="empty-state">No jobs yet</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>`;
+            document.body.appendChild(overlay);
+            historyLoaded = false;
+            loadHistory();
+        }
 
         async function loadHistory(append) {
             if (!append) historyOffset = 0;
@@ -7139,19 +7320,31 @@
         // ── Drawer ──
 
         function toggleDrawer(event) {
-            // Don't toggle if clicking a toggle switch or button inside the handle
-            if (event.target.closest('.toggle, .btn, .status-bar-actions')) return;
+            // Don't toggle if clicking interactive controls
+            if (event.target.closest('.toggle, .btn, .status-bar-actions, input')) return;
             const drawer = document.getElementById('bottomDrawer');
             const opening = !drawer.classList.contains('open');
             drawer.classList.toggle('open');
-            if (opening && currentMainTab === 'updates') loadDrawerSettings();
-            // Adjust body padding so content is scrollable behind the drawer
+            if (opening && activeColumnMode === 'firmware') loadDrawerSettings();
             requestAnimationFrame(() => {
                 setTimeout(() => {
                     document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
-                }, 320); // after transition completes
+                }, 320);
             });
         }
+
+        // Collapse drawer when clicking outside it
+        document.addEventListener('click', function(e) {
+            const drawer = document.getElementById('bottomDrawer');
+            if (!drawer || !drawer.classList.contains('open')) return;
+            if (e.target.closest('.bottom-drawer')) return;
+            drawer.classList.remove('open');
+            requestAnimationFrame(() => {
+                setTimeout(() => {
+                    document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
+                }, 320);
+            });
+        });
 
         let drawerSettingsLoaded = false;
         let canaryAps = new Set();
@@ -7576,7 +7769,7 @@
             let html = '';
             const hasBeta = drawerFwFiles.some(f => f.channel === 'beta');
             if (drawerBetaEnabled && !hasBeta) {
-                html += `<div class="empty-state" style="margin-bottom:8px;font-size:12px;">No current beta firmware available — using latest stable.</div>`;
+                html += `<div style="margin-bottom:8px;font-size:11px;color:var(--text-muted);font-style:italic;">No current beta firmware available — using latest stable.</div>`;
             }
             for (const type of typeOrder) {
                 if (!groups[type] || groups[type].length === 0) continue;
@@ -7849,6 +8042,7 @@
 
         // Initialize
         connectWebSocket();
+        switchColumnMode(activeColumnMode);
         loadTime(); tickClock(); setInterval(tickClock, 1000);
         loadAutoSettings();
         loadCanarySettings();
@@ -8013,7 +8207,6 @@
         let configCompliance = {};  // {ip: {compliant, checked_at}}
         let configSummary = {};     // {ip: {id, config_hash, model, fetched_at}}
         let configTemplates = [];
-        let configExpandState = new Map();
         let configPushingDevices = new Set();
         let configPushRollout = null;  // Current config push rollout state
         const CONFIG_CATEGORIES = ['snmp', 'users', 'radius', 'ntp', 'syslog', 'watchdog', 'custom'];
@@ -8046,7 +8239,7 @@
                 configPushRollout = rolloutData.rollout;
                 configLoaded = true;
 
-                renderConfigTable();
+                if (activeColumnMode === 'config') renderTable();
                 updateConfigStats();
                 loadConfigTemplateUI();
                 renderConfigPushRolloutUI();
@@ -8089,6 +8282,7 @@
             document.getElementById('configCompliantCount').textContent = compliant;
             document.getElementById('configNonCompliantCount').textContent = nonCompliant;
             document.getElementById('configUncheckedCount').textContent = unchecked;
+            updateTabBadges();
         }
 
         function configStatusCell(ip) {
@@ -8121,118 +8315,6 @@
                 html += ' <span style="color:#6b7280;font-size:0.7rem;">Pushing...</span>';
             }
             return html;
-        }
-
-        function renderConfigTable() {
-            if (!topology || !topology.sites) return;
-            const tbody = document.getElementById('configTableBody');
-            let html = '';
-
-            const sortedSites = [...topology.sites].sort(siteComparator());
-
-            for (const site of sortedSites) {
-                const siteKey = `cfg-site:${site.id}`;
-                const siteExpanded = configExpandState.get(siteKey) !== false;
-                const aps = site.aps || [];
-                const switches = site.switches || [];
-                const totalCpes = aps.reduce((s, ap) => s + (ap.cpes?.length || 0), 0);
-
-                let badgeParts = [`${aps.length} AP${aps.length!==1?'s':''}`, `${totalCpes} CPE${totalCpes!==1?'s':''}`];
-                if (switches.length > 0) badgeParts.push(`${switches.length} SW`);
-
-                html += `<tr class="row-site">
-                    <td>
-                        <div class="name-cell tree-indent-0">
-                            <span class="expand-toggle ${siteExpanded ? 'expanded' : ''}" onclick="toggleConfigExpand('${siteKey}',event)">&#9654;</span>
-                            <span class="device-icon site">T</span>
-                            ${escapeHtml(site.name)}
-                            <span class="tree-badge">${badgeParts.join(', ')}</span>
-                        </div>
-                    </td>
-                    <td></td><td></td><td></td>
-                    <td><div class="actions-cell">
-                        ${site.id !== null ? `<a class="action-link" onclick="pushConfigToSite(${site.id});event.stopPropagation();">Push Templates</a>` : ''}
-                    </div></td>
-                </tr>`;
-
-                if (!siteExpanded) continue;
-
-                const sortedAPs = [...aps].sort(deviceComparator());
-
-                for (const ap of sortedAPs) {
-                    const apKey = `cfg-ap:${ap.ip}`;
-                    const apExpanded = configExpandState.get(apKey) !== false;
-                    const isOffline = !!ap.last_error;
-                    const cpes = ap.cpes || [];
-                    const apName = ap.system_name || ap.ip;
-
-                    html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''}">
-                        <td>
-                            <div class="name-cell tree-indent-1">
-                                <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleConfigExpand('${apKey}',event)">&#9654;</span>
-                                <span class="device-icon ap">AP</span>
-                                <a href="http://${ap.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>
-                            </div>
-                        </td>
-                        <td>${ap.model || ''}</td>
-                        <td>${configStatusCell(ap.ip)}</td>
-                        <td>${configLastBackupCell(ap.ip)}</td>
-                        <td><div class="actions-cell">${configActionsCell(ap.ip)}</div></td>
-                    </tr>`;
-
-                    if (!apExpanded) continue;
-
-                    const sortedCPEs = [...cpes].sort(deviceComparator());
-
-                    for (const cpe of sortedCPEs) {
-                        const cpeName = cpe.system_name || cpe.mac || 'Unknown';
-                        const cpeIp = cpe.ip || '';
-
-                        html += `<tr class="row-cpe">
-                            <td>
-                                <div class="name-cell tree-indent-2">
-                                    <span class="expand-toggle hidden">&#9654;</span>
-                                    <span class="device-icon cpe ${cpe.signal_health || 'red'}"></span>
-                                    ${cpeIp ? `<a href="http://${cpeIp}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : escapeHtml(cpeName)}
-                                </div>
-                            </td>
-                            <td>${cpe.model || ''}</td>
-                            <td>${cpeIp ? configStatusCell(cpeIp) : ''}</td>
-                            <td>${cpeIp ? configLastBackupCell(cpeIp) : ''}</td>
-                            <td><div class="actions-cell">${cpeIp ? configActionsCell(cpeIp) : ''}</div></td>
-                        </tr>`;
-                    }
-                }
-
-                for (const sw of switches) {
-                    const isOffline = !!sw.last_error;
-                    const swName = sw.system_name || sw.ip;
-
-                    html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''}">
-                        <td>
-                            <div class="name-cell tree-indent-1">
-                                <span class="expand-toggle hidden">&#9654;</span>
-                                <span class="device-icon ap">SW</span>
-                                <a href="http://${sw.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>
-                            </div>
-                        </td>
-                        <td>${sw.model || ''}</td>
-                        <td>${configStatusCell(sw.ip)}</td>
-                        <td>${configLastBackupCell(sw.ip)}</td>
-                        <td><div class="actions-cell">${configActionsCell(sw.ip)}</div></td>
-                    </tr>`;
-                }
-            }
-
-            if (!html) html = '<tr><td colspan="5" class="empty-state">No devices found</td></tr>';
-            tbody.innerHTML = html;
-        }
-
-        function toggleConfigExpand(key, event) {
-            event.stopPropagation();
-            const current = configExpandState.get(key);
-            configExpandState.set(key, current === false ? true : false);
-            renderConfigTable();
         }
 
         // Config actions
@@ -8303,14 +8385,14 @@
                 const resp = await fetch('/api/config-compliance');
                 const data = await resp.json();
                 configCompliance = data.devices || {};
-                renderConfigTable();
+                if (activeColumnMode === 'config') renderTable();
                 updateConfigStats();
             } catch (e) {
                 showToast('Failed to check compliance: ' + e.message);
             }
         }
 
-        // Config Template UI
+        // Config Policy UI
         function configCategoryLabel(category) {
             if (category === 'radius') return 'RADIUS';
             if (category === 'ntp') return 'NTP';
@@ -8336,7 +8418,7 @@
         function loadConfigTemplateUI() {
             const badge = document.getElementById('configTemplateBadge');
             const enabled = configTemplates.filter(t => t.enabled);
-            badge.textContent = `${enabled.length} active`;
+            badge.textContent = `${enabled.length} enforced`;
 
             const pushBtn = document.getElementById('configPushBtn');
             setHidden(pushBtn, enabled.length === 0);
@@ -8345,25 +8427,36 @@
                 const statusEl = document.getElementById(`cfgStatus-${cat}`);
                 if (!statusEl) continue;
                 statusEl.textContent = '';
-                statusEl.classList.remove('saved', 'suggested');
-                // Hide enable toggle until template is saved
+                statusEl.className = 'config-section-status';
+                // Disable toggle for unsaved sections
                 const toggle = document.getElementById(`cfgToggle-${cat}`);
-                if (toggle) { toggle.classList.add('hidden'); setToggleActive(toggle, false); }
+                if (toggle) { toggle.classList.add('not-saved'); toggle.title = 'Save this section first'; setToggleActive(toggle, false); }
+                const section = document.getElementById(`cfgSection-${cat}`);
+                if (section) section.classList.remove('enforced');
             }
 
             // Populate form fields and enable toggles from saved templates
             for (const t of configTemplates) {
                 const statusEl = document.getElementById(`cfgStatus-${t.category}`);
                 if (statusEl) {
-                    statusEl.textContent = 'Saved';
-                    statusEl.classList.add('saved');
+                    if (t.enabled) {
+                        statusEl.textContent = 'Enforced';
+                        statusEl.className = 'config-section-status enforced';
+                    } else {
+                        statusEl.textContent = 'Saved';
+                        statusEl.className = 'config-section-status saved';
+                    }
                 }
-                // Show and set the enable toggle
+                // Enable toggle for saved templates
                 const toggle = document.getElementById(`cfgToggle-${t.category}`);
                 if (toggle) {
-                    toggle.classList.remove('hidden');
+                    toggle.classList.remove('not-saved');
+                    toggle.title = t.enabled ? 'Click to stop enforcing' : 'Click to enforce this policy';
                     setToggleActive(toggle, !!t.enabled);
                 }
+                // Section accent
+                const section = document.getElementById(`cfgSection-${t.category}`);
+                if (section) section.classList.toggle('enforced', !!t.enabled);
                 if (t.form_data) {
                     populateConfigForm(t.category, t.form_data);
                 }
@@ -8554,11 +8647,11 @@
             row.innerHTML = `
                 <div>
                     <label>Username</label>
-                    <input type="text" class="cfg-user-name u-w-full" value="${escapeHtml(userData?.username || '')}" placeholder="username" >
+                    <input type="text" class="cfg-user-name u-w-full" value="${escapeHtml(userData?.username || '')}" placeholder="username" autocomplete="off" data-1p-ignore>
                 </div>
                 <div>
                     <label>Password</label>
-                    <input type="password" class="cfg-user-pass u-w-full" value="${escapeHtml(userData?.password || '')}" placeholder="password" >
+                    <input type="password" class="cfg-user-pass u-w-full" value="${escapeHtml(userData?.password || '')}" placeholder="password" autocomplete="off" data-1p-ignore>
                 </div>
                 <div>
                     <label>Level</label>
@@ -8718,9 +8811,12 @@
         }
 
         async function saveConfigSection(category) {
+            console.log('saveConfigSection called for:', category);
             const formData = collectFormData(category);
+            console.log('formData:', JSON.stringify(formData));
             const fragment = formDataToFragment(category, formData);
-            if (!fragment) return;
+            console.log('fragment:', JSON.stringify(fragment));
+            if (!fragment) { console.log('fragment is null, returning'); return; }
 
             // Parse scope from selector
             const scopeVal = document.getElementById('cfgScopeSelect')?.value || 'global';
@@ -8809,8 +8905,23 @@
 
         async function toggleConfigEnabled(toggleEl) {
             const cat = toggleEl.dataset.category;
-            const template = configTemplates.find(t => t.category === cat);
-            if (!template) return;
+            console.log('toggleConfigEnabled called for:', cat, 'populated:', isSectionPopulated(cat));
+            let template = configTemplates.find(t => t.category === cat);
+            if (!template) {
+                // Auto-save populated sections when user tries to toggle
+                if (isSectionPopulated(cat)) {
+                    toggleEl.style.opacity = '0.6';
+                    showToast('Saving policy\u2026');
+                    await saveConfigSection(cat);
+                    toggleEl.style.opacity = '';
+                    template = configTemplates.find(t => t.category === cat);
+                    if (!template) { showToast('Failed to save policy'); return; }
+                    // Auto-saved, now continue to enable it
+                } else {
+                    showToast('Fill in this section first, then toggle to enforce');
+                    return;
+                }
+            }
             const newEnabled = !toggleEl.classList.contains('active');
             setToggleActive(toggleEl, newEnabled);
             try {
@@ -8823,12 +8934,20 @@
                     template.enabled = newEnabled ? 1 : 0;
                     const badge = document.getElementById('configTemplateBadge');
                     const enabled = configTemplates.filter(t => t.enabled);
-                    badge.textContent = `${enabled.length} active`;
+                    badge.textContent = `${enabled.length} enforced`;
                     const pushBtn = document.getElementById('configPushBtn');
                     setHidden(pushBtn, enabled.length === 0);
+                    // Update section accent and status badge
+                    const section = document.getElementById(`cfgSection-${cat}`);
+                    if (section) section.classList.toggle('enforced', newEnabled);
+                    const statusEl = document.getElementById(`cfgStatus-${cat}`);
+                    if (statusEl) {
+                        statusEl.textContent = newEnabled ? 'Enforced' : 'Saved';
+                        statusEl.className = 'config-section-status ' + (newEnabled ? 'enforced' : 'saved');
+                    }
                 } else {
                     setToggleActive(toggleEl, !newEnabled);
-                    showToast('Failed to update template');
+                    showToast('Failed to update policy');
                 }
             } catch (e) {
                 setToggleActive(toggleEl, !newEnabled);
@@ -8895,7 +9014,7 @@
         // Config Push
         function showConfigPushDialog() {
             const enabled = configTemplates.filter(t => t.enabled);
-            if (!enabled.length) { showToast('No config templates saved. Save at least one section first.'); return; }
+            if (!enabled.length) { showToast('No config policies enabled. Save and enable at least one section first.'); return; }
 
             // Check if rollout is already active
             if (configPushRollout && (configPushRollout.status === 'active' || configPushRollout.status === 'paused')) {
@@ -8912,10 +9031,10 @@
             modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
             modal.innerHTML = `
                 <div class="backup-modal" style="width:400px;">
-                    <h3 style="margin:0 0 12px;">Push Config Templates</h3>
+                    <h3 style="margin:0 0 12px;">Push Config Policies</h3>
                     <p style="font-size:0.8rem;color:#6b7280;margin:0 0 12px;">Pushes in phases: Canary (1 device) → 10% → 50% → 100%. You advance each phase manually.</p>
                     <div style="margin-bottom:12px;">
-                        <label style="font-size:0.8rem;font-weight:500;display:block;margin-bottom:6px;">Templates to push:</label>
+                        <label style="font-size:0.8rem;font-weight:500;display:block;margin-bottom:6px;">Policies to push:</label>
                         ${templateList}
                     </div>
                     <div style="margin-bottom:12px;">
@@ -9003,11 +9122,11 @@
 
         async function pushConfigToSite(siteId) {
             const enabled = configTemplates.filter(t => t.enabled);
-            if (!enabled.length) { showToast('No config templates saved.'); return; }
+            if (!enabled.length) { showToast('No config policies enabled.'); return; }
 
             const site = topology?.sites?.find(s => s.id === siteId);
             const siteName = site?.name || `Site ${siteId}`;
-            if (!await showConfirmDialog(`Push all config templates to all devices in "${siteName}"?`, {
+            if (!await showConfirmDialog(`Push config policies to all devices in "${siteName}"?`, {
                 title: 'Push Configuration',
                 confirmText: 'Push',
                 danger: true,
@@ -9021,6 +9140,49 @@
             }).then(r => r.json()).then(data => {
                 if (data.device_count) showToast(`Config push started for ${data.device_count} devices`);
             }).catch(e => showToast('Push failed: ' + e.message));
+        }
+
+        async function pushConfigForSelected() {
+            const ips = [...checkedDevices];
+            if (!ips.length) { showToast('No devices selected'); return; }
+            const enabled = configTemplates.filter(t => t.enabled);
+            if (!enabled.length) { showToast('No config policies enabled.'); return; }
+            if (!await showConfirmDialog(`Push config policies to ${ips.length} selected device(s)?`, {
+                title: 'Push Configuration',
+                confirmText: 'Push',
+                danger: true,
+            })) return;
+            const targets = ips.map(ip => {
+                // Determine device type
+                if (findAP(ip)) return {type: 'ap', ip};
+                for (const site of (topology?.sites || [])) {
+                    for (const sw of (site.switches || [])) {
+                        if (sw.ip === ip) return {type: 'switch', ip};
+                    }
+                    for (const ap of (site.aps || [])) {
+                        for (const cpe of (ap.cpes || [])) {
+                            if (cpe.ip === ip) return {type: 'cpe', ip};
+                        }
+                    }
+                }
+                return {type: 'ap', ip};
+            });
+            const templateIds = enabled.map(t => t.id);
+            try {
+                const resp = await fetch('/api/config-push', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({template_ids: templateIds, targets}),
+                });
+                const data = await resp.json();
+                if (data.device_count) showToast(`Config push started for ${data.device_count} devices`);
+                else showToast(data.detail || 'Config push started');
+            } catch (e) { showToast('Push failed: ' + e.message); }
+        }
+
+        async function checkComplianceForSelected() {
+            showToast('Checking compliance...');
+            checkCompliance();
         }
 
         const CONFIG_PUSH_PHASES = ['canary', 'pct10', 'pct50', 'pct100'];
@@ -9135,12 +9297,12 @@
             } else {
                 configPushingDevices.add(msg.ip);
             }
-            if (currentMainTab === 'config') renderConfigTable();
+            if (activeColumnMode === 'config') renderTable();
         }
 
         function handleConfigPushComplete(msg) {
             configPushingDevices.clear();
-            if (currentMainTab === 'config') loadConfigData();
+            if (activeColumnMode === 'config') loadConfigData();
             const summary = `Config push complete: ${msg.success_count} succeeded, ${msg.failed_count} failed`;
             console.log(summary);
         }
@@ -9152,7 +9314,7 @@
             if (enabled) {
                 const toggle = document.getElementById('configAutoEnforceToggle');
                 const confirmed = await showConfirmDialog(
-                    'Auto-enforce will automatically push config corrections to non-compliant devices on each poll cycle. Continue?',
+                    'Auto-enforce will automatically push config corrections to non-compliant devices daily at the scheduled time. Continue?',
                     {title: 'Enable Auto-Enforce', confirmText: 'Enable'}
                 );
                 if (!confirmed) {
@@ -9180,13 +9342,43 @@
                 const toggle = document.getElementById('configAutoEnforceToggle');
                 if (toggle) setToggleActive(toggle, data.enabled);
                 updateEnforceStatusUI(data);
-                // Show/hide cooldown input based on enabled state
+                // Show/hide enforce controls based on enabled state
+                const show = data.enabled ? '' : 'none';
                 const cooldownInput = document.getElementById('configEnforceCooldown');
                 const cooldownLabel = document.getElementById('configCooldownLabel');
-                if (cooldownInput) cooldownInput.style.display = data.enabled ? '' : 'none';
-                if (cooldownLabel) cooldownLabel.style.display = data.enabled ? '' : 'none';
+                const hourSelect = document.getElementById('configEnforceHour');
+                if (cooldownInput) cooldownInput.style.display = show;
+                if (cooldownLabel) cooldownLabel.style.display = show;
+                if (hourSelect) {
+                    hourSelect.style.display = show;
+                    // Populate hour options if empty
+                    if (hourSelect.options.length === 0) {
+                        for (let h = 0; h < 24; h++) {
+                            const label = h === 0 ? '12 AM' : h < 12 ? `${h} AM` : h === 12 ? '12 PM' : `${h - 12} PM`;
+                            hourSelect.add(new Option(label, h));
+                        }
+                    }
+                    // Load saved hour
+                    const settingsResp = await fetch('/api/settings');
+                    const settings = await settingsResp.json();
+                    hourSelect.value = settings.config_enforce_hour || '4';
+                }
             } catch (e) {
                 console.debug('Failed to load enforce status:', e);
+            }
+        }
+
+        async function updateEnforceHour(value) {
+            const hour = parseInt(value);
+            if (isNaN(hour) || hour < 0 || hour > 23) return;
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({config_enforce_hour: String(hour)}),
+                });
+            } catch (e) {
+                console.debug('Failed to update enforce hour:', e);
             }
         }
 

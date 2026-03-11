@@ -628,21 +628,41 @@ class NetworkPoller:
     # ------------------------------------------------------------------
 
     async def _maybe_poll_configs(self):
-        """Check if it's time for a config poll based on settings."""
+        """Run config poll + auto-enforce daily at 4 AM local time."""
         try:
             if db.get_setting("config_poll_enabled", "true") != "true":
                 return
 
+            # Determine local time using timezone setting
+            import zoneinfo
+            tz_name = db.get_setting("timezone", "auto")
             try:
-                interval_hours = int(db.get_setting("config_poll_interval_hours", "24"))
+                if tz_name and tz_name != "auto":
+                    tz = zoneinfo.ZoneInfo(tz_name)
+                else:
+                    tz = None  # fall back to system local time
+            except Exception:
+                tz = None
+
+            now_local = datetime.now(tz)
+            try:
+                target_hour = int(db.get_setting("config_enforce_hour", "4"))
             except (TypeError, ValueError):
-                interval_hours = 24
+                target_hour = 4
+
+            # Only run during the target hour
+            if now_local.hour != target_hour:
+                return
+
+            # Don't run again if we already polled today
             if self._last_config_poll:
-                elapsed = (datetime.now() - self._last_config_poll).total_seconds()
-                if elapsed < interval_hours * 3600:
+                last_local = self._last_config_poll
+                if tz and not last_local.tzinfo:
+                    last_local = last_local.replace(tzinfo=tz)
+                if last_local.date() == now_local.date():
                     return
 
-            logger.info("Starting scheduled config poll")
+            logger.info(f"Starting scheduled config poll (daily at {target_hour}:00)")
             await self.poll_all_configs()
 
             # After polling, check if auto-enforce is enabled

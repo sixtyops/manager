@@ -1819,7 +1819,7 @@ _SETTINGS_WRITABLE = {
     # Poller settings
     "poller_concurrency",
     # Config enforce settings
-    "config_auto_enforce", "config_enforce_cooldown_minutes",
+    "config_auto_enforce", "config_enforce_cooldown_minutes", "config_enforce_hour",
     # Syslog forwarding
     "syslog_forward_enabled", "syslog_forward_host", "syslog_forward_port",
     "syslog_forward_protocol", "syslog_forward_facility",
