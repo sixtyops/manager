@@ -72,7 +72,7 @@ def seed_database() -> None:
     Delete data/tachyon.db to re-seed.
     """
     with db.get_db() as conn:
-        count = conn.execute("SELECT COUNT(*) FROM access_points").fetchone()[0]
+        count = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
         if count > 0:
             logger.info("Dev mode: database already seeded, skipping")
             return

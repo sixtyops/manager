@@ -244,84 +244,55 @@ class TestCredentialStateMismatch:
 # EC9: Setup wizard partial/failed SSL + backup
 # =========================================================================
 
-class TestSetupWizardPartialFailure:
-    """Wizard shows failure clearly and doesn't imply configured success."""
+class TestSetupWizardReplacement:
+    """Setup wizard replaced by App Settings modal with auto-open on first run."""
 
-    def test_wizard_ssl_failure_stays_on_step1(self, authed_client, mock_db):
-        """SSL cert failure → wizard stays on step 1 with error."""
-        from updater import database as db
-        db.set_setting("setup_wizard_completed", "false")
-
-        with patch("updater.ssl_manager.obtain_certificate", new_callable=AsyncMock) as mock_cert, \
-             patch("updater.ssl_manager.get_ssl_status", return_value={"enabled": False}), \
-             patch("updater.sftp_backup.get_backup_status", return_value={"enabled": False}):
-            mock_cert.return_value = (False, "ACME server rejected domain")
-            resp = authed_client.post("/setup-wizard", data={
-                "step": "1",
-                "action": "configure",
-                "ssl_domain": "example.com",
-                "ssl_email": "admin@example.com",
-            })
-        assert resp.status_code == 200
-        assert "ACME server rejected domain" in resp.text
-
-    def test_wizard_skip_ssl_advances_to_step2(self, authed_client, mock_db):
-        """Skipping SSL → wizard advances to step 2."""
+    def test_first_run_passes_show_settings_flag(self, authed_client, mock_db):
+        """When wizard not completed, index passes show_settings=True."""
         from updater import database as db
         db.set_setting("setup_wizard_completed", "false")
 
         with patch("updater.ssl_manager.get_ssl_status", return_value={"enabled": False}), \
              patch("updater.sftp_backup.get_backup_status", return_value={"enabled": False}):
-            resp = authed_client.post("/setup-wizard", data={
-                "step": "1",
-                "action": "skip",
-            })
+            resp = authed_client.get("/")
         assert resp.status_code == 200
-        # Should now be on step 2 (backup configuration)
-        assert "step" in resp.text.lower() or "backup" in resp.text.lower()
+        # The template should have the first-run auto-open JS
+        assert "_firstRunSetup" in resp.text
 
-    def test_wizard_backup_failure_stays_on_step2(self, authed_client, mock_db):
-        """Backup init failure → wizard stays on step 2 with error."""
+    def test_completed_wizard_no_auto_open(self, authed_client, mock_db):
+        """When wizard already completed, show_settings is False."""
+        from updater import database as db
+        db.set_setting("setup_wizard_completed", "true")
+
+        resp = authed_client.get("/")
+        assert resp.status_code == 200
+        # The auto-open setTimeout call should NOT be in the rendered page
+        assert "_firstRunSetup = true" not in resp.text
+
+    def test_ssl_setup_api_failure(self, authed_client, mock_db):
+        """SSL setup API returns error on certificate failure."""
+        with patch("updater.ssl_manager.obtain_certificate", new_callable=AsyncMock) as mock_cert:
+            mock_cert.return_value = (False, "ACME server rejected domain")
+            resp = authed_client.post("/api/ssl/setup", json={
+                "domain": "example.com",
+                "email": "admin@example.com",
+            })
+        assert resp.status_code == 400
+        assert "ACME server rejected domain" in resp.json()["detail"]
+
+    def test_wizard_complete_api(self, authed_client, mock_db):
+        """POST /api/setup-wizard/complete marks setup done."""
         from updater import database as db
         db.set_setting("setup_wizard_completed", "false")
-        db.set_setting("wizard_step_1_done", "true")
 
-        with patch("updater.sftp_backup.configure_backup", new_callable=AsyncMock) as mock_backup, \
-             patch("updater.ssl_manager.get_ssl_status", return_value={"enabled": False}), \
-             patch("updater.sftp_backup.get_backup_status", return_value={"enabled": False}):
-            mock_backup.return_value = (False, "Authentication failed: invalid token")
-            resp = authed_client.post("/setup-wizard", data={
-                "step": "2",
-                "action": "configure",
-                "sftp_host": "backup.example.com",
-                "sftp_username": "backupuser",
-                "sftp_path": "/backups",
-                "sftp_port": "22",
-                "auth_method": "password",
-                "sftp_password": "bad-password",
-            })
+        resp = authed_client.post("/api/setup-wizard/complete")
         assert resp.status_code == 200
-        assert "Authentication failed" in resp.text
-
-    def test_wizard_completes_without_ssl_or_backup(self, authed_client, mock_db):
-        """Skip both SSL and backup → wizard marked complete, but services unconfigured."""
-        from updater import database as db
-        db.set_setting("setup_wizard_completed", "false")
-        db.set_setting("wizard_step_1_done", "true")
-        db.set_setting("wizard_step_2_done", "true")
-
-        with patch("updater.ssl_manager.get_ssl_status", return_value={
-            "enabled": False, "domain": "", "cert_exists": False,
-            "needs_renewal": False, "using_letsencrypt": False, "days_until_expiry": None,
-        }), patch("updater.sftp_backup.get_backup_status", return_value={
-            "enabled": False, "repo_url": "", "auth_method": "", "last_run": "", "last_status": "",
-        }):
-            resp = authed_client.post("/setup-wizard", data={
-                "step": "3",
-                "action": "complete",
-            }, follow_redirects=False)
-        assert resp.status_code == 303
         assert db.get_setting("setup_wizard_completed") == "true"
+
+    def test_wizard_get_redirects_to_index(self, authed_client, mock_db):
+        """GET /setup-wizard now redirects to /."""
+        resp = authed_client.get("/setup-wizard", follow_redirects=False)
+        assert resp.status_code in (301, 302, 303, 307)
 
 
 # =========================================================================

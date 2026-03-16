@@ -816,98 +816,25 @@ async def logout(request: Request):
 
 
 # ============================================================================
-# Setup Wizard Routes
+# Setup Wizard (replaced by App Settings modal auto-open on first run)
 # ============================================================================
 
 def _is_wizard_needed() -> bool:
-    """Check if the setup wizard should be shown."""
+    """Check if the initial setup flow should be shown."""
     return db.get_setting("setup_wizard_completed", "false") != "true"
 
 
-def _wizard_step_allowed(step: int) -> bool:
-    """Check if a wizard step is allowed based on prior step completion."""
-    if step >= 2 and db.get_setting("wizard_step_1_done", "false") != "true":
-        return False
-    if step >= 3 and db.get_setting("wizard_step_2_done", "false") != "true":
-        return False
-    return True
-
-
 @app.get("/setup-wizard", response_class=HTMLResponse)
-async def setup_wizard_page(request: Request, step: int = 1, session: dict = Depends(require_auth)):
-    """Serve the setup wizard page."""
-    if not _is_wizard_needed():
-        return RedirectResponse(url="/", status_code=302)
-    # Enforce sequential step access
-    if not _wizard_step_allowed(step):
-        return RedirectResponse(url="/setup-wizard?step=1", status_code=302)
-    return render_template(request, "setup_wizard.html", {
-        "step": step,
-        "ssl_status": ssl_manager.get_ssl_status(),
-        "backup_status": sftp_backup.get_backup_status(),
-        "error": None, "success": None,
-    })
+async def setup_wizard_page(request: Request, session: dict = Depends(require_auth)):
+    """Legacy wizard URL — redirect to main page (App Settings opens automatically if needed)."""
+    return RedirectResponse(url="/", status_code=302)
 
 
-@app.post("/setup-wizard")
-async def setup_wizard_submit(
-    request: Request, step: int = Form(...), action: str = Form(...),
-    ssl_domain: str = Form(None), ssl_email: str = Form(None),
-    sftp_host: str = Form(None), sftp_port: int = Form(22),
-    sftp_path: str = Form("/backups/tachyon"), sftp_username: str = Form(None),
-    auth_method: str = Form("password"), sftp_password: str = Form(None),
-    ssh_key: str = Form(None), retention_count: int = Form(30),
-    session: dict = Depends(require_auth),
-):
-    """Handle setup wizard form submissions."""
-    # Enforce sequential step progression
-    if not _wizard_step_allowed(step):
-        return RedirectResponse(url="/setup-wizard?step=1", status_code=303)
-
-    ssl_status = ssl_manager.get_ssl_status()
-    backup_status = sftp_backup.get_backup_status()
-
-    if step == 1:
-        if action == "configure" and ssl_domain and ssl_email:
-            ok, msg = await ssl_manager.obtain_certificate(ssl_domain, ssl_email)
-            if not ok:
-                return render_template(request, "setup_wizard.html", {
-                    "step": 1, "ssl_status": ssl_status,
-                    "backup_status": backup_status, "error": msg, "success": None,
-                })
-        db.set_setting("wizard_step_1_done", "true")
-        return render_template(request, "setup_wizard.html", {
-            "step": 2,
-            "ssl_status": ssl_manager.get_ssl_status(),
-            "backup_status": backup_status, "error": None, "success": None,
-        })
-    elif step == 2:
-        if action == "configure" and sftp_host and sftp_username:
-            ok, msg = await sftp_backup.configure_backup(
-                host=sftp_host, port=sftp_port, path=sftp_path,
-                username=sftp_username, auth_method=auth_method,
-                password=sftp_password, ssh_key=ssh_key,
-                retention_count=retention_count,
-            )
-            if not ok:
-                return render_template(request, "setup_wizard.html", {
-                    "step": 2, "ssl_status": ssl_status,
-                    "backup_status": backup_status, "error": msg, "success": None,
-                })
-        db.set_setting("wizard_step_2_done", "true")
-        return render_template(request, "setup_wizard.html", {
-            "step": 3,
-            "ssl_status": ssl_manager.get_ssl_status(),
-            "backup_status": sftp_backup.get_backup_status(),
-            "error": None, "success": None,
-        })
-    elif step == 3:
-        db.set_setting("setup_wizard_completed", "true")
-        # Clean up step-tracking settings
-        db.set_setting("wizard_step_1_done", "false")
-        db.set_setting("wizard_step_2_done", "false")
-        return RedirectResponse(url="/", status_code=303)
-    return RedirectResponse(url="/setup-wizard", status_code=303)
+@app.post("/api/setup-wizard/complete", tags=["system"])
+async def complete_wizard_api(session: dict = Depends(require_role("admin"))):
+    """Mark the initial setup as completed."""
+    db.set_setting("setup_wizard_completed", "true")
+    return {"ok": True}
 
 
 @app.get("/ssl-setup", response_class=HTMLResponse)
@@ -937,6 +864,22 @@ async def ssl_setup_submit(
 @app.get("/api/ssl/status", tags=["system"])
 async def get_ssl_status_api(session: dict = Depends(require_auth)):
     return ssl_manager.get_ssl_status()
+
+
+@app.post("/api/ssl/setup", tags=["system"])
+async def ssl_setup_api(request: Request, session: dict = Depends(require_role("admin"))):
+    """Configure HTTPS certificate via JSON API."""
+    data = await request.json()
+    domain = (data.get("domain") or "").strip()
+    email = (data.get("email") or "").strip()
+    if not domain:
+        raise HTTPException(400, "Domain is required")
+    if not email:
+        raise HTTPException(400, "Email is required for Let's Encrypt")
+    success, message = await ssl_manager.obtain_certificate(domain, email)
+    if not success:
+        raise HTTPException(400, message)
+    return {"success": True, "message": message, **ssl_manager.get_ssl_status()}
 
 
 @app.get("/backup-setup", response_class=HTMLResponse)
@@ -1014,9 +957,8 @@ async def index(request: Request, session: dict = Depends(require_auth)):
     """Serve the main page (monitor view)."""
     if is_setup_required():
         return RedirectResponse(url="/setup", status_code=302)
-    if _is_wizard_needed():
-        return RedirectResponse(url="/setup-wizard", status_code=302)
-    return render_template(request, "monitor.html")
+    show_settings = _is_wizard_needed()
+    return render_template(request, "monitor.html", {"show_settings": show_settings})
 
 
 
@@ -2322,9 +2264,12 @@ async def get_radius_config_api(session: dict = Depends(require_auth), _pro=Depe
         "auth_port": config.auth_port,
         "has_secret": bool(config.shared_secret),
         "secret_set": bool(config.shared_secret),
+        "shared_secret": config.shared_secret,
         "configured": bool(config.shared_secret),
         "auth_mode": config.auth_mode,
         "advertised_address": config.advertised_address,
+        "client_mode": config.client_mode,
+        "detected_ip": radius_config._detect_host_ip(),
         "ldap_url": config.ldap_url,
         "ldap_bind_dn": config.ldap_bind_dn,
         "ldap_has_password": bool(config.ldap_bind_password),
@@ -2354,6 +2299,12 @@ async def update_radius_config_api(request: Request, session: dict = Depends(req
 
     if "enabled" in data:
         config.enabled = bool(data["enabled"])
+        if config.enabled and config.auth_mode != "ldap":
+            # Require at least one non-reserved RADIUS user for local mode
+            users = radius_users.get_radius_users()
+            valid_users = [u for u in users if u["username"] not in ("admin", "root") and u.get("enabled", True)]
+            if not valid_users:
+                raise HTTPException(400, "Add at least one RADIUS user (besides admin/root) before enabling the server")
     if "auth_port" in data or "port" in data:
         port = int(data.get("auth_port", data.get("port", config.auth_port)) or config.auth_port)
         if not (1024 <= port <= 65535):
@@ -2375,6 +2326,10 @@ async def update_radius_config_api(request: Request, session: dict = Depends(req
         config.auth_mode = data["auth_mode"]
     if "advertised_address" in data or "host" in data:
         config.advertised_address = (data.get("advertised_address", data.get("host", "")) or "").strip()
+    if "client_mode" in data:
+        if data["client_mode"] not in ("open", "restricted"):
+            raise HTTPException(400, "client_mode must be 'open' or 'restricted'")
+        config.client_mode = data["client_mode"]
     if "ldap_url" in data:
         url = data["ldap_url"].strip()
         if url and not (url.startswith("ldaps://") or url.startswith("ldap://")):
@@ -2665,19 +2620,12 @@ async def push_radius_to_devices_api(
         if target_ips:
             placeholders = ",".join("?" for _ in target_ips)
             devices = conn.execute(
-                f"SELECT ip, username, password FROM access_points WHERE enabled = 1 AND ip IN ({placeholders})",
-                target_ips,
-            ).fetchall()
-            devices += conn.execute(
-                f"SELECT ip, username, password FROM switches WHERE enabled = 1 AND ip IN ({placeholders})",
+                f"SELECT ip, username, password FROM devices WHERE enabled = 1 AND role IN ('ap', 'switch') AND ip IN ({placeholders})",
                 target_ips,
             ).fetchall()
         else:
             devices = conn.execute(
-                "SELECT ip, username, password FROM access_points WHERE enabled = 1"
-            ).fetchall()
-            devices += conn.execute(
-                "SELECT ip, username, password FROM switches WHERE enabled = 1"
+                "SELECT ip, username, password FROM devices WHERE enabled = 1 AND role IN ('ap', 'switch')"
             ).fetchall()
 
     if not devices:

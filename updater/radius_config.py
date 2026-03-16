@@ -7,11 +7,42 @@ Configuration can be set via:
 """
 
 import logging
+import os
+import socket
 from dataclasses import dataclass
 
 from . import database as db
 
 logger = logging.getLogger(__name__)
+
+
+def _detect_host_ip() -> str:
+    """Detect the host's primary IP address.
+
+    Prefers HOST_IP env var (set by docker-compose or the user).
+    Falls back to Docker host gateway (host.docker.internal), then
+    a UDP socket probe.
+    """
+    # Explicit override
+    env_ip = os.environ.get("HOST_IP", "").strip()
+    if env_ip:
+        return env_ip
+    # Docker host gateway (works on Docker Desktop and with extra_hosts)
+    try:
+        ip = socket.gethostbyname("host.docker.internal")
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    # Fallback: UDP probe (returns container IP inside Docker, host IP outside)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -123,10 +154,13 @@ def get_auth_config_summary() -> dict:
         "radius": {
             "enabled": radius_cfg.enabled,
             "advertised_address": radius_cfg.advertised_address,
+            "detected_ip": _detect_host_ip(),
             "auth_port": radius_cfg.auth_port,
             "secret_set": bool(radius_cfg.shared_secret),
+            "shared_secret": radius_cfg.shared_secret,
             "configured": bool(radius_cfg.shared_secret),
             "auth_mode": radius_cfg.auth_mode,
+            "client_mode": radius_cfg.client_mode,
             "ldap_url": radius_cfg.ldap_url,
             "ldap_bind_dn": radius_cfg.ldap_bind_dn,
             "ldap_has_password": bool(radius_cfg.ldap_bind_password),

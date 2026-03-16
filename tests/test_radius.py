@@ -190,7 +190,7 @@ class TestRadiusServerConfig:
         config = get_radius_server_config()
         assert config.enabled is False
         assert config.auth_port == 1812
-        assert config.shared_secret == ""
+        assert len(config.shared_secret) > 0  # auto-generated
         assert config.auth_mode == "local"
 
     def test_save_and_load_config_round_trip(self, mock_db):
@@ -260,10 +260,13 @@ class TestRadiusServerAPI:
         assert "auth_port" in data
         assert "has_secret" in data
         assert "auth_mode" in data
-        assert "shared_secret" not in data
+        assert "shared_secret" in data
         assert "ldap_bind_password" not in data
 
     def test_put_config_updates_settings(self, authed_client, pro_license):
+        # Create a RADIUS user first (required for enabling in local mode)
+        from updater import radius_users
+        radius_users.create_radius_user("testuser", "TestPassword1!")
         resp = authed_client.put("/api/auth/radius", json={
             "enabled": True,
             "auth_port": 1812,
@@ -543,14 +546,16 @@ class TestRadiusServiceConfig:
 
 class TestRadiusAPI:
     def test_config_requires_secret_when_enabled(self, authed_client):
-        resp = authed_client.put("/api/auth/radius", json={"enabled": True, "host": "radius.internal", "port": 39122, "secret": ""})
-        # Empty secret doesn't trigger error because we check "if data['secret']" which is falsy
-        # The config just won't set a secret. Test with explicit shared_secret field
+        from updater import radius_users
+        radius_users.create_radius_user("testuser", "TestPassword1!")
         resp = authed_client.put("/api/auth/radius", json={"enabled": True, "shared_secret": "short"})
         assert resp.status_code == 400
         assert "Shared secret" in resp.json()["detail"]
 
     def test_create_and_list_users(self, authed_client):
+        # Create a user first so we can enable RADIUS in local mode
+        created_first = authed_client.post("/api/auth/radius/users", json={"username": "bootstrap", "password": "pass123456789", "enabled": True})
+        assert created_first.status_code == 200
         resp = authed_client.put("/api/auth/radius", json={"enabled": True, "host": "radius.internal", "port": 39122, "secret": "sharedsecret"})
         assert resp.status_code == 200
 
@@ -580,8 +585,9 @@ class TestRadiusAPI:
         assert clients[0]["shortname"] == "tower-subnet"
 
     def test_mark_legacy_secret_reviewed(self, authed_client):
+        from updater.crypto import encrypt_password
         db.set_settings({
-            "builtin_radius_secret": "sharedsecret",
+            "radius_server_secret": encrypt_password("sharedsecret"),
             "builtin_radius_secret_updated_at": "",
         })
 

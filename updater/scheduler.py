@@ -160,6 +160,27 @@ class AutoUpdateScheduler:
         self._running = True
         self._task = asyncio.create_task(self._check_loop())
         logger.info(f"Auto-update scheduler started (interval: {self.check_interval}s)")
+        # Fetch weather eagerly so the header shows temperature immediately
+        asyncio.create_task(self._fetch_weather_initial())
+
+    async def _fetch_weather_initial(self):
+        """Fetch weather on startup so the UI shows temperature immediately."""
+        try:
+            settings = db.get_all_settings()
+            if settings.get("weather_check_enabled") != "true":
+                return
+            zip_code = settings.get("zip_code", "")
+            min_temp_c = _as_float(settings.get("min_temperature_c", "-10"), -10.0)
+            weather_ok, weather_data = await services.check_weather_ok(
+                zip_code if zip_code else None, min_temp_c
+            )
+            self._weather_info = weather_data
+            self._weather_ok = weather_ok
+            self._weather_checked_today = datetime.now().strftime("%Y-%m-%d")
+            if weather_data:
+                logger.info("Scheduler: initial weather fetch: %.1f°C", weather_data.get("temperature_c", 0))
+        except Exception as e:
+            logger.warning("Scheduler: initial weather fetch failed: %s", e)
 
     async def stop(self):
         """Stop the scheduler."""

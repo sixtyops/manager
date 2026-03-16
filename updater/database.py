@@ -1032,9 +1032,6 @@ def delete_tower_site(site_id: int):
     """Delete a tower site (devices will have tower_site_id set to NULL)."""
     with get_db() as db:
         db.execute("UPDATE devices SET tower_site_id = NULL WHERE tower_site_id = ?", (site_id,))
-        # Keep legacy tables in sync during transition
-        db.execute("UPDATE access_points SET tower_site_id = NULL WHERE tower_site_id = ?", (site_id,))
-        db.execute("UPDATE switches SET tower_site_id = NULL WHERE tower_site_id = ?", (site_id,))
         db.execute("DELETE FROM tower_sites WHERE id = ?", (site_id,))
 
 
@@ -2769,8 +2766,8 @@ def get_all_effective_templates() -> dict[str, list[dict]]:
     resolve scope in memory instead of per-device DB calls.
     """
     with get_db() as db:
-        aps = db.execute("SELECT ip, tower_site_id FROM access_points WHERE enabled = 1").fetchall()
-        switches = db.execute("SELECT ip, tower_site_id FROM switches WHERE enabled = 1").fetchall()
+        aps = db.execute("SELECT ip, tower_site_id FROM devices WHERE enabled = 1 AND role = 'ap'").fetchall()
+        switches = db.execute("SELECT ip, tower_site_id FROM devices WHERE enabled = 1 AND role = 'switch'").fetchall()
         rows = db.execute(
             "SELECT * FROM config_templates WHERE enabled = 1 ORDER BY category, id"
         ).fetchall()
@@ -3030,20 +3027,20 @@ def get_fleet_status() -> dict:
     """Get current fleet firmware status breakdown."""
     with get_db() as conn:
         ap_total = conn.execute(
-            "SELECT COUNT(*) FROM access_points WHERE enabled = 1"
+            "SELECT COUNT(*) FROM devices WHERE enabled = 1 AND role = 'ap'"
         ).fetchone()[0]
         ap_versions = conn.execute(
             "SELECT firmware_version, COUNT(*) as cnt "
-            "FROM access_points WHERE enabled = 1 AND firmware_version IS NOT NULL "
+            "FROM devices WHERE enabled = 1 AND role = 'ap' AND firmware_version IS NOT NULL "
             "GROUP BY firmware_version ORDER BY cnt DESC"
         ).fetchall()
 
         sw_total = conn.execute(
-            "SELECT COUNT(*) FROM switches WHERE enabled = 1"
+            "SELECT COUNT(*) FROM devices WHERE enabled = 1 AND role = 'switch'"
         ).fetchone()[0]
         sw_versions = conn.execute(
             "SELECT firmware_version, COUNT(*) as cnt "
-            "FROM switches WHERE enabled = 1 AND firmware_version IS NOT NULL "
+            "FROM devices WHERE enabled = 1 AND role = 'switch' AND firmware_version IS NOT NULL "
             "GROUP BY firmware_version ORDER BY cnt DESC"
         ).fetchall()
 

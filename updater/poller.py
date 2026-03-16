@@ -204,7 +204,7 @@ class NetworkPoller:
                 return
             self._last_alert_time[ip] = time.time()
 
-            from . import slack, snmp
+            from . import slack, snmp, email_notifier
             try:
                 await slack.notify_device_offline(ip, device_type, error)
             except Exception as e:
@@ -218,6 +218,10 @@ class NetworkPoller:
                 await webhooks.notify_device_offline(ip, device_type, error)
             except Exception as e:
                 logger.debug(f"Webhook device offline notification failed: {e}")
+            try:
+                await email_notifier.notify_device_offline(ip, device_type, error)
+            except Exception as e:
+                logger.debug(f"Email device offline notification failed: {e}")
         except Exception as e:
             logger.error(f"Device offline alert dispatch error: {e}")
 
@@ -231,7 +235,7 @@ class NetworkPoller:
                 return
             self._last_alert_time.pop(ip, None)
 
-            from . import slack, snmp
+            from . import slack, snmp, email_notifier
             try:
                 await slack.notify_device_recovered(ip, device_type)
             except Exception as e:
@@ -245,6 +249,10 @@ class NetworkPoller:
                 await webhooks.notify_device_recovered(ip, device_type)
             except Exception as e:
                 logger.debug(f"Webhook device recovered notification failed: {e}")
+            try:
+                await email_notifier.notify_device_recovered(ip, device_type)
+            except Exception as e:
+                logger.debug(f"Email device recovered notification failed: {e}")
         except Exception as e:
             logger.error(f"Device recovered alert dispatch error: {e}")
 

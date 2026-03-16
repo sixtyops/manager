@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SixtyOps</title>
-    <link rel="icon" type="image/png" href="/static/favicon.png">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
@@ -331,11 +331,29 @@
         .toggle-sm.active::after { transform: translateX(12px); }
 
         /* Settings tabs */
+        .app-settings-modal {
+            width: 640px;
+            max-width: 95vw;
+            height: 85vh;
+            max-height: 700px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .app-settings-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            flex-shrink: 0;
+        }
+
         .settings-tabs {
             display: flex;
             border-bottom: 1px solid #e5e7eb;
             margin-bottom: 16px;
             gap: 4px;
+            flex-shrink: 0;
         }
 
         .settings-tab {
@@ -360,6 +378,76 @@
             border-bottom-color: #3b82f6;
         }
 
+        .settings-subtabs {
+            display: flex;
+            gap: 2px;
+            margin-bottom: 14px;
+            border-bottom: 1px solid var(--border-light, #e5e7eb);
+        }
+        .settings-subtab {
+            padding: 5px 12px;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 0.72rem;
+            color: #6b7280;
+            border-bottom: 2px solid transparent;
+        }
+        .settings-subtab:hover { color: #374151; }
+        .settings-subtab.active { color: #3b82f6; border-bottom-color: #3b82f6; }
+        .notif-subpanel, .auth-subpanel { display: none; }
+        .notif-subpanel.active, .auth-subpanel.active { display: block; }
+
+        .auth-status-badge {
+            font-size: 0.65rem; font-weight:600; padding:1px 7px; border-radius:999px;
+            background:#e5e7eb; color:#6b7280;
+        }
+        .auth-stats-grid {
+            display: grid; grid-template-columns: repeat(4,1fr); gap:6px; margin-top:10px;
+        }
+        .auth-stat-card {
+            background:var(--bg); border:1px solid var(--border-light,#f3f4f6);
+            border-radius:6px; padding:7px 9px; text-align:center;
+        }
+        .auth-stat-label {
+            font-size:0.62rem; font-weight:600; color:var(--text-dim,#9ca3af);
+            text-transform:uppercase; letter-spacing:0.03em;
+        }
+        .auth-stat-value {
+            font-size:0.78rem; font-weight:700; color:#111827; margin-top:2px;
+        }
+
+
+        /* History modal */
+        .history-modal { width:960px; max-width:95vw; max-height:80vh; display:flex; flex-direction:column; overflow:hidden; }
+        .history-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-shrink:0; }
+        .history-header h3 { margin:0; font-size:0.9rem; font-weight:600; }
+        .history-filters { display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; margin-bottom:10px; flex-shrink:0; }
+        .history-filters input, .history-filters select {
+            padding:5px 8px; border:1px solid var(--border,#d1d5db); border-radius:6px; font-size:0.75rem;
+        }
+        .history-filters input[type="text"] { width:120px; }
+        .history-filters input[type="date"] { width:130px; }
+        .history-view-tabs { display:flex; gap:2px; margin-bottom:10px; flex-shrink:0; border-bottom:1px solid var(--border-light,#e5e7eb); }
+        .history-view-tab {
+            padding:4px 12px; border:none; background:none; cursor:pointer;
+            font-size:0.72rem; font-weight:500; color:#6b7280;
+            border-bottom:2px solid transparent;
+        }
+        .history-view-tab:hover { color:#374151; }
+        .history-view-tab.active { color:#3b82f6; border-bottom-color:#3b82f6; }
+        .history-table-wrap { flex:1; overflow-y:auto; min-height:0; }
+        .history-table { width:100%; border-collapse:collapse; }
+        .history-table th {
+            text-align:left; font-size:0.65rem; font-weight:600; color:var(--text-dim,#9ca3af);
+            text-transform:uppercase; letter-spacing:0.03em; padding:6px 8px;
+            border-bottom:1px solid var(--border,#e5e7eb); position:sticky; top:0; background:var(--bg-card,#fff);
+        }
+        .history-table td { padding:6px 8px; font-size:0.75rem; border-bottom:1px solid var(--border-light,#f3f4f6); vertical-align:middle; }
+        .history-table tr:last-child td { border-bottom:none; }
+        .history-table .cell-time { font-size:0.7rem; color:var(--text-dim); white-space:nowrap; }
+        .history-table .cell-mono { font-family:var(--font-mono,monospace); font-size:0.73rem; }
+        .history-table .cell-error { color:#dc2626; }
 
         /* History table styles */
         .history-status-badge {
@@ -404,11 +492,33 @@
             display: none;
             flex: 1;
             overflow-y: auto;
+            min-height: 0;
+            font-size: 0.78rem;
+        }
+
+        .u-note-inline {
+            font-size: 0.7rem;
+            color: var(--text-dim, #9ca3af);
+            margin: 2px 0 8px;
+            line-height: 1.4;
         }
 
         .settings-panel.active {
             display: block;
         }
+
+        .users-table { width:100%; border-collapse:collapse; font-size:0.78rem; }
+        .users-table th { text-align:left; font-weight:600; font-size:0.7rem; color:var(--text-dim,#9ca3af); text-transform:uppercase; letter-spacing:0.03em; padding:6px 8px; border-bottom:1px solid var(--border,#e5e7eb); }
+        .users-table td { padding:8px; border-bottom:1px solid var(--border-light,#f3f4f6); vertical-align:middle; }
+        .users-table tr:last-child td { border-bottom:none; }
+        .users-table .user-actions { display:flex; gap:5px; justify-content:flex-end; align-items:center; }
+        .users-table .user-role-select { padding:4px 8px; border:1px solid var(--border,#d1d5db); border-radius:6px; font-size:0.72rem; background:#fff; }
+        .users-table .user-btn { padding:4px 10px; border:none; border-radius:6px; font-size:0.7rem; font-weight:500; background:var(--bg,#f3f4f6); color:var(--text-muted,#6b7280); cursor:pointer; transition:background 0.15s; }
+        .users-table .user-btn:hover { background:#e5e7eb; color:var(--text,#111827); }
+        .users-table .user-btn-danger { color:#fff; background:#ef4444; }
+        .users-table .user-btn-danger:hover { background:#dc2626; color:#fff; }
+        .user-status-active { color:#16a34a; font-weight:500; }
+        .user-status-disabled { color:#dc2626; font-weight:500; }
 
         .release-notes-content {
             margin-top: 8px;
@@ -1227,7 +1337,8 @@
             color: var(--text-muted);
             cursor: pointer;
         }
-        .cfg-save-btn:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+        .cfg-save-btn:hover:not(.saved) { background: var(--primary); color: #fff; border-color: var(--primary); }
+        .cfg-save-btn.saved { opacity: 0.5; cursor: default; }
         .config-section-body {
             padding: 6px 0 8px;
             font-size: var(--text-sm);
@@ -1278,15 +1389,15 @@
         }
         .drawer-settings-grid .drawer-col,
         .drawer-settings-grid .drawer-col-wide {
-            flex: 1 1 200px;
-            min-width: 160px;
+            flex: 1 1 280px;
+            min-width: 250px;
             border: 1px solid var(--border);
             border-radius: 8px;
             padding: 10px 12px;
             background: var(--bg-card);
         }
         .drawer-settings-grid .drawer-col-wide {
-            flex: 1 1 240px;
+            flex: 1 1 320px;
         }
 
         .drawer-settings-grid label {
@@ -1303,7 +1414,7 @@
             padding: 4px 6px;
             background: var(--input-bg);
             border: 1px solid var(--border);
-            border-radius: 5px;
+            border-radius: 6px;
             color: var(--text);
             font-size: var(--text-sm);
             font-family: inherit;
@@ -1322,7 +1433,7 @@
         .drawer-days {
             display: flex;
             gap: 3px;
-            flex-wrap: nowrap;
+            flex-wrap: wrap;
         }
 
         .drawer-day-btn {
@@ -1375,14 +1486,14 @@
         .drawer-firmware-card {
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 4px;
         }
 
         .drawer-fw-list {
             flex: 1;
             display: flex;
             flex-direction: column;
-            gap: 6px;
+            gap: 3px;
             font-size: 0.75rem;
             min-height: 32px;
         }
@@ -1855,13 +1966,17 @@
         }
 
         /* Filter chip in toolbar */
+        .filter-chips {
+            display: inline-flex; gap: 4px; flex-wrap: wrap; align-items: center;
+        }
         .filter-chip {
-            display: inline-flex; align-items: center; gap: 2px;
+            display: inline-flex; align-items: center; gap: 3px;
             background: var(--primary-bg); color: var(--primary);
             padding: 2px 8px; border-radius: 12px; font-size: 0.72rem;
-            white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap;
         }
-        .filter-chip a { color: var(--primary); text-decoration: none; font-size: 0.85rem; line-height: 1; }
+        .filter-chip a { color: var(--primary); text-decoration: none; font-size: 0.85rem; line-height: 1; cursor: pointer; }
+        .filter-chip a:hover { color: var(--primary-text, #1d4ed8); }
 
         /* Selection action bar */
         .selection-action-bar {
@@ -1887,6 +2002,43 @@
         .u-text-sm-muted { font-size: var(--text-xs); color: var(--text-muted); }
         .u-text-xxs-dim { font-size: var(--text-2xs); color: var(--text-dim); }
         .u-gap-4 { gap: 4px; }
+
+        /* Compact input for settings panels */
+        .u-input-compact {
+            width: 100%;
+            padding: 6px 10px;
+            font-size: 0.8rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--input-bg);
+            color: var(--text);
+            font-family: inherit;
+            box-sizing: border-box;
+        }
+        select.u-input-compact { appearance: auto; }
+        .u-input-compact:focus {
+            outline: 2px solid rgba(59, 130, 246, 0.2);
+            outline-offset: 0;
+            border-color: var(--primary);
+        }
+
+        /* Compact labels */
+        .u-label-xs { display: block; font-size: 0.7rem; color: var(--text-dim); margin-bottom: 2px; font-weight: 500; }
+        .u-label-compact { display: block; font-size: 0.72rem; color: var(--text-muted); margin-bottom: 4px; font-weight: 600; }
+
+        /* Layout utilities */
+        .u-w-full { width: 100%; }
+        .u-span-2 { grid-column: span 2; }
+        .u-m0 { margin: 0; }
+        .u-hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+        .u-text-xxs-muted { font-size: 0.68rem; color: var(--text-muted); }
+
+        /* SNMP notification fields */
+        .snmp-field-label { display: block; font-size: 0.7rem; color: var(--text-dim); margin-bottom: 2px; font-weight: 500; }
+        .snmp-field-input { width: 100%; padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text); font-family: inherit; box-sizing: border-box; }
+
+        /* Config user template fields */
+        .cfg-user-name, .cfg-user-pass, .cfg-user-level { padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text); font-family: inherit; box-sizing: border-box; }
 
         /* Confirm dialog */
         .confirm-modal { max-width: 400px; }
@@ -1958,7 +2110,7 @@
     </div>
 
     <div class="header">
-        <h1>SixtyOps</h1>
+        <h1><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:#0D9488;border-radius:4px;margin-right:6px;vertical-align:baseline;position:relative;top:-1px;"><svg width="14" height="14" viewBox="0 0 28 28" fill="none"><rect x="3" y="8" width="2.5" height="12" rx="1" fill="white" opacity="0.9"/><rect x="7.5" y="6" width="2.5" height="16" rx="1" fill="white"/><rect x="12" y="4" width="2.5" height="20" rx="1" fill="white"/><path d="M17 10 L25 6" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><path d="M17 14 L26 14" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/><path d="M17 18 L25 22" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg></span>Sixty<span style="color:#0D9488;">Ops</span></h1>
         <div class="header-right">
             <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:var(--text-dim);"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:var(--text-muted);"></span></span>
             <button class="header-icon-btn" onclick="openHistoryModal()" title="Job History">
@@ -1999,10 +2151,10 @@
                 <h2>Add APs &amp; Switches</h2>
                 <p style="font-size:0.75rem;color:var(--text-dim);margin-bottom:8px;">Devices are auto-classified as APs or switches based on model (TNA&nbsp;=&nbsp;AP, TNS&nbsp;=&nbsp;switch) and assigned to tower sites by their &ldquo;location&rdquo; field.</p>
                 <div class="discovery-form">
-                    <textarea id="deviceIps" placeholder="Device IPs (one per line)&#10;192.168.1.1&#10;192.168.1.2&#10;https://192.168.1.23/"></textarea>
+                    <textarea id="deviceIps" name="deviceIps" placeholder="Device IPs (one per line)&#10;192.168.1.1&#10;192.168.1.2&#10;https://192.168.1.23/" aria-label="Device IPs"></textarea>
                     <div class="cred-row">
-                        <input type="text" id="username" placeholder="Username" value="root">
-                        <input type="password" id="password" placeholder="Password">
+                        <input type="text" id="username" name="username" placeholder="Username" value="root" aria-label="Device username">
+                        <input type="password" id="password" name="password" placeholder="Password" aria-label="Device password">
                     </div>
                     <button class="btn btn-primary" id="addDeviceBtn" onclick="addDevices()">Add APs &amp; Switches</button>
                 </div>
@@ -2088,18 +2240,15 @@
         </div>
         <div class="table-card">
             <div class="table-toolbar">
-                <input type="text" id="deviceFilterQuery" placeholder="Filter by name, IP, or site (comma for multiple)">
-                <span id="activeFilterChip" class="filter-chip" style="display:none;">
-                    <span id="activeFilterChipText"></span>
-                    <a onclick="clearAllColumnFilters()" title="Clear filter">&times;</a>
-                </span>
+                <input type="text" id="deviceFilterQuery" name="deviceFilterQuery" placeholder="Filter by name, IP, or site (comma for multiple)" aria-label="Search devices">
+                <span id="activeFilterChips" class="filter-chips" style="display:none;"></span>
                 <span class="table-filter-summary" id="deviceFilterSummary"></span>
             </div>
             <div id="selectionActionBar" class="selection-action-bar" style="display:none;">
                 <span id="selectionCount" style="font-weight:500;">0 selected</span>
-                <button class="btn btn-sm btn-warning" id="btnSetCanary" onclick="setCanaryForSelected()">Set Canary</button>
+                <button class="btn btn-sm btn-warning" id="btnSetCanary" onclick="setCanaryForSelected()" title="Canary devices receive new firmware first and soak-test it before the rest of the fleet upgrades">Set Canary</button>
                 <button class="btn btn-sm btn-primary" id="btnUpdateFirmware" onclick="updateFirmwareForSelected()">Update Firmware</button>
-                <button class="btn btn-sm btn-primary hidden" id="btnPushConfig" onclick="pushConfigForSelected()">Push Config</button>
+                <button class="btn btn-sm btn-primary hidden" id="btnPushConfig" onclick="pushConfigForSelected()">Push Active Policies</button>
                 <button class="btn btn-sm btn-secondary hidden" id="btnCheckCompliance" onclick="checkComplianceForSelected()">Check Compliance</button>
                 <button class="btn btn-sm btn-ghost" onclick="clearChecked()">Clear</button>
             </div>
@@ -2116,15 +2265,6 @@
             </div>
         </div>
 
-        <!-- Config Enforce Log (visible in config mode) -->
-        <details id="enforceLogDetails" class="hidden" style="margin-top:4px;">
-            <summary style="font-size:0.75rem;font-weight:500;cursor:pointer;padding:4px 8px;color:var(--text-muted);">
-                Enforce Log <span id="enforceLogCount" style="color:var(--text-dim);font-weight:400;"></span>
-            </summary>
-            <div class="enforce-log-panel" id="enforceLogPanel">
-                <div style="color:var(--text-dim);padding:8px;">No enforce log entries yet.</div>
-            </div>
-        </details>
 
 
 
@@ -2174,14 +2314,10 @@
                             onclick="toggleConfigAutoEnforce(!this.classList.contains('active'));event.stopPropagation();"></button>
                     <span class="status-bar-label" title="Checks compliance and pushes corrections daily">Auto-Enforce</span>
                     <span class="status-badge" id="configEnforceStatusBadge" style="display:none;"></span>
-                    <select id="configEnforceHour" class="u-w-64" style="display:none;font-size:var(--text-xs);"
-                            title="Daily enforce time"
+                    <span id="configEnforceAtLabel" class="u-text-xxs-dim" style="display:none;">daily at</span>
+                    <select id="configEnforceHour" name="configEnforceHour" class="u-w-64" style="display:none;font-size:var(--text-xs);"
+                            title="Daily enforce time — checks compliance and pushes corrections to non-compliant devices" aria-label="Daily enforce hour"
                             onchange="updateEnforceHour(this.value)" onclick="event.stopPropagation();"></select>
-                    <input type="number" id="configEnforceCooldown" class="u-w-48"
-                           min="1" max="60" value="10" style="display:none;"
-                           title="Cooldown minutes between phases"
-                           onchange="updateEnforceCooldown(this.value)" onclick="event.stopPropagation();">
-                    <span id="configCooldownLabel" class="u-text-xxs-dim" style="display:none;">min cooldown</span>
                 </div>
                 <div class="status-bar-section status-bar-rollout u-ml-auto" id="configRolloutSection">
                     <div class="status-bar-phases" id="configPushRolloutPhases"></div>
@@ -2215,7 +2351,7 @@
                             <button class="drawer-day-btn" data-day="sun" onclick="toggleDrawerDay(this)">Sun</button>
                         </div>
                         <div style="display:flex;gap:8px;margin-top:8px;">
-                            <div style="flex:1;"><label>Start</label><select id="drawerStartHour">
+                            <div style="flex:1;"><label for="drawerStartHour">Start</label><select id="drawerStartHour" name="drawerStartHour">
                                 <option value="0">12 AM</option><option value="1">1 AM</option><option value="2">2 AM</option>
                                 <option value="3">3 AM</option><option value="4">4 AM</option><option value="5">5 AM</option>
                                 <option value="6">6 AM</option><option value="7">7 AM</option><option value="8">8 AM</option>
@@ -2225,7 +2361,7 @@
                                 <option value="18">6 PM</option><option value="19">7 PM</option><option value="20">8 PM</option>
                                 <option value="21">9 PM</option><option value="22">10 PM</option><option value="23">11 PM</option>
                             </select></div>
-                            <div style="flex:1;"><label>End</label><select id="drawerEndHour">
+                            <div style="flex:1;"><label for="drawerEndHour">End</label><select id="drawerEndHour" name="drawerEndHour">
                                 <option value="1">1 AM</option><option value="2">2 AM</option><option value="3">3 AM</option>
                                 <option value="4">4 AM</option><option value="5">5 AM</option><option value="6">6 AM</option>
                                 <option value="7">7 AM</option><option value="8">8 AM</option><option value="9">9 AM</option>
@@ -2240,13 +2376,13 @@
 
                     <div class="drawer-col">
                         <div class="drawer-section-title">Settings</div>
-                        <label>Update Mode</label>
-                        <select id="drawerBankMode">
+                        <label for="drawerBankMode">Update Mode</label>
+                        <select id="drawerBankMode" name="drawerBankMode">
                             <option value="one">Single Bank (recommended)</option>
                             <option value="both">Both Banks</option>
                         </select>
                         <div style="margin-top:8px;">
-                            <label>Parallel</label><input type="number" id="drawerParallel" value="2" min="1" max="10">
+                            <label for="drawerParallel">Parallel</label><input type="number" id="drawerParallel" name="drawerParallel" value="2" min="1" max="10">
                         </div>
                     </div>
 
@@ -2263,17 +2399,17 @@
                         <div class="toggle-sm-row">
                             <button class="toggle-sm" id="drawerWeatherToggle" type="button" aria-label="Toggle weather lockout" aria-pressed="false" onclick="toggleDrawerWeather()"></button>
                             <span class="toggle-sm-label">Disable updates below</span>
-                            <input type="number" id="drawerMinTemp" value="14" min="-40" max="120" class="u-w-48">
+                            <input type="number" id="drawerMinTemp" name="drawerMinTemp" value="14" min="-40" max="120" aria-label="Minimum temperature" class="u-w-48">
                             <span id="drawerTempUnit" class="u-text-xs-muted">&deg;F</span>
                             <span id="drawerWeatherTemp" class="u-text-sm-muted"></span>
                         </div>
                         <div class="toggle-sm-row u-gap-4">
-                            <label class="u-text-xxs-dim">Postal</label>
-                            <input type="text" id="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56">
+                            <label class="u-text-xxs-dim" for="drawerZipCode">Postal</label>
+                            <input type="text" id="drawerZipCode" name="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56">
                         </div>
                         <div class="toggle-sm-row u-gap-4">
-                            <label class="u-text-xxs-dim">New firmware canary soak test</label>
-                            <input type="number" id="drawerQuarantineDays" value="7" min="0" max="90" class="u-w-48">
+                            <label class="u-text-xxs-dim" for="drawerQuarantineDays" title="Canary devices soak-test new firmware for this many days before the rest of the fleet upgrades">New firmware update delay</label>
+                            <input type="number" id="drawerQuarantineDays" name="drawerQuarantineDays" value="7" min="0" max="90" class="u-w-48">
                             <span class="u-text-xxs-dim">days</span>
                         </div>
                         <!-- TODO: Add per-device firmware update cooldown (default 30 days).
@@ -2293,7 +2429,7 @@
                         </div>
                         <div class="drawer-fw-meta" id="drawerFwMeta"></div>
                         <div class="drawer-upload" id="drawerUpload">
-                            <input type="file" id="drawerFwInput" accept=".bin,.img,.npk,.tar,.gz" class="hidden">
+                            <input type="file" id="drawerFwInput" name="drawerFwInput" accept=".bin,.img,.npk,.tar,.gz" aria-label="Upload firmware file" class="hidden">
                             <span>Drop or browse</span>
                             <span class="drawer-upload-status" id="drawerUploadStatus"></span>
                         </div>
@@ -2310,7 +2446,7 @@
             <!-- Config drawer content -->
             <div id="drawerContent-config" class="hidden" autocomplete="off" data-1p-ignore>
                 <div class="drawer-panel-inner">
-                <p style="margin:0 0 8px;font-size:11px;color:var(--text-muted);line-height:1.4;">Enforced policies fully replace the matching config section on each device — existing settings, users, and servers in that section are cleared and overwritten.</p>
+                <p style="margin:0 0 8px;font-size:11px;color:var(--text-muted);line-height:1.4;">Enforced policies fully replace the matching config section on each device.</p>
                 <div class="drawer-settings-grid" autocomplete="off">
                     <!-- Column 1: Network -->
                     <div class="drawer-col">
@@ -2319,31 +2455,31 @@
                         <div class="config-section" id="cfgSection-snmp">
                             <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-snmp" type="button" data-category="snmp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>SNMP</span><span class="config-section-status" id="cfgStatus-snmp"></span><button class="cfg-save-btn" id="cfgSave-snmp" onclick="saveConfigSection('snmp');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
-                                <label><input type="checkbox" id="cfgSnmpEnabled"> Enabled</label>
+                                <label><input type="checkbox" id="cfgSnmpEnabled" name="cfgSnmpEnabled"> Enabled</label>
                                 <fieldset style="border:1px solid var(--border-light);border-radius:4px;padding:6px;margin-top:6px;">
                                     <legend style="font-size:var(--text-xs);font-weight:600;padding:0 4px;">SNMPv2</legend>
                                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-                                        <div><label><input type="checkbox" id="cfgSnmpV2RoEnabled"> RO</label><input type="text" id="cfgSnmpV2RoCommunity" placeholder="public" style="width:100%;"></div>
-                                        <div><label><input type="checkbox" id="cfgSnmpV2RwEnabled"> RW</label><input type="text" id="cfgSnmpV2RwCommunity" placeholder="private" style="width:100%;"></div>
+                                        <div><label><input type="checkbox" id="cfgSnmpV2RoEnabled" name="cfgSnmpV2RoEnabled"> RO</label><input type="text" id="cfgSnmpV2RoCommunity" name="cfgSnmpV2RoCommunity" placeholder="public" aria-label="SNMPv2 RO community" style="width:100%;"></div>
+                                        <div><label><input type="checkbox" id="cfgSnmpV2RwEnabled" name="cfgSnmpV2RwEnabled"> RW</label><input type="text" id="cfgSnmpV2RwCommunity" name="cfgSnmpV2RwCommunity" placeholder="private" aria-label="SNMPv2 RW community" style="width:100%;"></div>
                                     </div>
                                 </fieldset>
                                 <fieldset style="border:1px solid var(--border-light);border-radius:4px;padding:6px;margin-top:6px;">
                                     <legend style="font-size:var(--text-xs);font-weight:600;padding:0 4px;">SNMPv3</legend>
                                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
                                         <div>
-                                            <label><input type="checkbox" id="cfgSnmpV3RoEnabled"> RO</label>
-                                            <input type="text" id="cfgSnmpV3RoUser" placeholder="User" autocomplete="off" data-1p-ignore style="width:100%;">
-                                            <input type="password" id="cfgSnmpV3RoPass" placeholder="Password" autocomplete="off" data-1p-ignore style="width:100%;margin-top:4px;">
+                                            <label><input type="checkbox" id="cfgSnmpV3RoEnabled" name="cfgSnmpV3RoEnabled"> RO</label>
+                                            <input type="text" id="cfgSnmpV3RoUser" name="cfgSnmpV3RoUser" placeholder="User" aria-label="SNMPv3 RO user" autocomplete="off" data-1p-ignore style="width:100%;">
+                                            <input type="password" id="cfgSnmpV3RoPass" name="cfgSnmpV3RoPass" placeholder="Password" aria-label="SNMPv3 RO password" autocomplete="off" data-1p-ignore style="width:100%;margin-top:4px;">
                                         </div>
                                         <div>
-                                            <label><input type="checkbox" id="cfgSnmpV3RwEnabled"> RW</label>
-                                            <input type="text" id="cfgSnmpV3RwUser" placeholder="User" autocomplete="off" data-1p-ignore style="width:100%;">
-                                            <input type="password" id="cfgSnmpV3RwPass" placeholder="Password" autocomplete="off" data-1p-ignore style="width:100%;margin-top:4px;">
+                                            <label><input type="checkbox" id="cfgSnmpV3RwEnabled" name="cfgSnmpV3RwEnabled"> RW</label>
+                                            <input type="text" id="cfgSnmpV3RwUser" name="cfgSnmpV3RwUser" placeholder="User" aria-label="SNMPv3 RW user" autocomplete="off" data-1p-ignore style="width:100%;">
+                                            <input type="password" id="cfgSnmpV3RwPass" name="cfgSnmpV3RwPass" placeholder="Password" aria-label="SNMPv3 RW password" autocomplete="off" data-1p-ignore style="width:100%;margin-top:4px;">
                                         </div>
                                     </div>
                                 </fieldset>
                                 <div style="margin-top:6px;">
-                                    <label><input type="checkbox" id="cfgSnmpHwUptime"> Use hardware uptime</label>
+                                    <label><input type="checkbox" id="cfgSnmpHwUptime" name="cfgSnmpHwUptime"> Use hardware uptime</label>
                                 </div>
                             </div>
                         </div>
@@ -2351,10 +2487,10 @@
                         <div class="config-section" id="cfgSection-ntp">
                             <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-ntp" type="button" data-category="ntp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>NTP</span><span class="config-section-status" id="cfgStatus-ntp"></span><button class="cfg-save-btn" id="cfgSave-ntp" onclick="saveConfigSection('ntp');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
-                                <label><input type="checkbox" id="cfgNtpEnabled" checked> Enable NTP</label>
+                                <label><input type="checkbox" id="cfgNtpEnabled" name="cfgNtpEnabled" checked> Enable NTP</label>
                                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
-                                    <div><label>Server 1</label><input type="text" id="cfgNtpServer1" placeholder="time.google.com" style="width:100%;"></div>
-                                    <div><label>Server 2</label><input type="text" id="cfgNtpServer2" placeholder="time.cloudflare.com" style="width:100%;"></div>
+                                    <div><label for="cfgNtpServer1">Server 1</label><input type="text" id="cfgNtpServer1" name="cfgNtpServer1" placeholder="time.google.com" style="width:100%;"></div>
+                                    <div><label for="cfgNtpServer2">Server 2</label><input type="text" id="cfgNtpServer2" name="cfgNtpServer2" placeholder="time.cloudflare.com" style="width:100%;"></div>
                                 </div>
                             </div>
                         </div>
@@ -2362,12 +2498,12 @@
                         <div class="config-section" id="cfgSection-discovery">
                             <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-discovery" type="button" data-category="discovery" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Discovery</span><span class="config-section-status" id="cfgStatus-discovery"></span><button class="cfg-save-btn" id="cfgSave-discovery" onclick="saveConfigSection('discovery');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
-                                <label><input type="checkbox" id="cfgDiscEnabled" checked> Enabled</label>
+                                <label><input type="checkbox" id="cfgDiscEnabled" name="cfgDiscEnabled" checked> Enabled</label>
                                 <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;">
-                                    <label><input type="checkbox" id="cfgDiscLldp"> LLDP</label>
-                                    <label><input type="checkbox" id="cfgDiscMndp"> MNDP</label>
-                                    <label><input type="checkbox" id="cfgDiscCdp"> CDP</label>
-                                    <label><input type="checkbox" id="cfgDiscLldpServer"> LLDP Server</label>
+                                    <label><input type="checkbox" id="cfgDiscLldp" name="cfgDiscLldp"> LLDP</label>
+                                    <label><input type="checkbox" id="cfgDiscMndp" name="cfgDiscMndp"> MNDP</label>
+                                    <label><input type="checkbox" id="cfgDiscCdp" name="cfgDiscCdp"> CDP</label>
+                                    <label><input type="checkbox" id="cfgDiscLldpServer" name="cfgDiscLldpServer"> LLDP Server</label>
                                 </div>
                             </div>
                         </div>
@@ -2375,11 +2511,11 @@
                         <div class="config-section" id="cfgSection-syslog">
                             <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-syslog" type="button" data-category="syslog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Syslog</span><span class="config-section-status" id="cfgStatus-syslog"></span><button class="cfg-save-btn" id="cfgSave-syslog" onclick="saveConfigSection('syslog');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
-                                <label><input type="checkbox" id="cfgSyslogEnabled"> Enable Remote Syslog</label>
+                                <label><input type="checkbox" id="cfgSyslogEnabled" name="cfgSyslogEnabled"> Enable Remote Syslog</label>
                                 <div style="display:grid;grid-template-columns:1fr 80px 80px;gap:6px;margin-top:6px;">
-                                    <div><label>Server</label><input type="text" id="cfgSyslogServer" placeholder="192.168.1.100" style="width:100%;"></div>
-                                    <div><label>Port</label><input type="number" id="cfgSyslogPort" value="514" style="width:100%;"></div>
-                                    <div><label>Proto</label><select id="cfgSyslogProtocol" style="width:100%;"><option value="udp">UDP</option><option value="tcp">TCP</option></select></div>
+                                    <div><label for="cfgSyslogServer">Server</label><input type="text" id="cfgSyslogServer" name="cfgSyslogServer" placeholder="192.168.1.100" style="width:100%;"></div>
+                                    <div><label for="cfgSyslogPort">Port</label><input type="number" id="cfgSyslogPort" name="cfgSyslogPort" value="514" style="width:100%;"></div>
+                                    <div><label for="cfgSyslogProtocol">Proto</label><select id="cfgSyslogProtocol" name="cfgSyslogProtocol" style="width:100%;"><option value="udp">UDP</option><option value="tcp">TCP</option></select></div>
                                 </div>
                             </div>
                         </div>
@@ -2401,16 +2537,16 @@
                             <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-radius" type="button" data-category="radius" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>RADIUS</span><span class="config-section-status" id="cfgStatus-radius"></span><button class="cfg-save-btn" id="cfgSave-radius" onclick="saveConfigSection('radius');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <div style="margin-bottom:6px;">
-                                    <label>Auth Method</label>
-                                    <select id="cfgRadiusMethod" style="width:100%;">
+                                    <label for="cfgRadiusMethod">Auth Method</label>
+                                    <select id="cfgRadiusMethod" name="cfgRadiusMethod" style="width:100%;">
                                         <option value="local">Local</option>
                                         <option value="radius">RADIUS</option>
                                     </select>
                                 </div>
-                                <div><label>Auth Server</label><input type="text" id="cfgRadiusServer" placeholder="radius.example.com" style="width:100%;"></div>
+                                <div><label for="cfgRadiusServer">Auth Server</label><input type="text" id="cfgRadiusServer" name="cfgRadiusServer" placeholder="radius.example.com" style="width:100%;"></div>
                                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;">
-                                    <div><label>Port</label><input type="number" id="cfgRadiusPort" value="1812" style="width:100%;"></div>
-                                    <div><label>Secret</label><input type="password" id="cfgRadiusSecret" placeholder="shared secret" autocomplete="off" data-1p-ignore style="width:100%;"></div>
+                                    <div><label for="cfgRadiusPort">Port</label><input type="number" id="cfgRadiusPort" name="cfgRadiusPort" value="1812" style="width:100%;"></div>
+                                    <div><label for="cfgRadiusSecret">Secret</label><input type="password" id="cfgRadiusSecret" name="cfgRadiusSecret" placeholder="shared secret" autocomplete="off" data-1p-ignore style="width:100%;"></div>
                                 </div>
                                 <div style="margin-top:6px;font-size:var(--text-xs);color:var(--text-dim);">
                                     <a class="action-link" onclick="prefillBuiltinRadiusConfig();event.stopPropagation();">Use this appliance's RADIUS</a>
@@ -2426,15 +2562,15 @@
                         <div class="config-section" id="cfgSection-watchdog">
                             <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-watchdog" type="button" data-category="watchdog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Watchdog</span><span class="config-section-status" id="cfgStatus-watchdog"></span><button class="cfg-save-btn" id="cfgSave-watchdog" onclick="saveConfigSection('watchdog');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
-                                <label><input type="checkbox" id="cfgWatchdogEnabled"> Enable Ping Watchdog</label>
+                                <label><input type="checkbox" id="cfgWatchdogEnabled" name="cfgWatchdogEnabled"> Enable Ping Watchdog</label>
                                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:6px;">
-                                    <div><label>Interval</label><input type="number" id="cfgWatchdogInterval" value="300" style="width:100%;"></div>
-                                    <div><label>Delay</label><input type="number" id="cfgWatchdogStartupDelay" value="300" style="width:100%;"></div>
-                                    <div><label>Failures</label><input type="number" id="cfgWatchdogFailureCount" value="3" style="width:100%;"></div>
+                                    <div><label for="cfgWatchdogInterval">Interval</label><input type="number" id="cfgWatchdogInterval" name="cfgWatchdogInterval" value="300" style="width:100%;"></div>
+                                    <div><label for="cfgWatchdogStartupDelay">Delay</label><input type="number" id="cfgWatchdogStartupDelay" name="cfgWatchdogStartupDelay" value="300" style="width:100%;"></div>
+                                    <div><label for="cfgWatchdogFailureCount">Failures</label><input type="number" id="cfgWatchdogFailureCount" name="cfgWatchdogFailureCount" value="3" style="width:100%;"></div>
                                 </div>
                                 <div style="margin-top:6px;">
-                                    <label>Ping Targets</label>
-                                    <input type="text" id="cfgWatchdogPingTargets" placeholder="8.8.8.8, 1.1.1.1" style="width:100%;">
+                                    <label for="cfgWatchdogPingTargets">Ping Targets</label>
+                                    <input type="text" id="cfgWatchdogPingTargets" name="cfgWatchdogPingTargets" placeholder="8.8.8.8, 1.1.1.1" style="width:100%;">
                                 </div>
                             </div>
                         </div>
@@ -2442,7 +2578,7 @@
                         <div class="config-section" id="cfgSection-custom">
                             <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-custom" type="button" data-category="custom" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Custom JSON</span><span class="config-section-status" id="cfgStatus-custom"></span><button class="cfg-save-btn" id="cfgSave-custom" onclick="saveConfigSection('custom');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
-                                <textarea id="cfgCustomJson" rows="5" placeholder='{"services": {"ssh": {"enabled": true}}}' style="width:100%;font-family:monospace;font-size:var(--text-sm);"></textarea>
+                                <textarea id="cfgCustomJson" name="cfgCustomJson" aria-label="Custom JSON config" rows="5" placeholder='{"services": {"ssh": {"enabled": true}}}' style="width:100%;font-family:monospace;font-size:var(--text-sm);"></textarea>
                             </div>
                         </div>
                     </div>
@@ -2459,50 +2595,78 @@
     <div class="backup-overlay" id="appSettingsOverlay" onclick="if(event.target===this)closeAppSettingsModal()">
         <div class="backup-modal app-settings-modal">
             <div class="app-settings-header">
-                <h3 class="u-m0">App Settings</h3>
-                <button onclick="closeAppSettingsModal()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.2rem;line-height:1;padding:4px;">&times;</button>
+                <span style="font-size:0.9rem;font-weight:600;">App Settings</span>
+                <button onclick="closeAppSettingsModal()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.1rem;line-height:1;padding:4px;">&times;</button>
             </div>
 
             <!-- Tabs -->
             <div class="settings-tabs" style="flex-shrink:0;">
                 <button class="settings-tab active" onclick="switchSettingsTab('updates')">Updates</button>
+                <button class="settings-tab" onclick="switchSettingsTab('https')">HTTPS</button>
                 <button class="settings-tab" onclick="switchSettingsTab('backup')">Backup <span class="pro-badge">PRO</span></button>
                 <button class="settings-tab" onclick="switchSettingsTab('notifications')">Notifications <span class="pro-badge">PRO</span></button>
                 <button class="settings-tab" onclick="switchSettingsTab('auth')">Authentication <span class="pro-badge">PRO</span></button>
                 <button class="settings-tab" onclick="switchSettingsTab('license')">License</button>
-                <button class="settings-tab" data-min-role="admin" onclick="switchSettingsTab('users')">Users</button>
             </div>
 
             <!-- Updates Panel -->
             <div class="settings-panel active" id="settingsPanel-updates">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-                    <button class="toggle" id="appAutoUpdateToggle" type="button" aria-label="Toggle app auto-update" aria-pressed="false" onclick="toggleAppAutoUpdate()" style="flex-shrink:0;"></button>
-                    <label style="margin:0;font-weight:500;">Auto Check and Install Updates</label>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <button class="toggle" id="appAutoUpdateToggle" type="button" aria-label="Toggle app auto-update" aria-pressed="false" onclick="toggleAppAutoUpdate()" style="flex-shrink:0;"></button>
+                        <label style="margin:0;font-weight:600;font-size:0.8rem;">Auto Check and Install SixtyOps App Updates</label>
+                    </div>
+                    <span id="appVersionDisplay" style="font-size:0.82rem;font-weight:700;color:var(--text);"></span>
                 </div>
-                <p class="u-note-inline" style="margin-bottom:16px;">When enabled, the app will automatically check for new versions and install them when no firmware rollout is active.</p>
 
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
                     <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
                     <span id="appUpdateStatus" class="u-text-xs-muted"></span>
-                    <span id="appVersionDisplay" class="u-text-xs-muted" style="margin-left:auto;"></span>
                 </div>
 
-                <div style="display:flex;align-items:center;gap:8px;padding-top:12px;border-top:1px solid var(--border-light);">
-                    <label class="u-text-xs-dim" style="margin:0;">Release Channel</label>
-                    <select id="appReleaseChannel" onchange="saveReleaseChannel()" style="font-size:0.75rem;">
+                <div style="display:flex;align-items:center;gap:8px;padding-top:10px;border-top:1px solid var(--border-light);">
+                    <label class="u-label-xs" style="margin:0;" for="appReleaseChannel">Release Channel</label>
+                    <select id="appReleaseChannel" name="appReleaseChannel" onchange="saveReleaseChannel()" style="font-size:0.72rem;padding:4px 8px;border:1px solid var(--border);border-radius:6px;">
                         <option value="stable">Stable</option>
                         <option value="dev">Dev</option>
                     </select>
-                    <span style="font-size:0.68rem;color:#b0b5bd;">Dev receives pre-release updates for testing</span>
+                    <span class="u-text-xxs-dim">Dev receives pre-release updates for testing</span>
                 </div>
 
-                <div id="appUpdateBannerInline" style="display:none;margin-top:16px;padding:12px;background:#dbeafe;border-radius:8px;">
+                <div id="appUpdateBannerInline" style="display:none;margin-top:12px;padding:10px;background:#dbeafe;border-radius:6px;">
                     <div style="display:flex;align-items:center;justify-content:space-between;">
-                        <div style="font-weight:500;color:#1e40af;">Update Available: <span id="appUpdateVersion"></span></div>
-                        <a id="appUpdateReleaseLink" href="#" target="_blank" style="font-size:0.72rem;color:#2563eb;">View on GitHub</a>
+                        <div style="font-weight:600;font-size:0.8rem;color:#1e40af;">Update Available: <span id="appUpdateVersion"></span></div>
+                        <a id="appUpdateReleaseLink" href="#" target="_blank" style="font-size:0.68rem;color:#2563eb;">View on GitHub</a>
                     </div>
                     <div id="appUpdateNotesContainer" class="release-notes-content hidden"></div>
-                    <button class="backup-btn" onclick="applyAppUpdate()" style="margin-top:8px;background:#16a34a;">Update Now</button>
+                    <button class="backup-btn" onclick="applyAppUpdate()" style="margin-top:8px;background:#16a34a;color:#fff;">Update Now</button>
+                </div>
+            </div>
+
+            <!-- HTTPS Panel -->
+            <div class="settings-panel" id="settingsPanel-https">
+                <div style="margin-bottom:12px;">
+                    <label style="font-weight:600;font-size:0.8rem;">HTTPS Certificate</label>
+                </div>
+                <div id="sslStatusDisplay" style="margin-bottom:12px;padding:8px 10px;border-radius:6px;background:var(--bg-subtle,#f9fafb);font-size:0.78rem;">
+                    Loading SSL status...
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
+                    <div>
+                        <label class="u-label-xs" for="sslDomain">Domain</label>
+                        <input type="text" id="sslDomain" name="sslDomain" placeholder="e.g. tachyon.example.com" class="u-input-compact">
+                    </div>
+                    <div>
+                        <label class="u-label-xs" for="sslEmail">Email (for Let's Encrypt)</label>
+                        <input type="email" id="sslEmail" name="sslEmail" placeholder="admin@example.com" class="u-input-compact">
+                    </div>
+                </div>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <button class="backup-btn" style="background:var(--primary,#3b82f6);color:#fff;font-weight:500;" onclick="configureSsl()">Configure HTTPS</button>
+                    <span id="sslStatus" class="u-text-xs-muted"></span>
+                </div>
+                <div style="margin-top:10px;font-size:0.72rem;color:var(--text-dim);">
+                    Requests a free Let's Encrypt certificate for your domain. Port 80 must be accessible from the internet for verification. If you're behind a firewall or using an internal domain, the app will continue using a self-signed certificate.
                 </div>
             </div>
 
@@ -2511,7 +2675,6 @@
                 <!-- SFTP Backup Status -->
                 <div style="margin-bottom:16px;">
                     <label>Scheduled Backup</label>
-                    <p class="u-note-inline">Automatic nightly database backup via SFTP.</p>
                     <div id="backupStatusInfo" style="font-size:0.75rem;color:var(--text-muted);padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;">Loading...</div>
                     <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
                         <button class="backup-btn" onclick="runBackupNow()">Run Now</button>
@@ -2525,9 +2688,8 @@
                 <!-- Export -->
                 <div style="margin-bottom:16px;">
                     <label>Export Devices (CSV)</label>
-                    <p class="u-note-inline">Download all devices as a CSV file. Passwords are encrypted with the passphrase you provide.</p>
                     <div class="u-flex-center-gap6">
-                        <input type="password" id="exportPassphrase" placeholder="Passphrase (min 8 characters)" class="u-flex-1">
+                        <input type="password" id="exportPassphrase" name="exportPassphrase" placeholder="Passphrase (min 8 characters)" class="u-flex-1" aria-label="Export passphrase">
                         <button class="backup-btn" onclick="exportBackup()">Download CSV</button>
                     </div>
                 </div>
@@ -2537,12 +2699,11 @@
                 <!-- Import -->
                 <div>
                     <label>Import Devices (CSV)</label>
-                    <p class="u-note-inline">Import devices from a previously exported CSV. Use the same passphrase to decrypt passwords.</p>
                     <div class="u-flex-col-gap8">
-                        <input type="file" id="importFile" accept=".csv" style="font-size:0.75rem;">
+                        <input type="file" id="importFile" name="importFile" accept=".csv" style="font-size:0.75rem;" aria-label="Import CSV file">
                         <div class="u-flex-center-gap6">
-                            <input type="password" id="importPassphrase" placeholder="Passphrase" class="u-flex-1">
-                            <select id="importConflictMode">
+                            <input type="password" id="importPassphrase" name="importPassphrase" placeholder="Passphrase" class="u-flex-1" aria-label="Import passphrase">
+                            <select id="importConflictMode" name="importConflictMode" aria-label="Import conflict mode">
                                 <option value="skip">Skip existing</option>
                                 <option value="update">Update existing</option>
                             </select>
@@ -2556,275 +2717,328 @@
 
             <!-- Notifications Panel -->
             <div class="settings-panel" id="settingsPanel-notifications">
-                <label>Slack Webhook</label>
-                <p class="u-note-inline">Get notified in Slack when firmware update jobs complete. Create an <a href="https://api.slack.com/messaging/webhooks" target="_blank" style="color:var(--primary);">Incoming Webhook</a> in your Slack workspace and paste the URL below.</p>
-                <div class="u-flex-col-gap8">
-                    <input type="text" id="notifSlackWebhook" placeholder="https://hooks.slack.com/services/..." style="width:100%;font-size:0.8rem;">
-                    <div class="u-flex-center-gap6">
-                        <button class="backup-btn" onclick="saveSlackWebhook()">Save</button>
-                        <button class="backup-btn u-bg-muted-cta" onclick="testSlackWebhookModal()">Test</button>
-                    </div>
+                <div class="settings-subtabs">
+                    <button class="settings-subtab active" onclick="switchNotifSubtab('slack')">Slack</button>
+                    <button class="settings-subtab" onclick="switchNotifSubtab('email')">Email</button>
+                    <button class="settings-subtab" onclick="switchNotifSubtab('snmp')">SNMP Traps <span id="snmpProBadge" class="pro-badge" style="display:none;">PRO</span></button>
+                    <button class="settings-subtab" onclick="switchNotifSubtab('webhooks')">Webhooks <span id="webhookProBadge" class="pro-badge" style="display:none;">PRO</span></button>
                 </div>
 
-                <div id="notifStatus" class="u-status-line"></div>
-
-                <hr style="border:none;border-top:1px solid var(--border);margin:16px 0;">
-
-                <label>SNMP Traps <span id="snmpProBadge" class="pro-badge" style="display:none;">PRO</span></label>
-                <p class="u-note-inline">Send SNMPv2c traps to your NMS when firmware update jobs complete. Configure your trap receiver host and community string below.</p>
-                <div class="u-flex-col-gap8">
-                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                        <input type="checkbox" id="snmpTrapsEnabled" onchange="toggleSnmpFields()">
-                        <span class="u-text-xs-muted">Enable SNMP Traps</span>
-                    </label>
-                    <div id="snmpFields" style="display:grid;grid-template-columns:1fr minmax(80px,100px);gap:8px;">
-                        <div>
-                            <label class="snmp-field-label">Trap Host</label>
-                            <input type="text" id="snmpTrapHost" placeholder="192.168.1.100" class="snmp-field-input">
-                        </div>
-                        <div>
-                            <label class="snmp-field-label">Port</label>
-                            <input type="number" id="snmpTrapPort" value="162" min="1" max="65535" class="snmp-field-input">
-                        </div>
-                        <div style="grid-column:1/-1;">
-                            <label class="snmp-field-label">Community String</label>
-                            <input type="text" id="snmpTrapCommunity" placeholder="public" class="snmp-field-input">
+                <!-- Slack sub-panel -->
+                <div class="notif-subpanel active" id="notifSub-slack">
+                    <label for="notifSlackWebhook">Slack Webhook <a href="https://api.slack.com/messaging/webhooks" target="_blank" title="How to create an Incoming Webhook in Slack" style="color:var(--primary);font-size:0.7rem;text-decoration:none;font-weight:400;">?</a></label>
+                    <div class="u-flex-col-gap8">
+                        <input type="text" id="notifSlackWebhook" name="notifSlackWebhook" placeholder="https://hooks.slack.com/services/..." class="u-input-compact">
+                        <div class="u-flex-center-gap6">
+                            <button class="backup-btn" onclick="saveSlackWebhook()">Save</button>
+                            <button class="backup-btn u-bg-muted-cta" onclick="testSlackWebhookModal()">Test</button>
                         </div>
                     </div>
-                    <div class="u-flex-center-gap6">
-                        <button class="backup-btn" onclick="saveSnmpSettings()">Save</button>
-                        <button class="backup-btn u-bg-muted-cta" onclick="testSnmpTrap()">Test Trap</button>
-                    </div>
+                    <div id="notifStatus" class="u-status-line"></div>
                 </div>
-                <div id="snmpStatus" class="u-status-line"></div>
-            </div>
 
-                <label>Webhooks <span id="webhookProBadge" class="pro-badge" style="display:none;">PRO</span></label>
-                <p class="u-note-inline">Send HTTP webhooks to external services (PagerDuty, Teams, custom endpoints) for job completions and device alerts.</p>
-                <div class="u-flex-col-gap8">
-                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                        <input type="checkbox" id="webhookEnabled" onchange="toggleWebhookFields()">
-                        <span style="font-size:0.75rem;color:#6b7280;">Enable Webhooks</span>
-                    </label>
-                    <div id="webhookFields" style="display:grid;grid-template-columns:1fr 100px;gap:8px;">
-                        <div style="grid-column:1/-1;">
-                            <label style="font-size:0.7rem;color:#9ca3af;">Webhook URL</label>
-                            <input type="text" id="webhookUrl" placeholder="https://example.com/webhook" style="width:100%;font-size:0.8rem;">
-                        </div>
-                        <div>
-                            <label style="font-size:0.7rem;color:#9ca3af;">Method</label>
-                            <select id="webhookMethod" style="width:100%;font-size:0.8rem;padding:6px;">
-                                <option value="POST">POST</option>
-                                <option value="PUT">PUT</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label style="font-size:0.7rem;color:#9ca3af;">Secret (HMAC)</label>
-                            <input type="password" id="webhookSecret" placeholder="Optional" style="width:100%;font-size:0.8rem;">
-                        </div>
-                        <div style="grid-column:1/-1;">
-                            <label style="font-size:0.7rem;color:#9ca3af;">Custom Headers (JSON)</label>
-                            <input type="text" id="webhookHeaders" placeholder='{"Authorization": "Bearer ..."}' style="width:100%;font-size:0.8rem;">
-                        </div>
-                        <div style="grid-column:1/-1;">
-                            <label style="font-size:0.7rem;color:#9ca3af;">Events</label>
-                            <div style="display:flex;gap:12px;flex-wrap:wrap;">
-                                <label style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:#6b7280;cursor:pointer;">
-                                    <input type="checkbox" id="webhookEvtJobCompleted" checked> job_completed
-                                </label>
-                                <label style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:#6b7280;cursor:pointer;">
-                                    <input type="checkbox" id="webhookEvtJobFailed" checked> job_failed
-                                </label>
-                                <label style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:#6b7280;cursor:pointer;">
-                                    <input type="checkbox" id="webhookEvtDeviceOffline" checked> device_offline
-                                </label>
-                                <label style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:#6b7280;cursor:pointer;">
-                                    <input type="checkbox" id="webhookEvtDeviceRecovered" checked> device_recovered
+                <!-- Email sub-panel -->
+                <div class="notif-subpanel" id="notifSub-email">
+                    <label>Email (SMTP)</label>
+                    <div class="u-flex-col-gap8">
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                            <input type="checkbox" id="emailEnabled" name="emailEnabled" onchange="toggleEmailFields()">
+                            <span class="u-text-xs-muted">Enable Email Notifications</span>
+                        </label>
+                        <div id="emailFields">
+                            <div style="display:grid;grid-template-columns:1fr 80px;gap:8px;">
+                                <div>
+                                    <label class="u-label-xs" for="emailSmtpHost">SMTP Host</label>
+                                    <input type="text" id="emailSmtpHost" name="emailSmtpHost" placeholder="smtp.gmail.com" class="u-input-compact">
+                                </div>
+                                <div>
+                                    <label class="u-label-xs" for="emailSmtpPort">Port</label>
+                                    <input type="number" id="emailSmtpPort" name="emailSmtpPort" value="587" min="1" max="65535" class="u-input-compact">
+                                </div>
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+                                <div>
+                                    <label class="u-label-xs" for="emailSmtpUsername">Username</label>
+                                    <input type="text" id="emailSmtpUsername" name="emailSmtpUsername" placeholder="user@example.com" class="u-input-compact">
+                                </div>
+                                <div>
+                                    <label class="u-label-xs" for="emailSmtpPassword">Password</label>
+                                    <input type="password" id="emailSmtpPassword" name="emailSmtpPassword" placeholder="App password" class="u-input-compact">
+                                </div>
+                            </div>
+                            <div style="margin-top:8px;">
+                                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                                    <input type="checkbox" id="emailSmtpTls" name="emailSmtpTls" checked>
+                                    <span class="u-text-xs-muted">Use TLS</span>
                                 </label>
                             </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+                                <div>
+                                    <label class="u-label-xs" for="emailFromAddress">From Address</label>
+                                    <input type="email" id="emailFromAddress" name="emailFromAddress" placeholder="alerts@example.com" class="u-input-compact">
+                                </div>
+                                <div>
+                                    <label class="u-label-xs" for="emailToAddresses">To Addresses</label>
+                                    <input type="text" id="emailToAddresses" name="emailToAddresses" placeholder="admin@example.com, ops@example.com" class="u-input-compact">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="u-flex-center-gap6">
+                            <button class="backup-btn" onclick="saveEmailSettings()">Save</button>
+                            <button class="backup-btn u-bg-muted-cta" onclick="testEmail()">Test</button>
                         </div>
                     </div>
-                    <div class="u-flex-center-gap6">
-                        <button class="backup-btn" onclick="saveWebhookSettings()">Save</button>
-                        <button class="backup-btn" onclick="testWebhook()" style="background:#6b7280;">Test Webhook</button>
-                    </div>
+                    <div id="emailStatus" class="u-status-line"></div>
                 </div>
-                <div id="webhookStatus" class="u-status-line"></div>
+
+                <!-- SNMP Traps sub-panel -->
+                <div class="notif-subpanel" id="notifSub-snmp">
+                    <label>SNMP Traps</label>
+                    <div class="u-flex-col-gap8">
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                            <input type="checkbox" id="snmpTrapsEnabled" name="snmpTrapsEnabled" onchange="toggleSnmpFields()">
+                            <span class="u-text-xs-muted">Enable SNMP Traps</span>
+                        </label>
+                        <div id="snmpFields" style="display:grid;grid-template-columns:1fr minmax(80px,100px);gap:8px;">
+                            <div>
+                                <label class="snmp-field-label" for="snmpTrapHost">Trap Host</label>
+                                <input type="text" id="snmpTrapHost" name="snmpTrapHost" placeholder="192.168.1.100" class="snmp-field-input">
+                            </div>
+                            <div>
+                                <label class="snmp-field-label" for="snmpTrapPort">Port</label>
+                                <input type="number" id="snmpTrapPort" name="snmpTrapPort" value="162" min="1" max="65535" class="snmp-field-input">
+                            </div>
+                            <div style="grid-column:1/-1;">
+                                <label class="snmp-field-label" for="snmpTrapCommunity">Community String</label>
+                                <input type="text" id="snmpTrapCommunity" name="snmpTrapCommunity" placeholder="public" class="snmp-field-input">
+                            </div>
+                        </div>
+                        <div class="u-flex-center-gap6">
+                            <button class="backup-btn" onclick="saveSnmpSettings()">Save</button>
+                            <button class="backup-btn u-bg-muted-cta" onclick="testSnmpTrap()">Test Trap</button>
+                        </div>
+                    </div>
+                    <div id="snmpStatus" class="u-status-line"></div>
+                </div>
+
+                <!-- Webhooks sub-panel -->
+                <div class="notif-subpanel" id="notifSub-webhooks">
+                    <label>Webhooks</label>
+                    <div class="u-flex-col-gap8">
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                            <input type="checkbox" id="webhookEnabled" name="webhookEnabled" onchange="toggleWebhookFields()">
+                            <span style="font-size:0.75rem;color:#6b7280;">Enable Webhooks</span>
+                        </label>
+                        <div id="webhookFields" style="display:grid;grid-template-columns:1fr 100px;gap:8px;">
+                            <div style="grid-column:1/-1;">
+                                <label style="font-size:0.7rem;color:#9ca3af;" for="webhookUrl">Webhook URL</label>
+                                <input type="text" id="webhookUrl" name="webhookUrl" placeholder="https://example.com/webhook" class="u-input-compact">
+                            </div>
+                            <div>
+                                <label style="font-size:0.7rem;color:#9ca3af;" for="webhookMethod">Method</label>
+                                <select id="webhookMethod" name="webhookMethod" class="u-input-compact">
+                                    <option value="POST">POST</option>
+                                    <option value="PUT">PUT</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:0.7rem;color:#9ca3af;" for="webhookSecret">Secret (HMAC)</label>
+                                <input type="password" id="webhookSecret" name="webhookSecret" placeholder="Optional" class="u-input-compact">
+                            </div>
+                            <div style="grid-column:1/-1;">
+                                <label style="font-size:0.7rem;color:#9ca3af;" for="webhookHeaders">Custom Headers (JSON)</label>
+                                <input type="text" id="webhookHeaders" name="webhookHeaders" placeholder='{"Authorization": "Bearer ..."}' class="u-input-compact">
+                            </div>
+                            <div style="grid-column:1/-1;">
+                                <label style="font-size:0.7rem;color:#9ca3af;">Events</label>
+                                <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                                    <label style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:#6b7280;cursor:pointer;">
+                                        <input type="checkbox" id="webhookEvtJobCompleted" name="webhookEvtJobCompleted" checked> job_completed
+                                    </label>
+                                    <label style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:#6b7280;cursor:pointer;">
+                                        <input type="checkbox" id="webhookEvtJobFailed" name="webhookEvtJobFailed" checked> job_failed
+                                    </label>
+                                    <label style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:#6b7280;cursor:pointer;">
+                                        <input type="checkbox" id="webhookEvtDeviceOffline" name="webhookEvtDeviceOffline" checked> device_offline
+                                    </label>
+                                    <label style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:#6b7280;cursor:pointer;">
+                                        <input type="checkbox" id="webhookEvtDeviceRecovered" name="webhookEvtDeviceRecovered" checked> device_recovered
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="u-flex-center-gap6">
+                            <button class="backup-btn" onclick="saveWebhookSettings()">Save</button>
+                            <button class="backup-btn" onclick="testWebhook()" style="background:#6b7280;">Test Webhook</button>
+                        </div>
+                    </div>
+                    <div id="webhookStatus" class="u-status-line"></div>
+                </div>
             </div>
 
             <!-- Authentication Panel -->
             <div class="settings-panel" id="settingsPanel-auth">
-                <!-- Built-in RADIUS Section -->
-                <div style="margin-bottom:20px;">
-                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                        <h4 style="margin:0;font-size:0.85rem;font-weight:600;">Built-in RADIUS Server</h4>
-                        <span id="authRadiusBadge" style="font-size:0.7rem;font-weight:600;padding:2px 8px;border-radius:999px;background:#e5e7eb;color:#4b5563;">Inactive</span>
-                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
-                            <input type="checkbox" id="authRadiusEnabled" onchange="toggleRadiusFields()">
-                            <span class="u-text-xs-muted">Enabled</span>
+                <div class="settings-subtabs" id="authSubtabs">
+                    <button class="settings-subtab active" data-min-role="admin" onclick="switchAuthSubtab('users')">Local Users</button>
+                    <button class="settings-subtab" onclick="switchAuthSubtab('radius')">RADIUS Server</button>
+                    <button class="settings-subtab" onclick="switchAuthSubtab('accounts')">Clients & Logs</button>
+                    <button class="settings-subtab" onclick="switchAuthSubtab('devices')">Default Login</button>
+                </div>
+
+                <!-- RADIUS Server sub-panel -->
+                <div class="auth-subpanel" id="authSub-radius">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                        <label style="font-weight:600;font-size:0.8rem;margin:0;">Built-in RADIUS Server</label>
+                        <span id="authRadiusBadge" class="auth-status-badge">Inactive</span>
+                        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;margin-left:auto;font-size:0.72rem;color:var(--text-muted);">
+                            <input type="checkbox" id="authRadiusEnabled" name="authRadiusEnabled" onchange="toggleRadiusFields()">
+                            Enabled
                         </label>
                     </div>
-                    <p class="u-note-block">Centralized RADIUS authentication for Tachyon device management logins. Devices authenticate admin sessions against this server instead of local credentials. Reserved usernames <code>admin</code> and <code>root</code> are blocked.</p>
                     <div id="radiusFields">
-                        <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 140px 160px;gap:8px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr 100px 130px;gap:6px;">
                             <div>
-                                <label class="u-label-compact">Advertised Address</label>
-                                <input type="text" id="authRadiusHost" placeholder="e.g. 10.0.0.50" class="u-input-compact">
+                                <label class="u-label-xs" for="authRadiusHost">Address</label>
+                                <input type="text" id="authRadiusHost" name="authRadiusHost" placeholder="e.g. 10.0.0.50" class="u-input-compact">
                             </div>
                             <div>
-                                <label class="u-label-compact">Shared Secret</label>
-                                <input type="password" id="authRadiusSecret" placeholder="Enter shared secret" class="u-input-compact">
+                                <label class="u-label-xs" for="authRadiusSecret">Shared Secret</label>
+                                <div style="position:relative;">
+                                    <input type="password" id="authRadiusSecret" name="authRadiusSecret" placeholder="Enter secret" class="u-input-compact" style="padding-right:28px;">
+                                    <button type="button" onclick="const i=document.getElementById('authRadiusSecret');i.type=i.type==='password'?'text':'password';this.textContent=i.type==='password'?'\u{1F441}':'\u{1F648}';" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:0.7rem;padding:2px;line-height:1;color:var(--text-dim);">&#x1F441;</button>
+                                </div>
                             </div>
                             <div>
-                                <label class="u-label-compact">UDP Port</label>
-                                <input type="number" id="authRadiusPort" min="1" max="65535" value="1812" class="u-input-compact">
+                                <label class="u-label-xs" for="authRadiusPort">Port</label>
+                                <input type="number" id="authRadiusPort" name="authRadiusPort" min="1" max="65535" value="1812" class="u-input-compact">
                             </div>
                             <div>
-                                <label class="u-label-compact">Auth Mode</label>
-                                <select id="authRadiusAuthMode" onchange="toggleRadiusAuthMode()" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;background:#fff;">
+                                <label class="u-label-xs" for="authRadiusAuthMode">Auth Mode</label>
+                                <select id="authRadiusAuthMode" name="authRadiusAuthMode" onchange="toggleRadiusAuthMode()" class="u-input-compact">
                                     <option value="local">Local Users</option>
-                                    <option value="ldap">LDAP / Active Directory</option>
+                                    <option value="ldap">LDAP / AD</option>
                                 </select>
                             </div>
                         </div>
 
                         <!-- LDAP Config (hidden by default) -->
-                        <div id="radiusLdapSection" class="hidden" style="margin-top:10px;">
-                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                        <div id="radiusLdapSection" class="hidden" style="margin-top:8px;">
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
                                 <div style="grid-column:span 2;">
-                                    <label class="u-label-compact">LDAP URL</label>
-                                    <input type="text" id="radiusLdapUrl" placeholder="ldaps://ad.example.com" class="u-input-compact">
+                                    <label class="u-label-xs" for="radiusLdapUrl">LDAP URL</label>
+                                    <input type="text" id="radiusLdapUrl" name="radiusLdapUrl" placeholder="ldaps://ad.example.com" class="u-input-compact">
                                 </div>
                                 <div>
-                                    <label class="u-label-compact">Bind DN</label>
-                                    <input type="text" id="radiusLdapBindDn" placeholder="CN=svc_radius,OU=Service Accounts,DC=example,DC=com" class="u-input-compact">
+                                    <label class="u-label-xs" for="radiusLdapBindDn">Bind DN</label>
+                                    <input type="text" id="radiusLdapBindDn" name="radiusLdapBindDn" placeholder="CN=svc_radius,OU=..." class="u-input-compact">
                                 </div>
                                 <div>
-                                    <label class="u-label-compact">Bind Password</label>
-                                    <input type="password" id="radiusLdapPassword" placeholder="Enter password" class="u-input-compact">
+                                    <label class="u-label-xs" for="radiusLdapPassword">Bind Password</label>
+                                    <input type="password" id="radiusLdapPassword" name="radiusLdapPassword" placeholder="Enter password" class="u-input-compact">
                                 </div>
                                 <div style="grid-column:span 2;">
-                                    <label class="u-label-compact">Base DN</label>
-                                    <input type="text" id="radiusLdapBaseDn" placeholder="DC=example,DC=com" class="u-input-compact">
+                                    <label class="u-label-xs" for="radiusLdapBaseDn">Base DN</label>
+                                    <input type="text" id="radiusLdapBaseDn" name="radiusLdapBaseDn" placeholder="DC=example,DC=com" class="u-input-compact">
                                 </div>
                                 <div style="grid-column:span 2;">
-                                    <label class="u-label-compact">User Filter</label>
-                                    <input type="text" id="radiusLdapUserFilter" placeholder="(&(objectClass=user)(sAMAccountName={username}))" class="u-input-compact">
+                                    <label class="u-label-xs" for="radiusLdapUserFilter">User Filter</label>
+                                    <input type="text" id="radiusLdapUserFilter" name="radiusLdapUserFilter" placeholder="(&(objectClass=user)(sAMAccountName={username}))" class="u-input-compact">
                                 </div>
                             </div>
-                            <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
+                            <div style="display:flex;gap:6px;align-items:center;margin-top:6px;">
                                 <button class="backup-btn u-bg-muted-cta" onclick="testRadiusLdap()">Test LDAP</button>
                                 <span id="radiusLdapStatus" class="u-text-xs-muted"></span>
                             </div>
                         </div>
                     </div>
-                    <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
-                        <button class="backup-btn" onclick="saveRadiusConfig()">Save RADIUS</button>
-                        <button class="backup-btn u-bg-muted-cta" onclick="restartRadiusServer()">Restart</button>
+
+                    <!-- Client acceptance mode -->
+                    <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border-light);">
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <label class="u-label-xs" style="margin:0;white-space:nowrap;" for="radiusClientMode">Client Policy</label>
+                            <select id="radiusClientMode" name="radiusClientMode" class="u-input-compact" style="width:auto;max-width:260px;">
+                                <option value="open">Accept any device with correct secret</option>
+                                <option value="restricted">Restrict to inventory + manual overrides</option>
+                            </select>
+                            <span class="u-text-xxs-muted">IPs are spoofable — the shared secret is the real gate.</span>
+                        </div>
+                    </div>
+
+                    <div style="display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap;">
+                        <button class="backup-btn" style="background:var(--primary,#3b82f6);color:#fff;font-weight:500;" onclick="saveRadiusConfig()">Save</button>
                         <button class="backup-btn u-bg-muted-cta" onclick="testRadiusConfig()">Test</button>
-                        <button class="backup-btn u-bg-muted-cta" onclick="refreshRadiusData()">Refresh</button>
                         <button class="backup-btn u-bg-muted-cta" onclick="pushRadiusToDevices()">Push to Devices</button>
+                        <span style="flex:1;"></span>
+                        <button class="backup-btn u-bg-muted-cta" onclick="restartRadiusServer()" style="font-size:0.68rem;padding:4px 8px;color:var(--text-dim);">Restart</button>
+                        <button class="backup-btn u-bg-muted-cta" onclick="refreshRadiusData()" style="font-size:0.68rem;padding:4px 8px;color:var(--text-dim);">Refresh</button>
                         <span id="radiusStatus" class="u-text-xs-muted"></span>
                     </div>
 
-                    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px;">
-                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
-                            <div class="settings-stat-label">Last Rotated</div>
-                            <div id="radiusSecretRotated" style="font-size:0.9rem;font-weight:700;color:#111827;margin-top:4px;">Unknown</div>
-                        </div>
-                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
-                            <div class="settings-stat-label">Secret Age</div>
-                            <div id="radiusSecretAge" style="font-size:0.9rem;font-weight:700;color:#111827;margin-top:4px;">Unknown</div>
-                        </div>
-                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
-                            <div class="settings-stat-label">Review Policy</div>
-                            <div id="radiusSecretPolicy" style="font-size:0.9rem;font-weight:700;color:#111827;margin-top:4px;">365 days</div>
-                        </div>
-                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
-                            <div class="settings-stat-label">Secret Status</div>
-                            <div id="radiusSecretState" style="font-size:0.9rem;font-weight:700;color:#111827;margin-top:4px;">No Secret</div>
-                        </div>
-                    </div>
-
-                    <div id="radiusSecretReminder" style="display:none;margin-top:10px;padding:10px 12px;border-radius:8px;border:1px solid #fcd34d;background:#fffbeb;color:#92400e;font-size:0.75rem;">
+                    <div id="radiusSecretReminder" style="display:none;margin-top:8px;padding:8px 10px;border-radius:6px;border:1px solid #fcd34d;background:#fffbeb;color:#92400e;font-size:0.72rem;">
                         <div id="radiusSecretReminderText"></div>
-                        <button id="radiusSecretReviewButton" class="backup-btn" onclick="markRadiusSecretReviewed()" style="display:none;margin-top:8px;background:#92400e;color:#fff;">Mark Reviewed Today</button>
+                        <button id="radiusSecretReviewButton" class="backup-btn" onclick="markRadiusSecretReviewed()" style="display:none;margin-top:6px;background:#92400e;color:#fff;">Mark Reviewed</button>
                     </div>
 
-                    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px;">
-                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
-                            <div class="settings-stat-label">Admin Accounts</div>
-                            <div id="radiusStatUsers" style="font-size:1rem;font-weight:700;color:#111827;margin-top:4px;">0</div>
+                    <div class="auth-stats-grid">
+                        <div class="auth-stat-card">
+                            <div class="auth-stat-label">Last Rotated</div>
+                            <div class="auth-stat-value" id="radiusSecretRotated">Not set</div>
                         </div>
-                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
-                            <div class="settings-stat-label">Known Devices</div>
-                            <div id="radiusStatDevices" style="font-size:1rem;font-weight:700;color:#111827;margin-top:4px;">0</div>
+                        <div class="auth-stat-card">
+                            <div class="auth-stat-label">Secret Age</div>
+                            <div class="auth-stat-value" id="radiusSecretAge">-</div>
                         </div>
-                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
-                            <div class="settings-stat-label">Success Rate</div>
-                            <div id="radiusStatSuccess" style="font-size:1rem;font-weight:700;color:#0D9488;margin-top:4px;">100%</div>
+                        <div class="auth-stat-card">
+                            <div class="auth-stat-label">Review Policy</div>
+                            <div class="auth-stat-value" id="radiusSecretPolicy">365 days</div>
                         </div>
-                        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;">
-                            <div class="settings-stat-label">Logins Today</div>
-                            <div id="radiusStatToday" style="font-size:1rem;font-weight:700;color:#111827;margin-top:4px;">0</div>
+                        <div class="auth-stat-card">
+                            <div class="auth-stat-label">Secret Status</div>
+                            <div class="auth-stat-value" id="radiusSecretState">No Secret</div>
                         </div>
                     </div>
 
-                    <div style="margin-top:14px;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                            <h5 style="margin:0;font-size:0.8rem;font-weight:600;">Device Radius Rollout</h5>
-                            <div style="display:flex;gap:6px;">
-                                <button class="backup-btn" id="radiusRolloutStartBtn" onclick="startRadiusRollout()">Start Rollout</button>
-                                <button class="backup-btn u-bg-muted-cta" id="radiusRolloutResumeBtn" onclick="resumeRadiusRollout()" style="display:none;">Resume</button>
-                                <button class="backup-btn" id="radiusRolloutCancelBtn" onclick="cancelRadiusRollout()" style="display:none;background:#dc2626;color:#fff;">Cancel</button>
-                            </div>
+                    <div class="auth-stats-grid">
+                        <div class="auth-stat-card">
+                            <div class="auth-stat-label">Accounts</div>
+                            <div class="auth-stat-value" id="radiusStatUsers">0</div>
                         </div>
-                        <p class="u-note-inline" style="margin-bottom:8px;">Rollout includes enabled APs, switches, and CPEs currently reachable with inherited parent AP credentials. Rollout start refreshes AP/CPE auth state first. If a CPE cannot log in with inherited credentials, fix the parent AP credentials here and resume.</p>
-                        <div id="radiusRolloutSummary" style="font-size:0.75rem;color:var(--text-muted);padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;">No Radius rollout started.</div>
-                        <div id="radiusRolloutStatus" class="u-status-line" style="margin-top:8px;"></div>
-                        <div id="radiusRolloutDevices" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;"></div>
+                        <div class="auth-stat-card">
+                            <div class="auth-stat-label">Devices</div>
+                            <div class="auth-stat-value" id="radiusStatDevices">0</div>
+                        </div>
+                        <div class="auth-stat-card">
+                            <div class="auth-stat-label">Success Rate</div>
+                            <div class="auth-stat-value" style="color:#0D9488;" id="radiusStatSuccess">100%</div>
+                        </div>
+                        <div class="auth-stat-card">
+                            <div class="auth-stat-label">Logins Today</div>
+                            <div class="auth-stat-value" id="radiusStatToday">0</div>
+                        </div>
                     </div>
+                    <p class="u-note-inline" style="margin-top:10px;">Reserved usernames admin and root are blocked from RADIUS authentication.</p>
+                </div>
 
-                    <div style="margin-top:14px;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                            <h5 style="margin:0;font-size:0.8rem;font-weight:600;">Admin Accounts</h5>
-                            <span class="u-text-sm-dim">Reserved: admin, root</span>
-                        </div>
-                        <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 80px auto;gap:8px;align-items:end;">
-                            <div>
-                                <label class="u-label-compact">Username</label>
-                                <input type="text" id="radiusNewUsername" placeholder="jsmith" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
-                            </div>
-                            <div>
-                                <label class="u-label-compact">Password</label>
-                                <input type="password" id="radiusNewPassword" placeholder="Enter password" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
-                            </div>
-                            <label class="u-text-xs-muted" style="display:flex;align-items:center;gap:6px;padding-bottom:8px;">
-                                <input type="checkbox" id="radiusNewEnabled" checked>
-                                Enabled
-                            </label>
-                            <button class="backup-btn" onclick="createRadiusUser()">Add User</button>
-                        </div>
-                        <div id="radiusUsersStatus" class="u-status-line" style="margin-top:8px;"></div>
-                        <div id="radiusUsersList" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;"></div>
-                    </div>
+                <!-- Clients & Logs sub-panel -->
+                <div class="auth-subpanel" id="authSub-accounts">
+                    <p class="u-note-inline" style="margin-bottom:12px;">RADIUS authenticates against the users in the <a href="#" onclick="switchAuthSubtab('users');return false;" style="color:var(--primary);text-decoration:none;font-weight:500;">Users</a> tab. To push RADIUS settings to devices, use <a href="#" onclick="closeAppSettingsModal();document.getElementById('bottomDrawer').classList.add('open');return false;" style="color:var(--primary);text-decoration:none;font-weight:500;">Config &rarr; Push to Devices</a> in the bottom drawer.</p>
 
-                    <div style="margin-top:14px;">
+                    <div style="margin-bottom:14px;">
                         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
                             <h5 style="margin:0;font-size:0.8rem;font-weight:600;">Manual Client Overrides</h5>
                             <span class="u-text-sm-dim">Use when device source IPs are not covered by inventory</span>
                         </div>
                         <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 80px auto;gap:8px;align-items:end;">
                             <div>
-                                <label class="u-label-compact">IP or CIDR</label>
-                                <input type="text" id="radiusClientSpec" placeholder="10.0.0.5 or 10.0.0.0/24" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                                <label class="u-label-compact" for="radiusClientSpec">IP or CIDR</label>
+                                <input type="text" id="radiusClientSpec" name="radiusClientSpec" placeholder="10.0.0.5 or 10.0.0.0/24" class="u-input-compact">
                             </div>
                             <div>
-                                <label class="u-label-compact">Short Name</label>
-                                <input type="text" id="radiusClientShortname" placeholder="tower-subnet" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                                <label class="u-label-compact" for="radiusClientShortname">Short Name</label>
+                                <input type="text" id="radiusClientShortname" name="radiusClientShortname" placeholder="tower-subnet" class="u-input-compact">
                             </div>
                             <label class="u-text-xs-muted" style="display:flex;align-items:center;gap:6px;padding-bottom:8px;">
-                                <input type="checkbox" id="radiusClientEnabled" checked>
+                                <input type="checkbox" id="radiusClientEnabled" name="radiusClientEnabled" checked>
                                 Enabled
                             </label>
                             <button class="backup-btn" onclick="createRadiusClient()">Add Client</button>
@@ -2833,7 +3047,9 @@
                         <div id="radiusClientsList" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;"></div>
                     </div>
 
-                    <div style="margin-top:14px;">
+                    <hr style="border:none;border-top:1px solid var(--border);margin:14px 0;">
+
+                    <div>
                         <h5 style="margin:0 0 8px 0;font-size:0.8rem;font-weight:600;">Recent Admin Logins</h5>
                         <div id="radiusRecentLogins" style="display:flex;flex-direction:column;gap:6px;"></div>
                     </div>
@@ -2849,193 +3065,120 @@
                     </div>
                 </div>
 
-                <!-- SSO / OIDC Section (hidden until tested) -->
-                <div style="display:none;margin-bottom:20px;">
-                    <div style="border-top:1px solid #e5e7eb;margin:16px 0;"></div>
-                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                        <h4 style="margin:0;font-size:0.85rem;font-weight:600;">SSO Authentication (OIDC)</h4>
-                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
-                            <input type="checkbox" id="authOidcEnabled" onchange="toggleOidcFields()">
-                            <span class="u-text-xs-muted">Enabled</span>
-                        </label>
-                    </div>
-                    <p class="u-note-block">Authenticate admin users via Authentik or another OIDC provider. Local credentials remain available as fallback.</p>
-                    <div id="oidcFields" class="u-grid-2-gap8">
-                        <div class="u-span-2">
-                            <label class="u-text-xxs-muted">Provider URL</label>
-                            <input type="text" id="authOidcProviderUrl" placeholder="https://authentik.example.com/application/o/tachyon/" class="u-input-compact">
+                <!-- Device Credentials sub-panel -->
+                <div class="auth-subpanel" id="authSub-devices">
+                    <div>
+                        <div class="u-flex-center-gap8-mb8">
+                            <h4 class="u-title-compact">Default Device Login</h4>
+                            <label class="u-row-gap6-auto">
+                                <input type="checkbox" id="authDeviceEnabled" name="authDeviceEnabled" onchange="toggleDeviceFields()">
+                                <span class="u-text-xs-muted">Enabled</span>
+                            </label>
                         </div>
-                        <div>
-                            <label class="u-text-xxs-muted">Client ID</label>
-                            <input type="text" id="authOidcClientId" placeholder="Client ID from provider" class="u-input-compact">
+                        <p class="u-note-block">Fallback username and password used when connecting to devices that don't have their own credentials configured.</p>
+                        <div id="deviceFields" class="u-grid-2-gap8">
+                            <div>
+                                <label class="u-text-xxs-muted" for="authDeviceUsername">Username</label>
+                                <input type="text" id="authDeviceUsername" name="authDeviceUsername" placeholder="root" class="u-input-compact">
+                            </div>
+                            <div>
+                                <label class="u-text-xxs-muted" for="authDevicePassword">Password</label>
+                                <input type="password" id="authDevicePassword" name="authDevicePassword" placeholder="Enter password" class="u-input-compact">
+                            </div>
                         </div>
-                        <div>
-                            <label class="u-text-xxs-muted">Client Secret</label>
-                            <input type="password" id="authOidcClientSecret" placeholder="Enter client secret" class="u-input-compact">
-                        </div>
-                        <div class="u-span-2">
-                            <label class="u-text-xxs-muted">Redirect URI</label>
-                            <input type="text" id="authOidcRedirectUri" placeholder="https://tachyon.example.com/auth/oidc/callback" class="u-input-compact">
-                        </div>
-                        <div class="u-span-2">
-                            <label class="u-text-xxs-muted">Allowed Group</label>
-                            <input type="text" id="authOidcAllowedGroup" placeholder="tachyon-admins" class="u-input-compact">
+                        <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
+                            <button class="backup-btn" onclick="saveDeviceConfig()">Save Device Credentials</button>
+                            <span id="deviceStatus" class="u-text-xs-muted"></span>
                         </div>
                     </div>
-                    <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
-                        <button class="backup-btn" onclick="saveOidcConfig()">Save SSO</button>
-                        <button class="backup-btn u-bg-muted-cta" onclick="testOidcConfig()" >Test</button>
-                        <span id="oidcStatus" class="u-text-xs-muted"></span>
+
+                    <!-- SSO / OIDC Section (hidden until tested) -->
+                    <div style="display:none;margin-top:20px;">
+                        <div style="border-top:1px solid #e5e7eb;margin:16px 0;"></div>
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                            <h4 style="margin:0;font-size:0.85rem;font-weight:600;">SSO Authentication (OIDC)</h4>
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
+                                <input type="checkbox" id="authOidcEnabled" name="authOidcEnabled" onchange="toggleOidcFields()">
+                                <span class="u-text-xs-muted">Enabled</span>
+                            </label>
+                        </div>
+                        <p class="u-note-block">Authenticate admin users via Authentik or another OIDC provider. Local credentials remain available as fallback.</p>
+                        <div id="oidcFields" class="u-grid-2-gap8">
+                            <div class="u-span-2">
+                                <label class="u-text-xxs-muted" for="authOidcProviderUrl">Provider URL</label>
+                                <input type="text" id="authOidcProviderUrl" name="authOidcProviderUrl" placeholder="https://authentik.example.com/application/o/tachyon/" class="u-input-compact">
+                            </div>
+                            <div>
+                                <label class="u-text-xxs-muted" for="authOidcClientId">Client ID</label>
+                                <input type="text" id="authOidcClientId" name="authOidcClientId" placeholder="Client ID from provider" class="u-input-compact">
+                            </div>
+                            <div>
+                                <label class="u-text-xxs-muted" for="authOidcClientSecret">Client Secret</label>
+                                <input type="password" id="authOidcClientSecret" name="authOidcClientSecret" placeholder="Enter client secret" class="u-input-compact">
+                            </div>
+                            <div class="u-span-2">
+                                <label class="u-text-xxs-muted" for="authOidcRedirectUri">Redirect URI</label>
+                                <input type="text" id="authOidcRedirectUri" name="authOidcRedirectUri" placeholder="https://tachyon.example.com/auth/oidc/callback" class="u-input-compact">
+                            </div>
+                            <div class="u-span-2">
+                                <label class="u-text-xxs-muted" for="authOidcAllowedGroup">Allowed Group</label>
+                                <input type="text" id="authOidcAllowedGroup" name="authOidcAllowedGroup" placeholder="tachyon-admins" class="u-input-compact">
+                            </div>
+                        </div>
+                        <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
+                            <button class="backup-btn" onclick="saveOidcConfig()">Save SSO</button>
+                            <button class="backup-btn u-bg-muted-cta" onclick="testOidcConfig()" >Test</button>
+                            <span id="oidcStatus" class="u-text-xs-muted"></span>
+                        </div>
                     </div>
                 </div>
 
-                <div class="u-hr-my16"></div>
-
-                <!-- Global Device Credentials Section -->
-                <div>
-                    <div class="u-flex-center-gap8-mb8">
-                        <h4 class="u-title-compact">Global Device Credentials</h4>
-                        <label class="u-row-gap6-auto">
-                            <input type="checkbox" id="authDeviceEnabled" onchange="toggleDeviceFields()">
-                            <span class="u-text-xs-muted">Enabled</span>
-                        </label>
-                    </div>
-                    <p class="u-note-block">Default credentials for connecting to devices (APs/CPEs) when no device-specific credentials are configured. Used as fallback for CPE authentication.</p>
-                    <div id="deviceFields" class="u-grid-2-gap8">
+                <!-- Users sub-panel -->
+                <div class="auth-subpanel active" id="authSub-users" data-min-role="admin">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
                         <div>
-                            <label class="u-text-xxs-muted">Username</label>
-                            <input type="text" id="authDeviceUsername" placeholder="root" class="u-input-compact">
+                            <label style="font-weight:600;font-size:0.85rem;">SixtyOps Local Users</label>
                         </div>
-                        <div>
-                            <label class="u-text-xxs-muted">Password</label>
-                            <input type="password" id="authDevicePassword" placeholder="Enter password" class="u-input-compact">
-                        </div>
+                        <button class="backup-btn" onclick="showAddUserForm()" style="flex-shrink:0;">+ Add User</button>
                     </div>
-                    <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
-                        <button class="backup-btn" onclick="saveDeviceConfig()">Save Device Credentials</button>
-                        <span id="deviceStatus" class="u-text-xs-muted"></span>
-                    </div>
-                </div>
 
-                <div class="u-hr-my16"></div>
-
-                <!-- Built-in RADIUS Server Section (removed — consolidated above) -->
-                <div id="radiusServerSection" style="display:none;">
-                    <div class="u-flex-center-gap8-mb8">
-                        <h4 class="u-title-compact">Built-in RADIUS Server</h4>
-                        <span class="pro-badge" style="font-size:0.6rem;background:#ede9fe;color:#7c3aed;padding:1px 6px;border-radius:3px;font-weight:700;">PRO</span>
-                        <span id="radiusRunningBadge" style="display:none;font-size:0.6rem;padding:1px 6px;border-radius:3px;font-weight:600;"></span>
-                        <label class="u-row-gap6-auto">
-                            <input type="checkbox" id="radiusEnabled" onchange="toggleRadiusFields()">
-                            <span class="u-text-xs-muted">Enabled</span>
-                        </label>
-                    </div>
-                    <p class="u-note-block">Centralized RADIUS authentication for Tachyon device management logins. Devices authenticate admin sessions against this server instead of local credentials.</p>
-                    <div id="radiusFields">
-                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;">
+                    <div id="add-user-form" style="display:none;margin-bottom:14px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr auto auto;gap:8px;align-items:end;">
                             <div>
-                                <label class="u-text-xxs-muted">Port</label>
-                                <input type="number" id="radiusPort" value="1812" min="1024" max="65535" class="u-input-compact">
+                                <label class="u-label-compact" for="new-user-username">Username</label>
+                                <input type="text" id="new-user-username" name="new-user-username" placeholder="Username" aria-label="Username" class="u-input-compact">
                             </div>
                             <div>
-                                <label class="u-text-xxs-muted">Shared Secret</label>
-                                <input type="password" id="radiusSecret" placeholder="Enter shared secret" class="u-input-compact">
+                                <label class="u-label-compact" for="new-user-password">Password</label>
+                                <input type="password" id="new-user-password" name="new-user-password" placeholder="Min 12 characters" aria-label="Password" class="u-input-compact">
                             </div>
                             <div>
-                                <label class="u-text-xxs-muted">Auth Mode</label>
-                                <select id="radiusAuthMode" onchange="toggleRadiusAuthMode()" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;background:#fff;">
-                                    <option value="local">Local Users</option>
-                                    <option value="ldap">LDAP / Active Directory</option>
+                                <label class="u-label-compact" for="new-user-role">Role</label>
+                                <select id="new-user-role" name="new-user-role" aria-label="User role" class="u-input-compact">
+                                    <option value="viewer">Viewer</option>
+                                    <option value="operator">Operator</option>
+                                    <option value="admin">Admin</option>
                                 </select>
                             </div>
-                        </div>
-
-                        <!-- Local Users Mode -->
-                        <div id="radiusLocalSection">
-                            <div style="display:flex;align-items:center;gap:8px;margin:12px 0 6px 0;">
-                                <span style="font-size:0.75rem;font-weight:600;color:#374151;">RADIUS Users</span>
-                                <button class="backup-btn" onclick="showAddRadiusUser()" style="font-size:0.7rem;padding:2px 8px;">+ Add User</button>
+                            <div style="display:flex;gap:6px;padding-bottom:1px;">
+                                <button class="backup-btn" onclick="createUser()">Create</button>
+                                <button class="backup-btn u-bg-muted-cta" onclick="hideAddUserForm()">Cancel</button>
                             </div>
-                            <div id="radiusAddUserForm" style="display:none;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-bottom:8px;">
-                                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;align-items:end;">
-                                    <div>
-                                        <label class="u-label-compact" style="font-size:0.65rem;">Username</label>
-                                        <input type="text" id="radiusNewUsername" placeholder="username" class="u-input-sm">
-                                    </div>
-                                    <div>
-                                        <label class="u-label-compact" style="font-size:0.65rem;">Password</label>
-                                        <input type="password" id="radiusNewPassword" placeholder="password" class="u-input-sm">
-                                    </div>
-                                    <div style="display:flex;gap:4px;">
-                                        <button class="backup-btn" onclick="addRadiusUser()" style="font-size:0.7rem;padding:4px 10px;">Save</button>
-                                        <button class="backup-btn" onclick="hideAddRadiusUser()" class="u-bg-muted-cta" style="font-size:0.7rem;padding:4px 8px;">Cancel</button>
-                                    </div>
-                                </div>
-                                <span id="radiusAddStatus" style="font-size:0.7rem;color:#ef4444;"></span>
-                            </div>
-                            <div id="radiusUsersTable" style="font-size:0.75rem;">
-                                <div class="u-muted-empty">No RADIUS users configured.</div>
-                            </div>
-                        </div>
-
-                        <!-- LDAP Mode -->
-                        <div id="radiusLdapSection" class="hidden">
-                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
-                                <div class="u-span-2">
-                                    <label class="u-text-xxs-muted">LDAP URL</label>
-                                    <input type="text" id="radiusLdapUrl" placeholder="ldaps://ad.example.com" class="u-input-compact">
-                                </div>
-                                <div>
-                                    <label class="u-text-xxs-muted">Bind DN</label>
-                                    <input type="text" id="radiusLdapBindDn" placeholder="CN=svc_radius,OU=Service Accounts,DC=example,DC=com" class="u-input-compact">
-                                </div>
-                                <div>
-                                    <label class="u-text-xxs-muted">Bind Password</label>
-                                    <input type="password" id="radiusLdapPassword" placeholder="Enter password" class="u-input-compact">
-                                </div>
-                                <div class="u-span-2">
-                                    <label class="u-text-xxs-muted">Base DN</label>
-                                    <input type="text" id="radiusLdapBaseDn" placeholder="DC=example,DC=com" class="u-input-compact">
-                                </div>
-                                <div class="u-span-2">
-                                    <label class="u-text-xxs-muted">User Filter</label>
-                                    <input type="text" id="radiusLdapUserFilter" placeholder="(&(objectClass=user)(sAMAccountName={username}))" class="u-input-compact">
-                                </div>
-                            </div>
-                            <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
-                                <button class="backup-btn u-bg-muted-cta" onclick="testRadiusLdap()" >Test LDAP</button>
-                                <span id="radiusLdapStatus" class="u-text-xs-muted"></span>
-                            </div>
-                        </div>
-
-                        <div style="display:flex;gap:6px;align-items:center;margin-top:12px;">
-                            <button class="backup-btn" onclick="saveRadiusConfig()">Save RADIUS Config</button>
-                            <button class="backup-btn u-bg-muted-cta" onclick="restartRadiusServer()" >Restart Server</button>
-                            <span id="radiusConfigStatus" class="u-text-xs-muted"></span>
-                        </div>
-
-                        <!-- Push to Devices -->
-                        <div class="u-hr-soft-my12"></div>
-                        <div style="display:flex;align-items:center;gap:8px;">
-                            <div class="u-flex-1">
-                                <label class="u-text-xxs-muted">Server Address (advertised to devices)</label>
-                                <input type="text" id="radiusAdvertisedAddr" placeholder="e.g. 10.0.0.50" class="u-input-compact">
-                            </div>
-                            <button class="backup-btn" onclick="pushRadiusToDevices()" style="margin-top:14px;">Push to All Devices</button>
-                        </div>
-                        <p class="u-note-tight">Configures all managed devices to authenticate against this RADIUS server. Configuration is sent over an encrypted connection.</p>
-                        <span id="radiusPushStatus" class="u-text-xs-muted"></span>
-
-                        <!-- Auth Log -->
-                        <div class="u-hr-soft-my12"></div>
-                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-                            <span style="font-size:0.75rem;font-weight:600;color:#374151;">Recent Auth Log</span>
-                            <button class="backup-btn" onclick="loadRadiusAuthLog()" class="u-bg-muted-cta" style="font-size:0.65rem;padding:1px 6px;">Refresh</button>
-                        </div>
-                        <div id="radiusAuthLogTable" style="font-size:0.72rem;max-height:150px;overflow-y:auto;">
-                            <div class="u-muted-empty-sm">No auth log entries.</div>
                         </div>
                     </div>
+
+                    <table class="users-table" id="users-table">
+                        <thead>
+                            <tr>
+                                <th>Username</th>
+                                <th>Role</th>
+                                <th>Auth</th>
+                                <th>Status</th>
+                                <th style="text-align:right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="users-table-body"></tbody>
+                    </table>
                 </div>
             </div>
 
@@ -3054,9 +3197,9 @@
                     </div>
                 </div>
                 <div style="border-top:1px solid var(--border);padding-top:12px;">
-                    <label class="u-text-xs-muted">License Key</label>
+                    <label class="u-text-xs-muted" for="licenseKeyInput">License Key</label>
                     <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
-                        <input type="text" id="licenseKeyInput" placeholder="XXXX-XXXX-XXXX-XXXX" style="flex:1;font-family:monospace;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.8rem;">
+                        <input type="text" id="licenseKeyInput" name="licenseKeyInput" placeholder="XXXX-XXXX-XXXX-XXXX" class="u-input-compact" style="flex:1;font-family:monospace;">
                         <button class="backup-btn" onclick="activateLicense()">Activate</button>
                     </div>
                     <div id="licenseKeyStatus" class="u-status-line" style="margin-top:6px;"></div>
@@ -3066,49 +3209,12 @@
                     <a href="https://billing.sixtyops.net" target="_blank" style="font-size:0.75rem;color:#0D9488;margin-left:12px;">Manage Billing</a>
                 </div>
                 <div class="u-text-sm-dim" style="margin-top:16px;">
-                    <a href="https://sixtyops.net/#pricing" target="_blank" style="color:#0D9488;">View pricing</a> &middot;
-                    <a href="https://docs.sixtyops.net/licensing" target="_blank" style="color:#0D9488;">Documentation</a> &middot;
+                    <a href="https://sixtyops.net/#pricing" target="_blank" style="color:#0D9488;">Pricing</a> &middot;
+                    <a href="https://sixtyops.net" target="_blank" style="color:#0D9488;">SixtyOps.net</a> &middot;
                     <a href="mailto:support@sixtyops.net" style="color:#0D9488;">Support</a>
                 </div>
             </div>
 
-            <!-- Users Panel (admin only) -->
-            <div class="settings-panel" id="settingsPanel-users" data-min-role="admin">
-                <div class="settings-section" id="user-management-section">
-                    <h3>User Management</h3>
-                    <p class="text-muted" style="margin-bottom: 12px; font-size: 13px;">
-                        Manage user accounts and roles. Admins have full access, operators can manage devices and updates, viewers have read-only access.
-                    </p>
-                    <button class="btn btn-sm btn-primary" onclick="showAddUserForm()" style="margin-bottom: 12px;">+ Add User</button>
-
-                    <div id="add-user-form" style="display:none; margin-bottom: 16px; padding: 12px; background: var(--bg-secondary, #f8f9fa); border-radius: 6px;">
-                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 8px;">
-                            <input type="text" id="new-user-username" placeholder="Username" class="form-control form-control-sm">
-                            <input type="password" id="new-user-password" placeholder="Password (min 12 chars)" class="form-control form-control-sm">
-                            <select id="new-user-role" class="form-control form-control-sm">
-                                <option value="viewer">Viewer</option>
-                                <option value="operator">Operator</option>
-                                <option value="admin">Admin</option>
-                            </select>
-                        </div>
-                        <button class="btn btn-sm btn-success" onclick="createUser()">Create</button>
-                        <button class="btn btn-sm btn-secondary" onclick="hideAddUserForm()">Cancel</button>
-                    </div>
-
-                    <table class="table table-sm" id="users-table">
-                        <thead>
-                            <tr>
-                                <th>Username</th>
-                                <th>Role</th>
-                                <th>Auth</th>
-                                <th>Status</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="users-table-body"></tbody>
-                    </table>
-                </div>
-            </div>
         </div>
     </div>
 
@@ -3135,6 +3241,19 @@
 
         // Role-based UI visibility
         let currentUserRole = 'viewer';
+
+        // Config policy state (declared early to avoid TDZ errors)
+        let configLoaded = false;
+        let configCompliance = {};  // {ip: {compliant, checked_at}}
+        let configSummary = {};     // {ip: {id, config_hash, model, fetched_at}}
+        let configTemplates = [];
+        let configPushingDevices = new Set();
+        let configPushRollout = null;
+        const CONFIG_CATEGORIES = ['snmp', 'ntp', 'discovery', 'syslog', 'users', 'radius', 'watchdog', 'custom'];
+        const CONFIG_PREFILL_CATEGORIES = ['snmp', 'users', 'radius', 'ntp', 'syslog', 'watchdog'];
+        let activeConfigCategory = 'snmp';
+        let configPrefillLoaded = new Set();
+        let configSuggestedCategories = new Set();
 
         function initRoleVisibility() {
             fetch('/api/users/me')
@@ -3973,23 +4092,31 @@
         }
 
         function updateFilterChip() {
-            const chip = document.getElementById('activeFilterChip');
-            const text = document.getElementById('activeFilterChipText');
-            if (!chip || !text) return;
+            const container = document.getElementById('activeFilterChips');
+            if (!container) return;
             const statusLabels = { behind: 'Needs update', current: 'Current', offline: 'Offline', unknown: 'Unknown', updating: 'Updating' };
             const colNames = { model: 'Model', firmware: 'Version', status: 'Status' };
-            const parts = [];
+            const chips = [];
             for (const [col, valSet] of Object.entries(columnFilters)) {
                 if (!valSet || valSet.size === 0) continue;
                 const vals = [...valSet].map(v => col === 'status' ? (statusLabels[v] || v) : v);
-                parts.push(`${colNames[col] || col}: ${vals.join(', ')}`);
+                const label = `${colNames[col] || col}: ${vals.join(', ')}`;
+                chips.push(`<span class="filter-chip">${escapeHtml(label)}<a onclick="clearColumnFilter('${col}')" title="Remove filter">&times;</a></span>`);
             }
-            if (parts.length === 0) {
-                chip.style.display = 'none';
+            if (chips.length === 0) {
+                container.style.display = 'none';
+                container.innerHTML = '';
             } else {
-                text.textContent = parts.join(' | ');
-                chip.style.display = 'inline-flex';
+                container.innerHTML = chips.join('');
+                container.style.display = 'inline-flex';
             }
+        }
+
+        function clearColumnFilter(col) {
+            delete columnFilters[col];
+            closeColumnFilter();
+            updateFilterChip();
+            renderTable();
         }
 
         function clearAllColumnFilters() {
@@ -4469,10 +4596,10 @@
 
                 const siteEmptyTds = activeColumnMode === 'firmware'
                     ? `<td></td><td></td><td></td><td></td><td></td><td>${siteUpdateCell(site.id, aps)}</td><td></td>`
-                    : `<td></td><td></td>`;
+                    : `<td></td><td></td><td></td>`;
                 const siteActions = activeColumnMode === 'firmware'
                     ? `${actionsCell('site', site.id, site.name)}${site.id !== null && aps.length === 0 && switches.length === 0 ? deleteActionLink('site', site.id) : ''}`
-                    : (site.id !== null ? `<a class="action-link" onclick="pushConfigToSite(${site.id});event.stopPropagation();">Push Templates</a>` : '');
+                    : '';
                 html += `<tr class="row-site ${isSelected ? 'row-selected' : ''}" onclick="selectSite(${site.id !== null ? site.id : 'null'})">
                     <td>
                         <div class="name-cell tree-indent-0">
@@ -5228,16 +5355,47 @@
             loadNotificationsData();
             loadAuthData();
             loadLicensePanel();
+            loadSslStatus();
             if (tab === 'users') loadUsers();
         }
 
         function closeAppSettingsModal() {
             document.getElementById('appSettingsOverlay').classList.remove('open');
             // Clear status messages
-            const statusEls = ['backupStatus', 'notifStatus', 'oidcStatus', 'deviceStatus', 'appUpdateStatus', 'radiusConfigStatus', 'radiusPushStatus', 'radiusLdapStatus'];
+            const statusEls = ['backupStatus', 'notifStatus', 'oidcStatus', 'deviceStatus', 'appUpdateStatus', 'radiusConfigStatus', 'radiusPushStatus', 'radiusLdapStatus', 'sslStatus'];
             statusEls.forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.textContent = '';
+            });
+            // Mark setup wizard complete on first close
+            if (window._firstRunSetup) {
+                window._firstRunSetup = false;
+                fetch('/api/setup-wizard/complete', { method: 'POST' }).catch(() => {});
+            }
+        }
+
+        function switchAuthSubtab(name) {
+            const container = document.getElementById('authSubtabs');
+            container.querySelectorAll('.settings-subtab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.auth-subpanel').forEach(p => p.classList.remove('active'));
+            const panel = document.getElementById('authSub-' + name);
+            if (panel) panel.classList.add('active');
+            // Activate the clicked tab button by matching onclick argument
+            container.querySelectorAll('.settings-subtab').forEach(t => {
+                const onclick = t.getAttribute('onclick') || '';
+                if (onclick.includes("'" + name + "'")) t.classList.add('active');
+            });
+            if (name === 'users') loadUsers();
+        }
+
+        function switchNotifSubtab(name) {
+            document.querySelectorAll('.settings-subtab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.notif-subpanel').forEach(p => p.classList.remove('active'));
+            const panel = document.getElementById('notifSub-' + name);
+            if (panel) panel.classList.add('active');
+            // Activate the clicked tab button
+            document.querySelectorAll('.settings-subtab').forEach(t => {
+                if (t.textContent.toLowerCase().includes(name)) t.classList.add('active');
             });
         }
 
@@ -5257,7 +5415,8 @@
             const panel = document.getElementById('settingsPanel-' + tabName);
             if (panel) panel.classList.add('active');
             if (tabName === 'backup') loadBackupStatus();
-            if (tabName === 'users') loadUsers();
+            if (tabName === 'auth') loadUsers();
+            if (tabName === 'https') loadSslStatus();
         }
 
         async function loadNotificationsData() {
@@ -5291,6 +5450,19 @@
                 if (webhookBadge && !(licenseState.is_pro || (licenseState.features||{}).webhooks)) {
                     webhookBadge.style.display = 'inline';
                 }
+                // Email settings
+                document.getElementById('emailEnabled').checked = data.settings.email_enabled === 'true';
+                document.getElementById('emailSmtpHost').value = data.settings.email_smtp_host || '';
+                document.getElementById('emailSmtpPort').value = data.settings.email_smtp_port || '587';
+                document.getElementById('emailSmtpUsername').value = data.settings.email_smtp_username || '';
+                // Don't populate password — show placeholder if set
+                const emailPwEl = document.getElementById('emailSmtpPassword');
+                emailPwEl.value = '';
+                emailPwEl.placeholder = data.settings.email_smtp_password ? '(unchanged)' : 'App password';
+                document.getElementById('emailSmtpTls').checked = data.settings.email_smtp_tls !== 'false';
+                document.getElementById('emailFromAddress').value = data.settings.email_from_address || '';
+                document.getElementById('emailToAddresses').value = data.settings.email_to_addresses || '';
+                toggleEmailFields();
             } catch (e) {}
         }
 
@@ -5303,12 +5475,19 @@
                 builtinRadiusSummary = data.radius || null;
                 const radiusEnabled = data.radius?.enabled || false;
                 document.getElementById('authRadiusEnabled').checked = radiusEnabled;
-                document.getElementById('authRadiusHost').value = data.radius?.advertised_address || data.radius?.host || '';
+                const radiusAddr = data.radius?.advertised_address || data.radius?.host || '';
+                const radiusHostEl = document.getElementById('authRadiusHost');
+                radiusHostEl.value = radiusAddr;
+                if (!radiusAddr && data.radius?.detected_ip) {
+                    radiusHostEl.placeholder = data.radius.detected_ip;
+                    radiusHostEl.value = data.radius.detected_ip;
+                }
                 document.getElementById('authRadiusPort').value = data.radius?.auth_port || data.radius?.port || 1812;
                 const radiusSecretEl = document.getElementById('authRadiusSecret');
-                radiusSecretEl.value = '';
-                radiusSecretEl.placeholder = data.radius?.secret_set ? '(unchanged)' : 'Enter shared secret';
+                radiusSecretEl.value = data.radius?.shared_secret || '';
+                radiusSecretEl.placeholder = 'Enter shared secret';
                 document.getElementById('authRadiusAuthMode').value = data.radius?.auth_mode || 'local';
+                document.getElementById('radiusClientMode').value = data.radius?.client_mode || 'open';
                 // LDAP fields
                 const ldapUrlEl = document.getElementById('radiusLdapUrl');
                 if (ldapUrlEl) ldapUrlEl.value = data.radius?.ldap_url || '';
@@ -5396,6 +5575,60 @@
                     statusEl.style.color = '#10b981';
                 } else {
                     statusEl.textContent = data.message || 'Failed to send test';
+                    statusEl.style.color = '#ef4444';
+                }
+            } catch (e) {
+                statusEl.textContent = 'Error: ' + e.message;
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        function toggleEmailFields() {
+            const enabled = document.getElementById('emailEnabled').checked;
+            const fields = document.getElementById('emailFields');
+            if (fields) fields.style.opacity = enabled ? '1' : '0.5';
+        }
+
+        async function saveEmailSettings() {
+            const statusEl = document.getElementById('emailStatus');
+            const settings = {
+                email_enabled: document.getElementById('emailEnabled').checked ? 'true' : 'false',
+                email_smtp_host: document.getElementById('emailSmtpHost').value.trim(),
+                email_smtp_port: document.getElementById('emailSmtpPort').value,
+                email_smtp_username: document.getElementById('emailSmtpUsername').value.trim(),
+                email_smtp_tls: document.getElementById('emailSmtpTls').checked ? 'true' : 'false',
+                email_from_address: document.getElementById('emailFromAddress').value.trim(),
+                email_to_addresses: document.getElementById('emailToAddresses').value.trim(),
+            };
+            const pw = document.getElementById('emailSmtpPassword').value;
+            if (pw) settings.email_smtp_password = pw;
+            try {
+                await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings),
+                });
+                statusEl.textContent = 'Saved!';
+                statusEl.style.color = '#10b981';
+            } catch (e) {
+                statusEl.textContent = 'Failed to save: ' + e.message;
+                statusEl.style.color = '#ef4444';
+            }
+        }
+
+        async function testEmail() {
+            const statusEl = document.getElementById('emailStatus');
+            await saveEmailSettings();
+            statusEl.textContent = 'Sending test email...';
+            statusEl.style.color = '#6b7280';
+            try {
+                const resp = await fetch('/api/email/test', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    statusEl.textContent = 'Test email sent! Check your inbox.';
+                    statusEl.style.color = '#10b981';
+                } else {
+                    statusEl.textContent = data.message || 'Failed to send test email';
                     statusEl.style.color = '#ef4444';
                 }
             } catch (e) {
@@ -5650,6 +5883,7 @@
 
         function renderRadiusUsers(users) {
             const container = document.getElementById('radiusUsersList');
+            if (!container) return;
             if (!users || users.length === 0) {
                 container.innerHTML = '<div style="font-size:0.75rem;color:#9ca3af;padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No RADIUS admin accounts configured.</div>';
                 return;
@@ -5678,6 +5912,7 @@
 
         function renderRadiusClients(clients) {
             const container = document.getElementById('radiusClientsList');
+            if (!container) return;
             if (!clients || clients.length === 0) {
                 container.innerHTML = '<div style="font-size:0.75rem;color:#9ca3af;padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No manual client overrides configured.</div>';
                 return;
@@ -5812,11 +6047,11 @@
                                 <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:6px;align-items:end;">
                                     <div>
                                         <label style="font-size:0.68rem;color:#6b7280;">Username</label>
-                                        <input id="radiusRepairUser-${repairKey}" type="text" placeholder="root" style="width:100%;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:0.75rem;">
+                                        <input id="radiusRepairUser-${repairKey}" type="text" placeholder="root" class="u-input-compact">
                                     </div>
                                     <div>
                                         <label style="font-size:0.68rem;color:#6b7280;">Password</label>
-                                        <input id="radiusRepairPass-${repairKey}" type="password" placeholder="Enter password" style="width:100%;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:0.75rem;">
+                                        <input id="radiusRepairPass-${repairKey}" type="password" placeholder="Enter password" class="u-input-compact">
                                     </div>
                                     <div>
                                         <button class="backup-btn" onclick='repairRadiusRolloutParentAp(${JSON.stringify(repairTarget)})'>Save AP Credentials</button>
@@ -5988,7 +6223,8 @@
 
         function prefillBuiltinRadiusConfig() {
             if (!builtinRadiusSummary || !builtinRadiusSummary.enabled) {
-                alert('Built-in RADIUS is not enabled yet.');
+                showToast('Built-in RADIUS is not enabled — opening settings\u2026');
+                openAppSettingsModal('auth');
                 return;
             }
 
@@ -6034,7 +6270,8 @@
                 return;
             }
 
-            const body = { enabled, host, port, auth_mode: authMode };
+            const clientMode = document.getElementById('radiusClientMode').value;
+            const body = { enabled, host, port, auth_mode: authMode, client_mode: clientMode };
             if (secret) body.secret = secret;
 
             // LDAP fields
@@ -6057,13 +6294,10 @@
                 });
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to save');
-                builtinRadiusSummary = data;
-                secretEl.value = '';
-                secretEl.placeholder = data.secret_set ? '(unchanged)' : 'Enter shared secret';
                 if (ldapPw) { ldapPw.value = ''; ldapPw.placeholder = '(unchanged)'; }
-                setRadiusBadge(data);
                 statusEl.textContent = 'RADIUS config saved';
                 statusEl.style.color = '#10b981';
+                await loadAuthSettings();
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to save RADIUS config';
@@ -6946,8 +7180,6 @@
             // Switch drawer content
             setHidden(document.getElementById('drawerContent-updates'), mode !== 'firmware');
             setHidden(document.getElementById('drawerContent-config'), mode !== 'config');
-            // Show/hide enforce log
-            setHidden(document.getElementById('enforceLogDetails'), mode !== 'config');
             // Show/hide canary summary
             if (mode !== 'firmware') {
                 const cs = document.getElementById('canarySummary');
@@ -7004,26 +7236,26 @@
             if (overlay) { overlay.remove(); return; }
             overlay = document.createElement('div');
             overlay.id = 'historyOverlay';
-            overlay.className = 'backup-overlay';
+            overlay.className = 'backup-overlay open';
             overlay.style.zIndex = '250';
             overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
             overlay.innerHTML = `
-                <div class="backup-modal" style="width:960px;max-width:95vw;max-height:80vh;overflow-y:auto;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                        <h3 style="margin:0;">Job History</h3>
-                        <button class="btn btn-sm btn-ghost" onclick="this.closest('.backup-overlay').remove()">&times;</button>
+                <div class="backup-modal history-modal">
+                    <div class="history-header">
+                        <h3>Job History</h3>
+                        <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.1rem;line-height:1;padding:4px;">&times;</button>
                     </div>
-                    <div style="display:flex;gap:8px;margin-bottom:8px;">
-                        <button class="btn btn-sm btn-primary" id="historyViewDevices" onclick="switchHistoryView('devices')">Devices</button>
-                        <button class="btn btn-sm" id="historyViewJobs" onclick="switchHistoryView('jobs')">Jobs</button>
+                    <div class="history-view-tabs">
+                        <button class="history-view-tab active" id="historyViewDevices" onclick="switchHistoryView('devices')">By Device</button>
+                        <button class="history-view-tab" id="historyViewJobs" onclick="switchHistoryView('jobs')">By Job</button>
                     </div>
-                    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;">
+                    <div class="history-filters">
                         <div>
-                            <label class="u-label-xs">Device IP</label>
-                            <input type="text" id="historyFilterIp" placeholder="All devices" style="width:140px;">
+                            <label class="u-label-xs" for="historyFilterIp">Device IP</label>
+                            <input type="text" id="historyFilterIp" placeholder="All devices">
                         </div>
                         <div>
-                            <label class="u-label-xs">Status</label>
+                            <label class="u-label-xs" for="historyFilterStatus">Status</label>
                             <select id="historyFilterStatus">
                                 <option value="">All</option>
                                 <option value="success">Success</option>
@@ -7034,7 +7266,7 @@
                             </select>
                         </div>
                         <div>
-                            <label class="u-label-xs">Action</label>
+                            <label class="u-label-xs" for="historyFilterAction">Action</label>
                             <select id="historyFilterAction">
                                 <option value="">All</option>
                                 <option value="firmware_update">Firmware Update</option>
@@ -7042,41 +7274,39 @@
                             </select>
                         </div>
                         <div>
-                            <label class="u-label-xs">From</label>
-                            <input type="date" id="historyFilterFrom" style="width:140px;">
+                            <label class="u-label-xs" for="historyFilterFrom">From</label>
+                            <input type="date" id="historyFilterFrom">
                         </div>
                         <div>
-                            <label class="u-label-xs">To</label>
-                            <input type="date" id="historyFilterTo" style="width:140px;">
+                            <label class="u-label-xs" for="historyFilterTo">To</label>
+                            <input type="date" id="historyFilterTo">
                         </div>
-                        <button class="btn btn-sm btn-primary" onclick="loadHistory()">Apply</button>
-                        <button class="btn btn-sm btn-secondary" onclick="exportHistoryCsv()">Export CSV</button>
+                        <button class="backup-btn" onclick="loadHistory()">Apply</button>
+                        <button class="backup-btn u-bg-muted-cta" onclick="exportHistoryCsv()">Export CSV</button>
                     </div>
-                    <div class="table-card" id="historyDevicesView">
-                        <div class="u-overflow-x-auto">
-                            <table class="tree-table" id="historyTable">
+                    <div class="history-table-wrap">
+                        <div id="historyDevicesView">
+                            <table class="history-table" id="historyTable">
                                 <thead><tr>
                                     <th>Time</th><th>Device</th><th>Role</th><th>Action</th>
-                                    <th>Version</th><th>Status</th><th>Failed Stage</th><th>Duration</th>
+                                    <th>Version</th><th>Status</th><th>Failed Stage</th><th>Dur.</th>
                                 </tr></thead>
                                 <tbody id="historyTableBody">
-                                    <tr><td colspan="8" class="empty-state">Loading...</td></tr>
+                                    <tr><td colspan="8" style="text-align:center;padding:16px;color:var(--text-dim);font-size:0.75rem;">Loading...</td></tr>
                                 </tbody>
                             </table>
+                            <div id="historyLoadMore" class="hidden" style="text-align:center;padding:10px;">
+                                <button class="backup-btn u-bg-muted-cta" onclick="loadMoreHistory()">Load More</button>
+                            </div>
                         </div>
-                        <div id="historyLoadMore" class="hidden" style="text-align:center;padding:12px;">
-                            <button class="btn btn-sm btn-secondary" onclick="loadMoreHistory()">Load More</button>
-                        </div>
-                    </div>
-                    <div class="table-card hidden" id="historyJobsView">
-                        <div class="u-overflow-x-auto">
-                            <table class="tree-table" id="jobHistoryTable">
+                        <div class="hidden" id="historyJobsView">
+                            <table class="history-table" id="jobHistoryTable">
                                 <thead><tr>
                                     <th>Time</th><th>Job ID</th><th>Duration</th>
                                     <th>Success</th><th>Failed</th><th>Skipped</th><th>Bank Mode</th>
                                 </tr></thead>
                                 <tbody id="jobHistoryTableBody">
-                                    <tr><td colspan="7" class="empty-state">No jobs yet</td></tr>
+                                    <tr><td colspan="7" style="text-align:center;padding:16px;color:var(--text-dim);font-size:0.75rem;">No jobs yet</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -7127,7 +7357,9 @@
 
                 for (const entry of data.history) {
                     const row = document.createElement('tr');
-                    row.className = 'u-history-row';
+                    row.style.cursor = 'pointer';
+                    row.onmouseenter = function() { this.style.background = 'var(--bg-secondary,#f9fafb)'; };
+                    row.onmouseleave = function() { this.style.background = ''; };
                     row.onclick = function() { toggleHistoryDetail(this, entry); };
 
                     const d = entry.completed_at ? new Date(entry.completed_at) : null;
@@ -7139,14 +7371,14 @@
                     const actionLabel = entry.action === 'config_push' ? 'Config' : 'Update';
 
                     row.innerHTML = `
-                        <td class="u-history-cell-time">${escapeHtml(timeStr)}</td>
-                        <td class="u-history-cell-mono">${escapeHtml(entry.ip)}</td>
-                        <td class="u-history-cell">${escapeHtml(entry.role || '-')}</td>
-                        <td class="u-history-cell">${actionLabel}</td>
-                        <td class="u-history-cell">${escapeHtml(verStr)}</td>
+                        <td class="cell-time">${escapeHtml(timeStr)}</td>
+                        <td class="cell-mono">${escapeHtml(entry.ip)}</td>
+                        <td>${escapeHtml(entry.role || '-')}</td>
+                        <td>${actionLabel}</td>
+                        <td>${escapeHtml(verStr)}</td>
                         <td><span class="history-status-badge ${entry.status}">${entry.status}</span></td>
-                        <td class="u-history-cell-failed ${entry.failed_stage ? 'error' : ''}">${entry.failed_stage || '-'}</td>
-                        <td class="u-history-cell">${durStr}</td>
+                        <td class="${entry.failed_stage ? 'cell-error' : ''}">${entry.failed_stage || '-'}</td>
+                        <td>${durStr}</td>
                     `;
                     tbody.appendChild(row);
                 }
@@ -7175,14 +7407,14 @@
             const devView = document.getElementById('historyDevicesView');
             const jobView = document.getElementById('historyJobsView');
             if (view === 'jobs') {
-                devBtn.classList.remove('btn-primary');
-                jobBtn.classList.add('btn-primary');
+                devBtn.classList.remove('active');
+                jobBtn.classList.add('active');
                 setHidden(devView, true);
                 setHidden(jobView, false);
                 if (!jobHistoryLoaded) loadJobHistory();
             } else {
-                jobBtn.classList.remove('btn-primary');
-                devBtn.classList.add('btn-primary');
+                jobBtn.classList.remove('active');
+                devBtn.classList.add('active');
                 setHidden(jobView, true);
                 setHidden(devView, false);
             }
@@ -7587,6 +7819,12 @@
                 const el = document.getElementById(id);
                 if (el) el.addEventListener('change', markDrawerDirty);
             });
+
+            // Auto-open App Settings on first run
+            {% if show_settings %}
+            window._firstRunSetup = true;
+            setTimeout(() => openAppSettingsModal('https'), 500);
+            {% endif %}
 
             const filterQueryEl = document.getElementById('deviceFilterQuery');
             if (filterQueryEl) filterQueryEl.addEventListener('input', () => renderTable());
@@ -8053,6 +8291,59 @@
         // Refresh fleet status periodically
         setInterval(loadFleetStatus, 60000);
 
+        // ── HTTPS / SSL ──
+
+        async function loadSslStatus() {
+            const el = document.getElementById('sslStatusDisplay');
+            if (!el) return;
+            try {
+                const resp = await fetch('/api/ssl/status');
+                const data = await resp.json();
+                if (data.enabled && data.domain) {
+                    const expiry = data.days_until_expiry != null ? `${data.days_until_expiry} days` : 'unknown';
+                    const renewalClass = data.needs_renewal ? 'color:#ef4444;' : 'color:#22c55e;';
+                    el.innerHTML = `<span style="font-weight:500;">Domain:</span> ${data.domain}<br>`
+                        + `<span style="font-weight:500;">Certificate:</span> Let's Encrypt`
+                        + ` &mdash; <span style="${renewalClass}">expires in ${expiry}</span>`
+                        + (data.needs_renewal ? ' (renewal recommended)' : '');
+                    document.getElementById('sslDomain').value = data.domain;
+                    document.getElementById('sslEmail').value = data.email || '';
+                } else {
+                    el.innerHTML = 'No HTTPS certificate configured. The app is using HTTP or a self-signed certificate.';
+                }
+            } catch (e) {
+                el.innerHTML = 'Could not load SSL status.';
+            }
+        }
+
+        async function configureSsl() {
+            const domain = document.getElementById('sslDomain').value.trim();
+            const email = document.getElementById('sslEmail').value.trim();
+            const status = document.getElementById('sslStatus');
+            if (!domain) { status.textContent = 'Domain is required'; return; }
+            if (!email) { status.textContent = 'Email is required'; return; }
+            status.textContent = 'Requesting certificate...';
+            try {
+                const resp = await fetch('/api/ssl/setup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ domain, email }),
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    status.textContent = 'Certificate configured successfully';
+                    status.style.color = '#22c55e';
+                    loadSslStatus();
+                } else {
+                    status.textContent = data.detail || 'Failed to configure HTTPS';
+                    status.style.color = '#ef4444';
+                }
+            } catch (e) {
+                status.textContent = 'Error: ' + e.message;
+                status.style.color = '#ef4444';
+            }
+        }
+
         // ── Backup / Restore ──
 
         async function loadBackupStatus() {
@@ -8203,18 +8494,6 @@
 
         // ── Config Tab ──
 
-        let configLoaded = false;
-        let configCompliance = {};  // {ip: {compliant, checked_at}}
-        let configSummary = {};     // {ip: {id, config_hash, model, fetched_at}}
-        let configTemplates = [];
-        let configPushingDevices = new Set();
-        let configPushRollout = null;  // Current config push rollout state
-        const CONFIG_CATEGORIES = ['snmp', 'users', 'radius', 'ntp', 'syslog', 'watchdog', 'custom'];
-        const CONFIG_PREFILL_CATEGORIES = ['snmp', 'users', 'radius', 'ntp', 'syslog', 'watchdog'];
-        let activeConfigCategory = 'snmp';
-        let configPrefillLoaded = new Set();
-        let configSuggestedCategories = new Set();
-
         async function loadConfigData() {
             try {
                 const [compResp, cfgResp, tplResp, rolloutResp] = await Promise.all([
@@ -8356,7 +8635,7 @@
 
                 // Show modal
                 const modal = document.createElement('div');
-                modal.className = 'backup-overlay';
+                modal.className = 'backup-overlay open';
                 modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
                 modal.innerHTML = `
                     <div class="backup-modal" style="width:700px;max-height:80vh;display:flex;flex-direction:column;">
@@ -8433,6 +8712,9 @@
                 if (toggle) { toggle.classList.add('not-saved'); toggle.title = 'Save this section first'; setToggleActive(toggle, false); }
                 const section = document.getElementById(`cfgSection-${cat}`);
                 if (section) section.classList.remove('enforced');
+                // Reset save button
+                const saveBtn = document.getElementById(`cfgSave-${cat}`);
+                if (saveBtn) { saveBtn.textContent = 'Save'; saveBtn.classList.remove('saved'); }
             }
 
             // Populate form fields and enable toggles from saved templates
@@ -8443,7 +8725,7 @@
                         statusEl.textContent = 'Enforced';
                         statusEl.className = 'config-section-status enforced';
                     } else {
-                        statusEl.textContent = 'Saved';
+                        statusEl.textContent = '';
                         statusEl.className = 'config-section-status saved';
                     }
                 }
@@ -8457,6 +8739,9 @@
                 // Section accent
                 const section = document.getElementById(`cfgSection-${t.category}`);
                 if (section) section.classList.toggle('enforced', !!t.enabled);
+                // Mark save button as saved
+                const saveBtn = document.getElementById(`cfgSave-${t.category}`);
+                if (saveBtn) { saveBtn.textContent = 'Saved'; saveBtn.classList.add('saved'); }
                 if (t.form_data) {
                     populateConfigForm(t.category, t.form_data);
                 }
@@ -8481,6 +8766,21 @@
             if (!CONFIG_CATEGORIES.includes(activeConfigCategory)) activeConfigCategory = 'snmp';
             selectConfigCategory(activeConfigCategory);
             updateCategorySiteBadges();
+        }
+
+        // Mark save button dirty when user edits a section
+        function markCfgDirty(cat) {
+            const btn = document.getElementById(`cfgSave-${cat}`);
+            if (btn && btn.classList.contains('saved')) {
+                btn.textContent = 'Save';
+                btn.classList.remove('saved');
+            }
+        }
+        for (const cat of CONFIG_CATEGORIES) {
+            const section = document.getElementById(`cfgSection-${cat}`);
+            if (!section) continue;
+            section.addEventListener('input', () => markCfgDirty(cat));
+            section.addEventListener('change', () => markCfgDirty(cat));
         }
 
         function populateConfigForm(category, formData) {
@@ -8646,19 +8946,22 @@
             row.className = 'config-user-row';
             row.innerHTML = `
                 <div>
-                    <label>Username</label>
+                    <label>Username
                     <input type="text" class="cfg-user-name u-w-full" value="${escapeHtml(userData?.username || '')}" placeholder="username" autocomplete="off" data-1p-ignore>
+                    </label>
                 </div>
                 <div>
-                    <label>Password</label>
+                    <label>Password
                     <input type="password" class="cfg-user-pass u-w-full" value="${escapeHtml(userData?.password || '')}" placeholder="password" autocomplete="off" data-1p-ignore>
+                    </label>
                 </div>
                 <div>
-                    <label>Level</label>
+                    <label>Level
                     <select class="cfg-user-level u-w-full">
                         <option value="0" ${(!userData?.level || userData?.level === 0) ? 'selected' : ''}>Admin</option>
                         <option value="9" ${userData?.level === 9 ? 'selected' : ''}>Read-Only</option>
                     </select>
+                    </label>
                 </div>
                 <div class="u-pt-16">
                     <button class="btn btn-sm u-text-danger" onclick="this.closest('.config-user-row').remove()" >&times;</button>
@@ -8811,12 +9114,18 @@
         }
 
         async function saveConfigSection(category) {
-            console.log('saveConfigSection called for:', category);
+            // Skip if already saved and unchanged
+            const saveBtn = document.getElementById(`cfgSave-${category}`);
+            if (saveBtn && saveBtn.classList.contains('saved')) return;
+            // Don't save empty sections (except updating existing templates)
+            const hasTemplate = configTemplates.some(t => t.category === category);
+            if (!hasTemplate && !isSectionPopulated(category)) {
+                showToast('Fill in this section before saving');
+                return;
+            }
             const formData = collectFormData(category);
-            console.log('formData:', JSON.stringify(formData));
             const fragment = formDataToFragment(category, formData);
-            console.log('fragment:', JSON.stringify(fragment));
-            if (!fragment) { console.log('fragment is null, returning'); return; }
+            if (!fragment) return;
 
             // Parse scope from selector
             const scopeVal = document.getElementById('cfgScopeSelect')?.value || 'global';
@@ -8873,7 +9182,7 @@
                 configSuggestedCategories.delete(category);
 
                 if (statusEl) {
-                    statusEl.textContent = 'Saved';
+                    statusEl.textContent = '';
                     statusEl.classList.remove('suggested');
                     statusEl.classList.add('saved');
                 }
@@ -8884,7 +9193,7 @@
                 configTemplates = data.templates || [];
                 loadConfigTemplateUI();
             } catch (e) {
-                showToast('Failed to save template: ' + e.message);
+                showToast('Failed to save policy: ' + e.message);
             }
         }
 
@@ -8905,7 +9214,6 @@
 
         async function toggleConfigEnabled(toggleEl) {
             const cat = toggleEl.dataset.category;
-            console.log('toggleConfigEnabled called for:', cat, 'populated:', isSectionPopulated(cat));
             let template = configTemplates.find(t => t.category === cat);
             if (!template) {
                 // Auto-save populated sections when user tries to toggle
@@ -9027,7 +9335,7 @@
             ).join('');
 
             const modal = document.createElement('div');
-            modal.className = 'backup-overlay';
+            modal.className = 'backup-overlay open';
             modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
             modal.innerHTML = `
                 <div class="backup-modal" style="width:400px;">
@@ -9344,11 +9652,9 @@
                 updateEnforceStatusUI(data);
                 // Show/hide enforce controls based on enabled state
                 const show = data.enabled ? '' : 'none';
-                const cooldownInput = document.getElementById('configEnforceCooldown');
-                const cooldownLabel = document.getElementById('configCooldownLabel');
                 const hourSelect = document.getElementById('configEnforceHour');
-                if (cooldownInput) cooldownInput.style.display = show;
-                if (cooldownLabel) cooldownLabel.style.display = show;
+                const atLabel = document.getElementById('configEnforceAtLabel');
+                if (atLabel) atLabel.style.display = show;
                 if (hourSelect) {
                     hourSelect.style.display = show;
                     // Populate hour options if empty
@@ -9424,9 +9730,13 @@
                     progress.textContent = `${data.completed}/${data.total}`;
                 }
             } else if (data.enabled) {
-                badge.style.display = '';
-                badge.textContent = data.failure_count ? `${data.failure_count} failures` : 'Idle';
-                badge.className = data.failure_count ? 'status-badge status-badge-warning' : 'status-badge status-badge-success';
+                if (data.failure_count) {
+                    badge.style.display = '';
+                    badge.textContent = `${data.failure_count} failures`;
+                    badge.className = 'status-badge status-badge-warning';
+                } else {
+                    badge.style.display = 'none';
+                }
                 if (phases) phases.style.display = 'none';
                 if (progress) progress.style.display = 'none';
             } else {
@@ -9539,14 +9849,22 @@
                     tbody.innerHTML = '';
                     (data.users || []).forEach(u => {
                         const row = document.createElement('tr');
-                        const statusBadge = u.enabled
-                            ? '<span style="color: green;">Active</span>'
-                            : '<span style="color: red;">Disabled</span>';
-                        const actions = [];
-                        actions.push(`<select onchange="changeUserRole(${u.id}, this.value)" class="form-control form-control-sm" style="width: auto; display: inline-block; font-size: 12px;"><option value="admin"${u.role==='admin'?' selected':''}>Admin</option><option value="operator"${u.role==='operator'?' selected':''}>Operator</option><option value="viewer"${u.role==='viewer'?' selected':''}>Viewer</option></select>`);
-                        actions.push(`<button class="btn btn-sm btn-outline-secondary" onclick="toggleUserEnabled(${u.id}, ${u.enabled ? 'false' : 'true'})" style="font-size: 11px;">${u.enabled ? 'Disable' : 'Enable'}</button>`);
-                        actions.push(`<button class="btn btn-sm btn-outline-danger" onclick="deleteUser(${u.id}, '${u.username}')" style="font-size: 11px;">Delete</button>`);
-                        row.innerHTML = `<td>${u.username}</td><td>${u.role}</td><td>${u.auth_method}</td><td>${statusBadge}</td><td>${actions.join(' ')}</td>`;
+                        const statusCls = u.enabled ? 'user-status-active' : 'user-status-disabled';
+                        const statusText = u.enabled ? 'Active' : 'Disabled';
+                        row.innerHTML = `
+                            <td style="font-weight:500;">${escapeHtml(u.username)}</td>
+                            <td>${escapeHtml(u.role)}</td>
+                            <td>${escapeHtml(u.auth_method || 'local')}</td>
+                            <td><span class="${statusCls}">${statusText}</span></td>
+                            <td><div class="user-actions">
+                                <select onchange="changeUserRole(${u.id}, this.value)" class="user-role-select" aria-label="Change role">
+                                    <option value="admin"${u.role==='admin'?' selected':''}>Admin</option>
+                                    <option value="operator"${u.role==='operator'?' selected':''}>Operator</option>
+                                    <option value="viewer"${u.role==='viewer'?' selected':''}>Viewer</option>
+                                </select>
+                                <button class="user-btn" onclick="toggleUserEnabled(${u.id}, ${u.enabled ? 'false' : 'true'})">${u.enabled ? 'Disable' : 'Enable'}</button>
+                                <button class="user-btn user-btn-danger" onclick="deleteUser(${u.id}, '${escapeHtml(u.username)}')">Delete</button>
+                            </div></td>`;
                         tbody.appendChild(row);
                     });
                 })

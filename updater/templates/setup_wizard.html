@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Setup Wizard - SixtyOps</title>
-    <link rel="icon" type="image/png" href="/static/favicon.png">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="stylesheet" href="/static/common.css">
     <link rel="stylesheet" href="/static/setup_pages.css">
 </head>
@@ -13,13 +13,14 @@
         <div class="progress-bar">
             <div class="progress-dot {% if step >= 1 %}{% if step > 1 %}completed{% else %}active{% endif %}{% endif %}"></div>
             <div class="progress-dot {% if step >= 2 %}{% if step > 2 %}completed{% else %}active{% endif %}{% endif %}"></div>
-            <div class="progress-dot {% if step >= 3 %}active{% endif %}"></div>
+            <div class="progress-dot {% if step >= 3 %}{% if step > 3 %}completed{% else %}active{% endif %}{% endif %}"></div>
+            <div class="progress-dot {% if step >= 4 %}active{% endif %}"></div>
         </div>
 
         {% if step == 1 %}
         <!-- Step 1: HTTPS Certificate -->
         <h1>HTTPS Certificate</h1>
-        <p class="subtitle">Step 1 of 2: Review HTTPS configuration</p>
+        <p class="subtitle">Step 1 of 3: Review HTTPS configuration</p>
 
         <div class="info-message">
             Your server is secured with HTTPS using a self-signed certificate. This is recommended
@@ -77,7 +78,7 @@
         {% elif step == 2 %}
         <!-- Step 2: Backup Setup -->
         <h1>Database Backup</h1>
-        <p class="subtitle">Step 2 of 2: Configure automatic backups</p>
+        <p class="subtitle">Step 2 of 3: Configure automatic backups</p>
 
         <div class="info-message">
             Back up your database and device configs to an SFTP server. Backups run daily at 5 AM
@@ -177,7 +178,77 @@
         </script>
 
         {% elif step == 3 %}
-        <!-- Step 3: Complete -->
+        <!-- Step 3: RADIUS Server -->
+        <h1>RADIUS Server</h1>
+        <p class="subtitle">Step 3 of 3: Built-in device authentication</p>
+
+        {% if radius_available %}
+        <div class="info-message">
+            Enable the built-in RADIUS server to centrally manage device login credentials.
+            Devices authenticate against this server instead of using local accounts.
+        </div>
+
+        <div class="error-message {{ 'visible' if error else '' }}">
+            {{ error or '' }}
+        </div>
+
+        {% if success %}
+        <div class="success-message">{{ success }}</div>
+        {% endif %}
+
+        <form method="POST" action="/setup-wizard" id="radiusForm">
+            <input type="hidden" name="step" value="3">
+
+            <div class="form-group">
+                <label for="radius_address">Server Address</label>
+                <input type="text" id="radius_address" name="radius_address"
+                       value="{{ radius_config.advertised_address or '' }}"
+                       placeholder="e.g. 10.0.0.50 (this server's IP reachable by devices)">
+                <div style="font-size: 0.78rem; color: #64748b; margin-top: 4px;">
+                    The IP address devices will use to reach this RADIUS server.
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 12px;">
+                <div class="form-group" style="flex: 1;">
+                    <label for="radius_secret">Shared Secret</label>
+                    <input type="password" id="radius_secret" name="radius_secret"
+                           placeholder="Min 8 characters">
+                </div>
+                <div class="form-group" style="flex: 0 0 100px;">
+                    <label for="radius_port">Port</label>
+                    <input type="number" id="radius_port" name="radius_port"
+                           value="{{ radius_config.auth_port or 1812 }}" min="1024" max="65535">
+                </div>
+            </div>
+
+            <div class="button-row">
+                <button type="submit" name="action" value="skip" class="btn-secondary">
+                    Skip for Now
+                </button>
+                <button type="submit" name="action" value="configure" class="btn-primary">
+                    Enable RADIUS
+                </button>
+            </div>
+        </form>
+
+        {% else %}
+        <div class="info-message">
+            The built-in RADIUS server provides centralized device authentication.
+            This feature is available with a Pro license. You can enable it later from
+            Settings &rarr; Authentication.
+        </div>
+
+        <form method="POST" action="/setup-wizard">
+            <input type="hidden" name="step" value="3">
+            <button type="submit" name="action" value="skip" class="btn-primary" style="width: 100%;">
+                Continue
+            </button>
+        </form>
+        {% endif %}
+
+        {% elif step == 4 %}
+        <!-- Step 4: Complete -->
         <h1>Setup Complete</h1>
         <p class="subtitle">Your system is ready to use</p>
 
@@ -198,7 +269,7 @@
                     {% endif %}
                 </span>
             </div>
-            <div class="setup-summary-row">
+            <div class="setup-summary-row divider">
                 <span class="setup-summary-label">Backups</span>
                 <span>
                     {% if backup_status.enabled %}
@@ -210,10 +281,25 @@
                     {% endif %}
                 </span>
             </div>
+            <div class="setup-summary-row">
+                <span class="setup-summary-label">RADIUS</span>
+                <span>
+                    {% if radius_config and radius_config.enabled %}
+                    {{ radius_config.advertised_address }}:{{ radius_config.auth_port }}
+                    <span class="status-badge configured">Enabled</span>
+                    {% elif not radius_available %}
+                    Pro feature
+                    <span class="status-badge skipped">Unavailable</span>
+                    {% else %}
+                    Not configured
+                    <span class="status-badge skipped">Skipped</span>
+                    {% endif %}
+                </span>
+            </div>
         </div>
 
         <form method="POST" action="/setup-wizard">
-            <input type="hidden" name="step" value="3">
+            <input type="hidden" name="step" value="4">
             <input type="hidden" name="action" value="finish">
             <button type="submit" class="btn-primary">Go to Dashboard</button>
         </form>

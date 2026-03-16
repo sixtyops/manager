@@ -217,13 +217,10 @@ def is_feature_enabled(feature: Feature) -> bool:
 def get_billable_device_count() -> int:
     """Count APs + switches (enabled). CPEs are free."""
     with db.get_db() as conn:
-        ap_count = conn.execute(
-            "SELECT COUNT(*) FROM access_points WHERE enabled = 1"
+        count = conn.execute(
+            "SELECT COUNT(*) FROM devices WHERE enabled = 1 AND role IN ('ap', 'switch')"
         ).fetchone()[0]
-        sw_count = conn.execute(
-            "SELECT COUNT(*) FROM switches WHERE enabled = 1"
-        ).fetchone()[0]
-    return ap_count + sw_count
+    return count
 
 
 def get_nag_info() -> dict:

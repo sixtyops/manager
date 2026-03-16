@@ -57,6 +57,7 @@ class RadiusServerConfig:
     shared_secret: str = ""
     auth_mode: str = "local"  # "local" or "ldap"
     advertised_address: str = ""
+    client_mode: str = "open"  # "open" = any device with correct secret; "restricted" = inventory + overrides only
     # LDAP proxy settings
     ldap_url: str = ""
     ldap_bind_dn: str = ""
@@ -72,13 +73,20 @@ def get_radius_server_config() -> RadiusServerConfig:
     secret_raw = db.get_setting("radius_server_secret", "")
     ldap_pw_raw = db.get_setting("radius_server_ldap_bind_password", "")
 
-    # Decrypt secrets if stored encrypted
+    # Decrypt secrets if stored encrypted; auto-generate if missing
     secret = ""
     if secret_raw:
         try:
             secret = decrypt_password(secret_raw) if is_encrypted(secret_raw) else secret_raw
         except Exception:
             logger.warning("Failed to decrypt RADIUS shared secret")
+    if not secret:
+        import secrets as _secrets
+        from datetime import datetime as _dt
+        secret = _secrets.token_urlsafe(24)
+        db.set_setting("radius_server_secret", encrypt_password(secret))
+        db.set_setting("builtin_radius_secret_updated_at", _dt.now().isoformat())
+        logger.info("Auto-generated RADIUS shared secret")
 
     ldap_pw = ""
     if ldap_pw_raw:
@@ -93,6 +101,7 @@ def get_radius_server_config() -> RadiusServerConfig:
         shared_secret=secret,
         auth_mode=db.get_setting("radius_server_auth_mode", "local"),
         advertised_address=db.get_setting("radius_server_advertised_address", ""),
+        client_mode=db.get_setting("radius_server_client_mode", "open"),
         ldap_url=db.get_setting("radius_server_ldap_url", ""),
         ldap_bind_dn=db.get_setting("radius_server_ldap_bind_dn", ""),
         ldap_bind_password=ldap_pw,
@@ -111,6 +120,7 @@ def set_radius_server_config(config: RadiusServerConfig):
         "radius_server_port": str(config.auth_port),
         "radius_server_auth_mode": config.auth_mode,
         "radius_server_advertised_address": config.advertised_address,
+        "radius_server_client_mode": config.client_mode,
         "radius_server_ldap_url": config.ldap_url,
         "radius_server_ldap_bind_dn": config.ldap_bind_dn,
         "radius_server_ldap_base_dn": config.ldap_base_dn,
@@ -294,16 +304,14 @@ class TachyonRadiusServer(server.Server):
         if not client_name or not client_model:
             try:
                 with db.get_db() as conn:
-                    for table in ("access_points", "switches"):
-                        row = conn.execute(
-                            f"SELECT system_name, model FROM {table} WHERE ip = ?",
-                            (nas_ip,),
-                        ).fetchone()
-                        if row:
-                            if not client_name:
-                                client_name = row["system_name"] or ""
-                            client_model = row["model"] or ""
-                            break
+                    row = conn.execute(
+                        "SELECT system_name, model FROM devices WHERE ip = ?",
+                        (nas_ip,),
+                    ).fetchone()
+                    if row:
+                        if not client_name:
+                            client_name = row["system_name"] or ""
+                        client_model = row["model"] or ""
             except Exception:
                 pass
         return client_name, client_model
@@ -485,21 +493,36 @@ class RadiusService:
         return None
 
     def _build_hosts(self, config: RadiusServerConfig) -> dict:
-        """Build pyrad hosts dict from managed devices and client overrides."""
-        hosts = {}
+        """Build pyrad hosts dict from managed devices and client overrides.
+
+        In "open" mode (default), accept auth from any device that presents
+        the correct shared secret.  In "restricted" mode, only inventory
+        devices and manual overrides are allowed.
+        """
         secret = config.shared_secret.encode()
+
+        if config.client_mode != "restricted":
+            # Open mode: accept from any IP with the correct secret
+            logger.info("RADIUS NAS clients: open mode (any device with correct secret)")
+            return {
+                "0.0.0.0": server.RemoteHost(
+                    address="0.0.0.0", secret=secret, name="any",
+                ),
+            }
+
+        # Restricted mode: only inventory devices + manual overrides
+        hosts = {}
         try:
             with db.get_db() as conn:
-                for table in ("access_points", "switches"):
-                    rows = conn.execute(
-                        f"SELECT ip, system_name FROM {table} WHERE enabled = 1"
-                    ).fetchall()
-                    for row in rows:
-                        ip = row["ip"]
-                        name = row["system_name"] or ip
-                        hosts[ip] = server.RemoteHost(
-                            address=ip, secret=secret, name=name,
-                        )
+                rows = conn.execute(
+                    "SELECT ip, system_name FROM devices WHERE enabled = 1 AND role IN ('ap', 'switch')"
+                ).fetchall()
+                for row in rows:
+                    ip = row["ip"]
+                    name = row["system_name"] or ip
+                    hosts[ip] = server.RemoteHost(
+                        address=ip, secret=secret, name=name,
+                    )
                 # Include manual client overrides
                 overrides = conn.execute(
                     "SELECT client_spec, shortname FROM radius_client_overrides WHERE enabled = 1"
@@ -514,11 +537,11 @@ class RadiusService:
         except Exception as e:
             logger.warning("Error building NAS client list: %s", e)
         if not hosts:
-            # If no managed devices yet, accept from any host with the secret
+            # No devices registered yet — accept from any as fallback
             hosts["0.0.0.0"] = server.RemoteHost(
                 address="0.0.0.0", secret=secret, name="any",
             )
-        logger.info("RADIUS NAS clients: %d device(s) registered", len(hosts))
+        logger.info("RADIUS NAS clients: restricted mode, %d device(s) registered", len(hosts))
         return hosts
 
     def refresh_clients(self):

@@ -25,7 +25,7 @@ MANAGEMENT_SERVICE_USERNAME = "sixtyops-radius-mgmt"
 RESERVED_USERNAMES = {"admin", "root", MANAGEMENT_SERVICE_USERNAME}
 ROLLOUT_PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
 
-SETTING_RADIUS_SECRET = "builtin_radius_secret"
+SETTING_RADIUS_SECRET = "radius_server_secret"
 SETTING_RADIUS_SECRET_UPDATED_AT = "builtin_radius_secret_updated_at"
 SETTING_RADIUS_SECRET_REVIEW_ACKNOWLEDGED_AT = "builtin_radius_secret_review_acknowledged_at"
 SETTING_RADIUS_MGMT_PASSWORD = "builtin_radius_mgmt_password"
@@ -400,11 +400,9 @@ def get_auth_stats(limit: int = 10) -> dict:
         override_count = conn.execute(
             "SELECT COUNT(*) FROM radius_client_overrides WHERE enabled = 1"
         ).fetchone()[0]
-        device_count = 0
-        for table in ("access_points", "switches"):
-            device_count += conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE enabled = 1"
-            ).fetchone()[0]
+        device_count = conn.execute(
+            "SELECT COUNT(*) FROM devices WHERE enabled = 1 AND role IN ('ap', 'switch')"
+        ).fetchone()[0]
         known_clients = device_count + override_count
 
     total = totals["total"] or 0

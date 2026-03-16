@@ -98,7 +98,7 @@ async def notify_job_completed(
     minutes = int(duration_seconds // 60)
     seconds = int(duration_seconds % 60)
 
-    subject = f"[Tachyon] Job {job_id} {status_emoji} - {success_count}/{total} devices updated"
+    subject = f"[SixtyOps] Job {job_id} {status_emoji} - {success_count}/{total} devices updated"
 
     body_text = (
         f"Firmware Update Job {job_id}\n"
@@ -147,10 +147,66 @@ async def notify_job_completed(
         logger.warning(f"Email notification failed for job {job_id}: {message}")
 
 
+async def notify_device_offline(ip: str, device_type: str, error: str):
+    """Send email notification when a device goes offline."""
+    config = _get_config()
+    if not config["enabled"]:
+        return
+
+    subject = f"[SixtyOps] Device Offline: {ip}"
+    body_text = (
+        f"Device Offline Alert\n\n"
+        f"Device: {ip} ({device_type})\n"
+        f"Error: {error}\n"
+    )
+    body_html = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 600px;">
+        <h2 style="color: #ef4444;">Device Offline</h2>
+        <table style="border-collapse: collapse; width: 100%;">
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Device</strong></td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">{ip} ({device_type})</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Error</strong></td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">{error}</td></tr>
+        </table>
+    </div>
+    """
+    success, message = _send_email(config, subject, body_html, body_text)
+    if not success:
+        logger.warning(f"Email device-offline notification failed for {ip}: {message}")
+
+
+async def notify_device_recovered(ip: str, device_type: str):
+    """Send email notification when a device recovers."""
+    config = _get_config()
+    if not config["enabled"]:
+        return
+
+    subject = f"[SixtyOps] Device Recovered: {ip}"
+    body_text = (
+        f"Device Recovered\n\n"
+        f"Device: {ip} ({device_type})\n"
+        f"Status: Back online\n"
+    )
+    body_html = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 600px;">
+        <h2 style="color: #22c55e;">Device Recovered</h2>
+        <table style="border-collapse: collapse; width: 100%;">
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Device</strong></td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">{ip} ({device_type})</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Status</strong></td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">Back online</td></tr>
+        </table>
+    </div>
+    """
+    success, message = _send_email(config, subject, body_html, body_text)
+    if not success:
+        logger.warning(f"Email device-recovered notification failed for {ip}: {message}")
+
+
 def send_test_email() -> tuple[bool, str]:
     """Send a test email to verify SMTP configuration."""
     config = _get_config()
-    subject = "[Tachyon] Test Email Notification"
+    subject = "[SixtyOps] Test Email Notification"
     body_text = "This is a test email from Tachyon Firmware Updater."
     body_html = """
     <div style="font-family: Arial, sans-serif;">
