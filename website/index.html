@@ -974,19 +974,19 @@ pvesh get /cluster/nextid  <span class="text-slate-500"># next available VM ID</
             </div>
           </div>
           <div class="relative">
-            <pre class="bg-slate-900 text-slate-100 rounded p-3 text-xs font-mono overflow-x-auto leading-relaxed whitespace-pre-wrap break-all"><code>URL=https://github.com/isolson/tachyon-manager-releases/releases/download/appliance-latest/tachyon-appliance-latest.qcow2
+            <pre class="bg-slate-900 text-slate-100 rounded p-3 text-xs font-mono overflow-x-auto leading-relaxed whitespace-pre-wrap break-all"><code>URL=https://github.com/isolson/sixtyops-releases/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2
 curl -LO $URL
 qm create <span x-text="vmid"></span> --name sixtyops --memory 2048 --cores 2 \
   --net0 virtio,bridge=vmbr0
-qm importdisk <span x-text="vmid"></span> tachyon-appliance-latest.qcow2 <span x-text="storage"></span>
+qm importdisk <span x-text="vmid"></span> sixtyops-appliance-latest.qcow2 <span x-text="storage"></span>
 qm set <span x-text="vmid"></span> --scsi0 <span x-text="storage"></span>:vm-<span x-text="vmid"></span>-disk-0
 qm set <span x-text="vmid"></span> --boot order=scsi0
 qm set <span x-text="vmid"></span> --serial0 socket --vga serial0
 qm start <span x-text="vmid"></span></code></pre>
             <button
               @click="
-                const url = 'https://github.com/isolson/tachyon-manager-releases/releases/download/appliance-latest/tachyon-appliance-latest.qcow2';
-                const cmds = `URL=${url}\ncurl -LO $URL\nqm create ${vmid} --name sixtyops --memory 2048 --cores 2 \\\n  --net0 virtio,bridge=vmbr0\nqm importdisk ${vmid} tachyon-appliance-latest.qcow2 ${storage}\nqm set ${vmid} --scsi0 ${storage}:vm-${vmid}-disk-0\nqm set ${vmid} --boot order=scsi0\nqm set ${vmid} --serial0 socket --vga serial0\nqm start ${vmid}`;
+                const url = 'https://github.com/isolson/sixtyops-releases/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2';
+                const cmds = `URL=${url}\ncurl -LO $URL\nqm create ${vmid} --name sixtyops --memory 2048 --cores 2 \\\n  --net0 virtio,bridge=vmbr0\nqm importdisk ${vmid} sixtyops-appliance-latest.qcow2 ${storage}\nqm set ${vmid} --scsi0 ${storage}:vm-${vmid}-disk-0\nqm set ${vmid} --boot order=scsi0\nqm set ${vmid} --serial0 socket --vga serial0\nqm start ${vmid}`;
                 navigator.clipboard.writeText(cmds);
                 copied2 = true;
                 setTimeout(() => copied2 = false, 2000);
@@ -1010,7 +1010,7 @@ qm start <span x-text="vmid"></span></code></pre>
       </div>
 
       <div class="flex flex-col sm:flex-row gap-4 justify-center mt-8">
-        <a href="https://github.com/isolson/tachyon-manager-releases/releases/tag/appliance-latest" class="inline-flex items-center justify-center gap-2 px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white font-medium rounded text-sm transition-colors">
+        <a href="https://github.com/isolson/sixtyops-releases/releases/tag/appliance-latest" class="inline-flex items-center justify-center gap-2 px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white font-medium rounded text-sm transition-colors">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
           Download Appliance
         </a>
