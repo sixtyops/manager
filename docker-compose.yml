@@ -1,7 +1,7 @@
 services:
-  tachyon-mgmt:
+  sixtyops-mgmt:
     build: .
-    container_name: tachyon-management
+    container_name: sixtyops-management
     ports:
       - "8000:8000"
       - "1812:1812/udp"
@@ -25,8 +25,8 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       # Set SEED_DATA=1 to populate sample devices/sites/templates on startup
       - SEED_DATA=${SEED_DATA:-}
-      # Set TACHYON_FORCE_PRO=1 to unlock all feature-gated endpoints locally
-      - TACHYON_FORCE_PRO=${TACHYON_FORCE_PRO:-}
+      # Set SIXTYOPS_FORCE_PRO=1 to unlock all feature-gated endpoints locally
+      - SIXTYOPS_FORCE_PRO=${SIXTYOPS_FORCE_PRO:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 30s
@@ -45,14 +45,14 @@ services:
 
   nginx:
     image: nginx:alpine
-    container_name: tachyon-nginx
+    container_name: sixtyops-nginx
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./nginx/ssl:/etc/nginx/ssl
       - ./nginx/entrypoint.sh:/entrypoint.sh:ro
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
     depends_on:
-      tachyon-mgmt:
+      sixtyops-mgmt:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:

@@ -79,11 +79,11 @@ def generate_ovf(
         </Network>
       </NetworkSection>
       <VirtualSystem ovf:id="{name}">
-        <Info>Tachyon Firmware Updater Appliance</Info>
+        <Info>SixtyOps Appliance</Info>
         <Name>{name}</Name>
         <AnnotationSection>
           <Info>Appliance description</Info>
-          <Annotation>Tachyon Firmware Updater v{version} - Automated firmware management for wireless network devices.</Annotation>
+          <Annotation>SixtyOps Manager v{version} - Automated firmware management for wireless network devices.</Annotation>
         </AnnotationSection>
         <OperatingSystemSection ovf:id="101">
           <Info>The operating system</Info>
@@ -149,7 +149,7 @@ def sha256_file(path: str) -> str:
 def create_ova(
     qcow2_path: str,
     output_path: str,
-    name: str = "tachyon-appliance",
+    name: str = "sixtyops-appliance",
     version: str = "latest",
     cpus: int = 2,
     memory_mb: int = 1024,
@@ -215,13 +215,13 @@ def main():
     parser.add_argument("qcow2", help="Input QCOW2 image path")
     parser.add_argument(
         "-o", "--output",
-        help="Output OVA path (default: tachyon-appliance.ova)",
-        default="tachyon-appliance.ova",
+        help="Output OVA path (default: sixtyops-appliance.ova)",
+        default="sixtyops-appliance.ova",
     )
     parser.add_argument(
         "-n", "--name",
-        help="Appliance name (default: tachyon-appliance)",
-        default="tachyon-appliance",
+        help="Appliance name (default: sixtyops-appliance)",
+        default="sixtyops-appliance",
     )
     parser.add_argument(
         "-v", "--version",

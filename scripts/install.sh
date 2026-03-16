@@ -1,17 +1,17 @@
 #!/bin/bash
-# Remote installer for Tachyon Management System
+# Remote installer for SixtyOps Manager
 # Usage: curl -sSL https://raw.githubusercontent.com/isolson/firmware-updater/main/scripts/install.sh | sudo bash
 #    or: wget -qO- https://raw.githubusercontent.com/isolson/firmware-updater/main/scripts/install.sh | sudo bash
 
 set -e
 
-REPO_URL="${TACHYON_REPO_URL:-https://github.com/isolson/firmware-updater.git}"
-INSTALL_DIR="${TACHYON_INSTALL_DIR:-/opt/tachyon}"
-BRANCH="${TACHYON_BRANCH:-main}"
+REPO_URL="${SIXTYOPS_REPO_URL:-https://github.com/isolson/firmware-updater.git}"
+INSTALL_DIR="${SIXTYOPS_INSTALL_DIR:-/opt/sixtyops}"
+BRANCH="${SIXTYOPS_BRANCH:-main}"
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.standalone.yml"
 
 echo "=========================================="
-echo "  Tachyon Management System - Installer"
+echo "  SixtyOps Manager - Installer"
 echo "=========================================="
 echo
 
@@ -93,9 +93,9 @@ fi
 
 # Create systemd service for auto-start when systemd is available
 if command -v systemctl &> /dev/null && [ -d /run/systemd/system ]; then
-    cat > /etc/systemd/system/tachyon.service << EOF
+    cat > /etc/systemd/system/sixtyops.service << EOF
 [Unit]
-Description=Tachyon Management System
+Description=SixtyOps Manager
 Requires=docker.service
 After=docker.service
 
@@ -111,9 +111,9 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable tachyon.service
+    systemctl enable sixtyops.service
 else
-    echo "Systemd not detected; skipping tachyon.service creation."
+    echo "Systemd not detected; skipping sixtyops.service creation."
 fi
 
 echo
@@ -135,5 +135,5 @@ echo
 echo "Commands:"
 echo "  cd $INSTALL_DIR && $COMPOSE logs -f    # View logs"
 echo "  cd $INSTALL_DIR && $COMPOSE restart    # Restart"
-echo "  systemctl status tachyon                     # Service status"
+echo "  systemctl status sixtyops                     # Service status"
 echo

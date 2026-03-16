@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Tachyon Firmware Updater — automated firmware update tool for Tachyon wireless
+SixtyOps Manager — automated firmware update tool for Tachyon wireless
 network devices (APs, CPEs, switches). Python/FastAPI backend, single-page
 HTML/JS frontend, SQLite database, Docker deployment.
 
@@ -52,7 +52,7 @@ Before creating any PR, verify:
 - **Appliance platform version**: `A.B` in `appliance/VERSION`
 - `updater/__init__.py` is the source of truth for app version
 - `appliance/VERSION` is the source of truth for appliance platform version
-- OVA files are named `tachyon-appliance-a{appliance_ver}-app{app_ver}.ova`
+- OVA files are named `sixtyops-appliance-a{appliance_ver}-app{app_ver}.ova`
 
 ### Appliance vs. App Updates
 - **App updates** are frequent — new Docker images pushed to GHCR, appliances
@@ -67,9 +67,9 @@ Before creating any PR, verify:
 - Latest appliance OVA is published to:
   `https://github.com/isolson/firmware-updater/releases/tag/appliance-latest`
   and mirrored to:
-  `https://github.com/isolson/tachyon-manager-releases/releases/tag/appliance-latest`
+  `https://github.com/isolson/sixtyops-releases/releases/tag/appliance-latest`
 - Default app release-check repo is
-  `isolson/tachyon-manager-releases` (`GITHUB_REPO` can override).
+  `isolson/sixtyops-releases` (`GITHUB_REPO` can override).
 - In non-appliance mode, `apply_update()` still checks out git tags from the
   mounted source repo (`/app/repo`), so release tags must exist in the code repo.
 
@@ -96,20 +96,20 @@ created. To ensure high-quality notes:
 | `updater/templates/monitor.html` | Entire frontend (single-page app) |
 | `updater/database.py` | SQLite schema and data access |
 | `updater/release_checker.py` | Self-update: checks GitHub releases API |
-| `updater/tachyon.py` | Device communication client |
+| `updater/tachyon.py` | Tachyon device communication client (hardware vendor) |
 | `scripts/install.sh` | Production installer (always pulls `main`) |
-| `docker-compose.yml` | Base runtime (tachyon-mgmt + nginx, no 80/443 publish) |
+| `docker-compose.yml` | Base runtime (sixtyops-mgmt + nginx, no 80/443 publish) |
 | `docker-compose.standalone.yml` | Standalone overlay (publishes 80/443 + certbot) |
 | `entrypoint.sh` | Runtime prep for self-update (docker socket group + repo ownership) |
 | `.github/release.yml` | GitHub auto-generated release notes config |
 | `appliance/VERSION` | Appliance platform version (independent from app) |
-| `appliance/packer/tachyon.pkr.hcl` | Packer template for OVA build |
+| `appliance/packer/sixtyops.pkr.hcl` | Packer template for OVA build |
 | `.github/workflows/build-appliance.yml` | Appliance build + latest-appliance release |
 
 ## Deployment Reality
 
-- Production install path is `/opt/tachyon` via `scripts/install.sh` (defaults
-  to `main`) and creates `tachyon.service` systemd unit that runs compose up/down.
+- Production install path is `/opt/sixtyops` via `scripts/install.sh` (defaults
+  to `main`) and creates `sixtyops.service` systemd unit that runs compose up/down.
 - Standard deployment command uses both compose files:
   `docker compose -f docker-compose.yml -f docker-compose.standalone.yml up -d --build`.
 - Base compose publishes `8000/tcp` and `1812/udp`; standalone overlay adds
@@ -130,11 +130,11 @@ uvicorn updater.app:app --reload --port 8000
 # Run tests
 pytest -v
 
-# Docker (always use SEED_DATA=1 and TACHYON_FORCE_PRO=1 for local rebuilds)
-SEED_DATA=1 TACHYON_FORCE_PRO=1 docker compose up -d --build
+# Docker (always use SEED_DATA=1 and SIXTYOPS_FORCE_PRO=1 for local rebuilds)
+SEED_DATA=1 SIXTYOPS_FORCE_PRO=1 docker compose up -d --build
 
 # Fresh rebuild (wipe DB first)
-docker compose down && rm -f data/tachyon.db && SEED_DATA=1 TACHYON_FORCE_PRO=1 docker compose up -d --build
+docker compose down && rm -f data/sixtyops.db && SEED_DATA=1 SIXTYOPS_FORCE_PRO=1 docker compose up -d --build
 ```
 
 Seed script (`scripts/seed_dev_data.py`) inserts sample sites, devices, CPEs,

@@ -1,4 +1,4 @@
-"""Built-in RADIUS authentication server for Tachyon device management.
+"""Built-in RADIUS authentication server for SixtyOps device management.
 
 Runs a pyrad-based RADIUS server in a background thread alongside the
 FastAPI application.  Supports PAP authentication against either a local
@@ -238,8 +238,8 @@ def _authenticate_ldap(username: str, password: str, config: RadiusServerConfig)
 # pyrad Server subclass
 # ---------------------------------------------------------------------------
 
-class TachyonRadiusServer(server.Server):
-    """RADIUS authentication server for Tachyon device management."""
+class SixtyOpsRadiusServer(server.Server):
+    """RADIUS authentication server for SixtyOps device management."""
 
     def __init__(
         self,
@@ -451,7 +451,7 @@ class RadiusService:
 
     def __init__(self, broadcast_func: Optional[Callable] = None):
         self._broadcast = broadcast_func
-        self._server: Optional[TachyonRadiusServer] = None
+        self._server: Optional[SixtyOpsRadiusServer] = None
         self._running = False
         self._bind_error: str = ""
         self._consecutive_bind_failures = 0
@@ -608,7 +608,7 @@ class RadiusService:
         rad_dict = _load_dictionary()
 
         try:
-            self._server = TachyonRadiusServer(
+            self._server = SixtyOpsRadiusServer(
                 config,
                 hosts,
                 rad_dict,

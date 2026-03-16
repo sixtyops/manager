@@ -5,7 +5,7 @@
 
 set -e
 
-SECRET_FILE="/etc/tachyon/recovery-secret"
+SECRET_FILE="/etc/sixtyops/recovery-secret"
 LOCKOUT_FILE="/tmp/recovery-lockout"
 ATTEMPT_FILE="/tmp/recovery-attempts"
 MAX_ATTEMPTS=5

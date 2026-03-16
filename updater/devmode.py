@@ -1,6 +1,6 @@
 """Dev mode: seed database with dummy data and provide a no-op poller.
 
-Activated by setting TACHYON_DEV_MODE=1.  Never imported in production.
+Activated by setting SIXTYOPS_DEV_MODE=1.  Never imported in production.
 """
 
 import json
@@ -69,7 +69,7 @@ def seed_database() -> None:
     """Populate the database with realistic dummy data.
 
     Skips seeding if data already exists (check access_points count).
-    Delete data/tachyon.db to re-seed.
+    Delete data/sixtyops.db to re-seed.
     """
     with db.get_db() as conn:
         count = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]

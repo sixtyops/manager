@@ -1,7 +1,7 @@
 services:
-  tachyon-mgmt:
+  sixtyops-mgmt:
     image: ghcr.io/isolson/firmware-updater:${APP_VERSION:-latest}
-    container_name: tachyon-management
+    container_name: sixtyops-management
     ports:
       - "1812:1812/udp"
     volumes:
@@ -11,8 +11,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - TACHYON_APPLIANCE=1
-      - TACHYON_IMAGE=ghcr.io/isolson/firmware-updater
+      - SIXTYOPS_APPLIANCE=1
+      - SIXTYOPS_IMAGE=ghcr.io/isolson/firmware-updater
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 30s
@@ -25,17 +25,17 @@ services:
 
   nginx:
     image: nginx:1.27-alpine
-    container_name: tachyon-nginx
+    container_name: sixtyops-nginx
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - /opt/tachyon/nginx/conf.d:/etc/nginx/conf.d:ro
+      - /opt/sixtyops/nginx/conf.d:/etc/nginx/conf.d:ro
       - /data/certs:/etc/nginx/ssl
-      - /opt/tachyon/nginx/entrypoint.sh:/entrypoint.sh:ro
+      - /opt/sixtyops/nginx/entrypoint.sh:/entrypoint.sh:ro
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
     depends_on:
-      tachyon-mgmt:
+      sixtyops-mgmt:
         condition: service_started
     mem_limit: 128m
     stop_grace_period: 10s
@@ -49,7 +49,7 @@ services:
 
   autoheal:
     image: docker:27-cli
-    container_name: tachyon-autoheal
+    container_name: sixtyops-autoheal
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     entrypoint: ["/bin/sh", "-c"]

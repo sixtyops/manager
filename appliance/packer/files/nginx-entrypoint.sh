@@ -25,7 +25,7 @@ if [ "$NEED_CERT" = "true" ]; then
         openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
             -keyout "$KEY_FILE" \
             -out "$CERT_FILE" \
-            -subj "/C=US/ST=State/L=City/O=Tachyon/CN=localhost"
+            -subj "/C=US/ST=State/L=City/O=SixtyOps/CN=localhost"
 
         if [ $? -eq 0 ]; then
             echo "Self-signed certificate generated successfully (valid 10 years)"

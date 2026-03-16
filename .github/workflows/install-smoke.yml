@@ -29,22 +29,22 @@ jobs:
         run: |
           git config --global user.email "ci@example.com"
           git config --global user.name "CI"
-          git init --bare /tmp/tachyon-origin.git
-          git push --force /tmp/tachyon-origin.git HEAD:refs/heads/main
+          git init --bare /tmp/sixtyops-origin.git
+          git push --force /tmp/sixtyops-origin.git HEAD:refs/heads/main
 
       - name: Fresh install via install.sh
         run: |
           sudo env \
-            TACHYON_REPO_URL="file:///tmp/tachyon-origin.git" \
-            TACHYON_BRANCH="main" \
-            TACHYON_INSTALL_DIR="/opt/tachyon-ci" \
+            SIXTYOPS_REPO_URL="file:///tmp/sixtyops-origin.git" \
+            SIXTYOPS_BRANCH="main" \
+            SIXTYOPS_INSTALL_DIR="/opt/sixtyops-ci" \
             bash scripts/install.sh
 
       - name: Validate app is reachable after install
         run: |
           sudo docker compose \
-            -f /opt/tachyon-ci/docker-compose.yml \
-            -f /opt/tachyon-ci/docker-compose.standalone.yml \
+            -f /opt/sixtyops-ci/docker-compose.yml \
+            -f /opt/sixtyops-ci/docker-compose.standalone.yml \
             ps
 
           code=$(curl -sk -o /dev/null -w "%{http_code}" https://localhost/login)
@@ -56,9 +56,9 @@ jobs:
       - name: Re-run installer (upgrade/idempotency path)
         run: |
           sudo env \
-            TACHYON_REPO_URL="file:///tmp/tachyon-origin.git" \
-            TACHYON_BRANCH="main" \
-            TACHYON_INSTALL_DIR="/opt/tachyon-ci" \
+            SIXTYOPS_REPO_URL="file:///tmp/sixtyops-origin.git" \
+            SIXTYOPS_BRANCH="main" \
+            SIXTYOPS_INSTALL_DIR="/opt/sixtyops-ci" \
             bash scripts/install.sh
 
       - name: Validate app is reachable after re-run
@@ -72,14 +72,14 @@ jobs:
       - name: Teardown
         if: always()
         run: |
-          if [ -d /opt/tachyon-ci ]; then
+          if [ -d /opt/sixtyops-ci ]; then
             sudo docker compose \
-              -f /opt/tachyon-ci/docker-compose.yml \
-              -f /opt/tachyon-ci/docker-compose.standalone.yml \
+              -f /opt/sixtyops-ci/docker-compose.yml \
+              -f /opt/sixtyops-ci/docker-compose.standalone.yml \
               down -v --remove-orphans || true
-            sudo rm -rf /opt/tachyon-ci
+            sudo rm -rf /opt/sixtyops-ci
           fi
-          sudo rm -f /etc/systemd/system/tachyon.service
-          sudo rm -rf /tmp/tachyon-origin.git
+          sudo rm -f /etc/systemd/system/sixtyops.service
+          sudo rm -rf /tmp/sixtyops-origin.git
           git config --global --unset user.email || true
           git config --global --unset user.name || true

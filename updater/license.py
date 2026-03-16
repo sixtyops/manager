@@ -73,11 +73,11 @@ LICENSE_SERVER_URL = os.environ.get(
     "https://license.sixtyops.net/api/v1",
 )
 
-# Dev override: TACHYON_FORCE_PRO=1 bypasses all gating (disabled in appliance mode)
-_APPLIANCE_MODE = os.environ.get("TACHYON_APPLIANCE", "") == "1"
+# Dev override: SIXTYOPS_FORCE_PRO=1 bypasses all gating (disabled in appliance mode)
+_APPLIANCE_MODE = os.environ.get("SIXTYOPS_APPLIANCE", "") == "1"
 _FORCE_PRO = (
     not _APPLIANCE_MODE
-    and os.environ.get("TACHYON_FORCE_PRO", "").lower() in ("1", "true", "yes")
+    and os.environ.get("SIXTYOPS_FORCE_PRO", "").lower() in ("1", "true", "yes")
 )
 
 

@@ -14,9 +14,9 @@ cp /tmp/appliance-files/recovery.sh /usr/local/bin/recovery
 chmod +x /usr/local/bin/recovery
 
 echo "[04-console] Writing recovery secret..."
-mkdir -p /etc/tachyon
-echo "$RECOVERY_SECRET" > /etc/tachyon/recovery-secret
-chmod 400 /etc/tachyon/recovery-secret
+mkdir -p /etc/sixtyops
+echo "$RECOVERY_SECRET" > /etc/sixtyops/recovery-secret
+chmod 400 /etc/sixtyops/recovery-secret
 
 echo "[04-console] Configuring tty1 for TUI..."
 # Replace tty1 getty with console TUI in inittab

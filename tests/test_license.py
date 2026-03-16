@@ -249,7 +249,7 @@ class TestNetworkConfigValidation:
 
     @pytest.fixture(autouse=True)
     def _appliance_mode(self, monkeypatch):
-        monkeypatch.setenv("TACHYON_APPLIANCE", "1")
+        monkeypatch.setenv("SIXTYOPS_APPLIANCE", "1")
 
     def test_network_rejects_shell_injection_in_address(self, authed_client):
         resp = authed_client.post("/api/system/network", json={

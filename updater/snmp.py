@@ -10,7 +10,7 @@ from . import database as db
 
 logger = logging.getLogger(__name__)
 
-# Enterprise OID for Tachyon Firmware Updater (under private enterprise arc)
+# Enterprise OID for SixtyOps (under private enterprise arc)
 # Using 1.3.6.1.4.1.99999 as a placeholder enterprise number
 ENTERPRISE_OID = "1.3.6.1.4.1.99999"
 

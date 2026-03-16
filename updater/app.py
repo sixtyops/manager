@@ -67,7 +67,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DEV_MODE = os.environ.get("TACHYON_DEV_MODE") == "1"
+DEV_MODE = os.environ.get("SIXTYOPS_DEV_MODE") == "1"
 
 # Paths
 BASE_DIR = Path(__file__).parent
@@ -260,7 +260,7 @@ def _run_daily_data_housekeeping():
     removed = _prune_firmware_storage()
     if removed:
         logger.info(f"Firmware retention removed {removed} old file(s)")
-    if os.environ.get("TACHYON_APPLIANCE") == "1":
+    if os.environ.get("SIXTYOPS_APPLIANCE") == "1":
         _run_backup_git_gc()
     db.cleanup_old_audit_log()
     db.cleanup_expired_api_tokens()
@@ -325,7 +325,7 @@ async def _periodic_cleanup():
 
         # Disk space monitoring
         try:
-            data_path = Path("/data") if os.environ.get("TACHYON_APPLIANCE") == "1" else DATA_DIR
+            data_path = Path("/data") if os.environ.get("SIXTYOPS_APPLIANCE") == "1" else DATA_DIR
             usage = shutil.disk_usage(str(data_path))
             percent_used = usage.used / usage.total * 100
             if percent_used > 95:
@@ -896,7 +896,7 @@ async def backup_setup_submit(
     request: Request,
     sftp_host: str = Form(...),
     sftp_port: int = Form(22),
-    sftp_path: str = Form("/backups/tachyon"),
+    sftp_path: str = Form("/backups/sixtyops"),
     sftp_username: str = Form(...),
     auth_method: str = Form("password"),
     sftp_password: str = Form(None),
@@ -2128,7 +2128,7 @@ async def get_system_info(session: dict = Depends(require_auth)):
 
     from .release_checker import get_appliance_version
 
-    appliance_mode = os.environ.get("TACHYON_APPLIANCE") == "1"
+    appliance_mode = os.environ.get("SIXTYOPS_APPLIANCE") == "1"
     info = {
         "version": __version__,
         "appliance_mode": appliance_mode,
@@ -2170,7 +2170,7 @@ async def get_system_info(session: dict = Depends(require_auth)):
 @app.post("/api/system/network", tags=["system"])
 async def update_network_config(request: Request, session: dict = Depends(require_role("admin"))):
     """Update network configuration (appliance mode only)."""
-    if os.environ.get("TACHYON_APPLIANCE") != "1":
+    if os.environ.get("SIXTYOPS_APPLIANCE") != "1":
         raise HTTPException(404, "Not available in this deployment mode")
 
     data = await request.json()
@@ -3473,7 +3473,7 @@ async def export_backup(request: Request, session: dict = Depends(require_role("
         logger.error(f"Backup export failed: {e}")
         raise HTTPException(500, "Export failed")
 
-    filename = f"tachyon-devices-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv"
+    filename = f"sixtyops-devices-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv"
     return StreamingResponse(
         iter([csv_content]),
         media_type="text/csv",

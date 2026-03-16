@@ -18,17 +18,17 @@ class TestOIDCConfig:
 
     def test_env_var_fallback(self, mock_db):
         with patch.dict(os.environ, {
-            "OIDC_PROVIDER_URL": "https://authentik.example.com/application/o/tachyon/",
+            "OIDC_PROVIDER_URL": "https://authentik.example.com/application/o/sixtyops/",
             "OIDC_CLIENT_ID": "test-client-id",
             "OIDC_CLIENT_SECRET": "test-secret",
-            "OIDC_REDIRECT_URI": "https://tachyon.example.com/auth/oidc/callback",
-            "OIDC_ALLOWED_GROUP": "tachyon-admins",
+            "OIDC_REDIRECT_URI": "https://sixtyops.example.com/auth/oidc/callback",
+            "OIDC_ALLOWED_GROUP": "sixtyops-admins",
         }):
             config = get_oidc_config()
             assert config.enabled is False
-            assert config.provider_url == "https://authentik.example.com/application/o/tachyon/"
+            assert config.provider_url == "https://authentik.example.com/application/o/sixtyops/"
             assert config.client_id == "test-client-id"
-            assert config.allowed_group == "tachyon-admins"
+            assert config.allowed_group == "sixtyops-admins"
 
     def test_db_overrides_env(self, mock_db):
         with patch.dict(os.environ, {
@@ -40,7 +40,7 @@ class TestOIDCConfig:
                 provider_url="https://db.example.com/",
                 client_id="db-client",
                 client_secret="db-secret",
-                redirect_uri="https://tachyon.example.com/auth/oidc/callback",
+                redirect_uri="https://sixtyops.example.com/auth/oidc/callback",
                 allowed_group="admins",
             ))
             config = get_oidc_config()
@@ -73,9 +73,9 @@ class TestAuthenticateOIDCUser:
             provider_url="https://auth.example.com/",
             client_id="c",
             client_secret="s",
-            allowed_group="tachyon-admins",
+            allowed_group="sixtyops-admins",
         ))
-        result = authenticate_oidc_user("admin@example.com", ["users", "tachyon-admins"])
+        result = authenticate_oidc_user("admin@example.com", ["users", "sixtyops-admins"])
         assert result == "admin@example.com"
 
     def test_denied_wrong_group(self, mock_db):
@@ -84,7 +84,7 @@ class TestAuthenticateOIDCUser:
             provider_url="https://auth.example.com/",
             client_id="c",
             client_secret="s",
-            allowed_group="tachyon-admins",
+            allowed_group="sixtyops-admins",
         ))
         result = authenticate_oidc_user("user@example.com", ["users", "other-group"])
         assert result is None
@@ -95,14 +95,14 @@ class TestAuthenticateOIDCUser:
             provider_url="https://auth.example.com/",
             client_id="c",
             client_secret="s",
-            allowed_group="tachyon-admins",
+            allowed_group="sixtyops-admins",
         ))
         result = authenticate_oidc_user("user@example.com", [])
         assert result is None
 
     def test_denied_when_disabled(self, mock_db):
-        set_oidc_config(OIDCConfig(enabled=False, allowed_group="tachyon-admins"))
-        result = authenticate_oidc_user("admin@example.com", ["tachyon-admins"])
+        set_oidc_config(OIDCConfig(enabled=False, allowed_group="sixtyops-admins"))
+        result = authenticate_oidc_user("admin@example.com", ["sixtyops-admins"])
         assert result is None
 
     def test_denied_no_allowed_group_configured(self, mock_db):
@@ -113,7 +113,7 @@ class TestAuthenticateOIDCUser:
             client_secret="s",
             allowed_group="",
         ))
-        result = authenticate_oidc_user("admin@example.com", ["tachyon-admins"])
+        result = authenticate_oidc_user("admin@example.com", ["sixtyops-admins"])
         assert result is None
 
 

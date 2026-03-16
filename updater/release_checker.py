@@ -22,17 +22,17 @@ logger = logging.getLogger(__name__)
 # Global singleton
 _checker: Optional["ReleaseChecker"] = None
 
-GITHUB_REPO = os.environ.get("GITHUB_REPO", "isolson/tachyon-manager-releases")
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "isolson/sixtyops-releases")
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_API_RELEASES = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 CHECK_INTERVAL = int(os.environ.get("AUTOUPDATE_CHECK_INTERVAL", 604800))  # 7 days
 
 # Appliance mode: use docker pull from GHCR instead of git-based updates
-APPLIANCE_MODE = os.environ.get("TACHYON_APPLIANCE", "") == "1"
-GHCR_IMAGE = os.environ.get("TACHYON_IMAGE", "ghcr.io/isolson/firmware-updater")
+APPLIANCE_MODE = os.environ.get("SIXTYOPS_APPLIANCE", "") == "1"
+GHCR_IMAGE = os.environ.get("SIXTYOPS_IMAGE", "ghcr.io/isolson/firmware-updater")
 
 # Appliance platform version file (written during OVA build)
-APPLIANCE_VERSION_FILE = Path("/etc/tachyon/appliance-version")
+APPLIANCE_VERSION_FILE = Path("/etc/sixtyops/appliance-version")
 
 
 def get_appliance_version() -> Optional[str]:
@@ -314,7 +314,7 @@ def _get_repo_dir() -> Optional[Path]:
     """Find the git repository root on the host (bind-mounted into the container)."""
     candidates = [
         Path("/app/repo"),   # Explicit mount for self-update
-        Path("/opt/tachyon"),  # Default install location (install.sh)
+        Path("/opt/sixtyops"),  # Default install location (install.sh)
     ]
     for path in candidates:
         if (path / ".git").exists():
@@ -326,7 +326,7 @@ def _get_host_repo_path() -> Optional[str]:
     """Discover the host-side path of the /app/repo bind mount."""
     try:
         result = subprocess.run(
-            ["docker", "inspect", "tachyon-management",
+            ["docker", "inspect", "sixtyops-management",
              "--format",
              "{{range .Mounts}}{{if eq .Destination \"/app/repo\"}}{{.Source}}{{end}}{{end}}"],
             capture_output=True, text=True, timeout=10,
@@ -353,10 +353,10 @@ def _build_watchdog_script(
 
     # Use .replace() instead of f-string to avoid escaping {{ }} for docker --format
     return """#!/bin/sh
-# Tachyon update watchdog — build, swap, monitor health, rollback on failure
+# SixtyOps update watchdog — build, swap, monitor health, rollback on failure
 set -e
 
-CONTAINER="tachyon-management"
+CONTAINER="sixtyops-management"
 REPO="__REPO__"
 ROLLBACK_REF="__ROLLBACK_REF__"
 COMPOSE="__COMPOSE_CMD__"
@@ -365,7 +365,7 @@ echo "[watchdog] Starting update build..."
 
 # Build new image (current container keeps running)
 cd "$REPO"
-$COMPOSE build tachyon-mgmt
+$COMPOSE build sixtyops-mgmt
 if [ $? -ne 0 ]; then
     echo "[watchdog] Build failed. Reverting git checkout..."
     apk add --no-cache git > /dev/null 2>&1
@@ -385,7 +385,7 @@ fi
 
 # Swap to new container
 echo "[watchdog] Swapping to new container..."
-$COMPOSE up -d tachyon-mgmt
+$COMPOSE up -d sixtyops-mgmt
 
 # Monitor health (90 seconds: 18 checks x 5s)
 echo "[watchdog] Monitoring health..."
@@ -431,7 +431,7 @@ if [ -n "$ROLLBACK_IMAGE" ] && [ -n "$IMAGE" ]; then
 fi
 
 # Restart from old image (--no-build since we re-tagged it)
-$COMPOSE up -d --no-build tachyon-mgmt
+$COMPOSE up -d --no-build sixtyops-mgmt
 
 echo "[watchdog] Rollback initiated. Monitoring recovery..."
 for i in $(seq 1 12); do
@@ -466,7 +466,7 @@ def _launch_watchdog(
     try:
         # Remove any leftover watchdog container from a previous attempt
         subprocess.run(
-            ["docker", "rm", "-f", "tachyon-update-watchdog"],
+            ["docker", "rm", "-f", "sixtyops-update-watchdog"],
             capture_output=True, timeout=10,
         )
 
@@ -483,7 +483,7 @@ def _launch_watchdog(
         result = subprocess.run(
             [
                 "docker", "run", "--rm", "-d",
-                "--name", "tachyon-update-watchdog",
+                "--name", "sixtyops-update-watchdog",
                 "-v", "/var/run/docker.sock:/var/run/docker.sock",
                 "-v", f"{host_repo_dir}:{host_repo_dir}",
                 "-w", host_repo_dir,
@@ -518,10 +518,10 @@ def _build_appliance_watchdog_script(
         compose_cmd += f" -f {compose_dir}/docker-compose.standalone.yml"
 
     return """#!/bin/sh
-# Tachyon appliance update watchdog — swap, monitor health, rollback on failure
+# SixtyOps appliance update watchdog — swap, monitor health, rollback on failure
 set -e
 
-CONTAINER="tachyon-management"
+CONTAINER="sixtyops-management"
 COMPOSE="__COMPOSE_CMD__"
 
 echo "[watchdog] Starting appliance update..."
@@ -536,7 +536,7 @@ fi
 
 # Swap to new container (image already pulled)
 echo "[watchdog] Swapping to new container..."
-$COMPOSE up -d --no-build tachyon-mgmt
+$COMPOSE up -d --no-build sixtyops-mgmt
 
 # Monitor health (90 seconds: 18 checks x 5s)
 echo "[watchdog] Monitoring health..."
@@ -574,7 +574,7 @@ if [ -n "$ROLLBACK_IMAGE" ] && [ -n "$IMAGE" ]; then
 fi
 
 # Restart from old image
-$COMPOSE up -d --no-build tachyon-mgmt
+$COMPOSE up -d --no-build sixtyops-mgmt
 
 echo "[watchdog] Rollback initiated. Monitoring recovery..."
 for i in $(seq 1 12); do
@@ -602,7 +602,7 @@ def _launch_appliance_watchdog(
     """Launch the appliance watchdog in a detached docker:cli container."""
     try:
         subprocess.run(
-            ["docker", "rm", "-f", "tachyon-update-watchdog"],
+            ["docker", "rm", "-f", "sixtyops-update-watchdog"],
             capture_output=True, timeout=10,
         )
 
@@ -616,7 +616,7 @@ def _launch_appliance_watchdog(
         result = subprocess.run(
             [
                 "docker", "run", "--rm", "-d",
-                "--name", "tachyon-update-watchdog",
+                "--name", "sixtyops-update-watchdog",
                 "-v", "/var/run/docker.sock:/var/run/docker.sock",
                 "-v", f"{compose_dir}:{compose_dir}",
                 "-w", str(compose_dir),
@@ -676,7 +676,7 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
             logger.warning("Appliance watchdog failed, falling back to direct swap")
             compose_cmd = _get_compose_cmd(compose_dir)
             subprocess.Popen(
-                compose_cmd + ["up", "-d", "--no-build", "tachyon-mgmt"],
+                compose_cmd + ["up", "-d", "--no-build", "sixtyops-mgmt"],
                 cwd=compose_dir,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -750,7 +750,7 @@ async def apply_update() -> dict:
             "manual": True,
             "message": "Docker socket not mounted. Run these commands on the host:",
             "commands": [
-                "cd /opt/tachyon",
+                "cd /opt/sixtyops",
                 f"git fetch origin tag {target_tag}",
                 f"git checkout {target_tag}",
                 "docker compose up -d --build",
@@ -763,7 +763,7 @@ async def apply_update() -> dict:
             "manual": True,
             "message": "Git repo not mounted. Run these commands on the host:",
             "commands": [
-                "cd /opt/tachyon",
+                "cd /opt/sixtyops",
                 f"git fetch origin tag {target_tag}",
                 f"git checkout {target_tag}",
                 "docker compose up -d --build",
@@ -846,7 +846,7 @@ async def apply_update() -> dict:
             if not launched:
                 logger.warning("Watchdog failed to launch, falling back to direct update")
                 subprocess.Popen(
-                    compose_cmd + ["up", "-d", "--build", "tachyon-mgmt"],
+                    compose_cmd + ["up", "-d", "--build", "sixtyops-mgmt"],
                     cwd=repo_dir,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -855,7 +855,7 @@ async def apply_update() -> dict:
             # Can't determine host path — proceed without rollback
             logger.warning("Could not determine host repo path; no rollback available")
             subprocess.Popen(
-                compose_cmd + ["up", "-d", "--build", "tachyon-mgmt"],
+                compose_cmd + ["up", "-d", "--build", "sixtyops-mgmt"],
                 cwd=repo_dir,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

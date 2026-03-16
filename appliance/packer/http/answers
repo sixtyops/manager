@@ -1,12 +1,12 @@
 KEYMAPOPTS="us us"
-HOSTNAMEOPTS="-n tachyon"
+HOSTNAMEOPTS="-n sixtyops"
 INTERFACESOPTS="auto lo
 iface lo inet loopback
 
 auto eth0
 iface eth0 inet dhcp
 "
-DNSOPTS="-d tachyon.local 8.8.8.8 1.1.1.1"
+DNSOPTS="-d sixtyops.local 8.8.8.8 1.1.1.1"
 TIMEZONEOPTS="-z UTC"
 PROXYOPTS="none"
 APKREPOSOPTS="-1"

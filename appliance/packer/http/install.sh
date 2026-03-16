@@ -5,7 +5,7 @@
 set -x
 
 # Run setup-alpine with password piped via stdin
-printf 'tachyon-build\ntachyon-build\n' | ERASE_DISKS=/dev/vda setup-alpine -f /tmp/answers
+printf 'sixtyops-build\nsixtyops-build\n' | ERASE_DISKS=/dev/vda setup-alpine -f /tmp/answers
 
 # Enable root SSH login on the installed system
 # Use blkid to find ext4 partitions on vda, then check for sshd_config

@@ -65,10 +65,10 @@ def _setup_handler(config: dict) -> Optional[logging.Handler]:
             facility=facility,
             socktype=socktype,
         )
-        handler.setFormatter(logging.Formatter("tachyon: %(message)s"))
+        handler.setFormatter(logging.Formatter("sixtyops: %(message)s"))
 
         if _syslog_logger is None:
-            _syslog_logger = logging.getLogger("tachyon.syslog")
+            _syslog_logger = logging.getLogger("sixtyops.syslog")
             _syslog_logger.setLevel(logging.INFO)
             _syslog_logger.propagate = False
 
@@ -142,7 +142,7 @@ def test_connection() -> tuple[bool, str]:
         return False, "Failed to connect to syslog server"
 
     try:
-        send_event("system", "Tachyon syslog forwarding test message", "info")
+        send_event("system", "SixtyOps syslog forwarding test message", "info")
         return True, f"Test message sent to {config['host']}:{config['port']}"
     except Exception as e:
         return False, f"Failed to send test message: {e}"

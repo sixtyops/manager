@@ -158,7 +158,7 @@ server {{
 
     # WebSocket support
     location /ws {{
-        proxy_pass http://tachyon-mgmt:8000;
+        proxy_pass http://sixtyops-mgmt:8000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -171,7 +171,7 @@ server {{
 
     # Main application
     location / {{
-        proxy_pass http://tachyon-mgmt:8000;
+        proxy_pass http://sixtyops-mgmt:8000;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -196,7 +196,7 @@ def _reload_nginx():
     try:
         # Try docker exec first (when running in docker-compose)
         result = subprocess.run(
-            ["docker", "exec", "tachyon-nginx", "nginx", "-s", "reload"],
+            ["docker", "exec", "sixtyops-nginx", "nginx", "-s", "reload"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -242,21 +242,21 @@ async def obtain_certificate(domain: str, email: str) -> Tuple[bool, str]:
     # Verify certbot container is running before attempting certificate request
     try:
         check = await asyncio.create_subprocess_exec(
-            "docker", "inspect", "--format", "{{.State.Running}}", "tachyon-certbot",
+            "docker", "inspect", "--format", "{{.State.Running}}", "sixtyops-certbot",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         stdout_check, _ = await _communicate_with_timeout(check, timeout=10)
         if check.returncode != 0 or stdout_check.decode().strip() != "true":
             return False, (
                 "Let's Encrypt is not available: the certbot container is not running. "
-                "This feature requires the Tachyon appliance deployment."
+                "This feature requires the SixtyOps appliance deployment."
             )
     except Exception:
         return False, "Unable to check certbot container status."
 
     # Run certbot in webroot mode via docker exec (certbot runs in separate container)
     cmd = [
-        "docker", "exec", "tachyon-certbot",
+        "docker", "exec", "sixtyops-certbot",
         "certbot", "certonly",
         "--webroot",
         "--webroot-path", "/var/www/certbot",
@@ -331,7 +331,7 @@ async def renew_certificate() -> Tuple[bool, str]:
 
     logger.info(f"Renewing certificate for {domain}")
 
-    cmd = ["docker", "exec", "tachyon-certbot", "certbot", "renew", "--non-interactive"]
+    cmd = ["docker", "exec", "sixtyops-certbot", "certbot", "renew", "--non-interactive"]
 
     proc = None
     try:

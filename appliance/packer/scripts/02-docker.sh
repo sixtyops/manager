@@ -19,8 +19,8 @@ apk add docker docker-cli-compose
 echo "[02-docker] Enabling Docker at boot..."
 rc-update add docker boot
 
-echo "[02-docker] Adding tachyon user to docker group..."
-addgroup tachyon docker
+echo "[02-docker] Adding sixtyops user to docker group..."
+addgroup sixtyops docker
 
 echo "[02-docker] Configuring Docker daemon..."
 mkdir -p /etc/docker /data/docker

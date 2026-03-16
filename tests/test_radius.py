@@ -448,16 +448,16 @@ class TestRadiusAuthLog:
 
 
 # ===========================================================================
-# TestRadiusRateLimiter — TachyonRadiusServer rate limiting logic
+# TestRadiusRateLimiter — SixtyOpsRadiusServer rate limiting logic
 # ===========================================================================
 
 class TestRadiusRateLimiter:
-    """Tests for the built-in rate limiter in TachyonRadiusServer."""
+    """Tests for the built-in rate limiter in SixtyOpsRadiusServer."""
 
     def _make_server(self):
-        from updater.radius_server import TachyonRadiusServer, RadiusServerConfig
+        from updater.radius_server import SixtyOpsRadiusServer, RadiusServerConfig
 
-        srv = TachyonRadiusServer.__new__(TachyonRadiusServer)
+        srv = SixtyOpsRadiusServer.__new__(SixtyOpsRadiusServer)
         srv._config = RadiusServerConfig(shared_secret="testsecret!", auth_port=11812)
         srv._running = True
         srv._last_heartbeat = time.monotonic()

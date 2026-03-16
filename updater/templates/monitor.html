@@ -2654,7 +2654,7 @@
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
                     <div>
                         <label class="u-label-xs" for="sslDomain">Domain</label>
-                        <input type="text" id="sslDomain" name="sslDomain" placeholder="e.g. tachyon.example.com" class="u-input-compact">
+                        <input type="text" id="sslDomain" name="sslDomain" placeholder="e.g. sixtyops.example.com" class="u-input-compact">
                     </div>
                     <div>
                         <label class="u-label-xs" for="sslEmail">Email (for Let's Encrypt)</label>
@@ -3106,7 +3106,7 @@
                         <div id="oidcFields" class="u-grid-2-gap8">
                             <div class="u-span-2">
                                 <label class="u-text-xxs-muted" for="authOidcProviderUrl">Provider URL</label>
-                                <input type="text" id="authOidcProviderUrl" name="authOidcProviderUrl" placeholder="https://authentik.example.com/application/o/tachyon/" class="u-input-compact">
+                                <input type="text" id="authOidcProviderUrl" name="authOidcProviderUrl" placeholder="https://authentik.example.com/application/o/sixtyops/" class="u-input-compact">
                             </div>
                             <div>
                                 <label class="u-text-xxs-muted" for="authOidcClientId">Client ID</label>
@@ -3118,11 +3118,11 @@
                             </div>
                             <div class="u-span-2">
                                 <label class="u-text-xxs-muted" for="authOidcRedirectUri">Redirect URI</label>
-                                <input type="text" id="authOidcRedirectUri" name="authOidcRedirectUri" placeholder="https://tachyon.example.com/auth/oidc/callback" class="u-input-compact">
+                                <input type="text" id="authOidcRedirectUri" name="authOidcRedirectUri" placeholder="https://sixtyops.example.com/auth/oidc/callback" class="u-input-compact">
                             </div>
                             <div class="u-span-2">
                                 <label class="u-text-xxs-muted" for="authOidcAllowedGroup">Allowed Group</label>
-                                <input type="text" id="authOidcAllowedGroup" name="authOidcAllowedGroup" placeholder="tachyon-admins" class="u-input-compact">
+                                <input type="text" id="authOidcAllowedGroup" name="authOidcAllowedGroup" placeholder="sixtyops-admins" class="u-input-compact">
                             </div>
                         </div>
                         <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
@@ -8405,7 +8405,7 @@
                 const blob = await resp.blob();
                 const disposition = resp.headers.get('Content-Disposition') || '';
                 const match = disposition.match(/filename="(.+)"/);
-                const filename = match ? match[1] : 'tachyon-devices.csv';
+                const filename = match ? match[1] : 'sixtyops-devices.csv';
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;

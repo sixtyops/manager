@@ -53,10 +53,10 @@ variable "memory" {
   default = 1024
 }
 
-source "qemu" "tachyon" {
+source "qemu" "sixtyops" {
   iso_url          = var.alpine_iso_url
   iso_checksum     = var.alpine_iso_checksum
-  output_directory = "output-tachyon"
+  output_directory = "output-sixtyops"
   shutdown_command  = "poweroff"
   disk_size        = var.disk_size
   format           = "qcow2"
@@ -76,14 +76,14 @@ source "qemu" "tachyon" {
   ]
   http_directory   = "${path.root}/http"
   ssh_username     = "root"
-  ssh_password     = "tachyon-build"
+  ssh_password     = "sixtyops-build"
   ssh_timeout      = "15m"
   ssh_file_transfer_method = "sftp"
-  vm_name          = "tachyon-appliance"
+  vm_name          = "sixtyops-appliance"
 }
 
 build {
-  sources = ["source.qemu.tachyon"]
+  sources = ["source.qemu.sixtyops"]
 
   provisioner "file" {
     source      = "files/"
