@@ -47,6 +47,7 @@ fi
 if [ -d "$INSTALL_DIR" ]; then
     echo "Updating existing installation..."
     cd "$INSTALL_DIR"
+    git config --global --add safe.directory "$INSTALL_DIR"
     git fetch origin
     git reset --hard "origin/$BRANCH"
 else
