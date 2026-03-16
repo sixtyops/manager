@@ -1,4 +1,4 @@
-# Tachyon Firmware Updater
+# SixtyOps Manager
 
 Automated firmware updates for Tachyon wireless networks. Handles scheduling, gradual rollouts, and safety checks so you don't have to update APs manually.
 
@@ -49,7 +49,7 @@ Failures pause the rollout until manually reviewed.
 - **Manual updates** - Immediate updates for specific APs when needed
 - **Network topology view** - Visual map of tower sites, APs, and CPEs with signal health indicators
 - **Parallel updates** - Configurable concurrency for faster bulk updates
-- **Built-in device Radius** - FreeRADIUS container managed from the app for AP and switch admin authentication
+- **Built-in device RADIUS** - Integrated RADIUS server for AP and switch admin authentication
 - **Git backups** - Automatic commit of configuration changes
 - **Real-time progress** - WebSocket-based live update status
 
@@ -143,7 +143,7 @@ Full API docs: [docs/api.md](docs/api.md)
 ## Roadmap
 
 - **Pre-update device config backup** — Pull and store AP/CPE configuration (SSIDs, channels, IP addressing, etc.) before firmware updates. The git backup system currently backs up the management database and device inventory, but not the operational configs on each device. This would enable automatic restore if a firmware update resets device settings to defaults.
-- **Git backup restore** — Add a restore flow (API + UI) to pull the latest backup from the configured git remote and replace the local database. Currently restore is a manual process (clone repo, copy `tachyon.db`, restart app).
+- **Git backup restore** — Add a restore flow (API + UI) to pull the latest backup from the configured git remote and replace the local database. Currently restore is a manual process (clone repo, copy `sixtyops.db`, restart app).
 
 ## For Developers
 

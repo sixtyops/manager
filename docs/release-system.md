@@ -6,7 +6,7 @@ the app updater.
 ## Repositories and Artifacts
 
 - **Code repo:** `isolson/firmware-updater`
-- **Public downloads/releases repo:** `isolson/tachyon-manager-releases`
+- **Public downloads/releases repo:** `isolson/sixtyops-releases`
 - **Container registry:** `ghcr.io/isolson/firmware-updater`
 - **Appliance artifacts:** `.ova` and `.qcow2`
 
@@ -62,14 +62,14 @@ Pipeline:
 - Attaches artifacts to the release (when triggered by release event).
 - Updates `appliance-latest` release in:
   - `isolson/firmware-updater`
-  - `isolson/tachyon-manager-releases` (public mirror)
+  - `isolson/sixtyops-releases` (public mirror)
 
 ## How App Self-Update Consumes Releases
 
 Implementation: `updater/release_checker.py`
 
 - Default release source repo is:
-  - `GITHUB_REPO=isolson/tachyon-manager-releases`
+  - `GITHUB_REPO=isolson/sixtyops-releases`
 - Release channels:
   - `stable` -> calls `/releases/latest`
   - `dev` -> calls `/releases?per_page=10` and uses first item
@@ -79,7 +79,7 @@ Implementation: `updater/release_checker.py`
 
 Apply behavior:
 
-- **Appliance mode** (`TACHYON_APPLIANCE=1`):
+- **Appliance mode** (`SIXTYOPS_APPLIANCE=1`):
   - pulls `ghcr.io/isolson/firmware-updater:v<target>`
   - restarts via watchdog with rollback behavior
 - **Non-appliance mode**:
