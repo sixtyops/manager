@@ -17,8 +17,8 @@ apk update && apk upgrade
 echo "[01-base] Installing base packages..."
 apk add bash util-linux e2fsprogs openssl curl parted jq qemu-guest-agent
 
-DATA_MODE_FILE="/etc/tachyon/data-mode"
-mkdir -p /etc/tachyon
+DATA_MODE_FILE="/etc/sixtyops/data-mode"
+mkdir -p /etc/sixtyops
 
 # Create /data partition from remaining disk space
 echo "[01-base] Setting up /data partition..."
@@ -50,9 +50,9 @@ if [ -n "$FREE_SPACE" ]; then
         exit 1
     fi
 
-    mkfs.ext4 -L tachyon-data "$DATA_DEV"
+    mkfs.ext4 -L sixtyops-data "$DATA_DEV"
     mkdir -p /data
-    echo "LABEL=tachyon-data  /data  ext4  defaults,noatime  0  2" >> /etc/fstab
+    echo "LABEL=sixtyops-data  /data  ext4  defaults,noatime  0  2" >> /etc/fstab
     if ! mount /data; then
         echo "[01-base] ERROR: Failed to mount /data partition"
         exit 1
@@ -66,10 +66,10 @@ fi
 
 echo "[01-base] Creating directory structure..."
 mkdir -p /data/db /data/firmware /data/certs /data/backups /data/network
-mkdir -p /opt/tachyon/nginx/conf.d
+mkdir -p /opt/sixtyops/nginx/conf.d
 
-echo "[01-base] Creating tachyon user (UID 1500)..."
-adduser -D -u 1500 -H tachyon
+echo "[01-base] Creating sixtyops user (UID 1500)..."
+adduser -D -u 1500 -H sixtyops
 chown -R 1500:1500 /data
 
 echo "[01-base] Enabling QEMU guest agent (for Proxmox management)..."

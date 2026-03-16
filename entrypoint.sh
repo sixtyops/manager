@@ -23,7 +23,7 @@ if [ "${SEED_DATA:-}" = "1" ] && [ -f /app/repo/scripts/seed_dev_data.py ]; then
         # Wait for the app to create the DB and become healthy
         echo "entrypoint: waiting for app to initialise before seeding..."
         for i in $(seq 1 30); do
-            if [ -f /app/data/tachyon.db ]; then
+            if [ -f /app/data/sixtyops.db ]; then
                 sleep 1
                 python3 /app/repo/scripts/seed_dev_data.py && break
                 break

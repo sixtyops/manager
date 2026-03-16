@@ -3,7 +3,7 @@
 set -e
 
 MARKER="/data/.first-boot-done"
-DATA_MODE_FILE="/etc/tachyon/data-mode"
+DATA_MODE_FILE="/etc/sixtyops/data-mode"
 
 if [ -f "$MARKER" ]; then
     exit 0
@@ -12,7 +12,7 @@ fi
 # Verify /data mode and mount state (critical for data persistence)
 DATA_MODE="$(cat "$DATA_MODE_FILE" 2>/dev/null)"
 if [ -z "$DATA_MODE" ]; then
-    if grep -q 'tachyon-data' /etc/fstab 2>/dev/null; then
+    if grep -q 'sixtyops-data' /etc/fstab 2>/dev/null; then
         DATA_MODE="partition"
     else
         DATA_MODE="rootfs"
@@ -53,7 +53,7 @@ if [ ! -f /data/certs/selfsigned.crt ] || [ ! -f /data/certs/selfsigned.key ]; t
     openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
         -keyout /data/certs/selfsigned.key \
         -out /data/certs/selfsigned.crt \
-        -subj "/C=US/ST=State/L=City/O=Tachyon/CN=localhost" \
+        -subj "/C=US/ST=State/L=City/O=SixtyOps/CN=localhost" \
         2>/dev/null
     if [ $? -eq 0 ]; then
         echo "[first-boot] Self-signed certificate generated successfully"
@@ -62,7 +62,7 @@ if [ ! -f /data/certs/selfsigned.crt ] || [ ! -f /data/certs/selfsigned.key ]; t
     fi
 fi
 
-# Set ownership for tachyon user (UID 1500)
+# Set ownership for sixtyops user (UID 1500)
 chown -R 1500:1500 /data/db /data/firmware /data/backups
 
 # Verify all critical directories exist before marking complete

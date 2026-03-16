@@ -16,7 +16,7 @@ if [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
         -keyout "$KEY_FILE" \
         -out "$CERT_FILE" \
-        -subj "/C=US/ST=State/L=City/O=Tachyon/CN=localhost" \
+        -subj "/C=US/ST=State/L=City/O=SixtyOps/CN=localhost" \
         2>/dev/null
 
     if [ $? -eq 0 ]; then

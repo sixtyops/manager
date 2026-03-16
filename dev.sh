@@ -10,17 +10,17 @@ set -e
 
 if [ "$1" = "--fresh" ]; then
     echo "Removing existing dev database..."
-    rm -f data/tachyon.db
+    rm -f data/sixtyops.db
 fi
 
 mkdir -p data firmware
 
-export TACHYON_DEV_MODE=1
+export SIXTYOPS_DEV_MODE=1
 export ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 export ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin}"
-export TACHYON_FORCE_PRO=1
+export SIXTYOPS_FORCE_PRO=1
 
-echo "=== Tachyon Dev Mode ==="
+echo "=== SixtyOps Dev Mode ==="
 echo "Login: ${ADMIN_USERNAME} / ${ADMIN_PASSWORD}"
 echo "URL:   http://localhost:8000"
 echo "Tip:   use --fresh to re-seed the database"

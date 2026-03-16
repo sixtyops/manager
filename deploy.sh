@@ -1,5 +1,5 @@
 #!/bin/bash
-# Local deployment for Tachyon Management System (standalone mode)
+# Local deployment for SixtyOps Manager (standalone mode)
 # Usage: ./deploy.sh (after cloning the repo)
 #
 # For fresh server install, use:
@@ -10,7 +10,7 @@ set -e
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.standalone.yml"
 
 echo "=========================================="
-echo "  Tachyon Management System - Deploy"
+echo "  SixtyOps Manager - Deploy"
 echo "=========================================="
 echo
 

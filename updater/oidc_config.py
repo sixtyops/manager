@@ -28,7 +28,7 @@ class OIDCConfig:
     provider_url: str = ""       # e.g. https://authentik.example.com/application/o/tachyon/
     client_id: str = ""
     client_secret: str = ""
-    redirect_uri: str = ""       # e.g. https://tachyon.example.com/auth/oidc/callback
+    redirect_uri: str = ""       # e.g. https://sixtyops.example.com/auth/oidc/callback
     allowed_group: str = ""      # Authentik group name required for access
     scopes: str = "openid email profile"
 

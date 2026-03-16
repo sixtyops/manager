@@ -19,7 +19,7 @@ rm -f /etc/ssh/ssh_host_*
 
 echo "[06-harden] Locking user accounts..."
 passwd -l root
-passwd -l tachyon 2>/dev/null || true
+passwd -l sixtyops 2>/dev/null || true
 
 echo "[06-harden] Configuring read-only root filesystem..."
 # Add ro flag to root mount in fstab (POSIX sed — BusyBox doesn't support \s or \+)

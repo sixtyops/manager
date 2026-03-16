@@ -13,7 +13,7 @@ from pathlib import Path
 
 import bcrypt
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "tachyon.db"
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "sixtyops.db"
 
 
 def seed():

@@ -427,8 +427,8 @@ class TestAutoUpdateAPI:
             "message": "Docker socket not mounted. Run these commands manually:",
             "commands": [
                 "cd /path/to/deployment",
-                "docker compose pull tachyon-mgmt",
-                "docker compose up -d tachyon-mgmt",
+                "docker compose pull sixtyops-mgmt",
+                "docker compose up -d sixtyops-mgmt",
             ],
         }):
             resp = authed_client.post("/api/updates/apply")

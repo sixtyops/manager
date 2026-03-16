@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Paths - match docker-compose volume mounts
 STAGING_DIR = Path("/app/backups")
 DATA_DIR = Path("/app/data")
-DB_FILE = DATA_DIR / "tachyon.db"
+DB_FILE = DATA_DIR / "sixtyops.db"
 SSH_KEY_PATH = Path("/app/.ssh/backup_key")
 
 # Prevent concurrent backup runs
@@ -176,7 +176,7 @@ async def run_backup() -> Tuple[bool, str]:
 async def _run_backup_locked() -> Tuple[bool, str]:
     """Build tar.gz archive and upload via SFTP."""
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    archive_name = f"tachyon-backup-{timestamp}.tar.gz"
+    archive_name = f"sixtyops-backup-{timestamp}.tar.gz"
     logger.info(f"Starting backup: {archive_name}")
 
     try:
@@ -191,7 +191,7 @@ async def _run_backup_locked() -> Tuple[bool, str]:
         archive_bytes = buf.getvalue()
 
         # Upload via SFTP (5 minute timeout for large archives)
-        remote_path = db.get_setting("backup_sftp_path") or "/backups/tachyon"
+        remote_path = db.get_setting("backup_sftp_path") or "/backups/sixtyops"
         async with await _get_sftp_connection() as conn:
             async with conn.start_sftp_client() as sftp:
                 # Ensure remote directory exists
@@ -231,7 +231,7 @@ def _add_database(tar: tarfile.TarFile):
         return
 
     STAGING_DIR.mkdir(parents=True, exist_ok=True)
-    staging_db = STAGING_DIR / "tachyon.db"
+    staging_db = STAGING_DIR / "sixtyops.db"
     try:
         src = sqlite3.connect(str(DB_FILE))
         dst = sqlite3.connect(str(staging_db))
@@ -240,7 +240,7 @@ def _add_database(tar: tarfile.TarFile):
         finally:
             dst.close()
             src.close()
-        tar.add(str(staging_db), arcname="tachyon.db")
+        tar.add(str(staging_db), arcname="sixtyops.db")
     finally:
         staging_db.unlink(missing_ok=True)
 
@@ -261,7 +261,7 @@ def _add_device_inventory(tar: tarfile.TarFile, timestamp: str):
     aps = db.get_access_points(enabled_only=False)
     switches = db.get_switches(enabled_only=False)
 
-    lines = [f"# Tachyon Device Inventory - {timestamp}\n"]
+    lines = [f"# SixtyOps Device Inventory - {timestamp}\n"]
     lines.append(f"\n## Access Points ({len(aps)} total)\n")
     for ap in aps:
         name = ap.get("system_name") or "unnamed"
@@ -311,7 +311,7 @@ async def _enforce_retention(sftp, remote_path: str):
     try:
         entries = await sftp.listdir(remote_path)
         backups = sorted(
-            [e for e in entries if e.startswith("tachyon-backup-") and e.endswith(".tar.gz")]
+            [e for e in entries if e.startswith("sixtyops-backup-") and e.endswith(".tar.gz")]
         )
         if len(backups) > retention:
             for old in backups[:len(backups) - retention]:

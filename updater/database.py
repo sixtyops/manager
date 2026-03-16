@@ -15,7 +15,7 @@ from .crypto import encrypt_password, decrypt_password, is_encrypted
 logger = logging.getLogger(__name__)
 
 # Database file location
-DB_PATH = Path(__file__).parent.parent / "data" / "tachyon.db"
+DB_PATH = Path(__file__).parent.parent / "data" / "sixtyops.db"
 
 # Settings cache — short TTL to reduce DB hits during poll cycles
 _settings_cache: Optional[dict] = None
@@ -847,7 +847,7 @@ def init_db():
             "backup_enabled": "false",
             "backup_sftp_host": "",
             "backup_sftp_port": "22",
-            "backup_sftp_path": "/backups/tachyon",
+            "backup_sftp_path": "/backups/sixtyops",
             "backup_sftp_username": "",
             "backup_sftp_password": "",
             "backup_sftp_auth_method": "password",

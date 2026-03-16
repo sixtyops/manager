@@ -35,7 +35,7 @@ jobs:
           else
             APP_VERSION="${{ github.event.release.tag_name }}"
           fi
-          OVA_NAME="tachyon-appliance-a${APPLIANCE_VERSION}-app${APP_VERSION}"
+          OVA_NAME="sixtyops-appliance-a${APPLIANCE_VERSION}-app${APP_VERSION}"
           echo "appliance_version=${APPLIANCE_VERSION}" >> "$GITHUB_OUTPUT"
           echo "app_version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
           echo "ova_name=${OVA_NAME}" >> "$GITHUB_OUTPUT"
@@ -44,7 +44,7 @@ jobs:
       - name: Initialize Packer
         run: |
           cd appliance/packer
-          packer init tachyon.pkr.hcl
+          packer init sixtyops.pkr.hcl
 
       - name: Build appliance image
         run: |
@@ -54,22 +54,22 @@ jobs:
             -var "appliance_version=${{ steps.version.outputs.appliance_version }}" \
             -var "recovery_secret=${{ secrets.APPLIANCE_RECOVERY_SECRET }}" \
             -var "ghcr_token=${{ secrets.GITHUB_TOKEN }}" \
-            tachyon.pkr.hcl
+            sixtyops.pkr.hcl
         env:
           PACKER_LOG: 1
 
       - name: Prepare QCOW2 for Proxmox
         run: |
           qemu-img convert -c -f qcow2 -O qcow2 \
-            appliance/packer/output-tachyon/tachyon-appliance \
+            appliance/packer/output-sixtyops/sixtyops-appliance \
             ${{ steps.version.outputs.ova_name }}.qcow2
 
       - name: Convert to OVA
         run: |
           python3 appliance/scripts/create-ova.py \
-            appliance/packer/output-tachyon/tachyon-appliance \
+            appliance/packer/output-sixtyops/sixtyops-appliance \
             -o ${{ steps.version.outputs.ova_name }}.ova \
-            -n tachyon-appliance \
+            -n sixtyops-appliance \
             -v ${{ steps.version.outputs.app_version }} \
             --memory 1024 \
             --disk-size 8G \
@@ -116,9 +116,9 @@ jobs:
           ### Proxmox
           SSH into your Proxmox host and run (replace \`100\` with your VM ID and \`local-lvm\` with your storage name):
           \`\`\`bash
-          curl -LO https://github.com/isolson/firmware-updater/releases/download/appliance-latest/tachyon-appliance-latest.qcow2
+          curl -LO https://github.com/isolson/firmware-updater/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2
           qm create 100 --name sixtyops --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0
-          qm importdisk 100 tachyon-appliance-latest.qcow2 YOUR_STORAGE
+          qm importdisk 100 sixtyops-appliance-latest.qcow2 YOUR_STORAGE
           qm set 100 --scsi0 YOUR_STORAGE:vm-100-disk-0
           qm set 100 --boot order=scsi0
           qm set 100 --serial0 socket --vga serial0
@@ -141,10 +141,10 @@ jobs:
           gh release upload appliance-latest "$QCOW2" --clobber
 
           # Upload fixed-name copies for stable download URLs
-          cp "$OVA" tachyon-appliance-latest.ova
-          cp "$QCOW2" tachyon-appliance-latest.qcow2
-          gh release upload appliance-latest tachyon-appliance-latest.ova --clobber
-          gh release upload appliance-latest tachyon-appliance-latest.qcow2 --clobber
+          cp "$OVA" sixtyops-appliance-latest.ova
+          cp "$QCOW2" sixtyops-appliance-latest.qcow2
+          gh release upload appliance-latest sixtyops-appliance-latest.ova --clobber
+          gh release upload appliance-latest sixtyops-appliance-latest.qcow2 --clobber
 
       - name: Publish to public downloads repo
         env:
@@ -154,9 +154,9 @@ jobs:
           QCOW2="${{ steps.version.outputs.ova_name }}.qcow2"
           APPLIANCE_VER="${{ steps.version.outputs.appliance_version }}"
           APP_VER="${{ steps.version.outputs.app_version }}"
-          REPO="isolson/tachyon-manager-releases"
+          REPO="isolson/sixtyops-releases"
 
-          NOTES="Tachyon Manager Appliance (platform v${APPLIANCE_VER}, app ${APP_VER}).
+          NOTES="SixtyOps Appliance (platform v${APPLIANCE_VER}, app ${APP_VER}).
 
           ## Install
 
@@ -169,9 +169,9 @@ jobs:
           ### Proxmox
           SSH into your Proxmox host and run (replace \`100\` with your VM ID and \`local-lvm\` with your storage name):
           \`\`\`bash
-          curl -LO https://github.com/isolson/tachyon-manager-releases/releases/download/appliance-latest/tachyon-appliance-latest.qcow2
+          curl -LO https://github.com/isolson/sixtyops-releases/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2
           qm create 100 --name sixtyops --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0
-          qm importdisk 100 tachyon-appliance-latest.qcow2 YOUR_STORAGE
+          qm importdisk 100 sixtyops-appliance-latest.qcow2 YOUR_STORAGE
           qm set 100 --scsi0 YOUR_STORAGE:vm-100-disk-0
           qm set 100 --boot order=scsi0
           qm set 100 --serial0 socket --vga serial0
@@ -197,14 +197,14 @@ jobs:
           gh release upload appliance-latest "$QCOW2" --clobber --repo "$REPO"
 
           # Upload fixed-name copies for stable download URLs (curl-friendly)
-          cp "$OVA" tachyon-appliance-latest.ova
-          cp "$QCOW2" tachyon-appliance-latest.qcow2
-          gh release upload appliance-latest tachyon-appliance-latest.ova --clobber --repo "$REPO"
-          gh release upload appliance-latest tachyon-appliance-latest.qcow2 --clobber --repo "$REPO"
+          cp "$OVA" sixtyops-appliance-latest.ova
+          cp "$QCOW2" sixtyops-appliance-latest.qcow2
+          gh release upload appliance-latest sixtyops-appliance-latest.ova --clobber --repo "$REPO"
+          gh release upload appliance-latest sixtyops-appliance-latest.qcow2 --clobber --repo "$REPO"
 
       - name: Cleanup build artifacts
         if: always()
         run: |
-          rm -rf appliance/packer/output-tachyon
+          rm -rf appliance/packer/output-sixtyops
           rm -f *.ova *.qcow2
-          rm -f tachyon-appliance-latest.ova tachyon-appliance-latest.qcow2
+          rm -f sixtyops-appliance-latest.ova sixtyops-appliance-latest.qcow2

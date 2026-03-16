@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 os.environ["ADMIN_USERNAME"] = "admin"
 os.environ["ADMIN_PASSWORD"] = "testpass123"
 # Enable all features by default in tests (license gating tests override this)
-os.environ["TACHYON_FORCE_PRO"] = "1"
+os.environ["SIXTYOPS_FORCE_PRO"] = "1"
 
 
 @pytest.fixture

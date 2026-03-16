@@ -1,5 +1,5 @@
 #!/bin/sh
-# console-tui.sh — Whiptail-based console TUI for Tachyon appliance (tty1)
+# console-tui.sh — Whiptail-based console TUI for SixtyOps appliance (tty1)
 
 # Prevent kernel/init messages from corrupting the TUI display
 dmesg -n 1 2>/dev/null || true
@@ -56,11 +56,11 @@ get_ip() {
 }
 
 get_version() {
-    if timeout 5 docker inspect tachyon-management >/dev/null 2>&1; then
-        timeout 5 docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' tachyon-management 2>/dev/null \
+    if timeout 5 docker inspect sixtyops-management >/dev/null 2>&1; then
+        timeout 5 docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' sixtyops-management 2>/dev/null \
             | grep '^APP_VERSION=' | cut -d= -f2 || echo "unknown"
     else
-        grep '^APP_VERSION=' /opt/tachyon/.env 2>/dev/null | cut -d= -f2 || echo "unknown"
+        grep '^APP_VERSION=' /opt/sixtyops/.env 2>/dev/null | cut -d= -f2 || echo "unknown"
     fi
 }
 
@@ -81,7 +81,7 @@ get_disk_usage() {
 }
 
 get_status() {
-    if timeout 5 docker ps --format '{{.Names}}' 2>/dev/null | grep -q tachyon-management; then
+    if timeout 5 docker ps --format '{{.Names}}' 2>/dev/null | grep -q sixtyops-management; then
         echo "Running"
     else
         echo "Stopped"
@@ -96,7 +96,7 @@ show_main_menu() {
     DISK=$(get_disk_usage)
     STATUS=$(get_status)
 
-    CHOICE=$(whiptail --title "Tachyon Firmware Updater" \
+    CHOICE=$(whiptail --title "SixtyOps Manager" \
         --menu "\n  IP Address:  ${IP}\n  Version:     ${VERSION}\n  Machine ID:  ${MACHINE_ID}\n  Status:      ${STATUS}\n  Uptime:      ${UPTIME}\n  Disk:        ${DISK}\n" \
         $ROWS $COLS 6 \
         "1" "Network Configuration" \
@@ -198,8 +198,8 @@ EOF
 
 show_logs() {
     clear
-    LOGFILE=$(mktemp /tmp/tachyon-logs.XXXXXX)
-    timeout 10 docker logs --tail 100 tachyon-management > "$LOGFILE" 2>&1 || echo "(timed out fetching logs)" > "$LOGFILE"
+    LOGFILE=$(mktemp /tmp/sixtyops-logs.XXXXXX)
+    timeout 10 docker logs --tail 100 sixtyops-management > "$LOGFILE" 2>&1 || echo "(timed out fetching logs)" > "$LOGFILE"
     whiptail --title "Application Logs (last 100 lines)" --scrolltext --textbox "$LOGFILE" $ROWS $COLS
     rm -f "$LOGFILE"
 }
@@ -280,10 +280,10 @@ factory_reset() {
     whiptail --title "Factory Reset" --infobox "Performing factory reset..." 5 $COLS
 
     # Stop the app (timeout must exceed stop_grace_period of 60s)
-    timeout 90 docker compose -f /opt/tachyon/docker-compose.yml down 2>/dev/null || {
+    timeout 90 docker compose -f /opt/sixtyops/docker-compose.yml down 2>/dev/null || {
         echo "[factory-reset] Graceful shutdown timed out, force-killing containers..."
-        docker compose -f /opt/tachyon/docker-compose.yml kill 2>/dev/null || true
-        docker compose -f /opt/tachyon/docker-compose.yml down --timeout 5 2>/dev/null || true
+        docker compose -f /opt/sixtyops/docker-compose.yml kill 2>/dev/null || true
+        docker compose -f /opt/sixtyops/docker-compose.yml down --timeout 5 2>/dev/null || true
     }
 
     # Brief pause to let Docker release volume mounts

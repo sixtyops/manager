@@ -40,7 +40,7 @@ WHAT IS NEVER SENT:
 HOW TO DISABLE TELEMETRY:
 --------------------------------------------------------------------------------
 Set the DISABLE_TELEMETRY environment variable, then restart the app.
-In docker-compose.yml, add under the tachyon-mgmt service:
+In docker-compose.yml, add under the sixtyops-mgmt service:
   environment:
     - DISABLE_TELEMETRY=1
 

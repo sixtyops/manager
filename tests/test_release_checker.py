@@ -290,7 +290,7 @@ class TestApplyUpdateGuardrails:
              patch("updater.release_checker._docker_socket_available", return_value=True), \
              patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
              patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
-             patch("updater.release_checker._get_host_repo_path", return_value="/opt/tachyon"), \
+             patch("updater.release_checker._get_host_repo_path", return_value="/opt/sixtyops"), \
              patch("updater.release_checker._launch_watchdog", return_value=True), \
              patch("updater.release_checker.subprocess.run", side_effect=mock_run), \
              patch.object(Path, "exists", return_value=True), \
@@ -324,7 +324,7 @@ class TestApplyUpdateGuardrails:
              patch("updater.release_checker._docker_socket_available", return_value=True), \
              patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
              patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
-             patch("updater.release_checker._get_host_repo_path", return_value="/opt/tachyon"), \
+             patch("updater.release_checker._get_host_repo_path", return_value="/opt/sixtyops"), \
              patch("updater.release_checker._launch_watchdog", return_value=True) as mock_watchdog, \
              patch("updater.release_checker.subprocess.run", side_effect=mock_run), \
              patch("updater.release_checker.subprocess.Popen") as mock_popen, \
@@ -358,7 +358,7 @@ class TestApplyUpdateGuardrails:
              patch("updater.release_checker._docker_socket_available", return_value=True), \
              patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
              patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
-             patch("updater.release_checker._get_host_repo_path", return_value="/opt/tachyon"), \
+             patch("updater.release_checker._get_host_repo_path", return_value="/opt/sixtyops"), \
              patch("updater.release_checker._launch_watchdog", return_value=False), \
              patch("updater.release_checker.subprocess.run", side_effect=mock_run), \
              patch("updater.release_checker.subprocess.Popen") as mock_popen, \
@@ -490,39 +490,39 @@ class TestIsSafeToUpdate:
 class TestBuildWatchdogScript:
     def test_script_contains_rollback_ref(self):
         from updater.release_checker import _build_watchdog_script
-        script = _build_watchdog_script("/opt/tachyon", "abc123", False)
+        script = _build_watchdog_script("/opt/sixtyops", "abc123", False)
         assert 'ROLLBACK_REF="abc123"' in script
 
     def test_script_contains_compose_cmd(self):
         from updater.release_checker import _build_watchdog_script
-        script = _build_watchdog_script("/opt/tachyon", "abc123", False)
-        assert "docker compose -f /opt/tachyon/docker-compose.yml" in script
+        script = _build_watchdog_script("/opt/sixtyops", "abc123", False)
+        assert "docker compose -f /opt/sixtyops/docker-compose.yml" in script
 
     def test_script_includes_standalone_when_flagged(self):
         from updater.release_checker import _build_watchdog_script
-        script = _build_watchdog_script("/opt/tachyon", "abc123", True)
+        script = _build_watchdog_script("/opt/sixtyops", "abc123", True)
         assert "docker-compose.standalone.yml" in script
 
     def test_script_excludes_standalone_when_not_flagged(self):
         from updater.release_checker import _build_watchdog_script
-        script = _build_watchdog_script("/opt/tachyon", "abc123", False)
+        script = _build_watchdog_script("/opt/sixtyops", "abc123", False)
         assert "standalone" not in script
 
     def test_script_has_health_check_loop(self):
         from updater.release_checker import _build_watchdog_script
-        script = _build_watchdog_script("/opt/tachyon", "abc123", False)
+        script = _build_watchdog_script("/opt/sixtyops", "abc123", False)
         assert "Health.Status" in script
         assert "healthy" in script
 
     def test_script_has_rollback_on_failure(self):
         from updater.release_checker import _build_watchdog_script
-        script = _build_watchdog_script("/opt/tachyon", "abc123", False)
+        script = _build_watchdog_script("/opt/sixtyops", "abc123", False)
         assert "Rolling back" in script
         assert "checkout" in script
 
     def test_script_tags_rollback_image(self):
         from updater.release_checker import _build_watchdog_script
-        script = _build_watchdog_script("/opt/tachyon", "abc123", False)
+        script = _build_watchdog_script("/opt/sixtyops", "abc123", False)
         assert "docker tag" in script
         assert ":rollback" in script
 
@@ -606,8 +606,8 @@ class TestApplianceMode:
         self.db.commit()
 
     def test_appliance_mode_env_var(self):
-        """APPLIANCE_MODE is driven by TACHYON_APPLIANCE env var."""
-        with patch.dict("os.environ", {"TACHYON_APPLIANCE": "1"}):
+        """APPLIANCE_MODE is driven by SIXTYOPS_APPLIANCE env var."""
+        with patch.dict("os.environ", {"SIXTYOPS_APPLIANCE": "1"}):
             import importlib
             import updater.release_checker as rc
             importlib.reload(rc)
@@ -642,7 +642,7 @@ class TestApplianceMode:
             result.stderr = ""
             return result
 
-        compose_dir = Path("/opt/tachyon")
+        compose_dir = Path("/opt/sixtyops")
         with patch("updater.release_checker._docker_socket_available", return_value=True), \
              patch("updater.release_checker._get_compose_dir", return_value=compose_dir), \
              patch("updater.release_checker.subprocess.run", side_effect=mock_run), \
@@ -670,7 +670,7 @@ class TestApplianceMode:
             return result
 
         with patch("updater.release_checker._docker_socket_available", return_value=True), \
-             patch("updater.release_checker._get_compose_dir", return_value=Path("/opt/tachyon")), \
+             patch("updater.release_checker._get_compose_dir", return_value=Path("/opt/sixtyops")), \
              patch("updater.release_checker.subprocess.run", side_effect=mock_run):
             result = await _apply_update_appliance("1.2.0", "v1.2.0")
 
@@ -700,7 +700,7 @@ class TestApplianceMode:
             return result
 
         with patch("updater.release_checker._docker_socket_available", return_value=True), \
-             patch("updater.release_checker._get_compose_dir", return_value=Path("/opt/tachyon")), \
+             patch("updater.release_checker._get_compose_dir", return_value=Path("/opt/sixtyops")), \
              patch("updater.release_checker.subprocess.run", side_effect=mock_run), \
              patch("updater.release_checker._launch_appliance_watchdog", return_value=False), \
              patch("updater.release_checker.subprocess.Popen") as mock_popen:
@@ -743,31 +743,31 @@ class TestApplianceMode:
 class TestApplianceWatchdogScript:
     def test_script_has_health_check(self):
         from updater.release_checker import _build_appliance_watchdog_script
-        script = _build_appliance_watchdog_script("/opt/tachyon", False)
+        script = _build_appliance_watchdog_script("/opt/sixtyops", False)
         assert "Health.Status" in script
         assert "healthy" in script
 
     def test_script_has_rollback(self):
         from updater.release_checker import _build_appliance_watchdog_script
-        script = _build_appliance_watchdog_script("/opt/tachyon", False)
+        script = _build_appliance_watchdog_script("/opt/sixtyops", False)
         assert "Rolling back" in script
         assert ":rollback" in script
 
     def test_script_no_git_operations(self):
         """Appliance watchdog should NOT use git."""
         from updater.release_checker import _build_appliance_watchdog_script
-        script = _build_appliance_watchdog_script("/opt/tachyon", False)
+        script = _build_appliance_watchdog_script("/opt/sixtyops", False)
         assert "git" not in script
 
     def test_script_uses_no_build(self):
         """Appliance watchdog should use --no-build (image already pulled)."""
         from updater.release_checker import _build_appliance_watchdog_script
-        script = _build_appliance_watchdog_script("/opt/tachyon", False)
+        script = _build_appliance_watchdog_script("/opt/sixtyops", False)
         assert "--no-build" in script
 
     def test_script_includes_standalone(self):
         from updater.release_checker import _build_appliance_watchdog_script
-        script = _build_appliance_watchdog_script("/opt/tachyon", True)
+        script = _build_appliance_watchdog_script("/opt/sixtyops", True)
         assert "docker-compose.standalone.yml" in script
 
 

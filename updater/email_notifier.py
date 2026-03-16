@@ -207,11 +207,11 @@ def send_test_email() -> tuple[bool, str]:
     """Send a test email to verify SMTP configuration."""
     config = _get_config()
     subject = "[SixtyOps] Test Email Notification"
-    body_text = "This is a test email from Tachyon Firmware Updater."
+    body_text = "This is a test email from SixtyOps Firmware Updater."
     body_html = """
     <div style="font-family: Arial, sans-serif;">
-        <h2>Tachyon Email Notification Test</h2>
-        <p>This is a test email from Tachyon Firmware Updater.</p>
+        <h2>SixtyOps Email Notification Test</h2>
+        <p>This is a test email from SixtyOps Firmware Updater.</p>
         <p>If you received this, email notifications are working correctly.</p>
     </div>
     """
