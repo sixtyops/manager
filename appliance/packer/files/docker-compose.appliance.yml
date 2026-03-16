@@ -2,6 +2,8 @@ services:
   tachyon-mgmt:
     image: ghcr.io/isolson/firmware-updater:${APP_VERSION:-latest}
     container_name: tachyon-management
+    ports:
+      - "1812:1812/udp"
     volumes:
       - /data/firmware:/app/firmware
       - /data/db:/app/data
@@ -12,36 +14,17 @@ services:
       - TACHYON_APPLIANCE=1
       - TACHYON_IMAGE=ghcr.io/isolson/firmware-updater
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/login"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
     mem_limit: 512m
-    restart: unless-stopped
-
-  radius:
-    image: freeradius/freeradius-server:latest-3.2-alpine
-    container_name: tachyon-radius
-    ports:
-      - "1812:1812/udp"
-    volumes:
-      - /data/db/radius/clients.conf:/etc/raddb/clients.conf:ro
-      - /data/db/radius/mods-config/files/authorize:/etc/raddb/mods-config/files/authorize:ro
-    depends_on:
-      tachyon-mgmt:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "test -s /etc/raddb/clients.conf && test -s /etc/raddb/mods-config/files/authorize && /opt/sbin/radiusd -C -d /etc/raddb >/dev/null 2>&1 && netstat -anu | grep -q ':1812 '"]
-      interval: 30s
-      timeout: 15s
-      retries: 3
-      start_period: 20s
-    mem_limit: 128m
+    stop_grace_period: 60s
     restart: unless-stopped
 
   nginx:
-    image: nginx:alpine
+    image: nginx:1.27-alpine
     container_name: tachyon-nginx
     ports:
       - "80:80"
@@ -53,8 +36,9 @@ services:
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
     depends_on:
       tachyon-mgmt:
-        condition: service_healthy
+        condition: service_started
     mem_limit: 128m
+    stop_grace_period: 10s
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "nginx", "-t"]
@@ -64,7 +48,7 @@ services:
       start_period: 10s
 
   autoheal:
-    image: docker:cli
+    image: docker:27-cli
     container_name: tachyon-autoheal
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -72,12 +56,48 @@ services:
     command:
       - |
         echo "[autoheal] Starting container health monitor..."
+        RESTART_COUNTS=""
+        LAST_PRUNE_DAY=""
         while true; do
           sleep 30
-          for id in $(docker ps -q --filter "health=unhealthy" --filter "label=com.docker.compose.project"); do
-            NAME=$(docker inspect --format '{{.Name}}' "$id" 2>/dev/null | sed 's|^/||')
-            echo "[autoheal] Restarting unhealthy container: $NAME"
-            docker restart "$id" 2>/dev/null || true
+          # Daily image prune to prevent disk fill from stale images
+          TODAY=$$(date +%Y%m%d)
+          if [ "$$TODAY" != "$$LAST_PRUNE_DAY" ]; then
+            PRUNED=$$(docker image prune -f 2>/dev/null | tail -1)
+            echo "[autoheal] Daily image prune: $$PRUNED"
+            LAST_PRUNE_DAY="$$TODAY"
+          fi
+          # Health check and restart with backoff
+          for id in $$(docker ps -q --filter "health=unhealthy" --filter "label=com.docker.compose.project"); do
+            NAME=$$(docker inspect --format '{{.Name}}' "$$id" 2>/dev/null | sed 's|^/||')
+            # Track restart count: NAME:COUNT:FIRST_RESTART_EPOCH
+            NOW=$$(date +%s)
+            ENTRY=$$(echo "$$RESTART_COUNTS" | tr ',' '\n' | grep "^$${NAME}:" | head -1)
+            if [ -n "$$ENTRY" ]; then
+              COUNT=$$(echo "$$ENTRY" | cut -d: -f2)
+              FIRST=$$(echo "$$ENTRY" | cut -d: -f3)
+              ELAPSED=$$((NOW - FIRST))
+              if [ "$$COUNT" -ge 5 ] && [ "$$ELAPSED" -lt 600 ]; then
+                echo "[autoheal] BACKOFF: $$NAME restarted $$COUNT times in $${ELAPSED}s — skipping (will retry after 10 min)"
+                continue
+              fi
+              if [ "$$ELAPSED" -ge 600 ]; then
+                COUNT=0
+                FIRST=$$NOW
+              fi
+              COUNT=$$((COUNT + 1))
+              RESTART_COUNTS=$$(echo "$$RESTART_COUNTS" | sed "s|$${NAME}:[^,]*|$${NAME}:$${COUNT}:$${FIRST}|")
+            else
+              COUNT=1
+              FIRST=$$NOW
+              if [ -n "$$RESTART_COUNTS" ]; then
+                RESTART_COUNTS="$${RESTART_COUNTS},$${NAME}:$${COUNT}:$${FIRST}"
+              else
+                RESTART_COUNTS="$${NAME}:$${COUNT}:$${FIRST}"
+              fi
+            fi
+            echo "[autoheal] Restarting unhealthy container: $$NAME (attempt $$COUNT/5)"
+            docker restart "$$id" 2>/dev/null || true
           done
         done
     mem_limit: 32m

@@ -1,6 +1,9 @@
+"""Tests for updater.scheduler."""
+
+import asyncio
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -14,6 +17,88 @@ def _seed_rollout_devices():
     db.upsert_access_point("10.0.0.11", "root", "pass", enabled=True, firmware_version="1.0.0")
     db.upsert_switch("10.0.1.5", "admin", "pass", enabled=True, firmware_version="1.0.0")
     db.upsert_switch("10.0.1.6", "admin", "pass", enabled=True, firmware_version="1.0.0")
+
+
+class TestSchedulerCompletionHandling:
+    @pytest.mark.asyncio
+    async def test_cancelled_no_progress_does_not_advance_phase(self):
+        scheduler = AutoUpdateScheduler(broadcast_func=None, start_update_func=None)
+        scheduler._current_job_id = "job123"
+
+        rollout = {
+            "id": 7,
+            "phase": "canary",
+            "status": "active",
+            "last_job_id": "job123",
+        }
+
+        with patch("updater.scheduler.db.get_active_rollout", return_value=rollout), \
+             patch("updater.scheduler.db.mark_rollout_device") as mark_rollout_device, \
+             patch("updater.scheduler.db.complete_rollout_phase") as complete_rollout_phase, \
+             patch("updater.scheduler.db.pause_rollout") as pause_rollout, \
+             patch("updater.scheduler.db.log_schedule_event") as log_schedule_event:
+            scheduler.on_job_completed(
+                job_id="job123",
+                success_count=0,
+                failed_count=0,
+                device_statuses={"10.0.0.1": "skipped"},
+                cancel_reason="Outside maintenance window",
+            )
+
+            await asyncio.sleep(0)
+
+        mark_rollout_device.assert_called_once_with(7, "10.0.0.1", "skipped")
+        complete_rollout_phase.assert_not_called()
+        pause_rollout.assert_not_called()
+        log_schedule_event.assert_any_call(
+            "job_deferred",
+            "Outside maintenance window",
+            job_id="job123",
+        )
+
+
+class TestSchedulerBankModeFiltering:
+    def test_device_already_on_target_is_skipped(self):
+        scheduler = AutoUpdateScheduler(broadcast_func=None, start_update_func=None)
+        ap = {
+            "ip": "10.0.0.1",
+            "model": "TNA-301",
+            "firmware_version": "1.12.2.54970",
+            "bank1_version": "1.12.2.54970",
+            "bank2_version": "1.12.1.54000",
+            "active_bank": 1,
+        }
+
+        with patch("updater.scheduler.db.get_all_access_points_dict", return_value={"10.0.0.1": ap}), \
+             patch("updater.scheduler.db.get_all_cpes_grouped", return_value={}):
+            result = scheduler._filter_devices_needing_update(
+                ["10.0.0.1"],
+                {"tna-30x": "1.12.2.54970"},
+                allow_downgrade=False,
+            )
+
+        assert result == []
+
+    def test_device_behind_target_is_included(self):
+        scheduler = AutoUpdateScheduler(broadcast_func=None, start_update_func=None)
+        ap = {
+            "ip": "10.0.0.1",
+            "model": "TNA-301",
+            "firmware_version": "1.12.1.54000",
+            "bank1_version": "1.12.1.54000",
+            "bank2_version": "1.12.1.54000",
+            "active_bank": 1,
+        }
+
+        with patch("updater.scheduler.db.get_all_access_points_dict", return_value={"10.0.0.1": ap}), \
+             patch("updater.scheduler.db.get_all_cpes_grouped", return_value={}):
+            result = scheduler._filter_devices_needing_update(
+                ["10.0.0.1"],
+                {"tna-30x": "1.12.2.54970"},
+                allow_downgrade=False,
+            )
+
+        assert result == ["10.0.0.1"]
 
 
 class TestSchedulerCanaries:
@@ -300,9 +385,12 @@ class TestSchedulerCanaries:
 
         db.upsert_access_point("10.0.0.10", "root", "pass", enabled=True, firmware_version="1.0.0")
 
+        mock_task = MagicMock()
+        mock_task.add_done_callback = MagicMock()
+
         def _discard_task(coro):
             coro.close()
-            return None
+            return mock_task
 
         with patch.object(app_module, "FIRMWARE_DIR", firmware_dir), \
              patch.object(app_module, "broadcast", AsyncMock()), \

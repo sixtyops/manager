@@ -17,7 +17,7 @@ class TestBroadcastTimeout:
 
         fast_ws = AsyncMock()
         slow_ws = AsyncMock()
-        slow_ws.send_json = AsyncMock(side_effect=asyncio.TimeoutError)
+        slow_ws.send_text = AsyncMock(side_effect=asyncio.TimeoutError)
 
         active_websockets.clear()
         active_websockets.add(fast_ws)
@@ -25,7 +25,7 @@ class TestBroadcastTimeout:
 
         await broadcast({"type": "test"})
 
-        fast_ws.send_json.assert_called_once()
+        fast_ws.send_text.assert_called_once()
         assert slow_ws not in active_websockets
         assert fast_ws in active_websockets
 
@@ -38,7 +38,7 @@ class TestBroadcastTimeout:
 
         good_ws = AsyncMock()
         bad_ws = AsyncMock()
-        bad_ws.send_json = AsyncMock(side_effect=ConnectionError)
+        bad_ws.send_text = AsyncMock(side_effect=ConnectionError)
 
         active_websockets.clear()
         active_websockets.add(good_ws)
@@ -57,9 +57,9 @@ class TestBroadcastTimeout:
         from updater.app import broadcast, active_websockets
 
         slow1 = AsyncMock()
-        slow1.send_json = AsyncMock(side_effect=asyncio.TimeoutError)
+        slow1.send_text = AsyncMock(side_effect=asyncio.TimeoutError)
         slow2 = AsyncMock()
-        slow2.send_json = AsyncMock(side_effect=asyncio.TimeoutError)
+        slow2.send_text = AsyncMock(side_effect=asyncio.TimeoutError)
 
         active_websockets.clear()
         active_websockets.add(slow1)

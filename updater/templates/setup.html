@@ -14,9 +14,9 @@
 
         <div class="info-message">
             {% if first_run %}
-            Welcome! Create an admin password to get started. Your password must be at least 8 characters.
+            Welcome! Create an admin password to get started. Your password must be at least 12 characters.
             {% else %}
-            For security, you must change the default admin password. Your new password must be at least 8 characters.
+            For security, you must change the default admin password. Your new password must be at least 12 characters.
             {% endif %}
         </div>
 
@@ -33,11 +33,11 @@
             {% endif %}
             <div class="form-group">
                 <label for="new_password">New Password</label>
-                <input type="password" id="new_password" name="new_password" autocomplete="new-password" required minlength="8" {% if first_run %}autofocus{% endif %}>
+                <input type="password" id="new_password" name="new_password" autocomplete="new-password" required minlength="12" {% if first_run %}autofocus{% endif %}>
             </div>
             <div class="form-group">
                 <label for="confirm_password">Confirm New Password</label>
-                <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password" required minlength="8">
+                <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password" required minlength="12">
             </div>
             <button type="submit" class="btn-primary">Set Password</button>
         </form>

@@ -3,6 +3,8 @@
 import io
 import json
 import tarfile
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from pathlib import Path
@@ -475,8 +477,7 @@ class TestStartUpdateAPI:
         fw_file.write_bytes(b"fake firmware")
 
         with patch("updater.app.FIRMWARE_DIR", tmp_path), \
-             patch("updater.app.asyncio") as mock_asyncio:
-            mock_asyncio.create_task = MagicMock()
+             patch("updater.app._spawn_update_job") as mock_spawn:
             resp = authed_client.post("/api/start-update", data={
                 "firmware_file": "tachyon-v1.12.3.bin",
                 "device_type": "mixed",
@@ -484,6 +485,7 @@ class TestStartUpdateAPI:
                 "concurrency": "2",
                 "bank_mode": "both",
             })
+            mock_spawn.assert_called_once()
 
         assert resp.status_code == 200
         data = resp.json()
@@ -540,6 +542,155 @@ class TestStartUpdateAPI:
             "ip_list": "10.0.0.1",
         }, follow_redirects=False)
         assert resp.status_code in (401, 303)
+
+    def test_start_update_single_bank_skips_active_target(self, authed_client, mock_db, tmp_path):
+        """Single-bank mode should skip devices whose active bank already matches target."""
+        mock_db.execute(
+            "INSERT INTO access_points (ip, username, password, model, firmware_version, bank1_version, bank2_version, active_bank)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("10.0.0.1", "root", "pass", "TNA-301", "1.12.2.54970", "1.12.2.54970", "1.12.1.54000", 1),
+        )
+        mock_db.commit()
+
+        fw_file = tmp_path / "tna-30x-1.12.2-r54970.bin"
+        fw_file.write_bytes(b"fake firmware")
+
+        with patch("updater.app.FIRMWARE_DIR", tmp_path):
+            resp = authed_client.post("/api/start-update", data={
+                "firmware_file": "tna-30x-1.12.2-r54970.bin",
+                "device_type": "mixed",
+                "ip_list": "10.0.0.1",
+                "bank_mode": "one",
+            })
+
+        assert resp.status_code == 400
+        assert "No devices require update" in resp.text
+
+    def test_start_update_dual_bank_includes_inactive_mismatch(self, authed_client, mock_db, tmp_path):
+        """Dual-bank mode should include devices with active target but inactive mismatch."""
+        mock_db.execute(
+            "INSERT INTO access_points (ip, username, password, model, firmware_version, bank1_version, bank2_version, active_bank)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("10.0.0.1", "root", "pass", "TNA-301", "1.12.2.54970", "1.12.2.54970", "1.12.1.54000", 1),
+        )
+        mock_db.commit()
+
+        fw_file = tmp_path / "tna-30x-1.12.2-r54970.bin"
+        fw_file.write_bytes(b"fake firmware")
+
+        with patch("updater.app.FIRMWARE_DIR", tmp_path), \
+             patch("updater.app._spawn_update_job") as mock_spawn:
+            resp = authed_client.post("/api/start-update", data={
+                "firmware_file": "tna-30x-1.12.2-r54970.bin",
+                "device_type": "mixed",
+                "ip_list": "10.0.0.1",
+                "bank_mode": "both",
+            })
+            mock_spawn.assert_called_once()
+
+        assert resp.status_code == 200
+        assert resp.json()["device_count"] == 1
+
+
+class TestJobCancelAPI:
+    def test_cancel_running_job(self, authed_client):
+        from updater.app import UpdateJob, update_jobs
+
+        update_jobs.clear()
+        try:
+            update_jobs["job12345"] = UpdateJob(job_id="job12345", status="running")
+            resp = authed_client.post("/api/job/job12345/cancel")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["cancelled"] is True
+            assert "cancelled by user" in data["message"].lower()
+            assert update_jobs["job12345"].cancelled is True
+        finally:
+            update_jobs.clear()
+
+    def test_cancel_completed_job_rejected(self, authed_client):
+        from updater.app import UpdateJob, update_jobs
+
+        update_jobs.clear()
+        try:
+            update_jobs["jobdone01"] = UpdateJob(job_id="jobdone01", status="completed")
+            resp = authed_client.post("/api/job/jobdone01/cancel")
+            assert resp.status_code == 400
+        finally:
+            update_jobs.clear()
+
+
+class TestScheduledRuntimeGuard:
+    @pytest.mark.asyncio
+    async def test_blocks_when_time_validation_fails(self):
+        from updater.app import UpdateJob, _scheduled_job_guard
+
+        job = UpdateJob(
+            job_id="sched1",
+            is_scheduled=True,
+            start_hour=3,
+            end_hour=4,
+            schedule_days=["thu"],
+            schedule_timezone="America/Chicago",
+        )
+        with patch("updater.app.services.validate_time_sources", new_callable=AsyncMock, return_value=(False, "NTP unavailable")):
+            allowed, reason = await _scheduled_job_guard(job)
+        assert allowed is False
+        assert "time anomaly" in reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_blocks_outside_window(self):
+        from updater.app import UpdateJob, _scheduled_job_guard
+
+        job = UpdateJob(
+            job_id="sched2",
+            is_scheduled=True,
+            start_hour=3,
+            end_hour=4,
+            schedule_days=["thu"],
+            schedule_timezone="America/Chicago",
+        )
+        now = datetime(2026, 2, 26, 10, 0, tzinfo=ZoneInfo("America/Chicago"))  # Thu
+        with patch("updater.app.services.validate_time_sources", new_callable=AsyncMock, return_value=(True, now)):
+            allowed, reason = await _scheduled_job_guard(job)
+        assert allowed is False
+        assert "outside maintenance window" in reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_blocks_when_window_is_ending(self):
+        from updater.app import UpdateJob, _scheduled_job_guard
+
+        job = UpdateJob(
+            job_id="sched3",
+            is_scheduled=True,
+            start_hour=3,
+            end_hour=4,
+            schedule_days=["thu"],
+            schedule_timezone="America/Chicago",
+        )
+        now = datetime(2026, 2, 26, 3, 55, tzinfo=ZoneInfo("America/Chicago"))  # Thu
+        with patch("updater.app.services.validate_time_sources", new_callable=AsyncMock, return_value=(True, now)):
+            allowed, reason = await _scheduled_job_guard(job)
+        assert allowed is False
+        assert "window ending" in reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_blocks_at_15_minute_boundary(self):
+        from updater.app import UpdateJob, _scheduled_job_guard
+
+        job = UpdateJob(
+            job_id="sched4",
+            is_scheduled=True,
+            start_hour=3,
+            end_hour=4,
+            schedule_days=["thu"],
+            schedule_timezone="America/Chicago",
+        )
+        now = datetime(2026, 2, 26, 3, 45, tzinfo=ZoneInfo("America/Chicago"))  # Thu, exactly 15 min left
+        with patch("updater.app.services.validate_time_sources", new_callable=AsyncMock, return_value=(True, now)):
+            allowed, reason = await _scheduled_job_guard(job)
+        assert allowed is False
+        assert "window ending" in reason.lower()
 
 
 class TestDevicePortalAPI:
@@ -903,7 +1054,7 @@ class TestConfigPrefillAPI:
         assert resp.json()["reason"] == "no_configs"
 
     def test_prefill_returns_dominant_value(self, authed_client, mock_db):
-        """When 80%+ devices share the same SNMP config, prefill returns it."""
+        """When 3+ devices share the same non-default SNMP config, prefill returns it."""
         snmp_config = {"services": {"snmp": {"v2_ro_community": "public"}}}
         for i in range(5):
             self._seed_config(mock_db, f"10.0.0.{i+1}", snmp_config)
@@ -912,6 +1063,28 @@ class TestConfigPrefillAPI:
         assert data["prefilled"] is True
         assert data["data"]["v2_ro_community"] == "public"
         assert data["match_count"] == 5
+
+    def test_prefill_requires_three_matching_devices(self, authed_client, mock_db):
+        match = {"services": {"snmp": {"v2_ro_community": "public"}}}
+        other = {"services": {"snmp": {"v2_ro_community": "private"}}}
+        self._seed_config(mock_db, "10.0.0.1", match)
+        self._seed_config(mock_db, "10.0.0.2", match)
+        self._seed_config(mock_db, "10.0.0.3", other)
+        resp = authed_client.get("/api/config-prefill/snmp")
+        data = resp.json()
+        assert data["prefilled"] is False
+        assert data["reason"] == "insufficient_matches"
+        assert data["required_matches"] == 3
+        assert data["match_count"] == 2
+
+    def test_prefill_ignores_default_like_values(self, authed_client, mock_db):
+        default_ntp = {"services": {"ntp": {"enabled": True, "servers": []}}}
+        for i in range(3):
+            self._seed_config(mock_db, f"10.0.1.{i+1}", default_ntp)
+        resp = authed_client.get("/api/config-prefill/ntp")
+        data = resp.json()
+        assert data["prefilled"] is False
+        assert data["reason"] == "no_non_default_data"
 
     def test_prefill_blocked_when_template_exists(self, authed_client, mock_db):
         """Prefill should NOT run if a template already exists for this category."""
@@ -1188,29 +1361,18 @@ class TestHashConsistency:
 
 
 class TestPrefillThreshold:
-    """Tests for the prefill dominant value int() threshold fix."""
+    """Tests for config prefill suggestion threshold behavior."""
 
-    def test_threshold_is_integer(self):
-        """The 80% threshold should be int (floor), not float."""
-        # 3 * 0.8 = 2.4 → int() = 2, so 2 matches out of 3 should pass
-        threshold = int(3 * 0.8)
-        assert threshold == 2
-        assert 2 >= threshold  # 2 matches passes
+    def test_threshold_requires_more_than_two_matches(self):
+        required_matches = 3
+        assert required_matches > 2
 
-    def test_threshold_small_counts(self):
-        """With 2 devices, threshold should be 1, not 1.6."""
-        threshold = int(2 * 0.8)
-        assert threshold == 1
-        # With 1 device, threshold=0
-        assert int(1 * 0.8) == 0
-
-    def test_prefill_endpoint_returns_data(self, authed_client, mock_db):
-        """Prefill returns dominant value when enough configs match."""
+    def test_prefill_endpoint_requires_three_matches(self, authed_client, mock_db):
+        """Prefill should not trigger with only 2 matching devices."""
         import json
         snmp_config = {"services": {"snmp": {"community": "public", "enabled": True}}}
         config_json = json.dumps(snmp_config, sort_keys=True, separators=(",", ":"))
         config_hash = "abc123"
-        # Insert 3 device configs where 2 match
         for ip in ["10.0.0.1", "10.0.0.2"]:
             mock_db.execute(
                 "INSERT INTO device_configs (ip, config_json, config_hash) VALUES (?, ?, ?)",
@@ -1221,6 +1383,23 @@ class TestPrefillThreshold:
             "INSERT INTO device_configs (ip, config_json, config_hash) VALUES (?, ?, ?)",
             ("10.0.0.3", json.dumps(different, sort_keys=True, separators=(",", ":")), "def456"),
         )
+        mock_db.commit()
+        resp = authed_client.get("/api/config-prefill/snmp")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("prefilled") is False
+        assert data.get("reason") == "insufficient_matches"
+
+    def test_prefill_endpoint_returns_data_with_three_matches(self, authed_client, mock_db):
+        """Prefill should trigger when 3 devices share the same value."""
+        import json
+        snmp_config = {"services": {"snmp": {"community": "public", "enabled": True}}}
+        config_json = json.dumps(snmp_config, sort_keys=True, separators=(",", ":"))
+        for ip in ["10.0.0.1", "10.0.0.2", "10.0.0.3"]:
+            mock_db.execute(
+                "INSERT INTO device_configs (ip, config_json, config_hash) VALUES (?, ?, ?)",
+                (ip, config_json, f"hash-{ip}"),
+            )
         mock_db.commit()
         resp = authed_client.get("/api/config-prefill/snmp")
         assert resp.status_code == 200

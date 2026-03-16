@@ -81,11 +81,17 @@ class FirmwareFetcher:
         logger.info("Firmware fetcher stopped")
 
     async def _check_loop(self):
-        # Immediate check on startup
+        # Delay startup check to let DNS/network settle, retry once on failure
+        await asyncio.sleep(15)
         try:
             await self.check_and_download()
         except Exception as e:
-            logger.exception(f"Firmware fetch error on startup: {e}")
+            logger.warning(f"Firmware fetch failed on startup, retrying in 30s: {e}")
+            await asyncio.sleep(30)
+            try:
+                await self.check_and_download()
+            except Exception as e2:
+                logger.exception(f"Firmware fetch retry also failed: {e2}")
 
         while self._running:
             await asyncio.sleep(self.check_interval)
@@ -113,10 +119,17 @@ class FirmwareFetcher:
                 releases = await self._scrape_page(platform, url)
                 all_releases.extend(releases)
             except Exception as e:
-                msg = f"Failed to scrape {platform}: {e}"
-                logger.error(msg)
-                errors.append(msg)
-                continue
+                # Retry once after a brief delay
+                logger.warning(f"Scrape {platform} failed, retrying: {e}")
+                await asyncio.sleep(5)
+                try:
+                    releases = await self._scrape_page(platform, url)
+                    all_releases.extend(releases)
+                except Exception as e2:
+                    msg = f"Failed to scrape {platform}: {e2}"
+                    logger.error(msg)
+                    errors.append(msg)
+                    continue
 
             for release in releases:
                 filepath = self.firmware_dir / release.filename

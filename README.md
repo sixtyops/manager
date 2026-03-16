@@ -126,6 +126,7 @@ The **Monitor** page displays network topology (tower sites → APs → CPEs) wi
 - **[Deployment Guide](docs/deployment.md)** - HTTPS, built-in Radius, environment variables
 - **[Radius Guide](docs/radius.md)** - Built-in FreeRADIUS setup, client overrides, and device rollout workflow
 - **[Gradual Rollout](docs/gradual-rollout.md)** - How the 4-night rollout works
+- **[Release System](docs/release-system.md)** - Branches, tags, workflows, GHCR, appliance publishing, self-update behavior
 - **[API Reference](docs/api.md)** - REST endpoints and WebSocket protocol
 - **[Architecture](docs/architecture.md)** - System design and data flow
 
