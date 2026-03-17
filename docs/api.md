@@ -65,7 +65,7 @@ Update built-in Radius server settings. Requires PRO `radius_auth`.
   - `host` is required when enabling the server
   - `secret` is required when enabling the server
   - If `secret` is omitted, the existing secret is preserved
-- **Effect**: Regenerates FreeRADIUS config and reloads the `tachyon-radius` container
+- **Effect**: Updates RADIUS server configuration and restarts the in-process server
 
 ### `GET /api/auth/radius/users`
 List built-in Radius users. Requires PRO `radius_auth`.
@@ -80,7 +80,7 @@ Create a built-in Radius user. Requires PRO `radius_auth`.
   - `username` is required
   - Reserved usernames `admin` and `root` are rejected
   - `password` is required
-- **Effect**: Regenerates FreeRADIUS user config and reloads the Radius container
+- **Effect**: Updates RADIUS user config and restarts the in-process server
 
 ### `PUT /api/auth/radius/users/{user_id}`
 Update a built-in Radius user. Requires PRO `radius_auth`.
@@ -119,7 +119,7 @@ Delete a manual built-in Radius client override. Requires PRO `radius_auth`.
 Get built-in Radius status, auth counters, and recent auth history. Requires PRO `radius_auth`.
 
 - **Response**: `enabled`, `configured`, `running`, `healthy`, `container_status`, `health_status`, `port`, `secret_set`, `last_error`, `secret_last_rotated_at`, `secret_age_days`, `rotation_recommended`, `rotation_status`, `rotation_recommend_after_days`, `admin_accounts`, `known_clients`, `active_devices_24h`, `auth_success_rate`, `logins_today`, `recent_logins`
-- **Notes**: Auth history is persisted in SQLite from FreeRADIUS logs by a background sync task
+- **Notes**: Auth history is persisted directly in SQLite by the in-process RADIUS server
 
 ### `POST /api/auth/radius/secret-review`
 Start tracking a legacy Radius shared secret from today without changing the secret value. Requires PRO `radius_auth`.

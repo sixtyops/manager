@@ -23,6 +23,26 @@ All notable changes to this project are documented in this file.
 - Test trap button for verifying SNMP configuration
 - Inline release notes display in Settings > Updates panel
 - GitHub release notes categorization via `.github/release.yml`
+- In-app subscription checkout with Stripe and auto-activation via instance_id
+- Contextual license status banners (cancelled, over limit, expired, grace period)
+- Device offline/recovered email notifications
+- RADIUS open client mode (accept any device with correct secret, default)
+- HTTPS/SSL tab in App Settings
+- Setup wizard replaced with App Settings auto-open on first run
+- Weather temperature display on startup (no longer waits for first scheduler tick)
+
+### Changed
+- Complete rebrand from Tachyon to SixtyOps across codebase, Docker, appliance, and CI
+- Release repo renamed from `tachyon-manager-releases` to `sixtyops-releases`
+- License server URL updated to `billing.sixtyops.net`
+- App Settings modal uses fixed height to prevent layout jumping between tabs
+- Email notification subjects changed from `[Tachyon]` to `[SixtyOps]`
+
+### Fixed
+- Website deploy pipeline (AWS OIDC credentials + S3/CloudFront)
+- Logo alignment (icon sits on text baseline)
+- Local Users tab not loading on initial Auth tab open
+- Border radius normalization (5px → 6px)
 
 ## 1.1.1-dev1 - 2026-02-19
 
