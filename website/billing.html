@@ -67,38 +67,12 @@
       <h1 class="text-3xl font-bold text-slate-900 mb-3">Manage Your Subscription</h1>
       <p class="text-slate-500 mb-8">Update your payment method, view invoices, change plans, or cancel your subscription.</p>
 
-      <!-- Email input for portal access -->
-      <div class="bg-white border border-slate-200 rounded-xl p-6 text-left" x-data="{ email: '', loading: false, error: '' }">
-        <label for="portal-email" class="block text-sm font-medium text-slate-700 mb-2">Account email</label>
-        <div class="flex gap-3">
-          <input type="email" id="portal-email" x-model="email" required
-            class="flex-1 px-4 py-3 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none transition"
-            placeholder="you@company.com">
-          <button id="portal-btn"
-            @click="
-              if (!email) { error = 'Please enter your email'; return; }
-              loading = true;
-              error = '';
-              // TODO: Replace with actual API endpoint that creates a Stripe Customer Portal session
-              // fetch('https://api.sixtyops.net/create-portal-session', {
-              //   method: 'POST',
-              //   headers: { 'Content-Type': 'application/json' },
-              //   body: JSON.stringify({ email })
-              // })
-              // .then(r => r.json())
-              // .then(data => { window.location.href = data.url; })
-              // .catch(() => { error = 'Could not open billing portal. Please contact support.'; })
-              // .finally(() => { loading = false; });
-              setTimeout(() => { error = 'Billing portal coming soon. Please contact support@sixtyops.net.'; loading = false; }, 500);
-            "
-            :disabled="loading"
-            class="px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap">
-            <span x-show="!loading">Open Portal</span>
-            <span x-show="loading" x-cloak>Loading...</span>
-          </button>
-        </div>
-        <p x-show="error" x-text="error" class="mt-3 text-sm text-red-600"></p>
-      </div>
+      <!-- Redirect to billing server portal -->
+      <a href="https://billing.sixtyops.net/billing"
+        class="inline-flex items-center gap-2 px-8 py-4 bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg transition-colors text-lg">
+        Open Billing Portal &rarr;
+      </a>
+      <p class="text-sm text-slate-400 mt-4">Enter your license key to manage your subscription, update payment, or view invoices.</p>
 
       <div class="mt-10 space-y-4 text-sm text-slate-500">
         <p>Not a customer yet? <a href="pricing.html" class="text-brand-600 hover:text-brand-700 font-medium">View pricing</a></p>

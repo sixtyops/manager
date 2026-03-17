@@ -46,10 +46,10 @@ fi
 # Clone or update repo
 if [ -d "$INSTALL_DIR" ]; then
     echo "Updating existing installation..."
+    git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
     cd "$INSTALL_DIR"
-    git config --global --add safe.directory "$INSTALL_DIR"
-    git fetch origin
-    git reset --hard "origin/$BRANCH"
+    git -c safe.directory="$INSTALL_DIR" fetch origin
+    git -c safe.directory="$INSTALL_DIR" reset --hard "origin/$BRANCH"
 else
     echo "Cloning repository..."
     git clone --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
