@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -53,6 +54,8 @@ class LicenseStatus(str, Enum):
     EXPIRED = "expired"
     GRACE = "grace"
     INVALID = "invalid"
+    CANCELLED = "cancelled"
+    OVER_LIMIT = "over_limit"
 
 
 # All Feature members require PRO
@@ -70,7 +73,7 @@ VALIDATION_INTERVAL = int(os.environ.get("LICENSE_CHECK_INTERVAL", 86400))
 # License server URL (configurable via env for dev/testing)
 LICENSE_SERVER_URL = os.environ.get(
     "LICENSE_SERVER_URL",
-    "https://license.sixtyops.net/api/v1",
+    "https://billing.sixtyops.net/api/v1",
 )
 
 # Dev override: SIXTYOPS_FORCE_PRO=1 bypasses all gating (disabled in appliance mode)
@@ -118,6 +121,7 @@ class LicenseState:
             "grace_until": self.grace_until,
             "device_limit": self.device_limit,
             "error": self.error,
+            "is_pro": self.is_pro(),
         }
 
 
@@ -282,15 +286,28 @@ async def validate_license(license_key: str = None) -> LicenseState:
             data = resp.json()
 
         is_valid = data.get("valid", False)
+        error_msg = data.get("error", "License invalid")
+
+        if is_valid:
+            fail_status = LicenseStatus.ACTIVE
+        elif "cancelled" in error_msg.lower():
+            fail_status = LicenseStatus.CANCELLED
+        elif "exceeds limit" in error_msg.lower():
+            fail_status = LicenseStatus.OVER_LIMIT
+        elif "expired" in error_msg.lower():
+            fail_status = LicenseStatus.EXPIRED
+        else:
+            fail_status = LicenseStatus.INVALID
+
         _license_state = LicenseState(
             tier=LicenseTier.PRO if is_valid else LicenseTier.FREE,
-            status=LicenseStatus.ACTIVE if is_valid else LicenseStatus.INVALID,
+            status=fail_status,
             license_key=key,
             customer_name=data.get("customer_name", ""),
             expires_at=data.get("expires_at"),
             last_validated=datetime.now().isoformat(),
             device_limit=data.get("device_limit"),
-            error="" if is_valid else data.get("error", "License invalid"),
+            error="" if is_valid else error_msg,
         )
 
     except (httpx.HTTPError, httpx.TimeoutException, Exception) as e:
@@ -341,6 +358,38 @@ def clear_license():
     global _license_state
     _license_state = LicenseState()
     _save_to_db(_license_state)
+
+
+def get_instance_id() -> str:
+    """Get or create a persistent instance ID (UUID4) for this installation."""
+    iid = db.get_setting("instance_id", "")
+    if iid:
+        return iid
+    iid = str(uuid.uuid4())
+    db.set_setting("instance_id", iid)
+    return iid
+
+
+async def auto_activate() -> LicenseState:
+    """Try to auto-activate by instance_id (after Stripe checkout).
+
+    Returns updated license state. Raises if no license found.
+    """
+    global _license_state
+    instance_id = get_instance_id()
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{LICENSE_SERVER_URL}/activate",
+            json={"instance_id": instance_id},
+        )
+        if resp.status_code == 404:
+            raise ValueError("No license found for this instance")
+        resp.raise_for_status()
+        data = resp.json()
+
+    # Activate with the returned key
+    return await validate_license(data["license_key"])
 
 
 # ---------------------------------------------------------------------------

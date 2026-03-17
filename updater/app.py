@@ -2116,6 +2116,26 @@ async def force_validate_license(session: dict = Depends(require_role("admin")))
     return result.to_dict()
 
 
+@app.get("/api/license/instance-id", tags=["license"])
+async def get_instance_id(session: dict = Depends(require_role("admin"))):
+    """Get the persistent instance ID for Stripe checkout linking."""
+    from .license import get_instance_id
+    return {"instance_id": get_instance_id()}
+
+
+@app.post("/api/license/auto-activate", tags=["license"])
+async def auto_activate_license(session: dict = Depends(require_role("admin"))):
+    """Try auto-activation by instance_id after Stripe checkout."""
+    from .license import auto_activate, LicenseStatus
+    try:
+        state = await auto_activate()
+        return {**state.to_dict(), "success": state.status == LicenseStatus.ACTIVE}
+    except ValueError:
+        return {"success": False, "error": "No license found for this instance yet"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 # ============================================================================
 # System / Appliance API
 # ============================================================================
