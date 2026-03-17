@@ -3194,8 +3194,19 @@
                         <div id="licenseCustomerRow" class="hidden">Customer: <strong id="licenseCustomerName"></strong></div>
                         <div id="licenseExpiresRow" class="hidden">Expires: <strong id="licenseExpiresAt"></strong></div>
                         <div id="licenseValidatedRow" class="hidden">Last validated: <strong id="licenseLastValidated"></strong></div>
+                        <div id="licenseDeviceLimitRow" class="hidden">Device limit: <strong id="licenseDeviceLimit"></strong></div>
                     </div>
+                    <div id="licenseAlertBanner" class="hidden" style="padding:8px 10px;border-radius:6px;background:#fef2f2;border:1px solid #fecaca;font-size:0.78rem;color:#991b1b;margin-bottom:12px;"></div>
                 </div>
+                <!-- Subscribe (shown when no license) -->
+                <div id="licenseSubscribeSection" style="border-top:1px solid var(--border);padding-top:12px;margin-bottom:12px;">
+                    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:8px;">
+                        Unlock all features — $1/mo per AP or switch. No device limit.
+                    </div>
+                    <button class="backup-btn" onclick="startCheckout()" style="background:#0D9488;color:#fff;font-weight:600;">Subscribe</button>
+                    <span id="licenseCheckoutStatus" class="u-text-xs-muted" style="margin-left:8px;"></span>
+                </div>
+                <!-- Manual key entry -->
                 <div style="border-top:1px solid var(--border);padding-top:12px;">
                     <label class="u-text-xs-muted" for="licenseKeyInput">License Key</label>
                     <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
@@ -3206,7 +3217,7 @@
                 </div>
                 <div id="licenseDeactivateSection" style="display:none;margin-top:12px;border-top:1px solid var(--border);padding-top:12px;">
                     <button class="backup-btn" onclick="deactivateLicense()" style="background:#dc2626;">Remove License</button>
-                    <a href="https://billing.sixtyops.net" target="_blank" style="font-size:0.75rem;color:#0D9488;margin-left:12px;">Manage Billing</a>
+                    <a href="https://billing.sixtyops.net/billing" target="_blank" style="font-size:0.75rem;color:#0D9488;margin-left:12px;">Manage Billing</a>
                 </div>
                 <div class="u-text-sm-dim" style="margin-top:16px;">
                     <a href="https://sixtyops.net/#pricing" target="_blank" style="color:#0D9488;">Pricing</a> &middot;
@@ -3415,10 +3426,21 @@
         }
 
         function showProUpgradePrompt(featureName) {
-            const msg = featureName
-                ? `${featureName} requires a Pro license.`
-                : 'This feature requires a Pro license.';
-            showToast(msg + '\nVisit sixtyops.net/#pricing to upgrade.');
+            const status = licenseState.status;
+            let msg;
+            if (status === 'cancelled') {
+                msg = 'Your subscription was cancelled. Reactivate at billing.sixtyops.net to restore access.';
+            } else if (status === 'over_limit') {
+                msg = `Device limit exceeded (${licenseState.billable_count}/${licenseState.device_limit}). Remove devices or upgrade your plan.`;
+            } else if (status === 'expired') {
+                msg = 'Your license has expired. Renew at billing.sixtyops.net to restore access.';
+            } else {
+                msg = featureName
+                    ? `${featureName} requires a Pro license.`
+                    : 'This feature requires a Pro license.';
+                msg += '\nVisit sixtyops.net/#pricing to upgrade.';
+            }
+            showToast(msg);
         }
 
         async function activateLicense() {
@@ -3470,11 +3492,17 @@
                 badge.style.color = isPro ? '#fff' : '#7c3aed';
                 badge.style.background = isPro ? '#7c3aed' : '#ede9fe';
 
-                document.getElementById('licenseStatusText').textContent =
-                    data.status === 'active' ? 'Active' :
-                    data.status === 'grace' ? 'Grace period' :
-                    data.status === 'expired' ? 'Expired' :
-                    data.status === 'invalid' ? 'Invalid' : '';
+                const statusEl = document.getElementById('licenseStatusText');
+                const statusMap = {
+                    active: 'Active',
+                    grace: 'Grace period',
+                    expired: 'Expired',
+                    invalid: 'Invalid',
+                    cancelled: 'Subscription cancelled',
+                    over_limit: 'Device limit exceeded',
+                };
+                statusEl.textContent = statusMap[data.status] || '';
+                statusEl.style.color = (data.status === 'cancelled' || data.status === 'over_limit' || data.status === 'expired') ? '#dc2626' : '';
 
                 document.getElementById('licenseBillableCount').textContent = data.billable_count || 0;
 
@@ -3502,9 +3530,90 @@
                     setHidden(valRow, true);
                 }
 
+                // Device limit
+                const limitRow = document.getElementById('licenseDeviceLimitRow');
+                if (data.device_limit) {
+                    setHidden(limitRow, false);
+                    document.getElementById('licenseDeviceLimit').textContent = data.device_limit;
+                } else {
+                    setHidden(limitRow, true);
+                }
+
+                // Contextual alert banner
+                const alertBanner = document.getElementById('licenseAlertBanner');
+                if (data.status === 'cancelled') {
+                    alertBanner.innerHTML = 'Your subscription has been cancelled. Pro features are now disabled. <a href="https://billing.sixtyops.net/billing" target="_blank" style="color:#991b1b;font-weight:600;">Reactivate subscription</a>';
+                    setHidden(alertBanner, false);
+                } else if (data.status === 'over_limit') {
+                    alertBanner.innerHTML = `You have ${data.billable_count} billable devices but your license allows ${data.device_limit}. Remove devices or <a href="https://billing.sixtyops.net/billing" target="_blank" style="color:#991b1b;font-weight:600;">upgrade your plan</a>.`;
+                    setHidden(alertBanner, false);
+                } else if (data.status === 'expired') {
+                    alertBanner.innerHTML = 'Your license has expired. <a href="https://billing.sixtyops.net/billing" target="_blank" style="color:#991b1b;font-weight:600;">Renew subscription</a>';
+                    setHidden(alertBanner, false);
+                } else if (data.status === 'grace') {
+                    alertBanner.style.background = '#fffbeb';
+                    alertBanner.style.borderColor = '#fde68a';
+                    alertBanner.style.color = '#92400e';
+                    alertBanner.innerHTML = 'Unable to reach the license server. Pro features will remain available until ' + (data.grace_until || '').slice(0,10) + '.';
+                    setHidden(alertBanner, false);
+                } else {
+                    setHidden(alertBanner, true);
+                    // Reset styles for next use
+                    alertBanner.style.background = '#fef2f2';
+                    alertBanner.style.borderColor = '#fecaca';
+                    alertBanner.style.color = '#991b1b';
+                }
+
+                // Show subscribe section only when no active license
+                const hasActiveLicense = data.has_key && (data.status === 'active' || data.status === 'grace');
+                setHidden('licenseSubscribeSection', hasActiveLicense);
                 setHidden('licenseDeactivateSection', !data.has_key);
                 if (data.has_key) document.getElementById('licenseKeyInput').placeholder = '••••••••••••';
             } catch (e) {}
+        }
+
+        let _checkoutPollTimer = null;
+
+        async function startCheckout() {
+            const statusEl = document.getElementById('licenseCheckoutStatus');
+            statusEl.textContent = 'Opening checkout...';
+            try {
+                const resp = await fetch('/api/license/instance-id');
+                const { instance_id } = await resp.json();
+                window.open(`https://billing.sixtyops.net/pricing?instance_id=${instance_id}`, '_blank');
+                statusEl.textContent = 'Complete checkout in the new tab, then wait for auto-activation...';
+                // Start polling for auto-activation
+                _startActivationPolling(statusEl);
+            } catch (e) {
+                statusEl.textContent = 'Error: ' + e.message;
+            }
+        }
+
+        function _startActivationPolling(statusEl) {
+            if (_checkoutPollTimer) clearInterval(_checkoutPollTimer);
+            let attempts = 0;
+            _checkoutPollTimer = setInterval(async () => {
+                attempts++;
+                try {
+                    const resp = await fetch('/api/license/auto-activate', { method: 'POST' });
+                    const data = await resp.json();
+                    if (data.success) {
+                        clearInterval(_checkoutPollTimer);
+                        _checkoutPollTimer = null;
+                        statusEl.textContent = 'License activated!';
+                        statusEl.style.color = '#16a34a';
+                        loadLicenseState();
+                        loadLicensePanel();
+                        return;
+                    }
+                } catch (e) {}
+                if (attempts >= 60) {
+                    // Stop after 5 minutes (60 * 5s)
+                    clearInterval(_checkoutPollTimer);
+                    _checkoutPollTimer = null;
+                    statusEl.textContent = 'Checkout not completed. You can paste your license key manually.';
+                }
+            }, 5000);
         }
 
         let tempUnit = 'f';  // Will be set from settings/location
