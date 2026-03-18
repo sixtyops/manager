@@ -43,6 +43,10 @@ All notable changes to this project are documented in this file.
 - Logo alignment (icon sits on text baseline)
 - Local Users tab not loading on initial Auth tab open
 - Border radius normalization (5px → 6px)
+- Appliance now boots on both Proxmox (virtio) and ESXi (SCSI) hypervisors via UUID-based fstab/bootloader and SCSI initramfs drivers
+- Appliance SSL cert generation failure now stops the service instead of silently continuing
+- Appliance boot disk detection is now automatic instead of hardcoded to /dev/vda
+- Proxmox installation instructions corrected to use virtio disk controller
 
 ## 1.1.1-dev1 - 2026-02-19
 

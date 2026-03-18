@@ -119,8 +119,8 @@ jobs:
           curl -LO https://github.com/isolson/firmware-updater/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2
           qm create 100 --name sixtyops --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0
           qm importdisk 100 sixtyops-appliance-latest.qcow2 YOUR_STORAGE
-          qm set 100 --scsi0 YOUR_STORAGE:vm-100-disk-0
-          qm set 100 --boot order=scsi0
+          qm set 100 --virtio0 YOUR_STORAGE:vm-100-disk-0
+          qm set 100 --boot order=virtio0
           qm set 100 --serial0 socket --vga serial0
           qm start 100
           \`\`\`
@@ -172,8 +172,8 @@ jobs:
           curl -LO https://github.com/isolson/sixtyops-releases/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2
           qm create 100 --name sixtyops --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0
           qm importdisk 100 sixtyops-appliance-latest.qcow2 YOUR_STORAGE
-          qm set 100 --scsi0 YOUR_STORAGE:vm-100-disk-0
-          qm set 100 --boot order=scsi0
+          qm set 100 --virtio0 YOUR_STORAGE:vm-100-disk-0
+          qm set 100 --boot order=virtio0
           qm set 100 --serial0 socket --vga serial0
           qm start 100
           \`\`\`

@@ -54,15 +54,19 @@ start() {
     fi
     rm -f /data/.write-test
 
-    # Ensure self-signed SSL cert exists for nginx
+    # Ensure self-signed SSL cert exists for nginx (nginx will crash-loop without it)
     if [ ! -f /data/certs/selfsigned.crt ] || [ ! -f /data/certs/selfsigned.key ]; then
         einfo "Generating self-signed SSL certificate..."
         mkdir -p /data/certs
-        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        if ! openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
             -keyout /data/certs/selfsigned.key \
             -out /data/certs/selfsigned.crt \
             -subj "/C=US/ST=State/L=City/O=SixtyOps/CN=localhost" \
-            2>/dev/null || ewarn "Failed to generate SSL certificate"
+            2>/dev/null; then
+            eerror "Failed to generate SSL certificate — nginx cannot start without it"
+            eend 1
+            return 1
+        fi
     fi
 
     cd /opt/sixtyops

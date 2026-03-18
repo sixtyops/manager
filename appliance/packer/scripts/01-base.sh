@@ -22,7 +22,12 @@ mkdir -p /etc/sixtyops
 
 # Create /data partition from remaining disk space
 echo "[01-base] Setting up /data partition..."
-DISK="/dev/vda"
+DISK=$(lsblk -npo PKNAME "$(findmnt -no SOURCE /)" | head -1)
+if [ -z "$DISK" ]; then
+    echo "[01-base] ERROR: Could not detect boot disk"
+    exit 1
+fi
+echo "[01-base] Detected boot disk: $DISK"
 # Get free space in MiB (look for free space > 100 MiB)
 FREE_SPACE=$(parted -s "$DISK" unit MiB print free 2>/dev/null | grep "Free Space" | tail -1 | awk '{gsub(/MiB/,""); if ($3+0 > 100) print $1}')
 if [ -n "$FREE_SPACE" ]; then

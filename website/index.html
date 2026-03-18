@@ -979,14 +979,14 @@ curl -LO $URL
 qm create <span x-text="vmid"></span> --name sixtyops --memory 2048 --cores 2 \
   --net0 virtio,bridge=vmbr0
 qm importdisk <span x-text="vmid"></span> sixtyops-appliance-latest.qcow2 <span x-text="storage"></span>
-qm set <span x-text="vmid"></span> --scsi0 <span x-text="storage"></span>:vm-<span x-text="vmid"></span>-disk-0
-qm set <span x-text="vmid"></span> --boot order=scsi0
+qm set <span x-text="vmid"></span> --virtio0 <span x-text="storage"></span>:vm-<span x-text="vmid"></span>-disk-0
+qm set <span x-text="vmid"></span> --boot order=virtio0
 qm set <span x-text="vmid"></span> --serial0 socket --vga serial0
 qm start <span x-text="vmid"></span></code></pre>
             <button
               @click="
                 const url = 'https://github.com/isolson/sixtyops-releases/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2';
-                const cmds = `URL=${url}\ncurl -LO $URL\nqm create ${vmid} --name sixtyops --memory 2048 --cores 2 \\\n  --net0 virtio,bridge=vmbr0\nqm importdisk ${vmid} sixtyops-appliance-latest.qcow2 ${storage}\nqm set ${vmid} --scsi0 ${storage}:vm-${vmid}-disk-0\nqm set ${vmid} --boot order=scsi0\nqm set ${vmid} --serial0 socket --vga serial0\nqm start ${vmid}`;
+                const cmds = `URL=${url}\ncurl -LO $URL\nqm create ${vmid} --name sixtyops --memory 2048 --cores 2 \\\n  --net0 virtio,bridge=vmbr0\nqm importdisk ${vmid} sixtyops-appliance-latest.qcow2 ${storage}\nqm set ${vmid} --virtio0 ${storage}:vm-${vmid}-disk-0\nqm set ${vmid} --boot order=virtio0\nqm set ${vmid} --serial0 socket --vga serial0\nqm start ${vmid}`;
                 navigator.clipboard.writeText(cmds);
                 copied2 = true;
                 setTimeout(() => copied2 = false, 2000);
