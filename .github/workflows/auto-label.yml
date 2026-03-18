@@ -1,0 +1,42 @@
+name: Auto Label PRs
+
+on:
+  pull_request:
+    types: [opened, edited]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: [self-hosted, linux, x64, proxmox]
+    timeout-minutes: 2
+    steps:
+      - name: Apply label from PR title
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = context.payload.pull_request.title.toLowerCase();
+            const labelMap = [
+              [/^feat(\(.*?\))?[!:]/, 'feature'],
+              [/^fix(\(.*?\))?[!:]/, 'bug'],
+              [/^chore(\(.*?\))?[!:]/, 'chore'],
+              [/^docs(\(.*?\))?[!:]/, 'docs'],
+              [/^ci(\(.*?\))?[!:]/, 'ci'],
+              [/^refactor(\(.*?\))?[!:]/, 'chore'],
+              [/^test(\(.*?\))?[!:]/, 'chore'],
+            ];
+
+            for (const [pattern, label] of labelMap) {
+              if (pattern.test(title)) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  labels: [label],
+                });
+                console.log(`Applied label: ${label}`);
+                return;
+              }
+            }
+            console.log('No conventional commit prefix matched');

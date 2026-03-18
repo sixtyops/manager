@@ -55,6 +55,7 @@ jobs:
 
       - name: Re-run installer (upgrade/idempotency path)
         run: |
+          sudo git config --global --add safe.directory /opt/sixtyops-ci
           sudo env \
             SIXTYOPS_REPO_URL="file:///tmp/sixtyops-origin.git" \
             SIXTYOPS_BRANCH="main" \
@@ -83,3 +84,4 @@ jobs:
           sudo rm -rf /tmp/sixtyops-origin.git
           git config --global --unset user.email || true
           git config --global --unset user.name || true
+          sudo git config --global --remove-section safe 2>/dev/null || true
