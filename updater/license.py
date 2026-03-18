@@ -61,8 +61,11 @@ class LicenseStatus(str, Enum):
 # All Feature members require PRO
 PRO_FEATURES = set(Feature)
 
-# Soft threshold for free-tier nag banner
-FREE_DEVICE_NAG_THRESHOLD = 10
+# Free tier auto-update limit (APs only, matches pricing page)
+FREE_AUTO_UPDATE_AP_LIMIT = 4
+
+# Soft threshold for free-tier nag banner (matches free AP limit)
+FREE_DEVICE_NAG_THRESHOLD = 4
 
 # Grace period when license server is unreachable (days)
 GRACE_PERIOD_DAYS = 7
@@ -531,6 +534,7 @@ _FEATURE_DISPLAY_NAMES = {
     "tower_sites": "Tower sites",
     "radius_auth": "RADIUS authentication",
     "snmp_traps": "SNMP traps",
+    "webhooks": "Webhooks",
 }
 
 

@@ -1936,6 +1936,9 @@ def _validate_settings(filtered: dict):
         if filtered["firmware_quarantine_days"] != current:
             raise HTTPException(403, detail={"error": "feature_locked", "feature": "firmware_hold_custom",
                                              "message": "Custom firmware hold period requires a Pro license."})
+    if filtered.get("config_auto_enforce") == "true" and not is_feature_enabled(Feature.CONFIG_COMPLIANCE):
+        raise HTTPException(403, detail={"error": "feature_locked", "feature": "config_compliance",
+                                         "message": "Config auto-enforce requires a Pro license."})
 
     effective_settings = db.get_all_settings()
     effective_settings.update(filtered)
@@ -5844,7 +5847,7 @@ async def download_config_tar(ip: str, config_id: int, session: dict = Depends(r
 
 
 @app.post("/api/configs/{ip}/poll", tags=["config"])
-async def poll_device_config(ip: str, session: dict = Depends(require_role("admin", "operator"))):
+async def poll_device_config(ip: str, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Trigger immediate config fetch for one device."""
     # Find the device (AP, CPE, or switch)
     device = db.get_access_point(ip)
@@ -5888,7 +5891,7 @@ async def poll_device_config(ip: str, session: dict = Depends(require_role("admi
 
 
 @app.post("/api/configs/poll", tags=["config"])
-async def poll_all_configs(session: dict = Depends(require_role("admin", "operator"))):
+async def poll_all_configs(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Trigger config poll for all devices."""
     poller = get_poller()
     if poller:
@@ -6061,7 +6064,7 @@ async def get_config_compliance(session: dict = Depends(require_auth), _pro=Depe
 # ============================================================================
 
 @app.get("/api/config-enforce/status", tags=["config"])
-async def get_config_enforce_status(session: dict = Depends(require_auth)):
+async def get_config_enforce_status(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_COMPLIANCE))):
     """Get current auto-enforce status and recent log entries."""
     poller = get_poller()
     running = poller._enforce_running if poller else False
@@ -6081,6 +6084,7 @@ async def get_config_enforce_log_api(
     ip: str = None,
     limit: int = 50,
     session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.CONFIG_COMPLIANCE)),
 ):
     """Get config enforcement log entries."""
     entries = db.get_config_enforce_log(ip=ip, limit=limit)
@@ -6165,7 +6169,7 @@ def _normalize_prefill_section(category: str, section):
 
 
 @app.get("/api/config-prefill/{category}", tags=["config"])
-async def get_config_prefill(category: str, session: dict = Depends(require_auth)):
+async def get_config_prefill(category: str, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """Get pre-fill data for a config category by analyzing fleet configs.
 
     Only returns data if no saved template exists for this category.
@@ -6707,7 +6711,7 @@ async def start_config_push_rollout(request: Request, session: dict = Depends(re
 
 
 @app.post("/api/config-push/rollout/{rollout_id}/advance")
-async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Manually advance to execute the next phase."""
     global _config_push_rollout_task
 
@@ -6752,7 +6756,7 @@ async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(r
 
 
 @app.post("/api/config-push/rollout/{rollout_id}/resume")
-async def resume_config_push_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+async def resume_config_push_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Resume a paused rollout (retries failed devices in current phase)."""
     global _config_push_rollout_task
 
@@ -6782,7 +6786,7 @@ async def resume_config_push_rollout(rollout_id: int, session: dict = Depends(re
 
 
 @app.post("/api/config-push/rollout/{rollout_id}/cancel")
-async def cancel_config_push_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+async def cancel_config_push_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Cancel an active or paused rollout."""
     rollout = db.get_config_push_rollout(rollout_id)
     if not rollout or rollout["status"] not in ("active", "paused"):

@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- Webhooks feature display name added to license feature list
+- Free-tier auto-update limit: APs capped at 4 per auto-update run; switch auto-updates now require Pro
+
+### Changed
+- Free-tier device nag threshold lowered from 10 to 4 to match the free AP limit
+- Config backup endpoints (/api/configs/poll) now require Pro (Config Backup feature)
+- Config compliance endpoints (/api/config-enforce/status, /api/config-enforce/log) now require Pro
+- Config templates endpoint (/api/config-prefill) now requires Pro
+- Enabling config auto-enforce now requires a Pro license
+- Config push rollout controls (advance, resume, cancel) now require admin or operator role
+
+### Added
 - Config auto-enforce: automatically detect config drift and push corrections in phases (canary → 10% → 50% → 100%)
 - Site-scoped config templates: site templates override global per category
 - Config enforce log: audit trail of all auto-enforcement actions
