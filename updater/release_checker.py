@@ -275,6 +275,11 @@ def _is_safe_to_update() -> tuple[bool, str]:
 
     Returns (is_safe, reason).
     """
+    # Check for active firmware update jobs
+    active_jobs = db.get_active_jobs()
+    if active_jobs:
+        return False, "Firmware update job(s) currently running"
+
     # Check for active rollout
     rollout = db.get_active_rollout()
     if rollout and rollout.get("status") in ("in_progress", "paused"):

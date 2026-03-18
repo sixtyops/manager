@@ -1,6 +1,7 @@
 """SixtyOps - Web Application."""
 
 import asyncio
+import hashlib
 import html as html_module
 import ipaddress
 import json
@@ -3611,6 +3612,7 @@ async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
 
     job.completed_at = datetime.now()
     job.status = "completed"
+    db.clear_active_job(job.job_id)
 
     success_count = sum(1 for d in job.devices.values() if d.status == "success")
     failed_count = sum(1 for d in job.devices.values() if d.status == "failed")
@@ -3696,6 +3698,7 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
 
     total_size = 0
     chunk_size = 1024 * 1024  # 1 MB chunks
+    sha256_hash = hashlib.sha256()
     try:
         async with aiofiles.open(firmware_path, "wb") as f:
             while True:
@@ -3705,6 +3708,7 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
                 total_size += len(chunk)
                 if total_size > MAX_FIRMWARE_SIZE:
                     raise HTTPException(413, f"Firmware file exceeds maximum size ({MAX_FIRMWARE_SIZE // (1024 * 1024)} MB)")
+                sha256_hash.update(chunk)
                 await f.write(chunk)
     except HTTPException:
         firmware_path.unlink(missing_ok=True)
@@ -3716,9 +3720,10 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
     finally:
         await file.close()
 
-    logger.info(f"Firmware uploaded: {safe_filename} ({total_size:,} bytes)")
+    firmware_sha256 = sha256_hash.hexdigest()
+    logger.info(f"Firmware uploaded: {safe_filename} ({total_size:,} bytes, sha256={firmware_sha256})")
 
-    db.register_firmware(safe_filename, source="manual")
+    db.register_firmware(safe_filename, source="manual", sha256=firmware_sha256)
     db.log_audit(session["username"], "firmware.upload", "firmware", safe_filename,
                  f"{total_size:,} bytes", None)
 
@@ -4945,14 +4950,40 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         driver_cls = None
 
     if driver_cls:
+        # Verify firmware file integrity before uploading to device
+        expected_sha256 = db.get_firmware_sha256(Path(fw_path).name)
+        if expected_sha256:
+            try:
+                def _hash_file():
+                    h = hashlib.sha256()
+                    with open(fw_path, "rb") as fh:
+                        for block in iter(lambda: fh.read(1024 * 1024), b""):
+                            h.update(block)
+                    return h.hexdigest()
+                actual_sha256 = await asyncio.get_event_loop().run_in_executor(None, _hash_file)
+                if actual_sha256 != expected_sha256:
+                    result = UpdateResult(ip=ip, success=False, error="Firmware file integrity check failed (SHA256 mismatch)")
+                    driver_cls = None
+            except FileNotFoundError:
+                result = UpdateResult(ip=ip, success=False, error="Firmware file not found on disk")
+                driver_cls = None
+
+    if driver_cls:
         username, password = job.credentials[ip]
         client = driver_cls(ip, username, password)
         reboot_timeout = client.get_reboot_timeout(device_status.role)
+        update_timeout = client.get_update_timeout(device_status.role)
         try:
             bw_limit = int(db.get_setting("bandwidth_limit_kbps", "0"))
         except (ValueError, TypeError):
             bw_limit = 0
-        result = await client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit)
+        try:
+            result = await asyncio.wait_for(
+                client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit),
+                timeout=update_timeout,
+            )
+        except asyncio.TimeoutError:
+            result = UpdateResult(ip=ip, success=False, error=f"Update timed out after {update_timeout // 60}m")
 
     device_status.old_version = result.old_version
     device_status.new_version = result.new_version
@@ -7268,6 +7299,8 @@ async def _run_radius_rollout(rollout_id: int):
             template["fragment"] = _apply_radius_settings_to_fragment(template["fragment"], current_config)
             service_username, service_password = radius_rollout.get_management_service_credentials(create_if_missing=True)
 
+            radius_sem = asyncio.Semaphore(10)
+
             while True:
                 rollout = radius_rollout.get_rollout(rollout_id)
                 if not rollout or rollout["status"] != "active":
@@ -7284,14 +7317,18 @@ async def _run_radius_rollout(rollout_id: int):
                         return
                     continue
 
+                async def _limited_radius_push(dev):
+                    async with radius_sem:
+                        return await _push_radius_to_device(
+                            rollout_id,
+                            dev,
+                            template["fragment"],
+                            service_username,
+                            service_password,
+                        )
+
                 results = await asyncio.gather(*[
-                    _push_radius_to_device(
-                        rollout_id,
-                        device,
-                        template["fragment"],
-                        service_username,
-                        service_password,
-                    )
+                    _limited_radius_push(device)
                     for device in phase_devices
                 ])
                 failures = [error for ok, error in results if not ok]

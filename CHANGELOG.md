@@ -23,6 +23,13 @@ All notable changes to this project are documented in this file.
 - Test trap button for verifying SNMP configuration
 - Inline release notes display in Settings > Updates panel
 - GitHub release notes categorization via `.github/release.yml`
+- SHA256 integrity verification for firmware files before device upload
+- Overall update timeout safety net (30 min APs/CPEs, 45 min switches)
+- Concurrency limit (10) for RADIUS rollout device pushes
+- Self-update safety gate: block app updates while firmware jobs are running
+
+### Fixed
+- Crashed update jobs now properly clear active job state
 
 ## 1.1.1-dev1 - 2026-02-19
 
