@@ -1,5 +1,7 @@
 """Shared config management utilities used by app.py and poller.py."""
 
+import difflib
+import json as _json
 from copy import deepcopy
 
 PROTECTED_CONFIG_KEYS = {"network", "ethernet"}
@@ -40,6 +42,15 @@ def fragment_matches(config: dict, fragment: dict) -> bool:
         elif config[key] != value:
             return False
     return True
+
+
+def generate_config_diff(
+    config_a: dict, config_b: dict, label_a: str = "before", label_b: str = "after"
+) -> list[str]:
+    """Return unified diff lines between two config dicts (pretty-printed JSON)."""
+    a_lines = _json.dumps(config_a, indent=2, sort_keys=True).splitlines(keepends=True)
+    b_lines = _json.dumps(config_b, indent=2, sort_keys=True).splitlines(keepends=True)
+    return list(difflib.unified_diff(a_lines, b_lines, fromfile=label_a, tofile=label_b))
 
 
 def check_config_compliance(device_config, templates: list[dict]) -> bool:

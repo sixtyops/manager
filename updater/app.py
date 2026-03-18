@@ -19,7 +19,7 @@ from typing import Dict, Optional, Set
 
 import aiofiles
 import bcrypt
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, Depends
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, Depends, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -5721,6 +5721,7 @@ from .config_utils import (
     PROTECTED_CONFIG_KEYS,
     validate_fragment_safety as _validate_fragment_safety,
     deep_merge,
+    generate_config_diff,
     check_config_compliance as _check_config_compliance,
     fragment_matches as _fragment_matches,
 )
@@ -5766,6 +5767,29 @@ async def get_config_snapshot(ip: str, config_id: int, session: dict = Depends(r
         raise HTTPException(404, "Config snapshot not found")
     config["config_json"] = json.loads(config["config_json"]) if isinstance(config["config_json"], str) else config["config_json"]
     return config
+
+
+@app.get("/api/configs/{ip}/diff", tags=["config"])
+async def diff_config_snapshots(ip: str, a: int = Query(...), b: int = Query(...), session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+    """Diff two config snapshots for a device."""
+    config_a = db.get_device_config_by_id(a)
+    config_b = db.get_device_config_by_id(b)
+    if not config_a or config_a["ip"] != ip:
+        raise HTTPException(404, "Snapshot A not found for this device")
+    if not config_b or config_b["ip"] != ip:
+        raise HTTPException(404, "Snapshot B not found for this device")
+
+    json_a = json.loads(config_a["config_json"]) if isinstance(config_a["config_json"], str) else config_a["config_json"]
+    json_b = json.loads(config_b["config_json"]) if isinstance(config_b["config_json"], str) else config_b["config_json"]
+
+    diff_lines = generate_config_diff(json_a, json_b, label_a=config_a["fetched_at"], label_b=config_b["fetched_at"])
+
+    return {
+        "diff_lines": diff_lines,
+        "config_a": {"id": config_a["id"], "fetched_at": config_a["fetched_at"], "config_hash": config_a.get("config_hash")},
+        "config_b": {"id": config_b["id"], "fetched_at": config_b["fetched_at"], "config_hash": config_b.get("config_hash")},
+        "identical": len(diff_lines) == 0,
+    }
 
 
 @app.get("/api/configs/{ip}/download/{config_id}", tags=["config"])
@@ -6204,6 +6228,52 @@ async def get_config_prefill(category: str, session: dict = Depends(require_auth
 # Config Push (Mass Operations)
 # ============================================================================
 
+@app.post("/api/config-push/preview", tags=["config"])
+async def preview_config_merge(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
+    """Preview what a template merge would produce for a device, without pushing."""
+    data = await request.json()
+    ip = data.get("ip")
+    template_ids = data.get("template_ids", [])
+
+    if not ip or not template_ids:
+        raise HTTPException(400, "ip and template_ids are required")
+
+    # Load templates
+    templates = []
+    for tid in template_ids:
+        t = db.get_config_template(tid)
+        if not t:
+            raise HTTPException(404, f"Template {tid} not found")
+        fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
+        try:
+            _validate_fragment_safety(fragment)
+        except ValueError as e:
+            raise HTTPException(400, f"Template '{t['name']}' contains unsafe keys: {e}")
+        templates.append(fragment)
+
+    # Get latest stored config (no device connection needed)
+    stored = db.get_latest_device_config(ip)
+    if not stored or not stored.get("config_json"):
+        raise HTTPException(400, "No stored config for this device. Run a config poll first.")
+
+    original = json.loads(stored["config_json"]) if isinstance(stored["config_json"], str) else stored["config_json"]
+
+    # Apply all templates
+    merged = original
+    for fragment in templates:
+        merged = deep_merge(merged, fragment)
+
+    diff_lines = generate_config_diff(original, merged, label_a="current", label_b="after merge")
+
+    return {
+        "original": original,
+        "merged": merged,
+        "diff_lines": diff_lines,
+        "changed": len(diff_lines) > 0,
+        "snapshot_date": stored.get("fetched_at"),
+    }
+
+
 @app.post("/api/config-push", tags=["config"])
 async def push_config_templates(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
     """Push config template(s) to devices.
@@ -6459,37 +6529,60 @@ async def cancel_config_push_job(job_id: str, session: dict = Depends(require_au
 
 
 @app.post("/api/config-push/rollback/{ip}", tags=["config"])
-async def rollback_device_config(ip: str, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
-    """Rollback a device to its previous config snapshot (pre-push backup)."""
-    # Get the two most recent config snapshots — current and pre-push
-    history = db.get_device_config_history(ip, limit=2)
-    if len(history) < 2:
-        raise HTTPException(400, "No previous config snapshot available for rollback")
+async def rollback_device_config(ip: str, request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
+    """Rollback a device to a specific or previous config snapshot."""
+    # Parse optional body for arbitrary snapshot selection
+    target_config_id = None
+    try:
+        body = await request.json()
+        target_config_id = body.get("config_id")
+    except Exception:
+        pass  # No body = legacy behavior (previous snapshot)
 
-    # The second entry is the pre-push backup
-    prev_snapshot = db.get_device_config_by_id(history[1]["id"])
-    if not prev_snapshot or not prev_snapshot.get("config_json"):
-        raise HTTPException(400, "Previous config snapshot is empty")
+    if target_config_id:
+        # Arbitrary rollback: use the specified snapshot
+        target_snapshot = db.get_device_config_by_id(target_config_id)
+        if not target_snapshot or target_snapshot["ip"] != ip:
+            raise HTTPException(404, "Config snapshot not found for this device")
+    else:
+        # Legacy behavior: roll back to previous snapshot
+        history = db.get_device_config_history(ip, limit=2)
+        if len(history) < 2:
+            raise HTTPException(400, "No previous config snapshot available for rollback")
+        target_snapshot = db.get_device_config_by_id(history[1]["id"])
+
+    if not target_snapshot or not target_snapshot.get("config_json"):
+        raise HTTPException(400, "Target config snapshot is empty")
 
     try:
-        rollback_config = json.loads(prev_snapshot["config_json"])
+        rollback_config = json.loads(target_snapshot["config_json"])
     except (json.JSONDecodeError, TypeError):
-        raise HTTPException(400, "Previous config snapshot is corrupt")
+        raise HTTPException(400, "Target config snapshot is corrupt")
 
     # Get device credentials
     device = db.get_access_point(ip)
-    role = "ap"
     if not device:
         device = db.get_switch(ip)
-        role = "switch"
     if not device:
         raise HTTPException(404, "Device not found")
 
-    # Connect and apply with dry-run first
+    # Connect and save pre-rollback backup
     client = TachyonClient(ip, device["username"], device["password"])
     login_result = await client.login()
     if login_result is not True:
         raise HTTPException(502, f"Login failed: {login_result}")
+
+    # Safety: save current config before rollback so rollback itself is reversible
+    try:
+        current_config = await client.get_config()
+        if current_config:
+            pre_json = _canonical_config_json(current_config)
+            pre_hash = _compute_config_hash(current_config)
+            model = device.get("model")
+            hardware_id = client.get_hardware_id(model)
+            db.save_device_config(ip, pre_json, pre_hash, model, hardware_id)
+    except Exception:
+        pass  # Continue with rollback — dry-run will catch invalid configs
 
     dry_result = await client.apply_config(rollback_config, dry_run=True)
     if not dry_result.get("success"):
@@ -6506,7 +6599,7 @@ async def rollback_device_config(ip: str, session: dict = Depends(require_role("
     if poller:
         asyncio.create_task(poller.poll_configs_for_ips([ip]))
 
-    return {"status": "success", "ip": ip, "rolled_back_to": prev_snapshot["fetched_at"]}
+    return {"status": "success", "ip": ip, "rolled_back_to": target_snapshot["fetched_at"]}
 
 
 # ---------------------------------------------------------------------------

@@ -1327,6 +1327,13 @@
             border-top: 1px solid var(--border);
         }
 
+        .diff-line-add { background: #dcfce7; color: #166534; }
+        .diff-line-del { background: #fee2e2; color: #991b1b; }
+        .diff-line-hunk { color: #6b7280; font-style: italic; }
+        .diff-line-meta { color: #6b7280; font-weight: 600; }
+        .diff-pre { font-size: 0.68rem; margin: 0; padding: 12px; background: var(--bg-secondary); border-radius: 6px; overflow: auto; max-height: 60vh; white-space: pre; font-family: monospace; }
+        .diff-select-cb { width: 14px; height: 14px; cursor: pointer; accent-color: var(--brand); }
+
         .config-section {
             border: 1px solid var(--border);
             border-radius: 6px;
@@ -8754,7 +8761,7 @@
                 const pretty = JSON.stringify(json, null, 2);
 
                 // Load history
-                const histResp = await fetch(`/api/configs/${ip}?limit=10`);
+                const histResp = await fetch(`/api/configs/${ip}?limit=20`);
                 const histData = await histResp.json();
                 const history = histData.history || [];
 
@@ -8762,10 +8769,12 @@
                 for (const h of history) {
                     const d = new Date(h.fetched_at);
                     const dateStr = d.toLocaleString();
-                    histHtml += `<div style="padding:4px 0;border-bottom:1px solid var(--border);font-size:0.72rem;display:flex;justify-content:space-between;">
-                        <span>${dateStr}</span>
-                        <span class="u-text-dim">${h.config_hash?.slice(0,8)}</span>
-                        <a class="action-link" onclick="downloadConfigTar('${ip}', ${h.id})">Download</a>
+                    histHtml += `<div style="padding:4px 0;border-bottom:1px solid var(--border);font-size:0.72rem;display:flex;align-items:center;gap:4px;">
+                        <input type="checkbox" class="diff-select-cb" data-config-id="${h.id}" onchange="updateDiffCompareBtn(this.closest('.backup-modal'))">
+                        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;">${dateStr}</span>
+                        <span class="u-text-dim" style="flex-shrink:0;">${h.config_hash?.slice(0,8)}</span>
+                        <a class="action-link" onclick="rollbackToSnapshot('${ip}', ${h.id}, '${dateStr}');event.stopPropagation();" style="flex-shrink:0;">Restore</a>
+                        <a class="action-link" onclick="downloadConfigTar('${ip}', ${h.id});event.stopPropagation();" style="flex-shrink:0;">Download</a>
                     </div>`;
                 }
 
@@ -8774,7 +8783,7 @@
                 modal.className = 'backup-overlay open';
                 modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
                 modal.innerHTML = `
-                    <div class="backup-modal" style="width:700px;max-height:80vh;display:flex;flex-direction:column;">
+                    <div class="backup-modal" style="width:750px;max-height:80vh;display:flex;flex-direction:column;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                             <h3 class="u-m0">Config: ${escapeHtml(ip)}</h3>
                             <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.2rem;">&times;</button>
@@ -8783,15 +8792,119 @@
                             <div style="flex:1;overflow:auto;">
                                 <pre style="font-size:0.7rem;background:#f9fafb;padding:12px;border-radius:6px;overflow:auto;max-height:60vh;margin:0;">${escapeHtml(pretty)}</pre>
                             </div>
-                            <div style="width:220px;overflow-y:auto;">
+                            <div style="width:250px;overflow-y:auto;">
                                 <h4 style="margin:0 0 8px;font-size:0.8rem;">Version History</h4>
                                 ${histHtml || '<p style="color:#9ca3af;font-size:0.72rem;">No history</p>'}
+                                <div style="margin-top:8px;display:flex;gap:6px;">
+                                    <button class="btn btn-sm btn-ghost diff-compare-btn" style="display:none;" onclick="compareSelectedConfigs('${ip}', this.closest('.backup-modal'))">Compare</button>
+                                    <button class="btn btn-sm btn-ghost" onclick="previewMergeForDevice('${ip}')">Preview Merge</button>
+                                </div>
                             </div>
                         </div>
                     </div>`;
                 document.body.appendChild(modal);
             } catch (e) {
                 showToast('Failed to load config: ' + e.message);
+            }
+        }
+
+        function updateDiffCompareBtn(modalEl) {
+            const checked = [...modalEl.querySelectorAll('.diff-select-cb:checked')];
+            // Limit to 2 selections — uncheck oldest when a 3rd is selected
+            if (checked.length > 2) {
+                for (let i = 0; i < checked.length - 2; i++) checked[i].checked = false;
+            }
+            const remaining = modalEl.querySelectorAll('.diff-select-cb:checked').length;
+            const btn = modalEl.querySelector('.diff-compare-btn');
+            if (btn) btn.style.display = remaining === 2 ? '' : 'none';
+        }
+
+        async function compareSelectedConfigs(ip, modalEl) {
+            const checked = [...modalEl.querySelectorAll('.diff-select-cb:checked')];
+            if (checked.length !== 2) { showToast('Select exactly 2 snapshots to compare.'); return; }
+            const idA = parseInt(checked[0].dataset.configId);
+            const idB = parseInt(checked[1].dataset.configId);
+            try {
+                const resp = await fetch(`/api/configs/${encodeURIComponent(ip)}/diff?a=${idA}&b=${idB}`);
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Diff failed'); }
+                const data = await resp.json();
+                showDiffModal(ip, data);
+            } catch (e) {
+                showToast('Failed to compare configs: ' + e.message);
+            }
+        }
+
+        function showDiffModal(title, data) {
+            if (data.identical) { showToast('Configs are identical.'); return; }
+            let html = '';
+            if (!Array.isArray(data.diff_lines) || data.diff_lines.length === 0) {
+                showToast('No differences to display.');
+                return;
+            }
+            for (const line of data.diff_lines) {
+                const escaped = escapeHtml(line.replace(/\n$/, ''));
+                if (line.startsWith('+++') || line.startsWith('---')) html += `<div class="diff-line-meta">${escaped}</div>`;
+                else if (line.startsWith('+')) html += `<div class="diff-line-add">${escaped}</div>`;
+                else if (line.startsWith('-')) html += `<div class="diff-line-del">${escaped}</div>`;
+                else if (line.startsWith('@@')) html += `<div class="diff-line-hunk">${escaped}</div>`;
+                else html += `<div>${escaped}</div>`;
+            }
+            const overlay = document.createElement('div');
+            overlay.className = 'backup-overlay open';
+            overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+            overlay.innerHTML = `
+                <div class="backup-modal" style="width:700px;max-height:80vh;display:flex;flex-direction:column;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <h3 class="u-m0">Config Diff: ${escapeHtml(title)}</h3>
+                        <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.2rem;">&times;</button>
+                    </div>
+                    <div class="diff-pre" style="flex:1;overflow:auto;">${html}</div>
+                </div>`;
+            document.body.appendChild(overlay);
+        }
+
+        async function rollbackToSnapshot(ip, configId, dateStr) {
+            const confirmed = await showConfirmDialog(
+                'Restore config from ' + dateStr + '? A backup of the current config will be saved first. The device will validate the config before applying.',
+                { title: 'Restore Config Snapshot', confirmText: 'Restore', danger: true }
+            );
+            if (!confirmed) return;
+            try {
+                const resp = await fetch(`/api/config-push/rollback/${encodeURIComponent(ip)}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({config_id: configId}),
+                });
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Rollback failed'); }
+                const data = await resp.json();
+                showToast('Config restored to ' + data.rolled_back_to);
+                // Close the config modal and refresh
+                document.querySelectorAll('.backup-overlay').forEach(o => o.remove());
+            } catch (e) {
+                showToast('Restore failed: ' + e.message);
+            }
+        }
+
+        async function previewMergeForDevice(ip) {
+            try {
+                // Get enabled templates
+                const tplResp = await fetch('/api/config-templates');
+                const tplData = await tplResp.json();
+                const enabled = (tplData.templates || []).filter(t => t.enabled);
+                if (!enabled.length) { showToast('No config policies enabled.'); return; }
+                const templateIds = enabled.map(t => t.id);
+
+                const resp = await fetch('/api/config-push/preview', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ip, template_ids: templateIds}),
+                });
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Preview failed'); }
+                const data = await resp.json();
+                if (!data.changed) { showToast('No changes — device config already matches all enabled policies.'); return; }
+                showDiffModal(ip + ' (merge preview)', data);
+            } catch (e) {
+                showToast('Preview failed: ' + e.message);
             }
         }
 
@@ -9492,10 +9605,46 @@
                     </div>
                     <div style="display:flex;gap:8px;justify-content:flex-end;">
                         <button class="btn btn-sm btn-ghost" onclick="this.closest('.backup-overlay').remove()">Cancel</button>
+                        <button class="btn btn-sm btn-ghost" onclick="previewConfigPush(this.closest('.backup-overlay'))">Preview</button>
                         <button class="btn btn-sm btn-primary" onclick="startConfigPushRollout(this.closest('.backup-overlay'))">Start Rollout</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
+        }
+
+        async function previewConfigPush(modal) {
+            const templateIds = [...modal.querySelectorAll('.push-tpl:checked')].map(c => parseInt(c.value));
+            if (!templateIds.length) { showToast('Select at least one policy.'); return; }
+
+            // Pick first device from topology as preview target
+            let previewIp = null;
+            const scope = modal.querySelector('#pushScope').value;
+            if (topology) {
+                for (const site of (topology.sites || [])) {
+                    if (previewIp) break;
+                    if ((scope === 'all' || scope === 'all_aps') && site.access_points) {
+                        for (const ap of site.access_points) { if (ap.ip) { previewIp = ap.ip; break; } }
+                    }
+                    if (!previewIp && (scope === 'all' || scope === 'all_switches') && site.switches) {
+                        for (const sw of site.switches) { if (sw.ip) { previewIp = sw.ip; break; } }
+                    }
+                }
+            }
+            if (!previewIp) { showToast('No devices found to preview against.'); return; }
+
+            try {
+                const resp = await fetch('/api/config-push/preview', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ip: previewIp, template_ids: templateIds}),
+                });
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Preview failed'); }
+                const data = await resp.json();
+                if (!data.changed) { showToast('No changes for ' + previewIp + ' — config already matches.'); return; }
+                showDiffModal(previewIp + ' (preview)', data);
+            } catch (e) {
+                showToast('Preview failed: ' + e.message);
+            }
         }
 
         async function startConfigPushRollout(modal) {
