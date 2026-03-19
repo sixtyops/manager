@@ -39,9 +39,31 @@ All notable changes to this project are documented in this file.
 - Overall update timeout safety net (30 min APs/CPEs, 45 min switches)
 - Concurrency limit (10) for RADIUS rollout device pushes
 - Self-update safety gate: block app updates while firmware jobs are running
+- In-app subscription checkout with Stripe and auto-activation via instance_id
+- Contextual license status banners (cancelled, over limit, expired, grace period)
+- Device offline/recovered email notifications
+- RADIUS open client mode (accept any device with correct secret, default)
+- HTTPS/SSL tab in App Settings
+- Setup wizard replaced with App Settings auto-open on first run
+- Weather temperature display on startup (no longer waits for first scheduler tick)
+
+### Changed
+- Complete rebrand from Tachyon to SixtyOps across codebase, Docker, appliance, and CI
+- Release repo renamed from `tachyon-manager-releases` to `sixtyops-releases`
+- License server URL updated to `billing.sixtyops.net`
+- App Settings modal uses fixed height to prevent layout jumping between tabs
+- Email notification subjects changed from `[Tachyon]` to `[SixtyOps]`
 
 ### Fixed
 - Crashed update jobs now properly clear active job state
+- Website deploy pipeline (AWS OIDC credentials + S3/CloudFront)
+- Logo alignment (icon sits on text baseline)
+- Local Users tab not loading on initial Auth tab open
+- Border radius normalization (5px → 6px)
+- Appliance now boots on both Proxmox (virtio) and ESXi (SCSI) hypervisors via UUID-based fstab/bootloader and SCSI initramfs drivers
+- Appliance SSL cert generation failure now stops the service instead of silently continuing
+- Appliance boot disk detection is now automatic instead of hardcoded to /dev/vda
+- Proxmox installation instructions corrected to use virtio disk controller
 
 ## 1.1.1-dev1 - 2026-02-19
 

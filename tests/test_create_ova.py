@@ -139,3 +139,36 @@ class TestGenerateOVF:
         xml_str = create_ova.generate_ovf("t.vmdk", 100, "my-app", "2.5.0")
         assert "my-app" in xml_str
         assert "v2.5.0" in xml_str
+
+    def test_scsi_controller_present(self):
+        root = self._parse_ovf()
+        ns = {"rasd": "http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData"}
+        # ResourceType 6 = SCSI Controller
+        for item in root.iter("{http://schemas.dmtf.org/ovf/envelope/1}Item"):
+            rt = item.find("rasd:ResourceType", ns)
+            if rt is not None and rt.text == "6":
+                subtype = item.find("rasd:ResourceSubType", ns)
+                assert subtype.text == "lsilogic"
+                return
+        pytest.fail("SCSI controller not found in OVF")
+
+    def test_disk_references_scsi_controller(self):
+        root = self._parse_ovf()
+        ns = {"rasd": "http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData"}
+        # Find SCSI controller InstanceID
+        scsi_id = None
+        for item in root.iter("{http://schemas.dmtf.org/ovf/envelope/1}Item"):
+            rt = item.find("rasd:ResourceType", ns)
+            if rt is not None and rt.text == "6":
+                scsi_id = item.find("rasd:InstanceID", ns).text
+                break
+        assert scsi_id is not None, "SCSI controller not found"
+        # Find disk (ResourceType 17) and verify Parent matches
+        for item in root.iter("{http://schemas.dmtf.org/ovf/envelope/1}Item"):
+            rt = item.find("rasd:ResourceType", ns)
+            if rt is not None and rt.text == "17":
+                parent = item.find("rasd:Parent", ns)
+                assert parent is not None, "Disk has no Parent reference"
+                assert parent.text == scsi_id
+                return
+        pytest.fail("Disk item not found in OVF")

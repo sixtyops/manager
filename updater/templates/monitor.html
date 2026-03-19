@@ -275,6 +275,10 @@
             transform: scale(0.97);
             opacity: 0.8;
         }
+        .backup-btn-sm {
+            font-size: 0.72rem;
+            padding: 3px 8px;
+        }
 
         /* Toggle switch — standard (36x20) */
         .toggle {
@@ -383,20 +387,21 @@
             gap: 2px;
             margin-bottom: 14px;
             border-bottom: 1px solid var(--border-light, #e5e7eb);
+            flex-shrink: 0;
         }
         .settings-subtab {
-            padding: 5px 12px;
+            padding: 6px 14px;
             border: none;
             background: none;
             cursor: pointer;
-            font-size: 0.72rem;
+            font-size: 0.78rem;
             color: #6b7280;
             border-bottom: 2px solid transparent;
         }
         .settings-subtab:hover { color: #374151; }
         .settings-subtab.active { color: #3b82f6; border-bottom-color: #3b82f6; }
         .notif-subpanel, .auth-subpanel { display: none; }
-        .notif-subpanel.active, .auth-subpanel.active { display: block; }
+        .notif-subpanel.active, .auth-subpanel.active { display: block; flex: 1; min-height: 0; overflow-y: auto; }
 
         .auth-status-badge {
             font-size: 0.65rem; font-weight:600; padding:1px 7px; border-radius:999px;
@@ -410,7 +415,7 @@
             border-radius:6px; padding:7px 9px; text-align:center;
         }
         .auth-stat-label {
-            font-size:0.62rem; font-weight:600; color:var(--text-dim,#9ca3af);
+            font-size:0.68rem; font-weight:600; color:var(--text-dim,#9ca3af);
             text-transform:uppercase; letter-spacing:0.03em;
         }
         .auth-stat-value {
@@ -493,7 +498,9 @@
             flex: 1;
             overflow-y: auto;
             min-height: 0;
-            font-size: 0.78rem;
+            font-size: 0.85rem;
+            line-height: 1.55;
+            scrollbar-gutter: stable;
         }
 
         .u-note-inline {
@@ -503,8 +510,28 @@
             line-height: 1.4;
         }
 
+        @keyframes settingsFadeIn {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
         .settings-panel.active {
-            display: block;
+            display: flex;
+            flex-direction: column;
+            animation: settingsFadeIn 0.15s ease-out;
+        }
+
+        .settings-panel p,
+        .settings-panel .u-note-inline,
+        .settings-panel .u-note-block {
+            line-height: 1.5;
+        }
+
+        .settings-section-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text);
+            margin: 0 0 6px;
+            line-height: 1.3;
         }
 
         .users-table { width:100%; border-collapse:collapse; font-size:0.78rem; }
@@ -1300,6 +1327,13 @@
             border-top: 1px solid var(--border);
         }
 
+        .diff-line-add { background: #dcfce7; color: #166534; }
+        .diff-line-del { background: #fee2e2; color: #991b1b; }
+        .diff-line-hunk { color: #6b7280; font-style: italic; }
+        .diff-line-meta { color: #6b7280; font-weight: 600; }
+        .diff-pre { font-size: 0.68rem; margin: 0; padding: 12px; background: var(--bg-secondary); border-radius: 6px; overflow: auto; max-height: 60vh; white-space: pre; font-family: monospace; }
+        .diff-select-cb { width: 14px; height: 14px; cursor: pointer; accent-color: var(--brand); }
+
         .config-section {
             border: 1px solid var(--border);
             border-radius: 6px;
@@ -2023,14 +2057,14 @@
         }
 
         /* Compact labels */
-        .u-label-xs { display: block; font-size: 0.7rem; color: var(--text-dim); margin-bottom: 2px; font-weight: 500; }
-        .u-label-compact { display: block; font-size: 0.72rem; color: var(--text-muted); margin-bottom: 4px; font-weight: 600; }
+        .u-label-xs { display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 3px; font-weight: 500; }
+        .u-label-compact { display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; font-weight: 600; }
 
         /* Layout utilities */
         .u-w-full { width: 100%; }
         .u-span-2 { grid-column: span 2; }
         .u-m0 { margin: 0; }
-        .u-hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+        .u-hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
         .u-text-xxs-muted { font-size: 0.68rem; color: var(--text-muted); }
 
         /* SNMP notification fields */
@@ -2646,7 +2680,7 @@
             <!-- HTTPS Panel -->
             <div class="settings-panel" id="settingsPanel-https">
                 <div style="margin-bottom:12px;">
-                    <label style="font-weight:600;font-size:0.8rem;">HTTPS Certificate</label>
+                    <label class="settings-section-title">HTTPS Certificate</label>
                 </div>
                 <div id="sslStatusDisplay" style="margin-bottom:12px;padding:8px 10px;border-radius:6px;background:var(--bg-subtle,#f9fafb);font-size:0.78rem;">
                     Loading SSL status...
@@ -2665,16 +2699,16 @@
                     <button class="backup-btn" style="background:var(--primary,#3b82f6);color:#fff;font-weight:500;" onclick="configureSsl()">Configure HTTPS</button>
                     <span id="sslStatus" class="u-text-xs-muted"></span>
                 </div>
-                <div style="margin-top:10px;font-size:0.72rem;color:var(--text-dim);">
+                <p class="u-note-inline" style="margin-top:10px;">
                     Requests a free Let's Encrypt certificate for your domain. Port 80 must be accessible from the internet for verification. If you're behind a firewall or using an internal domain, the app will continue using a self-signed certificate.
-                </div>
+                </p>
             </div>
 
             <!-- Backup Panel -->
             <div class="settings-panel" id="settingsPanel-backup">
                 <!-- SFTP Backup Status -->
                 <div style="margin-bottom:16px;">
-                    <label>Scheduled Backup</label>
+                    <label class="settings-section-title">Scheduled Backup</label>
                     <div id="backupStatusInfo" style="font-size:0.75rem;color:var(--text-muted);padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;">Loading...</div>
                     <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
                         <button class="backup-btn" onclick="runBackupNow()">Run Now</button>
@@ -2683,22 +2717,22 @@
                     </div>
                 </div>
 
-                <div style="border-top:1px solid var(--border);margin-bottom:16px;"></div>
+                <hr class="u-hr">
 
                 <!-- Export -->
                 <div style="margin-bottom:16px;">
-                    <label>Export Devices (CSV)</label>
+                    <label class="settings-section-title">Export Devices (CSV)</label>
                     <div class="u-flex-center-gap6">
                         <input type="password" id="exportPassphrase" name="exportPassphrase" placeholder="Passphrase (min 8 characters)" class="u-flex-1" aria-label="Export passphrase">
                         <button class="backup-btn" onclick="exportBackup()">Download CSV</button>
                     </div>
                 </div>
 
-                <div style="border-top:1px solid var(--border);margin-bottom:16px;"></div>
+                <hr class="u-hr">
 
                 <!-- Import -->
                 <div>
-                    <label>Import Devices (CSV)</label>
+                    <label class="settings-section-title">Import Devices (CSV)</label>
                     <div class="u-flex-col-gap8">
                         <input type="file" id="importFile" name="importFile" accept=".csv" style="font-size:0.75rem;" aria-label="Import CSV file">
                         <div class="u-flex-center-gap6">
@@ -2739,7 +2773,7 @@
 
                 <!-- Email sub-panel -->
                 <div class="notif-subpanel" id="notifSub-email">
-                    <label>Email (SMTP)</label>
+                    <label class="settings-section-title">Email (SMTP)</label>
                     <div class="u-flex-col-gap8">
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
                             <input type="checkbox" id="emailEnabled" name="emailEnabled" onchange="toggleEmailFields()">
@@ -2793,7 +2827,7 @@
 
                 <!-- SNMP Traps sub-panel -->
                 <div class="notif-subpanel" id="notifSub-snmp">
-                    <label>SNMP Traps</label>
+                    <label class="settings-section-title">SNMP Traps</label>
                     <div class="u-flex-col-gap8">
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
                             <input type="checkbox" id="snmpTrapsEnabled" name="snmpTrapsEnabled" onchange="toggleSnmpFields()">
@@ -2823,7 +2857,7 @@
 
                 <!-- Webhooks sub-panel -->
                 <div class="notif-subpanel" id="notifSub-webhooks">
-                    <label>Webhooks</label>
+                    <label class="settings-section-title">Webhooks</label>
                     <div class="u-flex-col-gap8">
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
                             <input type="checkbox" id="webhookEnabled" name="webhookEnabled" onchange="toggleWebhookFields()">
@@ -2888,7 +2922,7 @@
                 <!-- RADIUS Server sub-panel -->
                 <div class="auth-subpanel" id="authSub-radius">
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-                        <label style="font-weight:600;font-size:0.8rem;margin:0;">Built-in RADIUS Server</label>
+                        <label class="settings-section-title" style="margin:0;">Built-in RADIUS Server</label>
                         <span id="authRadiusBadge" class="auth-status-badge">Inactive</span>
                         <label style="display:flex;align-items:center;gap:5px;cursor:pointer;margin-left:auto;font-size:0.72rem;color:var(--text-muted);">
                             <input type="checkbox" id="authRadiusEnabled" name="authRadiusEnabled" onchange="toggleRadiusFields()">
@@ -2969,8 +3003,8 @@
                         <button class="backup-btn u-bg-muted-cta" onclick="testRadiusConfig()">Test</button>
                         <button class="backup-btn u-bg-muted-cta" onclick="pushRadiusToDevices()">Push to Devices</button>
                         <span style="flex:1;"></span>
-                        <button class="backup-btn u-bg-muted-cta" onclick="restartRadiusServer()" style="font-size:0.68rem;padding:4px 8px;color:var(--text-dim);">Restart</button>
-                        <button class="backup-btn u-bg-muted-cta" onclick="refreshRadiusData()" style="font-size:0.68rem;padding:4px 8px;color:var(--text-dim);">Refresh</button>
+                        <button class="backup-btn backup-btn-sm u-bg-muted-cta" onclick="restartRadiusServer()">Restart</button>
+                        <button class="backup-btn backup-btn-sm u-bg-muted-cta" onclick="refreshRadiusData()">Refresh</button>
                         <span id="radiusStatus" class="u-text-xs-muted"></span>
                     </div>
 
@@ -3025,7 +3059,7 @@
 
                     <div style="margin-bottom:14px;">
                         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                            <h5 style="margin:0;font-size:0.8rem;font-weight:600;">Manual Client Overrides</h5>
+                            <h5 class="settings-section-title" style="margin:0;">Manual Client Overrides</h5>
                             <span class="u-text-sm-dim">Use when device source IPs are not covered by inventory</span>
                         </div>
                         <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 80px auto;gap:8px;align-items:end;">
@@ -3047,17 +3081,17 @@
                         <div id="radiusClientsList" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;"></div>
                     </div>
 
-                    <hr style="border:none;border-top:1px solid var(--border);margin:14px 0;">
+                    <hr class="u-hr">
 
                     <div>
-                        <h5 style="margin:0 0 8px 0;font-size:0.8rem;font-weight:600;">Recent Admin Logins</h5>
+                        <h5 class="settings-section-title">Recent Admin Logins</h5>
                         <div id="radiusRecentLogins" style="display:flex;flex-direction:column;gap:6px;"></div>
                     </div>
 
                     <div style="margin-top:14px;">
                         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-                            <h5 style="margin:0;font-size:0.8rem;font-weight:600;">Auth Log</h5>
-                            <button class="backup-btn u-bg-muted-cta" onclick="loadRadiusAuthLog()" style="font-size:0.65rem;padding:1px 6px;">Refresh</button>
+                            <h5 class="settings-section-title" style="margin:0;">Auth Log</h5>
+                            <button class="backup-btn backup-btn-sm u-bg-muted-cta" onclick="loadRadiusAuthLog()">Refresh</button>
                         </div>
                         <div id="radiusAuthLogTable" style="font-size:0.72rem;max-height:150px;overflow-y:auto;">
                             <div class="u-muted-empty-sm">No auth log entries.</div>
@@ -3137,7 +3171,7 @@
                 <div class="auth-subpanel active" id="authSub-users" data-min-role="admin">
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
                         <div>
-                            <label style="font-weight:600;font-size:0.85rem;">SixtyOps Local Users</label>
+                            <label class="settings-section-title">SixtyOps Local Users</label>
                         </div>
                         <button class="backup-btn" onclick="showAddUserForm()" style="flex-shrink:0;">+ Add User</button>
                     </div>
@@ -8727,7 +8761,7 @@
                 const pretty = JSON.stringify(json, null, 2);
 
                 // Load history
-                const histResp = await fetch(`/api/configs/${ip}?limit=10`);
+                const histResp = await fetch(`/api/configs/${ip}?limit=20`);
                 const histData = await histResp.json();
                 const history = histData.history || [];
 
@@ -8735,10 +8769,12 @@
                 for (const h of history) {
                     const d = new Date(h.fetched_at);
                     const dateStr = d.toLocaleString();
-                    histHtml += `<div style="padding:4px 0;border-bottom:1px solid var(--border);font-size:0.72rem;display:flex;justify-content:space-between;">
-                        <span>${dateStr}</span>
-                        <span class="u-text-dim">${h.config_hash?.slice(0,8)}</span>
-                        <a class="action-link" onclick="downloadConfigTar('${ip}', ${h.id})">Download</a>
+                    histHtml += `<div style="padding:4px 0;border-bottom:1px solid var(--border);font-size:0.72rem;display:flex;align-items:center;gap:4px;">
+                        <input type="checkbox" class="diff-select-cb" data-config-id="${h.id}" onchange="updateDiffCompareBtn(this.closest('.backup-modal'))">
+                        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;">${dateStr}</span>
+                        <span class="u-text-dim" style="flex-shrink:0;">${h.config_hash?.slice(0,8)}</span>
+                        <a class="action-link" onclick="rollbackToSnapshot('${ip}', ${h.id}, '${dateStr}');event.stopPropagation();" style="flex-shrink:0;">Restore</a>
+                        <a class="action-link" onclick="downloadConfigTar('${ip}', ${h.id});event.stopPropagation();" style="flex-shrink:0;">Download</a>
                     </div>`;
                 }
 
@@ -8747,7 +8783,7 @@
                 modal.className = 'backup-overlay open';
                 modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
                 modal.innerHTML = `
-                    <div class="backup-modal" style="width:700px;max-height:80vh;display:flex;flex-direction:column;">
+                    <div class="backup-modal" style="width:750px;max-height:80vh;display:flex;flex-direction:column;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                             <h3 class="u-m0">Config: ${escapeHtml(ip)}</h3>
                             <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.2rem;">&times;</button>
@@ -8756,15 +8792,119 @@
                             <div style="flex:1;overflow:auto;">
                                 <pre style="font-size:0.7rem;background:#f9fafb;padding:12px;border-radius:6px;overflow:auto;max-height:60vh;margin:0;">${escapeHtml(pretty)}</pre>
                             </div>
-                            <div style="width:220px;overflow-y:auto;">
+                            <div style="width:250px;overflow-y:auto;">
                                 <h4 style="margin:0 0 8px;font-size:0.8rem;">Version History</h4>
                                 ${histHtml || '<p style="color:#9ca3af;font-size:0.72rem;">No history</p>'}
+                                <div style="margin-top:8px;display:flex;gap:6px;">
+                                    <button class="btn btn-sm btn-ghost diff-compare-btn" style="display:none;" onclick="compareSelectedConfigs('${ip}', this.closest('.backup-modal'))">Compare</button>
+                                    <button class="btn btn-sm btn-ghost" onclick="previewMergeForDevice('${ip}')">Preview Merge</button>
+                                </div>
                             </div>
                         </div>
                     </div>`;
                 document.body.appendChild(modal);
             } catch (e) {
                 showToast('Failed to load config: ' + e.message);
+            }
+        }
+
+        function updateDiffCompareBtn(modalEl) {
+            const checked = [...modalEl.querySelectorAll('.diff-select-cb:checked')];
+            // Limit to 2 selections — uncheck oldest when a 3rd is selected
+            if (checked.length > 2) {
+                for (let i = 0; i < checked.length - 2; i++) checked[i].checked = false;
+            }
+            const remaining = modalEl.querySelectorAll('.diff-select-cb:checked').length;
+            const btn = modalEl.querySelector('.diff-compare-btn');
+            if (btn) btn.style.display = remaining === 2 ? '' : 'none';
+        }
+
+        async function compareSelectedConfigs(ip, modalEl) {
+            const checked = [...modalEl.querySelectorAll('.diff-select-cb:checked')];
+            if (checked.length !== 2) { showToast('Select exactly 2 snapshots to compare.'); return; }
+            const idA = parseInt(checked[0].dataset.configId);
+            const idB = parseInt(checked[1].dataset.configId);
+            try {
+                const resp = await fetch(`/api/configs/${encodeURIComponent(ip)}/diff?a=${idA}&b=${idB}`);
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Diff failed'); }
+                const data = await resp.json();
+                showDiffModal(ip, data);
+            } catch (e) {
+                showToast('Failed to compare configs: ' + e.message);
+            }
+        }
+
+        function showDiffModal(title, data) {
+            if (data.identical) { showToast('Configs are identical.'); return; }
+            let html = '';
+            if (!Array.isArray(data.diff_lines) || data.diff_lines.length === 0) {
+                showToast('No differences to display.');
+                return;
+            }
+            for (const line of data.diff_lines) {
+                const escaped = escapeHtml(line.replace(/\n$/, ''));
+                if (line.startsWith('+++') || line.startsWith('---')) html += `<div class="diff-line-meta">${escaped}</div>`;
+                else if (line.startsWith('+')) html += `<div class="diff-line-add">${escaped}</div>`;
+                else if (line.startsWith('-')) html += `<div class="diff-line-del">${escaped}</div>`;
+                else if (line.startsWith('@@')) html += `<div class="diff-line-hunk">${escaped}</div>`;
+                else html += `<div>${escaped}</div>`;
+            }
+            const overlay = document.createElement('div');
+            overlay.className = 'backup-overlay open';
+            overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+            overlay.innerHTML = `
+                <div class="backup-modal" style="width:700px;max-height:80vh;display:flex;flex-direction:column;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <h3 class="u-m0">Config Diff: ${escapeHtml(title)}</h3>
+                        <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.2rem;">&times;</button>
+                    </div>
+                    <div class="diff-pre" style="flex:1;overflow:auto;">${html}</div>
+                </div>`;
+            document.body.appendChild(overlay);
+        }
+
+        async function rollbackToSnapshot(ip, configId, dateStr) {
+            const confirmed = await showConfirmDialog(
+                'Restore config from ' + dateStr + '? A backup of the current config will be saved first. The device will validate the config before applying.',
+                { title: 'Restore Config Snapshot', confirmText: 'Restore', danger: true }
+            );
+            if (!confirmed) return;
+            try {
+                const resp = await fetch(`/api/config-push/rollback/${encodeURIComponent(ip)}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({config_id: configId}),
+                });
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Rollback failed'); }
+                const data = await resp.json();
+                showToast('Config restored to ' + data.rolled_back_to);
+                // Close the config modal and refresh
+                document.querySelectorAll('.backup-overlay').forEach(o => o.remove());
+            } catch (e) {
+                showToast('Restore failed: ' + e.message);
+            }
+        }
+
+        async function previewMergeForDevice(ip) {
+            try {
+                // Get enabled templates
+                const tplResp = await fetch('/api/config-templates');
+                const tplData = await tplResp.json();
+                const enabled = (tplData.templates || []).filter(t => t.enabled);
+                if (!enabled.length) { showToast('No config policies enabled.'); return; }
+                const templateIds = enabled.map(t => t.id);
+
+                const resp = await fetch('/api/config-push/preview', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ip, template_ids: templateIds}),
+                });
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Preview failed'); }
+                const data = await resp.json();
+                if (!data.changed) { showToast('No changes — device config already matches all enabled policies.'); return; }
+                showDiffModal(ip + ' (merge preview)', data);
+            } catch (e) {
+                showToast('Preview failed: ' + e.message);
             }
         }
 
@@ -9465,10 +9605,46 @@
                     </div>
                     <div style="display:flex;gap:8px;justify-content:flex-end;">
                         <button class="btn btn-sm btn-ghost" onclick="this.closest('.backup-overlay').remove()">Cancel</button>
+                        <button class="btn btn-sm btn-ghost" onclick="previewConfigPush(this.closest('.backup-overlay'))">Preview</button>
                         <button class="btn btn-sm btn-primary" onclick="startConfigPushRollout(this.closest('.backup-overlay'))">Start Rollout</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
+        }
+
+        async function previewConfigPush(modal) {
+            const templateIds = [...modal.querySelectorAll('.push-tpl:checked')].map(c => parseInt(c.value));
+            if (!templateIds.length) { showToast('Select at least one policy.'); return; }
+
+            // Pick first device from topology as preview target
+            let previewIp = null;
+            const scope = modal.querySelector('#pushScope').value;
+            if (topology) {
+                for (const site of (topology.sites || [])) {
+                    if (previewIp) break;
+                    if ((scope === 'all' || scope === 'all_aps') && site.access_points) {
+                        for (const ap of site.access_points) { if (ap.ip) { previewIp = ap.ip; break; } }
+                    }
+                    if (!previewIp && (scope === 'all' || scope === 'all_switches') && site.switches) {
+                        for (const sw of site.switches) { if (sw.ip) { previewIp = sw.ip; break; } }
+                    }
+                }
+            }
+            if (!previewIp) { showToast('No devices found to preview against.'); return; }
+
+            try {
+                const resp = await fetch('/api/config-push/preview', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ip: previewIp, template_ids: templateIds}),
+                });
+                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Preview failed'); }
+                const data = await resp.json();
+                if (!data.changed) { showToast('No changes for ' + previewIp + ' — config already matches.'); return; }
+                showDiffModal(previewIp + ' (preview)', data);
+            } catch (e) {
+                showToast('Preview failed: ' + e.message);
+            }
         }
 
         async function startConfigPushRollout(modal) {

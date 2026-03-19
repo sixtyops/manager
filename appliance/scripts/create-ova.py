@@ -113,10 +113,18 @@ def generate_ovf(
             <rasd:VirtualQuantity>{memory_mb}</rasd:VirtualQuantity>
           </Item>
           <Item>
+            <rasd:Description>SCSI Controller</rasd:Description>
+            <rasd:ElementName>SCSI Controller 0</rasd:ElementName>
+            <rasd:InstanceID>3</rasd:InstanceID>
+            <rasd:ResourceSubType>lsilogic</rasd:ResourceSubType>
+            <rasd:ResourceType>6</rasd:ResourceType>
+          </Item>
+          <Item>
             <rasd:AddressOnParent>0</rasd:AddressOnParent>
             <rasd:ElementName>Hard Disk 1</rasd:ElementName>
             <rasd:HostResource>ovf:/disk/vmdisk1</rasd:HostResource>
-            <rasd:InstanceID>3</rasd:InstanceID>
+            <rasd:InstanceID>4</rasd:InstanceID>
+            <rasd:Parent>3</rasd:Parent>
             <rasd:ResourceType>17</rasd:ResourceType>
           </Item>
           <Item>
@@ -124,7 +132,7 @@ def generate_ovf(
             <rasd:Connection>bridged</rasd:Connection>
             <rasd:Description>VMXNET3 ethernet adapter on bridged</rasd:Description>
             <rasd:ElementName>Ethernet adapter 1</rasd:ElementName>
-            <rasd:InstanceID>4</rasd:InstanceID>
+            <rasd:InstanceID>5</rasd:InstanceID>
             <rasd:ResourceSubType>VMXNET3</rasd:ResourceSubType>
             <rasd:ResourceType>10</rasd:ResourceType>
           </Item>

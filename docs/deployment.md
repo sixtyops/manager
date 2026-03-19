@@ -17,7 +17,7 @@ Required:
 curl -sSL https://raw.githubusercontent.com/isolson/firmware-updater/main/scripts/install.sh | sudo bash
 ```
 
-This installs Docker if needed, clones the repo to `/opt/tachyon`, builds and starts all services in standalone mode, and creates a systemd service for auto-start on boot.
+This installs Docker if needed, clones the repo to `/opt/sixtyops`, builds and starts all services in standalone mode, and creates a systemd service for auto-start on boot.
 
 ### Manual install
 
@@ -27,7 +27,7 @@ cd firmware-updater
 ./deploy.sh
 ```
 
-`deploy.sh` creates the required directories, builds the Docker images, and starts all services in standalone mode (app + built-in FreeRADIUS + nginx + certbot).
+`deploy.sh` creates the required directories, builds the Docker images, and starts all services in standalone mode (app + built-in RADIUS + nginx + certbot).
 
 ## Initial Setup
 
@@ -75,7 +75,7 @@ The project ships two compose files:
 
 | File | Purpose |
 |------|---------|
-| `docker-compose.yml` | Base: app on port 8000, built-in FreeRADIUS on UDP 1812, and bundled nginx with no published ports. Use behind your own reverse proxy. |
+| `docker-compose.yml` | Base: app on port 8000, built-in RADIUS on UDP 1812, and bundled nginx with no published ports. Use behind your own reverse proxy. |
 | `docker-compose.standalone.yml` | Overlay: publishes nginx on 80/443 and adds certbot. Use for standalone deployments. |
 
 ### Behind your own proxy
@@ -84,7 +84,7 @@ The project ships two compose files:
 docker compose up -d --build
 ```
 
-Starts the application on port 8000, the built-in FreeRADIUS service on UDP 1812, and the bundled nginx (with no published ports). Your reverse proxy forwards to `localhost:8000` and handles TLS.
+Starts the application on port 8000, the built-in RADIUS service on UDP 1812, and the bundled nginx (with no published ports). Your reverse proxy forwards to `localhost:8000` and handles TLS.
 
 If you prefer to route through the bundled nginx on custom ports (e.g., so the app's SSL management UI still works), create a `docker-compose.override.yml`:
 
@@ -172,14 +172,14 @@ python -c "from passlib.hash import bcrypt; print(bcrypt.hash('yourpassword'))"
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8000` | HTTP server port (inside the container) |
-| `GITHUB_REPO` | `isolson/tachyon-manager-releases` | GitHub repo for auto-update checks |
+| `GITHUB_REPO` | `isolson/sixtyops-releases` | GitHub repo for auto-update checks |
 | `AUTOUPDATE_CHECK_INTERVAL` | `604800` (7 days) | Seconds between release checks |
 
 Built-in Radius settings are managed in the web UI under `Settings > Authentication`, not by environment variables. New installs default the feature to enabled, but it will not authenticate devices until you set a shared secret and add Radius users.
 
 ## Built-in Radius
 
-The appliance includes a FreeRADIUS container for device-admin authentication. This is separate from management UI login:
+The appliance includes a RADIUS container for device-admin authentication. This is separate from management UI login:
 
 - Web login uses local username/password and optional OIDC SSO
 - Device-admin Radius is for APs, switches, and other managed devices authenticating to this system
@@ -188,7 +188,7 @@ The appliance includes a FreeRADIUS container for device-admin authentication. T
 Operational notes:
 
 - Radius listens on UDP `1812`
-- The app generates FreeRADIUS config from SQLite and reloads the Radius container after config changes
+- The app generates RADIUS config from SQLite and reloads the Radius container after config changes
 - The Radius container has a Docker healthcheck, and the app also runs a background health monitor that attempts recovery if Docker reports the container unhealthy
 - The app recommends a manual Radius shared-secret review every 365 days; this is advisory only and never changes the secret automatically
 - Allowed Radius clients come from enabled inventory IPs plus any manual client overrides configured in the Authentication tab
