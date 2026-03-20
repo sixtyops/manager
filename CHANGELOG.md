@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- Webhooks feature display name added to license feature list
+- Free-tier auto-update limit: APs capped at 4 per auto-update run; switch auto-updates now require Pro
+
+### Changed
+- Free-tier device nag threshold lowered from 10 to 4 to match the free AP limit
+- Config backup endpoints (/api/configs/poll) now require Pro (Config Backup feature)
+- Config compliance endpoints (/api/config-enforce/status, /api/config-enforce/log) now require Pro
+- Config templates endpoint (/api/config-prefill) now requires Pro
+- Enabling config auto-enforce now requires a Pro license
+- Config push rollout controls (advance, resume, cancel) now require admin or operator role
+
+### Added
 - Config auto-enforce: automatically detect config drift and push corrections in phases (canary → 10% → 50% → 100%)
 - Site-scoped config templates: site templates override global per category
 - Config enforce log: audit trail of all auto-enforcement actions
@@ -23,6 +35,10 @@ All notable changes to this project are documented in this file.
 - Test trap button for verifying SNMP configuration
 - Inline release notes display in Settings > Updates panel
 - GitHub release notes categorization via `.github/release.yml`
+- SHA256 integrity verification for firmware files before device upload
+- Overall update timeout safety net (30 min APs/CPEs, 45 min switches)
+- Concurrency limit (10) for RADIUS rollout device pushes
+- Self-update safety gate: block app updates while firmware jobs are running
 - In-app subscription checkout with Stripe and auto-activation via instance_id
 - Contextual license status banners (cancelled, over limit, expired, grace period)
 - Device offline/recovered email notifications
@@ -39,6 +55,7 @@ All notable changes to this project are documented in this file.
 - Email notification subjects changed from `[Tachyon]` to `[SixtyOps]`
 
 ### Fixed
+- Crashed update jobs now properly clear active job state
 - Website deploy pipeline (AWS OIDC credentials + S3/CloudFront)
 - Logo alignment (icon sits on text baseline)
 - Local Users tab not loading on initial Auth tab open

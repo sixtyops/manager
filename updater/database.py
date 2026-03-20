@@ -135,6 +135,14 @@ def _migrate(db):
     except Exception:
         pass  # Table may not exist yet
 
+    # Add sha256 column to firmware_registry
+    try:
+        fr_columns = [row[1] for row in db.execute("PRAGMA table_info(firmware_registry)").fetchall()]
+        if fr_columns and "sha256" not in fr_columns:
+            db.execute("ALTER TABLE firmware_registry ADD COLUMN sha256 TEXT DEFAULT NULL")
+    except Exception:
+        pass  # Table may not exist yet
+
     # Migrate data from access_points/switches into unified devices table
     _migrate_to_devices_table(db)
 
@@ -443,7 +451,8 @@ def init_db():
             CREATE TABLE IF NOT EXISTS firmware_registry (
                 filename TEXT PRIMARY KEY,
                 added_at TEXT NOT NULL,
-                source TEXT DEFAULT 'manual'
+                source TEXT DEFAULT 'manual',
+                sha256 TEXT DEFAULT NULL
             );
 
             CREATE TABLE IF NOT EXISTS device_update_history (
@@ -1510,13 +1519,23 @@ def set_settings(settings: dict):
 
 
 # Firmware registry operations
-def register_firmware(filename: str, source: str = "manual"):
-    """Register a firmware file with its addition timestamp. No-op if already registered."""
+def register_firmware(filename: str, source: str = "manual", sha256: str = None):
+    """Register a firmware file with its addition timestamp. Updates sha256 if re-uploaded."""
     with get_db() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO firmware_registry (filename, added_at, source) VALUES (?, ?, ?)",
-            (filename, datetime.now().isoformat(), source)
+            "INSERT INTO firmware_registry (filename, added_at, source, sha256) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(filename) DO UPDATE SET sha256 = excluded.sha256, added_at = excluded.added_at",
+            (filename, datetime.now().isoformat(), source, sha256)
         )
+
+
+def get_firmware_sha256(filename: str) -> str | None:
+    """Return stored SHA256 hash for a firmware file, or None if not recorded."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT sha256 FROM firmware_registry WHERE filename = ?", (filename,)
+        ).fetchone()
+        return row["sha256"] if row and row["sha256"] else None
 
 
 def get_firmware_registry(vendor: str = None) -> list[dict]:

@@ -176,6 +176,13 @@ class VendorDriver(ABC):
         """Vendor-specific reboot timeout in seconds."""
         return 300
 
+    def get_update_timeout(self, role: str = "ap") -> int:
+        """Overall timeout for the entire update cycle (login + upload + reboot + verify).
+
+        Returns seconds. Override per vendor/role as needed.
+        """
+        return 1800  # 30 minutes default
+
     def get_hardware_id(self, model: str) -> str:
         """Get hardware ID for config downloads. Override per vendor."""
         return ""

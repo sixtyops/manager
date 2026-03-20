@@ -1,6 +1,7 @@
 """SixtyOps - Web Application."""
 
 import asyncio
+import hashlib
 import html as html_module
 import ipaddress
 import json
@@ -1935,6 +1936,9 @@ def _validate_settings(filtered: dict):
         if filtered["firmware_quarantine_days"] != current:
             raise HTTPException(403, detail={"error": "feature_locked", "feature": "firmware_hold_custom",
                                              "message": "Custom firmware hold period requires a Pro license."})
+    if filtered.get("config_auto_enforce") == "true" and not is_feature_enabled(Feature.CONFIG_COMPLIANCE):
+        raise HTTPException(403, detail={"error": "feature_locked", "feature": "config_compliance",
+                                         "message": "Config auto-enforce requires a Pro license."})
 
     effective_settings = db.get_all_settings()
     effective_settings.update(filtered)
@@ -3611,6 +3615,7 @@ async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
 
     job.completed_at = datetime.now()
     job.status = "completed"
+    db.clear_active_job(job.job_id)
 
     success_count = sum(1 for d in job.devices.values() if d.status == "success")
     failed_count = sum(1 for d in job.devices.values() if d.status == "failed")
@@ -3696,6 +3701,7 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
 
     total_size = 0
     chunk_size = 1024 * 1024  # 1 MB chunks
+    sha256_hash = hashlib.sha256()
     try:
         async with aiofiles.open(firmware_path, "wb") as f:
             while True:
@@ -3705,6 +3711,7 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
                 total_size += len(chunk)
                 if total_size > MAX_FIRMWARE_SIZE:
                     raise HTTPException(413, f"Firmware file exceeds maximum size ({MAX_FIRMWARE_SIZE // (1024 * 1024)} MB)")
+                sha256_hash.update(chunk)
                 await f.write(chunk)
     except HTTPException:
         firmware_path.unlink(missing_ok=True)
@@ -3716,9 +3723,10 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
     finally:
         await file.close()
 
-    logger.info(f"Firmware uploaded: {safe_filename} ({total_size:,} bytes)")
+    firmware_sha256 = sha256_hash.hexdigest()
+    logger.info(f"Firmware uploaded: {safe_filename} ({total_size:,} bytes, sha256={firmware_sha256})")
 
-    db.register_firmware(safe_filename, source="manual")
+    db.register_firmware(safe_filename, source="manual", sha256=firmware_sha256)
     db.log_audit(session["username"], "firmware.upload", "firmware", safe_filename,
                  f"{total_size:,} bytes", None)
 
@@ -4945,14 +4953,40 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         driver_cls = None
 
     if driver_cls:
+        # Verify firmware file integrity before uploading to device
+        expected_sha256 = db.get_firmware_sha256(Path(fw_path).name)
+        if expected_sha256:
+            try:
+                def _hash_file():
+                    h = hashlib.sha256()
+                    with open(fw_path, "rb") as fh:
+                        for block in iter(lambda: fh.read(1024 * 1024), b""):
+                            h.update(block)
+                    return h.hexdigest()
+                actual_sha256 = await asyncio.get_event_loop().run_in_executor(None, _hash_file)
+                if actual_sha256 != expected_sha256:
+                    result = UpdateResult(ip=ip, success=False, error="Firmware file integrity check failed (SHA256 mismatch)")
+                    driver_cls = None
+            except FileNotFoundError:
+                result = UpdateResult(ip=ip, success=False, error="Firmware file not found on disk")
+                driver_cls = None
+
+    if driver_cls:
         username, password = job.credentials[ip]
         client = driver_cls(ip, username, password)
         reboot_timeout = client.get_reboot_timeout(device_status.role)
+        update_timeout = client.get_update_timeout(device_status.role)
         try:
             bw_limit = int(db.get_setting("bandwidth_limit_kbps", "0"))
         except (ValueError, TypeError):
             bw_limit = 0
-        result = await client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit)
+        try:
+            result = await asyncio.wait_for(
+                client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit),
+                timeout=update_timeout,
+            )
+        except asyncio.TimeoutError:
+            result = UpdateResult(ip=ip, success=False, error=f"Update timed out after {update_timeout // 60}m")
 
     device_status.old_version = result.old_version
     device_status.new_version = result.new_version
@@ -5837,7 +5871,7 @@ async def download_config_tar(ip: str, config_id: int, session: dict = Depends(r
 
 
 @app.post("/api/configs/{ip}/poll", tags=["config"])
-async def poll_device_config(ip: str, session: dict = Depends(require_role("admin", "operator"))):
+async def poll_device_config(ip: str, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Trigger immediate config fetch for one device."""
     # Find the device (AP, CPE, or switch)
     device = db.get_access_point(ip)
@@ -5881,7 +5915,7 @@ async def poll_device_config(ip: str, session: dict = Depends(require_role("admi
 
 
 @app.post("/api/configs/poll", tags=["config"])
-async def poll_all_configs(session: dict = Depends(require_role("admin", "operator"))):
+async def poll_all_configs(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Trigger config poll for all devices."""
     poller = get_poller()
     if poller:
@@ -6054,7 +6088,7 @@ async def get_config_compliance(session: dict = Depends(require_auth), _pro=Depe
 # ============================================================================
 
 @app.get("/api/config-enforce/status", tags=["config"])
-async def get_config_enforce_status(session: dict = Depends(require_auth)):
+async def get_config_enforce_status(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_COMPLIANCE))):
     """Get current auto-enforce status and recent log entries."""
     poller = get_poller()
     running = poller._enforce_running if poller else False
@@ -6074,6 +6108,7 @@ async def get_config_enforce_log_api(
     ip: str = None,
     limit: int = 50,
     session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.CONFIG_COMPLIANCE)),
 ):
     """Get config enforcement log entries."""
     entries = db.get_config_enforce_log(ip=ip, limit=limit)
@@ -6158,7 +6193,7 @@ def _normalize_prefill_section(category: str, section):
 
 
 @app.get("/api/config-prefill/{category}", tags=["config"])
-async def get_config_prefill(category: str, session: dict = Depends(require_auth)):
+async def get_config_prefill(category: str, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """Get pre-fill data for a config category by analyzing fleet configs.
 
     Only returns data if no saved template exists for this category.
@@ -6769,7 +6804,7 @@ async def start_config_push_rollout(request: Request, session: dict = Depends(re
 
 
 @app.post("/api/config-push/rollout/{rollout_id}/advance")
-async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Manually advance to execute the next phase."""
     global _config_push_rollout_task
 
@@ -6814,7 +6849,7 @@ async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(r
 
 
 @app.post("/api/config-push/rollout/{rollout_id}/resume")
-async def resume_config_push_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+async def resume_config_push_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Resume a paused rollout (retries failed devices in current phase)."""
     global _config_push_rollout_task
 
@@ -6844,7 +6879,7 @@ async def resume_config_push_rollout(rollout_id: int, session: dict = Depends(re
 
 
 @app.post("/api/config-push/rollout/{rollout_id}/cancel")
-async def cancel_config_push_rollout(rollout_id: int, session: dict = Depends(require_auth)):
+async def cancel_config_push_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Cancel an active or paused rollout."""
     rollout = db.get_config_push_rollout(rollout_id)
     if not rollout or rollout["status"] not in ("active", "paused"):
@@ -7361,6 +7396,8 @@ async def _run_radius_rollout(rollout_id: int):
             template["fragment"] = _apply_radius_settings_to_fragment(template["fragment"], current_config)
             service_username, service_password = radius_rollout.get_management_service_credentials(create_if_missing=True)
 
+            radius_sem = asyncio.Semaphore(10)
+
             while True:
                 rollout = radius_rollout.get_rollout(rollout_id)
                 if not rollout or rollout["status"] != "active":
@@ -7377,14 +7414,18 @@ async def _run_radius_rollout(rollout_id: int):
                         return
                     continue
 
+                async def _limited_radius_push(dev):
+                    async with radius_sem:
+                        return await _push_radius_to_device(
+                            rollout_id,
+                            dev,
+                            template["fragment"],
+                            service_username,
+                            service_password,
+                        )
+
                 results = await asyncio.gather(*[
-                    _push_radius_to_device(
-                        rollout_id,
-                        device,
-                        template["fragment"],
-                        service_username,
-                        service_password,
-                    )
+                    _limited_radius_push(device)
                     for device in phase_devices
                 ])
                 failures = [error for ok, error in results if not ok]

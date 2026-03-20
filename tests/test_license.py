@@ -1,11 +1,13 @@
 """Tests for license management and feature gating."""
 
 import pytest
+from datetime import datetime, timedelta
 from unittest.mock import patch, AsyncMock
 
 from updater.license import (
     Feature, LicenseState, LicenseStatus, LicenseTier,
     get_billable_device_count, get_nag_info, FREE_DEVICE_NAG_THRESHOLD,
+    FREE_AUTO_UPDATE_AP_LIMIT,
 )
 
 
@@ -322,3 +324,146 @@ class TestLicenseAPI:
     def test_validate_without_key(self, authed_client, free_license):
         resp = authed_client.post("/api/license/validate")
         assert resp.status_code == 400
+
+    def test_instance_id_returns_uuid(self, authed_client):
+        resp = authed_client.get("/api/license/instance-id")
+        assert resp.status_code == 200
+        iid = resp.json()["instance_id"]
+        assert len(iid) == 36  # UUID4 format
+
+    def test_auto_activate_no_license(self, authed_client):
+        """auto-activate returns success=false when no license exists for instance."""
+        resp = authed_client.post("/api/license/auto-activate")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is False
+
+
+class TestOverLimitAndCancelledStatus:
+    """Tests for OVER_LIMIT and CANCELLED license statuses."""
+
+    def test_over_limit_is_not_pro(self):
+        state = LicenseState(tier=LicenseTier.FREE, status=LicenseStatus.OVER_LIMIT)
+        assert not state.is_pro()
+
+    def test_over_limit_disables_features(self):
+        state = LicenseState(tier=LicenseTier.FREE, status=LicenseStatus.OVER_LIMIT)
+        for feature in Feature:
+            assert not state.is_feature_enabled(feature)
+
+    def test_cancelled_is_not_pro(self):
+        state = LicenseState(tier=LicenseTier.FREE, status=LicenseStatus.CANCELLED)
+        assert not state.is_pro()
+
+    def test_cancelled_disables_features(self):
+        state = LicenseState(tier=LicenseTier.FREE, status=LicenseStatus.CANCELLED)
+        for feature in Feature:
+            assert not state.is_feature_enabled(feature)
+
+    def test_over_limit_to_dict(self):
+        state = LicenseState(
+            tier=LicenseTier.FREE,
+            status=LicenseStatus.OVER_LIMIT,
+            license_key="TEST-KEY",
+            device_limit=10,
+            error="Device count exceeds limit",
+        )
+        d = state.to_dict()
+        assert d["status"] == "over_limit"
+        assert d["device_limit"] == 10
+        assert d["is_pro"] is False
+
+    def test_cancelled_to_dict(self):
+        state = LicenseState(
+            tier=LicenseTier.FREE,
+            status=LicenseStatus.CANCELLED,
+            license_key="TEST-KEY",
+            error="Subscription cancelled",
+        )
+        d = state.to_dict()
+        assert d["status"] == "cancelled"
+        assert d["is_pro"] is False
+
+
+class TestGracePeriodExpiry:
+    """Tests for runtime grace period expiry in is_feature_enabled."""
+
+    def test_grace_expires_at_runtime(self, mock_db):
+        """When grace_until is in the past, is_feature_enabled should expire it."""
+        import updater.license as lic
+        old_force = lic._FORCE_PRO
+        lic._FORCE_PRO = False
+        try:
+            past = (datetime.now() - timedelta(hours=1)).isoformat()
+            state = LicenseState(
+                tier=LicenseTier.PRO,
+                status=LicenseStatus.GRACE,
+                license_key="TEST-GRACE-KEY",
+                grace_until=past,
+            )
+            lic._license_state = state
+
+            result = lic.is_feature_enabled(Feature.CONFIG_BACKUP)
+            assert not result
+            assert lic._license_state.status == LicenseStatus.EXPIRED
+            assert lic._license_state.tier == LicenseTier.FREE
+        finally:
+            lic._FORCE_PRO = old_force
+            lic._license_state = None
+
+    def test_grace_still_active(self, mock_db):
+        """When grace_until is in the future, features should still work."""
+        import updater.license as lic
+        old_force = lic._FORCE_PRO
+        lic._FORCE_PRO = False
+        try:
+            future = (datetime.now() + timedelta(days=3)).isoformat()
+            state = LicenseState(
+                tier=LicenseTier.PRO,
+                status=LicenseStatus.GRACE,
+                license_key="TEST-GRACE-KEY",
+                grace_until=future,
+            )
+            lic._license_state = state
+
+            result = lic.is_feature_enabled(Feature.CONFIG_BACKUP)
+            assert result
+            assert lic._license_state.status == LicenseStatus.GRACE
+        finally:
+            lic._FORCE_PRO = old_force
+            lic._license_state = None
+
+
+class TestFreeAutoUpdateLimit:
+    """Tests for the free-tier AP auto-update limit constant."""
+
+    def test_free_limit_matches_nag(self):
+        """Free AP limit and nag threshold should be aligned."""
+        assert FREE_AUTO_UPDATE_AP_LIMIT == FREE_DEVICE_NAG_THRESHOLD
+
+    def test_free_limit_is_four(self):
+        assert FREE_AUTO_UPDATE_AP_LIMIT == 4
+
+
+class TestNewlyGatedEndpoints:
+    """Tests for endpoints that were previously ungated."""
+
+    def test_config_poll_blocked_free(self, authed_client, free_license):
+        resp = authed_client.post("/api/configs/10.0.0.1/poll")
+        assert resp.status_code == 403
+
+    def test_config_poll_all_blocked_free(self, authed_client, free_license):
+        resp = authed_client.post("/api/configs/poll")
+        assert resp.status_code == 403
+
+    def test_config_enforce_status_blocked_free(self, authed_client, free_license):
+        resp = authed_client.get("/api/config-enforce/status")
+        assert resp.status_code == 403
+
+    def test_config_enforce_log_blocked_free(self, authed_client, free_license):
+        resp = authed_client.get("/api/config-enforce/log")
+        assert resp.status_code == 403
+
+    def test_config_prefill_blocked_free(self, authed_client, free_license):
+        resp = authed_client.get("/api/config-prefill/snmp")
+        assert resp.status_code == 403

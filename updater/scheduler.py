@@ -9,6 +9,7 @@ from typing import Callable, Optional, Set
 from . import database as db
 from . import services
 from .services import format_temperature
+from . import license as lic
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +278,7 @@ class AutoUpdateScheduler:
             if last_rollout and last_rollout["status"] == "completed":
                 scope_ips = self._resolve_scope(settings)
                 switch_scope = self._resolve_switch_scope(settings)
+                scope_ips, switch_scope = self._apply_free_tier_limits(scope_ips, switch_scope)
                 target_versions = self._target_versions(settings, None)
                 needs_update = self._filter_devices_needing_update(
                     scope_ips, target_versions, allow_downgrade
@@ -408,6 +410,7 @@ class AutoUpdateScheduler:
             if last and last["status"] == "completed":
                 scope_ips = self._resolve_scope(settings)
                 switch_scope = self._resolve_switch_scope(settings)
+                scope_ips, switch_scope = self._apply_free_tier_limits(scope_ips, switch_scope)
                 target_versions = self._target_versions(settings, None)
                 needs_update = self._filter_devices_needing_update(
                     scope_ips, target_versions, allow_downgrade
@@ -440,6 +443,8 @@ class AutoUpdateScheduler:
 
         scope_ips = self._resolve_scope(settings)
         switch_scope = self._resolve_switch_scope(settings)
+        scope_ips, switch_scope = self._apply_free_tier_limits(scope_ips, switch_scope)
+
         if not scope_ips and not switch_scope:
             self._state = "idle"
             self._block_reason = "No devices in scope"
@@ -587,6 +592,7 @@ class AutoUpdateScheduler:
 
         scope_ips = self._resolve_scope(settings)
         switch_scope = self._resolve_switch_scope(settings)
+        scope_ips, switch_scope = self._apply_free_tier_limits(scope_ips, switch_scope)
 
         if rollout is None:
             last = db.get_last_rollout_for_firmware_set(fw_30x, fw_303l, fw_tns100)
@@ -971,6 +977,20 @@ class AutoUpdateScheduler:
             return ips
 
         return []
+
+    @staticmethod
+    def _apply_free_tier_limits(scope_ips: list[str], switch_scope: list[str]) -> tuple[list[str], list[str]]:
+        """Enforce free-tier auto-update device limits."""
+        if lic._FORCE_PRO or lic.get_license_state().is_pro():
+            return scope_ips, switch_scope
+        limit = lic.FREE_AUTO_UPDATE_AP_LIMIT
+        if len(scope_ips) > limit:
+            logger.info(f"Free tier: limiting auto-update to {limit} APs (had {len(scope_ips)})")
+            scope_ips = scope_ips[:limit]
+        if switch_scope:
+            logger.info("Free tier: switch auto-updates require a Pro license")
+            switch_scope = []
+        return scope_ips, switch_scope
 
     def _calculate_predictions(self, rollout: dict, settings: dict) -> dict:
         """Calculate rollout time predictions based on historical device durations."""

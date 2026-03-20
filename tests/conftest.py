@@ -143,7 +143,8 @@ def memory_db():
         CREATE TABLE firmware_registry (
             filename TEXT PRIMARY KEY,
             added_at TEXT NOT NULL,
-            source TEXT DEFAULT 'manual'
+            source TEXT DEFAULT 'manual',
+            sha256 TEXT DEFAULT NULL
         );
         CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,

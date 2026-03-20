@@ -116,6 +116,11 @@ class TachyonDriver(VendorDriver):
             return 600  # TNS-100 switches take longer
         return 300
 
+    def get_update_timeout(self, role: str = "ap") -> int:
+        if role == "switch":
+            return 2700  # 45 min — switches have longer upload + reboot
+        return 1800  # 30 min — APs and CPEs
+
     def get_hardware_id(self, model: str) -> str:
         return self._client.get_hardware_id(model)
 
