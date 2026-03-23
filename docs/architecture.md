@@ -2,7 +2,7 @@
 
 ## Overview
 
-Charlotte is a FastAPI application with an async-first architecture. The backend is Python, the frontend is server-rendered HTML with vanilla JavaScript, and real-time updates flow over WebSocket. Device-admin RADIUS authentication is provided by a bundled FreeRADIUS container that is managed by the app.
+SixtyOps Manager is a FastAPI application with an async-first architecture. The backend is Python, the frontend is server-rendered HTML with vanilla JavaScript, and real-time updates flow over WebSocket. Device-admin RADIUS authentication is provided by a built-in pyrad-based RADIUS server.
 
 ```
 ┌─────────────────────────────────────┐
@@ -28,8 +28,8 @@ Lambda Webhook│          │    │   (cloud-hosted)
        └──────┬─────────────┘ │       Stripe
               │               │   HTTPS/curl
               ▼               ▼
-      FreeRADIUS Container  Network Devices
-     (generated config, UDP 1812)
+      RADIUS Server (pyrad)  Network Devices
+          (UDP 1812)
 ```
 
 ## Modules
