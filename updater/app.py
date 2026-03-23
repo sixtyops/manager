@@ -671,20 +671,20 @@ async def login(request: Request, username: str = Form(...), password: str = For
     ip_address = _client_ip(request)
     bucket = f"login:{ip_address}"
     if _check_rate_limit(bucket, LOGIN_RATE_LIMIT, AUTH_RATE_WINDOW):
-        return templates.TemplateResponse("login.html", {
-            "request": request,
+        resp = render_template(request, "login.html", {
             "error": "rate_limited",
             "oidc_enabled": oidc_config.is_oidc_enabled(),
-        }, status_code=429, headers={"Retry-After": str(AUTH_RATE_WINDOW)})
+        }, status_code=429)
+        resp.headers["Retry-After"] = str(AUTH_RATE_WINDOW)
+        return resp
 
     user = authenticate(username, password)
     if not user:
         _record_rate_limit_event(bucket)
-        return templates.TemplateResponse(
-            "login.html",
-            {"request": request, "error": True, "oidc_enabled": oidc_config.is_oidc_enabled()},
-            status_code=401,
-        )
+        return render_template(request, "login.html", {
+            "error": True,
+            "oidc_enabled": oidc_config.is_oidc_enabled(),
+        }, status_code=401)
 
     _clear_rate_limit_bucket(bucket)
     session_id = create_session(user["username"], ip_address)
@@ -886,8 +886,8 @@ async def ssl_setup_api(request: Request, session: dict = Depends(require_role("
 @app.get("/backup-setup", response_class=HTMLResponse)
 async def backup_setup_page(request: Request, session: dict = Depends(require_auth)):
     """Serve the backup setup page."""
-    return templates.TemplateResponse("backup_setup.html", {
-        "request": request, "backup_status": sftp_backup.get_backup_status(),
+    return render_template(request, "backup_setup.html", {
+        "backup_status": sftp_backup.get_backup_status(),
         "error": None, "success": None,
     })
 
@@ -912,8 +912,8 @@ async def backup_setup_submit(
         password=sftp_password, ssh_key=ssh_key,
         retention_count=retention_count,
     )
-    return templates.TemplateResponse("backup_setup.html", {
-        "request": request, "backup_status": sftp_backup.get_backup_status(),
+    return render_template(request, "backup_setup.html", {
+        "backup_status": sftp_backup.get_backup_status(),
         "error": None if success else message,
         "success": message if success else None,
     }, status_code=200 if success else 400)
@@ -923,8 +923,8 @@ async def backup_setup_submit(
 async def backup_run_now(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Trigger an immediate backup."""
     success, message = await sftp_backup.run_backup()
-    return templates.TemplateResponse("backup_setup.html", {
-        "request": request, "backup_status": sftp_backup.get_backup_status(),
+    return render_template(request, "backup_setup.html", {
+        "backup_status": sftp_backup.get_backup_status(),
         "error": None if success else message,
         "success": message if success else None,
     })
@@ -2851,12 +2851,12 @@ async def oidc_login(request: Request, _pro=Depends(require_feature(Feature.SSO_
     ip_address = _client_ip(request)
     bucket = f"oidc:{ip_address}"
     if _check_rate_limit(bucket, OIDC_RATE_LIMIT, AUTH_RATE_WINDOW):
-        return templates.TemplateResponse(
-            "login.html",
-            {"request": request, "error": "rate_limited", "oidc_enabled": oidc_config.is_oidc_enabled()},
-            status_code=429,
-            headers={"Retry-After": str(AUTH_RATE_WINDOW)},
-        )
+        resp = render_template(request, "login.html", {
+            "error": "rate_limited",
+            "oidc_enabled": oidc_config.is_oidc_enabled(),
+        }, status_code=429)
+        resp.headers["Retry-After"] = str(AUTH_RATE_WINDOW)
+        return resp
     _record_rate_limit_event(bucket)
 
     config = oidc_config.get_oidc_config()
@@ -2918,12 +2918,12 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
     ip_address = _client_ip(request)
     bucket = f"oidc:{ip_address}"
     if _check_rate_limit(bucket, OIDC_RATE_LIMIT, AUTH_RATE_WINDOW):
-        return templates.TemplateResponse(
-            "login.html",
-            {"request": request, "error": "rate_limited", "oidc_enabled": oidc_config.is_oidc_enabled()},
-            status_code=429,
-            headers={"Retry-After": str(AUTH_RATE_WINDOW)},
-        )
+        resp = render_template(request, "login.html", {
+            "error": "rate_limited",
+            "oidc_enabled": oidc_config.is_oidc_enabled(),
+        }, status_code=429)
+        resp.headers["Retry-After"] = str(AUTH_RATE_WINDOW)
+        return resp
     _record_rate_limit_event(bucket)
 
     if not oidc_config.is_oidc_enabled():
