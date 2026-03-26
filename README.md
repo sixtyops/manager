@@ -50,7 +50,7 @@ Failures pause the rollout until manually reviewed.
 - **Network topology view** - Visual map of tower sites, APs, and CPEs with signal health indicators
 - **Parallel updates** - Configurable concurrency for faster bulk updates
 - **Built-in device RADIUS** - Integrated RADIUS server for AP and switch admin authentication
-- **Git backups** - Automatic commit of configuration changes
+- **SFTP backups** - Automated backup of database and device configurations
 - **Real-time progress** - WebSocket-based live update status
 
 ## Quick Start
@@ -68,7 +68,7 @@ Installs Docker, configures HTTPS, generates credentials, and starts the system.
 Visit `https://your-server` to complete the setup wizard:
 1. Change default password
 2. Configure Let's Encrypt (optional)
-3. Configure git backups (optional)
+3. Configure SFTP backups (optional)
 
 ### Local Testing
 
@@ -142,8 +142,9 @@ Full API docs: [docs/api.md](docs/api.md)
 
 ## Roadmap
 
-- **Pre-update device config backup** — Pull and store AP/CPE configuration (SSIDs, channels, IP addressing, etc.) before firmware updates. The git backup system currently backs up the management database and device inventory, but not the operational configs on each device. This would enable automatic restore if a firmware update resets device settings to defaults.
-- **Git backup restore** — Add a restore flow (API + UI) to pull the latest backup from the configured git remote and replace the local database. Currently restore is a manual process (clone repo, copy `sixtyops.db`, restart app).
+- **Per-device firmware update cooldown** — Prevent rapid re-updating of a device after a successful firmware update (default 30 days). This ensures a stable soak period before applying further changes.
+- **Pre-update device config backup** — Automatically pull and store a configuration snapshot before starting a firmware update. This ensures a "before" record exists for every update, enabling quick recovery if an update resets settings to defaults.
+- **SFTP backup restore** — Add a restore flow (API + UI) to pull a selected backup from the SFTP server and replace the local database. Currently restore is a manual process.
 
 ## For Developers
 

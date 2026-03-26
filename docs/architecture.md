@@ -115,6 +115,16 @@ Sends anonymized job statistics to an AWS Lambda endpoint after each update job 
 
 Sends rich webhook notifications on job completion with success/failure counts, failed device details, rollout phase progress, and next scheduled job info. Configured via `slack_webhook_url` in settings.
 
+### `sftp_backup.py` - System Backup & Restore
+
+SFTP-based backup system for the management database, settings, and device configurations.
+
+Key responsibilities:
+- **Scheduled Backups**: Creates a compressed `tar.gz` archive containing the SQLite database, device inventory, and configuration snapshots.
+- **Remote Storage**: Uploads backups to a configured SFTP server with support for password or SSH key authentication.
+- **Retention**: Automatically prunes older backups based on a configurable retention count.
+- **Restore Flow**: Provides an API to list remote backups and restore the local database from a selected archive (requires system restart).
+
 ### `license.py` - Licensing and Feature Gating
 
 Client-side license management. Validates license keys against a remote license server and gates PRO features based on subscription status.

@@ -51,11 +51,11 @@ HTTPS works out of the box with a self-signed certificate, which is recommended 
 
 <!-- screenshot: HTTPS certificate wizard step -->
 
-**4. Configure Git backups (optional)**
+**4. Configure SFTP backups (optional)**
 
-Point to a Git repository for automatic configuration backups.
+Point to an SFTP server for automatic configuration backups.
 
-<!-- screenshot: Git backup wizard step -->
+<!-- screenshot: SFTP backup wizard step -->
 
 **5. Add tower sites and devices**
 
@@ -125,7 +125,7 @@ All host paths (left side of `:`) can be changed to suit your setup.
 |-----------|---------------|----------|
 | `./firmware` | `/app/firmware` | Uploaded firmware files |
 | `./data` | `/app/data` | SQLite database (`tachyon.db`) |
-| `./backups` | `/app/backups` | Git backup repository |
+| `./backups` | `/app/backups` | Backup staging directory (temporary) |
 
 The built-in Radius service also uses files generated under `./data/radius/`:
 

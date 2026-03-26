@@ -31,7 +31,7 @@ Set or change admin password.
 Multi-step setup wizard for SSL and backup configuration. Auth required.
 
 ### `POST /setup-wizard`
-Handle wizard steps (SSL certificate setup, Git backup, completion).
+Handle wizard steps (SSL certificate setup, SFTP backup, completion).
 
 - **Body**: `step` (form), `action` (form), plus step-specific fields
 
@@ -192,15 +192,15 @@ Request a Let's Encrypt certificate.
 - **Body**: `domain` (form), `email` (form)
 
 ### `GET /backup-setup`
-Git backup configuration page.
+SFTP backup configuration page.
 
 ### `POST /backup-setup`
-Configure Git backup repository.
+Configure SFTP backup server.
 
-- **Body**: `repo_url` (form), `auth_method` (form), `token` (form, optional), `ssh_key` (form, optional)
+- **Body**: `host` (form), `port` (form), `path` (form), `username` (form), `auth_method` (form), `password` (form, optional), `ssh_key` (form, optional)
 
 ### `POST /backup-run`
-Trigger an immediate Git backup.
+Trigger an immediate SFTP backup.
 
 ## WebSocket
 
@@ -328,7 +328,7 @@ Get all configuration settings as key-value pairs. Sensitive values (password ha
 ### `PUT /api/settings`
 Update settings. Only whitelisted keys are accepted:
 
-`schedule_enabled`, `schedule_days`, `schedule_start_hour`, `schedule_end_hour`, `parallel_updates`, `bank_mode`, `allow_downgrade`, `timezone`, `zip_code`, `weather_check_enabled`, `min_temperature_c`, `temperature_unit`, `schedule_scope`, `schedule_scope_data`, `rollout_canary_aps`, `rollout_canary_switches`, `firmware_beta_enabled`, `firmware_quarantine_days`, `slack_webhook_url`, `autoupdate_enabled`
+`schedule_enabled`, `schedule_days`, `schedule_start_hour`, `schedule_end_hour`, `parallel_updates`, `bank_mode`, `allow_downgrade`, `timezone`, `zip_code`, `weather_check_enabled`, `min_temperature_c`, `temperature_unit`, `schedule_scope`, `schedule_scope_data`, `rollout_canary_aps`, `rollout_canary_switches`, `firmware_beta_enabled`, `firmware_quarantine_days`, `firmware_update_cooldown_days`, `slack_webhook_url`, `autoupdate_enabled`
 
 - **Body** (JSON): Object of key-value pairs to set
 - **Notes**:
@@ -435,7 +435,24 @@ Start a firmware update for a single device (AP, CPE, or switch).
 ### `GET /api/job/{job_id}`
 Get the status of an update job including per-device results.
 
-## Backup & Export
+## Backup & Restore
+
+### `GET /api/backup/status`
+Get SFTP backup configuration and status. Requires PRO `config_backup`.
+
+### `POST /api/backup/run`
+Trigger an immediate SFTP backup. Requires PRO `config_backup`.
+
+### `POST /api/backup/test-connection`
+Test connectivity to the configured SFTP server. Requires PRO `config_backup`.
+
+### `GET /api/backup/list`
+List available backup archives on the SFTP server. Requires PRO `config_backup`.
+
+### `POST /api/backup/restore`
+Restore the management database from an SFTP backup archive. Requires PRO `config_backup`.
+
+- **Body** (form): `archive_name`
 
 ### `POST /api/backup/export`
 Export device inventory as CSV with encrypted passwords.
@@ -447,9 +464,6 @@ Export device inventory as CSV with encrypted passwords.
 Import device inventory from a CSV with encrypted passwords.
 
 - **Body** (multipart form): `file`, `passphrase`, `conflict_mode` (`"skip"` or `"update"`)
-
-### `GET /api/backup/git-status`
-Get Git backup configuration and status.
 
 ## App Updates
 

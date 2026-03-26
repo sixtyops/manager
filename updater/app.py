@@ -949,6 +949,25 @@ async def test_backup_connection_api(session: dict = Depends(require_role("admin
     return {"success": success, "message": message}
 
 
+@app.get("/api/backup/list", tags=["config"])
+async def list_backups_api(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+    """List available backups on SFTP server."""
+    return await sftp_backup.list_backups()
+
+
+@app.post("/api/backup/restore", tags=["config"])
+async def restore_backup_api(
+    archive_name: str = Form(...),
+    session: dict = Depends(require_role("admin")),
+    _pro=Depends(require_feature(Feature.CONFIG_BACKUP))
+):
+    """Restore database from an SFTP backup archive."""
+    success, message = await sftp_backup.restore_backup(archive_name)
+    if success:
+        db.log_audit(session["username"], "backup.restore", "backup", archive_name, "System restore initiated", None)
+    return {"success": success, "message": message}
+
+
 # ============================================================================
 # Page Routes
 # ============================================================================
@@ -4974,6 +4993,24 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     if driver_cls:
         username, password = job.credentials[ip]
         client = driver_cls(ip, username, password)
+
+        # Pre-update config backup (Pro feature)
+        if is_feature_enabled(Feature.CONFIG_BACKUP):
+            try:
+                progress_callback(ip, "Backing up configuration...")
+                login_ok = await client.connect()
+                if login_ok is True:
+                    config = await client.get_config()
+                    if config:
+                        config_json = _canonical_config_json(config)
+                        config_hash = hashlib.sha256(config_json.encode()).hexdigest()
+                        model = device_status.model or (await client.get_device_info()).model
+                        hardware_id = client.get_hardware_id(model)
+                        db.save_device_config(ip, config_json, config_hash, model, hardware_id)
+                        logger.info(f"Pre-update backup saved for {ip}")
+            except Exception as e:
+                logger.warning(f"Pre-update backup failed for {ip} (non-fatal): {e}")
+
         reboot_timeout = client.get_reboot_timeout(device_status.role)
         update_timeout = client.get_update_timeout(device_status.role)
         try:
