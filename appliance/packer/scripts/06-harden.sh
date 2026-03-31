@@ -43,7 +43,7 @@ echo "[06-harden] Making boot device-agnostic (UUID-based)..."
 # regardless of disk controller (virtio on Proxmox, SCSI on ESXi).
 # Skip lines that already use LABEL= or UUID=, and skip non-device entries.
 for dev in $(awk '/^\/dev\// {print $1}' /etc/fstab); do
-    uuid=$(blkid -s UUID -o value "$dev" 2>/dev/null)
+    uuid=$(blkid -s UUID -o value "$dev" 2>/dev/null || true)
     if [ -n "$uuid" ]; then
         sed -i "s|^${dev}|UUID=${uuid}|" /etc/fstab
         echo "[06-harden] fstab: ${dev} -> UUID=${uuid}"
@@ -54,10 +54,12 @@ done
 if [ -f /boot/extlinux.conf ]; then
     ROOT_DEV=$(awk '/^APPEND/ { for(i=1;i<=NF;i++) if($i ~ /^root=\/dev\//) print $i }' /boot/extlinux.conf | sed 's/root=//')
     if [ -n "$ROOT_DEV" ]; then
-        ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV" 2>/dev/null)
+        ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV" 2>/dev/null || true)
         if [ -n "$ROOT_UUID" ]; then
             sed -i "s|root=${ROOT_DEV}|root=UUID=${ROOT_UUID}|" /boot/extlinux.conf
             echo "[06-harden] extlinux: root=${ROOT_DEV} -> root=UUID=${ROOT_UUID}"
+        else
+            echo "[06-harden] WARNING: Could not resolve UUID for ${ROOT_DEV}, keeping device path"
         fi
     fi
 fi
