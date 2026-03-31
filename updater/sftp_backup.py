@@ -148,11 +148,88 @@ async def test_backup_connection() -> Tuple[bool, str]:
     except asyncssh.PermissionDenied:
         return False, "Authentication failed - check username/password or key"
     except asyncssh.DisconnectError as e:
-        return False, f"SSH connection failed: {e}"
-    except OSError as e:
-        return False, f"Connection error: {e}"
+        return False, f"Connection dropped: {e}"
     except Exception as e:
-        return False, f"Connection failed: {str(e)[:200]}"
+        return False, f"Connection failed: {e}"
+
+
+async def list_backups() -> list[dict]:
+    """List available backups on the SFTP server."""
+    try:
+        async with await _get_sftp_connection() as conn:
+            async with conn.start_sftp_client() as sftp:
+                remote_path = db.get_setting("backup_sftp_path") or "/"
+                try:
+                    entries = await sftp.listdir(remote_path)
+                    backups = sorted(
+                        [e for e in entries if e.startswith("sixtyops-backup-") and e.endswith(".tar.gz")],
+                        reverse=True
+                    )
+                    results = []
+                    for b in backups:
+                        try:
+                            attrs = await sftp.stat(f"{remote_path}/{b}")
+                            results.append({
+                                "name": b,
+                                "size": attrs.size,
+                                "mtime": datetime.fromtimestamp(attrs.mtime).isoformat() if attrs.mtime else None
+                            })
+                        except Exception:
+                            results.append({"name": b})
+                    return results
+                except asyncssh.SFTPNoSuchFile:
+                    return []
+    except Exception as e:
+        logger.warning(f"Failed to list SFTP backups: {e}")
+        return []
+
+
+async def restore_backup(archive_name: str) -> Tuple[bool, str]:
+    """Download a backup from SFTP and restore the database.
+
+    WARNING: This replaces the local sixtyops.db file. The application should
+    ideally be restarted after this operation.
+    """
+    import re
+    if not re.match(r'^sixtyops-backup-[\w.\-]+\.tar\.gz$', archive_name) or '..' in archive_name:
+        return False, "Invalid backup archive name"
+
+    async with _backup_lock:
+        try:
+            STAGING_DIR.mkdir(parents=True, exist_ok=True)
+            local_archive = STAGING_DIR / archive_name
+
+            async with await _get_sftp_connection() as conn:
+                async with conn.start_sftp_client() as sftp:
+                    remote_path = db.get_setting("backup_sftp_path") or "/"
+                    remote_file = f"{remote_path}/{archive_name}"
+                    await sftp.get(remote_file, str(local_archive))
+
+            # Extract sixtyops.db from the archive
+            with tarfile.open(local_archive, "r:gz") as tar:
+                tar.extract("sixtyops.db", path=STAGING_DIR)
+
+            extracted_db = STAGING_DIR / "sixtyops.db"
+            if not extracted_db.exists():
+                return False, "sixtyops.db not found in backup archive"
+
+            # Replace live database file
+            # Note: SQLite might have open connections; in a real deployment,
+            # this might need the app to stop or use .backup to a new file then swap.
+            # Here we do a simple file swap which is risky but common for simple restores.
+            import shutil
+            shutil.copy2(extracted_db, DB_FILE)
+
+            # Cleanup
+            local_archive.unlink(missing_ok=True)
+            extracted_db.unlink(missing_ok=True)
+
+            logger.info(f"Database restored from backup: {archive_name}")
+            return True, "Database restored successfully. System restart recommended."
+
+        except Exception as e:
+            logger.exception(f"Restore failed: {e}")
+            return False, f"Restore failed: {e}"
 
 
 async def run_backup() -> Tuple[bool, str]:

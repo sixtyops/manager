@@ -404,3 +404,47 @@ class TestSchedulerCanaries:
 
         assert app_module.update_jobs[job_id].enforce_window_cutoff is False
         app_module.update_jobs.pop(job_id, None)
+
+
+class TestSchedulerCooldown:
+    def test_device_skips_during_cooldown(self):
+        from updater.scheduler import _device_needs_update
+        from datetime import datetime, timedelta
+
+        # Last update was 10 days ago, cooldown is 30 days
+        last_upd = (datetime.now() - timedelta(days=10)).isoformat()
+        assert _device_needs_update(
+            current_version="1.0.0",
+            target_version="1.1.0",
+            allow_downgrade=False,
+            last_update_iso=last_upd,
+            cooldown_days=30
+        ) is False
+
+    def test_device_included_after_cooldown(self):
+        from updater.scheduler import _device_needs_update
+        from datetime import datetime, timedelta
+
+        # Last update was 31 days ago, cooldown is 30 days
+        last_upd = (datetime.now() - timedelta(days=31)).isoformat()
+        assert _device_needs_update(
+            current_version="1.0.0",
+            target_version="1.1.0",
+            allow_downgrade=False,
+            last_update_iso=last_upd,
+            cooldown_days=30
+        ) is True
+
+    def test_device_included_when_cooldown_disabled(self):
+        from updater.scheduler import _device_needs_update
+        from datetime import datetime, timedelta
+
+        # Last update was 1 day ago, but cooldown is 0
+        last_upd = (datetime.now() - timedelta(days=1)).isoformat()
+        assert _device_needs_update(
+            current_version="1.0.0",
+            target_version="1.1.0",
+            allow_downgrade=False,
+            last_update_iso=last_upd,
+            cooldown_days=0
+        ) is True

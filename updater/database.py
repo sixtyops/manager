@@ -803,6 +803,7 @@ def init_db():
             "setup_completed": "false",
             "admin_password_hash": "",
             "firmware_quarantine_days": "7",
+            "firmware_update_cooldown_days": "30",
             "slack_webhook_url": "",
             # Notification health tracking
             "notification_consecutive_failures": "0",

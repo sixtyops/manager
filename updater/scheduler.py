@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Callable, Optional, Set
 
 from . import database as db
@@ -64,12 +64,28 @@ def _firmware_type_for_model(model: Optional[str]) -> str:
     return "tna-30x"
 
 
-def _device_needs_update(current_version: str, target_version: str, allow_downgrade: bool) -> bool:
+def _device_needs_update(
+    current_version: str,
+    target_version: str,
+    allow_downgrade: bool,
+    last_update_iso: Optional[str] = None,
+    cooldown_days: int = 0,
+) -> bool:
     """Return True when a device should be included in a rollout."""
     if not target_version:
         return False
     if target_version == "__unknown__":
         return True
+
+    # Cooldown check: skip if recently updated
+    if cooldown_days > 0 and last_update_iso:
+        try:
+            last_upd = datetime.fromisoformat(last_update_iso)
+            if datetime.now() - last_upd < timedelta(days=cooldown_days):
+                return False
+        except (ValueError, TypeError):
+            pass
+
     if current_version == target_version:
         return False
     if not allow_downgrade and _parse_version(current_version) > _parse_version(target_version):
@@ -672,10 +688,16 @@ class AutoUpdateScheduler:
         return targets
 
     def _ap_or_children_need_update(self, ap: dict, target_versions: dict[str, str], allow_downgrade: bool,
-                                     cpes_by_ap: Optional[dict[str, list[dict]]] = None) -> bool:
+                                     cpes_by_ap: Optional[dict[str, list[dict]]] = None, cooldown_days: int = 0) -> bool:
         """Return True when an AP or any attached manageable CPE needs an update."""
         ap_target = target_versions.get(_firmware_type_for_model(ap.get("model")), "")
-        if _device_needs_update(ap.get("firmware_version", ""), ap_target, allow_downgrade):
+        if _device_needs_update(
+            ap.get("firmware_version", ""),
+            ap_target,
+            allow_downgrade,
+            last_update_iso=ap.get("last_firmware_update"),
+            cooldown_days=cooldown_days
+        ):
             return True
 
         cpes = cpes_by_ap.get(ap["ip"], []) if cpes_by_ap is not None else db.get_cpes_for_ap(ap["ip"])
@@ -683,11 +705,17 @@ class AutoUpdateScheduler:
             if cpe.get("auth_status") != "ok":
                 continue
             cpe_target = target_versions.get(_firmware_type_for_model(cpe.get("model")), "")
-            if _device_needs_update(cpe.get("firmware_version", ""), cpe_target, allow_downgrade):
+            if _device_needs_update(
+                cpe.get("firmware_version", ""),
+                cpe_target,
+                allow_downgrade,
+                last_update_iso=cpe.get("last_firmware_update"),
+                cooldown_days=cooldown_days
+            ):
                 return True
         return False
 
-    def _filter_devices_needing_update(self, scope_ips: list[str], target_versions: dict[str, str], allow_downgrade: bool = False) -> list[str]:
+    def _filter_devices_needing_update(self, scope_ips: list[str], target_versions: dict[str, str], allow_downgrade: bool = False, cooldown_days: int = 0) -> list[str]:
         """Filter scope APs to those whose firmware differs from target."""
         ap_dict = db.get_all_access_points_dict(enabled_only=False)
         cpes_by_ap = db.get_all_cpes_grouped()
@@ -697,11 +725,11 @@ class AutoUpdateScheduler:
             ap = ap_dict.get(ip)
             if not ap:
                 continue
-            if self._ap_or_children_need_update(ap, target_versions, allow_downgrade, cpes_by_ap=cpes_by_ap):
+            if self._ap_or_children_need_update(ap, target_versions, allow_downgrade, cpes_by_ap=cpes_by_ap, cooldown_days=cooldown_days):
                 needs_update.append(ip)
         return needs_update
 
-    def _filter_switches_needing_update(self, scope_ips: list[str], target_versions: dict[str, str], allow_downgrade: bool = False) -> list[str]:
+    def _filter_switches_needing_update(self, scope_ips: list[str], target_versions: dict[str, str], allow_downgrade: bool = False, cooldown_days: int = 0) -> list[str]:
         """Filter scope switches to those whose firmware differs from target."""
         switch_dict = db.get_all_switches_dict(enabled_only=False)
         needs_update = []
@@ -711,7 +739,13 @@ class AutoUpdateScheduler:
             if not switch:
                 continue
             target_version = target_versions.get(_firmware_type_for_model(switch.get("model")), "")
-            if _device_needs_update(switch.get("firmware_version", ""), target_version, allow_downgrade):
+            if _device_needs_update(
+                switch.get("firmware_version", ""),
+                target_version,
+                allow_downgrade,
+                last_update_iso=switch.get("last_firmware_update"),
+                cooldown_days=cooldown_days
+            ):
                 needs_update.append(ip)
         return needs_update
 
@@ -725,7 +759,9 @@ class AutoUpdateScheduler:
         """Determine which APs to update in the current phase."""
         phase = rollout["phase"]
         rollout_id = rollout["id"]
-        target_versions = self._target_versions(settings or db.get_all_settings(), rollout)
+        actual_settings = settings or db.get_all_settings()
+        target_versions = self._target_versions(actual_settings, rollout)
+        cooldown_days = _as_int(actual_settings.get("firmware_update_cooldown_days", "30"), 30)
 
         existing_devices = db.get_rollout_devices(rollout_id)
         already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "pending", "failed")}
@@ -739,10 +775,13 @@ class AutoUpdateScheduler:
             ap = ap_dict.get(ip)
             if not ap:
                 continue
-            if self._ap_or_children_need_update(ap, target_versions, allow_downgrade, cpes_by_ap=cpes_by_ap):
+            if self._ap_or_children_need_update(
+                ap, target_versions, allow_downgrade,
+                cpes_by_ap=cpes_by_ap, cooldown_days=cooldown_days
+            ):
                 candidates.append(ip)
 
-        preferred_canaries = self._preferred_canary_devices(settings, "rollout_canary_aps")
+        preferred_canaries = self._preferred_canary_devices(actual_settings, "rollout_canary_aps")
         return self._select_phase_batch(phase, candidates, preferred_canaries)
 
     def _get_switches_for_phase(
@@ -755,7 +794,9 @@ class AutoUpdateScheduler:
         """Determine which switches to update in the current phase."""
         phase = rollout["phase"]
         rollout_id = rollout["id"]
-        target_versions = self._target_versions(settings or db.get_all_settings(), rollout)
+        actual_settings = settings or db.get_all_settings()
+        target_versions = self._target_versions(actual_settings, rollout)
+        cooldown_days = _as_int(actual_settings.get("firmware_update_cooldown_days", "30"), 30)
 
         existing_devices = db.get_rollout_devices(rollout_id)
         already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "pending", "failed")}
@@ -769,10 +810,16 @@ class AutoUpdateScheduler:
             if not switch:
                 continue
             target_version = target_versions.get(_firmware_type_for_model(switch.get("model")), "")
-            if _device_needs_update(switch.get("firmware_version", ""), target_version, allow_downgrade):
+            if _device_needs_update(
+                switch.get("firmware_version", ""),
+                target_version,
+                allow_downgrade,
+                last_update_iso=switch.get("last_firmware_update"),
+                cooldown_days=cooldown_days
+            ):
                 candidates.append(ip)
 
-        preferred_canaries = self._preferred_canary_devices(settings, "rollout_canary_switches")
+        preferred_canaries = self._preferred_canary_devices(actual_settings, "rollout_canary_switches")
         return self._select_phase_batch(phase, candidates, preferred_canaries)
 
     def _select_phase_batch(self, phase: str, candidates: list[str], preferred_canaries: Optional[list[str]] = None) -> list[str]:
@@ -994,8 +1041,6 @@ class AutoUpdateScheduler:
 
     def _calculate_predictions(self, rollout: dict, settings: dict) -> dict:
         """Calculate rollout time predictions based on historical device durations."""
-        from datetime import timedelta
-
         avg_durations = db.get_avg_durations()
         concurrency = _as_int(settings.get("parallel_updates", "2"), 2)
         bank_mode = settings.get("bank_mode", "both")
@@ -1003,6 +1048,7 @@ class AutoUpdateScheduler:
         start_hour = _as_int(settings.get("schedule_start_hour", "3"), 3)
         end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
         schedule_days = settings.get("schedule_days", "")
+        cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
         window_minutes = (end_hour - start_hour) * 60
         if window_minutes <= 0:
             window_minutes += 24 * 60
@@ -1026,7 +1072,9 @@ class AutoUpdateScheduler:
             if ip in already_done:
                 continue
             ap = db.get_access_point(ip)
-            if ap and self._ap_or_children_need_update(ap, target_versions, allow_downgrade):
+            if ap and self._ap_or_children_need_update(
+                ap, target_versions, allow_downgrade, cooldown_days=cooldown_days
+            ):
                 ap_candidates.append(ip)
 
         switch_candidates = []
@@ -1037,7 +1085,13 @@ class AutoUpdateScheduler:
             if not switch:
                 continue
             target_version = target_versions.get(_firmware_type_for_model(switch.get("model")), "")
-            if _device_needs_update(switch.get("firmware_version", ""), target_version, allow_downgrade):
+            if _device_needs_update(
+                switch.get("firmware_version", ""),
+                target_version,
+                allow_downgrade,
+                last_update_iso=switch.get("last_firmware_update"),
+                cooldown_days=cooldown_days
+            ):
                 switch_candidates.append(ip)
 
         total_candidates = len(ap_candidates) + len(switch_candidates)

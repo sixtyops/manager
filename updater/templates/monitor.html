@@ -1492,8 +1492,9 @@
         .toggle-sm-row {
             display: flex;
             align-items: center;
-            gap: 6px;
-            margin-bottom: 5px;
+            gap: 8px;
+            margin-bottom: 6px;
+            min-height: 24px;
         }
         .toggle-sm-row input[type="number"],
         .toggle-sm-row input[type="text"] {
@@ -1505,6 +1506,12 @@
             font-size: var(--text-xs);
             color: var(--text-subtle);
             font-weight: 500;
+            white-space: nowrap;
+        }
+
+        .toggle-sm-label-fixed {
+            width: 120px;
+            flex-shrink: 0;
         }
 
         .drawer-section-title {
@@ -2432,24 +2439,25 @@
                         </div>
                         <div class="toggle-sm-row">
                             <button class="toggle-sm" id="drawerWeatherToggle" type="button" aria-label="Toggle weather lockout" aria-pressed="false" onclick="toggleDrawerWeather()"></button>
-                            <span class="toggle-sm-label">Disable updates below</span>
+                            <span class="toggle-sm-label">Weather Guard &lt;</span>
                             <input type="number" id="drawerMinTemp" name="drawerMinTemp" value="14" min="-40" max="120" aria-label="Minimum temperature" class="u-w-48">
                             <span id="drawerTempUnit" class="u-text-xs-muted">&deg;F</span>
-                            <span id="drawerWeatherTemp" class="u-text-sm-muted"></span>
+                            <span id="drawerWeatherTemp" class="u-text-sm-muted" style="margin-left:auto;"></span>
                         </div>
-                        <div class="toggle-sm-row u-gap-4">
-                            <label class="u-text-xxs-dim" for="drawerZipCode">Postal</label>
+                        <div class="toggle-sm-row">
+                            <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerZipCode">Postal / Zip</label>
                             <input type="text" id="drawerZipCode" name="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56">
                         </div>
-                        <div class="toggle-sm-row u-gap-4">
-                            <label class="u-text-xxs-dim" for="drawerQuarantineDays" title="Canary devices soak-test new firmware for this many days before the rest of the fleet upgrades">New firmware update delay</label>
+                        <div class="toggle-sm-row">
+                            <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerQuarantineDays" title="Canary devices soak-test new firmware for this many days before the rest of the fleet upgrades">Quarantine Period</label>
                             <input type="number" id="drawerQuarantineDays" name="drawerQuarantineDays" value="7" min="0" max="90" class="u-w-48">
                             <span class="u-text-xxs-dim">days</span>
                         </div>
-                        <!-- TODO: Add per-device firmware update cooldown (default 30 days).
-                             Prevents rapidly re-updating a device after a firmware update.
-                             Needs backend support: track last_firmware_update per device,
-                             skip device in auto-update if updated within cooldown window. -->
+                        <div class="toggle-sm-row">
+                            <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerCooldownDays" title="Prevents rapidly re-updating a device after a firmware update. Device will skip auto-updates if it was updated within this window.">Update Cooldown <span class="pro-badge">PRO</span></label>
+                            <input type="number" id="drawerCooldownDays" name="drawerCooldownDays" value="30" min="0" max="365" class="u-w-48">
+                            <span class="u-text-xxs-dim">days</span>
+                        </div>
                     </div>
 
                     <div class="drawer-col-wide drawer-firmware-card">
@@ -2645,21 +2653,21 @@
 
             <!-- Updates Panel -->
             <div class="settings-panel active" id="settingsPanel-updates">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                    <div style="display:flex;align-items:center;gap:8px;">
+                <div class="u-flex-center-between u-mb-8">
+                    <div class="u-flex-center-gap8">
                         <button class="toggle" id="appAutoUpdateToggle" type="button" aria-label="Toggle app auto-update" aria-pressed="false" onclick="toggleAppAutoUpdate()" style="flex-shrink:0;"></button>
-                        <label style="margin:0;font-weight:600;font-size:0.8rem;">Auto Check and Install SixtyOps App Updates</label>
+                        <label class="u-m0" style="font-weight:600;font-size:0.8rem;">Auto Check and Install SixtyOps App Updates</label>
                     </div>
                     <span id="appVersionDisplay" style="font-size:0.82rem;font-weight:700;color:var(--text);"></span>
                 </div>
 
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+                <div class="u-flex-center-gap8 u-mb-12">
                     <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
                     <span id="appUpdateStatus" class="u-text-xs-muted"></span>
                 </div>
 
-                <div style="display:flex;align-items:center;gap:8px;padding-top:10px;border-top:1px solid var(--border-light);">
-                    <label class="u-label-xs" style="margin:0;" for="appReleaseChannel">Release Channel</label>
+                <div class="u-flex-center-gap8 u-pt-10" style="border-top:1px solid var(--border-light);">
+                    <label class="u-label-xs u-m0" for="appReleaseChannel">Release Channel</label>
                     <select id="appReleaseChannel" name="appReleaseChannel" onchange="saveReleaseChannel()" style="font-size:0.72rem;padding:4px 8px;border:1px solid var(--border);border-radius:6px;">
                         <option value="stable">Stable</option>
                         <option value="dev">Dev</option>
@@ -2708,12 +2716,20 @@
             <div class="settings-panel" id="settingsPanel-backup">
                 <!-- SFTP Backup Status -->
                 <div style="margin-bottom:16px;">
-                    <label class="settings-section-title">Scheduled Backup</label>
+                    <label class="settings-section-title">Backup & Restore</label>
                     <div id="backupStatusInfo" style="font-size:0.75rem;color:var(--text-muted);padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;">Loading...</div>
                     <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
                         <button class="backup-btn" onclick="runBackupNow()">Run Now</button>
                         <a href="/backup-setup" class="backup-btn u-bg-muted-cta" style="text-decoration:none;text-align:center;">Configure</a>
                         <span id="backupRunStatus" class="u-text-xs-muted"></span>
+                    </div>
+
+                    <!-- Remote Backups List -->
+                    <div style="margin-top:16px;">
+                        <label class="u-label-xs" style="color:var(--text-dim);margin-bottom:4px;">Remote Backups (SFTP) <span class="pro-badge">PRO</span></label>
+                        <div id="remoteBackupsList" style="max-height:160px;overflow-y:auto;border:1px solid var(--border-light);border-radius:6px;background:var(--input-bg);padding:4px;">
+                            <div style="padding:10px;text-align:center;font-size:0.75rem;color:var(--text-muted);">Loading backups...</div>
+                        </div>
                     </div>
                 </div>
 
@@ -7882,8 +7898,9 @@
                 // Postal code
                 document.getElementById('drawerZipCode').value = s.zip_code || '';
 
-                // Quarantine
+                // Quarantine & Cooldown
                 document.getElementById('drawerQuarantineDays').value = s.firmware_quarantine_days || '7';
+                document.getElementById('drawerCooldownDays').value = s.firmware_update_cooldown_days || '30';
 
                 drawerSettingsLoaded = true;
             } catch (e) {}
@@ -7958,7 +7975,8 @@
         document.addEventListener('DOMContentLoaded', () => {
             ['drawerStartHour', 'drawerEndHour', 'drawerBankMode',
              'drawerParallel', 'drawerMinTemp', 'drawerZipCode',
-             'drawerQuarantineDays'].forEach(id => {
+             'drawerQuarantineDays', 'drawerCooldownDays'].forEach(id => {
+
                 const el = document.getElementById(id);
                 if (el) el.addEventListener('change', markDrawerDirty);
             });
@@ -7995,6 +8013,7 @@
                 min_temperature_c: String(storageTemp(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
                 zip_code: document.getElementById('drawerZipCode').value,
                 firmware_quarantine_days: document.getElementById('drawerQuarantineDays').value,
+                firmware_update_cooldown_days: document.getElementById('drawerCooldownDays').value,
                 firmware_beta_enabled: drawerBetaEnabled ? 'true' : 'false',
                 allow_downgrade: document.getElementById('drawerDowngradeToggle').classList.contains('active') ? 'true' : 'false',
                 weather_check_enabled: document.getElementById('drawerWeatherToggle').classList.contains('active') ? 'true' : 'false',
@@ -8503,6 +8522,7 @@
                     const statusText = data.last_status || 'never run';
                     const lastRun = data.last_run || 'Never';
                     el.innerHTML = `Status: <strong style="color:${statusColor}">${escapeHtml(statusText)}</strong> · Last run: ${escapeHtml(lastRun)}${data.sftp_display ? ` · ${escapeHtml(data.sftp_display)}` : ''}`;
+                    loadRemoteBackups();
                 }
             } catch (e) {
                 el.textContent = 'Could not load backup status';
@@ -8523,6 +8543,77 @@
                 statusEl.textContent = 'Backup failed: ' + e.message;
                 statusEl.style.color = '#dc2626';
             }
+        }
+
+        async function loadRemoteBackups() {
+            const listEl = document.getElementById('remoteBackupsList');
+            if (!listEl) return;
+            try {
+                const resp = await fetch('/api/backup/list');
+                if (!resp.ok) { listEl.innerHTML = '<div style="padding:10px;text-align:center;font-size:0.75rem;color:#dc2626;">Error loading backups</div>'; return; }
+                const backups = await resp.json();
+                if (backups.length === 0) {
+                    listEl.innerHTML = '<div style="padding:10px;text-align:center;font-size:0.75rem;color:var(--text-muted);">No backups found on SFTP server.</div>';
+                } else {
+                    listEl.innerHTML = backups.map(b => {
+                        const date = b.mtime ? new Date(b.mtime).toLocaleString() : 'Unknown date';
+                        const size = formatBytes(b.size || 0);
+                        return `
+                            <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-bottom:1px solid var(--border-light);font-size:0.75rem;">
+                                <div style="flex:1;min-width:0;margin-right:8px;">
+                                    <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(b.name)}">${escapeHtml(b.name)}</div>
+                                    <div style="color:var(--text-dim);font-size:0.68rem;">${date} · ${size}</div>
+                                </div>
+                                <button class="action-link" style="color:var(--primary);font-weight:600;" onclick="restoreRemoteBackup('${escapeHtml(b.name)}')">Restore</button>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            } catch (e) {
+                listEl.innerHTML = '<div style="padding:10px;text-align:center;font-size:0.75rem;color:#dc2626;">Failed to fetch backup list</div>';
+            }
+        }
+
+        async function restoreRemoteBackup(name) {
+            confirmDialog(
+                'Restore database from <strong>' + escapeHtml(name) + '</strong>? This will replace all current settings, devices, and history. The system should be restarted after restore.',
+                { title: 'Restore System Backup', confirmText: 'Restore Now', danger: true }
+            ).then(async (confirmed) => {
+                if (!confirmed) return;
+
+                const statusEl = document.getElementById('backupRunStatus');
+                statusEl.innerHTML = '<span class="spinner-inline"></span> Restoring...';
+                statusEl.style.color = '#3b82f6';
+
+                try {
+                    const formData = new FormData();
+                    formData.append('archive_name', name);
+                    const resp = await fetch('/api/backup/restore', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        showToast('Restore successful. Reloading...');
+                        setTimeout(() => location.reload(), 2000);
+                    } else {
+                        throw new Error(data.message || 'Restore failed');
+                    }
+                } catch (e) {
+                    statusEl.textContent = 'Restore failed: ' + e.message;
+                    statusEl.style.color = '#dc2626';
+                    showToast('Restore failed: ' + e.message, 'error');
+                }
+            });
+        }
+
+        function formatBytes(bytes, decimals = 1) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
         }
 
         async function exportBackup() {
