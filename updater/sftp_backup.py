@@ -194,6 +194,7 @@ async def restore_backup(archive_name: str) -> Tuple[bool, str]:
     if not re.match(r'^sixtyops-backup-[\w.\-]+\.tar\.gz$', archive_name) or '..' in archive_name:
         return False, "Invalid backup archive name"
 
+
     async with _backup_lock:
         try:
             STAGING_DIR.mkdir(parents=True, exist_ok=True)

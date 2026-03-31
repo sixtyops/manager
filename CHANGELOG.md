@@ -5,6 +5,7 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- Release validation script (`scripts/validate_release.py`) for automated API-level smoke testing against live deployments
 - Webhooks feature display name added to license feature list
 - Free-tier auto-update limit: APs capped at 4 per auto-update run; switch auto-updates now require Pro
 
