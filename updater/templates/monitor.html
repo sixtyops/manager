@@ -2449,6 +2449,11 @@
                             <input type="text" id="drawerZipCode" name="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56">
                         </div>
                         <div class="toggle-sm-row">
+                            <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerQuarantineDays" title="Canary devices soak-test new firmware for this many days before the rest of the fleet upgrades">Quarantine Period</label>
+                            <input type="number" id="drawerQuarantineDays" name="drawerQuarantineDays" value="7" min="0" max="90" class="u-w-48">
+                            <span class="u-text-xxs-dim">days</span>
+                        </div>
+                        <div class="toggle-sm-row">
                             <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerCooldownDays" title="Prevents rapidly re-updating a device after a firmware update. Device will skip auto-updates if it was updated within this window.">Update Cooldown <span class="pro-badge">PRO</span></label>
                             <input type="number" id="drawerCooldownDays" name="drawerCooldownDays" value="30" min="0" max="365" class="u-w-48">
                             <span class="u-text-xxs-dim">days</span>

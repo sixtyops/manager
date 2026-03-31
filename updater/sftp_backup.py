@@ -190,6 +190,11 @@ async def restore_backup(archive_name: str) -> Tuple[bool, str]:
     WARNING: This replaces the local sixtyops.db file. The application should
     ideally be restarted after this operation.
     """
+    import re
+    if not re.match(r'^sixtyops-backup-[\w.\-]+\.tar\.gz$', archive_name) or '..' in archive_name:
+        return False, "Invalid backup archive name"
+
+
     async with _backup_lock:
         try:
             STAGING_DIR.mkdir(parents=True, exist_ok=True)
