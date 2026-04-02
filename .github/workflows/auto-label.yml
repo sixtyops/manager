@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   label:
-    runs-on: [self-hosted, linux, x64, proxmox]
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 2
     steps:
       - name: Apply label from PR title

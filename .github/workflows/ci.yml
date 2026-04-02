@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   test:
-    runs-on: [self-hosted, linux, x64, proxmox]
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -36,14 +36,14 @@ jobs:
           pytest -v
 
   docker-build:
-    runs-on: [self-hosted, linux, x64, proxmox]
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       - run: docker build -t firmware-updater:ci .
   appliance-check:
-    runs-on: [self-hosted, linux, x64, proxmox]
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 5
     if: github.event_name == 'pull_request'
     steps:
