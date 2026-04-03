@@ -22,7 +22,7 @@ concurrency:
 jobs:
   validate-dispatch:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: [self-hosted, linux, x64, proxmox]
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 5
     steps:
       - name: Validate confirmation
@@ -41,7 +41,7 @@ jobs:
           fi
 
   test:
-    runs-on: [self-hosted, linux, x64, proxmox]
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 10
     if: always() && (needs.validate-dispatch.result == 'success' || needs.validate-dispatch.result == 'skipped')
     needs: [validate-dispatch]
@@ -59,7 +59,7 @@ jobs:
   release:
     needs: [test]
     if: always() && needs.test.result == 'success'
-    runs-on: [self-hosted, linux, x64, proxmox]
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 10
     permissions:
       contents: write
@@ -113,7 +113,7 @@ jobs:
   docker-push:
     needs: [release]
     if: always() && needs.release.result == 'success'
-    runs-on: [self-hosted, linux, x64, proxmox]
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 15
     permissions:
       contents: read
