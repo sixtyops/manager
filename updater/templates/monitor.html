@@ -6900,6 +6900,15 @@
                 return;
             }
 
+            // If rollout is still active but all devices are already current
+            // (e.g. target firmware changed or devices updated outside rollout),
+            // treat as idle — the rollout is stale.
+            if (rollout.status !== 'completed' && lastBehindCount <= 0 && lastFleetTotal > 0) {
+                currentRolloutId = null;
+                renderIdlePhases();
+                return;
+            }
+
             currentRolloutId = rollout.id;
 
             const phaseIdx = PHASES.indexOf(rollout.phase);
