@@ -2,7 +2,7 @@
 
 Automated firmware updates for Tachyon wireless networks — handles scheduling, gradual rollouts, and safety checks so you don't have to update APs manually.
 
-A firmware cycle means logging into each AP and every attached CPE, uploading the image, selecting the right bank, and waiting for the reboot. One device at a time. In the middle of the night. With hundreds of devices across dozens of sites, it's a lot of work — and it tends to get skipped. SixtyOps handles it automatically: set a maintenance window, assign firmware, and the system updates your fleet over 4 consecutive nights with safety checks at each step. Setup takes 15 minutes.
+A firmware cycle means logging into each AP and every attached CPE, uploading the image, selecting the right bank, and waiting for the reboot. One device at a time. In the middle of the night. With hundreds of devices across dozens of sites, it's a lot of work — and it tends to get skipped. SixtyOps handles it automatically: add your APs once with credentials, set a maintenance window, and the system updates your fleet over 4 consecutive nights with safety checks at each step. Setup takes 15 minutes.
 
 ![Dashboard — device table with signal health and update status](docs/screenshots/dashboard.png)
 
@@ -10,39 +10,56 @@ A firmware cycle means logging into each AP and every attached CPE, uploading th
 
 ## How It Works
 
-1. Upload firmware files and configure a maintenance window (e.g., Sundays 2–6 AM)
-2. Enable the scheduler
-3. Optionally pin test APs and switches as dedicated canaries in the firmware drawer
-4. The system rolls out updates over 4 consecutive maintenance windows:
-   - Window 1: Canary APs (+ attached CPEs) and canary switches
-   - Window 2: 10% of remaining APs and switches
-   - Window 3: 50% of remaining APs and switches
-   - Window 4: All remaining APs and switches
+1. Add APs and switches (top left) — the system discovers CPEs attached to each AP and assigns devices to tower sites based on the AP's location field
+2. Upload firmware files via the **Firmware** tab
+3. Configure the scheduler in the **Auto-Update** tab:
+   - Set your maintenance window (e.g., Sunday 2–6 AM)
+   - Assign firmware images to device models
+   - Set safety thresholds (temperature, timezone)
+4. The system automatically rolls out updates over 4 consecutive nights:
+   - Night 1: Canary APs (+ attached CPEs) and canary switches
+   - Night 2: 10% of remaining APs and switches
+   - Night 3: 50% of remaining APs and switches
+   - Night 4: All remaining APs and switches
 
-Any failure pauses the rollout. Review the failed devices and resume when ready.
+Any failure pauses the rollout. Review the failed devices in the rollout status panel and resume when ready.
+
+You can also trigger immediate updates on any single AP, CPE, or switch from the device table's **Update** column without affecting the scheduled rollout.
 
 ## Safety Mechanisms
 
-- **Temperature validation** — Blocks updates if temperature is below threshold (default -10°C / 14°F)
-- **System time validation** — Blocks updates if AP clock is unreliable (prevents boot loops)
-- **Gradual rollout** — Updates canary APs/switches first, then 10%, 50%, 100% on consecutive windows
-- **Manual canary run** — The pending Canary pill can run the test phase outside the normal maintenance window
-- **Automatic pause on failure** — Any failed update stops the rollout for manual review
-- **Maintenance windows** — Updates only run on specified days and times
-- **Dry-run mode** — Preview what would be updated before enabling the scheduler
+- **Temperature validation** — Blocks updates if temperature is below threshold (default -10°C / 14°F) to protect equipment in cold conditions
+- **Timezone validation** — Prevents daytime updates that would cause outages due to device clock drift
+- **Gradual rollout** — Updates canary devices first, then progressively larger groups on consecutive nights
+- **Manual canary run** — Click the pending Canary pill to test firmware on canary devices before the maintenance window
+- **Automatic pause on failure** — Any failed update stops the rollout; manually review and resume from the rollout status panel
+- **Maintenance windows** — Updates only run during configured days and times
 
 ## Supported Devices
 
-**Tachyon Networks**: TNA-301, TNA-302, TNA-303x, TNA-303L, TNA-303L-65, TNS-100
+**Tachyon Networks:**
+- TNA-301
+- TNA-302
+- TNA-303x
+- TNA-303L
+- TNA-303L-65
+- TNS-100
 
 ## Additional Features
 
-- **Manual updates** — Immediate updates for specific APs when needed
-- **Network topology view** — Visual map of tower sites, APs, and CPEs with signal health indicators
+- **Manual updates** — Immediate firmware push on any single AP, CPE, or switch without affecting the scheduled rollout
+- **Signal health monitoring** — Real-time signal strength and distance visualization across your fleet
 - **Parallel updates** — Configurable concurrency for faster bulk updates
-- **Built-in RADIUS** — Integrated RADIUS server for AP and switch admin authentication
-- **SFTP backups** — Automated backup of database and device configurations
-- **Real-time progress** — WebSocket-based live update status
+- **Real-time progress** — WebSocket-based live update status during rollouts
+
+## Dangerous / Experimental Features
+
+The following features involve untested or high-impact operations — use with care:
+
+- **Configuration backup and restore** — Full database and device configuration snapshots (SFTP push/restore)
+- **Authentication** — Built-in RADIUS server and SSO / OIDC integration for AP and switch admin credentials
+
+These are marked **DANGEROUS** in the UI and should only be used after testing in a lab environment.
 
 ## Quick Start
 
@@ -83,37 +100,42 @@ See [docs/deployment.md](docs/deployment.md) for full deployment options.
 
 ## Usage
 
-### Automatic Updates
+### Scheduled Automatic Updates
 
-1. Upload firmware files (**Firmware** tab)
-2. Configure scheduler (**Auto-Update** tab):
+1. Add APs and switches with credentials (top left, "Add APs & Switches" card)
+2. Upload firmware files (**Firmware** tab)
+3. Configure scheduler (**Auto-Update** tab):
    - Set maintenance window (days and time range)
    - Assign firmware to device models
    - Set temperature threshold (default: -10°C / 14°F)
-   - Enable scheduler
+4. Enable the scheduler
 
-The system runs the gradual rollout automatically. Check **Rollout Status** to monitor progress. If you have a lab AP or switch, pin it as a canary in the firmware drawer. You can also click the pending `Canary` pill to run that test phase before the maintenance window opens.
+The system runs the gradual rollout automatically on your configured nights. Monitor progress in the **Rollout Status** panel. If you have a lab AP or switch, pin it as a canary in the firmware drawer to test before the full rollout.
 
 See [docs/gradual-rollout.md](docs/gradual-rollout.md) for rollout details.
 
 ### Manual Updates
 
-1. Upload firmware (**Firmware** tab)
-2. Enter IP addresses (**Update** tab)
-3. Configure concurrency and bank mode
-4. Start update and monitor progress
+Click the **Update** button on any AP, CPE, or switch in the device table to trigger an immediate firmware push:
+- Updates start immediately (no maintenance window required)
+- The device reboots with the new firmware
+- Useful for emergency updates, testing new firmware, or updating specific devices outside the schedule
 
-Useful for emergency updates, testing new firmware, or updating specific sites outside the schedule.
+Configure concurrency (number of parallel updates) and bank mode before starting.
 
-### Network Monitoring
+### Signal Monitoring
 
-The **Monitor** page displays network topology (tower sites → APs → CPEs) with signal health indicators. Background polling keeps data current.
+The main page displays real-time signal strength and distance data for all APs and CPEs:
+- **Signal Chart** — Scatter plot of signal strength vs distance, color-coded by health (strong / low / critical / offline)
+- **Device Table** — All devices with current signal dBm, health status, and update controls
+
+Background polling keeps data current. Check here before scheduling updates to understand current network health.
 
 ## Documentation
 
-- **[Deployment Guide](docs/deployment.md)** — HTTPS, built-in RADIUS, environment variables
+- **[Deployment Guide](docs/deployment.md)** — HTTPS, RADIUS, environment variables
 - **[RADIUS Guide](docs/radius.md)** — Built-in FreeRADIUS setup, client overrides, and device rollout workflow
-- **[Gradual Rollout](docs/gradual-rollout.md)** — How the 4-window rollout works
+- **[Gradual Rollout](docs/gradual-rollout.md)** — How the 4-night rollout works
 - **[Release System](docs/release-system.md)** — Release channels, versioning, and self-update behavior
 - **[API Reference](docs/api.md)** — REST endpoints and WebSocket protocol
 - **[Architecture](docs/architecture.md)** — System design and data flow
@@ -142,12 +164,9 @@ pytest -v
 
 All work happens on feature branches off `main`:
 
-### Contributing
-
 1. Create a feature branch from `main`
 2. Make changes and run tests (`pytest -v`)
 3. Open a PR targeting `main`
-4. After merge, tag a dev or stable release as needed
 
 ### Release Channels
 
