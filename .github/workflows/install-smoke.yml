@@ -2,7 +2,7 @@ name: Installer Smoke
 
 on:
   pull_request:
-    branches: [main, dev]
+    branches: [main]
     paths:
       - 'scripts/install.sh'
       - 'docker-compose.yml'
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   install-smoke:
-    runs-on: [self-hosted, linux, x64, proxmox]
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4

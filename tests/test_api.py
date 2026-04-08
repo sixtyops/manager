@@ -352,7 +352,7 @@ class TestAutoUpdateAPI:
             "enabled": True,
             "last_check": "2026-01-01T00:00:00",
             "available_version": "0.2.0",
-            "release_url": "https://github.com/isolson/firmware-updater/releases/tag/v0.2.0",
+            "release_url": "https://github.com/sixtyops/manager/releases/tag/v0.2.0",
             "release_notes": "New features",
             "update_available": True,
             "docker_socket_available": True,
@@ -388,7 +388,7 @@ class TestAutoUpdateAPI:
             "current_version": "1.0.0",
             "latest_version": "0.3.0",
             "update_available": True,
-            "release_url": "https://github.com/isolson/firmware-updater/releases/tag/v0.3.0",
+            "release_url": "https://github.com/sixtyops/manager/releases/tag/v0.3.0",
             "release_notes": "Bug fixes and improvements",
             "error": None,
         })

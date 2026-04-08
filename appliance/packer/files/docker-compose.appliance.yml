@@ -1,6 +1,6 @@
 services:
   sixtyops-mgmt:
-    image: ghcr.io/isolson/firmware-updater:${APP_VERSION:-latest}
+    image: ghcr.io/sixtyops/manager:${APP_VERSION:-latest}
     container_name: sixtyops-management
     ports:
       - "1812:1812/udp"
@@ -12,7 +12,7 @@ services:
     environment:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - SIXTYOPS_APPLIANCE=1
-      - SIXTYOPS_IMAGE=ghcr.io/isolson/firmware-updater
+      - SIXTYOPS_IMAGE=ghcr.io/sixtyops/manager
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 30s

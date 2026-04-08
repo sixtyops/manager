@@ -88,10 +88,7 @@
           <p class="mt-3">Telemetry <strong>never</strong> includes IP addresses, MAC addresses, serial numbers, hostnames, credentials, locations, or any personally identifiable information.</p>
           <p class="mt-2">You can disable telemetry entirely by setting the environment variable <code class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">DISABLE_TELEMETRY=1</code> on your appliance.</p>
 
-          <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.4 License Validation</h3>
-          <p>If you activate a Pro license, the appliance sends your license key and total device count (APs + switches) to our license server (license.sixtyops.net) approximately every 24 hours to validate your subscription. No device details, network data, or personal information is included.</p>
-
-          <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.5 Website Data</h3>
+          <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.4 Website Data</h3>
           <p>When you visit sixtyops.net, our hosting provider may collect standard web server logs (IP address, browser type, pages visited). We do not use third-party analytics or advertising trackers on our website.</p>
         </section>
 
@@ -106,7 +103,6 @@
           <h2 class="text-lg font-semibold text-slate-900 mb-3">4. How We Use Information</h2>
           <ul class="list-disc list-inside space-y-1 text-sm">
             <li>Telemetry data: to improve product reliability, identify common failure modes, and prioritize device compatibility</li>
-            <li>License validation: to verify active subscriptions and enforce device limits</li>
             <li>Website logs: to maintain site security and availability</li>
           </ul>
           <p class="mt-3">We do not sell, rent, or share your data with third parties for advertising or marketing purposes.</p>
@@ -158,7 +154,7 @@
           <ul class="list-disc list-inside mt-2 space-y-1 text-sm">
             <li>Admin passwords are bcrypt-hashed and never stored in plaintext</li>
             <li>Device credentials are encrypted at rest on your appliance</li>
-            <li>All external communications (telemetry, license validation) use HTTPS/TLS</li>
+            <li>All external communications (telemetry) use HTTPS/TLS</li>
             <li>Login attempts are rate-limited to prevent brute-force attacks</li>
           </ul>
           <p class="mt-3">No method of electronic transmission or storage is 100% secure. We cannot guarantee absolute security, but we strive to use commercially reasonable protections.</p>

@@ -12,8 +12,6 @@ from fastapi.testclient import TestClient
 # Set test env vars before any app imports
 os.environ["ADMIN_USERNAME"] = "admin"
 os.environ["ADMIN_PASSWORD"] = "testpass123"
-# Enable all features by default in tests (license gating tests override this)
-os.environ["SIXTYOPS_FORCE_PRO"] = "1"
 
 
 @pytest.fixture
@@ -517,7 +515,7 @@ def memory_db():
     """)
     # Insert default settings
     defaults = {
-        "schedule_enabled": "false",
+        "schedule_enabled": "true",
         "schedule_days": "tue,wed,thu",
         "schedule_start_hour": "3",
         "schedule_end_hour": "4",
@@ -650,9 +648,6 @@ def client(mock_db):
     mock_scheduler = MagicMock()
     mock_scheduler.start = AsyncMock()
     mock_scheduler.stop = AsyncMock()
-    mock_license_validator = MagicMock()
-    mock_license_validator.start = AsyncMock()
-    mock_license_validator.stop = AsyncMock()
     mock_radius_svc = MagicMock()
     mock_radius_svc.run_forever = AsyncMock()
     # FreeRADIUS runtime removed — pyrad runs in-process
@@ -668,7 +663,6 @@ def client(mock_db):
          patch("updater.app.init_checker", return_value=mock_checker), \
          patch("updater.app.get_checker", return_value=mock_checker), \
          patch("updater.app.init_scheduler", return_value=mock_scheduler), \
-         patch("updater.app.init_license_validator", return_value=mock_license_validator), \
          patch("updater.app.init_radius_service", return_value=mock_radius_svc), \
          patch("updater.app.ensure_admin_user"), \
          patch("updater.app._recover_crashed_device_jobs"), \
@@ -733,27 +727,11 @@ def viewer_client(client, mock_db):
 
 @pytest.fixture
 def pro_license(mock_db):
-    """Set up a PRO license in the test DB and enable it in the license module."""
-    import updater.license as lic
-    mock_db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("license_status", "active"))
-    mock_db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("license_key", "TEST-PRO-KEY"))
-    mock_db.commit()
-    lic._license_state = None
-    # Temporarily disable FORCE_PRO so license state is read from DB
-    old_force = lic._FORCE_PRO
-    lic._FORCE_PRO = False
+    """No-op — all features are always unlocked. Kept for backward compat."""
     yield
-    lic._FORCE_PRO = old_force
-    lic._license_state = None
 
 
 @pytest.fixture
 def free_license(mock_db):
-    """Ensure free tier with no license key, and disable FORCE_PRO."""
-    import updater.license as lic
-    lic._license_state = None
-    old_force = lic._FORCE_PRO
-    lic._FORCE_PRO = False
+    """No-op — all features are always unlocked. Kept for backward compat."""
     yield
-    lic._FORCE_PRO = old_force
-    lic._license_state = None

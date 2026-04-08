@@ -8,81 +8,50 @@ HTML/JS frontend, SQLite database, Docker deployment.
 
 ## Branching Model
 
-- **`main`** — Production. Always reflects the latest stable release.
-  Only receives merges from `dev` after staging testing.
-- **`dev`** — Staging. All feature work merges here first.
-- **Feature branches** — Branch from `dev`, PR back to `dev`.
+- **`main`** — The only long-lived branch. Always deployable.
+- **Feature branches** — Branch from `main`, PR back to `main`.
 
 ### Branching Rules (MUST follow)
 
-1. **Never push directly to `main`** — all changes reach main via `dev` → `main` PR.
-2. **Never create PRs targeting `main`** from feature branches — always target `dev`.
-3. **Feature branches must branch from `dev`**, not `main`.
-4. **Before creating a feature branch**, run `git fetch origin && git checkout dev && git pull origin dev` to start from the latest `dev`.
-5. **After merging to `dev`**, sync periodically: `git fetch origin && git merge origin/dev`.
-6. **Keep `dev` up to date with `main`** — after a stable release merges `dev` → `main`, immediately merge `main` back into `dev` to avoid divergence.
-7. **If `main` and `dev` diverge**, merge `main` into `dev` (not the other way around) to reconcile.
+1. **Never push directly to `main`** — all changes go through PRs.
+2. **Feature branches must branch from `main`**.
+3. **Before creating a feature branch**, run `git fetch origin && git checkout main && git pull origin main` to start from the latest `main`.
 
 ### PR Checklist
 
 Before creating any PR, verify:
-- [ ] Target branch is `dev` (not `main`) for feature work
-- [ ] Source branch was created from `dev`
+- [ ] Target branch is `main`
+- [ ] Source branch was created from `main`
 - [ ] All tests pass (`pytest -v`)
 - [ ] CHANGELOG.md updated if user-facing change
 
 ## Release Workflow
 
-### Dev Release (automatic — do this after every meaningful change)
-Every commit to `dev` that is ready for testing MUST be tagged as a dev
-release. This is how appliances receive updates — without a tag, the change
-is invisible to deployed instances.
+### Dev Release (pre-release for early testing)
+1. Bump `updater/__init__.py` version with a `-devN` suffix
+   (e.g., `"1.3.0"` → `"1.3.1-dev1"`)
+2. Commit the bump: `git commit -m "chore: bump version to X.Y.Z-devN"`
+3. Tag and push: `git tag vX.Y.Z-devN && git push origin main --tags`
+4. GitHub Actions auto-creates a pre-release with commit-based changelog
+   and pushes the Docker image to `ghcr.io/sixtyops/manager:vX.Y.Z-devN`
 
-1. Commit and push to `dev`
-2. Bump `updater/__init__.py` version: increment the `devN` suffix
-   (e.g., `"1.2.1-dev5"` → `"1.2.1-dev6"`)
-3. Commit the bump: `git add updater/__init__.py && git commit -m "chore: bump version to X.Y.Z-devN"`
-4. Push and tag: `git push origin dev && git tag vX.Y.Z-devN && git push origin vX.Y.Z-devN`
-5. GitHub Actions auto-creates a pre-release with commit-based changelog
-   and pushes the Docker image to `ghcr.io/isolson/firmware-updater:vX.Y.Z-devN`
-
-**Do NOT skip tagging.** An untagged commit on `dev` will not be picked up
-by `release_checker.py` and will not reach any deployed appliance.
+Users on the dev update channel will receive pre-releases automatically.
 
 ### Stable Release (manual approval required)
-1. Create PR from `dev` → `main`, merge
-2. On `main`, update `updater/__init__.py` version (e.g., `"1.2.0"`)
-3. Tag on main: `git tag v1.2.0 && git push origin v1.2.0`
-4. Go to **GitHub Actions > Release > Run workflow**
-5. Enter the tag name and type `RELEASE` to confirm
-6. After merge, immediately merge `main` back into `dev` to avoid divergence
+1. Update `updater/__init__.py` to stable version (e.g., `"1.3.0"`)
+2. Update CHANGELOG.md: move Unreleased items under a version header
+3. Commit: `git commit -m "chore: release vX.Y.Z"`
+4. Tag and push: `git tag vX.Y.Z && git push origin main --tags`
+5. Go to **GitHub Actions > Release > Run workflow**
+6. Enter the tag name and type `RELEASE` to confirm
 
 ### Version Conventions
 - **App version (Dev)**: `X.Y.Z-devN` in code, `vX.Y.Z-devN` in tags
 - **App version (Stable)**: `X.Y.Z` in code, `vX.Y.Z` in tags
-- **Appliance platform version**: `A.B` in `appliance/VERSION`
 - `updater/__init__.py` is the source of truth for app version
-- `appliance/VERSION` is the source of truth for appliance platform version
-- OVA files are named `sixtyops-appliance-a{appliance_ver}-app{app_ver}.ova`
-
-### Appliance vs. App Updates
-- **App updates** are frequent — new Docker images pushed to GHCR, appliances
-  auto-pull them via `release_checker.py`. No appliance rebuild needed.
-- **Appliance rebuilds** are infrequent — only when base OS, Docker version,
-  TUI scripts, networking, firewall, or compose file changes. Trigger manually
-  via GitHub Actions > Build Appliance workflow.
-- If an app update requires appliance changes (e.g., new volume mount), add
-  `<!-- min_appliance_version: X.Y -->` to the GitHub release notes body.
-  The release checker will block the update on incompatible appliances and
-  direct users to download the new OVA.
-- Latest appliance OVA is published to:
-  `https://github.com/isolson/firmware-updater/releases/tag/appliance-latest`
-  and mirrored to:
-  `https://github.com/isolson/sixtyops-releases/releases/tag/appliance-latest`
-- Default app release-check repo is
-  `isolson/sixtyops-releases` (`GITHUB_REPO` can override).
-- In non-appliance mode, `apply_update()` still checks out git tags from the
-  mounted source repo (`/app/repo`), so release tags must exist in the code repo.
+- Default release-check repo is `sixtyops/manager` (`GITHUB_REPO` can override)
+- Self-update checks out git tags from the mounted source repo (`/app/repo`),
+  so release tags must exist in the code repo.
 
 ### Release Notes
 - **Dev releases**: auto-generated from commit messages between tags.
@@ -137,18 +106,24 @@ by `release_checker.py` and will not reach any deployed appliance.
 ## Development
 
 ```bash
-# Local dev (no Docker)
-uvicorn updater.app:app --reload --port 8000
+# Local dev (no Docker) — UI work, fast iteration
+./dev.sh                # uvicorn --reload on localhost:8000
+./dev.sh --fresh        # wipe DB and re-seed
+
+# Dev Docker (full stack on LAN — nginx, SSL, RADIUS, seed data)
+./dev-docker.sh              # build and start
+./dev-docker.sh --fresh      # wipe DB, rebuild, re-seed
 
 # Run tests
 pytest -v
-
-# Docker (always use SEED_DATA=1 and SIXTYOPS_FORCE_PRO=1 for local rebuilds)
-SEED_DATA=1 SIXTYOPS_FORCE_PRO=1 docker compose up -d --build
-
-# Fresh rebuild (wipe DB first)
-docker compose down && rm -f data/sixtyops.db && SEED_DATA=1 SIXTYOPS_FORCE_PRO=1 docker compose up -d --build
 ```
+
+**Local dev** (`dev.sh`): Pure Python, hot-reload, localhost only. Best for
+UI/API work that doesn't need hardware.
+
+**Dev Docker** (`dev-docker.sh`): Full production-like stack (nginx + self-signed
+SSL, RADIUS on 1812/udp, app on 8000) accessible from the LAN. Use this for
+testing against real Tachyon hardware. Login: `admin / admin`.
 
 Seed script (`scripts/seed_dev_data.py`) inserts sample sites, devices, CPEs,
 config templates, and job history. It's idempotent — skips if data exists.
@@ -163,6 +138,6 @@ If port conflicts persist after `docker compose down`: `colima restart`.
 - Never commit secrets or credentials
 - Dev releases can be frequent; stable releases should be deliberate
 - `scripts/install.sh` always pulls from `main` — main must be stable
-- All PRs target `dev` unless it's a `dev` → `main` release PR
+- All PRs target `main`
 - One feature per branch/PR — don't bundle unrelated changes
 - Keep commits focused and atomic with conventional commit messages

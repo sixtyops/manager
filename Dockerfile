@@ -30,10 +30,6 @@ COPY static/ ./static/
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Compile Python to bytecode and strip source files
-RUN python -m compileall -b updater/ && \
-    find updater/ -name "*.py" -delete && \
-    find updater/ -name "__pycache__" -type d -exec rm -rf {} +
 
 # Create directories for uploads, data, backups, and SSH with restricted permissions
 RUN mkdir -p /app/firmware /app/data /app/backups /app/.ssh /app/nginx-conf \

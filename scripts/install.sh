@@ -1,11 +1,11 @@
 #!/bin/bash
 # Remote installer for SixtyOps Manager
-# Usage: curl -sSL https://raw.githubusercontent.com/isolson/firmware-updater/main/scripts/install.sh | sudo bash
-#    or: wget -qO- https://raw.githubusercontent.com/isolson/firmware-updater/main/scripts/install.sh | sudo bash
+# Usage: curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo bash
+#    or: wget -qO- https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo bash
 
 set -e
 
-REPO_URL="${SIXTYOPS_REPO_URL:-https://github.com/isolson/firmware-updater.git}"
+REPO_URL="${SIXTYOPS_REPO_URL:-https://github.com/sixtyops/manager.git}"
 INSTALL_DIR="${SIXTYOPS_INSTALL_DIR:-/opt/sixtyops}"
 BRANCH="${SIXTYOPS_BRANCH:-main}"
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.standalone.yml"

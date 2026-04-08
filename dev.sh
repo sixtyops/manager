@@ -18,7 +18,6 @@ mkdir -p data firmware
 export SIXTYOPS_DEV_MODE=1
 export ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 export ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin}"
-export SIXTYOPS_FORCE_PRO=1
 
 echo "=== SixtyOps Dev Mode ==="
 echo "Login: ${ADMIN_USERNAME} / ${ADMIN_PASSWORD}"

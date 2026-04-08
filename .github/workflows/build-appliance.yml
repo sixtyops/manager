@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       app_version:
-        description: "App version tag (e.g., v1.2.0)"
-        required: true
+        description: "App version tag (e.g., v1.2.0). Leave blank to use latest stable release."
+        required: false
         type: string
   release:
     types: [published]
@@ -16,7 +16,7 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'release' && !github.event.release.prerelease)
-    runs-on: [self-hosted, linux, x64, proxmox]
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 60
     permissions:
       contents: write
@@ -28,13 +28,31 @@ jobs:
 
       - name: Determine versions
         id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           APPLIANCE_VERSION=$(cat appliance/VERSION | tr -d '[:space:]')
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             APP_VERSION="${{ inputs.app_version }}"
+            if [ -z "$APP_VERSION" ]; then
+              APP_VERSION=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName')
+              if [ -z "$APP_VERSION" ]; then
+                echo "::error::No stable release found and no app_version provided"
+                exit 1
+              fi
+              echo "Auto-resolved latest stable release: ${APP_VERSION}"
+            fi
           else
             APP_VERSION="${{ github.event.release.tag_name }}"
           fi
+
+          # Verify the app version tag exists and has a published GHCR image
+          if ! gh release view "$APP_VERSION" > /dev/null 2>&1; then
+            echo "::error::Release ${APP_VERSION} not found"
+            exit 1
+          fi
+          echo "Verified release ${APP_VERSION} exists"
+
           OVA_NAME="sixtyops-appliance-a${APPLIANCE_VERSION}-app${APP_VERSION}"
           echo "appliance_version=${APPLIANCE_VERSION}" >> "$GITHUB_OUTPUT"
           echo "app_version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
@@ -116,7 +134,7 @@ jobs:
           ### Proxmox
           SSH into your Proxmox host and run (replace \`100\` with your VM ID and \`local-lvm\` with your storage name):
           \`\`\`bash
-          curl -LO https://github.com/isolson/firmware-updater/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2
+          curl -LO https://github.com/sixtyops/manager/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2
           qm create 100 --name sixtyops --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0
           qm importdisk 100 sixtyops-appliance-latest.qcow2 YOUR_STORAGE
           qm set 100 --virtio0 YOUR_STORAGE:vm-100-disk-0
@@ -154,7 +172,7 @@ jobs:
           QCOW2="${{ steps.version.outputs.ova_name }}.qcow2"
           APPLIANCE_VER="${{ steps.version.outputs.appliance_version }}"
           APP_VER="${{ steps.version.outputs.app_version }}"
-          REPO="isolson/sixtyops-releases"
+          REPO="sixtyops/manager"
 
           NOTES="SixtyOps Appliance (platform v${APPLIANCE_VER}, app ${APP_VER}).
 
@@ -169,7 +187,7 @@ jobs:
           ### Proxmox
           SSH into your Proxmox host and run (replace \`100\` with your VM ID and \`local-lvm\` with your storage name):
           \`\`\`bash
-          curl -LO https://github.com/isolson/sixtyops-releases/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2
+          curl -LO https://github.com/sixtyops/manager/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2
           qm create 100 --name sixtyops --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0
           qm importdisk 100 sixtyops-appliance-latest.qcow2 YOUR_STORAGE
           qm set 100 --virtio0 YOUR_STORAGE:vm-100-disk-0

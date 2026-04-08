@@ -29,7 +29,7 @@ variable "appliance_version" {
 
 variable "ghcr_image" {
   type    = string
-  default = "ghcr.io/isolson/firmware-updater"
+  default = "ghcr.io/sixtyops/manager"
 }
 
 variable "recovery_secret" {
