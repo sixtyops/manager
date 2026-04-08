@@ -101,7 +101,7 @@ Current rollout behavior:
 
 ## Operational Notes
 
-- Built-in RADIUS is a PRO-gated feature
+- Built-in RADIUS is classified as a dangerous feature in the UI
 - The shared secret is not returned by the API after it is stored
 - The app tracks when the RADIUS shared secret was last changed and shows a yearly manual review reminder
 - Older installs that had a secret before tracking was added will show `Age Unknown` until an operator either changes the secret or explicitly marks the current secret as reviewed today

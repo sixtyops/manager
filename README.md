@@ -134,7 +134,7 @@ Background polling keeps data current. Check here before scheduling updates to u
 ## Documentation
 
 - **[Deployment Guide](docs/deployment.md)** — HTTPS, RADIUS, environment variables
-- **[RADIUS Guide](docs/radius.md)** — Built-in FreeRADIUS setup, client overrides, and device rollout workflow
+- **[RADIUS Guide](docs/radius.md)** — Built-in RADIUS setup, client overrides, and device rollout workflow
 - **[Gradual Rollout](docs/gradual-rollout.md)** — How the 4-night rollout works
 - **[Release System](docs/release-system.md)** — Release channels, versioning, and self-update behavior
 - **[API Reference](docs/api.md)** — REST endpoints and WebSocket protocol

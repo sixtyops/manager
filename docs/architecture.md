@@ -43,8 +43,7 @@ Key responsibilities:
 - WebSocket broadcast to all connected clients
 - Update job orchestration with phase-based device ordering
 - App lifespan management (starts/stops poller, scheduler, release checks, and Radius log sync)
-- Generates and reloads FreeRADIUS config for built-in device-admin authentication
-- Monitors Radius container health and attempts automatic recovery when Docker marks it unhealthy
+- Manages the in-process pyrad RADIUS server for built-in device-admin authentication
 
 ### `tachyon.py` - Device Communication
 
@@ -84,14 +83,14 @@ Web login authentication for the management UI. Supports local username/password
 
 ### `builtin_radius.py` - Device Admin RADIUS Control Plane
 
-Application-side management for the bundled FreeRADIUS service used by APs, switches, and other managed devices.
+Application-side management for the built-in pyrad RADIUS server used by APs, switches, and other managed devices.
 
 Key responsibilities:
-- Stores built-in Radius users, auth history, and manual client overrides in SQLite
-- Generates `clients.conf` and `mods-config/files/authorize` under `data/radius/`
-- Reloads the `tachyon-radius` container when users or settings change
-- Syncs FreeRADIUS auth results back into SQLite for stats and audit history
-- Enforces reserved usernames (`admin` and `root`) for device-admin Radius accounts
+- Stores built-in RADIUS users, auth history, and manual client overrides in SQLite
+- Reads configuration directly from the database — no config file generation
+- Manages the in-process pyrad server lifecycle (start/stop/restart on config changes)
+- Logs authentication results directly to SQLite for stats and audit history
+- Enforces reserved usernames (`admin` and `root`) for device-admin RADIUS accounts
 
 ### `models.py` - Data Models
 

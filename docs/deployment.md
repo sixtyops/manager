@@ -75,7 +75,7 @@ The project ships two compose files:
 
 | File | Purpose |
 |------|---------|
-| `docker-compose.yml` | Base: app on port 8000, built-in RADIUS on UDP 1812, and bundled nginx with no published ports. Use behind your own reverse proxy. |
+| `docker-compose.yml` | Base: app on port 8000 (with built-in RADIUS on UDP 1812) and bundled nginx with no published ports. Use behind your own reverse proxy. |
 | `docker-compose.standalone.yml` | Overlay: publishes nginx on 80/443 and adds certbot. Use for standalone deployments. |
 
 ### Behind your own proxy
@@ -84,7 +84,7 @@ The project ships two compose files:
 docker compose up -d --build
 ```
 
-Starts the application on port 8000, the built-in RADIUS service on UDP 1812, and the bundled nginx (with no published ports). Your reverse proxy forwards to `localhost:8000` and handles TLS.
+Starts the application on port 8000 (with built-in RADIUS on UDP 1812) and the bundled nginx (with no published ports). Your reverse proxy forwards to `localhost:8000` and handles TLS.
 
 If you prefer to route through the bundled nginx on custom ports (e.g., so the app's SSL management UI still works), create a `docker-compose.override.yml`:
 
@@ -104,12 +104,11 @@ Then `docker compose up -d --build` exposes nginx on those ports. Your external 
 docker compose -f docker-compose.yml -f docker-compose.standalone.yml up -d --build
 ```
 
-Starts four services:
+Starts three services:
 
 | Service | Image | Purpose |
 |---------|-------|---------|
-| `tachyon-mgmt` | Built from `Dockerfile` | The application (FastAPI on port 8000) |
-| `radius` | `freeradius/freeradius-server:latest-3.2-alpine` | Built-in RADIUS server for device-admin auth on UDP 1812 |
+| `sixtyops-mgmt` | Built from `Dockerfile` | The application (FastAPI on port 8000, built-in RADIUS on UDP 1812) |
 | `nginx` | `nginx:alpine` | Reverse proxy, HTTPS termination, WebSocket upgrade |
 | `certbot` | `certbot/certbot` | Let's Encrypt certificate auto-renewal (every 12h) |
 
@@ -126,13 +125,6 @@ All host paths (left side of `:`) can be changed to suit your setup.
 | `./firmware` | `/app/firmware` | Uploaded firmware files |
 | `./data` | `/app/data` | SQLite database (`sixtyops.db`) |
 | `./backups` | `/app/backups` | Backup staging directory (temporary) |
-
-The built-in Radius service also uses files generated under `./data/radius/`:
-
-| Host path | Container path | Contents |
-|-----------|---------------|----------|
-| `./data/radius/clients.conf` | `/etc/raddb/clients.conf` (radius) | Allowed Radius clients generated from inventory and manual overrides |
-| `./data/radius/mods-config/files/authorize` | `/etc/raddb/mods-config/files/authorize` (radius) | Built-in Radius users generated from the app database |
 
 ### Standalone mode (additional volumes)
 
@@ -179,20 +171,19 @@ Built-in Radius settings are managed in the web UI under `Settings > Authenticat
 
 ## Built-in Radius
 
-The system includes a RADIUS container for device-admin authentication. This is separate from management UI login:
+The system includes a built-in RADIUS server for device-admin authentication. This runs in-process alongside the FastAPI app using pyrad — no separate container is needed. This is separate from management UI login:
 
 - Web login uses local username/password and optional OIDC SSO
-- Device-admin Radius is for APs, switches, and other managed devices authenticating to this system
-- Reserved usernames `admin` and `root` are rejected for built-in Radius accounts
+- Device-admin RADIUS is for APs, switches, and other managed devices authenticating to this system
+- Reserved usernames `admin` and `root` are rejected for built-in RADIUS accounts
 
 Operational notes:
 
-- Radius listens on UDP `1812`
-- The app generates RADIUS config from SQLite and reloads the Radius container after config changes
-- The Radius container has a Docker healthcheck, and the app also runs a background health monitor that attempts recovery if Docker reports the container unhealthy
-- The app recommends a manual Radius shared-secret review every 365 days; this is advisory only and never changes the secret automatically
-- Allowed Radius clients come from enabled inventory IPs plus any manual client overrides configured in the Authentication tab
-- If you add devices with manual credentials first and later migrate them to Radius, save a Radius config template and use the staged Radius rollout in `Settings > Authentication`
+- RADIUS listens on UDP `1812` (exposed by the `sixtyops-mgmt` container)
+- Users, settings, client overrides, and auth history are stored in SQLite — the server reads config directly from the database
+- The app recommends a manual RADIUS shared-secret review every 365 days; this is advisory only and never changes the secret automatically
+- Allowed RADIUS clients come from enabled inventory IPs plus any manual client overrides configured in the Authentication tab
+- If you add devices with manual credentials first and later migrate them to RADIUS, save a RADIUS config template and use the staged RADIUS rollout in `Settings > Authentication`
 - The shared secret is not returned by the API after initial save, so you should record it when configuring downstream devices
 
 ## Reverse Proxy
@@ -381,43 +372,4 @@ Enable or disable auto-update checking in the Settings UI (`autoupdate_enabled`)
 
 ## Publishing a Release
 
-When you're ready to publish a new version that the auto-update system can detect:
-
-### 1. Bump the version
-
-Edit `updater/__init__.py`:
-
-```python
-__version__ = "0.2.0"
-```
-
-### 2. Commit and tag
-
-```bash
-git add updater/__init__.py
-git commit -m "Bump version to 0.2.0"
-git tag v0.2.0
-git push origin main --tags
-```
-
-### 3. Create the GitHub release
-
-```bash
-gh release create v0.2.0 --title "v0.2.0" --notes "Release notes here..."
-```
-
-Or create the release through the GitHub web UI at **Releases > Draft a new release**.
-
-### 4. Build and push the Docker image (if using a registry)
-
-```bash
-docker build -t ghcr.io/sixtyops/manager:0.2.0 -t ghcr.io/sixtyops/manager:latest .
-docker push ghcr.io/sixtyops/manager:0.2.0
-docker push ghcr.io/sixtyops/manager:latest
-```
-
-If building locally on the deployment host, `docker compose build` is sufficient.
-
-### Release tag format
-
-The auto-update system expects tags in the format `v*.*.*` (e.g., `v0.2.0`). The leading `v` is stripped for version comparison using semantic versioning.
+See [docs/release-system.md](release-system.md) for the full release workflow, including dev pre-releases and stable releases via GitHub Actions.
