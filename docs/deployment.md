@@ -23,7 +23,7 @@ This installs Docker if needed, clones the repo to `/opt/sixtyops`, builds and s
 
 ```bash
 git clone https://github.com/sixtyops/manager.git
-cd firmware-updater
+cd manager
 ./deploy.sh
 ```
 
@@ -124,7 +124,7 @@ All host paths (left side of `:`) can be changed to suit your setup.
 | Host path | Container path | Contents |
 |-----------|---------------|----------|
 | `./firmware` | `/app/firmware` | Uploaded firmware files |
-| `./data` | `/app/data` | SQLite database (`tachyon.db`) |
+| `./data` | `/app/data` | SQLite database (`sixtyops.db`) |
 | `./backups` | `/app/backups` | Backup staging directory (temporary) |
 
 The built-in Radius service also uses files generated under `./data/radius/`:
@@ -179,7 +179,7 @@ Built-in Radius settings are managed in the web UI under `Settings > Authenticat
 
 ## Built-in Radius
 
-The appliance includes a RADIUS container for device-admin authentication. This is separate from management UI login:
+The system includes a RADIUS container for device-admin authentication. This is separate from management UI login:
 
 - Web login uses local username/password and optional OIDC SSO
 - Device-admin Radius is for APs, switches, and other managed devices authenticating to this system
@@ -332,7 +332,7 @@ uvicorn updater.app:app --reload --port 8000
 
 ## Database
 
-SQLite. The database file (`tachyon.db`) is created automatically on first run in the working directory (or `/app/data/` in Docker).
+SQLite. The database file (`sixtyops.db`) is created automatically on first run in the working directory (or `/app/data/` in Docker).
 
 Schema migrations run automatically on startup. No manual database setup is required.
 

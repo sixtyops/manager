@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
     paths-ignore:
       - 'docs/**'
       - 'website/**'
@@ -10,7 +10,7 @@ on:
       - '.context/**'
       - 'LICENSE'
   pull_request:
-    branches: [main, dev]
+    branches: [main]
     paths-ignore:
       - 'docs/**'
       - 'website/**'

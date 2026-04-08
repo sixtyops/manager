@@ -6,23 +6,20 @@ the app updater.
 ## Repositories and Artifacts
 
 - **Code repo:** `sixtyops/manager`
-- **Public downloads/releases repo:** `sixtyops/manager`
 - **Container registry:** `ghcr.io/sixtyops/manager`
-- **Appliance artifacts:** `.ova` and `.qcow2`
 
 ## Branch and Tag Model
 
-- `dev` is staging and receives normal feature work first.
-- `main` is production.
-- Version source for app releases is `updater/__init__.py`.
-- App tags are expected in `vX.Y.Z` / `vX.Y.Z-devN` format.
-- Appliance platform version source is `appliance/VERSION`.
+- `main` is the only long-lived branch. All PRs target `main`.
+- Feature branches are created from `main` and merged back via PR.
+- Version source is `updater/__init__.py`.
+- App tags use `vX.Y.Z` (stable) and `vX.Y.Z-devN` (pre-release) format.
 
 ## GitHub Workflows
 
 ### 1) CI (`.github/workflows/ci.yml`)
 
-- Runs on pushes/PRs to `main` and `dev`.
+- Runs on pushes/PRs to `main`.
 - Executes:
   - `pytest -v`
   - `docker build`
@@ -30,7 +27,7 @@ the app updater.
 
 ### 2) Installer Smoke (`.github/workflows/install-smoke.yml`)
 
-- Runs on pushes/PRs to `main` and `dev`.
+- Runs on PRs to `main` that touch installer-related paths.
 - Executes `scripts/install.sh` in CI against a local bare git remote.
 - Validates app reachability on `https://localhost/login`.
 - Re-runs installer to validate upgrade/idempotency path.
@@ -56,62 +53,56 @@ Pipeline:
 
 - Triggers:
   - manual `workflow_dispatch` with `app_version`
-  - release `published` events, but only non-prerelease releases
-- Builds appliance via Packer.
-- Produces both `.ova` and `.qcow2`.
-- Attaches artifacts to the release (when triggered by release event).
-- Updates `appliance-latest` release in:
-  - `sixtyops/manager`
-  - `sixtyops/manager` (public mirror)
+  - release `published` events (non-prerelease only)
+- Builds appliance via Packer (OVA + QCOW2).
+- Attaches artifacts to the release and updates `appliance-latest`.
 
 ## How App Self-Update Consumes Releases
 
 Implementation: `updater/release_checker.py`
 
-- Default release source repo is:
-  - `GITHUB_REPO=sixtyops/manager`
+- Default release source repo: `GITHUB_REPO=sixtyops/manager`
 - Release channels:
-  - `stable` -> calls `/releases/latest`
-  - `dev` -> calls `/releases?per_page=10` and uses first item
+  - `stable` → calls `/releases/latest` (skips pre-releases)
+  - `dev` → calls `/releases?per_page=10` and uses the newest
 - Tag parsing:
   - strips leading `v`
   - compares parsed versions against current app version
 
-Apply behavior:
+Apply behavior (Docker / non-appliance mode):
+- Fetches and checks out `v<target>` tag in mounted repo (`/app/repo`)
+- Rebuilds and restarts via compose watchdog with rollback on failure
 
-- **Appliance mode** (`SIXTYOPS_APPLIANCE=1`):
-  - pulls `ghcr.io/sixtyops/manager:v<target>`
-  - restarts via watchdog with rollback behavior
-- **Non-appliance mode**:
-  - fetches/checks out `v<target>` tag in mounted repo (`/app/repo`)
-  - rebuilds/restarts via compose watchdog
+## Important Constraints
 
-## Important Coupling and Constraints
-
-1. The updater expects semver-like app tags (`vX.Y.Z` / `vX.Y.Z-devN`) for version comparison.
-2. In non-appliance mode, the same target tag must exist in the code repo (`sixtyops/manager`) because update apply uses git checkout by tag.
-3. If release data source (`GITHUB_REPO`) contains non-semver tags (for example only `appliance-latest`), app update detection will not produce normal upgrade behavior.
-4. Appliance compatibility can be gated by adding this HTML comment to release notes:
-   - `<!-- min_appliance_version: X.Y -->`
+1. The updater expects semver-like app tags (`vX.Y.Z` / `vX.Y.Z-devN`).
+2. The target tag must exist in the code repo because update apply uses
+   `git checkout` by tag.
+3. Release notes are displayed in the app's Settings > Updates panel
+   (truncated to 2000 characters).
 
 ## Release Notes
 
 - GitHub auto-generated release notes are categorized by `.github/release.yml`
   labels (`feature`, `bug`, `chore`, `docs`, `ci`, etc.).
-- The app shows release notes in Settings > Updates (truncated payload in API/UI).
+- PR labels are auto-applied by `.github/workflows/auto-label.yml` from
+  conventional commit prefixes in the PR title.
 
-## Recommended Stable Release Procedure
+## Recommended Release Procedure
 
-1. Merge `dev` -> `main`.
-2. Bump `updater/__init__.py` to stable version.
-3. Create and push stable tag (`vX.Y.Z`) on `main`.
+### Dev Release
+1. Bump `updater/__init__.py` to `X.Y.Z-devN`.
+2. Commit, tag `vX.Y.Z-devN`, push with tags.
+3. CI auto-creates a pre-release and pushes the Docker image.
+
+### Stable Release
+1. Bump `updater/__init__.py` to `X.Y.Z`.
+2. Update CHANGELOG.md with a version header.
+3. Commit, tag `vX.Y.Z`, push with tags.
 4. Run Release workflow manually with `tag=vX.Y.Z` and `confirm=RELEASE`.
 5. Verify:
    - GitHub Release exists and is not prerelease
    - GHCR has `vX.Y.Z` and `latest`
-   - (if needed) Build Appliance workflow run completed
-   - `appliance-latest` assets updated in both repos
 6. Smoke-check updater endpoints/UI in a running instance:
    - `POST /api/updates/check`
    - `GET /api/updates`
-   - optional: `POST /api/updates/apply` in a safe environment

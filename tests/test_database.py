@@ -103,7 +103,7 @@ class TestCPECache:
 class TestSettings:
     def test_get_default(self, mock_db):
         val = db.get_setting("schedule_enabled")
-        assert val == "false"
+        assert val == "true"
 
     def test_get_missing(self, mock_db):
         assert db.get_setting("nonexistent") is None
@@ -121,7 +121,7 @@ class TestSettings:
     def test_get_all(self, mock_db):
         settings = db.get_all_settings()
         assert "schedule_enabled" in settings
-        assert settings["schedule_enabled"] == "false"
+        assert settings["schedule_enabled"] == "true"
 
 
 class TestHealthSummary:

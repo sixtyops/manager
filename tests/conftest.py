@@ -515,7 +515,7 @@ def memory_db():
     """)
     # Insert default settings
     defaults = {
-        "schedule_enabled": "false",
+        "schedule_enabled": "true",
         "schedule_days": "tue,wed,thu",
         "schedule_start_hour": "3",
         "schedule_end_hour": "4",

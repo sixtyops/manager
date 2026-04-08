@@ -4,32 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 1.3.0 - 2026-04-08
+
 ### Added
 - Release validation script (`scripts/validate_release.py`) for automated API-level smoke testing against live deployments
 - "Dangerous" feature classification: 6 features that make sweeping network/auth changes are labeled with amber badges in the UI (config backup/restore, config templates, config compliance, config push, RADIUS, SSO/OIDC)
 - `/api/features` endpoint returning feature map with enabled/dangerous status
 - About panel in Settings (replaces License panel) showing version, instance ID, and GitHub link
-
-### Changed
-- **Open-source conversion**: all features are now free and unlocked with no license key required
-- Removed all billing/licensing infrastructure (license server, Stripe, activation, validation, grace periods, device counting, free-tier limits, nag banners)
-- `updater/license.py` replaced by `updater/features.py`; `license.py` is now a thin re-export shim
-- `require_feature()` and `require_pro()` are no-ops (kept in endpoint signatures for minimal diff)
-- Repo references updated from `isolson/firmware-updater` to `sixtyops/manager`
-- Docker image updated from `ghcr.io/isolson/firmware-updater` to `ghcr.io/sixtyops/manager`
-- Website pricing section replaced with open-source feature list
-- Privacy policy updated to remove license validation references
-- Config push rollout controls (advance, resume, cancel) now require admin or operator role
-
-### Removed
-- License key activation, deactivation, and validation endpoints
-- License validator background task and grace period logic
-- Free-tier device limits and nag banner
-- `SIXTYOPS_FORCE_PRO` environment variable
-- `website/billing.html`
-- Stripe and billing references throughout codebase
-
-### Added
 - Config auto-enforce: automatically detect config drift and push corrections in phases (canary → 10% → 50% → 100%)
 - Site-scoped config templates: site templates override global per category
 - Config enforce log: audit trail of all auto-enforcement actions
@@ -52,8 +33,6 @@ All notable changes to this project are documented in this file.
 - Overall update timeout safety net (30 min APs/CPEs, 45 min switches)
 - Concurrency limit (10) for RADIUS rollout device pushes
 - Self-update safety gate: block app updates while firmware jobs are running
-- In-app subscription checkout with Stripe and auto-activation via instance_id
-- Contextual license status banners (cancelled, over limit, expired, grace period)
 - Device offline/recovered email notifications
 - RADIUS open client mode (accept any device with correct secret, default)
 - HTTPS/SSL tab in App Settings
@@ -61,11 +40,29 @@ All notable changes to this project are documented in this file.
 - Weather temperature display on startup (no longer waits for first scheduler tick)
 
 ### Changed
+- **Open-source conversion**: all features are now free and unlocked with no license key required
+- Removed all billing/licensing infrastructure (license server, Stripe, activation, validation, grace periods, device counting, free-tier limits, nag banners)
+- `updater/license.py` replaced by `updater/features.py`; `license.py` is now a thin re-export shim
+- `require_feature()` and `require_pro()` are no-ops (kept in endpoint signatures for minimal diff)
+- Repo references updated from `isolson/firmware-updater` to `sixtyops/manager`
+- Docker image updated from `ghcr.io/isolson/firmware-updater` to `ghcr.io/sixtyops/manager`
+- Website pricing section replaced with open-source feature list
+- Privacy policy updated to remove license validation references
+- Config push rollout controls (advance, resume, cancel) now require admin or operator role
 - Complete rebrand from Tachyon to SixtyOps across codebase, Docker, appliance, and CI
-- Release repo renamed from `tachyon-manager-releases` to `sixtyops-releases`
-- License server URL updated to `billing.sixtyops.net`
 - App Settings modal uses fixed height to prevent layout jumping between tabs
 - Email notification subjects changed from `[Tachyon]` to `[SixtyOps]`
+- Simplified to single-branch (`main`) workflow — no more `dev` staging branch
+
+### Removed
+- License key activation, deactivation, and validation endpoints
+- License validator background task and grace period logic
+- Free-tier device limits and nag banner
+- `SIXTYOPS_FORCE_PRO` environment variable
+- `website/billing.html`
+- Stripe and billing references throughout codebase
+- In-app subscription checkout with Stripe and auto-activation via instance_id
+- Contextual license status banners (cancelled, over limit, expired, grace period)
 
 ### Fixed
 - Crashed update jobs now properly clear active job state

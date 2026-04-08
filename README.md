@@ -74,7 +74,7 @@ Visit `https://your-server` to complete the setup wizard:
 
 ```bash
 git clone https://github.com/sixtyops/manager.git
-cd firmware-updater
+cd manager
 ./deploy.sh
 ```
 
@@ -158,18 +158,14 @@ pytest -v
 
 ## Development Workflow
 
-This project uses a two-branch model:
-
-- **`dev`** — All changes merge here first. Dev pre-releases (e.g., `v1.2.0-dev1`) are tagged from this branch and auto-published as GitHub pre-releases.
-- **`main`** — Production only. Receives merges from `dev` after testing. Stable releases require manual approval through GitHub Actions.
+All work happens on feature branches off `main`:
 
 ### Contributing
 
-1. Create a feature branch from `dev`
+1. Create a feature branch from `main`
 2. Make changes and run tests (`pytest -v`)
-3. Open a PR targeting `dev`
-4. After merge and staging testing, `dev` is merged to `main`
-5. Stable release is created through the GitHub Actions Release workflow
+3. Open a PR targeting `main`
+4. After merge, tag a dev or stable release as needed
 
 ### Release Channels
 
@@ -185,4 +181,4 @@ For networks with more than a few APs, automated updates are significantly more 
 
 ## License
 
-MIT
+[Elastic License 2.0 (ELv2)](LICENSE) — free to use and modify, but you may not offer it as a managed service or repackage it for sale.
