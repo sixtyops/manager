@@ -2,7 +2,7 @@
 
 Automated firmware updates for Tachyon wireless networks — handles scheduling, gradual rollouts, and safety checks so you don't have to update APs manually.
 
-Each AP takes 5–10 minutes to update manually and requires checking temperature, verifying system time, and setting bank mode correctly. Across dozens or hundreds of APs, that's hours of work per firmware cycle — and updates tend to get skipped because nobody has time to babysit the process. SixtyOps automates the entire workflow. You upload firmware, set a maintenance window, and the system updates the fleet over 4 consecutive windows with automatic safety checks at each step. Setup takes about 15 minutes; after that, updates run unattended on your schedule.
+A firmware cycle means logging into each AP and every attached CPE, uploading the image, selecting the right bank, and waiting for the reboot. One device at a time. In the middle of the night. With hundreds of devices across dozens of sites, it's a lot of work — and it tends to get skipped. SixtyOps handles it automatically: set a maintenance window, assign firmware, and the system updates your fleet over 4 consecutive nights with safety checks at each step. Setup takes 15 minutes.
 
 ![Dashboard — device table with signal health and update status](docs/screenshots/dashboard.png)
 
