@@ -2,7 +2,7 @@
 
 Automated firmware updates for Tachyon wireless networks — handles scheduling, gradual rollouts, and safety checks so you don't have to update APs manually.
 
-Each AP takes 5–10 minutes to update manually and requires checking temperature, verifying system time, and setting bank mode correctly. Across dozens or hundreds of APs, that's hours of work per firmware cycle — and updates tend to get skipped because nobody has time to babysit the process. SixtyOps automates the entire workflow. You upload firmware, set a maintenance window, and the system updates the fleet over 4 consecutive windows with automatic safety checks at each step. Setup takes about 15 minutes; after that, updates run unattended on your schedule.
+A firmware cycle means logging into each AP and every attached CPE, uploading the image, selecting the right bank, and waiting for the reboot. One device at a time. In the middle of the night. With hundreds of devices across dozens of sites, it's a lot of work — and it tends to get skipped. SixtyOps handles it automatically: set a maintenance window, assign firmware, and the system updates your fleet over 4 consecutive nights with safety checks at each step. Setup takes 15 minutes.
 
 ![Dashboard — device table with signal health and update status](docs/screenshots/dashboard.png)
 
@@ -13,17 +13,17 @@ Each AP takes 5–10 minutes to update manually and requires checking temperatur
 1. Upload firmware files and configure a maintenance window (e.g., Sundays 2–6 AM)
 2. Enable the scheduler
 3. Optionally pin test APs and switches as dedicated canaries in the firmware drawer
-4. The system automatically updates the fleet over 4 consecutive maintenance windows:
+4. The system rolls out updates over 4 consecutive maintenance windows:
    - Window 1: Canary APs (+ attached CPEs) and canary switches
    - Window 2: 10% of remaining APs and switches
    - Window 3: 50% of remaining APs and switches
    - Window 4: All remaining APs and switches
 
-Any failure pauses the rollout for manual review before continuing.
+Any failure pauses the rollout. Review the failed devices and resume when ready.
 
 ## Safety Mechanisms
 
-- **Temperature validation** — Blocks updates if temperature is below threshold (default 0°C / 32°F)
+- **Temperature validation** — Blocks updates if temperature is below threshold (default -10°C / 14°F)
 - **System time validation** — Blocks updates if AP clock is unreliable (prevents boot loops)
 - **Gradual rollout** — Updates canary APs/switches first, then 10%, 50%, 100% on consecutive windows
 - **Manual canary run** — The pending Canary pill can run the test phase outside the normal maintenance window
@@ -46,7 +46,7 @@ Any failure pauses the rollout for manual review before continuing.
 
 ## Quick Start
 
-Both options below run in **standalone mode** — the app plus a bundled nginx reverse proxy with automatic HTTPS (self-signed on first boot, Let's Encrypt via the setup wizard).
+Both options below include a bundled nginx reverse proxy with automatic HTTPS — self-signed out of the box, with Let's Encrypt available via the setup wizard.
 
 ### Production Deployment
 
@@ -89,7 +89,7 @@ See [docs/deployment.md](docs/deployment.md) for full deployment options.
 2. Configure scheduler (**Auto-Update** tab):
    - Set maintenance window (days and time range)
    - Assign firmware to device models
-   - Set temperature threshold (default: 0°C / 32°F)
+   - Set temperature threshold (default: -10°C / 14°F)
    - Enable scheduler
 
 The system runs the gradual rollout automatically. Check **Rollout Status** to monitor progress. If you have a lab AP or switch, pin it as a canary in the firmware drawer. You can also click the pending `Canary` pill to run that test phase before the maintenance window opens.
@@ -114,7 +114,7 @@ The **Monitor** page displays network topology (tower sites → APs → CPEs) wi
 - **[Deployment Guide](docs/deployment.md)** — HTTPS, built-in RADIUS, environment variables
 - **[RADIUS Guide](docs/radius.md)** — Built-in FreeRADIUS setup, client overrides, and device rollout workflow
 - **[Gradual Rollout](docs/gradual-rollout.md)** — How the 4-window rollout works
-- **[Release System](docs/release-system.md)** — Branches, tags, workflows, GHCR, appliance publishing, self-update behavior
+- **[Release System](docs/release-system.md)** — Release channels, versioning, and self-update behavior
 - **[API Reference](docs/api.md)** — REST endpoints and WebSocket protocol
 - **[Architecture](docs/architecture.md)** — System design and data flow
 
@@ -152,10 +152,8 @@ All work happens on feature branches off `main`:
 ### Release Channels
 
 The app supports two self-update channels (Settings > Updates):
-- **Stable** (default) — Only full releases from `main`
+- **Stable** (default) — Only tagged stable releases
 - **Dev** — Includes pre-releases for early testing
-
-See [CLAUDE.md](CLAUDE.md) for detailed release procedures.
 
 ## License
 
