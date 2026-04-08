@@ -44,7 +44,7 @@ is invisible to deployed instances.
 3. Commit the bump: `git add updater/__init__.py && git commit -m "chore: bump version to X.Y.Z-devN"`
 4. Push and tag: `git push origin dev && git tag vX.Y.Z-devN && git push origin vX.Y.Z-devN`
 5. GitHub Actions auto-creates a pre-release with commit-based changelog
-   and pushes the Docker image to `ghcr.io/isolson/firmware-updater:vX.Y.Z-devN`
+   and pushes the Docker image to `ghcr.io/sixtyops/manager:vX.Y.Z-devN`
 
 **Do NOT skip tagging.** An untagged commit on `dev` will not be picked up
 by `release_checker.py` and will not reach any deployed appliance.
@@ -76,11 +76,11 @@ by `release_checker.py` and will not reach any deployed appliance.
   The release checker will block the update on incompatible appliances and
   direct users to download the new OVA.
 - Latest appliance OVA is published to:
-  `https://github.com/isolson/firmware-updater/releases/tag/appliance-latest`
+  `https://github.com/sixtyops/manager/releases/tag/appliance-latest`
   and mirrored to:
-  `https://github.com/isolson/sixtyops-releases/releases/tag/appliance-latest`
+  `https://github.com/sixtyops/manager/releases/tag/appliance-latest`
 - Default app release-check repo is
-  `isolson/sixtyops-releases` (`GITHUB_REPO` can override).
+  `sixtyops/manager` (`GITHUB_REPO` can override).
 - In non-appliance mode, `apply_update()` still checks out git tags from the
   mounted source repo (`/app/repo`), so release tags must exist in the code repo.
 
@@ -143,11 +143,11 @@ uvicorn updater.app:app --reload --port 8000
 # Run tests
 pytest -v
 
-# Docker (always use SEED_DATA=1 and SIXTYOPS_FORCE_PRO=1 for local rebuilds)
-SEED_DATA=1 SIXTYOPS_FORCE_PRO=1 docker compose up -d --build
+# Docker (use SEED_DATA=1 for local rebuilds)
+SEED_DATA=1 docker compose up -d --build
 
 # Fresh rebuild (wipe DB first)
-docker compose down && rm -f data/sixtyops.db && SEED_DATA=1 SIXTYOPS_FORCE_PRO=1 docker compose up -d --build
+docker compose down && rm -f data/sixtyops.db && SEED_DATA=1 docker compose up -d --build
 ```
 
 Seed script (`scripts/seed_dev_data.py`) inserts sample sites, devices, CPEs,

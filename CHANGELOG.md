@@ -6,16 +6,28 @@ All notable changes to this project are documented in this file.
 
 ### Added
 - Release validation script (`scripts/validate_release.py`) for automated API-level smoke testing against live deployments
-- Webhooks feature display name added to license feature list
-- Free-tier auto-update limit: APs capped at 4 per auto-update run; switch auto-updates now require Pro
+- "Dangerous" feature classification: 6 features that make sweeping network/auth changes are labeled with amber badges in the UI (config backup/restore, config templates, config compliance, config push, RADIUS, SSO/OIDC)
+- `/api/features` endpoint returning feature map with enabled/dangerous status
+- About panel in Settings (replaces License panel) showing version, instance ID, and GitHub link
 
 ### Changed
-- Free-tier device nag threshold lowered from 10 to 4 to match the free AP limit
-- Config backup endpoints (/api/configs/poll) now require Pro (Config Backup feature)
-- Config compliance endpoints (/api/config-enforce/status, /api/config-enforce/log) now require Pro
-- Config templates endpoint (/api/config-prefill) now requires Pro
-- Enabling config auto-enforce now requires a Pro license
+- **Open-source conversion**: all features are now free and unlocked with no license key required
+- Removed all billing/licensing infrastructure (license server, Stripe, activation, validation, grace periods, device counting, free-tier limits, nag banners)
+- `updater/license.py` replaced by `updater/features.py`; `license.py` is now a thin re-export shim
+- `require_feature()` and `require_pro()` are no-ops (kept in endpoint signatures for minimal diff)
+- Repo references updated from `isolson/firmware-updater` to `sixtyops/manager`
+- Docker image updated from `ghcr.io/isolson/firmware-updater` to `ghcr.io/sixtyops/manager`
+- Website pricing section replaced with open-source feature list
+- Privacy policy updated to remove license validation references
 - Config push rollout controls (advance, resume, cancel) now require admin or operator role
+
+### Removed
+- License key activation, deactivation, and validation endpoints
+- License validator background task and grace period logic
+- Free-tier device limits and nag banner
+- `SIXTYOPS_FORCE_PRO` environment variable
+- `website/billing.html`
+- Stripe and billing references throughout codebase
 
 ### Added
 - Config auto-enforce: automatically detect config drift and push corrections in phases (canary → 10% → 50% → 100%)

@@ -143,6 +143,17 @@ def _migrate(db):
     except Exception:
         pass  # Table may not exist yet
 
+    # Remove stale license settings (billing removed in open-source conversion)
+    _license_keys = (
+        "license_key", "license_status", "license_customer_name",
+        "license_expires_at", "license_last_validated", "license_grace_until",
+        "license_device_limit", "license_error", "license_migration_v1",
+    )
+    db.execute(
+        f"DELETE FROM settings WHERE key IN ({','.join('?' for _ in _license_keys)})",
+        _license_keys,
+    )
+
     # Migrate data from access_points/switches into unified devices table
     _migrate_to_devices_table(db)
 

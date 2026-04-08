@@ -60,7 +60,7 @@ Both options below run in **standalone mode** — the app plus a bundled nginx r
 ### Production Deployment
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/isolson/firmware-updater/main/scripts/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo bash
 ```
 
 Installs Docker, configures HTTPS, generates credentials, and starts the system.
@@ -73,7 +73,7 @@ Visit `https://your-server` to complete the setup wizard:
 ### Local Testing
 
 ```bash
-git clone https://github.com/isolson/firmware-updater.git
+git clone https://github.com/sixtyops/manager.git
 cd firmware-updater
 ./deploy.sh
 ```

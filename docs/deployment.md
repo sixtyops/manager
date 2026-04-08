@@ -14,7 +14,7 @@ Required:
 ### Automated install (fresh server)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/isolson/firmware-updater/main/scripts/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo bash
 ```
 
 This installs Docker if needed, clones the repo to `/opt/sixtyops`, builds and starts all services in standalone mode, and creates a systemd service for auto-start on boot.
@@ -22,7 +22,7 @@ This installs Docker if needed, clones the repo to `/opt/sixtyops`, builds and s
 ### Manual install
 
 ```bash
-git clone https://github.com/isolson/firmware-updater.git
+git clone https://github.com/sixtyops/manager.git
 cd firmware-updater
 ./deploy.sh
 ```
@@ -172,7 +172,7 @@ python -c "from passlib.hash import bcrypt; print(bcrypt.hash('yourpassword'))"
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8000` | HTTP server port (inside the container) |
-| `GITHUB_REPO` | `isolson/sixtyops-releases` | GitHub repo for auto-update checks |
+| `GITHUB_REPO` | `sixtyops/manager` | GitHub repo for auto-update checks |
 | `AUTOUPDATE_CHECK_INTERVAL` | `604800` (7 days) | Seconds between release checks |
 
 Built-in Radius settings are managed in the web UI under `Settings > Authentication`, not by environment variables. New installs default the feature to enabled, but it will not authenticate devices until you set a shared secret and add Radius users.
@@ -411,9 +411,9 @@ Or create the release through the GitHub web UI at **Releases > Draft a new rele
 ### 4. Build and push the Docker image (if using a registry)
 
 ```bash
-docker build -t ghcr.io/isolson/firmware-updater:0.2.0 -t ghcr.io/isolson/firmware-updater:latest .
-docker push ghcr.io/isolson/firmware-updater:0.2.0
-docker push ghcr.io/isolson/firmware-updater:latest
+docker build -t ghcr.io/sixtyops/manager:0.2.0 -t ghcr.io/sixtyops/manager:latest .
+docker push ghcr.io/sixtyops/manager:0.2.0
+docker push ghcr.io/sixtyops/manager:latest
 ```
 
 If building locally on the deployment host, `docker compose build` is sufficient.

@@ -134,7 +134,7 @@ jobs:
           ### Proxmox
           SSH into your Proxmox host and run (replace \`100\` with your VM ID and \`local-lvm\` with your storage name):
           \`\`\`bash
-          curl -LO https://github.com/isolson/firmware-updater/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2
+          curl -LO https://github.com/sixtyops/manager/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2
           qm create 100 --name sixtyops --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0
           qm importdisk 100 sixtyops-appliance-latest.qcow2 YOUR_STORAGE
           qm set 100 --virtio0 YOUR_STORAGE:vm-100-disk-0
@@ -172,7 +172,7 @@ jobs:
           QCOW2="${{ steps.version.outputs.ova_name }}.qcow2"
           APPLIANCE_VER="${{ steps.version.outputs.appliance_version }}"
           APP_VER="${{ steps.version.outputs.app_version }}"
-          REPO="isolson/sixtyops-releases"
+          REPO="sixtyops/manager"
 
           NOTES="SixtyOps Appliance (platform v${APPLIANCE_VER}, app ${APP_VER}).
 
@@ -187,7 +187,7 @@ jobs:
           ### Proxmox
           SSH into your Proxmox host and run (replace \`100\` with your VM ID and \`local-lvm\` with your storage name):
           \`\`\`bash
-          curl -LO https://github.com/isolson/sixtyops-releases/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2
+          curl -LO https://github.com/sixtyops/manager/releases/download/appliance-latest/sixtyops-appliance-latest.qcow2
           qm create 100 --name sixtyops --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0
           qm importdisk 100 sixtyops-appliance-latest.qcow2 YOUR_STORAGE
           qm set 100 --virtio0 YOUR_STORAGE:vm-100-disk-0

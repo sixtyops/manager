@@ -49,8 +49,8 @@
         </a>
         <div class="hidden md:flex items-center gap-8">
           <a href="#features" class="text-sm text-slate-500 hover:text-slate-900 transition-colors">Features</a>
-          <a href="#pricing" class="text-sm text-slate-500 hover:text-slate-900 transition-colors">Pricing</a>
-          <a href="mailto:hello@sixtyops.net" class="text-sm text-brand-600 hover:text-brand-700 font-medium transition-colors">Request Access</a>
+          <a href="#download" class="text-sm text-slate-500 hover:text-slate-900 transition-colors">Download</a>
+          <a href="https://github.com/sixtyops/manager" class="text-sm text-brand-600 hover:text-brand-700 font-medium transition-colors">GitHub</a>
         </div>
         <button @click="open = !open" class="md:hidden p-1.5 text-slate-400 hover:text-slate-900" aria-label="Menu">
           <svg x-show="!open" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/></svg>
@@ -59,8 +59,8 @@
       </div>
       <div x-show="open" x-cloak x-transition class="md:hidden pb-4 border-t border-slate-100 mt-1 pt-3 space-y-2">
         <a href="#features" @click="open=false" class="block text-sm text-slate-500 hover:text-slate-900">Features</a>
-        <a href="#pricing" @click="open=false" class="block text-sm text-slate-500 hover:text-slate-900">Pricing</a>
-        <a href="mailto:hello@sixtyops.net" @click="open=false" class="block text-sm text-brand-600 font-medium">Request Access</a>
+        <a href="#download" @click="open=false" class="block text-sm text-slate-500 hover:text-slate-900">Download</a>
+        <a href="https://github.com/sixtyops/manager" @click="open=false" class="block text-sm text-brand-600 font-medium">GitHub</a>
       </div>
     </div>
   </nav>
@@ -739,142 +739,52 @@
   </section>
 
 
-  <!-- ════════ PRICING ════════ -->
-  <section id="pricing" class="section-rule py-20">
+  <!-- ════════ OPEN SOURCE ════════ -->
+  <section id="open-source" class="section-rule py-20">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="max-w-3xl mx-auto mb-12">
-        <p class="font-mono text-xs text-slate-400 tracking-wide mb-3">// pricing</p>
-        <h2 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">Simple Pricing. No Tiers.</h2>
-        <p class="mt-3 text-slate-500">$1/month per AP and per switch. SMs (subscriber modules) are free. That's it.</p>
+        <p class="font-mono text-xs text-slate-400 tracking-wide mb-3">// open source</p>
+        <h2 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">Free &amp; Open Source</h2>
+        <p class="mt-3 text-slate-500">Every feature, unlimited devices, no license keys. Run it on your infrastructure, own your data.</p>
       </div>
 
-      <div class="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto">
-        <!-- Free -->
-        <div class="border border-slate-200 rounded p-6 flex flex-col">
-          <h3 class="text-base font-semibold text-slate-900">Free</h3>
-          <p class="text-sm text-slate-400 mt-1 mb-4">Get started with a small network</p>
-          <div class="mb-5">
-            <span class="text-3xl font-bold font-mono text-slate-900">$0</span>
-            <span class="text-sm text-slate-400">/mo</span>
-          </div>
-          <ul class="space-y-2.5 mb-6 flex-1 text-sm">
-            <li class="flex items-start gap-2 text-slate-600">
+      <div class="max-w-3xl mx-auto">
+        <div class="border border-slate-200 rounded p-6">
+          <div class="grid sm:grid-cols-2 gap-4 text-sm">
+            <div class="flex items-start gap-2 text-slate-600">
               <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-              Auto-update up to <strong>4 APs</strong>
-            </li>
-            <li class="flex items-start gap-2 text-slate-600">
+              Unlimited APs, switches &amp; SMs
+            </div>
+            <div class="flex items-start gap-2 text-slate-600">
               <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-              Gradual rollout
-            </li>
-            <li class="flex items-start gap-2 text-slate-600">
+              Auto &amp; manual firmware updates
+            </div>
+            <div class="flex items-start gap-2 text-slate-600">
               <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-              Maintenance windows
-            </li>
-            <li class="flex items-start gap-2 text-slate-600">
+              Gradual rollout &amp; maintenance windows
+            </div>
+            <div class="flex items-start gap-2 text-slate-600">
+              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
+              Config backup, restore &amp; templates
+            </div>
+            <div class="flex items-start gap-2 text-slate-600">
+              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
+              Slack, SNMP &amp; webhook notifications
+            </div>
+            <div class="flex items-start gap-2 text-slate-600">
+              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
+              RADIUS &amp; SSO/OIDC authentication
+            </div>
+            <div class="flex items-start gap-2 text-slate-600">
               <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
               Signal &amp; device monitoring
-            </li>
-            <li class="flex items-start gap-2 text-slate-600">
-              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-              Unlimited SMs (free)
-            </li>
-            <li class="flex items-start gap-2 text-slate-400">
-              <svg class="w-4 h-4 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-              Manual one-click updates
-            </li>
-            <li class="flex items-start gap-2 text-slate-400">
-              <svg class="w-4 h-4 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-              Config backup &amp; restore
-            </li>
-            <li class="flex items-start gap-2 text-slate-400">
-              <svg class="w-4 h-4 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-              Slack webhooks
-            </li>
-            <li class="flex items-start gap-2 text-slate-400">
-              <svg class="w-4 h-4 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-              RADIUS server
-            </li>
-          </ul>
-          <span class="block w-full text-center px-5 py-2.5 border border-slate-200 text-slate-400 font-medium rounded text-sm cursor-default">Coming April 2026</span>
-        </div>
-
-        <!-- Pro -->
-        <div class="border border-brand-600 rounded p-6 flex flex-col relative">
-          <h3 class="text-base font-semibold text-slate-900">Pro</h3>
-          <p class="text-sm text-slate-400 mt-1 mb-4">Everything, unlimited scale</p>
-          <div class="mb-1">
-            <span class="text-3xl font-bold font-mono text-slate-900">$1</span>
-            <span class="text-sm text-slate-400">/mo per AP or switch</span>
-          </div>
-          <ul class="space-y-2.5 mb-6 flex-1 text-sm mt-5">
-            <li class="flex items-start gap-2 text-slate-600">
-              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-              <strong>Unlimited</strong> APs &amp; switches
-            </li>
-            <li class="flex items-start gap-2 text-slate-600">
-              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-              Gradual rollout
-            </li>
-            <li class="flex items-start gap-2 text-slate-600">
-              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-              Maintenance windows
-            </li>
-            <li class="flex items-start gap-2 text-slate-600">
-              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-              Signal &amp; device monitoring
-            </li>
-            <li class="flex items-start gap-2 text-slate-600">
-              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-              Unlimited SMs (free)
-            </li>
-            <li class="flex items-start gap-2 text-slate-600">
-              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-              Manual one-click updates
-            </li>
-            <li class="flex items-start gap-2 text-slate-600">
-              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-              Config backup &amp; restore
-            </li>
-            <li class="flex items-start gap-2 text-slate-600">
-              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-              Slack webhooks
-            </li>
-            <li class="flex items-start gap-2 text-slate-600">
-              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-              RADIUS server
-            </li>
-          </ul>
-          <span class="block w-full text-center px-5 py-2.5 bg-slate-300 text-slate-500 font-medium rounded text-sm cursor-default">Coming April 2026</span>
-        </div>
-      </div>
-
-      <!-- Pricing example -->
-      <div class="max-w-xl mx-auto mt-10">
-        <div class="border border-slate-200 rounded p-5">
-          <div class="text-xs font-mono text-slate-400 uppercase tracking-wider mb-3">Example</div>
-          <div class="space-y-2 text-sm">
-            <div class="flex justify-between items-center">
-              <span class="text-slate-600">25 APs</span>
-              <span class="font-mono text-slate-900">$25</span>
             </div>
-            <div class="flex justify-between items-center">
-              <span class="text-slate-600">3 switches</span>
-              <span class="font-mono text-slate-900">$3</span>
-            </div>
-            <div class="flex justify-between items-center text-slate-400">
-              <span>142 SMs</span>
-              <span class="font-mono">$0</span>
-            </div>
-            <div class="flex justify-between items-center pt-2 border-t border-slate-200">
-              <span class="font-semibold text-slate-900">Total</span>
-              <span class="font-mono font-bold text-brand-600">$28/mo</span>
+            <div class="flex items-start gap-2 text-slate-600">
+              <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
+              Self-hosted &mdash; your data stays local
             </div>
           </div>
         </div>
-      </div>
-
-      <div class="mt-6 text-center">
-        <p class="text-sm text-slate-400">Subscriptions are purchased and managed in the server UI after setup.</p>
       </div>
 
       <!-- FAQ -->
@@ -883,31 +793,24 @@
         <div class="space-y-0 divide-y divide-slate-200 border-t border-b border-slate-200">
           <div>
             <button @click="openFaq = openFaq === 1 ? null : 1" class="w-full flex items-center justify-between py-4 text-left">
-              <span class="font-medium text-slate-900 text-sm">What counts as a billable device?</span>
+              <span class="font-medium text-slate-900 text-sm">Where does SixtyOps run?</span>
               <svg class="w-4 h-4 text-slate-400 transition-transform shrink-0 ml-4" :class="openFaq === 1 && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
             </button>
-            <div x-show="openFaq === 1" x-collapse class="pb-4 text-sm text-slate-500">APs and switches only. SMs (subscriber modules / CPEs) are free and don't count toward billing. Inactive or decommissioned devices don't count either.</div>
+            <div x-show="openFaq === 1" x-collapse class="pb-4 text-sm text-slate-500">On your infrastructure as a Docker container, pre-built OVA (VMware/ESXi), or QCOW2 (Proxmox) appliance. Your data stays on your network&mdash;we never see your device configs or credentials.</div>
           </div>
           <div>
             <button @click="openFaq = openFaq === 2 ? null : 2" class="w-full flex items-center justify-between py-4 text-left">
-              <span class="font-medium text-slate-900 text-sm">What's included in the free version?</span>
+              <span class="font-medium text-slate-900 text-sm">What are "dangerous" features?</span>
               <svg class="w-4 h-4 text-slate-400 transition-transform shrink-0 ml-4" :class="openFaq === 2 && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
             </button>
-            <div x-show="openFaq === 2" x-collapse class="pb-4 text-sm text-slate-500">Free includes auto-updates for up to 4 APs with gradual rollout and maintenance windows. Manual updates, config backup &amp; restore, and Slack webhooks require a paid subscription, which you can purchase directly in the server UI.</div>
+            <div x-show="openFaq === 2" x-collapse class="pb-4 text-sm text-slate-500">Some features (config push, compliance enforcement, backup/restore, RADIUS, SSO) can make sweeping changes across your network. They're fully functional but labeled "dangerous" in the UI so you know to test carefully before relying on them in production.</div>
           </div>
           <div>
             <button @click="openFaq = openFaq === 3 ? null : 3" class="w-full flex items-center justify-between py-4 text-left">
-              <span class="font-medium text-slate-900 text-sm">Where does SixtyOps run?</span>
+              <span class="font-medium text-slate-900 text-sm">Is there really no catch?</span>
               <svg class="w-4 h-4 text-slate-400 transition-transform shrink-0 ml-4" :class="openFaq === 3 && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
             </button>
-            <div x-show="openFaq === 3" x-collapse class="pb-4 text-sm text-slate-500">On your infrastructure as a pre-built OVA or QCOW2 (Proxmox) appliance. Your data stays on your network&mdash;we never see your device configs or credentials.</div>
-          </div>
-          <div>
-            <button @click="openFaq = openFaq === 4 ? null : 4" class="w-full flex items-center justify-between py-4 text-left">
-              <span class="font-medium text-slate-900 text-sm">How does billing work?</span>
-              <svg class="w-4 h-4 text-slate-400 transition-transform shrink-0 ml-4" :class="openFaq === 4 && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
-            </button>
-            <div x-show="openFaq === 4" x-collapse class="pb-4 text-sm text-slate-500">Billed monthly via Stripe based on your active AP and switch count. Subscribe and manage billing directly in the server UI. Cancel anytime.</div>
+            <div x-show="openFaq === 3" x-collapse class="pb-4 text-sm text-slate-500">No catch. SixtyOps is free and open source. Anonymous telemetry (device counts, job stats) is sent by default to help improve the product, but you can disable it with a single environment variable.</div>
           </div>
         </div>
       </div>
@@ -944,9 +847,8 @@
         </div>
         <div class="flex items-center gap-6 text-xs text-slate-500">
           <a href="#features" class="hover:text-slate-700 transition-colors">Features</a>
-          <a href="#pricing" class="hover:text-slate-700 transition-colors">Pricing</a>
-          <a href="mailto:hello@sixtyops.net" class="hover:text-slate-700 transition-colors">Early Access</a>
-          <a href="billing.html" class="hover:text-slate-700 transition-colors">Billing</a>
+          <a href="#download" class="hover:text-slate-700 transition-colors">Download</a>
+          <a href="https://github.com/sixtyops/manager" class="hover:text-slate-700 transition-colors">GitHub</a>
           <a href="terms.html" class="hover:text-slate-700 transition-colors">Terms</a>
           <a href="privacy.html" class="hover:text-slate-700 transition-colors">Privacy</a>
         </div>

@@ -5,9 +5,9 @@ the app updater.
 
 ## Repositories and Artifacts
 
-- **Code repo:** `isolson/firmware-updater`
-- **Public downloads/releases repo:** `isolson/sixtyops-releases`
-- **Container registry:** `ghcr.io/isolson/firmware-updater`
+- **Code repo:** `sixtyops/manager`
+- **Public downloads/releases repo:** `sixtyops/manager`
+- **Container registry:** `ghcr.io/sixtyops/manager`
 - **Appliance artifacts:** `.ova` and `.qcow2`
 
 ## Branch and Tag Model
@@ -49,7 +49,7 @@ Pipeline:
    - prerelease for dev tags
    - full release for manual stable flow
 4. GHCR image push:
-   - always pushes `ghcr.io/isolson/firmware-updater:<tag>`
+   - always pushes `ghcr.io/sixtyops/manager:<tag>`
    - stable flow also pushes `:latest`
 
 ### 4) Build Appliance (`.github/workflows/build-appliance.yml`)
@@ -61,15 +61,15 @@ Pipeline:
 - Produces both `.ova` and `.qcow2`.
 - Attaches artifacts to the release (when triggered by release event).
 - Updates `appliance-latest` release in:
-  - `isolson/firmware-updater`
-  - `isolson/sixtyops-releases` (public mirror)
+  - `sixtyops/manager`
+  - `sixtyops/manager` (public mirror)
 
 ## How App Self-Update Consumes Releases
 
 Implementation: `updater/release_checker.py`
 
 - Default release source repo is:
-  - `GITHUB_REPO=isolson/sixtyops-releases`
+  - `GITHUB_REPO=sixtyops/manager`
 - Release channels:
   - `stable` -> calls `/releases/latest`
   - `dev` -> calls `/releases?per_page=10` and uses first item
@@ -80,7 +80,7 @@ Implementation: `updater/release_checker.py`
 Apply behavior:
 
 - **Appliance mode** (`SIXTYOPS_APPLIANCE=1`):
-  - pulls `ghcr.io/isolson/firmware-updater:v<target>`
+  - pulls `ghcr.io/sixtyops/manager:v<target>`
   - restarts via watchdog with rollback behavior
 - **Non-appliance mode**:
   - fetches/checks out `v<target>` tag in mounted repo (`/app/repo`)
@@ -89,7 +89,7 @@ Apply behavior:
 ## Important Coupling and Constraints
 
 1. The updater expects semver-like app tags (`vX.Y.Z` / `vX.Y.Z-devN`) for version comparison.
-2. In non-appliance mode, the same target tag must exist in the code repo (`isolson/firmware-updater`) because update apply uses git checkout by tag.
+2. In non-appliance mode, the same target tag must exist in the code repo (`sixtyops/manager`) because update apply uses git checkout by tag.
 3. If release data source (`GITHUB_REPO`) contains non-semver tags (for example only `appliance-latest`), app update detection will not produce normal upgrade behavior.
 4. Appliance compatibility can be gated by adding this HTML comment to release notes:
    - `<!-- min_appliance_version: X.Y -->`

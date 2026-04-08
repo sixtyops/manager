@@ -3,7 +3,7 @@
 # Usage: ./deploy.sh (after cloning the repo)
 #
 # For fresh server install, use:
-#   curl -sSL https://raw.githubusercontent.com/isolson/firmware-updater/main/scripts/install.sh | sudo bash
+#   curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo bash
 
 set -e
 
