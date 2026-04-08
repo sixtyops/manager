@@ -2,7 +2,7 @@ name: Installer Smoke
 
 on:
   pull_request:
-    branches: [main, dev]
+    branches: [main]
     paths:
       - 'scripts/install.sh'
       - 'docker-compose.yml'

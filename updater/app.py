@@ -48,12 +48,10 @@ from . import sftp_backup
 from . import radius_config
 from . import radius_rollout
 from . import oidc_config
-from .license import (
-    Feature, get_license_state, get_nag_info, get_billable_device_count,
-    is_feature_enabled, validate_license, clear_license,
-    init_license_validator, require_feature,
+from .features import (
+    Feature, get_feature_map, is_feature_enabled,
+    get_instance_id, require_feature,
 )
-from . import license as _license_mod
 from .radius_server import (
     init_radius_service, get_radius_service,
     get_radius_server_config, set_radius_server_config,
@@ -471,7 +469,7 @@ async def lifespan(app: FastAPI):
             _supervised_task("periodic_cleanup", _periodic_cleanup)
         )
         # Skip network-dependent services in dev mode
-        fetcher = checker = license_validator = None
+        fetcher = checker = None
         backup_task = ws_health_task = None
         radius_svc = radius_task = None
         logger.info("Application started (DEV MODE — no network services)")
@@ -487,8 +485,6 @@ async def lifespan(app: FastAPI):
         await verify_update_on_startup(broadcast)
         _recover_crashed_device_jobs()
         syslog_forwarder.reload_config()
-        license_validator = init_license_validator(broadcast)
-        await license_validator.start()
         radius_svc = init_radius_service(broadcast)
         radius_task = asyncio.create_task(
             _supervised_task("radius_server", radius_svc.run_forever)
@@ -502,8 +498,6 @@ async def lifespan(app: FastAPI):
         ws_health_task = asyncio.create_task(
             _supervised_task("ws_health_check", _websocket_health_check)
         )
-        state = get_license_state()
-        logger.info(f"License: {state.status.value} (tier={state.tier.value})")
         logger.info("Application started")
 
     yield
@@ -524,8 +518,6 @@ async def lifespan(app: FastAPI):
             await task
         except asyncio.CancelledError:
             pass
-    if license_validator:
-        await license_validator.stop()
     if checker:
         await checker.stop()
     if fetcher:
@@ -550,7 +542,7 @@ app = FastAPI(
         {"name": "analytics", "description": "Update analytics and trends"},
         {"name": "notifications", "description": "Slack and SNMP notification configuration"},
         {"name": "auth", "description": "Authentication, sessions, and user management"},
-        {"name": "license", "description": "License management and feature gating"},
+        {"name": "features", "description": "Feature info and stability classification"},
         {"name": "config", "description": "Device configuration backup and templates"},
         {"name": "system", "description": "System health, updates, and maintenance"},
     ],
@@ -1055,23 +1047,15 @@ async def websocket_endpoint(websocket: WebSocket):
             "timezone": hist.get("timezone"),
         })
 
-    # Send license state
-    if _license_mod._FORCE_PRO:
-        await websocket.send_json({
-            "type": "license_state",
-            "tier": "pro", "status": "active", "is_pro": True,
-            "has_key": False, "customer_name": "Dev Mode",
-            "error": "", "should_nag": False, "billable_count": 0,
-            "features": {f.value: True for f in Feature},
-        })
-    else:
-        _ls = get_license_state()
-        await websocket.send_json({
-            "type": "license_state",
-            **_ls.to_dict(),
-            **get_nag_info(),
-            "features": {f.value: _ls.is_feature_enabled(f) for f in Feature},
-        })
+    # Send feature state (all features unlocked)
+    await websocket.send_json({
+        "type": "license_state",
+        "tier": "pro", "status": "active", "is_pro": True,
+        "has_key": False, "customer_name": "",
+        "error": "", "should_nag": False, "billable_count": 0,
+        "features": {f.value: True for f in Feature},
+        "feature_info": get_feature_map(),
+    })
 
     # Send scheduler status (includes rollout info)
     scheduler = get_scheduler()
@@ -1733,7 +1717,7 @@ async def quick_add(
 
 _SETTINGS_SENSITIVE = {
     "admin_password_hash", "oidc_client_secret",
-    "device_default_password", "license_key",
+    "device_default_password",
     "radius_server_secret", "radius_server_ldap_bind_password",
     "email_smtp_password", "webhook_secret", "slack_webhook_url",
 }
@@ -1938,26 +1922,9 @@ def _validate_settings(filtered: dict):
         if fw_key in filtered and filtered[fw_key]:
             validate_firmware_filename(str(filtered[fw_key]))
 
-    # License-gated settings
-    if filtered.get("slack_webhook_url") and not is_feature_enabled(Feature.SLACK_NOTIFICATIONS):
-        raise HTTPException(403, detail={"error": "feature_locked", "feature": "slack_notifications",
-                                         "message": "Slack notifications require a Pro license."})
-    if filtered.get("snmp_traps_enabled") == "true" and not is_feature_enabled(Feature.SNMP_TRAPS):
-        raise HTTPException(403, detail={"error": "feature_locked", "feature": "snmp_traps",
-                                         "message": "SNMP trap notifications require a Pro license."})
+    # Dependency checks
     if filtered.get("snmp_traps_enabled") == "true" and not snmp.is_pysnmp_available():
         raise HTTPException(400, "Cannot enable SNMP traps: pysnmp-lextudio is not installed")
-    if filtered.get("firmware_beta_enabled") == "true" and not is_feature_enabled(Feature.BETA_FIRMWARE):
-        raise HTTPException(403, detail={"error": "feature_locked", "feature": "beta_firmware",
-                                         "message": "Beta firmware channel requires a Pro license."})
-    if "firmware_quarantine_days" in filtered and not is_feature_enabled(Feature.FIRMWARE_HOLD_CUSTOM):
-        current = db.get_setting("firmware_quarantine_days", "7")
-        if filtered["firmware_quarantine_days"] != current:
-            raise HTTPException(403, detail={"error": "feature_locked", "feature": "firmware_hold_custom",
-                                             "message": "Custom firmware hold period requires a Pro license."})
-    if filtered.get("config_auto_enforce") == "true" and not is_feature_enabled(Feature.CONFIG_COMPLIANCE):
-        raise HTTPException(403, detail={"error": "feature_locked", "feature": "config_compliance",
-                                         "message": "Config auto-enforce requires a Pro license."})
 
     effective_settings = db.get_all_settings()
     effective_settings.update(filtered)
@@ -2090,73 +2057,34 @@ async def test_email(session: dict = Depends(require_role("admin"))):
 
 
 # ============================================================================
-# License API
+# Features API
 # ============================================================================
 
-@app.get("/api/license", tags=["license"])
+@app.get("/api/license", tags=["features"])
 async def get_license_status(session: dict = Depends(require_auth)):
-    """Get current license state, features map, and device counts."""
-    if _license_mod._FORCE_PRO:
-        features = {f.value: True for f in Feature}
-        return {
-            "tier": "pro", "status": "active", "is_pro": True,
-            "has_key": False, "customer_name": "Dev Mode",
-            "error": "", "features": features,
-            "should_nag": False, "billable_count": 0,
-        }
-    state = get_license_state()
-    nag = get_nag_info()
-    features = {f.value: state.is_feature_enabled(f) for f in Feature}
-    return {**state.to_dict(), **nag, "features": features}
+    """Get feature state. All features are unlocked (backward-compat shape)."""
+    return {
+        "tier": "pro", "status": "active", "is_pro": True,
+        "has_key": False, "customer_name": "",
+        "error": "", "should_nag": False, "billable_count": 0,
+        "features": {f.value: True for f in Feature},
+        "feature_info": get_feature_map(),
+    }
 
 
-@app.post("/api/license/activate", tags=["license"])
-async def activate_license(request: Request, session: dict = Depends(require_role("admin"))):
-    """Activate or update the license key."""
-    data = await request.json()
-    key = data.get("license_key", "").strip()
-    if not key:
-        raise HTTPException(400, "License key is required")
-    from .license import LicenseStatus
-    state = await validate_license(license_key=key)
-    return {**state.to_dict(), "success": state.status == LicenseStatus.ACTIVE}
+@app.get("/api/features", tags=["features"])
+async def get_features(session: dict = Depends(require_auth)):
+    """Get feature map with stability classification."""
+    return {
+        "features": {f.value: True for f in Feature},
+        "feature_info": get_feature_map(),
+    }
 
 
-@app.post("/api/license/deactivate", tags=["license"])
-async def deactivate_license(session: dict = Depends(require_role("admin"))):
-    """Remove the license key and revert to free tier."""
-    clear_license()
-    return {"success": True, "status": "free"}
-
-
-@app.post("/api/license/validate", tags=["license"])
-async def force_validate_license(session: dict = Depends(require_role("admin"))):
-    """Force re-validate the current license with the server."""
-    state = get_license_state()
-    if not state.license_key:
-        raise HTTPException(400, "No license key configured")
-    result = await validate_license()
-    return result.to_dict()
-
-
-@app.get("/api/license/instance-id", tags=["license"])
-async def get_instance_id(session: dict = Depends(require_role("admin"))):
-    """Get the persistent instance ID for Stripe checkout linking."""
-    from .license import get_instance_id
+@app.get("/api/license/instance-id", tags=["features"])
+async def get_instance_id_api(session: dict = Depends(require_role("admin"))):
+    """Get the persistent instance ID."""
     return {"instance_id": get_instance_id()}
-
-
-@app.post("/api/license/auto-activate", tags=["license"])
-async def auto_activate_license(session: dict = Depends(require_role("admin"))):
-    """Try auto-activation by instance_id after Stripe checkout."""
-    from .license import auto_activate, LicenseStatus
-    try:
-        state = await auto_activate()
-        return {**state.to_dict(), "success": state.status == LicenseStatus.ACTIVE}
-    except ValueError:
-        return {"success": False, "error": "No license found for this instance yet"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 
 
 # ============================================================================

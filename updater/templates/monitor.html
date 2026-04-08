@@ -1902,39 +1902,20 @@
             50% { opacity: 0.5; }
         }
 
-        /* License gating styles */
-        .pro-badge {
+        /* Feature stability badges */
+        .danger-badge {
             display: inline-flex;
             align-items: center;
             font-size: 0.55rem;
             font-weight: 700;
-            color: #7c3aed;
-            background: #ede9fe;
+            color: #d97706;
+            background: #fffbeb;
             padding: 1px 5px;
             border-radius: 3px;
             letter-spacing: 0.4px;
             vertical-align: middle;
             margin-left: 4px;
         }
-        .pro-locked {
-            opacity: 0.45;
-            pointer-events: none;
-            position: relative;
-        }
-        .nag-banner {
-            background: #fef3c7;
-            border: 1px solid #fbbf24;
-            border-radius: 8px;
-            padding: 8px 16px;
-            margin: 8px 24px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            font-size: 0.75rem;
-            color: #92400e;
-        }
-        .nag-banner a { color: #7c3aed; font-weight: 500; text-decoration: none; }
-        .nag-banner a:hover { text-decoration: underline; }
 
         /* Utility classes */
         .hidden { display: none !important; }
@@ -2179,11 +2160,6 @@
     </div>
 
     <div class="connection-status" id="connectionStatus">Connected</div>
-
-    <div class="nag-banner" id="deviceNagBanner" style="display:none;">
-        <span>You have <strong class="nag-count">0</strong> managed devices. Consider upgrading to <a href="https://sixtyops.net/#pricing" target="_blank">Pro</a> for advanced features like manual updates, config management, and SSO.</span>
-        <button onclick="this.parentElement.style.display='none'" style="background:none;border:none;cursor:pointer;font-size:1rem;color:#92400e;padding:0 4px;">&times;</button>
-    </div>
 
     <div class="container">
         <!-- Top section: Add APs + Chart -->
@@ -2454,7 +2430,7 @@
                             <span class="u-text-xxs-dim">days</span>
                         </div>
                         <div class="toggle-sm-row">
-                            <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerCooldownDays" title="Prevents rapidly re-updating a device after a firmware update. Device will skip auto-updates if it was updated within this window.">Update Cooldown <span class="pro-badge">PRO</span></label>
+                            <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerCooldownDays" title="Prevents rapidly re-updating a device after a firmware update. Device will skip auto-updates if it was updated within this window.">Update Cooldown</label>
                             <input type="number" id="drawerCooldownDays" name="drawerCooldownDays" value="30" min="0" max="365" class="u-w-48">
                             <span class="u-text-xxs-dim">days</span>
                         </div>
@@ -2645,10 +2621,10 @@
             <div class="settings-tabs" style="flex-shrink:0;">
                 <button class="settings-tab active" onclick="switchSettingsTab('updates')">Updates</button>
                 <button class="settings-tab" onclick="switchSettingsTab('https')">HTTPS</button>
-                <button class="settings-tab" onclick="switchSettingsTab('backup')">Backup <span class="pro-badge">PRO</span></button>
-                <button class="settings-tab" onclick="switchSettingsTab('notifications')">Notifications <span class="pro-badge">PRO</span></button>
-                <button class="settings-tab" onclick="switchSettingsTab('auth')">Authentication <span class="pro-badge">PRO</span></button>
-                <button class="settings-tab" onclick="switchSettingsTab('license')">License</button>
+                <button class="settings-tab" onclick="switchSettingsTab('backup')">Backup <span class="danger-badge">DANGEROUS</span></button>
+                <button class="settings-tab" onclick="switchSettingsTab('notifications')">Notifications</button>
+                <button class="settings-tab" onclick="switchSettingsTab('auth')">Authentication <span class="danger-badge">DANGEROUS</span></button>
+                <button class="settings-tab" onclick="switchSettingsTab('about')">About</button>
             </div>
 
             <!-- Updates Panel -->
@@ -2726,7 +2702,7 @@
 
                     <!-- Remote Backups List -->
                     <div style="margin-top:16px;">
-                        <label class="u-label-xs" style="color:var(--text-dim);margin-bottom:4px;">Remote Backups (SFTP) <span class="pro-badge">PRO</span></label>
+                        <label class="u-label-xs" style="color:var(--text-dim);margin-bottom:4px;">Remote Backups (SFTP) <span class="danger-badge">DANGEROUS</span></label>
                         <div id="remoteBackupsList" style="max-height:160px;overflow-y:auto;border:1px solid var(--border-light);border-radius:6px;background:var(--input-bg);padding:4px;">
                             <div style="padding:10px;text-align:center;font-size:0.75rem;color:var(--text-muted);">Loading backups...</div>
                         </div>
@@ -2770,8 +2746,8 @@
                 <div class="settings-subtabs">
                     <button class="settings-subtab active" onclick="switchNotifSubtab('slack')">Slack</button>
                     <button class="settings-subtab" onclick="switchNotifSubtab('email')">Email</button>
-                    <button class="settings-subtab" onclick="switchNotifSubtab('snmp')">SNMP Traps <span id="snmpProBadge" class="pro-badge" style="display:none;">PRO</span></button>
-                    <button class="settings-subtab" onclick="switchNotifSubtab('webhooks')">Webhooks <span id="webhookProBadge" class="pro-badge" style="display:none;">PRO</span></button>
+                    <button class="settings-subtab" onclick="switchNotifSubtab('snmp')">SNMP Traps</button>
+                    <button class="settings-subtab" onclick="switchNotifSubtab('webhooks')">Webhooks</button>
                 </div>
 
                 <!-- Slack sub-panel -->
@@ -3232,45 +3208,23 @@
                 </div>
             </div>
 
-            <!-- License Panel -->
-            <div class="settings-panel" id="settingsPanel-license">
-                <div id="licenseStatusSection">
+            <!-- About Panel -->
+            <div class="settings-panel" id="settingsPanel-about">
+                <div style="margin-bottom:16px;">
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-                        <span id="licenseTierBadge" style="display:inline-flex;align-items:center;font-size:0.75rem;font-weight:700;padding:3px 10px;border-radius:4px;color:#0D9488;background:#ede9fe;">FREE</span>
-                        <span id="licenseStatusText" style="font-size:0.8rem;color:var(--text-muted);"></span>
+                        <span style="display:inline-flex;align-items:center;font-size:0.75rem;font-weight:700;padding:3px 10px;border-radius:4px;color:#fff;background:#0D9488;">SixtyOps Manager</span>
+                        <span id="aboutVersionText" style="font-size:0.8rem;color:var(--text-muted);"></span>
                     </div>
-                    <div class="u-text-xs-muted" style="margin-bottom:16px;">
-                        <div>Billable devices (APs + Switches): <strong id="licenseBillableCount">0</strong></div>
-                        <div id="licenseCustomerRow" class="hidden">Customer: <strong id="licenseCustomerName"></strong></div>
-                        <div id="licenseExpiresRow" class="hidden">Expires: <strong id="licenseExpiresAt"></strong></div>
-                        <div id="licenseValidatedRow" class="hidden">Last validated: <strong id="licenseLastValidated"></strong></div>
-                        <div id="licenseDeviceLimitRow" class="hidden">Device limit: <strong id="licenseDeviceLimit"></strong></div>
+                    <div class="u-text-xs-muted" style="margin-bottom:12px;">
+                        <div>Instance ID: <code id="aboutInstanceId" style="font-size:0.72rem;"></code></div>
                     </div>
-                    <div id="licenseAlertBanner" class="hidden" style="padding:8px 10px;border-radius:6px;background:#fef2f2;border:1px solid #fecaca;font-size:0.78rem;color:#991b1b;margin-bottom:12px;"></div>
-                </div>
-                <!-- Subscribe (shown when no license) -->
-                <div id="licenseSubscribeSection" style="border-top:1px solid var(--border);padding-top:12px;margin-bottom:12px;">
-                    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:8px;">
-                        Unlock all features — $1/mo per AP or switch. No device limit.
+                    <div class="u-text-xs-muted">
+                        Open-source firmware management for Tachyon wireless networks. All features are unlocked.
+                        Features marked <span class="danger-badge">DANGEROUS</span> involve untested or high-impact operations — use with care.
                     </div>
-                    <button class="backup-btn" onclick="startCheckout()" style="background:#0D9488;color:#fff;font-weight:600;">Subscribe</button>
-                    <span id="licenseCheckoutStatus" class="u-text-xs-muted" style="margin-left:8px;"></span>
-                </div>
-                <!-- Manual key entry -->
-                <div style="border-top:1px solid var(--border);padding-top:12px;">
-                    <label class="u-text-xs-muted" for="licenseKeyInput">License Key</label>
-                    <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
-                        <input type="text" id="licenseKeyInput" name="licenseKeyInput" placeholder="XXXX-XXXX-XXXX-XXXX" class="u-input-compact" style="flex:1;font-family:monospace;">
-                        <button class="backup-btn" onclick="activateLicense()">Activate</button>
-                    </div>
-                    <div id="licenseKeyStatus" class="u-status-line" style="margin-top:6px;"></div>
-                </div>
-                <div id="licenseDeactivateSection" style="display:none;margin-top:12px;border-top:1px solid var(--border);padding-top:12px;">
-                    <button class="backup-btn" onclick="deactivateLicense()" style="background:#dc2626;">Remove License</button>
-                    <a href="https://billing.sixtyops.net/billing" target="_blank" style="font-size:0.75rem;color:#0D9488;margin-left:12px;">Manage Billing</a>
                 </div>
                 <div class="u-text-sm-dim" style="margin-top:16px;">
-                    <a href="https://sixtyops.net/#pricing" target="_blank" style="color:#0D9488;">Pricing</a> &middot;
+                    <a href="https://github.com/sixtyops/manager" target="_blank" style="color:#0D9488;">GitHub</a> &middot;
                     <a href="https://sixtyops.net" target="_blank" style="color:#0D9488;">SixtyOps.net</a> &middot;
                     <a href="mailto:support@sixtyops.net" style="color:#0D9488;">Support</a>
                 </div>
@@ -3340,7 +3294,7 @@
         }
 
         // License state (loaded on init, updated via WebSocket)
-        let licenseState = { tier: 'free', status: 'free', features: {}, billable_count: 0, should_nag: false, is_pro: false };
+        let licenseState = { tier: 'pro', status: 'active', features: {}, is_pro: true, should_nag: false, feature_info: {} };
         let _confirmResolve = null;
         let _confirmKeyHandler = null;
 
@@ -3426,46 +3380,8 @@
                 const resp = await fetch('/api/license');
                 if (resp.ok) {
                     licenseState = await resp.json();
-                    applyLicenseGating();
                 }
-            } catch (e) { console.warn('Failed to load license state:', e); }
-        }
-
-        function applyLicenseGating() {
-            // Show/hide PRO badges based on license (badges always visible, but gating changes)
-            const isPro = licenseState.is_pro || licenseState.tier === 'pro';
-
-            // Nag banner
-            const nagEl = document.getElementById('deviceNagBanner');
-            if (nagEl) {
-                if (licenseState.should_nag && !isPro) {
-                    setHidden(nagEl, false);
-                    nagEl.querySelector('.nag-count').textContent = licenseState.billable_count;
-                } else {
-                    setHidden(nagEl, true);
-                }
-            }
-
-            // PRO badges — hide on pro tier
-            document.querySelectorAll('.pro-badge').forEach(el => {
-                setHidden(el, isPro);
-            });
-
-            // Gate settings panels
-            const gatePanels = { 'settingsPanel-backup': 'config_backup', 'settingsPanel-notifications': 'slack_notifications', 'settingsPanel-auth': 'radius_auth', 'tabPanel-config': 'config_templates' };
-            for (const [panelId, feature] of Object.entries(gatePanels)) {
-                const panel = document.getElementById(panelId);
-                if (panel) {
-                    const enabled = licenseState.features && licenseState.features[feature];
-                    panel.classList.toggle('pro-locked', !isPro && !enabled);
-                }
-            }
-
-            // Gate beta firmware toggle and quarantine days
-            const betaToggle = document.getElementById('drawerBetaToggle');
-            if (betaToggle) betaToggle.classList.toggle('pro-locked', !isPro && !(licenseState.features||{}).beta_firmware);
-            const quarantine = document.getElementById('drawerQuarantineDays');
-            if (quarantine) quarantine.classList.toggle('pro-locked', !isPro && !(licenseState.features||{}).firmware_hold_custom);
+            } catch (e) { console.warn('Failed to load feature state:', e); }
         }
 
         function extractDetail(detail) {
@@ -3475,195 +3391,17 @@
             return JSON.stringify(detail);
         }
 
-        function showProUpgradePrompt(featureName) {
-            const status = licenseState.status;
-            let msg;
-            if (status === 'cancelled') {
-                msg = 'Your subscription was cancelled. Reactivate at billing.sixtyops.net to restore access.';
-            } else if (status === 'over_limit') {
-                msg = `Device limit exceeded (${licenseState.billable_count}/${licenseState.device_limit}). Remove devices or upgrade your plan.`;
-            } else if (status === 'expired') {
-                msg = 'Your license has expired. Renew at billing.sixtyops.net to restore access.';
-            } else {
-                msg = featureName
-                    ? `${featureName} requires a Pro license.`
-                    : 'This feature requires a Pro license.';
-                msg += '\nVisit sixtyops.net/#pricing to upgrade.';
-            }
-            showToast(msg);
-        }
-
-        async function activateLicense() {
-            const key = document.getElementById('licenseKeyInput').value.trim();
-            if (!key) return;
-            const statusEl = document.getElementById('licenseKeyStatus');
-            statusEl.textContent = 'Activating...';
-            try {
-                const resp = await fetch('/api/license/activate', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ license_key: key }),
-                });
-                const data = await resp.json();
-                if (data.success) {
-                    statusEl.textContent = 'License activated!';
-                    statusEl.style.color = '#16a34a';
-                } else {
-                    statusEl.textContent = data.error || 'Activation failed.';
-                    statusEl.style.color = '#dc2626';
-                }
-                loadLicenseState();
-                loadLicensePanel();
-            } catch (e) {
-                statusEl.textContent = 'Network error.';
-                statusEl.style.color = '#dc2626';
-            }
-        }
-
-        async function deactivateLicense() {
-            if (!await showConfirmDialog('Remove your license key? Pro features will be disabled.', {
-                title: 'Remove License',
-                confirmText: 'Remove',
-                danger: true,
-            })) return;
-            await fetch('/api/license/deactivate', { method: 'POST' });
-            loadLicenseState();
-            loadLicensePanel();
-        }
-
-        async function loadLicensePanel() {
-            try {
-                const resp = await fetch('/api/license');
-                if (!resp.ok) return;
-                const data = await resp.json();
-                const isPro = data.tier === 'pro';
-                const badge = document.getElementById('licenseTierBadge');
-                badge.textContent = isPro ? 'PRO' : 'FREE';
-                badge.style.color = isPro ? '#fff' : '#7c3aed';
-                badge.style.background = isPro ? '#7c3aed' : '#ede9fe';
-
-                const statusEl = document.getElementById('licenseStatusText');
-                const statusMap = {
-                    active: 'Active',
-                    grace: 'Grace period',
-                    expired: 'Expired',
-                    invalid: 'Invalid',
-                    cancelled: 'Subscription cancelled',
-                    over_limit: 'Device limit exceeded',
-                };
-                statusEl.textContent = statusMap[data.status] || '';
-                statusEl.style.color = (data.status === 'cancelled' || data.status === 'over_limit' || data.status === 'expired') ? '#dc2626' : '';
-
-                document.getElementById('licenseBillableCount').textContent = data.billable_count || 0;
-
-                const custRow = document.getElementById('licenseCustomerRow');
-                if (data.customer_name) {
-                    setHidden(custRow, false);
-                    document.getElementById('licenseCustomerName').textContent = data.customer_name;
-                } else {
-                    setHidden(custRow, true);
-                }
-
-                const expRow = document.getElementById('licenseExpiresRow');
-                if (data.expires_at) {
-                    setHidden(expRow, false);
-                    document.getElementById('licenseExpiresAt').textContent = data.expires_at.slice(0,10);
-                } else {
-                    setHidden(expRow, true);
-                }
-
-                const valRow = document.getElementById('licenseValidatedRow');
-                if (data.last_validated) {
-                    setHidden(valRow, false);
-                    document.getElementById('licenseLastValidated').textContent = data.last_validated.slice(0,10);
-                } else {
-                    setHidden(valRow, true);
-                }
-
-                // Device limit
-                const limitRow = document.getElementById('licenseDeviceLimitRow');
-                if (data.device_limit) {
-                    setHidden(limitRow, false);
-                    document.getElementById('licenseDeviceLimit').textContent = data.device_limit;
-                } else {
-                    setHidden(limitRow, true);
-                }
-
-                // Contextual alert banner
-                const alertBanner = document.getElementById('licenseAlertBanner');
-                if (data.status === 'cancelled') {
-                    alertBanner.innerHTML = 'Your subscription has been cancelled. Pro features are now disabled. <a href="https://billing.sixtyops.net/billing" target="_blank" style="color:#991b1b;font-weight:600;">Reactivate subscription</a>';
-                    setHidden(alertBanner, false);
-                } else if (data.status === 'over_limit') {
-                    alertBanner.innerHTML = `You have ${data.billable_count} billable devices but your license allows ${data.device_limit}. Remove devices or <a href="https://billing.sixtyops.net/billing" target="_blank" style="color:#991b1b;font-weight:600;">upgrade your plan</a>.`;
-                    setHidden(alertBanner, false);
-                } else if (data.status === 'expired') {
-                    alertBanner.innerHTML = 'Your license has expired. <a href="https://billing.sixtyops.net/billing" target="_blank" style="color:#991b1b;font-weight:600;">Renew subscription</a>';
-                    setHidden(alertBanner, false);
-                } else if (data.status === 'grace') {
-                    alertBanner.style.background = '#fffbeb';
-                    alertBanner.style.borderColor = '#fde68a';
-                    alertBanner.style.color = '#92400e';
-                    alertBanner.innerHTML = 'Unable to reach the license server. Pro features will remain available until ' + (data.grace_until || '').slice(0,10) + '.';
-                    setHidden(alertBanner, false);
-                } else {
-                    setHidden(alertBanner, true);
-                    // Reset styles for next use
-                    alertBanner.style.background = '#fef2f2';
-                    alertBanner.style.borderColor = '#fecaca';
-                    alertBanner.style.color = '#991b1b';
-                }
-
-                // Show subscribe section only when no active license
-                const hasActiveLicense = data.has_key && (data.status === 'active' || data.status === 'grace');
-                setHidden('licenseSubscribeSection', hasActiveLicense);
-                setHidden('licenseDeactivateSection', !data.has_key);
-                if (data.has_key) document.getElementById('licenseKeyInput').placeholder = '••••••••••••';
-            } catch (e) {}
-        }
-
-        let _checkoutPollTimer = null;
-
-        async function startCheckout() {
-            const statusEl = document.getElementById('licenseCheckoutStatus');
-            statusEl.textContent = 'Opening checkout...';
+        async function loadAboutPanel() {
             try {
                 const resp = await fetch('/api/license/instance-id');
-                const { instance_id } = await resp.json();
-                window.open(`https://billing.sixtyops.net/pricing?instance_id=${instance_id}`, '_blank');
-                statusEl.textContent = 'Complete checkout in the new tab, then wait for auto-activation...';
-                // Start polling for auto-activation
-                _startActivationPolling(statusEl);
-            } catch (e) {
-                statusEl.textContent = 'Error: ' + e.message;
-            }
-        }
-
-        function _startActivationPolling(statusEl) {
-            if (_checkoutPollTimer) clearInterval(_checkoutPollTimer);
-            let attempts = 0;
-            _checkoutPollTimer = setInterval(async () => {
-                attempts++;
-                try {
-                    const resp = await fetch('/api/license/auto-activate', { method: 'POST' });
+                if (resp.ok) {
                     const data = await resp.json();
-                    if (data.success) {
-                        clearInterval(_checkoutPollTimer);
-                        _checkoutPollTimer = null;
-                        statusEl.textContent = 'License activated!';
-                        statusEl.style.color = '#16a34a';
-                        loadLicenseState();
-                        loadLicensePanel();
-                        return;
-                    }
-                } catch (e) {}
-                if (attempts >= 60) {
-                    // Stop after 5 minutes (60 * 5s)
-                    clearInterval(_checkoutPollTimer);
-                    _checkoutPollTimer = null;
-                    statusEl.textContent = 'Checkout not completed. You can paste your license key manually.';
+                    const el = document.getElementById('aboutInstanceId');
+                    if (el) el.textContent = data.instance_id;
                 }
-            }, 5000);
+            } catch (e) {}
+            const verEl = document.getElementById('aboutVersionText');
+            if (verEl) verEl.textContent = document.getElementById('appVersionDisplay')?.textContent || '';
         }
 
         let tempUnit = 'f';  // Will be set from settings/location
@@ -3876,7 +3614,6 @@
                     renderRadiusRollout(message.rollout || null);
                 } else if (message.type === 'license_state') {
                     licenseState = message;
-                    applyLicenseGating();
                 } else if (message.type === 'radius_status') {
                     updateRadiusStatusBadge(message.running, message.error);
                 } else if (message.type === 'radius_push_complete') {
@@ -4794,7 +4531,7 @@
                                 <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
                                 <span class="device-icon ap">AP</span>
                                 <span>
-                                ${licenseState.features?.device_portal ? `<a href="/api/device-portal/${ap.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>` : `<span class="name-link" style="cursor:default">${escapeHtml(apName)}</span>`}
+                                `<a href="/api/device-portal/${ap.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>`
                                 ${ap.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(ap.notes)}">${escapeHtml(ap.notes)}</div>` : ''}
                                 </span>
                                 ${noLocation ? '<span class="no-location-tag">(no location)</span>' : ''}
@@ -4836,7 +4573,7 @@
                                     <input type="checkbox" ${checkedDevices.has(cpe.ip) ? 'checked' : ''} onclick="toggleCheck('${cpe.ip}',event);event.stopPropagation();">
                                     <span class="expand-toggle hidden">&#9654;</span>
                                     <span class="device-icon cpe ${health}"></span>
-                                    ${cpeIp ? (licenseState.features?.device_portal ? `<a href="/api/device-portal/${cpeIp}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : `<span class="name-link" style="cursor:default">${escapeHtml(cpeName)}</span>`) : escapeHtml(cpeName)}
+                                    ${cpeIp ? `<a href="/api/device-portal/${cpeIp}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : escapeHtml(cpeName)}
                                 </div>
                             </td>
                             <td>${cpe.model || ''}</td>
@@ -4871,7 +4608,7 @@
                                 <span class="expand-toggle hidden">&#9654;</span>
                                 <span class="device-icon ap">SW</span>
                                 <span>
-                                ${licenseState.features?.device_portal ? `<a href="/api/device-portal/${sw.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>` : `<span class="name-link" style="cursor:default">${escapeHtml(swName)}</span>`}
+                                `<a href="/api/device-portal/${sw.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>`
                                 ${sw.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(sw.notes)}">${escapeHtml(sw.notes)}</div>` : ''}
                                 </span>
                             </div>
@@ -5335,11 +5072,6 @@
         }
 
         async function triggerUpdate(type, id, mode) {
-            // Check license for manual update feature
-            if (!licenseState.is_pro && !licenseState.features?.update_single_device) {
-                showProUpgradePrompt('Manual updates');
-                return;
-            }
 
             let settings;
             try {
@@ -5513,7 +5245,7 @@
             loadAppUpdateStatus();
             loadNotificationsData();
             loadAuthData();
-            loadLicensePanel();
+            loadAboutPanel();
             loadSslStatus();
             if (tab === 'users') loadUsers();
         }
@@ -5561,11 +5293,11 @@
         function switchSettingsTab(tabName) {
             // Update tab buttons
             document.querySelectorAll('.settings-tab').forEach(tab => {
-                const text = tab.textContent.replace(/PRO$/, '').trim().toLowerCase();
+                const text = tab.textContent.replace(/DANGEROUS$/, '').trim().toLowerCase();
                 tab.classList.toggle('active', text === tabName ||
                     (tabName === 'auth' && text === 'authentication') ||
                     (tabName === 'backup' && text === 'backup') ||
-                    (tabName === 'license' && text === 'license'));
+                    (tabName === 'about' && text === 'about'));
             });
             // Update panels
             document.querySelectorAll('.settings-panel').forEach(panel => {
@@ -5576,6 +5308,7 @@
             if (tabName === 'backup') loadBackupStatus();
             if (tabName === 'auth') loadUsers();
             if (tabName === 'https') loadSslStatus();
+            if (tabName === 'about') loadAboutPanel();
         }
 
         async function loadNotificationsData() {
@@ -5588,11 +5321,6 @@
                 document.getElementById('snmpTrapPort').value = data.settings.snmp_trap_port || '162';
                 document.getElementById('snmpTrapCommunity').value = data.settings.snmp_trap_community || 'public';
                 toggleSnmpFields();
-                // Show PRO badge if SNMP traps feature not available
-                const snmpBadge = document.getElementById('snmpProBadge');
-                if (snmpBadge && !(licenseState.is_pro || (licenseState.features||{}).snmp_traps)) {
-                    snmpBadge.style.display = 'inline';
-                }
                 // Webhook settings
                 document.getElementById('webhookEnabled').checked = data.settings.webhook_enabled === 'true';
                 document.getElementById('webhookUrl').value = data.settings.webhook_url || '';
@@ -5605,10 +5333,6 @@
                 document.getElementById('webhookEvtDeviceOffline').checked = events.includes('device_offline');
                 document.getElementById('webhookEvtDeviceRecovered').checked = events.includes('device_recovered');
                 toggleWebhookFields();
-                const webhookBadge = document.getElementById('webhookProBadge');
-                if (webhookBadge && !(licenseState.is_pro || (licenseState.features||{}).webhooks)) {
-                    webhookBadge.style.display = 'inline';
-                }
                 // Email settings
                 document.getElementById('emailEnabled').checked = data.settings.email_enabled === 'true';
                 document.getElementById('emailSmtpHost').value = data.settings.email_smtp_host || '';

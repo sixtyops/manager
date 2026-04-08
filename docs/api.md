@@ -477,7 +477,7 @@ Get current app update status.
     "enabled": true,
     "last_check": "2026-01-15T03:00:00",
     "available_version": "0.2.0",
-    "release_url": "https://github.com/isolson/firmware-updater/releases/tag/v0.2.0",
+    "release_url": "https://github.com/sixtyops/manager/releases/tag/v0.2.0",
     "release_notes": "Bug fixes and new features...",
     "update_available": true,
     "docker_socket_available": true,

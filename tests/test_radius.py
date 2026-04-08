@@ -389,26 +389,24 @@ class TestRadiusServerAPI:
 
 
 # ===========================================================================
-# TestRadiusLicenseGating — all RADIUS endpoints blocked on free tier
+# TestRadiusEndpointsAccessible — RADIUS endpoints not gated
 # ===========================================================================
 
-class TestRadiusLicenseGating:
-    """All RADIUS endpoints must return 403 on the free license tier."""
+class TestRadiusEndpointsAccessible:
+    """All RADIUS endpoints should be accessible (no license gating)."""
 
-    GATED_ENDPOINTS = [
+    ENDPOINTS = [
         ("GET", "/api/auth/radius"),
-        ("PUT", "/api/auth/radius"),
         ("GET", "/api/auth/radius/status"),
         ("GET", "/api/auth/radius/users"),
-        ("POST", "/api/auth/radius/users"),
         ("GET", "/api/auth/radius/auth-log"),
     ]
 
-    @pytest.mark.parametrize("method,path", GATED_ENDPOINTS)
-    def test_radius_endpoint_blocked_on_free_tier(self, method, path, authed_client, free_license):
+    @pytest.mark.parametrize("method,path", ENDPOINTS)
+    def test_radius_endpoint_not_gated(self, method, path, authed_client):
         resp = authed_client.request(method, path)
-        assert resp.status_code == 403, (
-            f"{method} {path} should return 403 on free tier, got {resp.status_code}"
+        assert resp.status_code != 403, (
+            f"{method} {path} should not return 403, got {resp.status_code}"
         )
 
 

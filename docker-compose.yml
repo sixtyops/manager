@@ -25,8 +25,7 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       # Set SEED_DATA=1 to populate sample devices/sites/templates on startup
       - SEED_DATA=${SEED_DATA:-}
-      # Set SIXTYOPS_FORCE_PRO=1 to unlock all feature-gated endpoints locally
-      - SIXTYOPS_FORCE_PRO=${SIXTYOPS_FORCE_PRO:-}
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 30s

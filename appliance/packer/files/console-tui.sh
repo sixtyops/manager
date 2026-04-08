@@ -216,7 +216,7 @@ check_updates() {
             if [ "$APPLIANCE_UPGRADE" = "true" ]; then
                 MIN_VER=$(echo "$RESULT" | jq -r '.min_appliance_version // "unknown"')
                 whiptail --title "Appliance Upgrade Required" --msgbox \
-                    "Update ${LATEST} requires appliance platform v${MIN_VER}.\n\nDownload the latest appliance OVA from:\nhttps://github.com/isolson/firmware-updater/releases/tag/appliance-latest\n\nDeploy the new OVA and migrate your data." \
+                    "Update ${LATEST} requires appliance platform v${MIN_VER}.\n\nDownload the latest appliance OVA from:\nhttps://github.com/sixtyops/manager/releases/tag/appliance-latest\n\nDeploy the new OVA and migrate your data." \
                     12 $COLS
             else
                 whiptail --title "Update Available" --yesno "Update available: ${LATEST}\n\nApply update now?" 10 $COLS

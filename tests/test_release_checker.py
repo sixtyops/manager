@@ -27,7 +27,7 @@ class TestVersionComparison:
             mock_resp.raise_for_status = MagicMock()
             mock_resp.json.return_value = {
                 "tag_name": latest_tag,
-                "html_url": "https://github.com/isolson/firmware-updater/releases/tag/" + latest_tag,
+                "html_url": "https://github.com/sixtyops/manager/releases/tag/" + latest_tag,
                 "body": "notes",
             }
 
@@ -653,7 +653,7 @@ class TestApplianceMode:
         # Verify docker pull was called with correct image
         pull_cmds = [c for c in calls if "pull" in c]
         assert len(pull_cmds) == 1
-        assert "ghcr.io/isolson/firmware-updater:v1.2.0" in pull_cmds[0]
+        assert "ghcr.io/sixtyops/manager:v1.2.0" in pull_cmds[0]
 
     @pytest.mark.asyncio
     async def test_appliance_update_fails_on_pull_error(self):
