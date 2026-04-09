@@ -22,6 +22,8 @@ Users, settings, client overrides, and auth history are stored in SQLite. The se
 - **Open** (default) — accepts authentication from any device that presents the correct shared secret. A single wildcard NAS client (`0.0.0.0`) is registered.
 - **Restricted** — only allows authentication from inventory IPs plus manual client overrides. Use this when you want IP-based access control in addition to the shared secret.
 
+Because `open` mode accepts requests from any source IP with the shared secret, it is not a good fit for broad public internet exposure. Even in `restricted` mode, prefer upstream firewall or VPN controls and treat IP filtering as defense in depth rather than the primary security boundary.
+
 ## Defaults
 
 New installs default built-in RADIUS to enabled in settings, but the server is not usable until you set a shared secret and create at least one RADIUS user.
@@ -71,7 +73,9 @@ The RADIUS server logs authentication results directly to SQLite. The Authentica
 3. Set the device-facing RADIUS host that APs/CPEs/switches should use
 4. Create named RADIUS users for device-admin login
 5. If using restricted client mode, add manual client overrides for devices or subnets not yet in inventory
-6. Configure your firewall or load balancer to allow UDP `1812` to the appliance
+6. Configure your firewall or load balancer to allow UDP `1812` to the appliance only from trusted device networks, VPN ranges, or explicit source-IP allowlists
+
+For most internet-facing deployments, publish only the web UI on `80/443` and keep RADIUS off the public internet. If remote devices must reach built-in RADIUS, expose UDP `1812` only behind network ACLs and use a strong random shared secret.
 
 ## Device Rollout Workflow
 
