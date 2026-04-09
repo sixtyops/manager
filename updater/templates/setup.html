@@ -10,11 +10,11 @@
 <body>
     <div class="auth-card">
         <h1>{% if first_run %}Create Admin Password{% else %}Change Default Password{% endif %}</h1>
-        <p class="subtitle">{% if first_run %}Set up your admin account{% else %}Please set a new password before continuing{% endif %}</p>
+        <p class="subtitle">{% if first_run %}Create the password for the <strong>admin</strong> account &mdash; this account has full system access{% else %}Please set a new password before continuing{% endif %}</p>
 
         <div class="info-message">
             {% if first_run %}
-            Welcome! Create an admin password to get started. Your password must be at least 12 characters.
+            You are creating the <strong>admin</strong> account. This is the primary administrator with full control over all devices, users, and settings. Choose a strong password &mdash; at least 12 characters.
             {% else %}
             For security, you must change the default admin password. Your new password must be at least 12 characters.
             {% endif %}

@@ -598,11 +598,7 @@ async def healthz():
     """Health endpoint for container runtime checks — verifies DB connectivity."""
     try:
         db.get_setting("setup_completed")
-        result = {"status": "ok", "db": "ok"}
-        notif_failures = int(db.get_setting("notification_consecutive_failures", "0"))
-        if notif_failures > 5:
-            result["notifications"] = f"degraded ({notif_failures} consecutive failures)"
-        return result
+        return {"status": "ok", "db": "ok"}
     except Exception as e:
         return JSONResponse(status_code=503, content={"status": "degraded", "db": str(e)})
 

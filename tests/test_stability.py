@@ -211,8 +211,8 @@ class TestHealthCheck:
         assert data["status"] == "ok"
         assert data["db"] == "ok"
 
-    def test_healthz_notification_degraded(self, mock_db, authed_client):
-        """Should include notification status when failures exceed threshold."""
+    def test_healthz_no_internal_details(self, mock_db, authed_client):
+        """Health endpoint should not leak internal details like notification status."""
         import updater.database as db_mod
 
         db_mod.set_setting("notification_consecutive_failures", "10")
@@ -220,8 +220,7 @@ class TestHealthCheck:
         resp = authed_client.get("/healthz")
         assert resp.status_code == 200
         data = resp.json()
-        assert "notifications" in data
-        assert "degraded" in data["notifications"]
+        assert data == {"status": "ok", "db": "ok"}
 
 
 class TestSchedulerDedupRecovery:

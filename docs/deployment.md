@@ -86,6 +86,8 @@ docker compose up -d --build
 
 Starts the application on port 8000 (with built-in RADIUS on UDP 1812) and the bundled nginx (with no published ports). Your reverse proxy forwards to `localhost:8000` and handles TLS.
 
+For internet-facing deployments, only publish the web UI through your reverse proxy. Do not publicly forward UDP `1812` unless you intentionally need internet-routable RADIUS clients and have strict source-IP filtering in front of the host.
+
 If you prefer to route through the bundled nginx on custom ports (e.g., so the app's SSL management UI still works), create a `docker-compose.override.yml`:
 
 ```yaml
@@ -185,6 +187,7 @@ Operational notes:
 - Allowed RADIUS clients come from enabled inventory IPs plus any manual client overrides configured in the Authentication tab
 - If you add devices with manual credentials first and later migrate them to RADIUS, save a RADIUS config template and use the staged RADIUS rollout in `Settings > Authentication`
 - The shared secret is not returned by the API after initial save, so you should record it when configuring downstream devices
+- If the server is internet-facing, keep UDP `1812` behind private routing, VPN, or upstream firewall allowlists whenever possible; publishing it broadly to the public internet is not recommended
 
 ## Reverse Proxy
 
@@ -217,7 +220,7 @@ The app listens on `localhost:8000`. Configure your proxy to forward to it with 
 | Max body size | 500 MB | Firmware file uploads |
 | Forwarded headers | `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto` | IP-based rate limiting, HTTPS detection |
 
-If you want devices to authenticate against the built-in Radius service through the same host, also allow UDP `1812` through whatever firewall or load balancer sits in front of the system.
+If you want devices to authenticate against the built-in Radius service through the same host, allow UDP `1812` only from trusted device networks or explicit source-IP allowlists. For most public deployments, NAT or port-forward only `80/443` from the internet and keep RADIUS reachable through private connectivity or filtered network rules instead of broad public exposure.
 
 **Caddy example** (`Caddyfile`):
 
