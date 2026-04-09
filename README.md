@@ -8,6 +8,8 @@ A firmware cycle means logging into each AP and every attached CPE, uploading th
 
 ![Auto-update configuration — schedule, firmware, and rollout settings](docs/screenshots/auto-update-config.png)
 
+![Config compliance — policy enforcement and backup status](docs/screenshots/config-compliance.png)
+
 ## How It Works
 
 1. Add APs and switches (top left) — the system discovers CPEs attached to each AP and assigns devices to tower sites based on the AP's location field
