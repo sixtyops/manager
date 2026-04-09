@@ -158,6 +158,40 @@ class TestOIDCProviderURLValidation:
         with pytest.raises(ValueError, match="no hostname"):
             validate_provider_url("https://")
 
+    def test_allows_private_ip_with_kwarg(self):
+        from updater.oidc_config import validate_provider_url
+        with patch("updater.oidc_config.socket.getaddrinfo", return_value=[
+            (2, 1, 6, '', ('192.168.1.1', 0)),
+        ]):
+            validate_provider_url("https://internal.corp.local", allow_private=True)
+
+    def test_allows_loopback_with_kwarg(self):
+        from updater.oidc_config import validate_provider_url
+        with patch("updater.oidc_config.socket.getaddrinfo", return_value=[
+            (2, 1, 6, '', ('127.0.0.1', 0)),
+        ]):
+            validate_provider_url("https://localhost", allow_private=True)
+
+    def test_allows_private_ip_with_env_var(self):
+        from updater.oidc_config import validate_provider_url
+        with patch.dict(os.environ, {"OIDC_ALLOW_PRIVATE_IPS": "true"}):
+            with patch("updater.oidc_config.socket.getaddrinfo", return_value=[
+                (2, 1, 6, '', ('10.0.0.1', 0)),
+            ]):
+                validate_provider_url("https://internal.corp.local")
+
+    def test_still_rejects_http_with_private_override(self):
+        from updater.oidc_config import validate_provider_url
+        with pytest.raises(ValueError, match="HTTPS"):
+            validate_provider_url("http://internal.corp.local", allow_private=True)
+
+    def test_still_rejects_unresolvable_with_private_override(self):
+        from updater.oidc_config import validate_provider_url
+        import socket
+        with patch("updater.oidc_config.socket.getaddrinfo", side_effect=socket.gaierror):
+            with pytest.raises(ValueError, match="could not be resolved"):
+                validate_provider_url("https://does.not.exist.example.com", allow_private=True)
+
     def test_oidc_api_rejects_http_url(self, authed_client):
         resp = authed_client.put("/api/auth/oidc", json={
             "enabled": True,

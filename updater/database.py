@@ -1801,8 +1801,17 @@ def delete_all_sessions():
 
 
 def cleanup_expired_sessions():
-    """Remove all expired sessions."""
+    """Remove all expired sessions and their associated OIDC id_token settings."""
+    _invalidate_settings_cache()
     with get_db() as db:
+        # Find expired session IDs to clean up associated id_token settings
+        expired = db.execute(
+            "SELECT session_id FROM sessions WHERE expires_at <= ?",
+            (datetime.now().isoformat(),)
+        ).fetchall()
+        for row in expired:
+            db.execute("DELETE FROM settings WHERE key = ?",
+                       (f"oidc_id_token_{row['session_id']}",))
         db.execute("DELETE FROM sessions WHERE expires_at <= ?", (datetime.now().isoformat(),))
 
 
