@@ -87,6 +87,7 @@ Users on the dev update channel will receive pre-releases automatically.
 | `appliance/VERSION` | Appliance platform version (independent from app) |
 | `appliance/packer/sixtyops.pkr.hcl` | Packer template for OVA build |
 | `.github/workflows/build-appliance.yml` | Appliance build + latest-appliance release |
+| `tests/integration/` | Integration tests against real hardware (requires `SIXTYOPS_TEST_URL`) |
 
 ## Deployment Reality
 
@@ -116,6 +117,9 @@ Users on the dev update channel will receive pre-releases automatically.
 
 # Run tests
 pytest -v
+
+# Integration tests against real hardware (see below)
+SIXTYOPS_TEST_URL=https://sixtyops-dev.infra.treehouse.mn pytest -m integration -v
 ```
 
 **Local dev** (`dev.sh`): Pure Python, hot-reload, localhost only. Best for
@@ -131,6 +135,53 @@ Runs automatically in the entrypoint when `SEED_DATA=1` is set.
 
 If Docker socket errors appear, start Colima: `colima start`.
 If port conflicts persist after `docker compose down`: `colima restart`.
+
+### Integration Tests (Real Hardware)
+
+Integration tests in `tests/integration/` run against a live SixtyOps instance
+with real Tachyon devices. They are **skipped by default** — `pytest -v` won't
+run them.
+
+**Dev server:** `sixtyops-dev.infra.treehouse.mn`
+
+```bash
+# Run all integration tests (except firmware — those are slow)
+SIXTYOPS_TEST_URL=https://sixtyops-dev.infra.treehouse.mn \
+  pytest -m "integration and not slow" -v
+
+# Include firmware update/downgrade tests (takes several minutes per device)
+SIXTYOPS_TEST_URL=https://sixtyops-dev.infra.treehouse.mn \
+  pytest -m integration -v --timeout=600
+
+# Override credentials (default: admin / admin)
+SIXTYOPS_TEST_USER=admin SIXTYOPS_TEST_PASS=secret \
+  SIXTYOPS_TEST_URL=https://... pytest -m integration -v
+```
+
+**What the tests cover:**
+
+| Test file | What it validates |
+|-----------|-------------------|
+| `test_smoke.py` | Health check, devices seen recently, no persistent errors |
+| `test_device_polling.py` | AP/switch poll returns firmware/model/mac, CPE discovery |
+| `test_config_backup.py` | Config poll, snapshot history, diff, tar download |
+| `test_config_push.py` | Preview dry-run with no-op template, compliance check |
+| `test_config_backup_restore.py` | Round-trip: poll config → restore same → verify hash |
+| `test_manager_backup.py` | Export CSV backup, verify it contains device IPs |
+| `test_firmware.py` | Upgrade device, verify, downgrade back (**slow**) |
+| `test_cpe_lifecycle.py` | CPE signal metrics, auth status, poll refresh behavior |
+
+**Safety:** Tests don't delete devices. Firmware tests restore the original
+version. Config restore tests push back the same config. The test suite is
+idempotent and safe to run repeatedly.
+
+**Environment variables:**
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIXTYOPS_TEST_URL` | *(none — tests skip)* | Base URL of the SixtyOps instance |
+| `SIXTYOPS_TEST_USER` | `admin` | Login username |
+| `SIXTYOPS_TEST_PASS` | `admin` | Login password |
 
 ## Rules
 
