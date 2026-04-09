@@ -791,16 +791,48 @@ async def setup_submit(
 
 @app.post("/logout")
 async def logout(request: Request):
-    """Handle logout."""
+    """Handle logout. For OIDC users, redirects to provider's end_session_endpoint."""
+    import secrets
     session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    auth_method = None
+    stored_id_token = None
+
     if session_id:
         session = db.get_session(session_id)
         if session:
             db.log_audit(session["username"], "auth.logout", None, None, None, _client_ip(request))
+            user = db.get_user(session["username"])
+            if user:
+                auth_method = user.get("auth_method")
+        # Retrieve stored id_token before deleting session data
+        stored_id_token = db.get_setting(f"oidc_id_token_{session_id}")
+        db.delete_setting(f"oidc_id_token_{session_id}")
         db.delete_session(session_id)
 
     response = RedirectResponse(url="/login", status_code=303)
     response.delete_cookie(SESSION_COOKIE_NAME)
+
+    # For OIDC users, redirect to provider's end_session_endpoint
+    if auth_method == "oidc" and oidc_config.is_oidc_enabled():
+        end_session_url = await _get_oidc_end_session_url()
+        if end_session_url:
+            config = oidc_config.get_oidc_config()
+            from urllib.parse import urlencode, urlparse
+            # Build absolute post-logout redirect URI from the redirect_uri origin
+            parsed = urlparse(config.redirect_uri)
+            post_logout_uri = f"{parsed.scheme}://{parsed.netloc}/login" if parsed.netloc else ""
+            params = {}
+            if stored_id_token:
+                params["id_token_hint"] = stored_id_token
+            if post_logout_uri:
+                params["post_logout_redirect_uri"] = post_logout_uri
+            params["client_id"] = config.client_id
+            params["state"] = secrets.token_urlsafe(16)
+            response = RedirectResponse(
+                url=f"{end_session_url}?{urlencode(params)}", status_code=303,
+            )
+            response.delete_cookie(SESSION_COOKIE_NAME)
+
     return response
 
 
@@ -2713,6 +2745,32 @@ async def update_device_auth_config(request: Request, session: dict = Depends(re
     return {"success": True}
 
 
+async def _get_oidc_end_session_url() -> str | None:
+    """Get the end_session_endpoint. Uses cached value from login-time discovery,
+    falls back to a fresh discovery fetch if cache is empty."""
+    # Prefer cached value (set during OIDC callback discovery)
+    cached = db.get_setting("oidc_end_session_endpoint")
+    if cached:
+        return cached
+
+    config = oidc_config.get_oidc_config()
+    if not config.provider_url:
+        return None
+    discovery_url = config.provider_url.rstrip("/") + "/.well-known/openid-configuration"
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(discovery_url)
+            resp.raise_for_status()
+            endpoint = resp.json().get("end_session_endpoint")
+            if endpoint:
+                db.set_setting("oidc_end_session_endpoint", endpoint)
+            return endpoint
+    except Exception as e:
+        logger.warning(f"Failed to fetch OIDC end_session_endpoint: {e}")
+        return None
+
+
 @app.get("/api/auth/oidc", tags=["auth"])
 async def get_oidc_config_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.SSO_OIDC))):
     """Get OIDC/SSO configuration (secret masked)."""
@@ -2740,7 +2798,7 @@ async def update_oidc_config_api(request: Request, session: dict = Depends(requi
         client_secret=data.get("client_secret", ""),
         redirect_uri=data.get("redirect_uri", ""),
         allowed_group=data.get("allowed_group", ""),
-        scopes=data.get("scopes", "openid email profile"),
+        scopes=data.get("scopes", "openid email profile groups"),
     )
 
     # Preserve existing secret if not provided (field is cleared on UI load)
@@ -2911,6 +2969,11 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
     jwks_uri = discovery.get("jwks_uri")
     issuer = discovery.get("issuer")
 
+    # Cache end_session_endpoint for RP-Initiated Logout
+    end_session_endpoint = discovery.get("end_session_endpoint")
+    if end_session_endpoint:
+        db.set_setting("oidc_end_session_endpoint", end_session_endpoint)
+
     if not token_endpoint or not jwks_uri:
         return RedirectResponse(url="/login?error=oidc_discovery_failed", status_code=302)
 
@@ -2991,6 +3054,9 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
     # Create session using existing infrastructure
     _clear_rate_limit_bucket(bucket)
     session_id = create_session(oidc_username, ip_address)
+
+    # Store the raw id_token for RP-Initiated Logout (id_token_hint)
+    db.set_setting(f"oidc_id_token_{session_id}", id_token)
 
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(

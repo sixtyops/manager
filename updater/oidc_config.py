@@ -30,7 +30,7 @@ class OIDCConfig:
     client_secret: str = ""
     redirect_uri: str = ""       # e.g. https://sixtyops.example.com/auth/oidc/callback
     allowed_group: str = ""      # Authentik group name required for access
-    scopes: str = "openid email profile"
+    scopes: str = "openid email profile groups"
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ def get_oidc_config() -> OIDCConfig:
             client_secret=db.get_setting(SETTING_OIDC_CLIENT_SECRET, ""),
             redirect_uri=db.get_setting(SETTING_OIDC_REDIRECT_URI, ""),
             allowed_group=db.get_setting(SETTING_OIDC_ALLOWED_GROUP, ""),
-            scopes=db.get_setting(SETTING_OIDC_SCOPES, "openid email profile"),
+            scopes=db.get_setting(SETTING_OIDC_SCOPES, "openid email profile groups"),
         )
 
     # Fall back to environment variables
@@ -79,7 +79,7 @@ def get_oidc_config() -> OIDCConfig:
         client_secret=os.environ.get("OIDC_CLIENT_SECRET", ""),
         redirect_uri=os.environ.get("OIDC_REDIRECT_URI", ""),
         allowed_group=os.environ.get("OIDC_ALLOWED_GROUP", ""),
-        scopes=os.environ.get("OIDC_SCOPES", "openid email profile"),
+        scopes=os.environ.get("OIDC_SCOPES", "openid email profile groups"),
     )
 
 
@@ -106,18 +106,26 @@ def is_oidc_enabled() -> bool:
             and bool(config.client_secret))
 
 
-def validate_provider_url(url: str):
-    """Validate OIDC provider URL. Raises ValueError if invalid."""
+def validate_provider_url(url: str, *, allow_private: bool | None = None):
+    """Validate OIDC provider URL. Raises ValueError if invalid.
+
+    Set OIDC_ALLOW_PRIVATE_IPS=true env var (or pass allow_private=True) to
+    permit private/loopback addresses for self-hosted OIDC providers on LAN.
+    """
     parsed = urlparse(url)
     if parsed.scheme != "https":
         raise ValueError("OIDC provider URL must use HTTPS")
     if not parsed.hostname:
         raise ValueError("OIDC provider URL has no hostname")
+
+    if allow_private is None:
+        allow_private = os.environ.get("OIDC_ALLOW_PRIVATE_IPS", "").lower() == "true"
+
     try:
         addrs = socket.getaddrinfo(parsed.hostname, None)
         for _, _, _, _, sockaddr in addrs:
             ip = ipaddress.ip_address(sockaddr[0])
-            if ip.is_private or ip.is_loopback or ip.is_reserved:
+            if not allow_private and (ip.is_private or ip.is_loopback or ip.is_reserved):
                 raise ValueError("OIDC provider URL must not resolve to a private/loopback address")
     except socket.gaierror:
         raise ValueError("OIDC provider URL hostname could not be resolved")

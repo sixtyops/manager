@@ -1,7 +1,8 @@
 """Tests for OIDC/SSO authentication configuration and flow."""
 
 import os
-from unittest.mock import patch, MagicMock
+from datetime import datetime, timedelta
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
@@ -166,3 +167,137 @@ class TestOIDCRoutes:
         data = resp.json()
         assert "enabled" in data
         assert "configured" in data
+
+
+class TestOIDCLogout:
+    """Tests for RP-initiated OIDC logout."""
+
+    def _create_oidc_session(self, mock_db, client, with_id_token=False):
+        """Helper: create an OIDC user and session, return session_id."""
+        from updater import database as db
+        # create_user is idempotent-safe: skip if user already exists
+        if not db.get_user("oidcuser@example.com"):
+            db.create_user("oidcuser@example.com", None, "viewer", "oidc")
+        session_id = "oidc-session-1234"
+        expires = (datetime.now() + timedelta(hours=24)).isoformat()
+        mock_db.execute(
+            "INSERT OR REPLACE INTO sessions (session_id, username, ip_address, expires_at) VALUES (?, ?, ?, ?)",
+            (session_id, "oidcuser@example.com", "127.0.0.1", expires),
+        )
+        mock_db.commit()
+        if with_id_token:
+            db.set_setting(f"oidc_id_token_{session_id}", "eyJ.fake.id_token")
+        client.cookies.set("session_id", session_id)
+        return session_id
+
+    def test_oidc_logout_redirects_to_end_session(self, client, mock_db):
+        """OIDC user logout redirects to provider's end_session_endpoint."""
+        self._create_oidc_session(mock_db, client)
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/application/o/sixtyops/",
+            client_id="test-client",
+            client_secret="test-secret",
+            redirect_uri="https://sixtyops.example.com/auth/oidc/callback",
+            allowed_group="admins",
+        ))
+        with patch("updater.app._get_oidc_end_session_url", new_callable=AsyncMock,
+                    return_value="https://auth.example.com/end-session"):
+            resp = client.post("/logout", follow_redirects=False)
+        assert resp.status_code == 303
+        location = resp.headers["location"]
+        assert "auth.example.com/end-session" in location
+        assert "post_logout_redirect_uri=https%3A%2F%2Fsixtyops.example.com%2Flogin" in location
+        assert "client_id=test-client" in location
+        assert "state=" in location
+
+    def test_oidc_logout_includes_id_token_hint(self, client, mock_db):
+        """Logout sends id_token_hint when id_token was stored at login."""
+        self._create_oidc_session(mock_db, client, with_id_token=True)
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/application/o/sixtyops/",
+            client_id="test-client",
+            client_secret="test-secret",
+            redirect_uri="https://sixtyops.example.com/auth/oidc/callback",
+            allowed_group="admins",
+        ))
+        with patch("updater.app._get_oidc_end_session_url", new_callable=AsyncMock,
+                    return_value="https://auth.example.com/end-session"):
+            resp = client.post("/logout", follow_redirects=False)
+        location = resp.headers["location"]
+        assert "id_token_hint=eyJ.fake.id_token" in location
+
+    def test_oidc_logout_without_id_token_omits_hint(self, client, mock_db):
+        """Logout omits id_token_hint when no id_token was stored."""
+        self._create_oidc_session(mock_db, client, with_id_token=False)
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/application/o/sixtyops/",
+            client_id="test-client",
+            client_secret="test-secret",
+            redirect_uri="https://sixtyops.example.com/auth/oidc/callback",
+            allowed_group="admins",
+        ))
+        with patch("updater.app._get_oidc_end_session_url", new_callable=AsyncMock,
+                    return_value="https://auth.example.com/end-session"):
+            resp = client.post("/logout", follow_redirects=False)
+        location = resp.headers["location"]
+        assert "id_token_hint" not in location
+
+    def test_oidc_logout_cleans_up_id_token_setting(self, client, mock_db):
+        """Logout deletes the stored id_token from settings."""
+        from updater import database as db
+        session_id = self._create_oidc_session(mock_db, client, with_id_token=True)
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/application/o/sixtyops/",
+            client_id="test-client",
+            client_secret="test-secret",
+            redirect_uri="https://sixtyops.example.com/auth/oidc/callback",
+            allowed_group="admins",
+        ))
+        with patch("updater.app._get_oidc_end_session_url", new_callable=AsyncMock,
+                    return_value="https://auth.example.com/end-session"):
+            client.post("/logout", follow_redirects=False)
+        assert db.get_setting(f"oidc_id_token_{session_id}") is None
+
+    def test_oidc_logout_falls_back_on_discovery_failure(self, client, mock_db):
+        """If OIDC discovery fails, logout falls back to /login."""
+        self._create_oidc_session(mock_db, client)
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/application/o/sixtyops/",
+            client_id="test-client",
+            client_secret="test-secret",
+            redirect_uri="https://sixtyops.example.com/auth/oidc/callback",
+            allowed_group="admins",
+        ))
+        with patch("updater.app._get_oidc_end_session_url", new_callable=AsyncMock,
+                    return_value=None):
+            resp = client.post("/logout", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/login"
+
+    def test_local_user_logout_unchanged(self, authed_client):
+        """Local auth user logout goes to /login (no OIDC redirect)."""
+        resp = authed_client.post("/logout", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/login"
+
+    def test_oidc_logout_always_deletes_session(self, client, mock_db):
+        """Session is always deleted from DB even when OIDC redirect happens."""
+        from updater import database as db
+        session_id = self._create_oidc_session(mock_db, client)
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/application/o/sixtyops/",
+            client_id="test-client",
+            client_secret="test-secret",
+            redirect_uri="https://sixtyops.example.com/auth/oidc/callback",
+            allowed_group="admins",
+        ))
+        with patch("updater.app._get_oidc_end_session_url", new_callable=AsyncMock,
+                    return_value="https://auth.example.com/end-session"):
+            client.post("/logout", follow_redirects=False)
+        assert db.get_session(session_id) is None
