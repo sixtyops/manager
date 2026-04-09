@@ -7985,6 +7985,7 @@
         }
 
         async function triggerDrawerFwFetch() {
+            if (drawerDirty) await saveDrawerSettings();
             const el = document.getElementById('drawerFwLastCheck');
             if (el) el.textContent = 'Checking\u2026';
             try {
