@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 import time
 from datetime import datetime
 from typing import Callable, Optional
@@ -27,6 +28,14 @@ _MAX_BACKOFF_CYCLES = 16
 
 # Global poller instance
 _poller: Optional["NetworkPoller"] = None
+
+
+def _port_sort_key(ap: dict) -> tuple:
+    """Natural sort key for AP port strings like 'eth1', 'eth12', 'Port 3'."""
+    port = ap.get("switch_port") or ""
+    match = re.search(r"(\d+)", port)
+    num = int(match.group(1)) if match else 10**9
+    return (num, port)
 
 
 class NetworkPoller:
@@ -607,6 +616,12 @@ class NetworkPoller:
             self._record_poll_success(ip)
             logger.debug(f"Polled switch {ip}")
 
+            try:
+                bridge_entries = await client.get_bridge_table()
+                db.replace_switch_bridge_entries(ip, bridge_entries)
+            except Exception as e:
+                logger.debug(f"Failed to fetch bridge table for switch {ip}: {e}")
+
         except Exception as e:
             logger.error(f"Error polling switch {ip}: {e}")
             db.update_switch_status(ip, last_error=str(e))
@@ -1051,9 +1066,24 @@ class NetworkPoller:
         # Build site lookup
         site_lookup = {s["id"]: s for s in sites}
 
+        # Build MAC -> (switch_ip, port) map from bridge entries of known switches
+        switches = db.get_switches(enabled_only=False)
+        known_switch_ips = {sw["ip"] for sw in switches}
+        mac_to_switch_port = {}
+        for sw in switches:
+            for entry in db.get_switch_downstream_aps(sw["ip"]):
+                mac = (entry.get("mac") or "").upper()
+                if not mac:
+                    continue
+                mac_to_switch_port.setdefault(mac, {
+                    "switch_ip": sw["ip"],
+                    "port": entry.get("port"),
+                })
+
         # Group APs by site
         site_aps = {}
         unassigned_aps = []
+        aps_by_switch = {}
 
         for ap in aps:
             ap_data = {
@@ -1074,6 +1104,8 @@ class NetworkPoller:
                 "cpes": [],
                 "cpe_count": 0,
                 "health_summary": {"green": 0, "yellow": 0, "red": 0},
+                "switch_ip": None,
+                "switch_port": None,
             }
 
             # Get CPEs for this AP from pre-loaded data
@@ -1107,6 +1139,15 @@ class NetworkPoller:
 
             ap_data["cpe_count"] = len(ap_data["cpes"])
 
+            # Check if this AP is seen on a known switch's port
+            ap_mac = (ap.get("mac") or "").upper()
+            upstream = mac_to_switch_port.get(ap_mac) if ap_mac else None
+            if upstream and upstream["switch_ip"] in known_switch_ips:
+                ap_data["switch_ip"] = upstream["switch_ip"]
+                ap_data["switch_port"] = upstream["port"]
+                aps_by_switch.setdefault(upstream["switch_ip"], []).append(ap_data)
+                continue
+
             if ap["tower_site_id"]:
                 site_id = ap["tower_site_id"]
                 if site_id not in site_aps:
@@ -1116,11 +1157,12 @@ class NetworkPoller:
                 unassigned_aps.append(ap_data)
 
         # Group switches by site
-        switches = db.get_switches(enabled_only=False)
         site_switches = {}
         unassigned_switches = []
 
         for sw in switches:
+            nested = aps_by_switch.get(sw["ip"], [])
+            nested.sort(key=_port_sort_key)
             sw_data = {
                 "ip": sw["ip"],
                 "system_name": sw.get("system_name"),
@@ -1136,6 +1178,7 @@ class NetworkPoller:
                 "enabled": bool(sw.get("enabled", 1)),
                 "last_firmware_update": sw.get("last_firmware_update"),
                 "notes": sw.get("notes"),
+                "aps": nested,
             }
 
             if sw.get("tower_site_id"):
@@ -1171,7 +1214,13 @@ class NetworkPoller:
             })
 
         total_aps = len(aps)
-        total_cpes = sum(len(ap_entry["cpes"]) for site in sites_data for ap_entry in site.get("aps", []))
+        total_cpes = 0
+        for site in sites_data:
+            for ap_entry in site.get("aps", []):
+                total_cpes += len(ap_entry.get("cpes", []))
+            for sw_entry in site.get("switches", []):
+                for ap_entry in sw_entry.get("aps", []):
+                    total_cpes += len(ap_entry.get("cpes", []))
         total_switches = len(switches)
 
         return {

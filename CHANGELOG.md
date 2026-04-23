@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added
+- Switch → AP topology cascade: APs are now nested under their upstream switch in the device tree, with a port badge showing the switch port they're connected to (ordered by port number)
+- OIDC admin group mapping: configure an "Admin Group" in SSO settings to auto-promote members to admin role on login
+- Role badge in the header shows the current user's role; write-operation UI (Add Devices, delete, bulk actions) is hidden from viewer accounts
+
+### Changed
+- Bridge/FDB table polled from Tachyon switches on each poll cycle to maintain AP-to-port mapping
+
 ### Removed
 - Appliance build infrastructure (OVA/QCOW2 image generation, Packer configs, build-appliance workflow)
 

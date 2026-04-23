@@ -828,6 +828,40 @@ class TachyonClient:
 
         return info
 
+    async def get_bridge_table(self) -> List[Dict[str, str]]:
+        """Fetch the switch's MAC forwarding table via /cgi.lua/bridge_table.
+
+        Returns a list of {mac, port} dicts. MAC is normalized to uppercase
+        with colon separators. Multiple VLAN entries for the same (mac, port)
+        pair are de-duplicated.
+        """
+        status, body = await self._curl("GET", "/cgi.lua/bridge_table")
+        if status != 200:
+            logger.warning(f"Failed to get bridge table from {self.ip}: HTTP {status}")
+            return []
+
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse bridge table from {self.ip}")
+            return []
+
+        raw = data.get("data", "")
+        seen = set()
+        entries = []
+        for line in raw.splitlines():
+            parts = line.split()
+            if len(parts) < 3 or parts[1] != "dev":
+                continue
+            mac = parts[0].upper()
+            port = parts[2]
+            key = (mac, port)
+            if key in seen:
+                continue
+            seen.add(key)
+            entries.append({"mac": mac, "port": port})
+        return entries
+
     async def get_config(self) -> Optional[dict]:
         """Download full device config via GET /cgi.lua/apiv1/config."""
         status, body = await self._curl("GET", "/cgi.lua/apiv1/config")

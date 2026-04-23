@@ -182,6 +182,15 @@ def authenticate(username: str, password: str) -> Optional[dict]:
 # OIDC authentication (callback validation)
 # ---------------------------------------------------------------------------
 
+def _normalize_oidc_groups(groups: object) -> set[str]:
+    """Normalize OIDC group claims to exact-match string membership."""
+    if isinstance(groups, str):
+        return {groups}
+    if isinstance(groups, (list, tuple, set)):
+        return {group for group in groups if isinstance(group, str)}
+    return set()
+
+
 def authenticate_oidc_user(email: str, groups: list[str]) -> Optional[str]:
     """Validate an OIDC-authenticated user against the allowed group.
 
@@ -193,7 +202,8 @@ def authenticate_oidc_user(email: str, groups: list[str]) -> Optional[str]:
     if not config.enabled or not config.allowed_group:
         return None
 
-    if config.allowed_group in groups:
+    normalized_groups = _normalize_oidc_groups(groups)
+    if config.allowed_group in normalized_groups:
         logger.info(f"OIDC auth successful for {email} (group: {config.allowed_group})")
         return email
 
@@ -201,16 +211,45 @@ def authenticate_oidc_user(email: str, groups: list[str]) -> Optional[str]:
     return None
 
 
-def ensure_oidc_user(email: str) -> dict:
-    """Ensure an OIDC user exists in the users table. Returns user dict."""
+def ensure_oidc_user(email: str, groups: list[str] | None = None) -> dict:
+    """Ensure an OIDC user exists in the users table. Returns user dict.
+
+    If an admin_group is configured and the user belongs to it, they get
+    the admin role. Otherwise they fall back to viewer while that mapping
+    is configured, or to oidc_default_role when no admin_group is set.
+    Role is re-evaluated on every login so group changes take effect.
+    """
+
     user = db.get_user(email)
     if user:
+        if user.get("auth_method") == "oidc" and groups is not None:
+            role = _resolve_oidc_role(groups)
+            if user["role"] != role:
+                db.update_user(user["id"], role=role)
+                logger.info(f"OIDC user {email} role updated: {user['role']} -> {role}")
+                return db.get_user_by_id(user["id"])
         return user
+
+    role = _resolve_oidc_role(groups)
+    user_id = db.create_user(email, None, role, "oidc")
+    return db.get_user_by_id(user_id)
+
+
+def _resolve_oidc_role(groups: list[str] | None) -> str:
+    """Determine the role for an OIDC user based on their group membership."""
+    from . import oidc_config
+
+    config = oidc_config.get_oidc_config()
+    normalized_groups = _normalize_oidc_groups(groups)
+    if config.admin_group:
+        if config.admin_group in normalized_groups:
+            return "admin"
+        return "viewer"
+
     default_role = db.get_setting("oidc_default_role", "viewer")
     if default_role not in db.VALID_ROLES:
         default_role = "viewer"
-    user_id = db.create_user(email, None, default_role, "oidc")
-    return db.get_user_by_id(user_id)
+    return default_role
 
 
 # ---------------------------------------------------------------------------

@@ -355,6 +355,17 @@ def init_db():
                 FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
             );
 
+            CREATE TABLE IF NOT EXISTS switch_bridge_entries (
+                switch_ip TEXT NOT NULL,
+                mac TEXT NOT NULL,
+                port TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                PRIMARY KEY (switch_ip, mac, port)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_switch_bridge_entries_mac
+                ON switch_bridge_entries(mac);
+
             CREATE TABLE IF NOT EXISTS cpe_cache (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ap_ip TEXT NOT NULL,
@@ -1237,6 +1248,53 @@ def update_switch_status(ip: str, last_seen: str = None, last_error: str = _UNSE
 def delete_switch(ip: str):
     """Delete a switch (delegates to unified devices table)."""
     delete_device(ip)
+    with get_db() as db:
+        db.execute("DELETE FROM switch_bridge_entries WHERE switch_ip = ?", (ip,))
+
+
+def replace_switch_bridge_entries(switch_ip: str, entries: list[dict]):
+    """Replace all bridge-table entries for a switch atomically."""
+    now = datetime.now().isoformat()
+    with get_db() as db:
+        db.execute("DELETE FROM switch_bridge_entries WHERE switch_ip = ?", (switch_ip,))
+        if entries:
+            db.executemany(
+                """
+                INSERT OR REPLACE INTO switch_bridge_entries
+                    (switch_ip, mac, port, last_seen)
+                VALUES (?, ?, ?, ?)
+                """,
+                [(switch_ip, e["mac"].upper(), e["port"], now) for e in entries],
+            )
+
+
+def get_ap_switch_port(ap_mac: str) -> Optional[dict]:
+    """Look up an AP's upstream switch + port by MAC address."""
+    if not ap_mac:
+        return None
+    with get_db() as db:
+        row = db.execute(
+            """
+            SELECT switch_ip, port FROM switch_bridge_entries
+            WHERE mac = ?
+            ORDER BY last_seen DESC LIMIT 1
+            """,
+            (ap_mac.upper(),),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_switch_downstream_aps(switch_ip: str) -> list[dict]:
+    """List MAC+port entries observed on this switch."""
+    with get_db() as db:
+        rows = db.execute(
+            """
+            SELECT mac, port FROM switch_bridge_entries
+            WHERE switch_ip = ?
+            """,
+            (switch_ip,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 _BULK_TABLES = {"ap": "devices", "switch": "devices"}
@@ -3010,7 +3068,15 @@ def count_admin_users() -> int:
 
 def delete_sessions_for_user(username: str):
     """Delete all sessions for a given username."""
+    _invalidate_settings_cache()
     with get_db() as db:
+        rows = db.execute(
+            "SELECT session_id FROM sessions WHERE username = ?",
+            (username,),
+        ).fetchall()
+        for row in rows:
+            db.execute("DELETE FROM settings WHERE key = ?",
+                       (f"oidc_id_token_{row['session_id']}",))
         db.execute("DELETE FROM sessions WHERE username = ?", (username,))
 
 
