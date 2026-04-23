@@ -15,6 +15,9 @@ All notable changes to this project are documented in this file.
 ### Removed
 - Appliance build infrastructure (OVA/QCOW2 image generation, Packer configs, build-appliance workflow)
 
+### Fixed
+- "Update Available" banner in Settings > Updates stayed hidden even when an update was detected (inline `display:none` overrode the `.hidden` class toggle)
+
 ## 1.3.0 - 2026-04-08
 
 ### Added
