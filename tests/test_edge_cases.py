@@ -1,29 +1,19 @@
-"""Edge case tests for OVA/initial setup scenarios.
+"""Edge case tests for initial setup scenarios.
 
-Tests cover 10 edge cases:
+Tests cover edge cases:
 EC5  - No DHCP lease (TUI remains accessible)
 EC6  - /data mount failure (no false completion marker)
 EC7  - First-run password race (concurrent /setup POST)
 EC8  - Bootstrap credential state mismatch (no lockout)
 EC9  - Setup wizard partial/failed SSL + backup
-EC10 - OVA hardware drift across hypervisors
 """
 
 import os
-import sys
 import threading
-import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
-from pathlib import Path
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock
 
 import pytest
 import bcrypt as _bcrypt
-
-# Add appliance/scripts to path for create-ova
-sys.path.insert(0, str(Path(__file__).parent.parent / "appliance" / "scripts"))
-import importlib
-create_ova = importlib.import_module("create-ova")
 
 
 # =========================================================================
@@ -294,117 +284,3 @@ class TestSetupWizardReplacement:
         resp = authed_client.get("/setup-wizard", follow_redirects=False)
         assert resp.status_code in (301, 302, 303, 307)
 
-
-# =========================================================================
-# EC10: OVA import hardware drift across hypervisors
-# =========================================================================
-
-class TestOVAHardwareDrift:
-    """Generated OVA matches intended defaults and rejects invalid params."""
-
-    def _parse_ovf(self, **kwargs):
-        defaults = {
-            "vmdk_filename": "test.vmdk",
-            "vmdk_size": 1000000,
-            "name": "test-appliance",
-            "version": "1.0.0",
-        }
-        defaults.update(kwargs)
-        xml_str = create_ova.generate_ovf(**defaults)
-        return ET.fromstring(xml_str)
-
-    def test_ovf_matches_workflow_defaults(self):
-        """OVF with exact workflow params produces correct hardware values."""
-        root = self._parse_ovf(cpus=2, memory_mb=1024, disk_capacity_bytes=8 * 1024**3)
-        ns = {
-            "rasd": "http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData",
-            "ovf": "http://schemas.dmtf.org/ovf/envelope/1",
-        }
-
-        # Verify CPU = 2
-        for item in root.iter("{http://schemas.dmtf.org/ovf/envelope/1}Item"):
-            rt = item.find("rasd:ResourceType", ns)
-            if rt is not None and rt.text == "3":
-                qty = item.find("rasd:VirtualQuantity", ns)
-                assert qty.text == "2"
-                break
-        else:
-            pytest.fail("CPU item not found in OVF")
-
-        # Verify Memory = 1024 MB
-        for item in root.iter("{http://schemas.dmtf.org/ovf/envelope/1}Item"):
-            rt = item.find("rasd:ResourceType", ns)
-            if rt is not None and rt.text == "4":
-                qty = item.find("rasd:VirtualQuantity", ns)
-                assert qty.text == "1024"
-                break
-        else:
-            pytest.fail("Memory item not found in OVF")
-
-        # Verify Disk = 8GB
-        disk = root.find(".//ovf:Disk", ns)
-        assert disk is not None
-        assert disk.get("{http://schemas.dmtf.org/ovf/envelope/1}capacity") == str(8 * 1024**3)
-
-    def test_ovf_rejects_negative_cpus(self):
-        with pytest.raises(ValueError, match="cpus must be between"):
-            create_ova.generate_ovf("t.vmdk", 100, "app", "1.0", cpus=-1)
-
-    def test_ovf_rejects_zero_cpus(self):
-        with pytest.raises(ValueError, match="cpus must be between"):
-            create_ova.generate_ovf("t.vmdk", 100, "app", "1.0", cpus=0)
-
-    def test_ovf_rejects_excessive_cpus(self):
-        with pytest.raises(ValueError, match="cpus must be between"):
-            create_ova.generate_ovf("t.vmdk", 100, "app", "1.0", cpus=64)
-
-    def test_ovf_rejects_zero_memory(self):
-        with pytest.raises(ValueError, match="memory_mb must be between"):
-            create_ova.generate_ovf("t.vmdk", 100, "app", "1.0", memory_mb=0)
-
-    def test_ovf_rejects_tiny_memory(self):
-        with pytest.raises(ValueError, match="memory_mb must be between"):
-            create_ova.generate_ovf("t.vmdk", 100, "app", "1.0", memory_mb=128)
-
-    def test_ovf_rejects_excessive_memory(self):
-        with pytest.raises(ValueError, match="memory_mb must be between"):
-            create_ova.generate_ovf("t.vmdk", 100, "app", "1.0", memory_mb=100000)
-
-    def test_ovf_rejects_tiny_disk(self):
-        with pytest.raises(ValueError, match="disk_capacity_bytes must be at least"):
-            create_ova.generate_ovf("t.vmdk", 100, "app", "1.0", disk_capacity_bytes=100)
-
-    def test_ovf_rejects_sub_gigabyte_disk(self):
-        with pytest.raises(ValueError, match="disk_capacity_bytes must be at least"):
-            create_ova.generate_ovf("t.vmdk", 100, "app", "1.0",
-                                     disk_capacity_bytes=512 * 1024 * 1024)
-
-    def test_ovf_vmxnet3_nic_for_hypervisor_compat(self):
-        """NIC type must be VMXNET3 for VMware/Proxmox compatibility."""
-        root = self._parse_ovf()
-        ns = {"rasd": "http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData"}
-        for item in root.iter("{http://schemas.dmtf.org/ovf/envelope/1}Item"):
-            rt = item.find("rasd:ResourceType", ns)
-            if rt is not None and rt.text == "10":
-                subtype = item.find("rasd:ResourceSubType", ns)
-                assert subtype.text == "VMXNET3"
-                return
-        pytest.fail("Ethernet adapter not found in OVF")
-
-    def test_ovf_accepts_valid_boundary_values(self):
-        """Boundary values (1 CPU, 256MB, 1GB disk) should be accepted."""
-        root = self._parse_ovf(cpus=1, memory_mb=256, disk_capacity_bytes=1073741824)
-        assert root is not None
-
-    def test_ovf_accepts_max_boundary_values(self):
-        """Max boundary values (16 CPUs, 65536MB) should be accepted."""
-        root = self._parse_ovf(cpus=16, memory_mb=65536, disk_capacity_bytes=100 * 1024**3)
-        assert root is not None
-
-    def test_negative_disk_size_caught_by_ovf_validation(self):
-        """Negative disk size from parse_disk_size is caught by generate_ovf validation."""
-        negative_bytes = create_ova.parse_disk_size("-8G")
-        assert negative_bytes < 0
-        with pytest.raises(ValueError, match="disk_capacity_bytes must be at least"):
-            create_ova.generate_ovf("t.vmdk", 100, "app", "1.0",
-                                     disk_capacity_bytes=negative_bytes)

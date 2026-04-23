@@ -84,9 +84,6 @@ Users on the dev update channel will receive pre-releases automatically.
 | `docker-compose.standalone.yml` | Standalone overlay (publishes 80/443 + certbot) |
 | `entrypoint.sh` | Runtime prep for self-update (docker socket group + repo ownership) |
 | `.github/release.yml` | GitHub auto-generated release notes config |
-| `appliance/VERSION` | Appliance platform version (independent from app) |
-| `appliance/packer/sixtyops.pkr.hcl` | Packer template for OVA build |
-| `.github/workflows/build-appliance.yml` | Appliance build + latest-appliance release |
 | `tests/integration/` | Integration tests against real hardware (requires `SIXTYOPS_TEST_URL`) |
 
 ## Deployment Reality
