@@ -53,6 +53,9 @@ pytest -m "integration and dev_sso" -v
 
 - `.github/workflows/dev-hardware.yml` runs the merge-gating `dev_blocking` lane on `pull_request`, `workflow_dispatch`, and `schedule`.
 - `.github/workflows/dev-sso.yml` runs the separate `dev_sso` lane on `workflow_dispatch` and `schedule`.
+- The Actions workflows accept repository variables or secrets for the non-sensitive host and device inputs, and secrets for passwords.
+- On `pull_request`, `Dev Hardware Validation` soft-skips with a warning if the live-dev inputs are not configured yet.
+- On `workflow_dispatch` and `schedule`, missing live-dev inputs are still treated as hard failures.
 
 ## Branch Protection
 
