@@ -1,0 +1,33 @@
+"""Live-dev validation matrix keyed by product feature."""
+
+from updater.features import Feature
+
+DEV_BLOCKING = "dev_blocking"
+DEV_SSO = "dev_sso"
+UNIT_API_ONLY = "unit_api_only"
+DEFERRED_EXTERNAL = "deferred_external"
+
+VALIDATION_LANES = {
+    DEV_BLOCKING,
+    DEV_SSO,
+    UNIT_API_ONLY,
+    DEFERRED_EXTERNAL,
+}
+
+FEATURE_VALIDATION_MATRIX = {
+    Feature.UPDATE_SINGLE_DEVICE: DEV_BLOCKING,
+    Feature.SSO_OIDC: DEV_SSO,
+    Feature.RADIUS_AUTH: DEV_BLOCKING,
+    Feature.CONFIG_BACKUP: DEV_BLOCKING,
+    Feature.CONFIG_TEMPLATES: DEV_BLOCKING,
+    Feature.CONFIG_COMPLIANCE: DEV_BLOCKING,
+    Feature.CONFIG_PUSH: DEV_BLOCKING,
+    Feature.SLACK_NOTIFICATIONS: DEFERRED_EXTERNAL,
+    Feature.DEVICE_PORTAL: DEV_BLOCKING,
+    Feature.DEVICE_HISTORY: DEV_BLOCKING,
+    Feature.TOWER_SITES: DEV_BLOCKING,
+    Feature.BETA_FIRMWARE: UNIT_API_ONLY,
+    Feature.FIRMWARE_HOLD_CUSTOM: UNIT_API_ONLY,
+    Feature.SNMP_TRAPS: DEFERRED_EXTERNAL,
+    Feature.WEBHOOKS: DEFERRED_EXTERNAL,
+}

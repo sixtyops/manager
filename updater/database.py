@@ -135,6 +135,14 @@ def _migrate(db):
     except Exception:
         pass  # Table may not exist yet
 
+    # Add target_ips_json to radius_rollouts
+    try:
+        rr_columns = [row[1] for row in db.execute("PRAGMA table_info(radius_rollouts)").fetchall()]
+        if rr_columns and "target_ips_json" not in rr_columns:
+            db.execute("ALTER TABLE radius_rollouts ADD COLUMN target_ips_json TEXT")
+    except Exception:
+        pass  # Table may not exist yet
+
     # Add sha256 column to firmware_registry
     try:
         fr_columns = [row[1] for row in db.execute("PRAGMA table_info(firmware_registry)").fetchall()]
@@ -582,7 +590,8 @@ def init_db():
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 last_phase_completed_at TEXT,
                 completed_at TEXT,
-                service_username TEXT
+                service_username TEXT,
+                target_ips_json TEXT
             );
             CREATE TABLE IF NOT EXISTS radius_rollout_devices (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

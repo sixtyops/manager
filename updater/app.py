@@ -2666,23 +2666,37 @@ async def get_radius_rollout_api(session: dict = Depends(require_auth), _pro=Dep
 
 
 @app.post("/api/auth/radius/rollout/start", tags=["auth"])
-async def start_radius_rollout_api(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
+async def start_radius_rollout_api(
+    request: Request,
+    session: dict = Depends(require_role("admin", "operator")),
+    _pro=Depends(require_feature(Feature.RADIUS_AUTH)),
+):
     """Start staged RADIUS migration for managed devices."""
     if radius_rollout.get_active_rollout():
         raise HTTPException(400, "A RADIUS rollout is already active")
+
+    data = {}
+    body = await request.body()
+    if body.strip():
+        try:
+            data = await request.json()
+        except Exception:
+            raise HTTPException(400, "Invalid JSON body")
+    target_ips = _parse_radius_rollout_target_ips(data)
+    target_ip_set = set(target_ips) if target_ips else None
 
     config = get_radius_server_config()
     if not config.enabled or not config.shared_secret or not config.advertised_address:
         raise HTTPException(400, "RADIUS must be enabled with an advertised address and shared secret before rollout")
 
     try:
-        await _refresh_radius_rollout_inventory()
+        await _refresh_radius_rollout_inventory(target_ip_set)
         template = _get_radius_rollout_template()
         _validate_radius_rollout_template(template, config)
         template["fragment"] = _apply_radius_settings_to_fragment(template["fragment"], config)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    devices = _radius_rollout_targets()
+    devices = _radius_rollout_targets(target_ip_set)
     if not devices:
         raise HTTPException(400, "No enabled APs, switches, or verified CPEs available for RADIUS rollout")
 
@@ -2690,7 +2704,7 @@ async def start_radius_rollout_api(session: dict = Depends(require_role("admin",
     svc = get_radius_service()
     if svc:
         svc.refresh_clients()
-    rollout_id = radius_rollout.create_rollout(template["id"], service_username)
+    rollout_id = radius_rollout.create_rollout(template["id"], service_username, target_ips=target_ips)
     _start_radius_rollout_task(rollout_id)
     rollout = radius_rollout.get_rollout(rollout_id)
     return {"rollout": rollout}
@@ -7167,20 +7181,71 @@ _radius_rollout_task: Optional[asyncio.Task] = None
 _radius_rollout_lock = asyncio.Lock()
 
 
-def _radius_rollout_targets() -> list[dict]:
+def _parse_radius_rollout_target_ips(data: dict) -> Optional[list[str]]:
+    raw = data.get("target_ips")
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(400, "target_ips must be a non-empty list of IPs")
+
+    target_ips = []
+    seen = set()
+    for item in raw:
+        if not isinstance(item, str):
+            raise HTTPException(400, "target_ips must contain only string IPs")
+        ip = item.strip()
+        _validate_ip(ip)
+        if ip not in seen:
+            target_ips.append(ip)
+            seen.add(ip)
+    return target_ips
+
+
+def _radius_rollout_target_set(rollout: Optional[dict]) -> Optional[set[str]]:
+    if not rollout:
+        return None
+    raw = rollout.get("target_ips_json")
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, list):
+        return None
+    return {str(item).strip() for item in parsed if isinstance(item, str) and str(item).strip()}
+
+
+def _radius_ap_in_target_scope(ap_ip: str, target_ips: Optional[set[str]]) -> bool:
+    if target_ips is None or ap_ip in target_ips:
+        return True
+    for cpe in db.get_cpes_for_ap(ap_ip):
+        cpe_ip = cpe.get("ip")
+        if cpe_ip and cpe_ip in target_ips:
+            return True
+    return False
+
+
+def _radius_rollout_targets(target_ips: Optional[set[str]] = None) -> list[dict]:
     devices = []
     seen_ips = set()
     for ap in db.get_access_points(enabled_only=True):
-        if ap["ip"] not in seen_ips:
-            devices.append({
-                "ip": ap["ip"],
-                "role": "ap",
-                "username": ap["username"],
-                "password": ap["password"],
-            })
-            seen_ips.add(ap["ip"])
+        ap_in_scope = _radius_ap_in_target_scope(ap["ip"], target_ips)
+        if target_ips is None or ap["ip"] in target_ips:
+            if ap["ip"] not in seen_ips:
+                devices.append({
+                    "ip": ap["ip"],
+                    "role": "ap",
+                    "username": ap["username"],
+                    "password": ap["password"],
+                })
+                seen_ips.add(ap["ip"])
+        if not ap_in_scope:
+            continue
         for cpe in db.get_cpes_for_ap(ap["ip"]):
             cpe_ip = cpe.get("ip")
+            if target_ips is not None and cpe_ip not in target_ips:
+                continue
             if not cpe_ip or cpe.get("auth_status") != "ok" or cpe_ip in seen_ips:
                 continue
             devices.append({
@@ -7192,6 +7257,8 @@ def _radius_rollout_targets() -> list[dict]:
             })
             seen_ips.add(cpe_ip)
     for switch in db.get_switches(enabled_only=True):
+        if target_ips is not None and switch["ip"] not in target_ips:
+            continue
         if switch["ip"] in seen_ips:
             continue
         devices.append({
@@ -7358,13 +7425,15 @@ def _serialize_radius_rollout_devices(rollout_id: int) -> list[dict]:
     return serialized
 
 
-async def _refresh_radius_rollout_inventory():
+async def _refresh_radius_rollout_inventory(target_ips: Optional[set[str]] = None):
     poller = get_poller()
     if not poller:
         raise ValueError("Poller not initialized")
 
     failures = []
     for ap in db.get_access_points(enabled_only=True):
+        if not _radius_ap_in_target_scope(ap["ip"], target_ips):
+            continue
         ok = await poller.poll_ap_now(ap["ip"])
         if ok:
             continue
@@ -7452,7 +7521,7 @@ async def _run_radius_rollout(rollout_id: int):
                     await _broadcast_radius_rollout_state()
                     return
 
-                devices = _radius_rollout_targets()
+                devices = _radius_rollout_targets(_radius_rollout_target_set(rollout))
                 phase_devices = _resolve_radius_rollout_phase_devices(rollout, devices)
                 if not phase_devices:
                     radius_rollout.complete_rollout_phase(rollout_id)

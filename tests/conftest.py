@@ -331,7 +331,8 @@ def memory_db():
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             last_phase_completed_at TEXT,
             completed_at TEXT,
-            service_username TEXT
+            service_username TEXT,
+            target_ips_json TEXT
         );
         CREATE TABLE radius_rollout_devices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

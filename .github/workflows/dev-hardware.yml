@@ -1,0 +1,88 @@
+name: Dev Hardware Validation
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *"
+
+concurrency:
+  group: dev-hardware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dev-blocking:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 90
+    env:
+      SIXTYOPS_TEST_URL: ${{ vars.SIXTYOPS_TEST_URL || secrets.SIXTYOPS_TEST_URL }}
+      SIXTYOPS_TEST_USER: ${{ vars.SIXTYOPS_TEST_USER || secrets.SIXTYOPS_TEST_USER }}
+      SIXTYOPS_TEST_PASS: ${{ secrets.SIXTYOPS_TEST_PASS }}
+      SIXTYOPS_TEST_AP_IP: ${{ vars.SIXTYOPS_TEST_AP_IP || secrets.SIXTYOPS_TEST_AP_IP }}
+      SIXTYOPS_TEST_SWITCH_IP: ${{ vars.SIXTYOPS_TEST_SWITCH_IP || secrets.SIXTYOPS_TEST_SWITCH_IP }}
+      SIXTYOPS_TEST_FIRMWARE_AP_IP: ${{ vars.SIXTYOPS_TEST_FIRMWARE_AP_IP || secrets.SIXTYOPS_TEST_FIRMWARE_AP_IP }}
+      SIXTYOPS_TEST_CONFIG_AP_IP: ${{ vars.SIXTYOPS_TEST_CONFIG_AP_IP || secrets.SIXTYOPS_TEST_CONFIG_AP_IP }}
+      SIXTYOPS_TEST_RADIUS_AP_IP: ${{ vars.SIXTYOPS_TEST_RADIUS_AP_IP || secrets.SIXTYOPS_TEST_RADIUS_AP_IP }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required live-dev inputs
+        id: validate_inputs
+        run: |
+          missing=()
+          for name in \
+            SIXTYOPS_TEST_URL \
+            SIXTYOPS_TEST_USER \
+            SIXTYOPS_TEST_PASS \
+            SIXTYOPS_TEST_AP_IP \
+            SIXTYOPS_TEST_SWITCH_IP \
+            SIXTYOPS_TEST_FIRMWARE_AP_IP \
+            SIXTYOPS_TEST_CONFIG_AP_IP \
+            SIXTYOPS_TEST_RADIUS_AP_IP
+          do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          missing_csv="$(IFS=,; echo "${missing[*]}")"
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          echo "missing=$missing_csv" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "::warning::Skipping live-dev validation on pull_request because required inputs are not configured: $missing_csv"
+            {
+              echo "### Dev Hardware Validation skipped"
+              echo
+              echo "Required live-dev inputs are not configured for this repository or environment."
+              echo
+              echo "Missing inputs: \`$missing_csv\`"
+              echo
+              echo "PR validation is soft-skipped until the live-dev secrets or variables are wired. Scheduled and manual runs still fail fast when inputs are missing."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          for name in "${missing[@]}"; do
+            echo "::error::Missing required secret or variable: $name"
+          done
+          exit 1
+
+      - name: Install test dependencies
+        if: steps.validate_inputs.outputs.ready == 'true'
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Run merge-gating live-dev validation
+        if: steps.validate_inputs.outputs.ready == 'true'
+        run: |
+          . .venv/bin/activate
+          pytest -m "integration and dev_blocking" -v --timeout=900
