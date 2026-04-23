@@ -558,14 +558,50 @@
         .users-table th { text-align:left; font-weight:600; font-size:0.7rem; color:var(--text-dim,#9ca3af); text-transform:uppercase; letter-spacing:0.03em; padding:6px 8px; border-bottom:1px solid var(--border,#e5e7eb); }
         .users-table td { padding:8px; border-bottom:1px solid var(--border-light,#f3f4f6); vertical-align:middle; }
         .users-table tr:last-child td { border-bottom:none; }
-        .users-table .user-actions { display:flex; gap:5px; justify-content:flex-end; align-items:center; }
-        .users-table .user-role-select { padding:4px 8px; border:1px solid var(--border,#d1d5db); border-radius:6px; font-size:0.72rem; background:#fff; }
-        .users-table .user-btn { padding:4px 10px; border:none; border-radius:6px; font-size:0.7rem; font-weight:500; background:var(--bg,#f3f4f6); color:var(--text-muted,#6b7280); cursor:pointer; transition:background 0.15s; }
+        .users-table .user-actions { display:flex; gap:6px; justify-content:flex-end; align-items:center; }
+        .users-table .user-role-select { height:26px; padding:0 8px; border:1px solid var(--border,#d1d5db); border-radius:6px; font-size:0.72rem; background:#fff; }
+        .users-table .user-btn { height:26px; min-width:64px; padding:0 10px; border:1px solid transparent; border-radius:6px; font-size:0.7rem; font-weight:500; background:var(--bg,#f3f4f6); color:var(--text-muted,#6b7280); cursor:pointer; transition:background 0.15s; display:inline-flex; align-items:center; justify-content:center; }
         .users-table .user-btn:hover { background:#e5e7eb; color:var(--text,#111827); }
         .users-table .user-btn-danger { color:#fff; background:#ef4444; }
         .users-table .user-btn-danger:hover { background:#dc2626; color:#fff; }
         .user-status-active { color:#16a34a; font-weight:500; }
         .user-status-disabled { color:#dc2626; font-weight:500; }
+        .users-table .user-btn[disabled],
+        .users-table .user-btn[disabled]:hover { opacity:0.45; cursor:not-allowed; background:var(--bg,#f3f4f6); color:var(--text-muted,#6b7280); }
+        .users-table .user-btn-danger[disabled],
+        .users-table .user-btn-danger[disabled]:hover { background:#fca5a5; color:#fff; }
+
+        /* System > Updates */
+        .updates-grid { display:flex; flex-direction:column; border:1px solid var(--border-light,#f3f4f6); border-radius:8px; overflow:hidden; background:#fff; }
+        .updates-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 14px; min-height:40px; border-bottom:1px solid var(--border-light,#f3f4f6); }
+        .updates-row:last-child { border-bottom:none; }
+        .updates-row label { cursor:pointer; }
+        .updates-label { font-size:0.78rem; font-weight:600; color:var(--text,#111827); }
+        .updates-version { font-size:0.8rem; font-weight:700; color:var(--text,#111827); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+        .updates-select { font-size:0.72rem; padding:4px 8px; border:1px solid var(--border,#d1d5db); border-radius:6px; background:#fff; min-width:160px; }
+        .updates-row-actions { background:var(--bg-subtle,#f9fafb); }
+        .updates-banner { margin-top:12px; padding:12px 14px; background:#dbeafe; border-radius:8px; }
+        .updates-banner-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+        .updates-banner-title { font-weight:600; font-size:0.82rem; color:#1e40af; }
+        .updates-banner-link { font-size:0.7rem; color:#2563eb; text-decoration:none; }
+        .updates-banner-link:hover { text-decoration:underline; }
+        .updates-banner-btn { margin-top:10px; background:#16a34a; color:#fff; }
+
+        /* About panel */
+        .about-header { display:flex; align-items:baseline; gap:10px; margin-bottom:6px; }
+        .about-chip { display:inline-flex; align-items:center; font-size:0.78rem; font-weight:700; padding:4px 10px; border-radius:4px; color:#fff; background:#0D9488; line-height:1; }
+        .about-version { font-size:0.82rem; font-weight:600; color:var(--text,#111827); letter-spacing:0.01em; }
+        .about-meta { font-size:0.72rem; color:var(--text-muted,#6b7280); margin-bottom:10px; }
+        .about-meta code { font-size:0.7rem; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+        .about-blurb { font-size:0.75rem; color:var(--text-muted,#6b7280); margin:0 0 16px 0; line-height:1.5; }
+        .about-support { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 14px; border:1px solid #FCD34D; border-radius:10px; background:linear-gradient(135deg,#FFF7CC 0%,#FFFDF4 100%); flex-wrap:wrap; }
+        .about-support-text { min-width:200px; flex:1; }
+        .about-support-title { font-size:0.82rem; font-weight:700; color:#92400E; margin-bottom:2px; }
+        .about-support-body { font-size:0.72rem; color:#78350F; line-height:1.45; }
+        .about-support-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:8px 14px; border-radius:8px; background:#FFDD00; color:#111827; font-size:0.78rem; font-weight:700; text-decoration:none; white-space:nowrap; box-shadow:inset 0 -1px 0 rgba(0,0,0,0.08); }
+        .about-footer { display:flex; flex-wrap:wrap; gap:14px; margin-top:16px; font-size:0.75rem; }
+        .about-footer a { color:#0D9488; text-decoration:none; }
+        .about-footer a:hover { text-decoration:underline; }
 
         .release-notes-content {
             margin-top: 8px;
@@ -2038,6 +2074,7 @@
         .tree-indent-2 { padding-left: var(--tree-indent-2); }
         .tree-indent-3 { padding-left: var(--tree-indent-3); }
 
+        /* Port badge shown on APs that are attached to a known switch port. */
         .port-badge {
             display: inline-flex;
             align-items: center;
@@ -2045,42 +2082,49 @@
             margin-left: 8px;
             padding: 1px 8px;
             border-radius: 999px;
-            background: rgba(99, 102, 241, 0.15);
-            border: 1px solid rgba(99, 102, 241, 0.35);
-            color: #6366f1;
+            background: rgba(37, 99, 235, 0.10);
+            border: 1px solid rgba(37, 99, 235, 0.30);
+            color: #2563eb;
             font-size: 10px;
             font-weight: 600;
             letter-spacing: 0.02em;
             white-space: nowrap;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         }
-        .port-badge::before {
-            content: "";
-            display: inline-block;
-            width: 10px;
-            height: 1px;
-            background: currentColor;
-            opacity: 0.6;
+
+        /* Toast notifications */
+        .toast-container {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            pointer-events: none;
+            max-width: 380px;
         }
-        .name-cell.tree-indent-2.under-switch {
-            position: relative;
+        .toast {
+            pointer-events: auto;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 13px;
+            line-height: 1.4;
+            background: #ffffff;
+            color: #1f2937;
+            border: 1px solid #e5e7eb;
+            border-left: 4px solid #6b7280;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+            animation: toastSlideIn 0.18s ease-out;
+            word-wrap: break-word;
         }
-        .name-cell.tree-indent-2.under-switch::before {
-            content: "";
-            position: absolute;
-            left: calc(var(--tree-indent-1) + 12px);
-            top: 0;
-            bottom: 50%;
-            width: 1px;
-            background: rgba(148, 163, 184, 0.4);
-        }
-        .name-cell.tree-indent-2.under-switch::after {
-            content: "";
-            position: absolute;
-            left: calc(var(--tree-indent-1) + 12px);
-            top: 50%;
-            width: 10px;
-            height: 1px;
-            background: rgba(148, 163, 184, 0.4);
+        .toast.info    { border-left-color: #2563eb; }
+        .toast.success { border-left-color: #059669; }
+        .toast.warn    { border-left-color: #d97706; }
+        .toast.error   { border-left-color: #dc2626; }
+        @keyframes toastSlideIn {
+            from { opacity: 0; transform: translateX(12px); }
+            to   { opacity: 1; transform: translateX(0); }
         }
 
         /* Utility classes */
@@ -2410,7 +2454,7 @@
                     <div class="status-bar-actions">
                         <button class="btn btn-sm btn-ghost" id="configCancelBtn" onclick="cancelConfigPushRollout();event.stopPropagation();" style="display:none;">Cancel</button>
                         <button class="btn btn-sm btn-warning" id="configResumeBtn" onclick="resumeConfigPushRollout();event.stopPropagation();" style="display:none;">Resume</button>
-                        <button class="btn btn-sm btn-secondary" onclick="checkCompliance();event.stopPropagation();">Check Compliance</button>
+                        <button class="btn btn-sm btn-secondary" id="checkComplianceBtn" onclick="checkCompliance();event.stopPropagation();">Check Compliance</button>
                         <button class="btn btn-sm btn-primary hidden" id="configPushBtn" onclick="showConfigPushDialog();event.stopPropagation();">Push to Devices</button>
                     </div>
                 </div>
@@ -2574,8 +2618,8 @@
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgNtpEnabled" name="cfgNtpEnabled" checked> Enable NTP</label>
                                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
-                                    <div><label for="cfgNtpServer1">Server 1</label><input type="text" id="cfgNtpServer1" name="cfgNtpServer1" placeholder="time.google.com" style="width:100%;"></div>
-                                    <div><label for="cfgNtpServer2">Server 2</label><input type="text" id="cfgNtpServer2" name="cfgNtpServer2" placeholder="time.cloudflare.com" style="width:100%;"></div>
+                                    <div><label for="cfgNtpServer1">Server 1</label><input type="text" id="cfgNtpServer1" name="cfgNtpServer1" value="132.163.97.1" placeholder="132.163.97.1" style="width:100%;"></div>
+                                    <div><label for="cfgNtpServer2">Server 2</label><input type="text" id="cfgNtpServer2" name="cfgNtpServer2" value="129.6.15.28" placeholder="129.6.15.28" style="width:100%;"></div>
                                 </div>
                             </div>
                         </div>
@@ -2703,35 +2747,39 @@
                 </div>
 
                 <div class="system-subpanel active" id="systemSub-updates">
-                    <div class="u-flex-center-between u-mb-8">
-                        <div class="u-flex-center-gap8">
-                            <button class="toggle" id="appAutoUpdateToggle" type="button" aria-label="Toggle app auto-update" aria-pressed="false" onclick="toggleAppAutoUpdate()" style="flex-shrink:0;"></button>
-                            <label class="u-m0" style="font-weight:600;font-size:0.8rem;">Auto Check for SixtyOps App Updates</label>
+                    <div class="updates-grid">
+                        <div class="updates-row">
+                            <span class="updates-label">Current Version</span>
+                            <span class="updates-version" id="appVersionDisplay">&mdash;</span>
                         </div>
-                        <span id="appVersionDisplay" style="font-size:0.82rem;font-weight:700;color:var(--text);"></span>
+                        <div class="updates-row">
+                            <span class="updates-label">
+                                <label for="appAutoUpdateToggle" class="u-m0">Auto-Check for Updates</label>
+                            </span>
+                            <button class="toggle" id="appAutoUpdateToggle" type="button" aria-label="Toggle app auto-update" aria-pressed="false" onclick="toggleAppAutoUpdate()"></button>
+                        </div>
+                        <div class="updates-row">
+                            <span class="updates-label">
+                                <label for="appReleaseChannel" class="u-m0">Release Channel</label>
+                            </span>
+                            <select id="appReleaseChannel" name="appReleaseChannel" onchange="saveReleaseChannel()" class="updates-select">
+                                <option value="stable">Stable</option>
+                                <option value="dev">Dev (pre-release)</option>
+                            </select>
+                        </div>
+                        <div class="updates-row updates-row-actions">
+                            <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
+                            <span id="appUpdateStatus" class="u-text-xs-muted"></span>
+                        </div>
                     </div>
 
-                    <div class="u-flex-center-gap8 u-mb-12">
-                        <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
-                        <span id="appUpdateStatus" class="u-text-xs-muted"></span>
-                    </div>
-
-                    <div class="u-flex-center-gap8 u-pt-10" style="border-top:1px solid var(--border-light);">
-                        <label class="u-label-xs u-m0" for="appReleaseChannel">Release Channel</label>
-                        <select id="appReleaseChannel" name="appReleaseChannel" onchange="saveReleaseChannel()" style="font-size:0.72rem;padding:4px 8px;border:1px solid var(--border);border-radius:6px;">
-                            <option value="stable">Stable</option>
-                            <option value="dev">Dev</option>
-                        </select>
-                        <span class="u-text-xxs-dim">Dev receives pre-release updates for testing</span>
-                    </div>
-
-                    <div id="appUpdateBannerInline" class="hidden" style="margin-top:12px;padding:10px;background:#dbeafe;border-radius:6px;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;">
-                            <div style="font-weight:600;font-size:0.8rem;color:#1e40af;">Update Available: <span id="appUpdateVersion"></span></div>
-                            <a id="appUpdateReleaseLink" href="#" target="_blank" style="font-size:0.68rem;color:#2563eb;">View on GitHub</a>
+                    <div id="appUpdateBannerInline" class="hidden updates-banner">
+                        <div class="updates-banner-head">
+                            <div class="updates-banner-title">Update Available: <span id="appUpdateVersion"></span></div>
+                            <a id="appUpdateReleaseLink" href="#" target="_blank" class="updates-banner-link">View on GitHub</a>
                         </div>
                         <div id="appUpdateNotesContainer" class="release-notes-content hidden"></div>
-                        <button class="backup-btn" onclick="applyAppUpdate()" style="margin-top:8px;background:#16a34a;color:#fff;">Update Now</button>
+                        <button class="backup-btn updates-banner-btn" onclick="applyAppUpdate()">Update Now</button>
                     </div>
                 </div>
 
@@ -3198,54 +3246,15 @@
                         <button id="radiusSecretReviewButton" class="backup-btn" onclick="markRadiusSecretReviewed()" style="display:none;margin-top:6px;background:#92400e;color:#fff;">Mark Reviewed</button>
                     </div>
 
-                    <div class="auth-stats-grid">
-                        <div class="auth-stat-card">
-                            <div class="auth-stat-label">Last Rotated</div>
-                            <div class="auth-stat-value" id="radiusSecretRotated">Not set</div>
-                        </div>
-                        <div class="auth-stat-card">
-                            <div class="auth-stat-label">Secret Age</div>
-                            <div class="auth-stat-value" id="radiusSecretAge">-</div>
-                        </div>
-                        <div class="auth-stat-card">
-                            <div class="auth-stat-label">Review Policy</div>
-                            <div class="auth-stat-value" id="radiusSecretPolicy">365 days</div>
-                        </div>
-                        <div class="auth-stat-card">
-                            <div class="auth-stat-label">Secret Status</div>
-                            <div class="auth-stat-value" id="radiusSecretState">No Secret</div>
-                        </div>
-                    </div>
-
-                    <div class="auth-stats-grid">
-                        <div class="auth-stat-card">
-                            <div class="auth-stat-label">Accounts</div>
-                            <div class="auth-stat-value" id="radiusStatUsers">0</div>
-                        </div>
-                        <div class="auth-stat-card">
-                            <div class="auth-stat-label">Devices</div>
-                            <div class="auth-stat-value" id="radiusStatDevices">0</div>
-                        </div>
-                        <div class="auth-stat-card">
-                            <div class="auth-stat-label">Success Rate</div>
-                            <div class="auth-stat-value" style="color:#0D9488;" id="radiusStatSuccess">100%</div>
-                        </div>
-                        <div class="auth-stat-card">
-                            <div class="auth-stat-label">Logins Today</div>
-                            <div class="auth-stat-value" id="radiusStatToday">0</div>
-                        </div>
-                    </div>
-                    <p class="u-note-inline" style="margin-top:10px;">Reserved usernames admin and root are blocked from RADIUS authentication.</p>
+                    <p class="u-note-inline" style="margin-top:10px;">Reserved usernames <code>admin</code> and <code>root</code> are blocked from RADIUS authentication.</p>
                 </div>
 
                 <div class="radius-subpanel" id="radiusSub-clients">
-                    <p class="u-note-inline" style="margin-bottom:12px;">RADIUS authenticates against the users in the <a href="#" onclick="switchSettingsTab('access', 'users');return false;" style="color:var(--primary);text-decoration:none;font-weight:500;">Local Users</a> panel. To push RADIUS settings to devices, use <a href="#" onclick="closeAppSettingsModal();document.getElementById('bottomDrawer').classList.add('open');return false;" style="color:var(--primary);text-decoration:none;font-weight:500;">Config &rarr; Push to Devices</a> in the bottom drawer.</p>
-
-                    <div style="margin-bottom:14px;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                    <div style="margin-bottom:16px;">
+                        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:4px;">
                             <h5 class="settings-section-title" style="margin:0;">Manual Client Overrides</h5>
-                            <span class="u-text-sm-dim">Use when device source IPs are not covered by inventory</span>
                         </div>
+                        <p class="u-note-inline" style="margin:0 0 8px 0;">Allow RADIUS requests from devices not tracked in inventory (e.g. a whole subnet). By default, any device presenting the correct shared secret is accepted — overrides are only needed when <em>Client Policy</em> is set to restricted.</p>
                         <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 80px auto;gap:8px;align-items:end;">
                             <div>
                                 <label class="u-label-compact" for="radiusClientSpec">IP or CIDR</label>
@@ -3259,7 +3268,7 @@
                                 <input type="checkbox" id="radiusClientEnabled" name="radiusClientEnabled" checked>
                                 Enabled
                             </label>
-                            <button class="backup-btn" onclick="createRadiusClient()">Add Client</button>
+                            <button class="backup-btn" onclick="createRadiusClient()">Add</button>
                         </div>
                         <div id="radiusClientsStatus" class="u-status-line" style="margin-top:8px;"></div>
                         <div id="radiusClientsList" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;"></div>
@@ -3268,57 +3277,46 @@
                     <hr class="u-hr">
 
                     <div>
-                        <h5 class="settings-section-title">Recent Admin Logins</h5>
-                        <div id="radiusRecentLogins" style="display:flex;flex-direction:column;gap:6px;"></div>
-                    </div>
-
-                    <div style="margin-top:14px;">
                         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-                            <h5 class="settings-section-title" style="margin:0;">Auth Log</h5>
-                            <button class="backup-btn backup-btn-sm u-bg-muted-cta" onclick="loadRadiusAuthLog()">Refresh</button>
+                            <h5 class="settings-section-title" style="margin:0;">Recent Authentication Activity</h5>
+                            <button class="backup-btn backup-btn-sm u-bg-muted-cta" onclick="refreshRadiusData()" style="margin-left:auto;">Refresh</button>
                         </div>
-                        <div id="radiusAuthLogTable" style="font-size:0.72rem;max-height:150px;overflow-y:auto;">
-                            <div class="u-muted-empty-sm">No auth log entries.</div>
-                        </div>
+                        <p class="u-note-inline" style="margin:0 0 8px 0;">The latest admin RADIUS auth attempts (accept/reject) against this server. Use this to verify devices are reaching the RADIUS service with a valid secret.</p>
+                        <div id="radiusRecentLogins" style="display:flex;flex-direction:column;gap:6px;"></div>
                     </div>
                 </div>
             </div>
 
             <!-- About Panel -->
             <div class="settings-panel" id="settingsPanel-about">
-                <div style="margin-bottom:16px;">
-                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-                        <span style="display:inline-flex;align-items:center;font-size:0.75rem;font-weight:700;padding:3px 10px;border-radius:4px;color:#fff;background:#0D9488;">SixtyOps Manager</span>
-                        <span id="aboutVersionText" style="font-size:0.8rem;color:var(--text-muted);"></span>
-                    </div>
-                    <div class="u-text-xs-muted" style="margin-bottom:12px;">
-                        <div>Instance ID: <code id="aboutInstanceId" style="font-size:0.72rem;"></code></div>
-                    </div>
-                    <div class="u-text-xs-muted">
-                        Open-source firmware management for Tachyon wireless networks. All features are unlocked.
-                        Features marked <span class="danger-badge">DANGEROUS</span> involve untested or high-impact operations — use with care.
-                    </div>
+                <div class="about-header">
+                    <span class="about-chip">SixtyOps Manager</span>
+                    <span class="about-version" id="aboutVersionText"></span>
                 </div>
-                <div style="margin:16px 0 0 0;padding:14px 16px;border:1px solid #FCD34D;border-radius:10px;background:linear-gradient(135deg,#FFF7CC 0%,#FFFDF4 100%);">
-                    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
-                        <div style="min-width:220px;flex:1;">
-                            <div style="font-size:0.86rem;font-weight:700;color:#92400E;margin-bottom:4px;">Support SixtyOps</div>
-                            <div class="u-text-xs-muted" style="color:#78350F;">
-                                If SixtyOps saves you time, you can help fund continued development and support the project with a coffee.
-                            </div>
+                <div class="about-meta">
+                    Instance ID: <code id="aboutInstanceId"></code>
+                </div>
+                <p class="about-blurb">
+                    Open-source firmware management for Tachyon wireless networks. All features are unlocked.
+                    Features marked <span class="danger-badge">DANGEROUS</span> involve untested or high-impact operations — use with care.
+                </p>
+                <div class="about-support">
+                    <div class="about-support-text">
+                        <div class="about-support-title">Support SixtyOps</div>
+                        <div class="about-support-body">
+                            If SixtyOps saves you time, you can help fund continued development with a coffee.
                         </div>
-                        <a href="https://buymeacoffee.com/sixtyops" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 14px;border-radius:8px;background:#FFDD00;color:#111827;font-size:0.8rem;font-weight:700;text-decoration:none;white-space:nowrap;box-shadow:inset 0 -1px 0 rgba(0,0,0,0.08);">
-                            <span aria-hidden="true">☕</span>
-                            <span>Buy Me a Coffee</span>
-                        </a>
                     </div>
+                    <a href="https://buymeacoffee.com/sixtyops" target="_blank" rel="noopener noreferrer" class="about-support-btn">
+                        <span aria-hidden="true">☕</span>
+                        <span>Buy Me a Coffee</span>
+                    </a>
                 </div>
-                <div class="u-text-sm-dim" style="margin-top:16px;">
-                    <a href="https://github.com/sixtyops/manager" target="_blank" style="color:#0D9488;">GitHub</a> &middot;
-                    <a href="https://buymeacoffee.com/sixtyops" target="_blank" rel="noopener noreferrer" style="color:#0D9488;">Buy Me a Coffee</a> &middot;
-                    <a href="https://sixtyops.net" target="_blank" style="color:#0D9488;">SixtyOps.net</a> &middot;
-                    <a href="mailto:support@sixtyops.net" style="color:#0D9488;">Support</a>
-                </div>
+                <nav class="about-footer" aria-label="About links">
+                    <a href="https://github.com/sixtyops/manager" target="_blank" rel="noopener noreferrer">GitHub</a>
+                    <a href="https://sixtyops.net" target="_blank" rel="noopener noreferrer">SixtyOps.net</a>
+                    <a href="mailto:support@sixtyops.net">Support</a>
+                </nav>
             </div>
 
         </div>
@@ -3347,6 +3345,7 @@
 
         // Role-based UI visibility
         let currentUserRole = 'viewer';
+        let currentUsername = '';
 
         // Config policy state (declared early to avoid TDZ errors)
         let configLoaded = false;
@@ -3366,10 +3365,11 @@
                 .then(r => r.json())
                 .then(data => {
                     currentUserRole = data.role || 'viewer';
+                    currentUsername = data.username || '';
                     applyRoleVisibility();
                     updateRoleBadge(currentUserRole);
                 })
-                .catch(() => { currentUserRole = 'viewer'; applyRoleVisibility(); updateRoleBadge('viewer'); });
+                .catch(() => { currentUserRole = 'viewer'; currentUsername = ''; applyRoleVisibility(); updateRoleBadge('viewer'); });
         }
 
         function updateRoleBadge(role) {
@@ -4465,9 +4465,9 @@
             const noLocation = !ap.location && siteName === 'Unassigned';
             const isApSelected = selectedNode?.type === 'ap' && selectedNode?.data?.ip === ap.ip;
             const isApCanary = canaryAps.has(ap.ip);
-            const nameCellClass = `name-cell tree-indent-${indent}${underSwitch ? ' under-switch' : ''}`;
+            const nameCellClass = `name-cell tree-indent-${indent}`;
             const portBadge = underSwitch && ap.switch_port
-                ? `<span class="port-badge" title="Connected to switch port">${escapeHtml(ap.switch_port)}</span>`
+                ? `<span class="port-badge" title="Connected to switch port ${escapeHtml(ap.switch_port)}">${escapeHtml(ap.switch_port)}</span>`
                 : '';
 
             let out = `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isApSelected ? 'row-selected' : ''} ${isApCanary ? 'row-canary' : ''}" onclick="selectAP('${ap.ip}')">
@@ -4674,10 +4674,16 @@
                     visibleRows += (ap.cpes || []).length;
                 }
 
-                const totalCpes = aps.reduce((s, ap) => s + (ap.cpes?.length || 0), 0);
+                const nestedApCount = switches.reduce((s, sw) => s + ((sw.aps || []).length), 0);
+                const nestedCpeCount = switches.reduce(
+                    (s, sw) => s + (sw.aps || []).reduce((ss, a) => ss + ((a.cpes || []).length), 0),
+                    0,
+                );
+                const totalApsShown = aps.length + nestedApCount;
+                const totalCpes = aps.reduce((s, ap) => s + (ap.cpes?.length || 0), 0) + nestedCpeCount;
                 const isSelected = selectedNode?.type === 'site' && selectedNode?.data?.id === site.id;
 
-                let badgeParts = [`${aps.length} AP${aps.length!==1?'s':''}`, `${totalCpes} CPE${totalCpes!==1?'s':''}`];
+                let badgeParts = [`${totalApsShown} AP${totalApsShown!==1?'s':''}`, `${totalCpes} CPE${totalCpes!==1?'s':''}`];
                 if (switches.length > 0) badgeParts.push(`${switches.length} SW`);
 
                 const siteEmptyTds = activeColumnMode === 'firmware'
@@ -4770,9 +4776,14 @@
 
                     if (!swExpanded || !hasChildren) continue;
 
-                    for (const ap of nestedAps) {
-                        html += renderApRow(ap, { siteName, indent: 2, underSwitch: true, cpeIndent: 3 });
-                    }
+                    nestedAps.forEach((ap) => {
+                        html += renderApRow(ap, {
+                            siteName,
+                            indent: 2,
+                            underSwitch: true,
+                            cpeIndent: 3,
+                        });
+                    });
                 }
             }
 
@@ -5870,52 +5881,27 @@
         }
 
         function renderRadiusSecretHealth(radius) {
-            const rotatedEl = document.getElementById('radiusSecretRotated');
-            const ageEl = document.getElementById('radiusSecretAge');
-            const policyEl = document.getElementById('radiusSecretPolicy');
-            const stateEl = document.getElementById('radiusSecretState');
             const reminderEl = document.getElementById('radiusSecretReminder');
             const reminderTextEl = document.getElementById('radiusSecretReminderText');
             const reviewButtonEl = document.getElementById('radiusSecretReviewButton');
-            if (!rotatedEl || !ageEl || !policyEl || !stateEl || !reminderEl || !reminderTextEl || !reviewButtonEl) return;
+            if (!reminderEl || !reminderTextEl || !reviewButtonEl) return;
 
-            const recommendDays = radius?.rotation_recommend_after_days || 365;
-            policyEl.textContent = `${recommendDays} days`;
             reminderEl.style.display = 'none';
             reviewButtonEl.style.display = 'none';
 
-            if (!radius?.secret_set) {
-                rotatedEl.textContent = 'Not set';
-                ageEl.textContent = '-';
-                stateEl.textContent = 'No Secret';
-                stateEl.style.color = '#6b7280';
-                return;
-            }
+            if (!radius?.secret_set) return;
 
             if (radius.rotation_status === 'unknown') {
-                rotatedEl.textContent = 'Unknown';
-                ageEl.textContent = 'Unknown';
-                stateEl.textContent = 'Age Unknown';
-                stateEl.style.color = '#92400e';
                 reminderTextEl.textContent = 'This shared secret predates rotation tracking. Review it manually, then mark it as reviewed today if you want the yearly reminder to start now.';
                 reminderEl.style.display = 'block';
                 reviewButtonEl.style.display = 'inline-flex';
                 return;
             }
 
-            rotatedEl.textContent = radius.secret_last_rotated_at ? formatDateTime(radius.secret_last_rotated_at) : 'Unknown';
-            ageEl.textContent = Number.isFinite(radius.secret_age_days) ? `${radius.secret_age_days} days` : 'Unknown';
-
             if (radius.rotation_status === 'due') {
-                stateEl.textContent = 'Review Due';
-                stateEl.style.color = '#b45309';
                 reminderTextEl.textContent = `Radius shared secret review recommended. It was last rotated ${radius.secret_age_days} days ago. Rotation remains manual and should be coordinated with downstream devices.`;
                 reminderEl.style.display = 'block';
-                return;
             }
-
-            stateEl.textContent = 'Healthy';
-            stateEl.style.color = '#065f46';
         }
 
         function toggleRadiusFields() {
@@ -6160,10 +6146,6 @@
             builtinRadiusSummary = data;
             setRadiusBadge(data);
             renderRadiusSecretHealth(data);
-            document.getElementById('radiusStatUsers').textContent = data.admin_accounts || 0;
-            document.getElementById('radiusStatDevices').textContent = data.known_clients || 0;
-            document.getElementById('radiusStatSuccess').textContent = `${Math.round(data.auth_success_rate || 0)}%`;
-            document.getElementById('radiusStatToday').textContent = data.logins_today || 0;
             renderRadiusRecentLogins(data.recent_logins || []);
             if (data.enabled && data.last_error) {
                 document.getElementById('radiusStatus').textContent = data.last_error;
@@ -6201,7 +6183,7 @@
 
         async function refreshRadiusData() {
             try {
-                await Promise.all([loadRadiusUsers(), loadRadiusClients(), loadRadiusStats(), loadRadiusRollout(), loadRadiusAuthLog()]);
+                await Promise.all([loadRadiusUsers(), loadRadiusClients(), loadRadiusStats(), loadRadiusRollout()]);
             } catch (e) {
                 document.getElementById('radiusStatus').textContent = e.message || 'Failed to refresh RADIUS data';
                 document.getElementById('radiusStatus').style.color = '#ef4444';
@@ -6269,26 +6251,6 @@
                 statusEl.textContent = 'Error: ' + e.message;
                 statusEl.style.color = '#ef4444';
             }
-        }
-
-        async function loadRadiusAuthLog() {
-            try {
-                const resp = await fetch('/api/auth/radius/auth-log?limit=20');
-                if (!resp.ok) return;
-                const data = await resp.json();
-                const el = document.getElementById('radiusAuthLogTable');
-                if (!data.entries || !data.entries.length) {
-                    el.innerHTML = '<div class="u-muted-empty-sm">No auth log entries.</div>';
-                    return;
-                }
-                let html = '<table style="width:100%;border-collapse:collapse;"><tr style="border-bottom:1px solid #e5e7eb;color:#6b7280;font-size:0.65rem;"><th style="text-align:left;padding:3px;">Time</th><th style="text-align:left;padding:3px;">Username</th><th style="text-align:left;padding:3px;">Client IP</th><th style="padding:3px;">Result</th></tr>';
-                for (const e of data.entries) {
-                    const t = e.occurred_at ? new Date(e.occurred_at).toLocaleString() : '';
-                    const color = e.outcome === 'accept' ? '#10b981' : '#ef4444';
-                    html += `<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:3px;color:#9ca3af;">${t}</td><td style="padding:3px;">${escapeHtml(e.username || '')}</td><td style="padding:3px;color:#9ca3af;">${escapeHtml(e.client_ip || '')}</td><td style="padding:3px;text-align:center;color:${color};font-weight:600;">${escapeHtml(e.outcome || '')}</td></tr>`;
-                }
-                el.innerHTML = html + '</table>';
-            } catch (e) {}
         }
 
         function prefillBuiltinRadiusConfig() {
@@ -8922,14 +8884,36 @@
         }
 
         async function checkCompliance() {
+            const btn = document.getElementById('checkComplianceBtn');
+            const origText = btn ? btn.textContent : null;
+            if (btn) { btn.disabled = true; btn.textContent = 'Polling devices\u2026'; }
+            showToast('Polling devices for fresh configs\u2026', 'info', 3000);
             try {
-                const resp = await fetch('/api/config-compliance');
+                const resp = await fetch('/api/config-compliance?refresh=true');
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    throw new Error(extractDetail(err.detail) || `HTTP ${resp.status}`);
+                }
                 const data = await resp.json();
                 configCompliance = data.devices || {};
                 if (activeColumnMode === 'config') renderTable();
                 updateConfigStats();
+
+                const entries = Object.values(configCompliance);
+                const total = entries.length;
+                const ok = entries.filter(e => e.compliant).length;
+                const bad = total - ok;
+                const polled = data.polled || 0;
+                if (total === 0) {
+                    showToast(`Polled ${polled} device(s) but no configs were returned — check device reachability and credentials.`, 'warn', 5000);
+                } else {
+                    const kind = bad === 0 ? 'success' : 'warn';
+                    showToast(`Compliance: ${ok} compliant, ${bad} non-compliant (${total} devices)`, kind, 4000);
+                }
             } catch (e) {
-                showToast('Failed to check compliance: ' + e.message);
+                showToast('Failed to check compliance: ' + e.message, 'error', 5000);
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = origText || 'Check Compliance'; }
             }
         }
 
@@ -10145,12 +10129,24 @@
                     const tbody = document.getElementById('users-table-body');
                     if (!tbody) return;
                     tbody.innerHTML = '';
-                    (data.users || []).forEach(u => {
+                    const users = data.users || [];
+                    const adminCount = users.filter(u => u.role === 'admin' && u.enabled).length;
+                    users.forEach(u => {
                         const row = document.createElement('tr');
                         const statusCls = u.enabled ? 'user-status-active' : 'user-status-disabled';
                         const statusText = u.enabled ? 'Active' : 'Disabled';
+                        const isSelf = currentUsername && u.username === currentUsername;
+                        const isLastAdmin = u.role === 'admin' && adminCount <= 1;
+                        const deleteBlocked = isSelf || isLastAdmin;
+                        const deleteTitle = isSelf
+                            ? 'You cannot delete your own account'
+                            : (isLastAdmin ? 'Cannot delete the last admin' : 'Delete user');
+                        const disableTitle = isSelf && u.enabled
+                            ? 'You cannot disable your own account'
+                            : (u.enabled ? 'Disable user' : 'Enable user');
+                        const disableBlocked = isSelf && u.enabled;
                         row.innerHTML = `
-                            <td style="font-weight:500;">${escapeHtml(u.username)}</td>
+                            <td style="font-weight:500;">${escapeHtml(u.username)}${isSelf ? ' <span class="u-text-xxs-dim">(you)</span>' : ''}</td>
                             <td>${escapeHtml(u.role)}</td>
                             <td>${escapeHtml(u.auth_method || 'local')}</td>
                             <td><span class="${statusCls}">${statusText}</span></td>
@@ -10160,8 +10156,8 @@
                                     <option value="operator"${u.role==='operator'?' selected':''}>Operator</option>
                                     <option value="viewer"${u.role==='viewer'?' selected':''}>Viewer</option>
                                 </select>
-                                <button class="user-btn" onclick="toggleUserEnabled(${u.id}, ${u.enabled ? 'false' : 'true'})">${u.enabled ? 'Disable' : 'Enable'}</button>
-                                <button class="user-btn user-btn-danger" onclick="deleteUser(${u.id}, '${escapeHtml(u.username)}')">Delete</button>
+                                <button class="user-btn" title="${escapeHtml(disableTitle)}" ${disableBlocked ? 'disabled' : ''} onclick="toggleUserEnabled(${u.id}, ${u.enabled ? 'false' : 'true'})">${u.enabled ? 'Disable' : 'Enable'}</button>
+                                <button class="user-btn user-btn-danger" title="${escapeHtml(deleteTitle)}" ${deleteBlocked ? 'disabled' : ''} onclick="deleteUser(${u.id}, '${escapeHtml(u.username)}')">Delete</button>
                             </div></td>`;
                         tbody.appendChild(row);
                     });
