@@ -17,6 +17,7 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 - "Update Available" banner in Settings > Updates stayed hidden even when an update was detected (inline `display:none` overrode the `.hidden` class toggle)
+- Switch → AP topology cascade wasn't populating because `TachyonDriver` didn't expose `get_bridge_table()`; added passthrough so bridge entries are stored and APs render under their upstream switch
 
 ## 1.3.0 - 2026-04-08
 

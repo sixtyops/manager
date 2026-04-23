@@ -98,6 +98,9 @@ class TachyonDriver(VendorDriver):
     async def get_config(self) -> Optional[dict]:
         return await self._client.get_config()
 
+    async def get_bridge_table(self) -> List[Dict[str, str]]:
+        return await self._client.get_bridge_table()
+
     async def apply_config(self, config: dict, dry_run: bool = False) -> dict:
         return await self._client.apply_config(config, dry_run)
 
