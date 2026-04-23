@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Removed
+- Appliance build infrastructure (OVA/QCOW2 image generation, Packer configs, build-appliance workflow)
+
 ## 1.3.0 - 2026-04-08
 
 ### Added
