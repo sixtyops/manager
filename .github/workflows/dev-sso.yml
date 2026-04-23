@@ -1,0 +1,57 @@
+name: Dev SSO Validation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "47 6 * * *"
+
+concurrency:
+  group: dev-sso-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dev-sso:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 45
+    env:
+      SIXTYOPS_TEST_URL: ${{ secrets.SIXTYOPS_TEST_URL }}
+      SIXTYOPS_TEST_USER: ${{ secrets.SIXTYOPS_TEST_USER }}
+      SIXTYOPS_TEST_PASS: ${{ secrets.SIXTYOPS_TEST_PASS }}
+      SIXTYOPS_TEST_OIDC_PROVIDER_URL: ${{ secrets.SIXTYOPS_TEST_OIDC_PROVIDER_URL }}
+      SIXTYOPS_TEST_OIDC_CLIENT_ID: ${{ secrets.SIXTYOPS_TEST_OIDC_CLIENT_ID }}
+      SIXTYOPS_TEST_OIDC_CLIENT_SECRET: ${{ secrets.SIXTYOPS_TEST_OIDC_CLIENT_SECRET }}
+      SIXTYOPS_TEST_OIDC_REDIRECT_URI: ${{ secrets.SIXTYOPS_TEST_OIDC_REDIRECT_URI }}
+      SIXTYOPS_TEST_OIDC_ALLOWED_GROUP: ${{ secrets.SIXTYOPS_TEST_OIDC_ALLOWED_GROUP }}
+      SIXTYOPS_TEST_OIDC_ADMIN_GROUP: ${{ secrets.SIXTYOPS_TEST_OIDC_ADMIN_GROUP }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required SSO inputs
+        run: |
+          missing=0
+          for name in \
+            SIXTYOPS_TEST_URL \
+            SIXTYOPS_TEST_USER \
+            SIXTYOPS_TEST_PASS \
+            SIXTYOPS_TEST_OIDC_PROVIDER_URL \
+            SIXTYOPS_TEST_OIDC_CLIENT_ID \
+            SIXTYOPS_TEST_OIDC_CLIENT_SECRET \
+            SIXTYOPS_TEST_OIDC_REDIRECT_URI
+          do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required secret: $name"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      - name: Install test dependencies
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Run non-blocking live SSO validation
+        run: |
+          . .venv/bin/activate
+          pytest -m "integration and dev_sso" -v --timeout=300

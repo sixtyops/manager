@@ -8,12 +8,12 @@ import json
 
 import pytest
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.dev_blocking]
 
 
-def test_backup_and_restore_roundtrip(session, test_ap):
+def test_backup_and_restore_roundtrip(session, config_ap):
     """Poll config → restore same config → verify device still matches."""
-    ip = test_ap["ip"]
+    ip = config_ap["ip"]
 
     # Step 1: Poll config to get a fresh snapshot
     poll_resp = session.post(f"/api/configs/{ip}/poll")

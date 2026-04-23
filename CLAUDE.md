@@ -124,7 +124,9 @@ UI/API work that doesn't need hardware.
 
 **Dev Docker** (`dev-docker.sh`): Full production-like stack (nginx + self-signed
 SSL, RADIUS on 1812/udp, app on 8000) accessible from the LAN. Use this for
-testing against real Tachyon hardware. Login: `admin / admin`.
+testing against real Tachyon hardware. Local seeded login: `admin / admin`.
+This local default does not apply to the shared dev host or live integration
+tests.
 
 Seed script (`scripts/seed_dev_data.py`) inserts sample sites, devices, CPEs,
 config templates, and job history. It's idempotent — skips if data exists.
@@ -142,17 +144,26 @@ run them.
 **Dev server:** `sixtyops-dev.infra.treehouse.mn`
 
 ```bash
-# Run all integration tests (except firmware — those are slow)
+# Run the merge-gating live-dev lane
 SIXTYOPS_TEST_URL=https://sixtyops-dev.infra.treehouse.mn \
-  pytest -m "integration and not slow" -v
+SIXTYOPS_TEST_USER=<local-admin-user> \
+SIXTYOPS_TEST_PASS=<local-admin-pass> \
+SIXTYOPS_TEST_AP_IP=<ap-with-cpes> \
+SIXTYOPS_TEST_SWITCH_IP=<dedicated-switch> \
+SIXTYOPS_TEST_FIRMWARE_AP_IP=<firmware-test-ap> \
+SIXTYOPS_TEST_CONFIG_AP_IP=<config-test-ap> \
+SIXTYOPS_TEST_RADIUS_AP_IP=<radius-test-ap> \
+  pytest -m "integration and dev_blocking" -v --timeout=900
 
-# Include firmware update/downgrade tests (takes several minutes per device)
+# Run the separate non-blocking SSO lane
 SIXTYOPS_TEST_URL=https://sixtyops-dev.infra.treehouse.mn \
-  pytest -m integration -v --timeout=600
-
-# Override credentials (default: admin / admin)
-SIXTYOPS_TEST_USER=admin SIXTYOPS_TEST_PASS=secret \
-  SIXTYOPS_TEST_URL=https://... pytest -m integration -v
+SIXTYOPS_TEST_USER=<local-admin-user> \
+SIXTYOPS_TEST_PASS=<local-admin-pass> \
+SIXTYOPS_TEST_OIDC_PROVIDER_URL=<provider-url> \
+SIXTYOPS_TEST_OIDC_CLIENT_ID=<client-id> \
+SIXTYOPS_TEST_OIDC_CLIENT_SECRET=<client-secret> \
+SIXTYOPS_TEST_OIDC_REDIRECT_URI=<redirect-uri> \
+  pytest -m "integration and dev_sso" -v
 ```
 
 **What the tests cover:**
@@ -160,25 +171,38 @@ SIXTYOPS_TEST_USER=admin SIXTYOPS_TEST_PASS=secret \
 | Test file | What it validates |
 |-----------|-------------------|
 | `test_smoke.py` | Health check, devices seen recently, no persistent errors |
-| `test_device_polling.py` | AP/switch poll returns firmware/model/mac, CPE discovery |
+| `test_device_polling.py` | Dedicated AP/switch poll coverage and CPE presence |
 | `test_config_backup.py` | Config poll, snapshot history, diff, tar download |
-| `test_config_push.py` | Preview dry-run with no-op template, compliance check |
+| `test_config_push.py` | Preview and no-op config push on the dedicated config AP |
 | `test_config_backup_restore.py` | Round-trip: poll config → restore same → verify hash |
-| `test_manager_backup.py` | Export CSV backup, verify it contains device IPs |
-| `test_firmware.py` | Upgrade device, verify, downgrade back (**slow**) |
-| `test_cpe_lifecycle.py` | CPE signal metrics, auth status, poll refresh behavior |
+| `test_manager_backup.py` | Export CSV backup, verify it contains live device IPs |
+| `test_firmware.py` | Upgrade dedicated firmware AP and roll back (**slow**) |
+| `test_cpe_lifecycle.py` | Dedicated AP CPE signal/auth coverage |
+| `test_system_surface.py` | Dashboard, portal, device history, reports, analytics |
+| `test_live_crud.py` | Tower-site, device-group, and bulk-device CRUD with cleanup |
+| `test_radius_live.py` | RADIUS CRUD, defaults, targeted rollout, and restore |
+| `test_sso_live.py` | Separate non-blocking OIDC config and login affordance checks |
 
-**Safety:** Tests don't delete devices. Firmware tests restore the original
-version. Config restore tests push back the same config. The test suite is
-idempotent and safe to run repeatedly.
+**Safety:** The blocking lane mutates only dedicated lab devices named by env
+vars. Firmware tests restore the original version. Config restore tests push
+back the same config. The RADIUS rollout lane is explicitly targetable so it
+does not walk the whole enabled fleet.
 
 **Environment variables:**
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `SIXTYOPS_TEST_URL` | *(none — tests skip)* | Base URL of the SixtyOps instance |
-| `SIXTYOPS_TEST_USER` | `admin` | Login username |
-| `SIXTYOPS_TEST_PASS` | `admin` | Login password |
+| `SIXTYOPS_TEST_URL` | *(none — tests skip)* | Base URL of the shared dev instance |
+| `SIXTYOPS_TEST_USER` | *(required for live auth)* | Dedicated local admin username |
+| `SIXTYOPS_TEST_PASS` | *(required for live auth)* | Dedicated local admin password |
+| `SIXTYOPS_TEST_AP_IP` | *(required for `dev_blocking`)* | Dedicated AP with attached CPEs |
+| `SIXTYOPS_TEST_SWITCH_IP` | *(required for `dev_blocking`)* | Dedicated switch |
+| `SIXTYOPS_TEST_FIRMWARE_AP_IP` | *(required for `dev_blocking`)* | Dedicated firmware test AP |
+| `SIXTYOPS_TEST_CONFIG_AP_IP` | *(required for `dev_blocking`)* | Dedicated config test AP |
+| `SIXTYOPS_TEST_RADIUS_AP_IP` | *(required for `dev_blocking`)* | Dedicated RADIUS rollout AP |
+
+See [docs/dev-hardware-validation.md](docs/dev-hardware-validation.md) for the
+full workflow and GitHub Actions contract.
 
 ## Rules
 

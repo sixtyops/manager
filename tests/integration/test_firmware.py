@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-pytestmark = [pytest.mark.integration, pytest.mark.slow]
+pytestmark = [pytest.mark.integration, pytest.mark.dev_blocking, pytest.mark.slow]
 
 
 def test_firmware_files_list(session):
@@ -31,7 +31,7 @@ def firmware_files(session):
     return files
 
 
-def test_single_device_firmware_update_and_rollback(session, test_ap, firmware_files):
+def test_single_device_firmware_update_and_rollback(session, firmware_ap, firmware_files):
     """Update a device to a different firmware, then restore the original.
 
     This test:
@@ -42,9 +42,9 @@ def test_single_device_firmware_update_and_rollback(session, test_ap, firmware_f
     5. Downgrades back to the original
     6. Verifies the original version is restored
     """
-    ip = test_ap["ip"]
-    model = test_ap.get("model", "")
-    original_version = test_ap.get("firmware_version", "")
+    ip = firmware_ap["ip"]
+    model = firmware_ap.get("model", "")
+    original_version = firmware_ap.get("firmware_version", "")
 
     if not original_version:
         pytest.skip(f"AP {ip} has no firmware_version — cannot test update")

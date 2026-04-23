@@ -2,23 +2,30 @@
 
 import pytest
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.dev_blocking]
 
 
-def test_poll_ap_returns_device_info(session, test_ap):
+def _find_ap(topology: dict, ip: str) -> dict | None:
+    for site in topology.get("sites", []):
+        for ap in site.get("aps", []):
+            if ap.get("ip") == ip:
+                return ap
+        for switch in site.get("switches", []):
+            for ap in switch.get("aps", []) or []:
+                if ap.get("ip") == ip:
+                    return ap
+    return None
+
+
+def test_poll_ap_returns_device_info(session, test_ap, request_with_retry):
     """Trigger a poll on an AP and verify core fields are populated."""
     ip = test_ap["ip"]
-    resp = session.post(f"/api/aps/{ip}/poll")
-    assert resp.status_code == 200
+    resp = request_with_retry("POST", f"/api/aps/{ip}/poll", timeout=90.0)
+    assert resp.status_code == 200, resp.text[:300]
 
     # Re-fetch topology to see updated data
     topo = session.get("/api/topology").json()
-    ap = None
-    for site in topo["sites"]:
-        for a in site.get("aps", []):
-            if a["ip"] == ip:
-                ap = a
-                break
+    ap = _find_ap(topo, ip)
 
     assert ap is not None, f"AP {ip} not found in topology after poll"
     assert ap.get("firmware_version"), f"AP {ip} missing firmware_version"
@@ -27,29 +34,19 @@ def test_poll_ap_returns_device_info(session, test_ap):
     assert ap.get("last_seen"), f"AP {ip} missing last_seen"
 
 
-def test_poll_switch(session, test_switch):
+def test_poll_switch(session, test_switch, request_with_retry):
     """Trigger a poll on a switch and verify core fields."""
     ip = test_switch["ip"]
-    resp = session.post(f"/api/switches/{ip}/poll")
-    assert resp.status_code == 200
+    resp = request_with_retry("POST", f"/api/switches/{ip}/poll", timeout=90.0)
+    assert resp.status_code == 200, resp.text[:300]
 
 
-def test_ap_has_connected_cpes(session, topology):
-    """At least one AP should have connected CPEs."""
-    total_cpes = topology.get("total_cpes", 0)
-    if total_cpes == 0:
-        pytest.xfail("No CPEs connected to any AP — check hardware")
-
-    for site in topology["sites"]:
-        for ap in site.get("aps", []):
-            cpes = ap.get("cpes", [])
-            if cpes:
-                return  # found at least one AP with CPEs
-
-    pytest.xfail("total_cpes > 0 but no CPEs found in AP trees — data inconsistency")
+def test_ap_has_connected_cpes(test_ap):
+    """The dedicated AP should have connected CPEs."""
+    assert test_ap.get("cpes"), "Dedicated test AP must have connected CPEs"
 
 
-def test_topology_refresh(session):
+def test_topology_refresh(session, request_with_retry):
     """POST /api/topology/refresh should succeed."""
-    resp = session.post("/api/topology/refresh")
-    assert resp.status_code == 200
+    resp = request_with_retry("POST", "/api/topology/refresh", timeout=90.0)
+    assert resp.status_code == 200, resp.text[:300]

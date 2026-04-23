@@ -8717,10 +8717,20 @@
         // Config actions
         async function pollDeviceConfig(ip) {
             try {
-                await fetch(`/api/configs/${ip}/poll`, {method: 'POST'});
+                const resp = await fetch(`/api/configs/${ip}/poll`, {method: 'POST'});
+                if (!resp.ok) {
+                    let detail = 'Unknown error';
+                    try {
+                        const error = await resp.json();
+                        detail = error.detail || detail;
+                    } catch (_) {
+                    }
+                    showToast(`Failed to poll config for ${ip}: ${detail}`, 'error', 6000);
+                    return;
+                }
                 await loadConfigData();
             } catch (e) {
-                showToast('Failed to poll config: ' + e.message);
+                showToast(`Failed to poll config for ${ip}: ${e.message}`, 'error', 6000);
             }
         }
 
@@ -9887,6 +9897,9 @@
             } else {
                 configPushingDevices.add(msg.ip);
             }
+            if (msg.status === 'failed' && msg.error) {
+                showToast(`Config push failed for ${msg.ip}: ${msg.error}`, 'error', 7000);
+            }
             if (activeColumnMode === 'config') renderTable();
         }
 
@@ -9895,6 +9908,11 @@
             if (activeColumnMode === 'config') loadConfigData();
             const summary = `Config push complete: ${msg.success_count} succeeded, ${msg.failed_count} failed`;
             console.log(summary);
+            if (msg.failed_count > 0) {
+                showToast(summary, 'error', 6000);
+            } else if (msg.success_count > 0) {
+                showToast(summary, 'success', 4000);
+            }
         }
 
         // ── Config Auto-Enforce ──

@@ -1,0 +1,59 @@
+name: Dev Hardware Validation
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *"
+
+concurrency:
+  group: dev-hardware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dev-blocking:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 90
+    env:
+      SIXTYOPS_TEST_URL: ${{ secrets.SIXTYOPS_TEST_URL }}
+      SIXTYOPS_TEST_USER: ${{ secrets.SIXTYOPS_TEST_USER }}
+      SIXTYOPS_TEST_PASS: ${{ secrets.SIXTYOPS_TEST_PASS }}
+      SIXTYOPS_TEST_AP_IP: ${{ secrets.SIXTYOPS_TEST_AP_IP }}
+      SIXTYOPS_TEST_SWITCH_IP: ${{ secrets.SIXTYOPS_TEST_SWITCH_IP }}
+      SIXTYOPS_TEST_FIRMWARE_AP_IP: ${{ secrets.SIXTYOPS_TEST_FIRMWARE_AP_IP }}
+      SIXTYOPS_TEST_CONFIG_AP_IP: ${{ secrets.SIXTYOPS_TEST_CONFIG_AP_IP }}
+      SIXTYOPS_TEST_RADIUS_AP_IP: ${{ secrets.SIXTYOPS_TEST_RADIUS_AP_IP }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required live-dev inputs
+        run: |
+          missing=0
+          for name in \
+            SIXTYOPS_TEST_URL \
+            SIXTYOPS_TEST_USER \
+            SIXTYOPS_TEST_PASS \
+            SIXTYOPS_TEST_AP_IP \
+            SIXTYOPS_TEST_SWITCH_IP \
+            SIXTYOPS_TEST_FIRMWARE_AP_IP \
+            SIXTYOPS_TEST_CONFIG_AP_IP \
+            SIXTYOPS_TEST_RADIUS_AP_IP
+          do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required secret: $name"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      - name: Install test dependencies
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Run merge-gating live-dev validation
+        run: |
+          . .venv/bin/activate
+          pytest -m "integration and dev_blocking" -v --timeout=900

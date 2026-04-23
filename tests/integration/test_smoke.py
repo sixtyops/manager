@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime, timedelta
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.dev_blocking]
 
 
 def test_healthz(session):

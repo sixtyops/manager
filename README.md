@@ -162,6 +162,8 @@ uvicorn updater.app:app --reload --port 8000
 pytest -v
 ```
 
+Live dev validation is documented in [docs/dev-hardware-validation.md](docs/dev-hardware-validation.md). The merge-gating lane uses explicit shared-dev credentials and dedicated lab-device IPs; it does not assume `admin/admin`.
+
 ## Development Workflow
 
 All work happens on feature branches off `main`:

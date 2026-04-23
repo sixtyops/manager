@@ -7,6 +7,7 @@ the rollout lifecycle (canary → 10% → 50% → 100%).
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import secrets
 from datetime import datetime, timedelta
@@ -146,15 +147,18 @@ def get_rollout(rollout_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def create_rollout(config_template_id: int, service_username: str) -> int:
+def create_rollout(config_template_id: int, service_username: str, target_ips: Optional[list[str]] = None) -> int:
     now = datetime.now().isoformat()
+    target_ips_json = json.dumps(target_ips) if target_ips else None
     with db.get_db() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO radius_rollouts (config_template_id, phase, status, created_at, updated_at, service_username)
-            VALUES (?, 'canary', 'active', ?, ?, ?)
+            INSERT INTO radius_rollouts (
+                config_template_id, phase, status, created_at, updated_at, service_username, target_ips_json
+            )
+            VALUES (?, 'canary', 'active', ?, ?, ?, ?)
             """,
-            (config_template_id, now, now, service_username),
+            (config_template_id, now, now, service_username, target_ips_json),
         )
         return cursor.lastrowid
 

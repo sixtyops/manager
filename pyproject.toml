@@ -27,6 +27,8 @@ timeout = 60
 timeout_method = "thread"
 markers = [
     "integration: tests that run against real hardware (requires SIXTYOPS_TEST_URL)",
+    "dev_blocking: merge-gating live dev validation against dedicated test devices",
+    "dev_sso: separate non-blocking live SSO/OIDC validation lane",
     "slow: tests that take a long time (e.g. firmware update with reboot)",
 ]
 

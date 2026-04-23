@@ -627,15 +627,20 @@ class TestRadiusAPI:
             description="",
         )
 
-        monkeypatch.setattr(app_module, "_radius_rollout_targets", lambda: [{"ip": "10.0.0.5", "role": "ap", "username": "root", "password": "oldpass"}])
+        monkeypatch.setattr(
+            app_module,
+            "_radius_rollout_targets",
+            lambda target_ips=None: [{"ip": "10.0.0.5", "role": "ap", "username": "root", "password": "oldpass"}],
+        )
         monkeypatch.setattr(app_module, "_start_radius_rollout_task", lambda rollout_id: None)
         monkeypatch.setattr(app_module, "_refresh_radius_rollout_inventory", app_module._refresh_radius_rollout_inventory)
         monkeypatch.setattr(radius_rollout, "get_management_service_credentials", lambda create_if_missing=True: ("sixtyops-radius-mgmt", "svcpass"))
 
-        resp = authed_client.post("/api/auth/radius/rollout/start")
+        resp = authed_client.post("/api/auth/radius/rollout/start", json={"target_ips": ["10.0.0.5"]})
         assert resp.status_code == 200
         assert resp.json()["rollout"]["status"] == "active"
         assert resp.json()["rollout"]["phase"] == "canary"
+        assert json.loads(resp.json()["rollout"]["target_ips_json"]) == ["10.0.0.5"]
 
     def test_start_radius_rollout_rejects_template_secret_mismatch(self, authed_client):
         from updater.radius_server import set_radius_server_config, RadiusServerConfig
@@ -707,7 +712,7 @@ class TestRadiusAPI:
             description="",
         )
 
-        async def fail_preflight():
+        async def fail_preflight(_target_ips=None):
             raise ValueError("Radius rollout preflight failed for APs: 10.0.0.5 (bad creds)")
 
         monkeypatch.setattr(app_module, "_refresh_radius_rollout_inventory", fail_preflight)
@@ -749,6 +754,28 @@ class TestRadiusRollout:
         assert cpe_target["username"] == "root"
         assert cpe_target["password"] == "ap-pass"
         assert cpe_target["parent_ap_ip"] == "10.0.0.10"
+
+    def test_rollout_targets_can_be_limited_to_explicit_ips(self, mock_db):
+        mock_db.execute(
+            """
+            INSERT INTO access_points (ip, username, password, system_name, enabled)
+            VALUES (?, ?, ?, ?, 1)
+            """,
+            ("10.0.0.10", "root", "ap-pass", "tower-ap-1"),
+        )
+        mock_db.execute(
+            """
+            INSERT INTO switches (ip, username, password, system_name, enabled)
+            VALUES (?, ?, ?, ?, 1)
+            """,
+            ("10.0.0.20", "admin", "sw-pass", "tower-sw-1"),
+        )
+        db.upsert_cpe("10.0.0.10", {"ip": "10.0.0.11", "system_name": "sm-ok", "auth_status": "ok"})
+        mock_db.commit()
+
+        targets = app_module._radius_rollout_targets({"10.0.0.11", "10.0.0.20"})
+
+        assert [target["ip"] for target in targets] == ["10.0.0.11", "10.0.0.20"]
 
     def test_serialize_rollout_devices_includes_parent_ap_repair_target(self, mock_db):
         mock_db.execute(
