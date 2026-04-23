@@ -30,6 +30,7 @@ class OIDCConfig:
     client_secret: str = ""
     redirect_uri: str = ""       # e.g. https://sixtyops.example.com/auth/oidc/callback
     allowed_group: str = ""      # Authentik group name required for access
+    admin_group: str = ""        # Authentik group name that grants admin role
     scopes: str = "openid email profile groups"
 
 
@@ -43,6 +44,7 @@ SETTING_OIDC_CLIENT_ID = "oidc_client_id"
 SETTING_OIDC_CLIENT_SECRET = "oidc_client_secret"
 SETTING_OIDC_REDIRECT_URI = "oidc_redirect_uri"
 SETTING_OIDC_ALLOWED_GROUP = "oidc_allowed_group"
+SETTING_OIDC_ADMIN_GROUP = "oidc_admin_group"
 SETTING_OIDC_SCOPES = "oidc_scopes"
 
 
@@ -65,6 +67,7 @@ def get_oidc_config() -> OIDCConfig:
             client_secret=db.get_setting(SETTING_OIDC_CLIENT_SECRET, ""),
             redirect_uri=db.get_setting(SETTING_OIDC_REDIRECT_URI, ""),
             allowed_group=db.get_setting(SETTING_OIDC_ALLOWED_GROUP, ""),
+            admin_group=db.get_setting(SETTING_OIDC_ADMIN_GROUP, ""),
             scopes=db.get_setting(SETTING_OIDC_SCOPES, "openid email profile groups"),
         )
 
@@ -79,12 +82,14 @@ def get_oidc_config() -> OIDCConfig:
         client_secret=os.environ.get("OIDC_CLIENT_SECRET", ""),
         redirect_uri=os.environ.get("OIDC_REDIRECT_URI", ""),
         allowed_group=os.environ.get("OIDC_ALLOWED_GROUP", ""),
+        admin_group=os.environ.get("OIDC_ADMIN_GROUP", ""),
         scopes=os.environ.get("OIDC_SCOPES", "openid email profile groups"),
     )
 
 
 def set_oidc_config(config: OIDCConfig):
     """Save OIDC configuration to database."""
+    previous = get_oidc_config()
     db.set_settings({
         SETTING_OIDC_ENABLED: str(config.enabled).lower(),
         SETTING_OIDC_PROVIDER_URL: config.provider_url,
@@ -92,8 +97,11 @@ def set_oidc_config(config: OIDCConfig):
         SETTING_OIDC_CLIENT_SECRET: config.client_secret,
         SETTING_OIDC_REDIRECT_URI: config.redirect_uri,
         SETTING_OIDC_ALLOWED_GROUP: config.allowed_group,
+        SETTING_OIDC_ADMIN_GROUP: config.admin_group,
         SETTING_OIDC_SCOPES: config.scopes,
     })
+    if not config.enabled or not config.provider_url or previous.provider_url != config.provider_url:
+        db.delete_setting("oidc_end_session_endpoint")
     logger.info(f"OIDC config updated: enabled={config.enabled}, provider={config.provider_url}")
 
 

@@ -174,6 +174,31 @@ class TestUserManagement:
         assert resp.status_code == 200
         assert db.get_user("del_user") is None
 
+    def test_delete_user_cleans_up_oidc_session_tokens(self, authed_client, mock_db):
+        from datetime import datetime, timedelta
+
+        mock_db.execute(
+            "INSERT OR IGNORE INTO users (username, role, auth_method) VALUES (?, ?, ?)",
+            ("oidc-delete@example.com", "viewer", "oidc"),
+        )
+        mock_db.execute(
+            "INSERT INTO sessions (session_id, username, ip_address, expires_at) VALUES (?, ?, ?, ?)",
+            (
+                "oidc-delete-session",
+                "oidc-delete@example.com",
+                "127.0.0.1",
+                (datetime.now() + timedelta(hours=1)).isoformat(),
+            ),
+        )
+        mock_db.commit()
+        db.set_setting("oidc_id_token_oidc-delete-session", "fake-id-token")
+
+        user = db.get_user("oidc-delete@example.com")
+        resp = authed_client.delete(f"/api/users/{user['id']}")
+
+        assert resp.status_code == 200
+        assert db.get_setting("oidc_id_token_oidc-delete-session") is None
+
     def test_cannot_delete_last_admin(self, authed_client, mock_db):
         """When another admin tries to delete the only admin, it should fail."""
         # Create a second admin so the authed user isn't the target
@@ -267,6 +292,82 @@ class TestOIDCUserCreation:
     def test_custom_default_role(self, mock_db):
         db.set_setting("oidc_default_role", "operator")
         user = ensure_oidc_user("custom@example.com")
+        assert user["role"] == "operator"
+
+    def test_admin_group_forces_non_members_to_viewer(self, mock_db):
+        from updater.oidc_config import OIDCConfig, set_oidc_config
+
+        db.set_setting("oidc_default_role", "operator")
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/",
+            client_id="client",
+            client_secret="secret",
+            allowed_group="sixtyops-users",
+            admin_group="sixtyops-admins",
+        ))
+
+        user = ensure_oidc_user("viewer@example.com", ["sixtyops-users"])
+        assert user["role"] == "viewer"
+
+    def test_admin_group_member_gets_admin(self, mock_db):
+        from updater.oidc_config import OIDCConfig, set_oidc_config
+
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/",
+            client_id="client",
+            client_secret="secret",
+            allowed_group="sixtyops-users",
+            admin_group="sixtyops-admins",
+        ))
+
+        user = ensure_oidc_user("admin@example.com", ["sixtyops-users", "sixtyops-admins"])
+        assert user["role"] == "admin"
+
+    def test_existing_oidc_user_is_demoted_when_admin_group_membership_is_removed(self, mock_db):
+        from updater.oidc_config import OIDCConfig, set_oidc_config
+
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/",
+            client_id="client",
+            client_secret="secret",
+            allowed_group="sixtyops-users",
+            admin_group="sixtyops-admins",
+        ))
+
+        user = ensure_oidc_user("demote@example.com", ["sixtyops-users", "sixtyops-admins"])
+        assert user["role"] == "admin"
+
+        user = ensure_oidc_user("demote@example.com", ["sixtyops-users"])
+        assert user["role"] == "viewer"
+
+    def test_existing_oidc_user_is_re_evaluated_when_admin_group_mapping_is_removed(self, mock_db):
+        from updater.oidc_config import OIDCConfig, set_oidc_config
+
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/",
+            client_id="client",
+            client_secret="secret",
+            allowed_group="sixtyops-users",
+            admin_group="sixtyops-admins",
+        ))
+        user = ensure_oidc_user("operator@example.com", ["sixtyops-users", "sixtyops-admins"])
+        assert user["role"] == "admin"
+
+        db.set_setting("oidc_default_role", "operator")
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/",
+            client_id="client",
+            client_secret="secret",
+            allowed_group="sixtyops-users",
+            admin_group="",
+        ))
+
+        user = ensure_oidc_user("operator@example.com", ["sixtyops-users"])
         assert user["role"] == "operator"
 
 

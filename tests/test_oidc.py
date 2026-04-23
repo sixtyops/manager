@@ -66,6 +66,26 @@ class TestOIDCConfig:
         ))
         assert is_oidc_enabled() is True
 
+    def test_set_oidc_config_clears_cached_logout_endpoint_when_provider_changes(self, mock_db):
+        from updater import database as db
+
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://old.example.com/",
+            client_id="client-a",
+            client_secret="secret-a",
+        ))
+        db.set_setting("oidc_end_session_endpoint", "https://old.example.com/logout")
+
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://new.example.com/",
+            client_id="client-b",
+            client_secret="secret-b",
+        ))
+
+        assert db.get_setting("oidc_end_session_endpoint") is None
+
 
 class TestAuthenticateOIDCUser:
     def test_allowed_group(self, mock_db):
@@ -116,6 +136,28 @@ class TestAuthenticateOIDCUser:
         ))
         result = authenticate_oidc_user("admin@example.com", ["sixtyops-admins"])
         assert result is None
+
+    def test_group_claim_string_is_matched_exactly(self, mock_db):
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/",
+            client_id="c",
+            client_secret="s",
+            allowed_group="sixtyops-admins",
+        ))
+        result = authenticate_oidc_user("admin@example.com", "not-sixtyops-admins")
+        assert result is None
+
+    def test_group_claim_string_exact_match_is_allowed(self, mock_db):
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/",
+            client_id="c",
+            client_secret="s",
+            allowed_group="sixtyops-admins",
+        ))
+        result = authenticate_oidc_user("admin@example.com", "sixtyops-admins")
+        assert result == "admin@example.com"
 
 
 class TestOIDCRoutes:

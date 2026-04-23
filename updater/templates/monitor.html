@@ -64,6 +64,7 @@
             --tree-indent-0: 4px;
             --tree-indent-1: 28px;
             --tree-indent-2: 52px;
+            --tree-indent-3: 76px;
         }
 
         * {
@@ -135,6 +136,20 @@
             color: var(--text-muted);
             white-space: nowrap;
         }
+
+        .role-badge {
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: var(--border);
+            color: var(--text-muted);
+        }
+        .role-badge[data-role="admin"] { background: #dbeafe; color: #1d4ed8; }
+        .role-badge[data-role="operator"] { background: #d1fae5; color: #047857; }
+        .role-badge[data-role="viewer"] { background: var(--border); color: var(--text-muted); }
 
         .user-menu {
             position: relative;
@@ -400,8 +415,13 @@
         }
         .settings-subtab:hover { color: #374151; }
         .settings-subtab.active { color: #3b82f6; border-bottom-color: #3b82f6; }
-        .notif-subpanel, .auth-subpanel { display: none; }
-        .notif-subpanel.active, .auth-subpanel.active { display: block; flex: 1; min-height: 0; overflow-y: auto; }
+        .system-subpanel, .notif-subpanel, .access-subpanel, .radius-subpanel { display: none; }
+        .system-subpanel.active, .notif-subpanel.active, .access-subpanel.active, .radius-subpanel.active {
+            display: block;
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+        }
 
         .auth-status-badge {
             font-size: 0.65rem; font-weight:600; padding:1px 7px; border-radius:999px;
@@ -2016,6 +2036,52 @@
         .tree-indent-0 { padding-left: var(--tree-indent-0); }
         .tree-indent-1 { padding-left: var(--tree-indent-1); }
         .tree-indent-2 { padding-left: var(--tree-indent-2); }
+        .tree-indent-3 { padding-left: var(--tree-indent-3); }
+
+        .port-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: 8px;
+            padding: 1px 8px;
+            border-radius: 999px;
+            background: rgba(99, 102, 241, 0.15);
+            border: 1px solid rgba(99, 102, 241, 0.35);
+            color: #6366f1;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            white-space: nowrap;
+        }
+        .port-badge::before {
+            content: "";
+            display: inline-block;
+            width: 10px;
+            height: 1px;
+            background: currentColor;
+            opacity: 0.6;
+        }
+        .name-cell.tree-indent-2.under-switch {
+            position: relative;
+        }
+        .name-cell.tree-indent-2.under-switch::before {
+            content: "";
+            position: absolute;
+            left: calc(var(--tree-indent-1) + 12px);
+            top: 0;
+            bottom: 50%;
+            width: 1px;
+            background: rgba(148, 163, 184, 0.4);
+        }
+        .name-cell.tree-indent-2.under-switch::after {
+            content: "";
+            position: absolute;
+            left: calc(var(--tree-indent-1) + 12px);
+            top: 50%;
+            width: 10px;
+            height: 1px;
+            background: rgba(148, 163, 184, 0.4);
+        }
 
         /* Utility classes */
         .u-w-48 { width: 56px !important; flex: none; }
@@ -2140,6 +2206,7 @@
                     <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
                 </svg>
             </button>
+            <span class="role-badge" id="userRoleBadge"></span>
             <div class="user-menu">
                 <button class="user-btn" onclick="document.getElementById('userDropdown').classList.toggle('open')">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2164,7 +2231,7 @@
     <div class="container">
         <!-- Top section: Add APs + Chart -->
         <div class="top-section">
-            <div class="card">
+            <div class="card" data-min-role="operator">
                 <h2>Add APs &amp; Switches</h2>
                 <p style="font-size:0.75rem;color:var(--text-dim);margin-bottom:8px;">Devices are auto-classified as APs or switches based on model (TNA&nbsp;=&nbsp;AP, TNS&nbsp;=&nbsp;switch) and assigned to tower sites by their &ldquo;location&rdquo; field.</p>
                 <div class="discovery-form">
@@ -2263,10 +2330,10 @@
             </div>
             <div id="selectionActionBar" class="selection-action-bar" style="display:none;">
                 <span id="selectionCount" style="font-weight:500;">0 selected</span>
-                <button class="btn btn-sm btn-warning" id="btnSetCanary" onclick="setCanaryForSelected()" title="Canary devices receive new firmware first and soak-test it before the rest of the fleet upgrades">Set Canary</button>
-                <button class="btn btn-sm btn-primary" id="btnUpdateFirmware" onclick="updateFirmwareForSelected()">Update Firmware</button>
-                <button class="btn btn-sm btn-primary hidden" id="btnPushConfig" onclick="pushConfigForSelected()">Push Active Policies</button>
-                <button class="btn btn-sm btn-secondary hidden" id="btnCheckCompliance" onclick="checkComplianceForSelected()">Check Compliance</button>
+                <button class="btn btn-sm btn-warning" id="btnSetCanary" onclick="setCanaryForSelected()" title="Canary devices receive new firmware first and soak-test it before the rest of the fleet upgrades" data-min-role="operator">Set Canary</button>
+                <button class="btn btn-sm btn-primary" id="btnUpdateFirmware" onclick="updateFirmwareForSelected()" data-min-role="operator">Update Firmware</button>
+                <button class="btn btn-sm btn-primary hidden" id="btnPushConfig" onclick="pushConfigForSelected()" data-min-role="operator">Push Active Policies</button>
+                <button class="btn btn-sm btn-secondary hidden" id="btnCheckCompliance" onclick="checkComplianceForSelected()" data-min-role="operator">Check Compliance</button>
                 <button class="btn btn-sm btn-ghost" onclick="clearChecked()">Clear</button>
             </div>
             <div class="u-overflow-x-auto">
@@ -2619,135 +2686,138 @@
 
             <!-- Tabs -->
             <div class="settings-tabs" style="flex-shrink:0;">
-                <button class="settings-tab active" onclick="switchSettingsTab('updates')">Updates</button>
-                <button class="settings-tab" onclick="switchSettingsTab('https')">HTTPS</button>
-                <button class="settings-tab" onclick="switchSettingsTab('backup')">Backup <span class="danger-badge">DANGEROUS</span></button>
-                <button class="settings-tab" onclick="switchSettingsTab('notifications')">Notifications</button>
-                <button class="settings-tab" onclick="switchSettingsTab('auth')">Authentication <span class="danger-badge">DANGEROUS</span></button>
-                <button class="settings-tab" onclick="switchSettingsTab('about')">About</button>
+                <button class="settings-tab active" data-tab="system" onclick="switchSettingsTab('system')">System</button>
+                <button class="settings-tab" data-tab="notifications" onclick="switchSettingsTab('notifications')">Notifications</button>
+                <button class="settings-tab" data-tab="access" data-min-role="admin" onclick="switchSettingsTab('access')">Access</button>
+                <button class="settings-tab" data-tab="radius" onclick="switchSettingsTab('radius')">RADIUS</button>
+                <button class="settings-tab" data-tab="about" onclick="switchSettingsTab('about')">About</button>
             </div>
 
-            <!-- Updates Panel -->
-            <div class="settings-panel active" id="settingsPanel-updates">
-                <div class="u-flex-center-between u-mb-8">
-                    <div class="u-flex-center-gap8">
-                        <button class="toggle" id="appAutoUpdateToggle" type="button" aria-label="Toggle app auto-update" aria-pressed="false" onclick="toggleAppAutoUpdate()" style="flex-shrink:0;"></button>
-                        <label class="u-m0" style="font-weight:600;font-size:0.8rem;">Auto Check and Install SixtyOps App Updates</label>
-                    </div>
-                    <span id="appVersionDisplay" style="font-size:0.82rem;font-weight:700;color:var(--text);"></span>
+            <!-- System Panel -->
+            <div class="settings-panel active" id="settingsPanel-system">
+                <p class="u-note-inline">Platform maintenance, certificates, backup workflows, and release management.</p>
+                <div class="settings-subtabs" id="systemSubtabs">
+                    <button class="settings-subtab active" data-subtab="updates" onclick="switchSystemSubtab('updates')">Updates</button>
+                    <button class="settings-subtab" data-subtab="https" onclick="switchSystemSubtab('https')">HTTPS</button>
+                    <button class="settings-subtab" data-subtab="backup" onclick="switchSystemSubtab('backup')">Backup & Restore</button>
                 </div>
 
-                <div class="u-flex-center-gap8 u-mb-12">
-                    <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
-                    <span id="appUpdateStatus" class="u-text-xs-muted"></span>
-                </div>
-
-                <div class="u-flex-center-gap8 u-pt-10" style="border-top:1px solid var(--border-light);">
-                    <label class="u-label-xs u-m0" for="appReleaseChannel">Release Channel</label>
-                    <select id="appReleaseChannel" name="appReleaseChannel" onchange="saveReleaseChannel()" style="font-size:0.72rem;padding:4px 8px;border:1px solid var(--border);border-radius:6px;">
-                        <option value="stable">Stable</option>
-                        <option value="dev">Dev</option>
-                    </select>
-                    <span class="u-text-xxs-dim">Dev receives pre-release updates for testing</span>
-                </div>
-
-                <div id="appUpdateBannerInline" style="display:none;margin-top:12px;padding:10px;background:#dbeafe;border-radius:6px;">
-                    <div style="display:flex;align-items:center;justify-content:space-between;">
-                        <div style="font-weight:600;font-size:0.8rem;color:#1e40af;">Update Available: <span id="appUpdateVersion"></span></div>
-                        <a id="appUpdateReleaseLink" href="#" target="_blank" style="font-size:0.68rem;color:#2563eb;">View on GitHub</a>
-                    </div>
-                    <div id="appUpdateNotesContainer" class="release-notes-content hidden"></div>
-                    <button class="backup-btn" onclick="applyAppUpdate()" style="margin-top:8px;background:#16a34a;color:#fff;">Update Now</button>
-                </div>
-            </div>
-
-            <!-- HTTPS Panel -->
-            <div class="settings-panel" id="settingsPanel-https">
-                <div style="margin-bottom:12px;">
-                    <label class="settings-section-title">HTTPS Certificate</label>
-                </div>
-                <div id="sslStatusDisplay" style="margin-bottom:12px;padding:8px 10px;border-radius:6px;background:var(--bg-subtle,#f9fafb);font-size:0.78rem;">
-                    Loading SSL status...
-                </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
-                    <div>
-                        <label class="u-label-xs" for="sslDomain">Domain</label>
-                        <input type="text" id="sslDomain" name="sslDomain" placeholder="e.g. sixtyops.example.com" class="u-input-compact">
-                    </div>
-                    <div>
-                        <label class="u-label-xs" for="sslEmail">Email (for Let's Encrypt)</label>
-                        <input type="email" id="sslEmail" name="sslEmail" placeholder="admin@example.com" class="u-input-compact">
-                    </div>
-                </div>
-                <div style="display:flex;gap:6px;align-items:center;">
-                    <button class="backup-btn" style="background:var(--primary,#3b82f6);color:#fff;font-weight:500;" onclick="configureSsl()">Configure HTTPS</button>
-                    <span id="sslStatus" class="u-text-xs-muted"></span>
-                </div>
-                <p class="u-note-inline" style="margin-top:10px;">
-                    Requests a free Let's Encrypt certificate for your domain. Port 80 must be accessible from the internet for verification. If you're behind a firewall or using an internal domain, the app will continue using a self-signed certificate.
-                </p>
-            </div>
-
-            <!-- Backup Panel -->
-            <div class="settings-panel" id="settingsPanel-backup">
-                <!-- SFTP Backup Status -->
-                <div style="margin-bottom:16px;">
-                    <label class="settings-section-title">Backup & Restore</label>
-                    <div id="backupStatusInfo" style="font-size:0.75rem;color:var(--text-muted);padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;">Loading...</div>
-                    <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
-                        <button class="backup-btn" onclick="runBackupNow()">Run Now</button>
-                        <a href="/backup-setup" class="backup-btn u-bg-muted-cta" style="text-decoration:none;text-align:center;">Configure</a>
-                        <span id="backupRunStatus" class="u-text-xs-muted"></span>
+                <div class="system-subpanel active" id="systemSub-updates">
+                    <div class="u-flex-center-between u-mb-8">
+                        <div class="u-flex-center-gap8">
+                            <button class="toggle" id="appAutoUpdateToggle" type="button" aria-label="Toggle app auto-update" aria-pressed="false" onclick="toggleAppAutoUpdate()" style="flex-shrink:0;"></button>
+                            <label class="u-m0" style="font-weight:600;font-size:0.8rem;">Auto Check for SixtyOps App Updates</label>
+                        </div>
+                        <span id="appVersionDisplay" style="font-size:0.82rem;font-weight:700;color:var(--text);"></span>
                     </div>
 
-                    <!-- Remote Backups List -->
-                    <div style="margin-top:16px;">
-                        <label class="u-label-xs" style="color:var(--text-dim);margin-bottom:4px;">Remote Backups (SFTP) <span class="danger-badge">DANGEROUS</span></label>
-                        <div id="remoteBackupsList" style="max-height:160px;overflow-y:auto;border:1px solid var(--border-light);border-radius:6px;background:var(--input-bg);padding:4px;">
-                            <div style="padding:10px;text-align:center;font-size:0.75rem;color:var(--text-muted);">Loading backups...</div>
+                    <div class="u-flex-center-gap8 u-mb-12">
+                        <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
+                        <span id="appUpdateStatus" class="u-text-xs-muted"></span>
+                    </div>
+
+                    <div class="u-flex-center-gap8 u-pt-10" style="border-top:1px solid var(--border-light);">
+                        <label class="u-label-xs u-m0" for="appReleaseChannel">Release Channel</label>
+                        <select id="appReleaseChannel" name="appReleaseChannel" onchange="saveReleaseChannel()" style="font-size:0.72rem;padding:4px 8px;border:1px solid var(--border);border-radius:6px;">
+                            <option value="stable">Stable</option>
+                            <option value="dev">Dev</option>
+                        </select>
+                        <span class="u-text-xxs-dim">Dev receives pre-release updates for testing</span>
+                    </div>
+
+                    <div id="appUpdateBannerInline" style="display:none;margin-top:12px;padding:10px;background:#dbeafe;border-radius:6px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;">
+                            <div style="font-weight:600;font-size:0.8rem;color:#1e40af;">Update Available: <span id="appUpdateVersion"></span></div>
+                            <a id="appUpdateReleaseLink" href="#" target="_blank" style="font-size:0.68rem;color:#2563eb;">View on GitHub</a>
+                        </div>
+                        <div id="appUpdateNotesContainer" class="release-notes-content hidden"></div>
+                        <button class="backup-btn" onclick="applyAppUpdate()" style="margin-top:8px;background:#16a34a;color:#fff;">Update Now</button>
+                    </div>
+                </div>
+
+                <div class="system-subpanel" id="systemSub-https">
+                    <div style="margin-bottom:12px;">
+                        <label class="settings-section-title">HTTPS Certificate</label>
+                    </div>
+                    <div id="sslStatusDisplay" style="margin-bottom:12px;padding:8px 10px;border-radius:6px;background:var(--bg-subtle,#f9fafb);font-size:0.78rem;">
+                        Loading SSL status...
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
+                        <div>
+                            <label class="u-label-xs" for="sslDomain">Domain</label>
+                            <input type="text" id="sslDomain" name="sslDomain" placeholder="e.g. sixtyops.example.com" class="u-input-compact">
+                        </div>
+                        <div>
+                            <label class="u-label-xs" for="sslEmail">Email (for Let's Encrypt)</label>
+                            <input type="email" id="sslEmail" name="sslEmail" placeholder="admin@example.com" class="u-input-compact">
                         </div>
                     </div>
-                </div>
-
-                <hr class="u-hr">
-
-                <!-- Export -->
-                <div style="margin-bottom:16px;">
-                    <label class="settings-section-title">Export Devices (CSV)</label>
-                    <div class="u-flex-center-gap6">
-                        <input type="password" id="exportPassphrase" name="exportPassphrase" placeholder="Passphrase (min 8 characters)" class="u-flex-1" aria-label="Export passphrase">
-                        <button class="backup-btn" onclick="exportBackup()">Download CSV</button>
+                    <div style="display:flex;gap:6px;align-items:center;">
+                        <button class="backup-btn" style="background:var(--primary,#3b82f6);color:#fff;font-weight:500;" onclick="configureSsl()">Configure HTTPS</button>
+                        <span id="sslStatus" class="u-text-xs-muted"></span>
                     </div>
+                    <p class="u-note-inline" style="margin-top:10px;">
+                        Requests a free Let's Encrypt certificate for your domain. Port 80 must be accessible from the internet for verification. If you're behind a firewall or using an internal domain, the app will continue using a self-signed certificate.
+                    </p>
                 </div>
 
-                <hr class="u-hr">
+                <div class="system-subpanel" id="systemSub-backup">
+                    <div style="margin-bottom:16px;">
+                        <label class="settings-section-title">Backup & Restore</label>
+                        <div id="backupStatusInfo" style="font-size:0.75rem;color:var(--text-muted);padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;">Loading...</div>
+                        <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
+                            <button class="backup-btn" onclick="runBackupNow()">Run Now</button>
+                            <a href="/backup-setup" class="backup-btn u-bg-muted-cta" style="text-decoration:none;text-align:center;">Open SFTP Setup</a>
+                            <span id="backupRunStatus" class="u-text-xs-muted"></span>
+                        </div>
 
-                <!-- Import -->
-                <div>
-                    <label class="settings-section-title">Import Devices (CSV)</label>
-                    <div class="u-flex-col-gap8">
-                        <input type="file" id="importFile" name="importFile" accept=".csv" style="font-size:0.75rem;" aria-label="Import CSV file">
+                        <div style="margin-top:16px;">
+                            <label class="u-label-xs" style="color:var(--text-dim);margin-bottom:4px;">Remote Backups (SFTP) <span class="danger-badge">DANGEROUS</span></label>
+                            <div id="remoteBackupsList" style="max-height:160px;overflow-y:auto;border:1px solid var(--border-light);border-radius:6px;background:var(--input-bg);padding:4px;">
+                                <div style="padding:10px;text-align:center;font-size:0.75rem;color:var(--text-muted);">Loading backups...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr class="u-hr">
+
+                    <div style="margin-bottom:16px;">
+                        <label class="settings-section-title">Export Devices (CSV)</label>
                         <div class="u-flex-center-gap6">
-                            <input type="password" id="importPassphrase" name="importPassphrase" placeholder="Passphrase" class="u-flex-1" aria-label="Import passphrase">
-                            <select id="importConflictMode" name="importConflictMode" aria-label="Import conflict mode">
-                                <option value="skip">Skip existing</option>
-                                <option value="update">Update existing</option>
-                            </select>
-                            <button class="backup-btn" onclick="importBackup()">Import CSV</button>
+                            <input type="password" id="exportPassphrase" name="exportPassphrase" placeholder="Passphrase (min 8 characters)" class="u-flex-1" aria-label="Export passphrase">
+                            <button class="backup-btn" onclick="exportBackup()">Download CSV</button>
                         </div>
                     </div>
-                </div>
 
-                <div id="backupStatus" class="u-status-line"></div>
+                    <hr class="u-hr">
+
+                    <div>
+                        <label class="settings-section-title">Import Devices (CSV)</label>
+                        <div class="u-flex-col-gap8">
+                            <input type="file" id="importFile" name="importFile" accept=".csv" style="font-size:0.75rem;" aria-label="Import CSV file">
+                            <div class="u-flex-center-gap6">
+                                <input type="password" id="importPassphrase" name="importPassphrase" placeholder="Passphrase" class="u-flex-1" aria-label="Import passphrase">
+                                <select id="importConflictMode" name="importConflictMode" aria-label="Import conflict mode">
+                                    <option value="skip">Skip existing</option>
+                                    <option value="update">Update existing</option>
+                                </select>
+                                <button class="backup-btn" onclick="importBackup()">Import CSV</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="backupStatus" class="u-status-line"></div>
+                </div>
             </div>
 
             <!-- Notifications Panel -->
             <div class="settings-panel" id="settingsPanel-notifications">
-                <div class="settings-subtabs">
-                    <button class="settings-subtab active" onclick="switchNotifSubtab('slack')">Slack</button>
-                    <button class="settings-subtab" onclick="switchNotifSubtab('email')">Email</button>
-                    <button class="settings-subtab" onclick="switchNotifSubtab('snmp')">SNMP Traps</button>
-                    <button class="settings-subtab" onclick="switchNotifSubtab('webhooks')">Webhooks</button>
+                <p class="u-note-inline">Delivery targets for operational alerts and job notifications.</p>
+                <div class="settings-subtabs" id="notifSubtabs">
+                    <button class="settings-subtab active" data-subtab="slack" onclick="switchNotifSubtab('slack')">Slack</button>
+                    <button class="settings-subtab" data-subtab="email" onclick="switchNotifSubtab('email')">Email</button>
+                    <button class="settings-subtab" data-subtab="snmp" onclick="switchNotifSubtab('snmp')">SNMP Traps</button>
+                    <button class="settings-subtab" data-subtab="webhooks" onclick="switchNotifSubtab('webhooks')">Webhooks</button>
                 </div>
 
                 <!-- Slack sub-panel -->
@@ -2902,17 +2972,140 @@
                 </div>
             </div>
 
-            <!-- Authentication Panel -->
-            <div class="settings-panel" id="settingsPanel-auth">
-                <div class="settings-subtabs" id="authSubtabs">
-                    <button class="settings-subtab active" data-min-role="admin" onclick="switchAuthSubtab('users')">Local Users</button>
-                    <button class="settings-subtab" onclick="switchAuthSubtab('radius')">RADIUS Server</button>
-                    <button class="settings-subtab" onclick="switchAuthSubtab('accounts')">Clients & Logs</button>
-                    <button class="settings-subtab" onclick="switchAuthSubtab('devices')">Default Login</button>
+            <!-- Access Panel -->
+            <div class="settings-panel" id="settingsPanel-access">
+                <p class="u-note-inline">Control who can access the manager and how admins authenticate.</p>
+                <div class="settings-subtabs" id="accessSubtabs">
+                    <button class="settings-subtab active" data-subtab="users" data-min-role="admin" onclick="switchAccessSubtab('users')">Local Users</button>
+                    <button class="settings-subtab" data-subtab="sso" data-min-role="admin" onclick="switchAccessSubtab('sso')">SSO / OIDC</button>
+                    <button class="settings-subtab" data-subtab="devices" data-min-role="admin" onclick="switchAccessSubtab('devices')">Device Login</button>
                 </div>
 
-                <!-- RADIUS Server sub-panel -->
-                <div class="auth-subpanel" id="authSub-radius">
+                <div class="access-subpanel active" id="accessSub-users" data-min-role="admin">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                        <div>
+                            <label class="settings-section-title">SixtyOps Local Users</label>
+                        </div>
+                        <button class="backup-btn" onclick="showAddUserForm()" style="flex-shrink:0;">+ Add User</button>
+                    </div>
+
+                    <div id="add-user-form" style="display:none;margin-bottom:14px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr auto auto;gap:8px;align-items:end;">
+                            <div>
+                                <label class="u-label-compact" for="new-user-username">Username</label>
+                                <input type="text" id="new-user-username" name="new-user-username" placeholder="Username" aria-label="Username" class="u-input-compact">
+                            </div>
+                            <div>
+                                <label class="u-label-compact" for="new-user-password">Password</label>
+                                <input type="password" id="new-user-password" name="new-user-password" placeholder="Min 12 characters" aria-label="Password" class="u-input-compact">
+                            </div>
+                            <div>
+                                <label class="u-label-compact" for="new-user-role">Role</label>
+                                <select id="new-user-role" name="new-user-role" aria-label="User role" class="u-input-compact">
+                                    <option value="viewer">Viewer</option>
+                                    <option value="operator">Operator</option>
+                                    <option value="admin">Admin</option>
+                                </select>
+                            </div>
+                            <div style="display:flex;gap:6px;padding-bottom:1px;">
+                                <button class="backup-btn" onclick="createUser()">Create</button>
+                                <button class="backup-btn u-bg-muted-cta" onclick="hideAddUserForm()">Cancel</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <table class="users-table" id="users-table">
+                        <thead>
+                            <tr>
+                                <th>Username</th>
+                                <th>Role</th>
+                                <th>Auth</th>
+                                <th>Status</th>
+                                <th style="text-align:right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="users-table-body"></tbody>
+                    </table>
+                </div>
+
+                <div class="access-subpanel" id="accessSub-sso" data-min-role="admin">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                        <h4 style="margin:0;font-size:0.85rem;font-weight:600;">SSO Authentication (OIDC)</h4>
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
+                            <input type="checkbox" id="authOidcEnabled" name="authOidcEnabled" onchange="toggleOidcFields()">
+                            <span class="u-text-xs-muted">Enabled</span>
+                        </label>
+                    </div>
+                    <p class="u-note-block">Authenticate admins via Authentik or another OIDC provider. Local credentials remain available as fallback.</p>
+                    <div id="oidcFields" class="u-grid-2-gap8">
+                        <div class="u-span-2">
+                            <label class="u-text-xxs-muted" for="authOidcProviderUrl">Provider URL</label>
+                            <input type="text" id="authOidcProviderUrl" name="authOidcProviderUrl" placeholder="https://authentik.example.com/application/o/sixtyops/" class="u-input-compact">
+                        </div>
+                        <div>
+                            <label class="u-text-xxs-muted" for="authOidcClientId">Client ID</label>
+                            <input type="text" id="authOidcClientId" name="authOidcClientId" placeholder="Client ID from provider" class="u-input-compact">
+                        </div>
+                        <div>
+                            <label class="u-text-xxs-muted" for="authOidcClientSecret">Client Secret</label>
+                            <input type="password" id="authOidcClientSecret" name="authOidcClientSecret" placeholder="Enter client secret" class="u-input-compact">
+                        </div>
+                        <div class="u-span-2">
+                            <label class="u-text-xxs-muted" for="authOidcRedirectUri">Redirect URI</label>
+                            <input type="text" id="authOidcRedirectUri" name="authOidcRedirectUri" placeholder="https://sixtyops.example.com/auth/oidc/callback" class="u-input-compact">
+                        </div>
+                        <div>
+                            <label class="u-text-xxs-muted" for="authOidcAllowedGroup">Allowed Group</label>
+                            <input type="text" id="authOidcAllowedGroup" name="authOidcAllowedGroup" placeholder="sixtyops-users" class="u-input-compact">
+                        </div>
+                        <div>
+                            <label class="u-text-xxs-muted" for="authOidcAdminGroup">Admin Group</label>
+                            <input type="text" id="authOidcAdminGroup" name="authOidcAdminGroup" placeholder="sixtyops-admins" class="u-input-compact">
+                        </div>
+                        <p class="u-note-block u-span-2" style="margin-top:0;">Users in the Admin Group get the admin role. When an Admin Group is configured, all other SSO users stay viewer (read-only).</p>
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
+                        <button class="backup-btn" onclick="saveOidcConfig()">Save SSO</button>
+                        <button class="backup-btn u-bg-muted-cta" onclick="testOidcConfig()">Test</button>
+                        <span id="oidcStatus" class="u-text-xs-muted"></span>
+                    </div>
+                </div>
+
+                <div class="access-subpanel" id="accessSub-devices" data-min-role="admin">
+                    <div class="u-flex-center-gap8-mb8">
+                        <h4 class="u-title-compact">Default Device Login</h4>
+                        <label class="u-row-gap6-auto">
+                            <input type="checkbox" id="authDeviceEnabled" name="authDeviceEnabled" onchange="toggleDeviceFields()">
+                            <span class="u-text-xs-muted">Enabled</span>
+                        </label>
+                    </div>
+                    <p class="u-note-block">Fallback username and password used when connecting to devices that do not have their own credentials configured.</p>
+                    <div id="deviceFields" class="u-grid-2-gap8">
+                        <div>
+                            <label class="u-text-xxs-muted" for="authDeviceUsername">Username</label>
+                            <input type="text" id="authDeviceUsername" name="authDeviceUsername" placeholder="root" class="u-input-compact">
+                        </div>
+                        <div>
+                            <label class="u-text-xxs-muted" for="authDevicePassword">Password</label>
+                            <input type="password" id="authDevicePassword" name="authDevicePassword" placeholder="Enter password" class="u-input-compact">
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
+                        <button class="backup-btn" onclick="saveDeviceConfig()">Save Device Credentials</button>
+                        <span id="deviceStatus" class="u-text-xs-muted"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Radius Panel -->
+            <div class="settings-panel" id="settingsPanel-radius">
+                <p class="u-note-inline">Built-in RADIUS for downstream device and admin authentication, plus client allowlists and logs.</p>
+                <div class="settings-subtabs" id="radiusSubtabs">
+                    <button class="settings-subtab active" data-subtab="server" onclick="switchRadiusSubtab('server')">Server</button>
+                    <button class="settings-subtab" data-subtab="clients" onclick="switchRadiusSubtab('clients')">Clients & Logs</button>
+                </div>
+
+                <div class="radius-subpanel active" id="radiusSub-server">
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
                         <label class="settings-section-title" style="margin:0;">Built-in RADIUS Server</label>
                         <span id="authRadiusBadge" class="auth-status-badge">Inactive</span>
@@ -3045,9 +3238,8 @@
                     <p class="u-note-inline" style="margin-top:10px;">Reserved usernames admin and root are blocked from RADIUS authentication.</p>
                 </div>
 
-                <!-- Clients & Logs sub-panel -->
-                <div class="auth-subpanel" id="authSub-accounts">
-                    <p class="u-note-inline" style="margin-bottom:12px;">RADIUS authenticates against the users in the <a href="#" onclick="switchAuthSubtab('users');return false;" style="color:var(--primary);text-decoration:none;font-weight:500;">Users</a> tab. To push RADIUS settings to devices, use <a href="#" onclick="closeAppSettingsModal();document.getElementById('bottomDrawer').classList.add('open');return false;" style="color:var(--primary);text-decoration:none;font-weight:500;">Config &rarr; Push to Devices</a> in the bottom drawer.</p>
+                <div class="radius-subpanel" id="radiusSub-clients">
+                    <p class="u-note-inline" style="margin-bottom:12px;">RADIUS authenticates against the users in the <a href="#" onclick="switchSettingsTab('access', 'users');return false;" style="color:var(--primary);text-decoration:none;font-weight:500;">Local Users</a> panel. To push RADIUS settings to devices, use <a href="#" onclick="closeAppSettingsModal();document.getElementById('bottomDrawer').classList.add('open');return false;" style="color:var(--primary);text-decoration:none;font-weight:500;">Config &rarr; Push to Devices</a> in the bottom drawer.</p>
 
                     <div style="margin-bottom:14px;">
                         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
@@ -3090,122 +3282,6 @@
                         </div>
                     </div>
                 </div>
-
-                <!-- Device Credentials sub-panel -->
-                <div class="auth-subpanel" id="authSub-devices">
-                    <div>
-                        <div class="u-flex-center-gap8-mb8">
-                            <h4 class="u-title-compact">Default Device Login</h4>
-                            <label class="u-row-gap6-auto">
-                                <input type="checkbox" id="authDeviceEnabled" name="authDeviceEnabled" onchange="toggleDeviceFields()">
-                                <span class="u-text-xs-muted">Enabled</span>
-                            </label>
-                        </div>
-                        <p class="u-note-block">Fallback username and password used when connecting to devices that don't have their own credentials configured.</p>
-                        <div id="deviceFields" class="u-grid-2-gap8">
-                            <div>
-                                <label class="u-text-xxs-muted" for="authDeviceUsername">Username</label>
-                                <input type="text" id="authDeviceUsername" name="authDeviceUsername" placeholder="root" class="u-input-compact">
-                            </div>
-                            <div>
-                                <label class="u-text-xxs-muted" for="authDevicePassword">Password</label>
-                                <input type="password" id="authDevicePassword" name="authDevicePassword" placeholder="Enter password" class="u-input-compact">
-                            </div>
-                        </div>
-                        <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
-                            <button class="backup-btn" onclick="saveDeviceConfig()">Save Device Credentials</button>
-                            <span id="deviceStatus" class="u-text-xs-muted"></span>
-                        </div>
-                    </div>
-
-                    <!-- SSO / OIDC Section -->
-                    <div style="margin-top:20px;">
-                        <div style="border-top:1px solid #e5e7eb;margin:16px 0;"></div>
-                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                            <h4 style="margin:0;font-size:0.85rem;font-weight:600;">SSO Authentication (OIDC)</h4>
-                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:auto;">
-                                <input type="checkbox" id="authOidcEnabled" name="authOidcEnabled" onchange="toggleOidcFields()">
-                                <span class="u-text-xs-muted">Enabled</span>
-                            </label>
-                        </div>
-                        <p class="u-note-block">Authenticate admin users via Authentik or another OIDC provider. Local credentials remain available as fallback.</p>
-                        <div id="oidcFields" class="u-grid-2-gap8">
-                            <div class="u-span-2">
-                                <label class="u-text-xxs-muted" for="authOidcProviderUrl">Provider URL</label>
-                                <input type="text" id="authOidcProviderUrl" name="authOidcProviderUrl" placeholder="https://authentik.example.com/application/o/sixtyops/" class="u-input-compact">
-                            </div>
-                            <div>
-                                <label class="u-text-xxs-muted" for="authOidcClientId">Client ID</label>
-                                <input type="text" id="authOidcClientId" name="authOidcClientId" placeholder="Client ID from provider" class="u-input-compact">
-                            </div>
-                            <div>
-                                <label class="u-text-xxs-muted" for="authOidcClientSecret">Client Secret</label>
-                                <input type="password" id="authOidcClientSecret" name="authOidcClientSecret" placeholder="Enter client secret" class="u-input-compact">
-                            </div>
-                            <div class="u-span-2">
-                                <label class="u-text-xxs-muted" for="authOidcRedirectUri">Redirect URI</label>
-                                <input type="text" id="authOidcRedirectUri" name="authOidcRedirectUri" placeholder="https://sixtyops.example.com/auth/oidc/callback" class="u-input-compact">
-                            </div>
-                            <div class="u-span-2">
-                                <label class="u-text-xxs-muted" for="authOidcAllowedGroup">Allowed Group</label>
-                                <input type="text" id="authOidcAllowedGroup" name="authOidcAllowedGroup" placeholder="sixtyops-admins" class="u-input-compact">
-                            </div>
-                        </div>
-                        <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
-                            <button class="backup-btn" onclick="saveOidcConfig()">Save SSO</button>
-                            <button class="backup-btn u-bg-muted-cta" onclick="testOidcConfig()" >Test</button>
-                            <span id="oidcStatus" class="u-text-xs-muted"></span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Users sub-panel -->
-                <div class="auth-subpanel active" id="authSub-users" data-min-role="admin">
-                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-                        <div>
-                            <label class="settings-section-title">SixtyOps Local Users</label>
-                        </div>
-                        <button class="backup-btn" onclick="showAddUserForm()" style="flex-shrink:0;">+ Add User</button>
-                    </div>
-
-                    <div id="add-user-form" style="display:none;margin-bottom:14px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;">
-                        <div style="display:grid;grid-template-columns:1fr 1fr auto auto;gap:8px;align-items:end;">
-                            <div>
-                                <label class="u-label-compact" for="new-user-username">Username</label>
-                                <input type="text" id="new-user-username" name="new-user-username" placeholder="Username" aria-label="Username" class="u-input-compact">
-                            </div>
-                            <div>
-                                <label class="u-label-compact" for="new-user-password">Password</label>
-                                <input type="password" id="new-user-password" name="new-user-password" placeholder="Min 12 characters" aria-label="Password" class="u-input-compact">
-                            </div>
-                            <div>
-                                <label class="u-label-compact" for="new-user-role">Role</label>
-                                <select id="new-user-role" name="new-user-role" aria-label="User role" class="u-input-compact">
-                                    <option value="viewer">Viewer</option>
-                                    <option value="operator">Operator</option>
-                                    <option value="admin">Admin</option>
-                                </select>
-                            </div>
-                            <div style="display:flex;gap:6px;padding-bottom:1px;">
-                                <button class="backup-btn" onclick="createUser()">Create</button>
-                                <button class="backup-btn u-bg-muted-cta" onclick="hideAddUserForm()">Cancel</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <table class="users-table" id="users-table">
-                        <thead>
-                            <tr>
-                                <th>Username</th>
-                                <th>Role</th>
-                                <th>Auth</th>
-                                <th>Status</th>
-                                <th style="text-align:right;">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="users-table-body"></tbody>
-                    </table>
-                </div>
             </div>
 
             <!-- About Panel -->
@@ -3223,8 +3299,23 @@
                         Features marked <span class="danger-badge">DANGEROUS</span> involve untested or high-impact operations — use with care.
                     </div>
                 </div>
+                <div style="margin:16px 0 0 0;padding:14px 16px;border:1px solid #FCD34D;border-radius:10px;background:linear-gradient(135deg,#FFF7CC 0%,#FFFDF4 100%);">
+                    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+                        <div style="min-width:220px;flex:1;">
+                            <div style="font-size:0.86rem;font-weight:700;color:#92400E;margin-bottom:4px;">Support SixtyOps</div>
+                            <div class="u-text-xs-muted" style="color:#78350F;">
+                                If SixtyOps saves you time, you can help fund continued development and support the project with a coffee.
+                            </div>
+                        </div>
+                        <a href="https://buymeacoffee.com/sixtyops" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 14px;border-radius:8px;background:#FFDD00;color:#111827;font-size:0.8rem;font-weight:700;text-decoration:none;white-space:nowrap;box-shadow:inset 0 -1px 0 rgba(0,0,0,0.08);">
+                            <span aria-hidden="true">☕</span>
+                            <span>Buy Me a Coffee</span>
+                        </a>
+                    </div>
+                </div>
                 <div class="u-text-sm-dim" style="margin-top:16px;">
                     <a href="https://github.com/sixtyops/manager" target="_blank" style="color:#0D9488;">GitHub</a> &middot;
+                    <a href="https://buymeacoffee.com/sixtyops" target="_blank" rel="noopener noreferrer" style="color:#0D9488;">Buy Me a Coffee</a> &middot;
                     <a href="https://sixtyops.net" target="_blank" style="color:#0D9488;">SixtyOps.net</a> &middot;
                     <a href="mailto:support@sixtyops.net" style="color:#0D9488;">Support</a>
                 </div>
@@ -3276,8 +3367,17 @@
                 .then(data => {
                     currentUserRole = data.role || 'viewer';
                     applyRoleVisibility();
+                    updateRoleBadge(currentUserRole);
                 })
-                .catch(() => { currentUserRole = 'viewer'; applyRoleVisibility(); });
+                .catch(() => { currentUserRole = 'viewer'; applyRoleVisibility(); updateRoleBadge('viewer'); });
+        }
+
+        function updateRoleBadge(role) {
+            const badge = document.getElementById('userRoleBadge');
+            if (badge) {
+                badge.textContent = role;
+                badge.dataset.role = role;
+            }
         }
 
         function applyRoleVisibility() {
@@ -4268,6 +4368,7 @@
         }
 
         function deleteActionLink(kind, id) {
+            if (currentUserRole === 'viewer') return '';
             const key = `${kind}:${id}`;
             const pendingUntil = pendingDeleteByKey.get(key) || 0;
             if (pendingUntil > Date.now()) {
@@ -4349,6 +4450,95 @@
                 return `<button class="update-action ${cls}" title="${title}" onclick="triggerUpdate('${type}','${ip}');event.stopPropagation();">&#8593;</button>`;
             }
             return '';
+        }
+
+        function renderApRow(ap, opts) {
+            const indent = opts.indent;
+            const cpeIndent = opts.cpeIndent;
+            const underSwitch = opts.underSwitch;
+            const siteName = opts.siteName || '';
+            const apKey = `ap:${ap.ip}`;
+            const apExpanded = expandState.get(apKey) !== false;
+            const isOffline = !!ap.last_error;
+            const cpes = ap.cpes || [];
+            const apName = ap.system_name || ap.ip;
+            const noLocation = !ap.location && siteName === 'Unassigned';
+            const isApSelected = selectedNode?.type === 'ap' && selectedNode?.data?.ip === ap.ip;
+            const isApCanary = canaryAps.has(ap.ip);
+            const nameCellClass = `name-cell tree-indent-${indent}${underSwitch ? ' under-switch' : ''}`;
+            const portBadge = underSwitch && ap.switch_port
+                ? `<span class="port-badge" title="Connected to switch port">${escapeHtml(ap.switch_port)}</span>`
+                : '';
+
+            let out = `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isApSelected ? 'row-selected' : ''} ${isApCanary ? 'row-canary' : ''}" onclick="selectAP('${ap.ip}')">
+                <td>
+                    <div class="${nameCellClass}">
+                        <input type="checkbox" data-check-ap="${ap.ip}" ${checkedDevices.has(ap.ip) ? 'checked' : ''} onclick="toggleCheckAP('${ap.ip}',event);event.stopPropagation();">
+                        <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
+                        <span class="device-icon ap">AP</span>
+                        <span>
+                        <a href="/api/device-portal/${ap.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>
+                        ${ap.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(ap.notes)}">${escapeHtml(ap.notes)}</div>` : ''}
+                        </span>
+                        ${portBadge}
+                        ${noLocation ? '<span class="no-location-tag">(no location)</span>' : ''}
+                    </div>
+                </td>
+                <td>${ap.model || ''}</td>
+                ${activeColumnMode === 'firmware' ? `
+                <td>${versionCell(ap)}</td>
+                <td></td>
+                <td></td>
+                <td>${statusCell(ap.ip, isOffline, null)}</td>
+                <td>${updateCell('ap', ap.ip)}</td>
+                <td>${lastUpdatedCell(ap.last_firmware_update)}</td>
+                <td><div class="actions-cell">${actionsCell('ap', ap.ip, apName)}</div></td>
+                ` : `
+                <td>${configStatusCell(ap.ip)}</td>
+                <td>${configLastBackupCell(ap.ip)}</td>
+                <td><div class="actions-cell">${configActionsCell(ap.ip)}</div></td>
+                `}
+            </tr>`;
+
+            if (!apExpanded) return out;
+
+            const sortedCPEs = [...cpes].sort(deviceComparator());
+            for (const cpe of sortedCPEs) {
+                const health = cpe.signal_health || 'red';
+                const cpeName = cpe.system_name || cpe.mac || 'Unknown';
+                const cpeIp = cpe.ip || '';
+                const signalVal = cpe.primary_signal;
+                const signalClass = signalVal != null
+                    ? (signalVal > -65 ? 'signal-good' : (signalVal > -75 ? 'signal-low' : 'signal-critical'))
+                    : '';
+                const isCpeSelected = selectedNode?.type === 'cpe' && selectedNode?.data?.ip === cpe.ip;
+
+                out += `<tr class="row-cpe ${isCpeSelected ? 'row-selected' : ''}" onclick="selectCPE('${cpe.ip}')">
+                    <td>
+                        <div class="name-cell tree-indent-${cpeIndent}">
+                            <input type="checkbox" ${checkedDevices.has(cpe.ip) ? 'checked' : ''} onclick="toggleCheck('${cpe.ip}',event);event.stopPropagation();">
+                            <span class="expand-toggle hidden">&#9654;</span>
+                            <span class="device-icon cpe ${health}"></span>
+                            ${cpeIp ? `<a href="/api/device-portal/${cpeIp}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : escapeHtml(cpeName)}
+                        </div>
+                    </td>
+                    <td>${cpe.model || ''}</td>
+                    ${activeColumnMode === 'firmware' ? `
+                    <td>${versionCell(cpe)}</td>
+                    <td class="${signalClass}">${signalVal != null ? signalVal.toFixed(1) + ' dBm' : ''}</td>
+                    <td>${formatDistance(cpe.link_distance)}</td>
+                    <td>${statusCell(cpe.ip, false, health, cpe.auth_status, ap.ip)}</td>
+                    <td>${updateCell('cpe', cpe.ip, ap.ip)}</td>
+                    <td></td>
+                    <td><div class="actions-cell">${actionsCell('cpe', cpe.ip, cpeName)}</div></td>
+                    ` : `
+                    <td>${cpeIp ? configStatusCell(cpeIp) : ''}</td>
+                    <td>${cpeIp ? configLastBackupCell(cpeIp) : ''}</td>
+                    <td><div class="actions-cell">${cpeIp ? configActionsCell(cpeIp) : ''}</div></td>
+                    `}
+                </tr>`;
+            }
+            return out;
         }
 
         function siteUpdateCell(siteId, aps) {
@@ -4515,83 +4705,7 @@
                 const sortedAPs = [...aps].sort(deviceComparator());
 
                 for (const ap of sortedAPs) {
-                    const apKey = `ap:${ap.ip}`;
-                    const apExpanded = expandState.get(apKey) !== false;
-                    const isOffline = !!ap.last_error;
-                    const cpes = ap.cpes || [];
-                    const apName = ap.system_name || ap.ip;
-                    const noLocation = !ap.location && site.name === 'Unassigned';
-                    const isApSelected = selectedNode?.type === 'ap' && selectedNode?.data?.ip === ap.ip;
-
-                    const isApCanary = canaryAps.has(ap.ip);
-                    html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isApSelected ? 'row-selected' : ''} ${isApCanary ? 'row-canary' : ''}" onclick="selectAP('${ap.ip}')">
-                        <td>
-                            <div class="name-cell tree-indent-1">
-                                <input type="checkbox" data-check-ap="${ap.ip}" ${checkedDevices.has(ap.ip) ? 'checked' : ''} onclick="toggleCheckAP('${ap.ip}',event);event.stopPropagation();">
-                                <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
-                                <span class="device-icon ap">AP</span>
-                                <span>
-                                <a href="/api/device-portal/${ap.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>
-                                ${ap.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(ap.notes)}">${escapeHtml(ap.notes)}</div>` : ''}
-                                </span>
-                                ${noLocation ? '<span class="no-location-tag">(no location)</span>' : ''}
-                            </div>
-                        </td>
-                        <td>${ap.model || ''}</td>
-                        ${activeColumnMode === 'firmware' ? `
-                        <td>${versionCell(ap)}</td>
-                        <td></td>
-                        <td></td>
-                        <td>${statusCell(ap.ip, isOffline, null)}</td>
-                        <td>${updateCell('ap', ap.ip)}</td>
-                        <td>${lastUpdatedCell(ap.last_firmware_update)}</td>
-                        <td><div class="actions-cell">${actionsCell('ap', ap.ip, apName)}</div></td>
-                        ` : `
-                        <td>${configStatusCell(ap.ip)}</td>
-                        <td>${configLastBackupCell(ap.ip)}</td>
-                        <td><div class="actions-cell">${configActionsCell(ap.ip)}</div></td>
-                        `}
-                    </tr>`;
-
-                    if (!apExpanded) continue;
-
-                    const sortedCPEs = [...cpes].sort(deviceComparator());
-
-                    for (const cpe of sortedCPEs) {
-                        const health = cpe.signal_health || 'red';
-                        const cpeName = cpe.system_name || cpe.mac || 'Unknown';
-                        const cpeIp = cpe.ip || '';
-                        const signalVal = cpe.primary_signal;
-                        const signalClass = signalVal != null
-                            ? (signalVal > -65 ? 'signal-good' : (signalVal > -75 ? 'signal-low' : 'signal-critical'))
-                            : '';
-                        const isCpeSelected = selectedNode?.type === 'cpe' && selectedNode?.data?.ip === cpe.ip;
-
-                        html += `<tr class="row-cpe ${isCpeSelected ? 'row-selected' : ''}" onclick="selectCPE('${cpe.ip}')">
-                            <td>
-                                <div class="name-cell tree-indent-2">
-                                    <input type="checkbox" ${checkedDevices.has(cpe.ip) ? 'checked' : ''} onclick="toggleCheck('${cpe.ip}',event);event.stopPropagation();">
-                                    <span class="expand-toggle hidden">&#9654;</span>
-                                    <span class="device-icon cpe ${health}"></span>
-                                    ${cpeIp ? `<a href="/api/device-portal/${cpeIp}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : escapeHtml(cpeName)}
-                                </div>
-                            </td>
-                            <td>${cpe.model || ''}</td>
-                            ${activeColumnMode === 'firmware' ? `
-                            <td>${versionCell(cpe)}</td>
-                            <td class="${signalClass}">${signalVal != null ? signalVal.toFixed(1) + ' dBm' : ''}</td>
-                            <td>${formatDistance(cpe.link_distance)}</td>
-                            <td>${statusCell(cpe.ip, false, health, cpe.auth_status, ap.ip)}</td>
-                            <td>${updateCell('cpe', cpe.ip, ap.ip)}</td>
-                            <td></td>
-                            <td><div class="actions-cell">${actionsCell('cpe', cpe.ip, cpeName)}</div></td>
-                            ` : `
-                            <td>${cpeIp ? configStatusCell(cpeIp) : ''}</td>
-                            <td>${cpeIp ? configLastBackupCell(cpeIp) : ''}</td>
-                            <td><div class="actions-cell">${cpeIp ? configActionsCell(cpeIp) : ''}</div></td>
-                            `}
-                        </tr>`;
-                    }
+                    html += renderApRow(ap, { siteName: site.name, indent: 1, underSwitch: false, cpeIndent: 2 });
                 }
 
                 // Render switches within this site
@@ -4599,13 +4713,38 @@
                     const isOffline = !!sw.last_error;
                     const swName = sw.system_name || sw.ip;
                     const isSwSelected = selectedNode?.type === 'switch' && selectedNode?.data?.ip === sw.ip;
+                    const swKey = `sw:${sw.ip}`;
+                    const swExpanded = expandState.get(swKey) !== false;
+
+                    // Filter nested APs via the same filter pipeline
+                    const rawNested = sw.aps || [];
+                    const nestedAps = [];
+                    for (const nap of rawNested) {
+                        const ncpes = nap.cpes || [];
+                        if (queryOnlySiteFilter) { nestedAps.push(nap); continue; }
+                        const filtered = ncpes.filter(cpe => matchesDeviceFilters(cpe, siteName, 'cpe', nap.ip));
+                        if (matchesDeviceFilters(nap, siteName, 'ap') || filtered.length > 0) {
+                            nestedAps.push({ ...nap, cpes: filtered });
+                        }
+                    }
+                    nestedAps.sort((a, b) => {
+                        const ra = /(\d+)/.exec(a.switch_port || '');
+                        const rb = /(\d+)/.exec(b.switch_port || '');
+                        const na = ra ? parseInt(ra[1], 10) : 1e9;
+                        const nb = rb ? parseInt(rb[1], 10) : 1e9;
+                        if (na !== nb) return na - nb;
+                        return (a.switch_port || '').localeCompare(b.switch_port || '');
+                    });
+                    visibleRows += nestedAps.length;
+                    for (const nap of nestedAps) visibleRows += (nap.cpes || []).length;
 
                     const isSwCanary = canarySwitches.has(sw.ip);
+                    const hasChildren = nestedAps.length > 0;
                     html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isSwSelected ? 'row-selected' : ''} ${isSwCanary ? 'row-canary' : ''}" onclick="selectSwitch('${sw.ip}')">
                         <td>
                             <div class="name-cell tree-indent-1">
                                 <input type="checkbox" ${checkedDevices.has(sw.ip) ? 'checked' : ''} onclick="toggleCheck('${sw.ip}',event);event.stopPropagation();">
-                                <span class="expand-toggle hidden">&#9654;</span>
+                                <span class="expand-toggle ${hasChildren ? (swExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${swKey}',event)">&#9654;</span>
                                 <span class="device-icon ap">SW</span>
                                 <span>
                                 <a href="/api/device-portal/${sw.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>
@@ -4628,6 +4767,12 @@
                         <td><div class="actions-cell">${configActionsCell(sw.ip)}</div></td>
                         `}
                     </tr>`;
+
+                    if (!swExpanded || !hasChildren) continue;
+
+                    for (const ap of nestedAps) {
+                        html += renderApRow(ap, { siteName, indent: 2, underSwitch: true, cpeIndent: 3 });
+                    }
                 }
             }
 
@@ -5235,11 +5380,59 @@
             }
         });
 
+        function resolveSettingsTarget(tab = 'system', subtab = null) {
+            const aliases = {
+                updates: { tab: 'system', subtab: 'updates' },
+                https: { tab: 'system', subtab: 'https' },
+                backup: { tab: 'system', subtab: 'backup' },
+                auth: { tab: 'access', subtab: 'users' },
+                users: { tab: 'access', subtab: 'users' },
+                oidc: { tab: 'access', subtab: 'sso' },
+                devices: { tab: 'access', subtab: 'devices' },
+                radius: { tab: 'radius', subtab: 'server' },
+            };
+            const target = aliases[tab] ? { ...aliases[tab] } : { tab, subtab };
+            if (!target.subtab) {
+                if (target.tab === 'system') target.subtab = 'updates';
+                if (target.tab === 'notifications') target.subtab = 'slack';
+                if (target.tab === 'access') target.subtab = currentUserRole === 'admin' ? 'users' : 'sso';
+                if (target.tab === 'radius') target.subtab = 'server';
+            }
+            return target;
+        }
+
+        function getVisibleSubtab(containerId, fallbackName = null) {
+            const container = document.getElementById(containerId);
+            if (!container) return fallbackName;
+            const buttons = Array.from(container.querySelectorAll('.settings-subtab'))
+                .filter(btn => getComputedStyle(btn).display !== 'none');
+            if (!buttons.length) return fallbackName;
+            if (fallbackName) {
+                const matched = buttons.find(btn => btn.dataset.subtab === fallbackName);
+                if (matched) return fallbackName;
+            }
+            return buttons[0].dataset.subtab || fallbackName;
+        }
+
+        function activateScopedSubtab(containerId, panelSelector, panelPrefix, name, fallbackName = null) {
+            const container = document.getElementById(containerId);
+            if (!container) return null;
+            const activeName = getVisibleSubtab(containerId, name || fallbackName);
+            container.querySelectorAll('.settings-subtab').forEach(t => {
+                t.classList.toggle('active', t.dataset.subtab === activeName);
+            });
+            document.querySelectorAll(panelSelector).forEach(p => {
+                p.classList.toggle('active', p.id === panelPrefix + activeName);
+            });
+            return activeName;
+        }
+
         // App Settings modal
-        async function openAppSettingsModal(tab = 'updates') {
+        async function openAppSettingsModal(tab = 'system', subtab = null) {
+            const target = resolveSettingsTarget(tab, subtab);
             document.getElementById('userDropdown').classList.remove('open');
             document.getElementById('appSettingsOverlay').classList.add('open');
-            switchSettingsTab(tab);
+            switchSettingsTab(target.tab, target.subtab);
 
             // Load data for all tabs
             loadAppUpdateStatus();
@@ -5247,7 +5440,7 @@
             loadAuthData();
             loadAboutPanel();
             loadSslStatus();
-            if (tab === 'users') loadUsers();
+            if (target.tab === 'access' && target.subtab === 'users') loadUsers();
         }
 
         function closeAppSettingsModal() {
@@ -5265,50 +5458,43 @@
             }
         }
 
-        function switchAuthSubtab(name) {
-            const container = document.getElementById('authSubtabs');
-            container.querySelectorAll('.settings-subtab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.auth-subpanel').forEach(p => p.classList.remove('active'));
-            const panel = document.getElementById('authSub-' + name);
-            if (panel) panel.classList.add('active');
-            // Activate the clicked tab button by matching onclick argument
-            container.querySelectorAll('.settings-subtab').forEach(t => {
-                const onclick = t.getAttribute('onclick') || '';
-                if (onclick.includes("'" + name + "'")) t.classList.add('active');
-            });
-            if (name === 'users') loadUsers();
+        function switchSystemSubtab(name) {
+            const activeName = activateScopedSubtab('systemSubtabs', '.system-subpanel', 'systemSub-', name, 'updates');
+            if (activeName === 'updates') loadAppUpdateStatus();
+            if (activeName === 'https') loadSslStatus();
+            if (activeName === 'backup') loadBackupStatus();
         }
 
         function switchNotifSubtab(name) {
-            document.querySelectorAll('.settings-subtab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.notif-subpanel').forEach(p => p.classList.remove('active'));
-            const panel = document.getElementById('notifSub-' + name);
-            if (panel) panel.classList.add('active');
-            // Activate the clicked tab button
-            document.querySelectorAll('.settings-subtab').forEach(t => {
-                if (t.textContent.toLowerCase().includes(name)) t.classList.add('active');
-            });
+            activateScopedSubtab('notifSubtabs', '.notif-subpanel', 'notifSub-', name, 'slack');
         }
 
-        function switchSettingsTab(tabName) {
+        function switchAccessSubtab(name) {
+            const activeName = activateScopedSubtab('accessSubtabs', '.access-subpanel', 'accessSub-', name, currentUserRole === 'admin' ? 'users' : 'sso');
+            if (activeName === 'users') loadUsers();
+        }
+
+        function switchRadiusSubtab(name) {
+            activateScopedSubtab('radiusSubtabs', '.radius-subpanel', 'radiusSub-', name, 'server');
+        }
+
+        function switchSettingsTab(tabName, subtabName = null) {
+            const target = resolveSettingsTarget(tabName, subtabName);
             // Update tab buttons
             document.querySelectorAll('.settings-tab').forEach(tab => {
-                const text = tab.textContent.replace(/DANGEROUS$/, '').trim().toLowerCase();
-                tab.classList.toggle('active', text === tabName ||
-                    (tabName === 'auth' && text === 'authentication') ||
-                    (tabName === 'backup' && text === 'backup') ||
-                    (tabName === 'about' && text === 'about'));
+                tab.classList.toggle('active', tab.dataset.tab === target.tab);
             });
             // Update panels
             document.querySelectorAll('.settings-panel').forEach(panel => {
                 panel.classList.remove('active');
             });
-            const panel = document.getElementById('settingsPanel-' + tabName);
+            const panel = document.getElementById('settingsPanel-' + target.tab);
             if (panel) panel.classList.add('active');
-            if (tabName === 'backup') loadBackupStatus();
-            if (tabName === 'auth') loadUsers();
-            if (tabName === 'https') loadSslStatus();
-            if (tabName === 'about') loadAboutPanel();
+            if (target.tab === 'system') switchSystemSubtab(target.subtab);
+            if (target.tab === 'notifications') switchNotifSubtab(target.subtab);
+            if (target.tab === 'access') switchAccessSubtab(target.subtab);
+            if (target.tab === 'radius') switchRadiusSubtab(target.subtab);
+            if (target.tab === 'about') loadAboutPanel();
         }
 
         async function loadNotificationsData() {
@@ -5397,6 +5583,7 @@
                 secretEl.placeholder = data.oidc?.client_secret_set ? '(unchanged)' : 'Enter client secret';
                 document.getElementById('authOidcRedirectUri').value = data.oidc?.redirect_uri || '';
                 document.getElementById('authOidcAllowedGroup').value = data.oidc?.allowed_group || '';
+                document.getElementById('authOidcAdminGroup').value = data.oidc?.admin_group || '';
                 toggleOidcFields();
 
                 // Device defaults
@@ -6107,7 +6294,7 @@
         function prefillBuiltinRadiusConfig() {
             if (!builtinRadiusSummary || !builtinRadiusSummary.enabled) {
                 showToast('Built-in RADIUS is not enabled — opening settings\u2026');
-                openAppSettingsModal('auth');
+                openAppSettingsModal('radius', 'server');
                 return;
             }
 
@@ -6458,6 +6645,7 @@
             const secretAlreadySet = secretEl.placeholder === '(unchanged)';
             const redirect_uri = document.getElementById('authOidcRedirectUri').value.trim();
             const allowed_group = document.getElementById('authOidcAllowedGroup').value.trim();
+            const admin_group = document.getElementById('authOidcAdminGroup').value.trim();
 
             if (enabled && (!provider_url || !client_id || (!client_secret && !secretAlreadySet))) {
                 statusEl.textContent = 'Provider URL, Client ID, and Client Secret required when enabled';
@@ -6469,7 +6657,7 @@
                 const resp = await fetch('/api/auth/oidc', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled, provider_url, client_id, client_secret, redirect_uri, allowed_group }),
+                    body: JSON.stringify({ enabled, provider_url, client_id, client_secret, redirect_uri, allowed_group, admin_group }),
                 });
                 if (resp.ok) {
                     statusEl.textContent = 'SSO config saved!';
@@ -7717,7 +7905,7 @@
             // Auto-open App Settings on first run
             {% if show_settings %}
             window._firstRunSetup = true;
-            setTimeout(() => openAppSettingsModal('https'), 500);
+            setTimeout(() => openAppSettingsModal('system', 'https'), 500);
             {% endif %}
 
             const filterQueryEl = document.getElementById('deviceFilterQuery');

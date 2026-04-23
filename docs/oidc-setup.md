@@ -105,6 +105,10 @@ New users who authenticate via OIDC are automatically created with the
 **viewer** role (least-privilege default). An admin must manually promote
 users to `operator` or `admin` via the **Users** tab.
 
+If you configure an **Admin Group** in the OIDC settings, that mapping takes
+priority: members of that group become `admin`, and all other OIDC users stay
+`viewer` even if `oidc_default_role` is set to something broader.
+
 To change the default role for new OIDC users:
 
 ```

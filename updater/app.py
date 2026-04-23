@@ -2781,6 +2781,7 @@ async def get_oidc_config_api(session: dict = Depends(require_auth), _pro=Depend
         "client_id": config.client_id,
         "redirect_uri": config.redirect_uri,
         "allowed_group": config.allowed_group,
+        "admin_group": config.admin_group,
         "scopes": config.scopes,
         "configured": oidc_config.is_oidc_enabled(),
     }
@@ -2798,6 +2799,7 @@ async def update_oidc_config_api(request: Request, session: dict = Depends(requi
         client_secret=data.get("client_secret", ""),
         redirect_uri=data.get("redirect_uri", ""),
         allowed_group=data.get("allowed_group", ""),
+        admin_group=data.get("admin_group", ""),
         scopes=data.get("scopes", "openid email profile groups"),
     )
 
@@ -3046,8 +3048,8 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
     if not oidc_username:
         return RedirectResponse(url="/login?error=oidc_unauthorized", status_code=302)
 
-    # Ensure OIDC user exists in users table (auto-creates with default role)
-    db_user = ensure_oidc_user(oidc_username)
+    # Ensure OIDC user exists in users table (role derived from group membership)
+    db_user = ensure_oidc_user(oidc_username, groups)
     if db_user and not db_user.get("enabled", True):
         return RedirectResponse(url="/login?error=oidc_unauthorized", status_code=302)
 
