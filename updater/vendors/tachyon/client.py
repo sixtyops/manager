@@ -863,8 +863,8 @@ class TachyonClient:
         return entries
 
     async def get_config(self) -> Optional[dict]:
-        """Download full device config via GET /cgi.lua/apiv1/config."""
-        status, body = await self._curl("GET", "/cgi.lua/apiv1/config")
+        """Download full device config via GET /cgi.lua/config."""
+        status, body = await self._curl("GET", "/cgi.lua/config")
         if status == 200:
             try:
                 return json.loads(body)
@@ -954,7 +954,7 @@ class TachyonClient:
         return result
 
     async def apply_config(self, config: dict, dry_run: bool = False) -> dict:
-        """Apply full config to device via POST /cgi.lua/apiv1/config.
+        """Apply full config to device via POST /cgi.lua/config.
 
         Args:
             config: Full device configuration dict.
@@ -963,7 +963,7 @@ class TachyonClient:
         Returns:
             Dict with 'success' bool and response details.
         """
-        endpoint = "/cgi.lua/apiv1/config"
+        endpoint = "/cgi.lua/config"
         if dry_run:
             endpoint += "?dry_run=true"
         status, body = await self._curl("POST", endpoint, data=config)

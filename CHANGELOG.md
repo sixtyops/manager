@@ -8,9 +8,16 @@ All notable changes to this project are documented in this file.
 - Switch → AP topology cascade: APs are now nested under their upstream switch in the device tree, with a port badge showing the switch port they're connected to (ordered by port number)
 - OIDC admin group mapping: configure an "Admin Group" in SSO settings to auto-promote members to admin role on login
 - Role badge in the header shows the current user's role; write-operation UI (Add Devices, delete, bulk actions) is hidden from viewer accounts
+- Initial config priming: devices without a cached config are polled on the next poll cycle instead of waiting until the 4 AM daily run, so compliance works from day one
+- Check Compliance now triggers a fresh config poll (`?refresh=true`) with visible "Polling devices…" feedback instead of reading stale cache
+- NTP server defaults (132.163.97.1 and 129.6.15.28) in the config template editor; toggle stays off by default
+- Toast notification CSS (fixed top-right, typed color borders, slide-in) — previously toasts rendered as unstyled plaintext in the page body
+- Last-admin / self-delete guards on the Local Users table (disabled button + tooltip)
 
 ### Changed
 - Bridge/FDB table polled from Tachyon switches on each poll cycle to maintain AP-to-port mapping
+- Chassis connector replaced with inline `eth[n]` port badge on nested AP rows (cleaner, no orphaned line art)
+- System > Updates panel normalized into a label/control grid; RADIUS Server stat cards removed; RADIUS Clients & Logs rewritten for clarity; About panel redesigned with inline version chip
 
 ### Removed
 - Appliance build infrastructure (OVA/QCOW2 image generation, Packer configs, build-appliance workflow)
@@ -18,6 +25,7 @@ All notable changes to this project are documented in this file.
 ### Fixed
 - "Update Available" banner in Settings > Updates stayed hidden even when an update was detected (inline `display:none` overrode the `.hidden` class toggle)
 - Switch → AP topology cascade wasn't populating because `TachyonDriver` didn't expose `get_bridge_table()`; added passthrough so bridge entries are stored and APs render under their upstream switch
+- Tachyon config GET/POST hit the wrong endpoint (`/cgi.lua/apiv1/config`) and returned HTTP 401 "Authorization Failed"; corrected to `/cgi.lua/config` so config backup, compliance, and push all work
 
 ## 1.3.0 - 2026-04-08
 

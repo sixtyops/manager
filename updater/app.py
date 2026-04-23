@@ -6085,8 +6085,27 @@ async def delete_config_template_api(template_id: int, session: dict = Depends(r
 # ============================================================================
 
 @app.get("/api/config-compliance", tags=["config"])
-async def get_config_compliance(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_COMPLIANCE))):
-    """Get per-device config compliance status using scoped templates."""
+async def get_config_compliance(
+    refresh: bool = False,
+    session: dict = Depends(require_auth),
+    _pro=Depends(require_feature(Feature.CONFIG_COMPLIANCE)),
+):
+    """Get per-device config compliance status using scoped templates.
+
+    When refresh=true, polls fresh configs from all APs and switches before
+    computing compliance. This can take a while on large fleets.
+    """
+    polled = 0
+    if refresh:
+        poller = get_poller()
+        if poller:
+            ap_ips = list(db.get_all_access_points_dict(enabled_only=True).keys())
+            sw_ips = list(db.get_all_switches_dict(enabled_only=True).keys())
+            all_ips = ap_ips + sw_ips
+            if all_ips:
+                await poller.poll_configs_for_ips(all_ips)
+                polled = len(all_ips)
+
     all_configs = db.get_all_latest_configs()
     effective = db.get_all_effective_templates()
 
@@ -6109,7 +6128,7 @@ async def get_config_compliance(session: dict = Depends(require_auth), _pro=Depe
             "checked_at": cfg["fetched_at"],
         }
 
-    return {"devices": devices}
+    return {"devices": devices, "polled": polled}
 
 
 # ============================================================================

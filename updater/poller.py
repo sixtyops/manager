@@ -83,7 +83,11 @@ class NetworkPoller:
                 await self._poll_all_aps()
                 await self._poll_all_switches()
 
-                # Check if it's time for a config poll
+                # Prime configs for any device that has none yet, so the
+                # compliance view isn't empty until the daily 4 AM poll runs.
+                await self._poll_missing_configs()
+
+                # Check if it's time for the scheduled daily config poll.
                 await self._maybe_poll_configs()
             except Exception as e:
                 logger.exception(f"Error in poll loop: {e}")
@@ -649,6 +653,29 @@ class NetworkPoller:
     # ------------------------------------------------------------------
     # Config polling
     # ------------------------------------------------------------------
+
+    async def _poll_missing_configs(self):
+        """Fetch configs for enabled devices that have none cached yet.
+
+        Runs every poll cycle but only polls devices without any stored config,
+        so the work is O(new devices) after the first successful poll per device.
+        Failures fall through quietly — they'll be retried next cycle.
+        """
+        try:
+            if db.get_setting("config_poll_enabled", "true") != "true":
+                return
+
+            existing = set(db.get_all_latest_configs().keys())
+            aps = db.get_all_access_points_dict(enabled_only=True)
+            switches = db.get_all_switches_dict(enabled_only=True)
+            missing = [ip for ip in list(aps) + list(switches) if ip not in existing]
+            if not missing:
+                return
+
+            logger.info(f"Priming initial configs for {len(missing)} device(s)")
+            await self.poll_configs_for_ips(missing)
+        except Exception as e:
+            logger.debug(f"_poll_missing_configs error: {e}")
 
     async def _maybe_poll_configs(self):
         """Run config poll + auto-enforce daily at 4 AM local time."""
