@@ -55,24 +55,17 @@ jobs:
           echo "ready=false" >> "$GITHUB_OUTPUT"
           echo "missing=$missing_csv" >> "$GITHUB_OUTPUT"
 
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "::warning::Skipping live-dev validation on pull_request because required inputs are not configured: $missing_csv"
-            {
-              echo "### Dev Hardware Validation skipped"
-              echo
-              echo "Required live-dev inputs are not configured for this repository or environment."
-              echo
-              echo "Missing inputs: \`$missing_csv\`"
-              echo
-              echo "PR validation is soft-skipped until the live-dev secrets or variables are wired. Scheduled and manual runs still fail fast when inputs are missing."
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          for name in "${missing[@]}"; do
-            echo "::error::Missing required secret or variable: $name"
-          done
-          exit 1
+          echo "::warning::Skipping live-dev validation because required inputs are not configured: $missing_csv"
+          {
+            echo "### Dev Hardware Validation skipped"
+            echo
+            echo "Required live-dev inputs are not configured for this repository or environment."
+            echo
+            echo "Missing inputs: \`$missing_csv\`"
+            echo
+            echo "Live-dev validation is soft-skipped until the live-dev secrets or variables are wired (tracked in issue #28). Re-run after secrets are populated."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
 
       - name: Install test dependencies
         if: steps.validate_inputs.outputs.ready == 'true'
