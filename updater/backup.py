@@ -26,6 +26,39 @@ EXPORT_COLUMNS = [
 
 RADIUS_EXPORT_COLUMNS = ["username", "password", "enabled"]
 
+# Snapshot rows are written under `# section=device_configs`.
+# config_json is Fernet-encrypted with the same key as device passwords so
+# RADIUS shared secrets / WPA PSKs / SNMP communities never sit in the
+# exported file in plaintext. `mac` is the per-unit identifier carried
+# across DR so auto-rebind keeps working for restored history.
+CONFIG_EXPORT_COLUMNS = [
+    "ip", "fetched_at", "config_hash", "model", "hardware_id", "mac",
+    "deleted_at", "device_label", "config_json",
+]
+
+# Characters that turn a CSV cell into an executable formula in
+# Excel/Sheets/LibreOffice when the cell starts with one of them.
+_CSV_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _safe_cell(value: str) -> str:
+    """Defang a CSV cell against formula injection.
+
+    Spreadsheets evaluate cells starting with `=`, `+`, `-`, `@`, tab,
+    or CR. Prepend a single quote so they're treated as literal text.
+    `_unsafe_cell` reverses this on import.
+    """
+    if value and value[0] in _CSV_INJECTION_PREFIXES:
+        return "'" + value
+    return value
+
+
+def _unsafe_cell(value: str) -> str:
+    """Reverse `_safe_cell`: strip a leading single quote that we added on export."""
+    if value and value.startswith("'") and len(value) > 1 and value[1] in _CSV_INJECTION_PREFIXES:
+        return value[1:]
+    return value
+
 
 def _derive_key(passphrase: str, salt: bytes) -> bytes:
     """Derive a Fernet key from a passphrase using PBKDF2."""
@@ -66,12 +99,12 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
             "ip": ap["ip"],
             "username": ap["username"],
             "password": fernet.encrypt(ap["password"].encode()).decode(),
-            "site_name": sites.get(ap.get("tower_site_id"), ""),
-            "system_name": ap.get("system_name") or "",
+            "site_name": _safe_cell(sites.get(ap.get("tower_site_id"), "")),
+            "system_name": _safe_cell(ap.get("system_name") or ""),
             "model": ap.get("model") or "",
             "mac": ap.get("mac") or "",
             "firmware_version": ap.get("firmware_version") or "",
-            "location": ap.get("location") or "",
+            "location": _safe_cell(ap.get("location") or ""),
             "enabled": "1" if ap.get("enabled", 1) else "0",
         })
 
@@ -81,12 +114,12 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
             "ip": sw["ip"],
             "username": sw["username"],
             "password": fernet.encrypt(sw["password"].encode()).decode(),
-            "site_name": sites.get(sw.get("tower_site_id"), ""),
-            "system_name": sw.get("system_name") or "",
+            "site_name": _safe_cell(sites.get(sw.get("tower_site_id"), "")),
+            "system_name": _safe_cell(sw.get("system_name") or ""),
             "model": sw.get("model") or "",
             "mac": sw.get("mac") or "",
             "firmware_version": sw.get("firmware_version") or "",
-            "location": sw.get("location") or "",
+            "location": _safe_cell(sw.get("location") or ""),
             "enabled": "1" if sw.get("enabled", 1) else "0",
         })
 
@@ -108,6 +141,34 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
     except Exception:
         logger.debug("Could not export RADIUS users", exc_info=True)
 
+    # Device config snapshots (live + recycle-bin) section
+    try:
+        with db.get_db() as conn:
+            rows = conn.execute(
+                """SELECT ip, config_json, config_hash, model, hardware_id, mac,
+                          fetched_at, deleted_at, device_label
+                     FROM device_configs
+                    ORDER BY ip, fetched_at"""
+            ).fetchall()
+        if rows:
+            buf.write("# section=device_configs\n")
+            cfg_writer = csv.DictWriter(buf, fieldnames=CONFIG_EXPORT_COLUMNS)
+            cfg_writer.writeheader()
+            for r in rows:
+                cfg_writer.writerow({
+                    "ip": r["ip"],
+                    "fetched_at": r["fetched_at"] or "",
+                    "config_hash": r["config_hash"] or "",
+                    "model": r["model"] or "",
+                    "hardware_id": r["hardware_id"] or "",
+                    "mac": r["mac"] or "",
+                    "deleted_at": r["deleted_at"] or "",
+                    "device_label": _safe_cell(r["device_label"] or ""),
+                    "config_json": fernet.encrypt((r["config_json"] or "").encode()).decode(),
+                })
+    except Exception:
+        logger.debug("Could not export device_configs", exc_info=True)
+
     return buf.getvalue(), salt_b64
 
 
@@ -122,24 +183,30 @@ def process_csv_import(csv_content: str, passphrase: str, conflict_mode: str = "
     results = {
         "devices": {"added": 0, "updated": 0, "skipped": 0, "failed": 0, "errors": []},
         "radius_users": {"added": 0, "updated": 0, "skipped": 0, "failed": 0, "errors": []},
+        "device_configs": {"added": 0, "skipped": 0, "failed": 0, "errors": []},
     }
 
     lines = csv_content.splitlines(keepends=True)
 
-    # Extract salt from comment header; split into device and RADIUS sections
+    # Extract salt from comment header; split into device, RADIUS, and config sections
     salt_b64 = None
     csv_lines = []
     radius_lines = []
-    in_radius_section = False
+    config_lines = []
+    section = "devices"
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("# salt="):
             salt_b64 = stripped.split("=", 1)[1]
         elif stripped == "# section=radius_users":
-            in_radius_section = True
+            section = "radius_users"
+        elif stripped == "# section=device_configs":
+            section = "device_configs"
         elif not stripped.startswith("#"):
-            if in_radius_section:
+            if section == "radius_users":
                 radius_lines.append(line)
+            elif section == "device_configs":
+                config_lines.append(line)
             else:
                 csv_lines.append(line)
 
@@ -261,5 +328,68 @@ def process_csv_import(csv_content: str, passphrase: str, conflict_mode: str = "
                     results["radius_users"]["errors"].append(f"{username}: {e}")
         except Exception:
             logger.debug("Could not import RADIUS users", exc_info=True)
+
+    # Import device config snapshots if present. Idempotent on (ip, fetched_at):
+    # if a row with the same ip+fetched_at already exists we skip rather than
+    # duplicate, so re-importing the same backup is safe.
+    if config_lines:
+        try:
+            cfg_reader = csv.DictReader(io.StringIO("".join(config_lines)))
+            with db.get_db() as conn:
+                existing_keys = {
+                    (r["ip"], r["fetched_at"])
+                    for r in conn.execute(
+                        "SELECT ip, fetched_at FROM device_configs"
+                    ).fetchall()
+                }
+                for row in cfg_reader:
+                    ip = (row.get("ip") or "").strip()
+                    fetched_at = (row.get("fetched_at") or "").strip()
+                    if not ip or not fetched_at:
+                        results["device_configs"]["failed"] += 1
+                        continue
+                    if (ip, fetched_at) in existing_keys:
+                        results["device_configs"]["skipped"] += 1
+                        continue
+                    try:
+                        config_json = fernet.decrypt(row["config_json"].encode()).decode()
+                    except InvalidToken:
+                        results["device_configs"]["failed"] += 1
+                        results["device_configs"]["errors"].append(
+                            f"{ip}@{fetched_at}: wrong passphrase or corrupted"
+                        )
+                        continue
+                    except Exception as e:
+                        results["device_configs"]["failed"] += 1
+                        results["device_configs"]["errors"].append(
+                            f"{ip}@{fetched_at}: decrypt error — {e}"
+                        )
+                        continue
+                    mac_value = (row.get("mac") or "").strip().upper() or None
+                    try:
+                        conn.execute(
+                            """INSERT INTO device_configs
+                                   (ip, config_json, config_hash, model, hardware_id, mac,
+                                    fetched_at, deleted_at, device_label)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (
+                                ip,
+                                config_json,
+                                row.get("config_hash") or "",
+                                row.get("model") or None,
+                                row.get("hardware_id") or None,
+                                mac_value,
+                                fetched_at,
+                                row.get("deleted_at") or None,
+                                _unsafe_cell(row.get("device_label") or "") or None,
+                            ),
+                        )
+                        existing_keys.add((ip, fetched_at))
+                        results["device_configs"]["added"] += 1
+                    except Exception as e:
+                        results["device_configs"]["failed"] += 1
+                        results["device_configs"]["errors"].append(f"{ip}@{fetched_at}: {e}")
+        except Exception:
+            logger.debug("Could not import device_configs", exc_info=True)
 
     return results

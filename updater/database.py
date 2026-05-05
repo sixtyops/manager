@@ -168,6 +168,56 @@ def _migrate(db):
     # Encrypt any plaintext device passwords
     _migrate_encrypt_passwords(db)
 
+    # Add soft-delete + label + mac columns to device_configs (recycle bin + rebind support)
+    dc_columns = [row[1] for row in db.execute("PRAGMA table_info(device_configs)").fetchall()]
+    if "deleted_at" not in dc_columns:
+        db.execute("ALTER TABLE device_configs ADD COLUMN deleted_at TEXT DEFAULT NULL")
+    if "device_label" not in dc_columns:
+        db.execute("ALTER TABLE device_configs ADD COLUMN device_label TEXT DEFAULT NULL")
+    if "mac" not in dc_columns:
+        db.execute("ALTER TABLE device_configs ADD COLUMN mac TEXT DEFAULT NULL")
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_device_configs_deleted ON device_configs(deleted_at)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_device_configs_mac ON device_configs(mac)"
+    )
+
+    # Backfill hardware_id and mac on device_configs rows that are missing them,
+    # joining the current devices/cpe_cache tables.
+    try:
+        from updater.tachyon import TachyonClient
+        # hardware_id from device model
+        rows = db.execute(
+            """SELECT DISTINCT dc.ip, d.model
+                 FROM device_configs dc
+                 JOIN devices d ON d.ip = dc.ip
+                WHERE dc.hardware_id IS NULL"""
+        ).fetchall()
+        for row in rows:
+            model = (row["model"] or "").lower()
+            hw = TachyonClient.MODEL_HARDWARE_IDS.get(model, "tn-110-prs")
+            db.execute(
+                "UPDATE device_configs SET hardware_id = ? WHERE ip = ? AND hardware_id IS NULL",
+                (hw, row["ip"]),
+            )
+        # mac from devices table
+        db.execute(
+            """UPDATE device_configs
+                  SET mac = (SELECT UPPER(d.mac) FROM devices d WHERE d.ip = device_configs.ip)
+                WHERE mac IS NULL
+                  AND EXISTS (SELECT 1 FROM devices d WHERE d.ip = device_configs.ip AND d.mac IS NOT NULL)"""
+        )
+        # mac from cpe_cache for CPE snapshots
+        db.execute(
+            """UPDATE device_configs
+                  SET mac = (SELECT UPPER(c.mac) FROM cpe_cache c WHERE c.ip = device_configs.ip)
+                WHERE mac IS NULL
+                  AND EXISTS (SELECT 1 FROM cpe_cache c WHERE c.ip = device_configs.ip AND c.mac IS NOT NULL)"""
+        )
+    except Exception:
+        pass  # Best-effort backfill; new rows will populate correctly
+
 
 def _migrate_to_devices_table(db):
     """One-time migration: copy data from access_points/switches to unified devices table."""
@@ -517,11 +567,16 @@ def init_db():
                 config_hash TEXT NOT NULL,
                 model TEXT,
                 hardware_id TEXT,
-                fetched_at TEXT DEFAULT CURRENT_TIMESTAMP
+                mac TEXT,
+                fetched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                deleted_at TEXT DEFAULT NULL,
+                device_label TEXT DEFAULT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_device_configs_ip ON device_configs(ip);
             CREATE INDEX IF NOT EXISTS idx_device_configs_hash ON device_configs(ip, config_hash);
             CREATE INDEX IF NOT EXISTS idx_device_configs_fetched ON device_configs(ip, fetched_at DESC);
+            -- idx_device_configs_deleted, idx_device_configs_mac are created in
+            -- _migrate after the columns are guaranteed to exist on legacy DBs.
 
             CREATE TABLE IF NOT EXISTS config_templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1176,12 +1231,46 @@ def update_device_status(ip: str, last_seen: str = None, last_error: str = _UNSE
 
 
 def delete_device(ip: str):
-    """Delete a device from the unified table (and cached CPEs if AP)."""
+    """Delete a device from the unified table (and cached CPEs if AP).
+
+    Config snapshots are soft-deleted (recycle bin) rather than hard-deleted
+    so the operator can recover history if a device is re-added. When an AP
+    is deleted, snapshots for any CPEs underneath it are also moved to the
+    recycle bin keyed by their own IPs and labeled with the CPE's system_name.
+    """
+    now = datetime.now().isoformat()
     with get_db() as db:
-        row = db.execute("SELECT role FROM devices WHERE ip = ?", (ip,)).fetchone()
+        row = db.execute(
+            "SELECT role, system_name FROM devices WHERE ip = ?", (ip,)
+        ).fetchone()
+        label = (row["system_name"] if row else None) or ip
+
+        # Capture CPE IPs and labels before we drop the cache, so we can soft-delete
+        # the CPE snapshots and label them with the CPE's own name.
+        cpe_rows = []
         if row and row["role"] == "ap":
+            cpe_rows = [
+                dict(r) for r in db.execute(
+                    "SELECT ip, system_name FROM cpe_cache WHERE ap_ip = ?", (ip,)
+                ).fetchall()
+            ]
             db.execute("DELETE FROM cpe_cache WHERE ap_ip = ?", (ip,))
+
         db.execute("DELETE FROM devices WHERE ip = ?", (ip,))
+        db.execute(
+            """UPDATE device_configs
+                  SET deleted_at = ?, device_label = ?
+                WHERE ip = ? AND deleted_at IS NULL""",
+            (now, label, ip),
+        )
+        for cpe in cpe_rows:
+            cpe_label = cpe.get("system_name") or cpe["ip"]
+            db.execute(
+                """UPDATE device_configs
+                      SET deleted_at = ?, device_label = ?
+                    WHERE ip = ? AND deleted_at IS NULL""",
+                (now, cpe_label, cpe["ip"]),
+            )
 
 
 def get_devices_dict(role: str = None, vendor: str = None,
@@ -2567,38 +2656,50 @@ def cleanup_old_device_update_history(max_age_days: int = 180):
 # Device Config operations
 
 def save_device_config(ip: str, config_json: str, config_hash: str,
-                       model: str = None, hardware_id: str = None):
-    """Save a device config snapshot."""
+                       model: str = None, hardware_id: str = None,
+                       mac: str = None):
+    """Save a device config snapshot.
+
+    `mac` is the per-unit identifier used for auto-rebind on IP changes;
+    it should be normalized to upper-case (no separators or with `:`).
+    Callers without a known MAC may pass None — rebind will simply not fire.
+    """
+    normalized_mac = mac.upper() if mac else None
     with get_db() as db:
         db.execute(
-            """INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id, fetched_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (ip, config_json, config_hash, model, hardware_id, datetime.now().isoformat())
+            """INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id, mac, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (ip, config_json, config_hash, model, hardware_id, normalized_mac, datetime.now().isoformat())
         )
 
 
 def get_latest_device_config(ip: str) -> Optional[dict]:
-    """Get the most recent config snapshot for a device."""
+    """Get the most recent config snapshot for a device (live history only)."""
     with get_db() as db:
         row = db.execute(
-            "SELECT * FROM device_configs WHERE ip = ? ORDER BY fetched_at DESC LIMIT 1",
+            """SELECT * FROM device_configs
+                WHERE ip = ? AND deleted_at IS NULL
+                ORDER BY fetched_at DESC LIMIT 1""",
             (ip,)
         ).fetchone()
         return dict(row) if row else None
 
 
 def get_device_config_history(ip: str, limit: int = 20) -> list[dict]:
-    """Get config snapshots for a device, newest first."""
+    """Get config snapshots for a device, newest first (live history only)."""
     with get_db() as db:
         rows = db.execute(
-            "SELECT id, ip, config_hash, model, hardware_id, fetched_at FROM device_configs WHERE ip = ? ORDER BY fetched_at DESC LIMIT ?",
+            """SELECT id, ip, config_hash, model, hardware_id, fetched_at
+                 FROM device_configs
+                WHERE ip = ? AND deleted_at IS NULL
+                ORDER BY fetched_at DESC LIMIT ?""",
             (ip, limit)
         ).fetchall()
         return [dict(row) for row in rows]
 
 
 def get_device_config_by_id(config_id: int) -> Optional[dict]:
-    """Get a specific config snapshot by ID."""
+    """Get a specific config snapshot by ID (regardless of deletion state)."""
     with get_db() as db:
         row = db.execute(
             "SELECT * FROM device_configs WHERE id = ?", (config_id,)
@@ -2607,40 +2708,150 @@ def get_device_config_by_id(config_id: int) -> Optional[dict]:
 
 
 def get_all_latest_configs() -> dict:
-    """Get the latest config for each device. Returns {ip: {id, config_json, config_hash, fetched_at, ...}}."""
+    """Latest live config per device. Returns {ip: row_dict}."""
     with get_db() as db:
         rows = db.execute("""
             SELECT dc.* FROM device_configs dc
             INNER JOIN (
                 SELECT ip, MAX(fetched_at) as max_fetched
-                FROM device_configs GROUP BY ip
+                FROM device_configs
+                WHERE deleted_at IS NULL
+                GROUP BY ip
             ) latest ON dc.ip = latest.ip AND dc.fetched_at = latest.max_fetched
+            WHERE dc.deleted_at IS NULL
         """).fetchall()
         return {row["ip"]: dict(row) for row in rows}
 
 
 def get_latest_config_hash(ip: str) -> Optional[str]:
-    """Get the hash of the most recent config for a device."""
+    """Get the hash of the most recent live config for a device."""
     with get_db() as db:
         row = db.execute(
-            "SELECT config_hash FROM device_configs WHERE ip = ? ORDER BY fetched_at DESC LIMIT 1",
+            """SELECT config_hash FROM device_configs
+                WHERE ip = ? AND deleted_at IS NULL
+                ORDER BY fetched_at DESC LIMIT 1""",
             (ip,)
         ).fetchone()
         return row["config_hash"] if row else None
 
 
 def cleanup_old_device_configs(max_per_device: int = 50):
-    """Keep only the most recent N config snapshots per device."""
+    """Keep only the most recent N live snapshots per device.
+
+    Soft-deleted (recycle-bin) snapshots are NOT counted toward the cap and
+    are NOT pruned here — they are managed via the recycle-bin endpoints.
+    """
     with get_db() as db:
-        ips = db.execute("SELECT DISTINCT ip FROM device_configs").fetchall()
+        ips = db.execute(
+            "SELECT DISTINCT ip FROM device_configs WHERE deleted_at IS NULL"
+        ).fetchall()
         for row in ips:
             ip = row["ip"]
             db.execute("""
-                DELETE FROM device_configs WHERE ip = ? AND id NOT IN (
-                    SELECT id FROM device_configs WHERE ip = ?
-                    ORDER BY fetched_at DESC LIMIT ?
+                DELETE FROM device_configs
+                 WHERE ip = ? AND deleted_at IS NULL AND id NOT IN (
+                    SELECT id FROM device_configs
+                     WHERE ip = ? AND deleted_at IS NULL
+                     ORDER BY fetched_at DESC LIMIT ?
                 )
             """, (ip, ip, max_per_device))
+
+
+# Recycle bin (soft-deleted snapshots)
+
+def get_recycle_bin_summary() -> list[dict]:
+    """Group soft-deleted snapshots by IP for the recycle-bin view."""
+    with get_db() as db:
+        rows = db.execute("""
+            SELECT ip,
+                   COALESCE(MAX(device_label), ip) AS device_label,
+                   MAX(hardware_id) AS hardware_id,
+                   COUNT(*) AS snapshot_count,
+                   MIN(deleted_at) AS deleted_at,
+                   MAX(fetched_at) AS latest_fetched_at
+              FROM device_configs
+             WHERE deleted_at IS NOT NULL
+          GROUP BY ip
+          ORDER BY MIN(deleted_at) DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_recycle_bin_history(ip: str, limit: int = 200) -> list[dict]:
+    """List soft-deleted snapshots for a specific IP."""
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT id, ip, config_hash, model, hardware_id,
+                      fetched_at, deleted_at, device_label
+                 FROM device_configs
+                WHERE ip = ? AND deleted_at IS NOT NULL
+                ORDER BY fetched_at DESC LIMIT ?""",
+            (ip, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def restore_recycle_bin(ip: str) -> int:
+    """Clear deleted_at for all snapshots of an IP. Returns rows affected."""
+    with get_db() as db:
+        cur = db.execute(
+            """UPDATE device_configs
+                  SET deleted_at = NULL, device_label = NULL
+                WHERE ip = ? AND deleted_at IS NOT NULL""",
+            (ip,),
+        )
+        return cur.rowcount
+
+
+def purge_recycle_bin(ip: str) -> int:
+    """Permanently delete soft-deleted snapshots for an IP. Returns rows deleted."""
+    with get_db() as db:
+        cur = db.execute(
+            "DELETE FROM device_configs WHERE ip = ? AND deleted_at IS NOT NULL",
+            (ip,),
+        )
+        return cur.rowcount
+
+
+def find_orphan_snapshots_by_mac(mac: str, current_ip: str) -> list[str]:
+    """Find IPs whose live snapshots share the given MAC but are no longer
+    managed devices (not in `devices` and not in `cpe_cache`). Used to
+    auto-rebind history when a device's IP changes (DHCP renumber, replacement).
+    MAC is per-unit, so a single match is a strong identity signal.
+    Returns a list of old IPs.
+    """
+    if not mac:
+        return []
+    normalized = mac.upper()
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT DISTINCT dc.ip
+                 FROM device_configs dc
+            LEFT JOIN devices d ON d.ip = dc.ip
+            LEFT JOIN cpe_cache c ON c.ip = dc.ip
+                WHERE dc.mac = ?
+                  AND dc.ip != ?
+                  AND dc.deleted_at IS NULL
+                  AND d.ip IS NULL
+                  AND c.ip IS NULL""",
+            (normalized, current_ip),
+        ).fetchall()
+        return [r["ip"] for r in rows]
+
+
+def rebind_snapshots(old_ip: str, new_ip: str, mac: str) -> int:
+    """Move all live snapshots with the given MAC from old_ip to new_ip."""
+    if not mac:
+        return 0
+    normalized = mac.upper()
+    with get_db() as db:
+        cur = db.execute(
+            """UPDATE device_configs
+                  SET ip = ?
+                WHERE ip = ? AND mac = ? AND deleted_at IS NULL""",
+            (new_ip, old_ip, normalized),
+        )
+        return cur.rowcount
 
 
 # Config Template operations

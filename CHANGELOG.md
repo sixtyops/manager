@@ -13,6 +13,9 @@ All notable changes to this project are documented in this file.
 - NTP server defaults (132.163.97.1 and 129.6.15.28) in the config template editor; toggle stays off by default
 - Toast notification CSS (fixed top-right, typed color borders, slide-in) — previously toasts rendered as unstyled plaintext in the page body
 - Last-admin / self-delete guards on the Local Users table (disabled button + tooltip)
+- Config snapshot recycle bin: deleting a device now soft-deletes its config history rather than orphaning rows. Deleting an AP also cascades to its CPEs' snapshots. A new "Config Snapshot Recycle Bin" panel in the Config drawer lets admins restore or permanently purge entries
+- MAC-based config-history auto-rebind: when a managed device's IP changes (DHCP renumber, replacement at the same MAC), its prior config history is automatically re-linked to the new IP. The UI surfaces a toast and refreshes when this happens
+- Manager backup export now includes device config snapshots and the recycle bin (Fernet-encrypted with the same passphrase). Re-import is idempotent on `(ip, fetched_at)` so DR no longer resets config history
 
 ### Changed
 - Manual config push (`/api/config-push` and `/api/config-push/preview`, including phased rollouts) now honors each template's `device_types` filter — an AP-only template targeted at a switch is reported as "skipped" in preview and silently bypassed at apply, instead of being merged into a config it doesn't belong in. The push job and rollout state expose a new `skipped` counter alongside `success`/`failed`.

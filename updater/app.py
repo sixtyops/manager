@@ -5832,6 +5832,41 @@ async def get_configs_summary(session: dict = Depends(require_auth), _pro=Depend
     return {"configs": result}
 
 
+# ----------------------------------------------------------------------------
+# Recycle bin (soft-deleted config snapshots).
+# Registered BEFORE /api/configs/{ip} so "recycle-bin" is not consumed as an IP.
+# ----------------------------------------------------------------------------
+
+@app.get("/api/configs/recycle-bin", tags=["config"])
+async def list_recycle_bin(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+    """List soft-deleted config snapshot groups (one entry per former device IP)."""
+    return {"entries": db.get_recycle_bin_summary()}
+
+
+@app.get("/api/configs/recycle-bin/{ip}", tags=["config"])
+async def list_recycle_bin_history(ip: str, limit: int = 200, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+    """List soft-deleted snapshots for a specific former IP."""
+    return {"history": db.get_recycle_bin_history(ip, limit=limit)}
+
+
+@app.post("/api/configs/recycle-bin/{ip}/restore", tags=["config"])
+async def restore_recycle_bin_entry(ip: str, session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+    """Restore soft-deleted snapshots back into live history for the given IP."""
+    moved = db.restore_recycle_bin(ip)
+    if moved == 0:
+        raise HTTPException(404, "No recycle-bin entries found for this IP")
+    return {"status": "restored", "ip": ip, "snapshots_restored": moved}
+
+
+@app.delete("/api/configs/recycle-bin/{ip}", tags=["config"])
+async def purge_recycle_bin_entry(ip: str, session: dict = Depends(require_role("admin")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
+    """Permanently purge soft-deleted snapshots for the given IP."""
+    deleted = db.purge_recycle_bin(ip)
+    if deleted == 0:
+        raise HTTPException(404, "No recycle-bin entries found for this IP")
+    return {"status": "purged", "ip": ip, "snapshots_purged": deleted}
+
+
 @app.get("/api/configs/{ip}", tags=["config"])
 async def get_config_history(ip: str, limit: int = 20, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
     """Get config snapshot history for a device."""
@@ -5964,8 +5999,9 @@ async def poll_device_config(ip: str, session: dict = Depends(require_role("admi
     # Get model and hardware_id
     model = device.get("model")
     hardware_id = client.get_hardware_id(model)
+    mac = device.get("mac")
 
-    db.save_device_config(ip, config_json, config_hash, model, hardware_id)
+    db.save_device_config(ip, config_json, config_hash, model, hardware_id, mac)
 
     return {"success": True, "changed": changed, "config_hash": config_hash}
 
