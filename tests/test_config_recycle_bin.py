@@ -281,3 +281,153 @@ class TestBackupRoundTrip:
         assert second["device_configs"]["added"] == 0
         assert second["device_configs"]["skipped"] == 1
         assert len(db.get_device_config_history("10.0.0.60")) == 1
+
+    def test_export_import_preserves_mac(self, mock_db):
+        # Critical: MAC must survive the round-trip so auto-rebind keeps working
+        # for restored history after manager DR.
+        db.upsert_access_point("10.0.0.70", "root", "pass")
+        _seed_snapshots("10.0.0.70", "tn-110-prs", ["h-mac"], mac=MAC_A)
+
+        passphrase = "test-passphrase"
+        csv_content, _ = backup.build_csv_export(passphrase)
+
+        with db.get_db() as conn:
+            conn.execute("DELETE FROM device_configs")
+        backup.process_csv_import(csv_content, passphrase, conflict_mode="update")
+
+        with db.get_db() as conn:
+            row = conn.execute(
+                "SELECT mac FROM device_configs WHERE ip = ?", ("10.0.0.70",)
+            ).fetchone()
+        assert row is not None
+        assert row["mac"] == MAC_A.upper()
+
+    def test_csv_injection_in_device_label_is_neutralized(self, mock_db):
+        # A malicious system_name like "=2+3" should not survive as a formula
+        # in the exported CSV. The export prefixes it with a single-quote and
+        # the import strips that prefix back off.
+        db.upsert_access_point("10.0.0.80", "root", "pass")
+        with db.get_db() as conn:
+            conn.execute(
+                "UPDATE devices SET system_name = ? WHERE ip = ?",
+                ("=cmd|'/c calc'!A1", "10.0.0.80"),
+            )
+        _seed_snapshots("10.0.0.80", "tn-110-prs", ["h"])
+        db.delete_device("10.0.0.80")  # captures system_name as device_label
+
+        passphrase = "test-passphrase"
+        csv_content, _ = backup.build_csv_export(passphrase)
+
+        # Find the row in the raw CSV and confirm it's defanged
+        section_marker = "# section=device_configs"
+        assert section_marker in csv_content
+        post_marker = csv_content.split(section_marker, 1)[1]
+        assert "'=cmd|" in post_marker  # leading apostrophe added
+        assert "\n=cmd|" not in post_marker  # no naked formula
+
+        # Round-trip restores the original label
+        with db.get_db() as conn:
+            conn.execute("DELETE FROM device_configs")
+        backup.process_csv_import(csv_content, passphrase, conflict_mode="update")
+        bin_summary = db.get_recycle_bin_summary()
+        assert any(e["device_label"] == "=cmd|'/c calc'!A1" for e in bin_summary)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# HTTP endpoint coverage for the recycle-bin routes
+# ────────────────────────────────────────────────────────────────────────────
+
+class TestRecycleBinEndpoints:
+    def test_list_requires_auth(self, client):
+        resp = client.get("/api/configs/recycle-bin")
+        assert resp.status_code in (401, 403)
+
+    def test_list_returns_entries_for_admin(self, authed_client, mock_db):
+        db.upsert_access_point("10.0.0.90", "root", "pass")
+        _seed_snapshots("10.0.0.90", "tn-110-prs", ["h"])
+        db.delete_device("10.0.0.90")
+
+        resp = authed_client.get("/api/configs/recycle-bin")
+        assert resp.status_code == 200
+        ips = {e["ip"] for e in resp.json()["entries"]}
+        assert "10.0.0.90" in ips
+
+    def test_history_returns_soft_deleted_snapshots(self, authed_client, mock_db):
+        db.upsert_access_point("10.0.0.91", "root", "pass")
+        _seed_snapshots("10.0.0.91", "tn-110-prs", ["a", "b"])
+        db.delete_device("10.0.0.91")
+
+        resp = authed_client.get("/api/configs/recycle-bin/10.0.0.91")
+        assert resp.status_code == 200
+        history = resp.json()["history"]
+        assert len(history) == 2
+        for row in history:
+            assert row["deleted_at"] is not None
+
+    def test_restore_requires_admin_role(self, operator_client, mock_db):
+        db.upsert_access_point("10.0.0.92", "root", "pass")
+        _seed_snapshots("10.0.0.92", "tn-110-prs", ["h"])
+        db.delete_device("10.0.0.92")
+
+        # Operator (not admin) should be forbidden from restore
+        resp = operator_client.post("/api/configs/recycle-bin/10.0.0.92/restore")
+        assert resp.status_code == 403
+
+    def test_restore_succeeds_for_admin(self, authed_client, mock_db):
+        db.upsert_access_point("10.0.0.93", "root", "pass")
+        _seed_snapshots("10.0.0.93", "tn-110-prs", ["a", "b"])
+        db.delete_device("10.0.0.93")
+
+        resp = authed_client.post("/api/configs/recycle-bin/10.0.0.93/restore")
+        assert resp.status_code == 200
+        assert resp.json()["snapshots_restored"] == 2
+        assert len(db.get_device_config_history("10.0.0.93")) == 2
+
+    def test_restore_404_for_unknown_ip(self, authed_client, mock_db):
+        resp = authed_client.post("/api/configs/recycle-bin/10.99.99.99/restore")
+        assert resp.status_code == 404
+
+    def test_purge_requires_admin_role(self, operator_client, mock_db):
+        db.upsert_access_point("10.0.0.94", "root", "pass")
+        _seed_snapshots("10.0.0.94", "tn-110-prs", ["h"])
+        db.delete_device("10.0.0.94")
+
+        resp = operator_client.delete("/api/configs/recycle-bin/10.0.0.94")
+        assert resp.status_code == 403
+
+    def test_purge_succeeds_for_admin(self, authed_client, mock_db):
+        db.upsert_access_point("10.0.0.95", "root", "pass")
+        _seed_snapshots("10.0.0.95", "tn-110-prs", ["a", "b", "c"])
+        db.delete_device("10.0.0.95")
+
+        resp = authed_client.delete("/api/configs/recycle-bin/10.0.0.95")
+        assert resp.status_code == 200
+        assert resp.json()["snapshots_purged"] == 3
+        assert db.get_recycle_bin_summary() == []
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Concurrent rebind: two new IPs racing to claim the same orphan
+# ────────────────────────────────────────────────────────────────────────────
+
+class TestConcurrentRebind:
+    def test_only_one_concurrent_rebind_moves_rows(self, mock_db):
+        # Simulate the race window: two new IPs both look up the orphan IP
+        # via find_orphan_snapshots_by_mac, then each call rebind_snapshots.
+        # The first wins; the second should report moved == 0.
+        _seed_snapshots("10.0.0.10", "tn-110-prs", ["old1", "old2"], mac=MAC_A)
+
+        # Both new IPs see the orphan
+        orphans_for_a = db.find_orphan_snapshots_by_mac(MAC_A, "10.0.0.20")
+        orphans_for_b = db.find_orphan_snapshots_by_mac(MAC_A, "10.0.0.21")
+        assert orphans_for_a == ["10.0.0.10"]
+        assert orphans_for_b == ["10.0.0.10"]
+
+        moved_first = db.rebind_snapshots("10.0.0.10", "10.0.0.20", MAC_A)
+        moved_second = db.rebind_snapshots("10.0.0.10", "10.0.0.21", MAC_A)
+
+        assert moved_first == 2
+        assert moved_second == 0  # second call's UPDATE matches nothing
+        # Snapshots ended up under the first IP, not the second
+        assert len(db.get_device_config_history("10.0.0.20")) == 2
+        assert db.get_device_config_history("10.0.0.21") == []

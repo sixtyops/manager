@@ -8669,8 +8669,8 @@
                             <div style="font-weight:500;font-size:var(--text-sm);">${label}</div>
                             <div class="u-text-xxs-dim">${ip} · ${e.snapshot_count} snapshot(s) · deleted ${escapeHtml(deletedAt)}</div>
                         </div>
-                        <button type="button" class="btn btn-sm btn-secondary" onclick="restoreRecycleBinEntry('${ip}')">Restore</button>
-                        <button type="button" class="btn btn-sm btn-warning" onclick="purgeRecycleBinEntry('${ip}')">Purge</button>
+                        <button type="button" class="btn btn-sm btn-secondary" data-ip="${ip}" onclick="restoreRecycleBinEntry(this.dataset.ip)">Restore</button>
+                        <button type="button" class="btn btn-sm btn-warning" data-ip="${ip}" onclick="purgeRecycleBinEntry(this.dataset.ip)">Purge</button>
                     </div>`;
                 }).join('');
             } catch (e) {

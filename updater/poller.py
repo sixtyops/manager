@@ -852,23 +852,27 @@ class NetworkPoller:
                 if len(orphans) == 1:
                     old_ip = orphans[0]
                     moved = db.rebind_snapshots(old_ip, ip, mac)
-                    logger.info(
-                        f"Config poll: rebound {moved} snapshot(s) from {old_ip} → {ip} "
-                        f"(mac={mac})"
-                    )
-                    if self.broadcast_func:
-                        await self.broadcast_func({
-                            "type": "config_history_rebound",
-                            "old_ip": old_ip,
-                            "new_ip": ip,
-                            "mac": mac,
-                            "snapshots_moved": moved,
-                        })
-                    # Refresh existing_hash since rebind brought history under this IP.
-                    existing_hash = db.get_latest_config_hash(ip)
-                    if existing_hash == config_hash:
-                        logger.debug(f"Config poll: {ip} matches rebound history, skipping save")
-                        return
+                    if moved > 0:
+                        # Concurrent polls on the same orphan can race; only the
+                        # first UPDATE moves rows. Skip broadcast/refresh on a
+                        # zero-row move to avoid misleading "rebound 0" toasts.
+                        logger.info(
+                            f"Config poll: rebound {moved} snapshot(s) from {old_ip} → {ip} "
+                            f"(mac={mac})"
+                        )
+                        if self.broadcast_func:
+                            await self.broadcast_func({
+                                "type": "config_history_rebound",
+                                "old_ip": old_ip,
+                                "new_ip": ip,
+                                "mac": mac,
+                                "snapshots_moved": moved,
+                            })
+                        # Refresh existing_hash since rebind brought history under this IP.
+                        existing_hash = db.get_latest_config_hash(ip)
+                        if existing_hash == config_hash:
+                            logger.debug(f"Config poll: {ip} matches rebound history, skipping save")
+                            return
                 elif len(orphans) > 1:
                     logger.warning(
                         f"Config poll: ambiguous MAC rebind for {ip} "

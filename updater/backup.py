@@ -29,11 +29,35 @@ RADIUS_EXPORT_COLUMNS = ["username", "password", "enabled"]
 # Snapshot rows are written under `# section=device_configs`.
 # config_json is Fernet-encrypted with the same key as device passwords so
 # RADIUS shared secrets / WPA PSKs / SNMP communities never sit in the
-# exported file in plaintext.
+# exported file in plaintext. `mac` is the per-unit identifier carried
+# across DR so auto-rebind keeps working for restored history.
 CONFIG_EXPORT_COLUMNS = [
-    "ip", "fetched_at", "config_hash", "model", "hardware_id",
+    "ip", "fetched_at", "config_hash", "model", "hardware_id", "mac",
     "deleted_at", "device_label", "config_json",
 ]
+
+# Characters that turn a CSV cell into an executable formula in
+# Excel/Sheets/LibreOffice when the cell starts with one of them.
+_CSV_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _safe_cell(value: str) -> str:
+    """Defang a CSV cell against formula injection.
+
+    Spreadsheets evaluate cells starting with `=`, `+`, `-`, `@`, tab,
+    or CR. Prepend a single quote so they're treated as literal text.
+    `_unsafe_cell` reverses this on import.
+    """
+    if value and value[0] in _CSV_INJECTION_PREFIXES:
+        return "'" + value
+    return value
+
+
+def _unsafe_cell(value: str) -> str:
+    """Reverse `_safe_cell`: strip a leading single quote that we added on export."""
+    if value and value.startswith("'") and len(value) > 1 and value[1] in _CSV_INJECTION_PREFIXES:
+        return value[1:]
+    return value
 
 
 def _derive_key(passphrase: str, salt: bytes) -> bytes:
@@ -75,12 +99,12 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
             "ip": ap["ip"],
             "username": ap["username"],
             "password": fernet.encrypt(ap["password"].encode()).decode(),
-            "site_name": sites.get(ap.get("tower_site_id"), ""),
-            "system_name": ap.get("system_name") or "",
+            "site_name": _safe_cell(sites.get(ap.get("tower_site_id"), "")),
+            "system_name": _safe_cell(ap.get("system_name") or ""),
             "model": ap.get("model") or "",
             "mac": ap.get("mac") or "",
             "firmware_version": ap.get("firmware_version") or "",
-            "location": ap.get("location") or "",
+            "location": _safe_cell(ap.get("location") or ""),
             "enabled": "1" if ap.get("enabled", 1) else "0",
         })
 
@@ -90,12 +114,12 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
             "ip": sw["ip"],
             "username": sw["username"],
             "password": fernet.encrypt(sw["password"].encode()).decode(),
-            "site_name": sites.get(sw.get("tower_site_id"), ""),
-            "system_name": sw.get("system_name") or "",
+            "site_name": _safe_cell(sites.get(sw.get("tower_site_id"), "")),
+            "system_name": _safe_cell(sw.get("system_name") or ""),
             "model": sw.get("model") or "",
             "mac": sw.get("mac") or "",
             "firmware_version": sw.get("firmware_version") or "",
-            "location": sw.get("location") or "",
+            "location": _safe_cell(sw.get("location") or ""),
             "enabled": "1" if sw.get("enabled", 1) else "0",
         })
 
@@ -121,7 +145,7 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
     try:
         with db.get_db() as conn:
             rows = conn.execute(
-                """SELECT ip, config_json, config_hash, model, hardware_id,
+                """SELECT ip, config_json, config_hash, model, hardware_id, mac,
                           fetched_at, deleted_at, device_label
                      FROM device_configs
                     ORDER BY ip, fetched_at"""
@@ -137,8 +161,9 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
                     "config_hash": r["config_hash"] or "",
                     "model": r["model"] or "",
                     "hardware_id": r["hardware_id"] or "",
+                    "mac": r["mac"] or "",
                     "deleted_at": r["deleted_at"] or "",
-                    "device_label": r["device_label"] or "",
+                    "device_label": _safe_cell(r["device_label"] or ""),
                     "config_json": fernet.encrypt((r["config_json"] or "").encode()).decode(),
                 })
     except Exception:
@@ -328,27 +353,35 @@ def process_csv_import(csv_content: str, passphrase: str, conflict_mode: str = "
                         continue
                     try:
                         config_json = fernet.decrypt(row["config_json"].encode()).decode()
-                    except (InvalidToken, Exception) as e:
+                    except InvalidToken:
                         results["device_configs"]["failed"] += 1
                         results["device_configs"]["errors"].append(
                             f"{ip}@{fetched_at}: wrong passphrase or corrupted"
                         )
                         continue
+                    except Exception as e:
+                        results["device_configs"]["failed"] += 1
+                        results["device_configs"]["errors"].append(
+                            f"{ip}@{fetched_at}: decrypt error — {e}"
+                        )
+                        continue
+                    mac_value = (row.get("mac") or "").strip().upper() or None
                     try:
                         conn.execute(
                             """INSERT INTO device_configs
-                                   (ip, config_json, config_hash, model, hardware_id,
+                                   (ip, config_json, config_hash, model, hardware_id, mac,
                                     fetched_at, deleted_at, device_label)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                             (
                                 ip,
                                 config_json,
                                 row.get("config_hash") or "",
                                 row.get("model") or None,
                                 row.get("hardware_id") or None,
+                                mac_value,
                                 fetched_at,
                                 row.get("deleted_at") or None,
-                                row.get("device_label") or None,
+                                _unsafe_cell(row.get("device_label") or "") or None,
                             ),
                         )
                         existing_keys.add((ip, fetched_at))
