@@ -32,6 +32,7 @@ All notable changes to this project are documented in this file.
 - Tachyon config GET/POST hit the wrong endpoint (`/cgi.lua/apiv1/config`) and returned HTTP 401 "Authorization Failed"; corrected to `/cgi.lua/config` so config backup, compliance, and push all work
 - Signal vs Distance chart was empty whenever every AP at a site sat behind a managed switch — `updateChart()` only walked `site.aps[]` and missed `site.switches[].aps[]`; now iterates both, and selecting a switch in the topology scopes the chart to its nested APs
 - Topology index (`rebuildTopologyIndex`) skipped APs and CPEs nested under managed switches, so `findAP`/`findCPE` returned null for those rows — broke "Edit notes", AP/CPE checkbox selection, and chart point highlight for switch-nested devices
+- Site-wide iterators (Config tab badge, model/firmware filter dropdowns, "X Devices / Y Compliant" bar, site/all checkbox toggles + indeterminate state, CPE preservation across polls) walked only `site.aps[]` and undercounted or skipped switch-nested APs/CPEs; now traverse both branches via a shared `walkSiteAPs` helper, so site-row checkboxes also toggle every nested device row
 
 ## 1.3.0 - 2026-04-08
 

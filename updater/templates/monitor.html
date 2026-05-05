@@ -3674,7 +3674,7 @@
                     // Merge back preserved CPEs that are missing from new topology
                     if (preservedCPEs.size > 0) {
                         for (const site of (topology.sites || [])) {
-                            for (const ap of (site.aps || [])) {
+                            for (const ap of walkSiteAPs(site)) {
                                 const preserved = preservedCPEs.get(ap.ip);
                                 if (!preserved) continue;
                                 const existingIps = new Set((ap.cpes || []).map(c => c.ip));
@@ -3881,6 +3881,13 @@
 
         // ── Topology Index ──
 
+        function* walkSiteAPs(site) {
+            for (const ap of (site.aps || [])) yield ap;
+            for (const sw of (site.switches || [])) {
+                for (const ap of (sw.aps || [])) yield ap;
+            }
+        }
+
         function rebuildTopologyIndex() {
             _apIndex.clear();
             _cpeIndex.clear();
@@ -3941,7 +3948,7 @@
             const cfgBadge = document.getElementById('modeTabCfgBadge');
             let nonCompliant = 0;
             for (const site of (topology?.sites || [])) {
-                for (const ap of (site.aps || [])) {
+                for (const ap of walkSiteAPs(site)) {
                     const c = configCompliance[ap.ip];
                     if (c && !c.compliant) nonCompliant++;
                     for (const cpe of (ap.cpes || [])) {
@@ -4005,7 +4012,7 @@
             const values = new Set();
             if (!topology?.sites) return values;
             for (const site of topology.sites) {
-                for (const ap of (site.aps || [])) {
+                for (const ap of walkSiteAPs(site)) {
                     values.add(getDeviceColumnValue(ap, 'ap', column));
                     for (const cpe of (ap.cpes || [])) {
                         values.add(getDeviceColumnValue(cpe, 'cpe', column, ap.ip));
@@ -4178,7 +4185,7 @@
                 : findSite(typeof siteId === 'string' ? parseInt(siteId) : siteId);
             if (!site) return;
             const allIps = [];
-            for (const ap of (site.aps || [])) {
+            for (const ap of walkSiteAPs(site)) {
                 allIps.push(ap.ip);
                 for (const cpe of (ap.cpes || [])) {
                     if (cpe.ip) allIps.push(cpe.ip);
@@ -4200,7 +4207,7 @@
             const allIps = [];
             if (topology?.sites) {
                 for (const site of topology.sites) {
-                    for (const ap of (site.aps || [])) {
+                    for (const ap of walkSiteAPs(site)) {
                         allIps.push(ap.ip);
                         for (const cpe of (ap.cpes || [])) {
                             if (cpe.ip) allIps.push(cpe.ip);
@@ -4226,7 +4233,7 @@
 
         function getSiteCheckState(site) {
             const allIps = [];
-            for (const ap of (site.aps || [])) {
+            for (const ap of walkSiteAPs(site)) {
                 allIps.push(ap.ip);
                 for (const cpe of (ap.cpes || [])) { if (cpe.ip) allIps.push(cpe.ip); }
             }
@@ -4272,7 +4279,7 @@
             if (allBox && topology?.sites) {
                 let total = 0, checked = 0;
                 for (const site of topology.sites) {
-                    for (const ap of (site.aps || [])) {
+                    for (const ap of walkSiteAPs(site)) {
                         total++; if (checkedDevices.has(ap.ip)) checked++;
                         for (const cpe of (ap.cpes || [])) {
                             if (cpe.ip) { total++; if (checkedDevices.has(cpe.ip)) checked++; }
@@ -8769,7 +8776,7 @@
             if (!topology) return;
             let total = 0, compliant = 0, nonCompliant = 0, unchecked = 0;
             for (const site of (topology.sites || [])) {
-                for (const ap of (site.aps || [])) {
+                for (const ap of walkSiteAPs(site)) {
                     total++;
                     const c = configCompliance[ap.ip];
                     if (!c) unchecked++;
