@@ -4953,13 +4953,23 @@
                 titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'AP';
             } else if (selectedNode?.type === 'cpe') {
                 titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'CPE';
+            } else if (selectedNode?.type === 'switch') {
+                titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'Switch';
             }
             document.getElementById('chartTitle').textContent = `Signal vs Distance \u2014 ${titleSuffix}`;
 
             for (const site of (topology.sites || [])) {
                 if (selectedNode?.type === 'site' && site.id !== selectedNode.data?.id) continue;
 
-                for (const ap of (site.aps || [])) {
+                const apList = [...(site.aps || [])];
+                for (const sw of (site.switches || [])) {
+                    for (const ap of (sw.aps || [])) apList.push(ap);
+                }
+                const aps = selectedNode?.type === 'switch'
+                    ? apList.filter(ap => ap.switch_ip === selectedNode.data?.ip)
+                    : apList;
+
+                for (const ap of aps) {
                     if (selectedNode?.type === 'ap' && ap.ip !== selectedNode.data?.ip) continue;
 
                     // Track offline APs
