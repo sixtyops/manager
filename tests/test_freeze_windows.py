@@ -81,6 +81,32 @@ class TestFreezeWindowDB:
         assert db.is_in_freeze_window("2026-05-31T23:59:59") is None
         assert db.is_in_freeze_window("2026-06-16T00:00:00") is None
 
+    def test_is_in_freeze_window_date_only_end_inclusive(self, mock_db):
+        """A date-only end_date covers the entire end-day inclusively."""
+        from updater import database as db
+        db.create_freeze_window("DateOnlyEnd", "2026-05-01", "2026-05-05")
+        # Mid-day on the end date should still be in the freeze
+        assert db.is_in_freeze_window("2026-05-05T08:00:00") is not None
+        assert db.is_in_freeze_window("2026-05-05T23:59:00") is not None
+        # Just past end-of-day should be out
+        assert db.is_in_freeze_window("2026-05-06T00:00:00") is None
+
+    def test_is_in_freeze_window_date_only_start_inclusive(self, mock_db):
+        """A date-only start_date is active from 00:00 of that day."""
+        from updater import database as db
+        db.create_freeze_window("DateOnlyStart", "2026-05-01", "2026-05-05")
+        assert db.is_in_freeze_window("2026-05-01T00:00:00") is not None
+        assert db.is_in_freeze_window("2026-04-30T23:59:59") is None
+
+    def test_is_in_freeze_window_tz_aware_now_iso(self, mock_db):
+        """TZ-aware now_iso should compare correctly against TZ-naive freeze rows."""
+        from updater import database as db
+        db.create_freeze_window("TZTest", "2026-05-01", "2026-05-05")
+        # Chicago time during May 5 should still be inside the freeze
+        assert db.is_in_freeze_window("2026-05-05T20:00:00-05:00") is not None
+        # Chicago time on May 6 should be out
+        assert db.is_in_freeze_window("2026-05-06T01:00:00-05:00") is None
+
 
 class TestFreezeWindowAPI:
     """Tests for freeze window API routes."""

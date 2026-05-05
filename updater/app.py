@@ -3691,7 +3691,7 @@ async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
                 job.job_id,
                 success_count,
                 failed_count if failed_count > 0 else 1,
-                learned_version=None,
+                learned_versions=None,
                 device_statuses=device_statuses,
                 cancel_reason=job.cancel_reason,
             )
@@ -4767,14 +4767,12 @@ def _request_job_cancel(job: "UpdateJob", reason: str):
 
 
 def _minutes_until_window_end(now: datetime, start_hour: int, end_hour: int) -> int:
-    """Compute minutes remaining in the active schedule window."""
-    if start_hour < end_hour:
-        # Same-day window (e.g., 03:00-04:00)
-        return (end_hour - now.hour) * 60 - now.minute
-    # Overnight window (e.g., 20:00-04:00)
-    if now.hour >= start_hour:
-        return (24 - now.hour + end_hour) * 60 - now.minute
-    return (end_hour - now.hour) * 60 - now.minute
+    """Compute minutes remaining in the active schedule window.
+
+    Thin wrapper around `services.minutes_until_window_end`. Returns 0 or a
+    negative value when `now` is at or past the window end.
+    """
+    return services.minutes_until_window_end(now, start_hour, end_hour)
 
 
 async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
@@ -4825,18 +4823,18 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         return
 
     # Maintenance window cutoff for scheduled jobs
-    if job.is_scheduled and job.enforce_window_cutoff and job.end_hour is not None and job.schedule_timezone:
+    if (
+        job.is_scheduled
+        and job.enforce_window_cutoff
+        and job.end_hour is not None
+        and job.start_hour is not None
+        and job.schedule_timezone
+    ):
         try:
             from zoneinfo import ZoneInfo
             tz = ZoneInfo(job.schedule_timezone)
             now = datetime.now(tz)
-            # Handle overnight windows (e.g., 20:00-04:00)
-            if job.end_hour > now.hour:
-                # Same day: end is later today
-                minutes_until_end = (job.end_hour - now.hour) * 60 - now.minute
-            else:
-                # Overnight: end is tomorrow morning
-                minutes_until_end = (24 - now.hour + job.end_hour) * 60 - now.minute
+            minutes_until_end = _minutes_until_window_end(now, job.start_hour, job.end_hour)
             if minutes_until_end < 10:
                 device_status.status = "deferred"
                 device_status.progress_message = "Deferred: maintenance window ending (will retry next window)"

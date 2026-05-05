@@ -3643,19 +3643,62 @@ def delete_freeze_window(window_id: int) -> bool:
         return cursor.rowcount > 0
 
 
+def _parse_freeze_boundary(value: str, end_of_day: bool, default_tz) -> Optional[datetime]:
+    """Normalize a freeze window boundary into a comparable datetime.
+
+    Date-only inputs (``YYYY-MM-DD``) become start-of-day or
+    end-of-day depending on ``end_of_day`` so that date-only rows
+    cover the entire day inclusively. Naive datetimes are stamped
+    with ``default_tz`` so the result can be compared with TZ-aware
+    timestamps.
+    """
+    if not value:
+        return None
+    if len(value) == 10 and value[4] == "-" and value[7] == "-":
+        try:
+            dt = datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            return None
+        if end_of_day:
+            dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    else:
+        try:
+            dt = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if dt.tzinfo is None and default_tz is not None:
+        dt = dt.replace(tzinfo=default_tz)
+    return dt
+
+
 def is_in_freeze_window(now_iso: str = None) -> Optional[dict]:
     """Check if the current time falls within an active freeze window.
 
-    Returns the matching freeze window dict, or None if not frozen.
+    ``now_iso`` should be a TZ-aware ISO 8601 string. A date-only
+    ``end_date`` row covers the entire day inclusively (through
+    23:59:59.999999). When inputs are TZ-naive they are interpreted in
+    the same timezone as ``now_iso``.
     """
     if now_iso is None:
-        now_iso = datetime.now().isoformat()
+        now_iso = datetime.now().astimezone().isoformat()
+    try:
+        now_dt = datetime.fromisoformat(now_iso)
+    except ValueError:
+        return None
+
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM freeze_windows WHERE enabled = 1 AND start_date <= ? AND end_date >= ? LIMIT 1",
-            (now_iso, now_iso),
-        ).fetchone()
-        return dict(row) if row else None
+        rows = conn.execute(
+            "SELECT * FROM freeze_windows WHERE enabled = 1"
+        ).fetchall()
+
+    for row in rows:
+        start_dt = _parse_freeze_boundary(row["start_date"], end_of_day=False, default_tz=now_dt.tzinfo)
+        end_dt = _parse_freeze_boundary(row["end_date"], end_of_day=True, default_tz=now_dt.tzinfo)
+        if start_dt is None or end_dt is None:
+            continue
+        if start_dt <= now_dt <= end_dt:
+            return dict(row)
+    return None
 
 
 def delete_device_group(group_id: int) -> bool:
