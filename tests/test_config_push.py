@@ -222,3 +222,112 @@ class TestRunConfigPushFilters:
         assert job_info["success"] == 1
         assert job_info["failed"] == 0
         assert job_info["done"] is True
+
+
+class TestRollbackSafetySnapshot:
+    """Pre-rollback safety snapshot must be mandatory (issue #42).
+    If get_config fails or returns empty, the rollback must refuse with 409
+    unless the operator explicitly passes force=true."""
+
+    @pytest.fixture
+    def rollback_db(self, mock_db):
+        """DB with an AP that has two snapshots so rollback has a target."""
+        mock_db.execute(
+            "INSERT INTO access_points (ip, username, password, enabled) "
+            "VALUES ('10.0.0.5', 'admin', 'pass', 1)"
+        )
+        mock_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.5", json.dumps({"v": "old"}), "h-old", "2026-01-01T00:00:00"),
+        )
+        mock_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.5", json.dumps({"v": "new"}), "h-new", "2026-01-02T00:00:00"),
+        )
+        mock_db.commit()
+        return mock_db
+
+    def _patch_client(self, get_config_result=None, get_config_raises=None):
+        from contextlib import ExitStack
+        from unittest.mock import AsyncMock, MagicMock, patch
+        instance = MagicMock()
+        instance.login = AsyncMock(return_value=True)
+        if get_config_raises is not None:
+            instance.get_config = AsyncMock(side_effect=get_config_raises)
+        else:
+            instance.get_config = AsyncMock(return_value=get_config_result)
+        instance.apply_config = AsyncMock(return_value={"success": True})
+        instance.get_hardware_id = MagicMock(return_value="tn-110")
+        # Stub poller so the post-rollback re-poll doesn't blow up on the
+        # default MagicMock from conftest (which isn't awaitable).
+        poller_stub = MagicMock()
+        poller_stub.poll_configs_for_ips = AsyncMock(return_value=None)
+        stack = ExitStack()
+        stack.enter_context(patch("updater.app.TachyonClient", return_value=instance))
+        stack.enter_context(patch("updater.app.get_poller", return_value=poller_stub))
+        return stack, instance
+
+    def test_rollback_refuses_when_get_config_raises(self, operator_client, rollback_db):
+        ctx, _ = self._patch_client(get_config_raises=ConnectionError("device unreachable"))
+        with ctx:
+            resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
+        assert resp.status_code == 409, resp.text
+        assert "safety snapshot" in resp.json()["detail"].lower()
+        assert "force=true" in resp.json()["detail"]
+
+    def test_rollback_refuses_when_get_config_returns_empty(self, operator_client, rollback_db):
+        ctx, _ = self._patch_client(get_config_result=None)
+        with ctx:
+            resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
+        assert resp.status_code == 409, resp.text
+        assert "empty config" in resp.json()["detail"].lower()
+
+    def test_rollback_refuses_when_force_is_false(self, operator_client, rollback_db):
+        ctx, _ = self._patch_client(get_config_raises=RuntimeError("boom"))
+        with ctx:
+            resp = operator_client.post(
+                "/api/config-push/rollback/10.0.0.5", json={"force": False}
+            )
+        assert resp.status_code == 409, resp.text
+
+    def test_rollback_proceeds_with_force_when_snapshot_fails(
+        self, operator_client, rollback_db
+    ):
+        ctx, instance = self._patch_client(get_config_raises=RuntimeError("boom"))
+        with ctx:
+            resp = operator_client.post(
+                "/api/config-push/rollback/10.0.0.5", json={"force": True}
+            )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] == "success"
+        assert body["safety_snapshot_saved"] is False
+        # Apply was still attempted (dry-run + apply)
+        assert instance.apply_config.await_count == 2
+        # Audit trail records the forced override
+        row = rollback_db.execute(
+            "SELECT action, target_id, details FROM audit_log "
+            "WHERE action = 'config.rollback.force'"
+        ).fetchone()
+        assert row is not None
+        assert row["target_id"] == "10.0.0.5"
+        assert "boom" in row["details"]
+
+    def test_rollback_succeeds_and_saves_snapshot_on_happy_path(
+        self, operator_client, rollback_db
+    ):
+        ctx, instance = self._patch_client(get_config_result={"v": "current"})
+        with ctx:
+            resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["safety_snapshot_saved"] is True
+        # The pre-rollback snapshot landed in device_configs
+        snapshots = rollback_db.execute(
+            "SELECT config_json FROM device_configs WHERE ip = '10.0.0.5' "
+            "ORDER BY id DESC"
+        ).fetchall()
+        # Latest row is the safety snapshot we just took
+        assert json.loads(snapshots[0]["config_json"]) == {"v": "current"}
