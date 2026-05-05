@@ -27,6 +27,7 @@ All notable changes to this project are documented in this file.
 - Switch → AP topology cascade wasn't populating because `TachyonDriver` didn't expose `get_bridge_table()`; added passthrough so bridge entries are stored and APs render under their upstream switch
 - Tachyon config GET/POST hit the wrong endpoint (`/cgi.lua/apiv1/config`) and returned HTTP 401 "Authorization Failed"; corrected to `/cgi.lua/config` so config backup, compliance, and push all work
 - Signal vs Distance chart was empty whenever every AP at a site sat behind a managed switch — `updateChart()` only walked `site.aps[]` and missed `site.switches[].aps[]`; now iterates both, and selecting a switch in the topology scopes the chart to its nested APs
+- Topology index (`rebuildTopologyIndex`) skipped APs and CPEs nested under managed switches, so `findAP`/`findCPE` returned null for those rows — broke "Edit notes", AP/CPE checkbox selection, and chart point highlight for switch-nested devices
 
 ## 1.3.0 - 2026-04-08
 
