@@ -862,16 +862,44 @@ class TachyonClient:
             entries.append({"mac": mac, "port": port})
         return entries
 
+    async def fetch_config(self) -> tuple[Optional[dict], str, Optional[str]]:
+        """Download full device config and return (config, status, error_msg).
+
+        Status values: 'ok', 'timeout', 'http_status', 'json_decode', 'unknown'.
+        Lets callers (the config poller) record *why* a poll attempt failed
+        instead of just hiding the device.
+        """
+        try:
+            status, body = await self._curl("GET", "/cgi.lua/config")
+        except asyncio.TimeoutError as e:
+            return None, "timeout", str(e) or "request timed out"
+        except RuntimeError as e:
+            # _curl raises RuntimeError on subprocess (curl) failure — usually
+            # network unreachable, DNS failure, connection refused.
+            msg = str(e)
+            if "timed out" in msg.lower() or "timeout" in msg.lower():
+                return None, "timeout", msg
+            return None, "unknown", msg
+        except Exception as e:
+            return None, "unknown", str(e) or e.__class__.__name__
+        if status != 200:
+            return None, "http_status", f"HTTP {status}"
+        try:
+            return json.loads(body), "ok", None
+        except json.JSONDecodeError as e:
+            return None, "json_decode", f"json decode failed: {e}"
+
     async def get_config(self) -> Optional[dict]:
         """Download full device config via GET /cgi.lua/config."""
-        status, body = await self._curl("GET", "/cgi.lua/config")
-        if status == 200:
-            try:
-                return json.loads(body)
-            except json.JSONDecodeError:
-                logger.error(f"Failed to parse config from {self.ip}")
-                return None
-        logger.warning(f"Failed to get config from {self.ip}: HTTP {status}")
+        config, status, err = await self.fetch_config()
+        if status == "ok":
+            return config
+        if status == "http_status":
+            logger.warning(f"Failed to get config from {self.ip}: {err}")
+        elif status == "json_decode":
+            logger.error(f"Failed to parse config from {self.ip}: {err}")
+        else:
+            logger.warning(f"Failed to get config from {self.ip} ({status}): {err}")
         return None
 
     async def run_smoke_tests(self, role: str = "ap", pre_update_cpe_count: int = 0) -> SmokeTestResult:

@@ -860,11 +860,14 @@ class NetworkPoller:
                 login_result = await client.connect()
                 if login_result is not True:
                     logger.debug(f"Config poll: login failed for {ip}: {login_result}")
+                    err = login_result if isinstance(login_result, str) else "login failed"
+                    db.update_device_config_poll_status(ip, "auth", err)
                     return
 
-            config = await client.get_config()
+            config, poll_status, poll_error = await client.fetch_config()
+            db.update_device_config_poll_status(ip, poll_status, poll_error)
             if config is None:
-                logger.debug(f"Config poll: failed to get config from {ip}")
+                logger.debug(f"Config poll: failed to get config from {ip}: {poll_status} {poll_error}")
                 return
 
             import hashlib

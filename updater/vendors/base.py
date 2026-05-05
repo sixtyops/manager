@@ -144,6 +144,20 @@ class VendorDriver(ABC):
         """Download device configuration. Returns None if unsupported."""
         return None
 
+    async def fetch_config(self) -> tuple[Optional[dict], str, Optional[str]]:
+        """Download config and return (config, status, error_msg) for poll outcome reporting.
+
+        Default impl wraps get_config() so vendor drivers that haven't been
+        updated still work — they just lose granular failure classification.
+        """
+        try:
+            config = await self.get_config()
+        except Exception as e:
+            return None, "unknown", str(e) or e.__class__.__name__
+        if config is None:
+            return None, "unknown", "get_config returned None"
+        return config, "ok", None
+
     async def apply_config(self, config: dict, dry_run: bool = False) -> dict:
         """Apply configuration to device."""
         return {"success": False, "error": f"Config push not supported by {self.VENDOR_NAME}"}
