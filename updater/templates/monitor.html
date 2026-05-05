@@ -9819,16 +9819,31 @@
             const targets = [];
 
             if (topology) {
+                // Backend resolves a {type: 'site'} target to APs + CPEs + switches,
+                // which is "all" semantics. Other scopes need explicit per-role
+                // enumeration so we don't silently include the unwanted roles.
                 for (const site of (topology.sites || [])) {
-                    if (site.id !== null && (scope === 'all' || scope === 'all_aps')) {
-                        targets.push({type: 'site', id: site.id});
-                    }
-                    if (site.id !== null && (scope === 'all' || scope === 'all_switches')) {
-                        for (const sw of (site.switches || [])) {
-                            if (sw.ip) targets.push({type: 'switch', ip: sw.ip});
+                    if (site.id !== null) {
+                        if (scope === 'all') {
+                            targets.push({type: 'site', id: site.id});
+                        } else if (scope === 'all_aps') {
+                            for (const ap of walkSiteAPs(site)) {
+                                if (ap.ip) targets.push({type: 'ap', ip: ap.ip});
+                            }
+                        } else if (scope === 'all_switches') {
+                            for (const sw of (site.switches || [])) {
+                                if (sw.ip) targets.push({type: 'switch', ip: sw.ip});
+                            }
+                        } else if (scope === 'all_cpes') {
+                            for (const ap of walkSiteAPs(site)) {
+                                for (const cpe of (ap.cpes || [])) {
+                                    if (cpe.ip) targets.push({type: 'cpe', ip: cpe.ip});
+                                }
+                            }
                         }
-                    }
-                    if (site.id === null) {
+                    } else {
+                        // Null-id site (the unassigned bucket) — backend has no
+                        // site_id to resolve, so always enumerate explicitly.
                         for (const ap of walkSiteAPs(site)) {
                             if (ap.ip && (scope === 'all' || scope === 'all_aps')) targets.push({type: 'ap', ip: ap.ip});
                             if (scope === 'all' || scope === 'all_cpes') {
@@ -9839,13 +9854,6 @@
                         }
                         for (const sw of (site.switches || [])) {
                             if (sw.ip && (scope === 'all' || scope === 'all_switches')) targets.push({type: 'switch', ip: sw.ip});
-                        }
-                    }
-                    if (scope === 'all_cpes' && site.id !== null) {
-                        for (const ap of walkSiteAPs(site)) {
-                            for (const cpe of (ap.cpes || [])) {
-                                if (cpe.ip) targets.push({type: 'cpe', ip: cpe.ip});
-                            }
                         }
                     }
                 }
