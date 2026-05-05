@@ -825,7 +825,58 @@ class NetworkPoller:
                 hardware_id = TachyonClient.MODEL_HARDWARE_IDS.get(
                     (model or "").lower(), "tn-110-prs"
                 )
-            db.save_device_config(ip, config_json, config_hash, model, hardware_id)
+
+            # Look up MAC for per-unit identity (used for auto-rebind on IP change).
+            # Falls through to None when the device's MAC hasn't been discovered yet,
+            # which simply disables rebind for this snapshot — no false matches.
+            mac = None
+            try:
+                dev_row = db.get_access_point(ip) or db.get_switch(ip)
+                if dev_row and dev_row.get("mac"):
+                    mac = dev_row["mac"]
+                else:
+                    cpe_row = db.get_cpe_by_ip(ip)
+                    if cpe_row and cpe_row.get("mac"):
+                        mac = cpe_row["mac"]
+            except Exception:
+                mac = None
+
+            # Auto-rebind: if a different IP has live snapshots with this MAC
+            # and is no longer a managed device, the device most likely changed IP
+            # (DHCP renumber, replacement). Re-link the history to this IP. MAC is
+            # a per-unit identifier so a single match is a strong identity signal.
+            # Only rebind on the first poll for this IP — ambiguous cases stay
+            # in the recycle bin for manual resolution.
+            if existing_hash is None and mac:
+                orphans = db.find_orphan_snapshots_by_mac(mac, ip)
+                if len(orphans) == 1:
+                    old_ip = orphans[0]
+                    moved = db.rebind_snapshots(old_ip, ip, mac)
+                    logger.info(
+                        f"Config poll: rebound {moved} snapshot(s) from {old_ip} → {ip} "
+                        f"(mac={mac})"
+                    )
+                    if self.broadcast_func:
+                        await self.broadcast_func({
+                            "type": "config_history_rebound",
+                            "old_ip": old_ip,
+                            "new_ip": ip,
+                            "mac": mac,
+                            "snapshots_moved": moved,
+                        })
+                    # Refresh existing_hash since rebind brought history under this IP.
+                    existing_hash = db.get_latest_config_hash(ip)
+                    if existing_hash == config_hash:
+                        logger.debug(f"Config poll: {ip} matches rebound history, skipping save")
+                        return
+                elif len(orphans) > 1:
+                    logger.warning(
+                        f"Config poll: ambiguous MAC rebind for {ip} "
+                        f"(mac={mac}) — {len(orphans)} candidate IPs: {orphans}. "
+                        f"Skipping rebind; manual reconciliation needed."
+                    )
+
+            db.save_device_config(ip, config_json, config_hash, model, hardware_id, mac)
             logger.info(f"Config poll: saved new config for {ip} (hash: {config_hash[:12]})")
 
         except Exception as e:

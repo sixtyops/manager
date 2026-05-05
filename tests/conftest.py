@@ -231,10 +231,15 @@ def memory_db():
             config_hash TEXT NOT NULL,
             model TEXT,
             hardware_id TEXT,
-            fetched_at TEXT DEFAULT CURRENT_TIMESTAMP
+            mac TEXT,
+            fetched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            deleted_at TEXT DEFAULT NULL,
+            device_label TEXT DEFAULT NULL
         );
         CREATE INDEX idx_device_configs_ip ON device_configs(ip);
         CREATE INDEX idx_device_configs_hash ON device_configs(ip, config_hash);
+        CREATE INDEX idx_device_configs_deleted ON device_configs(deleted_at);
+        CREATE INDEX idx_device_configs_mac ON device_configs(mac);
 
         CREATE TABLE config_templates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

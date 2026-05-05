@@ -2713,6 +2713,19 @@
                     </div>
                 </div>
 
+                <!-- Recycle Bin: soft-deleted snapshots from removed devices -->
+                <div class="config-section" id="cfgRecycleBinSection" style="margin-top:14px;">
+                    <div class="config-section-header" style="cursor:pointer;" onclick="toggleRecycleBinPanel();">
+                        <span>Config Snapshot Recycle Bin</span>
+                        <span class="config-section-status" id="cfgRecycleBinCount" style="margin-left:6px;"></span>
+                        <button type="button" class="cfg-save-btn" style="margin-left:auto;" onclick="loadRecycleBin();event.stopPropagation();">Refresh</button>
+                    </div>
+                    <div class="config-section-body" id="cfgRecycleBinBody" style="display:none;">
+                        <p class="u-text-xxs-dim" style="margin:0 0 6px;">When a device is removed, its config history is moved here. Restore re-links it to the original IP. Purge deletes permanently.</p>
+                        <div id="cfgRecycleBinList" style="display:flex;flex-direction:column;gap:4px;"></div>
+                    </div>
+                </div>
+
                 </div>
             </div>
 
@@ -3698,6 +3711,10 @@
                     setDisplayClass(dot, 'visible', true);
                 } else if (message.type === 'config_poll_complete') {
                     if (configLoaded) loadConfigData();
+                } else if (message.type === 'config_history_rebound') {
+                    showToast(`Config history re-linked: ${message.old_ip} → ${message.new_ip} (${message.snapshots_moved} snapshot${message.snapshots_moved === 1 ? '' : 's'})`, 'success', 5000);
+                    if (configLoaded) loadConfigData();
+                    loadRecycleBin();
                 } else if (message.type === 'config_push_update') {
                     handleConfigPushUpdate(message);
                 } else if (message.type === 'config_push_complete') {
@@ -8612,6 +8629,89 @@
 
         // ── Config Tab ──
 
+        function toggleRecycleBinPanel() {
+            const body = document.getElementById('cfgRecycleBinBody');
+            if (!body) return;
+            const willOpen = body.style.display === 'none';
+            body.style.display = willOpen ? '' : 'none';
+            if (willOpen) loadRecycleBin();
+        }
+
+        function escapeHtml(s) {
+            return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+
+        async function loadRecycleBin() {
+            const list = document.getElementById('cfgRecycleBinList');
+            const countEl = document.getElementById('cfgRecycleBinCount');
+            if (!list) return;
+            list.innerHTML = '<span class="u-text-xxs-dim">Loading…</span>';
+            try {
+                const resp = await fetch('/api/configs/recycle-bin');
+                if (!resp.ok) {
+                    list.innerHTML = '<span class="u-text-xxs-dim">Unavailable</span>';
+                    if (countEl) countEl.textContent = '';
+                    return;
+                }
+                const data = await resp.json();
+                const entries = data.entries || [];
+                if (countEl) countEl.textContent = entries.length ? `${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}` : 'empty';
+                if (!entries.length) {
+                    list.innerHTML = '<span class="u-text-xxs-dim">No deleted snapshots.</span>';
+                    return;
+                }
+                list.innerHTML = entries.map(e => {
+                    const deletedAt = e.deleted_at ? new Date(e.deleted_at).toLocaleString() : '';
+                    const label = escapeHtml(e.device_label || e.ip);
+                    const ip = escapeHtml(e.ip);
+                    return `<div style="display:flex;align-items:center;gap:8px;border:1px solid var(--border-light);border-radius:4px;padding:6px 8px;">
+                        <div style="flex:1;min-width:0;">
+                            <div style="font-weight:500;font-size:var(--text-sm);">${label}</div>
+                            <div class="u-text-xxs-dim">${ip} · ${e.snapshot_count} snapshot(s) · deleted ${escapeHtml(deletedAt)}</div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="restoreRecycleBinEntry('${ip}')">Restore</button>
+                        <button type="button" class="btn btn-sm btn-warning" onclick="purgeRecycleBinEntry('${ip}')">Purge</button>
+                    </div>`;
+                }).join('');
+            } catch (e) {
+                list.innerHTML = `<span class="u-text-xxs-dim">Error: ${escapeHtml(e.message)}</span>`;
+            }
+        }
+
+        async function restoreRecycleBinEntry(ip) {
+            if (!confirm(`Restore config snapshots for ${ip}? They'll re-appear in the device's history.`)) return;
+            try {
+                const resp = await fetch(`/api/configs/recycle-bin/${encodeURIComponent(ip)}/restore`, {method: 'POST'});
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast(`Restore failed: ${err.detail || resp.status}`, 'error', 5000);
+                    return;
+                }
+                const data = await resp.json();
+                showToast(`Restored ${data.snapshots_restored} snapshot(s) for ${ip}`, 'success', 4000);
+                loadRecycleBin();
+            } catch (e) {
+                showToast(`Restore error: ${e.message}`, 'error', 5000);
+            }
+        }
+
+        async function purgeRecycleBinEntry(ip) {
+            if (!confirm(`PERMANENTLY delete all snapshots for ${ip}? This cannot be undone.`)) return;
+            try {
+                const resp = await fetch(`/api/configs/recycle-bin/${encodeURIComponent(ip)}`, {method: 'DELETE'});
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast(`Purge failed: ${err.detail || resp.status}`, 'error', 5000);
+                    return;
+                }
+                const data = await resp.json();
+                showToast(`Purged ${data.snapshots_purged} snapshot(s) for ${ip}`, 'success', 4000);
+                loadRecycleBin();
+            } catch (e) {
+                showToast(`Purge error: ${e.message}`, 'error', 5000);
+            }
+        }
+
         async function loadConfigData() {
             try {
                 const [compResp, cfgResp, tplResp, rolloutResp] = await Promise.all([
@@ -8643,6 +8743,7 @@
                 loadEnforceStatus();
                 loadEnforceLog();
                 populateScopeSelector();
+                loadRecycleBin();
             } catch (e) {
                 console.error('Failed to load config data:', e);
             }
