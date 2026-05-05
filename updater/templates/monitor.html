@@ -5306,8 +5306,11 @@
             } else if (type === 'site') {
                 const site = findSite(id === 'null' ? null : parseInt(id));
                 if (site) {
-                    const apCount = (site.aps || []).length;
-                    const cpeCount = (site.aps || []).reduce((s, ap) => s + (ap.cpes || []).length, 0);
+                    let apCount = 0, cpeCount = 0;
+                    for (const ap of walkSiteAPs(site)) {
+                        apCount++;
+                        cpeCount += (ap.cpes || []).length;
+                    }
                     targetName = site.name;
                     targetDetail = ` (${apCount} AP${apCount !== 1 ? 's' : ''}, ${cpeCount} CPE${cpeCount !== 1 ? 's' : ''})`;
                 }
@@ -5330,7 +5333,7 @@
                 updatingDevices.add(id);
             } else if (type === 'site') {
                 const site = findSite(id === 'null' ? null : parseInt(id));
-                if (site) (site.aps || []).forEach(ap => updatingDevices.add(ap.ip));
+                if (site) for (const ap of walkSiteAPs(site)) updatingDevices.add(ap.ip);
             }
             renderTable();
 
@@ -5383,7 +5386,7 @@
             } else if (type === 'site') {
                 const site = findSite(id === 'null' ? null : parseInt(id));
                 if (!site) { showToast('Site not found'); return; }
-                const ips = (site.aps || []).map(ap => ap.ip).join('\n');
+                const ips = [...walkSiteAPs(site)].map(ap => ap.ip).join('\n');
                 if (!ips) { showToast('No APs in this site'); return; }
                 try {
                     const formData = new FormData();
@@ -9779,8 +9782,8 @@
             if (topology) {
                 for (const site of (topology.sites || [])) {
                     if (previewIp) break;
-                    if ((scope === 'all' || scope === 'all_aps') && site.access_points) {
-                        for (const ap of site.access_points) { if (ap.ip) { previewIp = ap.ip; break; } }
+                    if (scope === 'all' || scope === 'all_aps') {
+                        for (const ap of walkSiteAPs(site)) { if (ap.ip) { previewIp = ap.ip; break; } }
                     }
                     if (!previewIp && (scope === 'all' || scope === 'all_switches') && site.switches) {
                         for (const sw of site.switches) { if (sw.ip) { previewIp = sw.ip; break; } }
@@ -9826,7 +9829,7 @@
                         }
                     }
                     if (site.id === null) {
-                        for (const ap of (site.aps || [])) {
+                        for (const ap of walkSiteAPs(site)) {
                             if (ap.ip && (scope === 'all' || scope === 'all_aps')) targets.push({type: 'ap', ip: ap.ip});
                             if (scope === 'all' || scope === 'all_cpes') {
                                 for (const cpe of (ap.cpes || [])) {
@@ -9839,7 +9842,7 @@
                         }
                     }
                     if (scope === 'all_cpes' && site.id !== null) {
-                        for (const ap of (site.aps || [])) {
+                        for (const ap of walkSiteAPs(site)) {
                             for (const cpe of (ap.cpes || [])) {
                                 if (cpe.ip) targets.push({type: 'cpe', ip: cpe.ip});
                             }
@@ -9901,26 +9904,25 @@
             if (!ips.length) { showToast('No devices selected'); return; }
             const enabled = configTemplates.filter(t => t.enabled);
             if (!enabled.length) { showToast('No config policies enabled.'); return; }
-            if (!await showConfirmDialog(`Push config policies to ${ips.length} selected device(s)?`, {
+
+            const targets = [];
+            const unknown = [];
+            for (const ip of ips) {
+                if (findAP(ip)) { targets.push({type: 'ap', ip}); continue; }
+                if (findCPE(ip)) { targets.push({type: 'cpe', ip}); continue; }
+                if (findSwitch(ip)) { targets.push({type: 'switch', ip}); continue; }
+                unknown.push(ip);
+            }
+            if (unknown.length) {
+                showToast(`Skipping ${unknown.length} unknown device(s): ${unknown.join(', ')}`);
+            }
+            if (!targets.length) { showToast('No known devices to push to'); return; }
+
+            if (!await showConfirmDialog(`Push config policies to ${targets.length} selected device(s)?`, {
                 title: 'Push Configuration',
                 confirmText: 'Push',
                 danger: true,
             })) return;
-            const targets = ips.map(ip => {
-                // Determine device type
-                if (findAP(ip)) return {type: 'ap', ip};
-                for (const site of (topology?.sites || [])) {
-                    for (const sw of (site.switches || [])) {
-                        if (sw.ip === ip) return {type: 'switch', ip};
-                    }
-                    for (const ap of (site.aps || [])) {
-                        for (const cpe of (ap.cpes || [])) {
-                            if (cpe.ip === ip) return {type: 'cpe', ip};
-                        }
-                    }
-                }
-                return {type: 'ap', ip};
-            });
             const templateIds = enabled.map(t => t.id);
             try {
                 const resp = await fetch('/api/config-push', {
