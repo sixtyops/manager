@@ -34,6 +34,7 @@ All notable changes to this project are documented in this file.
 - Topology index (`rebuildTopologyIndex`) skipped APs and CPEs nested under managed switches, so `findAP`/`findCPE` returned null for those rows — broke "Edit notes", AP/CPE checkbox selection, and chart point highlight for switch-nested devices
 - Site-wide iterators (Config tab badge, model/firmware filter dropdowns, "X Devices / Y Compliant" bar, site/all checkbox toggles + indeterminate state, CPE preservation across polls) walked only `site.aps[]` and undercounted or skipped switch-nested APs/CPEs; now traverse both branches via a shared `walkSiteAPs` helper, so site-row checkboxes also toggle every nested device row
 - "Update site" firmware action and the config-push paths (rollout target builder, preview device picker — which also had a `site.access_points` typo — and "Push to selected") missed APs and CPEs nested under managed switches; switch-nested devices now flash with their site, count toward the confirmation summary, and resolve correctly for config push. "Push to selected" now drops unknown IPs with a toast instead of silently sending them as `type: 'ap'`
+- Config-push rollout `all_aps` scope was sending `{type: 'site', id}` per site, which the backend resolves to APs + CPEs + switches — so picking "all APs" silently pushed to CPEs and switches too. The rollout target builder now enumerates per role for `all_aps`/`all_switches`/`all_cpes` (matching the existing pattern for the unassigned-site bucket) and only uses the site shortcut for `all` scope
 
 ## 1.3.0 - 2026-04-08
 
