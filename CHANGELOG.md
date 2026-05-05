@@ -45,6 +45,7 @@ All notable changes to this project are documented in this file.
 - Time-source drift validation samples the system clock after the external HTTP response so request latency cannot register as drift
 - Stale job-completion events post-restart are now logged and reconciled if the active rollout still tracks the job_id, instead of silent drop
 - Pre-rollback safety snapshot is now mandatory: if `/api/config-push/rollback/{ip}` can't capture the current config (device unreachable for fetch, empty response), the rollback is refused with HTTP 409 instead of proceeding silently. Operators can override with `force=true` in the request body, which logs a warning and writes a `config.rollback.force` audit-log entry. The response now includes `safety_snapshot_saved`, and the UI re-prompts the operator before forcing
+- Deleting a device now also purges its rows in `config_enforce_log`, `device_update_history`, and `device_uptime_events`. Previously these audit/history tables accumulated orphaned rows keyed by stale IPs, and reusing an IP for a different device blended the histories. New `scripts/cleanup_orphaned_device_data.py` (with `--dry-run`) cleans up rows that orphaned before this fix shipped. `device_configs` is intentionally still soft-deleted via the recycle bin
 
 ## 1.3.0 - 2026-04-08
 

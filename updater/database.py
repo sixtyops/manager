@@ -1237,6 +1237,11 @@ def delete_device(ip: str):
     so the operator can recover history if a device is re-added. When an AP
     is deleted, snapshots for any CPEs underneath it are also moved to the
     recycle bin keyed by their own IPs and labeled with the CPE's system_name.
+
+    Audit/history rows in `config_enforce_log`, `device_update_history`, and
+    `device_uptime_events` are hard-deleted alongside the device — they're
+    keyed by IP, so leaving them behind blends history with whatever device
+    later reuses the IP.
     """
     now = datetime.now().isoformat()
     with get_db() as db:
@@ -1262,6 +1267,23 @@ def delete_device(ip: str):
                   SET deleted_at = ?, device_label = ?
                 WHERE ip = ? AND deleted_at IS NULL""",
             (now, label, ip),
+        )
+        # Hard-delete audit/history rows for the deleted IP (and any CPEs that
+        # rode along when an AP is removed) so they don't leak into a future
+        # device that reuses the same IP.
+        ips_to_purge = [ip] + [cpe["ip"] for cpe in cpe_rows]
+        placeholders = ",".join("?" * len(ips_to_purge))
+        db.execute(
+            f"DELETE FROM config_enforce_log WHERE ip IN ({placeholders})",
+            ips_to_purge,
+        )
+        db.execute(
+            f"DELETE FROM device_update_history WHERE ip IN ({placeholders})",
+            ips_to_purge,
+        )
+        db.execute(
+            f"DELETE FROM device_uptime_events WHERE ip IN ({placeholders})",
+            ips_to_purge,
         )
         for cpe in cpe_rows:
             cpe_label = cpe.get("system_name") or cpe["ip"]
