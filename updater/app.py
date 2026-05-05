@@ -5934,6 +5934,17 @@ async def download_config_tar(ip: str, config_id: int, session: dict = Depends(r
 
     hardware_id = config.get("hardware_id") or "tn-110-prs"
 
+    # CONTROL is now a key=value manifest so an importer can verify integrity
+    # before applying. Fields are newline-delimited; hardware_id stays first
+    # so any tool reading just the first line still gets the right value.
+    control_lines = [
+        f"hardware_id={hardware_id}",
+        f"fetched_at={config.get('fetched_at') or ''}",
+        f"config_hash={config.get('config_hash') or ''}",
+        f"manager_version={__version__}",
+    ]
+    control_text = "\n".join(control_lines) + "\n"
+
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
         # Add config.json
@@ -5943,7 +5954,7 @@ async def download_config_tar(ip: str, config_id: int, session: dict = Depends(r
         tar.addfile(json_info, io.BytesIO(json_bytes))
 
         # Add CONTROL
-        control_bytes = hardware_id.encode("utf-8")
+        control_bytes = control_text.encode("utf-8")
         control_info = tarfile.TarInfo(name="CONTROL")
         control_info.size = len(control_bytes)
         tar.addfile(control_info, io.BytesIO(control_bytes))
