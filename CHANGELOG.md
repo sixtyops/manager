@@ -35,6 +35,14 @@ All notable changes to this project are documented in this file.
 - Site-wide iterators (Config tab badge, model/firmware filter dropdowns, "X Devices / Y Compliant" bar, site/all checkbox toggles + indeterminate state, CPE preservation across polls) walked only `site.aps[]` and undercounted or skipped switch-nested APs/CPEs; now traverse both branches via a shared `walkSiteAPs` helper, so site-row checkboxes also toggle every nested device row
 - "Update site" firmware action and the config-push paths (rollout target builder, preview device picker — which also had a `site.access_points` typo — and "Push to selected") missed APs and CPEs nested under managed switches; switch-nested devices now flash with their site, count toward the confirmation summary, and resolve correctly for config push. "Push to selected" now drops unknown IPs with a toast instead of silently sending them as `type: 'ap'`
 - Config-push rollout `all_aps` scope was sending `{type: 'site', id}` per site, which the backend resolves to APs + CPEs + switches — so picking "all APs" silently pushed to CPEs and switches too. The rollout target builder now enumerates per role for `all_aps`/`all_switches`/`all_cpes` (matching the existing pattern for the unassigned-site bucket) and only uses the site shortcut for `all` scope
+- Crashed scheduled jobs no longer leave the rollout stuck "active" — `_finalize_crashed_job` was passing `learned_version=` instead of `learned_versions=`, so the scheduler call raised `TypeError` and the rollout never progressed
+- Per-device window cutoff was off-by-one: at exactly `end_hour` the deferral fell into the overnight branch and computed ~24 hours remaining, so devices kept updating past the window
+- Freeze windows configured with a date-only `end_date` (e.g., "2026-05-05") now cover the entire end-day inclusively; previously the lexical string compare excluded the entire end-day
+- Scheduler now recovers orphaned active rollouts after a restart: pending devices whose update job died with the previous process are flipped to `deferred` so they retry next window instead of being silently skipped
+- `_ran_today` startup recovery uses the configured timezone for the date key, preventing a same-day double-run when the container's system TZ differs from the configured TZ
+- `trigger_canary_now` no longer raises `ValueError` when settings like `parallel_updates` or `min_temperature_c` are malformed; uses the safe `_as_int` / `_as_float` helpers
+- Time-source drift validation samples the system clock after the external HTTP response so request latency cannot register as drift
+- Stale job-completion events post-restart are now logged and reconciled if the active rollout still tracks the job_id, instead of silent drop
 
 ## 1.3.0 - 2026-04-08
 

@@ -406,6 +406,190 @@ class TestSchedulerCanaries:
         app_module.update_jobs.pop(job_id, None)
 
 
+class TestSchedulerStartupRecovery:
+    def test_orphaned_active_rollout_devices_marked_deferred(self, mock_db):
+        """An active rollout whose update job died with the previous process
+        should have its pending devices flipped to ``deferred`` and its
+        ``last_job_id`` cleared so the next window can start fresh."""
+        rollout_id = db.create_rollout("firmware.bin")
+        db.assign_device_to_rollout(rollout_id, "10.0.0.10", "ap", "canary")
+        db.assign_device_to_rollout(rollout_id, "10.0.0.11", "ap", "canary")
+        db.set_rollout_job_id(rollout_id, "orphan-job-1")
+        db.log_schedule_event("job_started", "stale", job_id="orphan-job-1")
+
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        scheduler._recover_orphaned_rollouts()
+
+        rollout = db.get_rollout(rollout_id)
+        assert rollout["last_job_id"] is None
+        statuses = {d["ip"]: d["status"] for d in db.get_rollout_devices(rollout_id)}
+        assert statuses == {"10.0.0.10": "deferred", "10.0.0.11": "deferred"}
+
+    def test_completed_rollout_not_touched_by_recovery(self, mock_db):
+        """A non-active rollout must not be modified by orphan recovery."""
+        rollout_id = db.create_rollout("firmware.bin")
+        db.assign_device_to_rollout(rollout_id, "10.0.0.10", "ap", "canary")
+        db.set_rollout_job_id(rollout_id, "old-job")
+        with db.get_db() as conn:
+            conn.execute("UPDATE rollouts SET status = 'completed' WHERE id = ?", (rollout_id,))
+
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        scheduler._recover_orphaned_rollouts()
+
+        rollout = db.get_rollout(rollout_id)
+        assert rollout["last_job_id"] == "old-job"
+        assert db.get_rollout_devices(rollout_id)[0]["status"] == "pending"
+
+    def test_active_rollout_with_completion_event_not_touched(self, mock_db):
+        """An active rollout whose job already logged a completion event is
+        not orphaned."""
+        rollout_id = db.create_rollout("firmware.bin")
+        db.assign_device_to_rollout(rollout_id, "10.0.0.10", "ap", "canary")
+        db.set_rollout_job_id(rollout_id, "completed-job")
+        db.log_schedule_event("job_completed", "ok", job_id="completed-job")
+
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        scheduler._recover_orphaned_rollouts()
+
+        rollout = db.get_rollout(rollout_id)
+        assert rollout["last_job_id"] == "completed-job"
+
+    def test_ran_today_recovery_uses_configured_timezone_key(self, mock_db):
+        """The recovered ``today_key`` must be the date in the configured
+        timezone, so it lines up with the runtime check (regression for
+        P0-4)."""
+        from datetime import datetime as dt
+        from zoneinfo import ZoneInfo
+
+        db.set_settings({"timezone": "America/Chicago"})
+        db.log_schedule_event("job_started", "recent", job_id="job-1")
+
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        scheduler._recover_ran_today()
+
+        assert len(scheduler._ran_today) == 1
+        recovered_key = next(iter(scheduler._ran_today))
+        expected_key = dt.now(ZoneInfo("America/Chicago")).strftime("%Y-%m-%d")
+        assert recovered_key == expected_key
+
+
+class TestTriggerCanarySettingsSafety:
+    @pytest.mark.asyncio
+    async def test_malformed_settings_do_not_crash_canary(self, mock_db, monkeypatch):
+        """Manual canary must not raise on malformed numeric settings."""
+        _seed_rollout_devices()
+        db.set_settings({
+            "schedule_enabled": "true",
+            "timezone": "America/Chicago",
+            "selected_firmware_30x": "firmware.bin",
+            "weather_check_enabled": "false",
+            "parallel_updates": "auto",
+            "min_temperature_c": "",
+            "firmware_quarantine_days": "",
+            "schedule_end_hour": "not-a-number",
+            "rollout_canary_aps": "10.0.0.11",
+        })
+
+        start_update = AsyncMock(return_value="job-canary-safe")
+        scheduler = AutoUpdateScheduler(AsyncMock(), start_update)
+
+        monkeypatch.setattr(
+            "updater.scheduler.services.validate_time_sources",
+            AsyncMock(return_value=(True, datetime(2026, 3, 5, 13, 0, 0))),
+        )
+
+        await scheduler.trigger_canary_now()
+        start_update.assert_awaited_once()
+
+
+class TestOnJobCompletedReconciliation:
+    def test_stale_completion_for_active_rollout_reconciles(self, mock_db):
+        """After a restart, a completion event whose job_id is still tracked
+        on an active rollout should be reconciled, not silently dropped
+        (regression for P1-8)."""
+        rollout_id = db.create_rollout("firmware.bin")
+        db.assign_device_to_rollout(rollout_id, "10.0.0.10", "ap", "canary")
+        db.set_rollout_job_id(rollout_id, "stale-job-1")
+
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        # _current_job_id is None — simulating post-restart state
+
+        def _discard_task(coro):
+            coro.close()
+            class _DummyTask:
+                def add_done_callback(self, _cb):
+                    return None
+            return _DummyTask()
+
+        with patch("updater.scheduler.asyncio.create_task", _discard_task):
+            scheduler.on_job_completed(
+                "stale-job-1",
+                1,
+                0,
+                device_statuses={"10.0.0.10": "success"},
+            )
+
+        device = db.get_rollout_devices(rollout_id)[0]
+        assert device["status"] == "updated"
+
+    def test_truly_stale_completion_dropped(self, mock_db):
+        """A completion for a job_id that no longer matches any active
+        rollout is silently discarded with a warning (no DB writes)."""
+        rollout_id = db.create_rollout("firmware.bin")
+        db.assign_device_to_rollout(rollout_id, "10.0.0.10", "ap", "canary")
+        db.set_rollout_job_id(rollout_id, "different-job")
+
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        scheduler.on_job_completed(
+            "ghost-job",
+            1,
+            0,
+            device_statuses={"10.0.0.10": "success"},
+        )
+
+        device = db.get_rollout_devices(rollout_id)[0]
+        assert device["status"] == "pending"
+
+
+class TestFinalizeCrashedJobRegression:
+    """Regression for P0-1: _finalize_crashed_job must call
+    scheduler.on_job_completed with the correct keyword name
+    (``learned_versions``, plural)."""
+
+    @pytest.mark.asyncio
+    async def test_does_not_typeerror_on_scheduler_call(self, mock_db, monkeypatch):
+        from datetime import datetime as dt
+
+        job = app_module.UpdateJob(
+            job_id="crash-test-1",
+            started_at=dt.now(),
+            is_scheduled=True,
+            schedule_timezone="America/Chicago",
+        )
+        job.devices["10.0.0.10"] = app_module.DeviceStatus(ip="10.0.0.10", role="ap")
+
+        recorded = {}
+
+        class _StubScheduler:
+            def on_job_completed(self_inner, *args, **kwargs):
+                recorded["args"] = args
+                recorded["kwargs"] = kwargs
+
+        monkeypatch.setattr(app_module, "get_scheduler", lambda: _StubScheduler())
+        monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+        monkeypatch.setattr(
+            "updater.app.services.get_timezone",
+            AsyncMock(return_value="America/Chicago"),
+        )
+
+        await app_module._finalize_crashed_job(job, RuntimeError("simulated crash"))
+
+        assert "kwargs" in recorded, "scheduler.on_job_completed was not invoked"
+        kwargs = recorded["kwargs"]
+        assert "learned_versions" in kwargs
+        assert "learned_version" not in kwargs
+
+
 class TestSchedulerCooldown:
     def test_device_skips_during_cooldown(self):
         from updater.scheduler import _device_needs_update

@@ -6,9 +6,12 @@ import json
 
 import pytest
 
+from datetime import datetime
+
 from updater.services import (
     get_current_time,
     is_in_schedule_window,
+    minutes_until_window_end,
     c_to_f,
     f_to_c,
     format_temperature,
@@ -111,6 +114,37 @@ class TestIsInScheduleWindow:
         assert is_in_schedule_window(3, "tue", [], 3, 4) is False
 
 
+class TestMinutesUntilWindowEnd:
+    def test_same_day_window_inside(self):
+        now = datetime(2026, 5, 5, 3, 30)
+        assert minutes_until_window_end(now, 3, 4) == 30
+
+    def test_same_day_window_at_end_hour(self):
+        """At exactly end_hour, minutes should be <= 0 so per-device cutoff defers."""
+        now = datetime(2026, 5, 5, 4, 0)
+        assert minutes_until_window_end(now, 3, 4) <= 0
+
+    def test_same_day_window_past_end(self):
+        now = datetime(2026, 5, 5, 5, 30)
+        assert minutes_until_window_end(now, 3, 4) < 0
+
+    def test_overnight_window_evening(self):
+        now = datetime(2026, 5, 5, 22, 30)
+        assert minutes_until_window_end(now, 20, 4) == 5 * 60 + 30
+
+    def test_overnight_window_morning(self):
+        now = datetime(2026, 5, 5, 1, 30)
+        assert minutes_until_window_end(now, 20, 4) == 2 * 60 + 30
+
+    def test_overnight_window_at_morning_end(self):
+        now = datetime(2026, 5, 5, 4, 0)
+        assert minutes_until_window_end(now, 20, 4) <= 0
+
+    def test_overnight_window_past_morning_end(self):
+        now = datetime(2026, 5, 5, 5, 30)
+        assert minutes_until_window_end(now, 20, 4) < 0
+
+
 class TestValidateTimeSources:
     @pytest.mark.asyncio
     async def test_external_time_unavailable_blocks(self):
@@ -118,6 +152,39 @@ class TestValidateTimeSources:
             ok, result = await validate_time_sources("America/Chicago")
         assert ok is False
         assert "verify trusted time source" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_drift_uses_post_request_clock_sample(self, monkeypatch):
+        """system_now must be sampled after the external response so that
+        request latency does not register as drift (regression for P1-7)."""
+
+        external_time = datetime(2026, 5, 5, 12, 0, 0)
+        sample_calls = []
+
+        from updater import services as svc
+
+        async def fake_get_external_time(tz):
+            await asyncio.sleep(0)
+            return external_time
+
+        real_now = svc.datetime.now
+
+        class _DT(svc.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                sample_calls.append("now")
+                return external_time.replace(tzinfo=tz) if tz else external_time
+
+        monkeypatch.setattr(svc, "get_external_time", fake_get_external_time)
+        monkeypatch.setattr(svc, "datetime", _DT)
+
+        ok, result = await svc.validate_time_sources("America/Chicago", max_drift=300)
+
+        # Should have called datetime.now exactly once (after external fetch).
+        assert sample_calls == ["now"]
+        assert ok is True
+        # Sanity: real_now still callable, no leak
+        assert real_now() is not None
 
 
 class TestGetLocationFromIP:

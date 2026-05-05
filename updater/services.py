@@ -353,6 +353,23 @@ def is_in_schedule_window(
             return False
 
 
+def minutes_until_window_end(now: datetime, start_hour: int, end_hour: int) -> int:
+    """Compute minutes remaining in the active schedule window.
+
+    Returns 0 or a negative value if `now` is at or past the window end.
+    Callers can compare against a buffer to decide whether to defer work.
+    """
+    if start_hour < end_hour:
+        # Same-day window (e.g., 03:00-04:00). Negative when past end_hour.
+        return (end_hour - now.hour) * 60 - now.minute
+    # Overnight window (e.g., 20:00-04:00).
+    if now.hour >= start_hour:
+        # Evening portion: end is tomorrow morning.
+        return (24 - now.hour + end_hour) * 60 - now.minute
+    # Morning portion (or past it). Negative when past end_hour.
+    return (end_hour - now.hour) * 60 - now.minute
+
+
 async def get_external_time(timezone: str) -> Optional[datetime]:
     """Fetch current time from an external API.
 
@@ -394,9 +411,10 @@ async def validate_time_sources(timezone: str, max_drift: int = 300) -> Tuple[bo
     except Exception:
         tz = ZoneInfo("America/Chicago")
 
-    system_now = datetime.now(tz)
-
     external_now = await get_external_time(timezone)
+    # Sample the system clock after the external response so the comparison
+    # reflects the actual offset, not the request latency.
+    system_now = datetime.now(tz)
     if external_now is None:
         return (False, "Unable to verify trusted time source")
 

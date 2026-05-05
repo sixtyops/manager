@@ -159,25 +159,111 @@ class AutoUpdateScheduler:
         """Start the scheduler check loop."""
         if self._running:
             return
-        # Recover _ran_today from DB to prevent double-run after restart
-        today_key = datetime.now().strftime("%Y-%m-%d")
+        self._recover_ran_today()
+        self._recover_orphaned_rollouts()
+        self._running = True
+        self._task = asyncio.create_task(self._check_loop())
+        logger.info(f"Auto-update scheduler started (interval: {self.check_interval}s)")
+        # Fetch weather eagerly so the header shows temperature immediately
+        asyncio.create_task(self._fetch_weather_initial())
+
+    def _recover_ran_today(self):
+        """Recover the per-day run guard so a restart doesn't trigger a second job.
+
+        The schedule_log timestamp column is naive container-local time, so
+        `_ran_today` is keyed by the configured timezone's calendar date and
+        we look back 23 hours instead of relying on a DATE() match across
+        differing zones.
+        """
+        settings = db.get_all_settings()
+        tz_str = settings.get("timezone", "auto")
+        try:
+            from zoneinfo import ZoneInfo
+            if tz_str == "auto":
+                tz = datetime.now().astimezone().tzinfo
+            else:
+                tz = ZoneInfo(tz_str)
+        except Exception:
+            tz = datetime.now().astimezone().tzinfo
+        today_key = datetime.now(tz).strftime("%Y-%m-%d")
+
+        cutoff = (datetime.now() - timedelta(hours=23)).isoformat()
         try:
             with db.get_db() as conn:
                 row = conn.execute(
                     "SELECT 1 FROM schedule_log WHERE event = 'job_started' "
-                    "AND DATE(timestamp) = ? LIMIT 1",
-                    (today_key,),
+                    "AND timestamp >= ? LIMIT 1",
+                    (cutoff,),
                 ).fetchone()
                 if row:
                     self._ran_today.add(today_key)
                     logger.info(f"Scheduler: recovered _ran_today for {today_key} from DB")
         except Exception as e:
             logger.warning(f"Scheduler: failed to recover _ran_today: {e}")
-        self._running = True
-        self._task = asyncio.create_task(self._check_loop())
-        logger.info(f"Auto-update scheduler started (interval: {self.check_interval}s)")
-        # Fetch weather eagerly so the header shows temperature immediately
-        asyncio.create_task(self._fetch_weather_initial())
+
+    def _recover_orphaned_rollouts(self):
+        """Reconcile rollouts whose update job died with the previous process.
+
+        An active rollout with `last_job_id` set but no completion event for
+        that job is orphaned — the async update task did not survive the
+        restart. Flip its pending devices to `deferred` so they retry next
+        window, and clear `last_job_id` so the next window starts a fresh
+        job.
+        """
+        completion_events = (
+            "job_completed",
+            "job_completed_with_failures",
+            "rollout_paused",
+            "rollout_completed",
+            "rollout_cancelled",
+            "job_deferred",
+            "phase_completed",
+            "phase_deferred",
+        )
+        placeholders = ",".join("?" for _ in completion_events)
+        recovered = []
+        try:
+            with db.get_db() as conn:
+                rollouts = conn.execute(
+                    "SELECT id, last_job_id FROM rollouts "
+                    "WHERE status = 'active' AND last_job_id IS NOT NULL"
+                ).fetchall()
+                for row in rollouts:
+                    rollout_id = row["id"]
+                    job_id = row["last_job_id"]
+                    completion = conn.execute(
+                        f"SELECT 1 FROM schedule_log WHERE job_id = ? "
+                        f"AND event IN ({placeholders}) LIMIT 1",
+                        (job_id, *completion_events),
+                    ).fetchone()
+                    if completion:
+                        continue
+                    now_iso = datetime.now().isoformat()
+                    cur = conn.execute(
+                        "UPDATE rollout_devices SET status = 'deferred', updated_at = ? "
+                        "WHERE rollout_id = ? AND status = 'pending'",
+                        (now_iso, rollout_id),
+                    )
+                    affected = cur.rowcount
+                    conn.execute(
+                        "UPDATE rollouts SET last_job_id = NULL, updated_at = ? WHERE id = ?",
+                        (now_iso, rollout_id),
+                    )
+                    recovered.append((rollout_id, job_id, affected))
+        except Exception as e:
+            logger.warning(f"Scheduler: orphaned rollout recovery failed: {e}")
+            return
+
+        for rollout_id, job_id, affected in recovered:
+            db.log_schedule_event(
+                "startup_recovery",
+                f"Rollout {rollout_id}: orphaned job {job_id}, {affected} device(s) deferred",
+                job_id=job_id,
+            )
+            logger.warning(
+                f"Scheduler: recovered orphaned rollout {rollout_id} (job {job_id}); "
+                f"{affected} pending device(s) marked deferred"
+            )
 
     async def _fetch_weather_initial(self):
         """Fetch weather on startup so the UI shows temperature immediately."""
@@ -349,10 +435,7 @@ class AutoUpdateScheduler:
                 return
             logger.info(f"Continuing active rollout {active_rollout['id']} (phase {active_rollout['phase']})")
 
-        if end_hour > current_hour:
-            minutes_until_end = (end_hour - current_hour) * 60 - now.minute
-        else:
-            minutes_until_end = (24 - current_hour + end_hour) * 60 - now.minute
+        minutes_until_end = services.minutes_until_window_end(now, start_hour, end_hour)
         if minutes_until_end <= SCHEDULE_END_BUFFER_MINUTES:
             self._state = "waiting"
             self._block_reason = "Too close to maintenance window end"
@@ -560,7 +643,7 @@ class AutoUpdateScheduler:
             today_key = now.strftime("%Y-%m-%d")
             if self._weather_checked_today != today_key:
                 zip_code = settings.get("zip_code", "")
-                min_temp_c = float(settings.get("min_temperature_c", "-10"))
+                min_temp_c = _as_float(settings.get("min_temperature_c", "-10"), -10.0)
                 weather_ok, weather_data = await services.check_weather_ok(
                     zip_code if zip_code else None, min_temp_c
                 )
@@ -571,7 +654,7 @@ class AutoUpdateScheduler:
                 weather_ok = self._weather_ok
             if not weather_ok:
                 temp_c = self._weather_info.get("temperature_c") if self._weather_info else None
-                min_temp_c = float(settings.get("min_temperature_c", "-10"))
+                min_temp_c = _as_float(settings.get("min_temperature_c", "-10"), -10.0)
                 temp_unit = await services.resolve_temperature_unit(settings.get("temperature_unit", "auto"))
                 temp_str = format_temperature(temp_c, temp_unit) if temp_c is not None else "?"
                 min_temp_str = format_temperature(min_temp_c, temp_unit)
@@ -584,7 +667,7 @@ class AutoUpdateScheduler:
         fw_tns100 = settings.get("selected_firmware_tns100", "")
         allow_downgrade = settings.get("allow_downgrade", "false") == "true"
 
-        hold_days = int(settings.get("firmware_quarantine_days", "7"))
+        hold_days = _as_int(settings.get("firmware_quarantine_days", "7"), 7)
         if hold_days > 0:
             for fw_name in (fw_30x, fw_303l, fw_tns100):
                 if not fw_name:
@@ -642,8 +725,8 @@ class AutoUpdateScheduler:
         await self._broadcast_status()
 
         bank_mode = settings.get("bank_mode", "both")
-        concurrency = int(settings.get("parallel_updates", "2"))
-        end_hour = int(settings.get("schedule_end_hour", "4"))
+        concurrency = _as_int(settings.get("parallel_updates", "2"), 2)
+        end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
         try:
             job_id = await self.start_update_func(
                 ap_ips=batch_ips,
@@ -864,9 +947,24 @@ class AutoUpdateScheduler:
     ):
         """Called when a scheduled job finishes."""
         if self._current_job_id != job_id:
-            return
+            # Stale completion (typically a job that started in a previous
+            # process). Only reconcile if the DB still tracks this job_id on
+            # an active rollout — otherwise drop with a log line.
+            active_rollout = db.get_active_rollout()
+            if not (active_rollout and active_rollout.get("last_job_id") == job_id):
+                logger.warning(
+                    f"Scheduler: ignoring stale completion for job {job_id} "
+                    f"(current_job_id={self._current_job_id})"
+                )
+                return
+            logger.warning(
+                f"Scheduler: reconciling stale completion for job {job_id} "
+                f"(current_job_id={self._current_job_id}, "
+                f"matches active rollout {active_rollout['id']})"
+            )
+        else:
+            self._current_job_id = None
 
-        self._current_job_id = None
         self._last_run_time = datetime.now().isoformat()
         manual_canary = job_id in self._manual_canary_job_ids
         if manual_canary:
@@ -961,9 +1059,16 @@ class AutoUpdateScheduler:
                 self._last_run_result = f"Success ({success_count} devices)"
                 db.log_schedule_event("job_completed", f"success={success_count}", job_id=job_id)
 
-        if manual_canary and failed_count == 0 and rollout and rollout.get("status") == "active":
-            self._state = "idle"
-            self._block_reason = "Canary complete; next phase waits for the maintenance window"
+        if manual_canary and failed_count == 0:
+            if rollout and rollout.get("status") == "paused":
+                self._state = "waiting"
+                self._block_reason = rollout.get("pause_reason")
+            elif rollout and rollout.get("status") == "active":
+                self._state = "idle"
+                self._block_reason = "Canary complete; next phase waits for the maintenance window"
+            else:
+                self._state = "idle"
+                self._block_reason = "Canary complete"
         else:
             self._state = "waiting"
             self._block_reason = rollout.get("pause_reason") if rollout and rollout.get("status") == "paused" else "Already ran today"
