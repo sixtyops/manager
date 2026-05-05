@@ -15,6 +15,7 @@ All notable changes to this project are documented in this file.
 - Last-admin / self-delete guards on the Local Users table (disabled button + tooltip)
 
 ### Changed
+- Manual config push (`/api/config-push` and `/api/config-push/preview`, including phased rollouts) now honors each template's `device_types` filter — an AP-only template targeted at a switch is reported as "skipped" in preview and silently bypassed at apply, instead of being merged into a config it doesn't belong in. The push job and rollout state expose a new `skipped` counter alongside `success`/`failed`.
 - Bridge/FDB table polled from Tachyon switches on each poll cycle to maintain AP-to-port mapping
 - Chassis connector replaced with inline `eth[n]` port badge on nested AP rows (cleaner, no orphaned line art)
 - System > Updates panel normalized into a label/control grid; RADIUS Server stat cards removed; RADIUS Clients & Logs rewritten for clarity; About panel redesigned with inline version chip

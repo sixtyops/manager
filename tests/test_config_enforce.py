@@ -8,6 +8,7 @@ from unittest.mock import patch, AsyncMock, MagicMock
 import pytest
 
 from updater import database as db
+from updater.config_utils import filter_templates_by_device_type
 from updater.poller import NetworkPoller, PHASE_ORDER
 
 
@@ -391,6 +392,87 @@ class TestDeviceTypesFiltering:
         # (device_types filtering happens in the poller, not the DB query)
         templates = db.get_config_templates_for_device("10.0.0.1", site_id=1)
         assert len(templates) == 2  # Both returned; poller filters by device_type
+
+
+class TestFilterTemplatesByDeviceType:
+    """Helper used by both auto-enforce and manual config push to drop
+    templates whose device_types don't include the target's role."""
+
+    def test_no_device_types_applies_to_all(self):
+        templates = [{"id": 1, "name": "Global", "device_types": None}]
+        applicable, excluded = filter_templates_by_device_type(templates, "ap")
+        assert [t["id"] for t in applicable] == [1]
+        assert excluded == []
+
+    def test_empty_string_device_types_applies_to_all(self):
+        templates = [{"id": 1, "name": "Global", "device_types": ""}]
+        applicable, excluded = filter_templates_by_device_type(templates, "switch")
+        assert [t["id"] for t in applicable] == [1]
+        assert excluded == []
+
+    def test_ap_only_excludes_switch(self):
+        templates = [{"id": 1, "name": "AP-only", "device_types": '["ap"]'}]
+        applicable, excluded = filter_templates_by_device_type(templates, "switch")
+        assert applicable == []
+        assert [t["id"] for t in excluded] == [1]
+
+    def test_switch_only_excludes_ap(self):
+        templates = [{"id": 1, "name": "Switch-only", "device_types": '["switch"]'}]
+        applicable, excluded = filter_templates_by_device_type(templates, "ap")
+        assert applicable == []
+        assert [t["id"] for t in excluded] == [1]
+
+    def test_multi_type_match(self):
+        templates = [{"id": 1, "name": "AP+Switch", "device_types": '["ap","switch"]'}]
+        for dtype in ("ap", "switch"):
+            applicable, excluded = filter_templates_by_device_type(templates, dtype)
+            assert [t["id"] for t in applicable] == [1]
+            assert excluded == []
+        applicable, excluded = filter_templates_by_device_type(templates, "cpe")
+        assert applicable == []
+        assert [t["id"] for t in excluded] == [1]
+
+    def test_device_types_already_a_list(self):
+        # Templates loaded from a rollout snapshot may already be a list,
+        # not a JSON string.
+        templates = [{"id": 1, "name": "AP-only", "device_types": ["ap"]}]
+        applicable, _ = filter_templates_by_device_type(templates, "ap")
+        assert [t["id"] for t in applicable] == [1]
+        applicable, excluded = filter_templates_by_device_type(templates, "switch")
+        assert applicable == []
+        assert [t["id"] for t in excluded] == [1]
+
+    def test_malformed_device_types_treated_as_unrestricted(self):
+        # Don't surface "skipped" noise on bad data; same forgiving behavior
+        # as the prior inline auto-enforce filter.
+        templates = [{"id": 1, "name": "Bad", "device_types": "not-json"}]
+        applicable, excluded = filter_templates_by_device_type(templates, "ap")
+        assert [t["id"] for t in applicable] == [1]
+        assert excluded == []
+
+    def test_empty_list_treated_as_unrestricted(self):
+        templates = [{"id": 1, "name": "EmptyList", "device_types": "[]"}]
+        applicable, excluded = filter_templates_by_device_type(templates, "ap")
+        assert [t["id"] for t in applicable] == [1]
+        assert excluded == []
+
+    def test_cpe_role(self):
+        templates = [{"id": 1, "name": "CPE-only", "device_types": '["cpe"]'}]
+        applicable, _ = filter_templates_by_device_type(templates, "cpe")
+        assert [t["id"] for t in applicable] == [1]
+        applicable, excluded = filter_templates_by_device_type(templates, "ap")
+        assert applicable == []
+        assert [t["id"] for t in excluded] == [1]
+
+    def test_mixed_set_partial_filter(self):
+        templates = [
+            {"id": 1, "name": "Global", "device_types": None},
+            {"id": 2, "name": "AP-only", "device_types": '["ap"]'},
+            {"id": 3, "name": "Switch-only", "device_types": '["switch"]'},
+        ]
+        applicable, excluded = filter_templates_by_device_type(templates, "ap")
+        assert [t["id"] for t in applicable] == [1, 2]
+        assert [t["id"] for t in excluded] == [3]
 
 
 class TestPrefillScopeAware:

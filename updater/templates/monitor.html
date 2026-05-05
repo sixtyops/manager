@@ -8831,18 +8831,39 @@
 
         function showDiffModal(title, data) {
             if (data.identical) { showToast('Configs are identical.'); return; }
-            let html = '';
-            if (!Array.isArray(data.diff_lines) || data.diff_lines.length === 0) {
+            const skipped = Array.isArray(data.skipped_templates) ? data.skipped_templates : [];
+            const hasDiff = Array.isArray(data.diff_lines) && data.diff_lines.length > 0;
+            if (!hasDiff && skipped.length === 0) {
                 showToast('No differences to display.');
                 return;
             }
-            for (const line of data.diff_lines) {
-                const escaped = escapeHtml(line.replace(/\n$/, ''));
-                if (line.startsWith('+++') || line.startsWith('---')) html += `<div class="diff-line-meta">${escaped}</div>`;
-                else if (line.startsWith('+')) html += `<div class="diff-line-add">${escaped}</div>`;
-                else if (line.startsWith('-')) html += `<div class="diff-line-del">${escaped}</div>`;
-                else if (line.startsWith('@@')) html += `<div class="diff-line-hunk">${escaped}</div>`;
-                else html += `<div>${escaped}</div>`;
+            let skippedHtml = '';
+            if (skipped.length > 0) {
+                const targetType = data.device_type ? `<code>${escapeHtml(data.device_type)}</code>` : 'this device';
+                const items = skipped.map(s => {
+                    const allowed = Array.isArray(s.allowed_device_types)
+                        ? s.allowed_device_types.join(', ')
+                        : (s.allowed_device_types || 'unspecified');
+                    return `<li><strong>${escapeHtml(s.template_name)}</strong> — restricted to <code>${escapeHtml(allowed)}</code></li>`;
+                }).join('');
+                skippedHtml = `
+                    <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.4);padding:8px 12px;border-radius:6px;margin-bottom:8px;">
+                        <div style="font-weight:600;color:#f59e0b;margin-bottom:4px;">Skipped ${skipped.length} template${skipped.length === 1 ? '' : 's'} (target is ${targetType})</div>
+                        <ul style="margin:4px 0 0 16px;padding:0;">${items}</ul>
+                    </div>`;
+            }
+            let diffHtml = '';
+            if (hasDiff) {
+                for (const line of data.diff_lines) {
+                    const escaped = escapeHtml(line.replace(/\n$/, ''));
+                    if (line.startsWith('+++') || line.startsWith('---')) diffHtml += `<div class="diff-line-meta">${escaped}</div>`;
+                    else if (line.startsWith('+')) diffHtml += `<div class="diff-line-add">${escaped}</div>`;
+                    else if (line.startsWith('-')) diffHtml += `<div class="diff-line-del">${escaped}</div>`;
+                    else if (line.startsWith('@@')) diffHtml += `<div class="diff-line-hunk">${escaped}</div>`;
+                    else diffHtml += `<div>${escaped}</div>`;
+                }
+            } else {
+                diffHtml = '<div style="color:var(--text-dim);padding:8px;">No diff — every template was filtered out for this device type.</div>';
             }
             const overlay = document.createElement('div');
             overlay.className = 'backup-overlay open';
@@ -8853,7 +8874,8 @@
                         <h3 class="u-m0">Config Diff: ${escapeHtml(title)}</h3>
                         <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.2rem;">&times;</button>
                     </div>
-                    <div class="diff-pre" style="flex:1;overflow:auto;">${html}</div>
+                    ${skippedHtml}
+                    <div class="diff-pre" style="flex:1;overflow:auto;">${diffHtml}</div>
                 </div>`;
             document.body.appendChild(overlay);
         }
@@ -8896,7 +8918,11 @@
                 });
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Preview failed'); }
                 const data = await resp.json();
-                if (!data.changed) { showToast('No changes — device config already matches all enabled policies.'); return; }
+                const skippedCount = Array.isArray(data.skipped_templates) ? data.skipped_templates.length : 0;
+                if (!data.changed && skippedCount === 0) {
+                    showToast('No changes — device config already matches all enabled policies.');
+                    return;
+                }
                 showDiffModal(ip + ' (merge preview)', data);
             } catch (e) {
                 showToast('Preview failed: ' + e.message);
@@ -9657,7 +9683,11 @@
                 });
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Preview failed'); }
                 const data = await resp.json();
-                if (!data.changed) { showToast('No changes for ' + previewIp + ' — config already matches.'); return; }
+                const skippedCount = Array.isArray(data.skipped_templates) ? data.skipped_templates.length : 0;
+                if (!data.changed && skippedCount === 0) {
+                    showToast('No changes for ' + previewIp + ' — config already matches.');
+                    return;
+                }
                 showDiffModal(previewIp + ' (preview)', data);
             } catch (e) {
                 showToast('Preview failed: ' + e.message);
@@ -9902,13 +9932,15 @@
         }
 
         function handleConfigPushUpdate(msg) {
-            if (msg.status === 'success' || msg.status === 'failed') {
+            if (msg.status === 'success' || msg.status === 'failed' || msg.status === 'skipped') {
                 configPushingDevices.delete(msg.ip);
             } else {
                 configPushingDevices.add(msg.ip);
             }
             if (msg.status === 'failed' && msg.error) {
                 showToast(`Config push failed for ${msg.ip}: ${msg.error}`, 'error', 7000);
+            } else if (msg.status === 'skipped' && msg.reason) {
+                showToast(`Skipped ${msg.ip}: ${msg.reason}`, 'info', 5000);
             }
             if (activeColumnMode === 'config') renderTable();
         }
@@ -9916,11 +9948,14 @@
         function handleConfigPushComplete(msg) {
             configPushingDevices.clear();
             if (activeColumnMode === 'config') loadConfigData();
-            const summary = `Config push complete: ${msg.success_count} succeeded, ${msg.failed_count} failed`;
+            const skipped = msg.skipped_count || 0;
+            const parts = [`${msg.success_count} succeeded`, `${msg.failed_count} failed`];
+            if (skipped > 0) parts.push(`${skipped} skipped`);
+            const summary = `Config push complete: ${parts.join(', ')}`;
             console.log(summary);
             if (msg.failed_count > 0) {
                 showToast(summary, 'error', 6000);
-            } else if (msg.success_count > 0) {
+            } else if (msg.success_count > 0 || skipped > 0) {
                 showToast(summary, 'success', 4000);
             }
         }

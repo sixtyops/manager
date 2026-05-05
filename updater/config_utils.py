@@ -44,6 +44,39 @@ def fragment_matches(config: dict, fragment: dict) -> bool:
     return True
 
 
+def filter_templates_by_device_type(
+    templates: list[dict], device_type: str
+) -> tuple[list[dict], list[dict]]:
+    """Split templates into (applicable, excluded) for a device of given type.
+
+    A template with no `device_types` restriction (NULL/missing/empty) applies
+    to every device type. A template whose `device_types` JSON array names the
+    device's type applies; otherwise it goes to `excluded`. Malformed values
+    are treated as unrestricted (applicable) — same forgiving behavior as the
+    auto-enforce path so we don't surface noisy "skipped" reasons for bad data.
+    """
+    applicable: list[dict] = []
+    excluded: list[dict] = []
+    for t in templates:
+        dt = t.get("device_types")
+        if not dt:
+            applicable.append(t)
+            continue
+        try:
+            allowed_types = _json.loads(dt) if isinstance(dt, str) else dt
+        except (_json.JSONDecodeError, TypeError):
+            applicable.append(t)
+            continue
+        if not isinstance(allowed_types, list) or not allowed_types:
+            applicable.append(t)
+            continue
+        if device_type in allowed_types:
+            applicable.append(t)
+        else:
+            excluded.append(t)
+    return applicable, excluded
+
+
 def generate_config_diff(
     config_a: dict, config_b: dict, label_a: str = "before", label_b: str = "after"
 ) -> list[str]:

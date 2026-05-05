@@ -11,7 +11,13 @@ from typing import Callable, Optional
 
 from . import database as db
 from . import radius_config
-from .config_utils import deep_merge, fragment_matches, check_config_compliance, validate_fragment_safety
+from .config_utils import (
+    deep_merge,
+    fragment_matches,
+    check_config_compliance,
+    validate_fragment_safety,
+    filter_templates_by_device_type,
+)
 from .tachyon import TachyonClient  # kept for fallback/type compat
 from .vendors import get_driver
 from .vendors.base import VendorDriver
@@ -881,17 +887,7 @@ class NetworkPoller:
             ap = db.get_access_point(ip)
             device_type = "ap" if ap else "switch"
             # Filter templates by device_types (custom category may target specific types)
-            applicable = []
-            for t in templates:
-                dt = t.get("device_types")
-                if dt:
-                    try:
-                        allowed_types = json.loads(dt) if isinstance(dt, str) else dt
-                        if device_type not in allowed_types:
-                            continue
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                applicable.append(t)
+            applicable, _excluded = filter_templates_by_device_type(templates, device_type)
             if not applicable:
                 continue
             if not check_config_compliance(config_data, applicable):

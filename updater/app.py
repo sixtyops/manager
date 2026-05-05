@@ -5801,7 +5801,20 @@ from .config_utils import (
     generate_config_diff,
     check_config_compliance as _check_config_compliance,
     fragment_matches as _fragment_matches,
+    filter_templates_by_device_type as _filter_templates_by_device_type,
 )
+
+
+def _resolve_device_type(ip: str) -> Optional[str]:
+    """Return 'ap' | 'switch' | 'cpe' for a known IP, or None if unknown."""
+    device = db.get_device(ip)
+    if device:
+        role = device.get("role")
+        if role in ("ap", "switch"):
+            return role
+    if db.get_cpe_by_ip(ip):
+        return "cpe"
+    return None
 
 
 @app.get("/api/configs", tags=["config"])
@@ -6335,7 +6348,7 @@ async def preview_config_merge(request: Request, session: dict = Depends(require
     if not ip or not template_ids:
         raise HTTPException(400, "ip and template_ids are required")
 
-    # Load templates
+    # Load templates with device_types metadata so we can filter per target
     templates = []
     for tid in template_ids:
         t = db.get_config_template(tid)
@@ -6346,7 +6359,35 @@ async def preview_config_merge(request: Request, session: dict = Depends(require
             _validate_fragment_safety(fragment)
         except ValueError as e:
             raise HTTPException(400, f"Template '{t['name']}' contains unsafe keys: {e}")
-        templates.append(fragment)
+        templates.append({
+            "id": t["id"],
+            "name": t["name"],
+            "fragment": fragment,
+            "device_types": t.get("device_types"),
+        })
+
+    # Determine target device type so we can mirror the auto-enforce filter.
+    # If unknown (CPE not yet seen, or stray IP), fall back to applying every
+    # template — same permissive behavior as before so old call sites keep
+    # working.
+    device_type = _resolve_device_type(ip)
+    skipped = []
+    if device_type:
+        applicable, excluded = _filter_templates_by_device_type(templates, device_type)
+        for t in excluded:
+            allowed = t.get("device_types")
+            try:
+                allowed_list = json.loads(allowed) if isinstance(allowed, str) else allowed
+            except (json.JSONDecodeError, TypeError):
+                allowed_list = allowed
+            skipped.append({
+                "template_id": t["id"],
+                "template_name": t["name"],
+                "allowed_device_types": allowed_list,
+                "reason": "device_type_mismatch",
+            })
+    else:
+        applicable = templates
 
     # Get latest stored config (no device connection needed)
     stored = db.get_latest_device_config(ip)
@@ -6355,10 +6396,10 @@ async def preview_config_merge(request: Request, session: dict = Depends(require
 
     original = json.loads(stored["config_json"]) if isinstance(stored["config_json"], str) else stored["config_json"]
 
-    # Apply all templates
+    # Apply only the templates that match this device's type
     merged = original
-    for fragment in templates:
-        merged = deep_merge(merged, fragment)
+    for t in applicable:
+        merged = deep_merge(merged, t["fragment"])
 
     diff_lines = generate_config_diff(original, merged, label_a="current", label_b="after merge")
 
@@ -6368,6 +6409,8 @@ async def preview_config_merge(request: Request, session: dict = Depends(require
         "diff_lines": diff_lines,
         "changed": len(diff_lines) > 0,
         "snapshot_date": stored.get("fetched_at"),
+        "device_type": device_type,
+        "skipped_templates": skipped,
     }
 
 
@@ -6408,7 +6451,12 @@ async def push_config_templates(request: Request, session: dict = Depends(requir
             _validate_fragment_safety(fragment)
         except ValueError as e:
             raise HTTPException(400, f"Template '{t['name']}' contains unsafe keys: {e}")
-        templates.append({"id": t["id"], "name": t["name"], "fragment": fragment})
+        templates.append({
+            "id": t["id"],
+            "name": t["name"],
+            "fragment": fragment,
+            "device_types": t.get("device_types"),
+        })
 
     # Resolve targets to device IPs with credentials
     device_list = []  # [{ip, username, password, role, model}]
@@ -6456,7 +6504,7 @@ async def push_config_templates(request: Request, session: dict = Depends(requir
     # Run config push in background with job tracking
     job_id = str(uuid.uuid4())[:8]
     template_names = ", ".join(t["name"] for t in templates)
-    job_info = {"cancelled": False, "success": 0, "failed": 0, "total": len(device_list), "done": False}
+    job_info = {"cancelled": False, "success": 0, "failed": 0, "skipped": 0, "total": len(device_list), "done": False}
     task = asyncio.create_task(_run_config_push(job_id, device_list, templates, job_info))
     job_info["task"] = task
     _config_push_jobs[job_id] = job_info
@@ -6473,14 +6521,30 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
     sem = asyncio.Semaphore(5)
     success_count = 0
     failed_count = 0
+    skipped_count = 0
     template_names = ", ".join(t["name"] for t in templates)
 
     async def push_to_device(device: dict):
-        nonlocal success_count, failed_count
+        nonlocal success_count, failed_count, skipped_count
         ip = device["ip"]
 
         # Check if job was cancelled
         if job_info and job_info.get("cancelled"):
+            return
+
+        # Filter templates by this device's type so an "AP-only" template
+        # doesn't get merged into a switch config (and vice versa).
+        applicable, excluded = _filter_templates_by_device_type(templates, device.get("role"))
+        if not applicable:
+            skipped_count += 1
+            excluded_names = ", ".join(t["name"] for t in excluded) or "all"
+            await broadcast({
+                "type": "config_push_update",
+                "job_id": job_id,
+                "ip": ip,
+                "status": "skipped",
+                "reason": f"No templates apply to device_type={device.get('role')} (excluded: {excluded_names})",
+            })
             return
 
         started_at = datetime.now().isoformat()
@@ -6516,9 +6580,9 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                     hardware_id = client.get_hardware_id(model)
                     db.save_device_config(ip, pre_push_json, pre_push_hash, model, hardware_id)
 
-                    # Merge all templates into current config
+                    # Merge applicable templates into current config
                     merged = current_config
-                    for t in templates:
+                    for t in applicable:
                         merged = deep_merge(merged, t["fragment"])
 
                     # Safety: dry_run first to validate the merged config
@@ -6580,6 +6644,7 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
     if job_info:
         job_info["success"] = success_count
         job_info["failed"] = failed_count
+        job_info["skipped"] = skipped_count
         job_info["done"] = True
 
     await broadcast({
@@ -6587,10 +6652,11 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
         "job_id": job_id,
         "success_count": success_count,
         "failed_count": failed_count,
+        "skipped_count": skipped_count,
         "template_names": template_names,
     })
 
-    # Re-poll configs for affected devices after push
+    # Re-poll configs for affected devices after push (skip ones we never touched)
     poller = get_poller()
     if poller:
         affected_ips = [d["ip"] for d in device_list]
@@ -6608,6 +6674,7 @@ async def get_config_push_job(job_id: str, session: dict = Depends(require_auth)
         "total": job["total"],
         "success": job["success"],
         "failed": job["failed"],
+        "skipped": job.get("skipped", 0),
         "cancelled": job["cancelled"],
         "done": job["done"],
     }
@@ -6764,7 +6831,12 @@ def _load_rollout_templates(rollout: dict) -> list:
         t = db.get_config_template(tid)
         if t:
             fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
-            templates.append({"id": t["id"], "name": t["name"], "fragment": fragment})
+            templates.append({
+                "id": t["id"],
+                "name": t["name"],
+                "fragment": fragment,
+                "device_types": t.get("device_types"),
+            })
     return templates
 
 
@@ -6825,7 +6897,12 @@ async def start_config_push_rollout(request: Request, session: dict = Depends(re
             raise HTTPException(404, f"Template {tid} not found")
         fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
         _validate_fragment_safety(fragment)
-        templates.append({"id": t["id"], "name": t["name"], "fragment": fragment})
+        templates.append({
+            "id": t["id"],
+            "name": t["name"],
+            "fragment": fragment,
+            "device_types": t.get("device_types"),
+        })
 
     # Resolve all target devices
     device_list = _resolve_config_push_targets(targets)
@@ -7014,6 +7091,25 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
             db.mark_config_push_device(rollout_id, ip, "skipped", "Device not found in inventory")
             return
 
+        # Filter templates by this device's type so an "AP-only" template
+        # doesn't get merged into a switch config (and vice versa).
+        applicable, excluded = _filter_templates_by_device_type(templates, creds.get("role"))
+        if not applicable:
+            excluded_names = ", ".join(t["name"] for t in excluded) or "all"
+            db.mark_config_push_device(
+                rollout_id, ip, "skipped",
+                f"No templates apply to device_type={creds.get('role')} (excluded: {excluded_names})",
+            )
+            await broadcast({
+                "type": "config_push_rollout_update",
+                "rollout_id": rollout_id,
+                "ip": ip,
+                "status": "skipped",
+                "phase": phase,
+                "reason": f"No templates apply to device_type={creds.get('role')}",
+            })
+            return
+
         started_at = datetime.now().isoformat()
 
         async with _config_push_lock:
@@ -7045,9 +7141,9 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
                 hardware_id = client.get_hardware_id(model)
                 db.save_device_config(ip, pre_push_json, pre_push_hash, model, hardware_id)
 
-                # Merge templates
+                # Merge applicable templates only
                 merged = current_config
-                for t in templates:
+                for t in applicable:
                     merged = deep_merge(merged, t["fragment"])
 
                 # Dry-run validation
