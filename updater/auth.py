@@ -15,6 +15,7 @@ import bcrypt as _bcrypt
 from fastapi import Depends, Request, WebSocket, HTTPException
 
 from . import database as db
+from . import oidc_config
 
 logger = logging.getLogger(__name__)
 
@@ -196,8 +197,6 @@ def authenticate_oidc_user(email: str, groups: list[str]) -> Optional[str]:
 
     Returns the email as session username if authorized, None otherwise.
     """
-    from . import oidc_config
-
     config = oidc_config.get_oidc_config()
     if not config.enabled or not config.allowed_group:
         return None
@@ -222,9 +221,6 @@ def ensure_oidc_user(email: str, groups: list[str] | None = None) -> dict:
     the user is first created; on subsequent logins the stored role is
     preserved so admin overrides made in the UI are not clobbered.
     """
-
-    from . import oidc_config
-
     user = db.get_user(email)
     if user:
         if (
@@ -246,8 +242,6 @@ def ensure_oidc_user(email: str, groups: list[str] | None = None) -> dict:
 
 def _resolve_oidc_role(groups: list[str] | None) -> str:
     """Determine the role for an OIDC user based on their group membership."""
-    from . import oidc_config
-
     config = oidc_config.get_oidc_config()
     normalized_groups = _normalize_oidc_groups(groups)
     if config.admin_group:
