@@ -3932,6 +3932,7 @@
             updateTabBadges();
             renderTable();
             updateChart();
+            if (configLoaded) updateConfigStats();
         }
 
         function updateTabBadges() {
@@ -5014,11 +5015,15 @@
                 }
             }
 
-            const cpeData = cpes.map(cpe => ({
-                x: cpe.link_distance || 0,
-                y: cpe.primary_signal || cpe.combined_signal || cpe.rx_power || -100,
-                cpe: cpe,
-            }));
+            const cpeData = cpes.map(cpe => {
+                const sig = cpe.primary_signal ?? cpe.combined_signal ?? cpe.rx_power ?? cpe.last_local_rssi;
+                return {
+                    x: cpe.link_distance ?? 0,
+                    y: sig ?? -88,
+                    cpe: cpe,
+                    unpolled: sig == null,
+                };
+            });
 
             const offlineData = offlineAPs.map(ap => ({
                 x: 0,
@@ -5148,7 +5153,7 @@
                             title: { display: true, text: 'Signal (dBm)', color: '#6b7280' },
                             grid: { color: '#e5e7eb' },
                             ticks: { color: '#6b7280' },
-                            min: -75,
+                            min: -90,
                             max: -35,
                         },
                     },
@@ -5164,9 +5169,12 @@
                                     }
                                     const cpe = context.raw?.cpe;
                                     if (!cpe) return '';
+                                    const sigLine = context.raw?.unpolled
+                                        ? 'Signal: not yet polled'
+                                        : `Signal: ${cpe.primary_signal?.toFixed(1) ?? 'N/A'} dBm`;
                                     return [
                                         cpe.system_name || cpe.ip,
-                                        `Signal: ${cpe.primary_signal?.toFixed(1) || 'N/A'} dBm`,
+                                        sigLine,
                                         `Distance: ${cpe.link_distance != null ? formatDistance(cpe.link_distance) : 'N/A'}`,
                                     ];
                                 },
