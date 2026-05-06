@@ -491,3 +491,110 @@ class TestPrefillScopeAware:
         result = db.get_config_template_by_category("snmp")
         assert result is not None
         assert result["scope"] == "site"
+
+
+# ---------------------------------------------------------------------------
+# Config-poll catch-up tests (issue #41)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigPollCatchup:
+    """`_maybe_poll_configs` should catch up if the manager was down through
+    the configured poll window, and `last_config_poll_at` should survive a
+    process restart so the catch-up decision is correct."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_settings_cache(self, scoped_db):
+        # scoped_db doesn't invalidate the in-process settings cache between
+        # tests, so a setting written by an earlier test would leak into
+        # later ones. Drop the cache before each test in this class.
+        from updater import database as db_mod
+        db_mod._invalidate_settings_cache()
+        yield
+
+    @pytest.mark.asyncio
+    async def test_record_persists_to_settings(self, scoped_db):
+        poller = NetworkPoller()
+        poller._record_last_config_poll()
+        # In-memory + persisted both updated
+        assert poller._last_config_poll is not None
+        assert db.get_setting("last_config_poll_at") is not None
+
+    def test_hydrate_loads_persisted_value(self, scoped_db):
+        from datetime import datetime
+        ts = datetime(2026, 5, 1, 4, 0, 0)
+        db.set_setting("last_config_poll_at", ts.isoformat())
+        poller = NetworkPoller()
+        poller._hydrate_last_config_poll()
+        assert poller._last_config_poll == ts
+
+    def test_hydrate_handles_missing_setting(self, scoped_db):
+        poller = NetworkPoller()
+        poller._hydrate_last_config_poll()
+        assert poller._last_config_poll is None
+
+    def test_hydrate_handles_corrupt_value(self, scoped_db):
+        db.set_setting("last_config_poll_at", "not-a-timestamp")
+        poller = NetworkPoller()
+        poller._hydrate_last_config_poll()
+        assert poller._last_config_poll is None
+
+    @pytest.mark.asyncio
+    async def test_catchup_runs_when_last_poll_is_stale(self, scoped_db):
+        """If last poll was >25h ago, run a catch-up poll regardless of the
+        current hour — the catch-up branch fires before the hour gate."""
+        from datetime import datetime, timedelta
+
+        # Force config_auto_enforce off so the catch-up branch returns after
+        # poll_all_configs without trying to enforce
+        db.set_setting("config_auto_enforce", "false")
+
+        poller = NetworkPoller()
+        # Pretend last poll was 30 hours ago (manager was down for the window)
+        poller._last_config_poll = datetime.now() - timedelta(hours=30)
+        poller._last_config_poll_hydrated = True
+
+        with patch.object(poller, "poll_all_configs", new=AsyncMock()) as poll:
+            await poller._maybe_poll_configs()
+
+        poll.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_catchup_when_recent_poll_outside_window(self, scoped_db):
+        """A poll within the last 25h is not stale — don't catch up. The
+        existing hour gate also skips when we're outside the target hour."""
+        from datetime import datetime, timedelta
+
+        poller = NetworkPoller()
+        # 10h ago — well within the 25h freshness window
+        poller._last_config_poll = datetime.now() - timedelta(hours=10)
+        poller._last_config_poll_hydrated = True
+
+        # Pin target hour to one that is definitely not "now" so the hour
+        # gate also rejects (otherwise this test would be time-of-day flaky)
+        next_hour = (datetime.now().hour + 6) % 24
+        db.set_setting("config_enforce_hour", str(next_hour))
+
+        with patch.object(poller, "poll_all_configs", new=AsyncMock()) as poll:
+            await poller._maybe_poll_configs()
+
+        poll.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_catchup_on_fresh_install(self, scoped_db):
+        """First-ever startup (no persisted timestamp) should not trigger an
+        immediate catch-up — wait for the daily window. `_poll_missing_configs`
+        handles the brand-new-device case separately."""
+        from datetime import datetime
+
+        poller = NetworkPoller()
+        poller._last_config_poll_hydrated = True
+        poller._last_config_poll = None
+
+        next_hour = (datetime.now().hour + 6) % 24
+        db.set_setting("config_enforce_hour", str(next_hour))
+
+        with patch.object(poller, "poll_all_configs", new=AsyncMock()) as poll:
+            await poller._maybe_poll_configs()
+
+        poll.assert_not_called()

@@ -6,7 +6,7 @@ import logging
 import math
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Callable, Optional
 
 from . import database as db
@@ -54,6 +54,7 @@ class NetworkPoller:
         self._task: Optional[asyncio.Task] = None
         self._clients: dict[str, tuple[VendorDriver, float]] = {}  # IP -> (client, last_used)
         self._last_config_poll: Optional[datetime] = None
+        self._last_config_poll_hydrated = False
         self._poll_in_progress = False
         # Circuit breaker state
         self._failure_counts: dict[str, int] = {}
@@ -683,11 +684,47 @@ class NetworkPoller:
         except Exception as e:
             logger.debug(f"_poll_missing_configs error: {e}")
 
+    def _hydrate_last_config_poll(self) -> None:
+        """Load the persisted last-poll timestamp from settings (one-time per process).
+
+        Without this, a manager that restarts after the daily window would lose
+        the in-memory _last_config_poll and skip the day silently.
+
+        Note: _last_config_poll is intentionally a *naive* datetime — it
+        records the wall-clock instant we polled, and the catch-up branch
+        compares it via duration math (datetime.now() - _last_config_poll).
+        Don't mix it with the tz-aware now_local used by the hour gate.
+        """
+        if self._last_config_poll_hydrated:
+            return
+        self._last_config_poll_hydrated = True
+        raw = db.get_setting("last_config_poll_at")
+        if not raw:
+            return
+        try:
+            self._last_config_poll = datetime.fromisoformat(raw)
+        except (ValueError, TypeError):
+            logger.warning("Stored last_config_poll_at is unparseable: %r", raw)
+
+    def _record_last_config_poll(self) -> None:
+        """Stamp _last_config_poll and persist it so a restart after the daily
+        window doesn't silently skip a day."""
+        ts = datetime.now()
+        self._last_config_poll = ts
+        self._last_config_poll_hydrated = True
+        try:
+            db.set_setting("last_config_poll_at", ts.isoformat())
+        except Exception as e:
+            logger.warning("Failed to persist last_config_poll_at: %s", e)
+
     async def _maybe_poll_configs(self):
-        """Run config poll + auto-enforce daily at 4 AM local time."""
+        """Run config poll + auto-enforce daily at 4 AM local time, with
+        catch-up if the manager was down during the configured window."""
         try:
             if db.get_setting("config_poll_enabled", "true") != "true":
                 return
+
+            self._hydrate_last_config_poll()
 
             # Determine local time using timezone setting
             import zoneinfo
@@ -705,6 +742,24 @@ class NetworkPoller:
                 target_hour = int(db.get_setting("config_enforce_hour", "4"))
             except (TypeError, ValueError):
                 target_hour = 4
+
+            # Catch-up: if we have a previous poll and it's been >25h since
+            # then, the daily window was missed (manager was down). Run now,
+            # outside the hour gate, so the day isn't silently skipped.
+            # The 1-hour grace prevents triggering right before the next
+            # scheduled window would fire on its own.
+            if self._last_config_poll is not None:
+                stale_for = datetime.now() - self._last_config_poll
+                if stale_for > timedelta(hours=25):
+                    logger.info(
+                        "Config poll catch-up: last successful poll was %s ago "
+                        "(threshold 25h); running now",
+                        stale_for,
+                    )
+                    await self.poll_all_configs()
+                    if db.get_setting("config_auto_enforce", "false") == "true":
+                        await self._auto_enforce_compliance()
+                    return
 
             # Only run during the target hour
             if now_local.hour != target_hour:
@@ -748,7 +803,7 @@ class NetworkPoller:
                     devices.append((cpe["ip"], ap["username"], ap["password"], cpe.get("model"), "cpe"))
 
         if not devices:
-            self._last_config_poll = datetime.now()
+            self._record_last_config_poll()
             return
 
         logger.info(f"Config poll: fetching configs from {len(devices)} devices")
@@ -763,7 +818,7 @@ class NetworkPoller:
             return_exceptions=True,
         )
 
-        self._last_config_poll = datetime.now()
+        self._record_last_config_poll()
         logger.info("Config poll completed")
 
         if self.broadcast_func:
