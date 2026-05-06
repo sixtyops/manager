@@ -3932,6 +3932,7 @@
             updateTabBadges();
             renderTable();
             updateChart();
+            if (configLoaded) updateConfigStats();
         }
 
         function updateTabBadges() {
@@ -5014,11 +5015,19 @@
                 }
             }
 
-            const cpeData = cpes.map(cpe => ({
-                x: cpe.link_distance || 0,
-                y: cpe.primary_signal || cpe.combined_signal || cpe.rx_power || -100,
-                cpe: cpe,
-            }));
+            const cpeData = cpes.map(cpe => {
+                const sig = cpe.primary_signal ?? cpe.combined_signal ?? cpe.rx_power ?? cpe.last_local_rssi;
+                return {
+                    x: cpe.link_distance ?? 0,
+                    // -88 sits 2 dB above the chart's y-axis min (-90) so unpolled
+                    // dots stay visually distinct from the floor without colliding
+                    // with real Critical-tier readings (typically < -85).
+                    y: sig ?? -88,
+                    cpe: cpe,
+                    sig: sig,
+                    unpolled: sig == null,
+                };
+            });
 
             const offlineData = offlineAPs.map(ap => ({
                 x: 0,
@@ -5148,7 +5157,7 @@
                             title: { display: true, text: 'Signal (dBm)', color: '#6b7280' },
                             grid: { color: '#e5e7eb' },
                             ticks: { color: '#6b7280' },
-                            min: -75,
+                            min: -90,
                             max: -35,
                         },
                     },
@@ -5164,9 +5173,16 @@
                                     }
                                     const cpe = context.raw?.cpe;
                                     if (!cpe) return '';
+                                    // Use the same fallback chain (sig) the chart used to plot
+                                    // the dot — otherwise a CPE that has combined_signal but
+                                    // no primary_signal would render at the right Y but show
+                                    // "N/A dBm" in the tooltip.
+                                    const sigLine = context.raw?.unpolled
+                                        ? 'Signal: not yet polled'
+                                        : `Signal: ${context.raw?.sig?.toFixed(1) ?? 'N/A'} dBm`;
                                     return [
                                         cpe.system_name || cpe.ip,
-                                        `Signal: ${cpe.primary_signal?.toFixed(1) || 'N/A'} dBm`,
+                                        sigLine,
                                         `Distance: ${cpe.link_distance != null ? formatDistance(cpe.link_distance) : 'N/A'}`,
                                     ];
                                 },
