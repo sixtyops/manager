@@ -176,9 +176,8 @@ class TestCleanupOrphanedDeviceData:
     """Issue #56: one-time migration script that purges audit rows whose
     device was deleted before the cascade fix landed."""
 
-    def test_cleanup_removes_orphaned_rows_only(self, tmp_path, monkeypatch):
+    def test_cleanup_removes_orphaned_rows_only(self, tmp_path):
         # Build a fresh sqlite DB on disk so the script can open it directly.
-        import shutil
         import sqlite3
         from scripts.cleanup_orphaned_device_data import cleanup
 

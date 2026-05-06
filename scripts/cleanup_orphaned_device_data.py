@@ -29,6 +29,13 @@ _TABLES = (
 
 
 def cleanup(db_path: Path, dry_run: bool = False) -> dict[str, int]:
+    """Return per-table orphan counts.
+
+    - `{}` means the database file was not found (main() exits 1).
+    - `{table: 0, ...}` means the DB opened cleanly and had no orphans.
+    - Any non-zero count is the number deleted (or that *would* be
+      deleted under `--dry-run`).
+    """
     if not db_path.exists():
         print(f"cleanup: database not found at {db_path}", file=sys.stderr)
         return {}
