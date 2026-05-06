@@ -226,6 +226,26 @@ class TestApplyUpdateGuardrails:
         assert result["success"] is False
         assert result["manual"] is True
 
+    @staticmethod
+    def _git_run(calls=None):
+        """Mock subprocess.run that returns clean status / SHA / no-op per subcommand."""
+
+        def _run(cmd, **kwargs):
+            if calls is not None:
+                calls.append(cmd)
+            result = MagicMock()
+            result.returncode = 0
+            result.stderr = ""
+            if "status" in cmd:
+                result.stdout = ""  # clean tree
+            elif "rev-parse" in cmd:
+                result.stdout = "abc123"
+            else:
+                result.stdout = ""
+            return result
+
+        return _run
+
     @pytest.mark.asyncio
     async def test_fetches_specific_tag_not_main(self):
         """apply_update must fetch/checkout the release tag, not pull main."""
@@ -234,14 +254,7 @@ class TestApplyUpdateGuardrails:
 
         repo_dir = Path("/tmp/fake-repo")
         calls = []
-
-        def mock_run(cmd, **kwargs):
-            calls.append(cmd)
-            result = MagicMock()
-            result.returncode = 0
-            result.stdout = "abc123"  # for rev-parse
-            result.stderr = ""
-            return result
+        mock_run = self._git_run(calls)
 
         version_content = '__version__ = "1.0.2"'
 
@@ -280,8 +293,11 @@ class TestApplyUpdateGuardrails:
         def mock_run(cmd, **kwargs):
             result = MagicMock()
             result.returncode = 0
-            result.stdout = "abc123def456"
             result.stderr = ""
+            if "status" in cmd:
+                result.stdout = ""  # clean tree
+            else:
+                result.stdout = "abc123def456"
             return result
 
         version_content = '__version__ = "1.0.2"'
@@ -310,13 +326,7 @@ class TestApplyUpdateGuardrails:
         self._set_setting("autoupdate_available_version", "1.0.2")
 
         repo_dir = Path("/tmp/fake-repo")
-
-        def mock_run(cmd, **kwargs):
-            result = MagicMock()
-            result.returncode = 0
-            result.stdout = "abc123"
-            result.stderr = ""
-            return result
+        mock_run = self._git_run()
 
         version_content = '__version__ = "1.0.2"'
 
@@ -344,13 +354,7 @@ class TestApplyUpdateGuardrails:
         self._set_setting("autoupdate_available_version", "1.0.2")
 
         repo_dir = Path("/tmp/fake-repo")
-
-        def mock_run(cmd, **kwargs):
-            result = MagicMock()
-            result.returncode = 0
-            result.stdout = "abc123"
-            result.stderr = ""
-            return result
+        mock_run = self._git_run()
 
         version_content = '__version__ = "1.0.2"'
 
@@ -377,14 +381,7 @@ class TestApplyUpdateGuardrails:
 
         repo_dir = Path("/tmp/fake-repo")
         calls = []
-
-        def mock_run(cmd, **kwargs):
-            calls.append(cmd)
-            result = MagicMock()
-            result.returncode = 0
-            result.stdout = "abc123"
-            result.stderr = ""
-            return result
+        mock_run = self._git_run(calls)
 
         # Version file says 1.0.1, but we expected 1.0.2
         wrong_version = '__version__ = "1.0.1"'
@@ -405,6 +402,246 @@ class TestApplyUpdateGuardrails:
         checkout_cmds = [c for c in calls if "checkout" in c]
         assert len(checkout_cmds) == 2  # first checkout tag, then revert to rollback ref
         assert "abc123" in checkout_cmds[1]  # second checkout uses rollback ref
+
+
+class TestDirtyTreeHandling:
+    """apply_update must detect uncommitted changes before attempting checkout."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_db(self, mock_db):
+        self.db = mock_db
+
+    def _set_setting(self, key, value):
+        self.db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+        self.db.commit()
+
+    @staticmethod
+    def _make_git_dispatch(status_porcelain: str):
+        """Build a subprocess.run side_effect that dispatches on git subcommand."""
+
+        def _run(cmd, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            result.stderr = ""
+            if "rev-parse" in cmd:
+                result.stdout = "abc123def456"
+            elif "status" in cmd:
+                result.stdout = status_porcelain
+            else:
+                result.stdout = ""
+            return result
+
+        return _run
+
+    @pytest.mark.asyncio
+    async def test_dirty_tracked_file_blocks_with_structured_error(self):
+        """A dirty tracked file should produce a structured dirty_tree response."""
+        from updater.release_checker import apply_update
+        self._set_setting("autoupdate_available_version", "1.0.2")
+
+        repo_dir = Path("/tmp/fake-repo")
+        side_effect = self._make_git_dispatch(" M docker-compose.yml\n")
+
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
+             patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
+             patch("updater.release_checker.subprocess.run", side_effect=side_effect) as mock_run:
+            result = await apply_update()
+
+        assert result["success"] is False
+        assert result["dirty_tree"] is True
+        assert "docker-compose.yml" in result["dirty_files"]
+        assert "uncommitted" in result["message"].lower()
+        assert "stash" in result["suggested_command"]
+        assert "docker-compose.yml" in result["suggested_command"]
+
+        # Must not have attempted fetch or checkout
+        all_calls = [c.args[0] for c in mock_run.call_args_list]
+        assert not any("fetch" in cmd for cmd in all_calls)
+        assert not any("checkout" in cmd for cmd in all_calls)
+
+    @pytest.mark.asyncio
+    async def test_dirty_tree_lists_all_blocking_files(self):
+        """All tracked-modified files should be reported, not just one."""
+        from updater.release_checker import apply_update
+        self._set_setting("autoupdate_available_version", "1.0.2")
+
+        repo_dir = Path("/tmp/fake-repo")
+        # Mix of modified, added, deleted, renamed — all block checkout
+        porcelain = (
+            " M docker-compose.yml\n"
+            " M updater/templates/monitor.html\n"
+            "A  newfile.py\n"
+            " D removed.py\n"
+            "?? not-tracked.txt\n"  # untracked must NOT be reported
+        )
+        side_effect = self._make_git_dispatch(porcelain)
+
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
+             patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
+             patch("updater.release_checker.subprocess.run", side_effect=side_effect):
+            result = await apply_update()
+
+        assert result["success"] is False
+        assert result["dirty_tree"] is True
+        assert set(result["dirty_files"]) == {
+            "docker-compose.yml",
+            "updater/templates/monitor.html",
+            "newfile.py",
+            "removed.py",
+        }
+        assert "not-tracked.txt" not in result["dirty_files"]
+
+    @pytest.mark.asyncio
+    async def test_untracked_files_do_not_block(self):
+        """Untracked-only state must NOT block apply (git checkout handles it)."""
+        from updater.release_checker import apply_update
+        self._set_setting("autoupdate_available_version", "1.0.2")
+
+        repo_dir = Path("/tmp/fake-repo")
+        # Only untracked entries — typical for a working tree with a deploy override
+        side_effect = self._make_git_dispatch(
+            "?? docker-compose.override.yml\n?? .env.local\n"
+        )
+        version_content = '__version__ = "1.0.2"'
+
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
+             patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
+             patch("updater.release_checker._get_host_repo_path", return_value=None), \
+             patch("updater.release_checker.subprocess.run", side_effect=side_effect), \
+             patch("updater.release_checker.subprocess.Popen"), \
+             patch.object(Path, "exists", return_value=True), \
+             patch.object(Path, "read_text", return_value=version_content):
+            result = await apply_update()
+
+        # Should proceed to a successful apply
+        assert result["success"] is True
+        assert "dirty_tree" not in result
+
+    @pytest.mark.asyncio
+    async def test_clean_tree_proceeds(self):
+        """A truly clean working tree must proceed without dirty_tree handling."""
+        from updater.release_checker import apply_update
+        self._set_setting("autoupdate_available_version", "1.0.2")
+
+        repo_dir = Path("/tmp/fake-repo")
+        side_effect = self._make_git_dispatch("")  # empty porcelain = clean
+        version_content = '__version__ = "1.0.2"'
+
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
+             patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
+             patch("updater.release_checker._get_host_repo_path", return_value=None), \
+             patch("updater.release_checker.subprocess.run", side_effect=side_effect), \
+             patch("updater.release_checker.subprocess.Popen"), \
+             patch.object(Path, "exists", return_value=True), \
+             patch.object(Path, "read_text", return_value=version_content):
+            result = await apply_update()
+
+        assert result["success"] is True
+        assert "dirty_tree" not in result
+
+    @pytest.mark.asyncio
+    async def test_renamed_file_reports_new_path(self):
+        """Git porcelain emits renames as 'R  old -> new'. The new path is
+        what's tracked at HEAD and what blocks checkout — make sure that's
+        what we report (and what the suggested_command targets), not the
+        literal 'old -> new' string."""
+        from updater.release_checker import apply_update
+        self._set_setting("autoupdate_available_version", "1.0.2")
+
+        repo_dir = Path("/tmp/fake-repo")
+        side_effect = self._make_git_dispatch("R  old/path.py -> new/path.py\n")
+
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
+             patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
+             patch("updater.release_checker.subprocess.run", side_effect=side_effect):
+            result = await apply_update()
+
+        assert result["dirty_tree"] is True
+        assert result["dirty_files"] == ["new/path.py"]
+        assert "old/path.py" not in result["suggested_command"]
+        assert "new/path.py" in result["suggested_command"]
+
+    @pytest.mark.asyncio
+    async def test_dirty_path_with_spaces_is_shell_quoted(self):
+        """A path containing spaces must be shell-quoted in suggested_command
+        so the operator can paste it without it splitting into multiple args."""
+        from updater.release_checker import apply_update
+        self._set_setting("autoupdate_available_version", "1.0.2")
+
+        repo_dir = Path("/tmp/fake-repo")
+        side_effect = self._make_git_dispatch(' M docs/Release Notes.md\n')
+
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
+             patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
+             patch("updater.release_checker.subprocess.run", side_effect=side_effect):
+            result = await apply_update()
+
+        assert result["dirty_tree"] is True
+        # shlex.quote will wrap the space-containing path in single quotes
+        assert "'docs/Release Notes.md'" in result["suggested_command"]
+
+    @pytest.mark.asyncio
+    async def test_status_failure_logs_warning_and_proceeds(self, caplog):
+        """If `git status` itself fails, log a warning and proceed to checkout
+        rather than silently swallowing the failure."""
+        import logging
+        from updater.release_checker import apply_update
+        self._set_setting("autoupdate_available_version", "1.0.2")
+
+        repo_dir = Path("/tmp/fake-repo")
+
+        def side_effect(cmd, **kwargs):
+            result = MagicMock()
+            result.stderr = "fatal: not a git repository"
+            if "status" in cmd:
+                result.returncode = 128
+                result.stdout = ""
+            elif "rev-parse" in cmd:
+                result.returncode = 0
+                result.stdout = "abc123"
+                result.stderr = ""
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        version_content = '__version__ = "1.0.2"'
+
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
+             patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
+             patch("updater.release_checker._get_host_repo_path", return_value=None), \
+             patch("updater.release_checker.subprocess.run", side_effect=side_effect), \
+             patch("updater.release_checker.subprocess.Popen"), \
+             patch.object(Path, "exists", return_value=True), \
+             patch.object(Path, "read_text", return_value=version_content):
+            with caplog.at_level(logging.WARNING, logger="updater.release_checker"):
+                result = await apply_update()
+
+        # No dirty_tree key — status failure shouldn't masquerade as dirty
+        assert "dirty_tree" not in result
+        # Apply still proceeds (success path executes)
+        assert result["success"] is True
+        # And we left a breadcrumb
+        assert any("git status" in r.message and "failed" in r.message
+                   for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

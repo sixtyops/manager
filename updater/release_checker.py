@@ -797,6 +797,58 @@ async def apply_update() -> dict:
                 "message": "Could not determine current version for rollback",
             }
 
+        # Detect uncommitted changes to tracked files BEFORE attempting checkout.
+        # `git checkout <tag>` aborts with "Your local changes would be overwritten"
+        # if any tracked file is dirty, leaving the operator with a confusing error
+        # and no in-app affordance to recover. Surface a structured response instead
+        # so the UI can render a clear "resolve dirty files on host and retry"
+        # message. Untracked (??) and ignored (!!) files don't block checkout,
+        # so don't flag them.
+        status_result = subprocess.run(
+            git_cmd + ["status", "--porcelain"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if status_result.returncode != 0:
+            # Don't proceed silently — `git status` failing means we can't tell
+            # whether the tree is clean, and a subsequent `git checkout` will
+            # produce a less actionable error. Log so the operator has a trail.
+            logger.warning(
+                "git status --porcelain failed (rc=%s): %s — proceeding with "
+                "checkout anyway, but expect a confusing error if the tree is dirty",
+                status_result.returncode, status_result.stderr.strip(),
+            )
+        elif status_result.stdout.strip():
+            dirty_files = []
+            for line in status_result.stdout.splitlines():
+                if len(line) < 4:
+                    continue
+                code, path = line[:2], line[3:]
+                # ?? = untracked, !! = ignored. Neither blocks `git checkout`.
+                if code in ("??", "!!"):
+                    continue
+                # Renamed/copied lines look like "R  old -> new"; the new path
+                # is what's tracked at HEAD and what blocks checkout.
+                if " -> " in path:
+                    path = path.split(" -> ", 1)[1]
+                dirty_files.append(path)
+            if dirty_files:
+                return {
+                    "success": False,
+                    "dirty_tree": True,
+                    "dirty_files": dirty_files,
+                    "message": (
+                        f"Cannot apply update: {len(dirty_files)} tracked file(s) "
+                        "in the manager repo on the host have uncommitted local "
+                        "changes that would be overwritten. Resolve them on the "
+                        "host (stash, commit, or revert) and retry."
+                    ),
+                    "suggested_command": (
+                        f"git -C {shlex.quote(str(repo_dir))} stash push "
+                        "-m 'pre-update auto-stash' -- "
+                        + " ".join(shlex.quote(p) for p in dirty_files)
+                    ),
+                }
+
         # Fetch the specific release tag (not all of main)
         logger.info(f"Fetching tag {target_tag} in {repo_dir}...")
         fetch_result = subprocess.run(

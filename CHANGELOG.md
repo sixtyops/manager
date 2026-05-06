@@ -29,6 +29,7 @@ All notable changes to this project are documented in this file.
 - Appliance build infrastructure (OVA/QCOW2 image generation, Packer configs, build-appliance workflow)
 
 ### Fixed
+- Self-update now detects uncommitted local changes to tracked files in the manager repo *before* attempting `git checkout` and returns a structured `{success: false, dirty_tree: true, dirty_files: [...], suggested_command}` response instead of the opaque "Your local changes would be overwritten by checkout" error. Untracked files are not flagged because they don't block checkout. Operators get a clear message and a copy-pasteable `git stash` command instead of having to read the raw git error
 - "Update Available" banner in Settings > Updates stayed hidden even when an update was detected (inline `display:none` overrode the `.hidden` class toggle)
 - Switch → AP topology cascade wasn't populating because `TachyonDriver` didn't expose `get_bridge_table()`; added passthrough so bridge entries are stored and APs render under their upstream switch
 - Tachyon config GET/POST hit the wrong endpoint (`/cgi.lua/apiv1/config`) and returned HTTP 401 "Authorization Failed"; corrected to `/cgi.lua/config` so config backup, compliance, and push all work
