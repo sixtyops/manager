@@ -689,6 +689,11 @@ class NetworkPoller:
 
         Without this, a manager that restarts after the daily window would lose
         the in-memory _last_config_poll and skip the day silently.
+
+        Note: _last_config_poll is intentionally a *naive* datetime — it
+        records the wall-clock instant we polled, and the catch-up branch
+        compares it via duration math (datetime.now() - _last_config_poll).
+        Don't mix it with the tz-aware now_local used by the hour gate.
         """
         if self._last_config_poll_hydrated:
             return
