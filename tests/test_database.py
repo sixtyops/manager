@@ -240,6 +240,37 @@ class TestCleanupOrphanedDeviceData:
         verify.close()
 
 
+class TestUpdateDeviceConfigPollStatus:
+    """Issue #52: per-device config-poll outcome should be persisted so the
+    UI can show *why* a device's config is missing instead of hiding it."""
+
+    def test_records_status_and_error(self, mock_db):
+        db.upsert_access_point("10.0.0.1", "root", "pass")
+        db.update_device_config_poll_status("10.0.0.1", "timeout", "request timed out")
+        row = mock_db.execute(
+            "SELECT last_config_poll_status, last_config_poll_error, last_config_poll_at "
+            "FROM devices WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert row["last_config_poll_status"] == "timeout"
+        assert row["last_config_poll_error"] == "request timed out"
+        assert row["last_config_poll_at"] is not None
+
+    def test_overwrite_on_subsequent_calls(self, mock_db):
+        db.upsert_access_point("10.0.0.1", "root", "pass")
+        db.update_device_config_poll_status("10.0.0.1", "http_status", "HTTP 401")
+        db.update_device_config_poll_status("10.0.0.1", "ok", None)
+        row = mock_db.execute(
+            "SELECT last_config_poll_status, last_config_poll_error "
+            "FROM devices WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert row["last_config_poll_status"] == "ok"
+        assert row["last_config_poll_error"] is None
+
+    def test_unknown_ip_is_silent_noop(self, mock_db):
+        # No matching row in devices — should not raise
+        db.update_device_config_poll_status("10.99.99.99", "timeout", "x")
+
+
 class TestCPECache:
     def test_upsert_and_get(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "green"})

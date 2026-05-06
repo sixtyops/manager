@@ -49,6 +49,9 @@ def memory_db():
             active_bank INTEGER,
             last_firmware_update TEXT,
             notes TEXT,
+            last_config_poll_at TEXT,
+            last_config_poll_status TEXT,
+            last_config_poll_error TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
         );

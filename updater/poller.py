@@ -860,11 +860,20 @@ class NetworkPoller:
                 login_result = await client.connect()
                 if login_result is not True:
                     logger.debug(f"Config poll: login failed for {ip}: {login_result}")
+                    err = login_result if isinstance(login_result, str) else "login failed"
+                    db.update_device_config_poll_status(ip, "auth", err)
                     return
 
-            config = await client.get_config()
+            config, poll_status, poll_error = await client.fetch_config()
+            # 401/403 mid-session means our cached cookie expired (or perms
+            # changed) — that's an auth problem, not a generic HTTP one.
+            if poll_status == "http_status" and poll_error and (
+                "401" in poll_error or "403" in poll_error
+            ):
+                poll_status = "auth"
+            db.update_device_config_poll_status(ip, poll_status, poll_error)
             if config is None:
-                logger.debug(f"Config poll: failed to get config from {ip}")
+                logger.debug(f"Config poll: failed to get config from {ip}: {poll_status} {poll_error}")
                 return
 
             import hashlib

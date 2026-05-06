@@ -91,6 +91,15 @@ def _migrate(db):
     if "notes" not in sw_columns:
         db.execute("ALTER TABLE switches ADD COLUMN notes TEXT DEFAULT NULL")
 
+    # Add config-poll outcome columns to devices (issue #52)
+    dev_columns = [row[1] for row in db.execute("PRAGMA table_info(devices)").fetchall()]
+    if "last_config_poll_at" not in dev_columns:
+        db.execute("ALTER TABLE devices ADD COLUMN last_config_poll_at TEXT")
+    if "last_config_poll_status" not in dev_columns:
+        db.execute("ALTER TABLE devices ADD COLUMN last_config_poll_status TEXT")
+    if "last_config_poll_error" not in dev_columns:
+        db.execute("ALTER TABLE devices ADD COLUMN last_config_poll_error TEXT")
+
     # Add performance indexes for scaling
     db.execute("CREATE INDEX IF NOT EXISTS idx_schedule_log_timestamp ON schedule_log(timestamp DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_device_durations_job ON device_durations(job_id)")
@@ -365,6 +374,9 @@ def init_db():
                 active_bank INTEGER,
                 last_firmware_update TEXT,
                 notes TEXT,
+                last_config_poll_at TEXT,
+                last_config_poll_status TEXT,
+                last_config_poll_error TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
             );
@@ -1228,6 +1240,21 @@ def update_device_status(ip: str, last_seen: str = None, last_error: str = _UNSE
         if updates:
             set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
             db.execute(f"UPDATE devices SET {set_clause} WHERE ip = ?", (*updates.values(), ip))
+
+
+def update_device_config_poll_status(ip: str, status: str, error: Optional[str] = None) -> None:
+    """Record the outcome of a config-poll attempt for a device.
+
+    `status` is one of: ok, timeout, http_status, json_decode, auth, unknown.
+    `error` carries a short human-readable detail (for surfacing in the UI).
+    Quietly no-ops on rows not in the devices table (e.g. CPEs in cpe_cache).
+    """
+    with get_db() as db:
+        db.execute(
+            "UPDATE devices SET last_config_poll_at = ?, last_config_poll_status = ?, "
+            "last_config_poll_error = ? WHERE ip = ?",
+            (datetime.now().isoformat(), status, error, ip),
+        )
 
 
 def delete_device(ip: str):

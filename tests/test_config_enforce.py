@@ -598,3 +598,162 @@ class TestConfigPollCatchup:
             await poller._maybe_poll_configs()
 
         poll.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Per-device polling-failure surfacing (issue #52)
+# ---------------------------------------------------------------------------
+
+
+class TestFetchConfigClassification:
+    """`TachyonClient.fetch_config` returns (config, status, error_msg) so the
+    poller can persist *why* a config-poll attempt failed."""
+
+    @pytest.mark.asyncio
+    async def test_ok_status_on_successful_poll(self):
+        from updater.vendors.tachyon.client import TachyonClient
+        client = TachyonClient("10.0.0.1", "root", "pass")
+        with patch.object(client, "_curl", new=AsyncMock(return_value=(200, '{"x": 1}'))):
+            config, status, err = await client.fetch_config()
+        assert status == "ok"
+        assert config == {"x": 1}
+        assert err is None
+
+    @pytest.mark.asyncio
+    async def test_http_status_when_non_200(self):
+        from updater.vendors.tachyon.client import TachyonClient
+        client = TachyonClient("10.0.0.1", "root", "pass")
+        with patch.object(client, "_curl", new=AsyncMock(return_value=(401, "auth failed"))):
+            config, status, err = await client.fetch_config()
+        assert status == "http_status"
+        assert config is None
+        assert "401" in err
+
+    @pytest.mark.asyncio
+    async def test_json_decode_when_body_unparseable(self):
+        from updater.vendors.tachyon.client import TachyonClient
+        client = TachyonClient("10.0.0.1", "root", "pass")
+        with patch.object(client, "_curl", new=AsyncMock(return_value=(200, "not-json"))):
+            config, status, err = await client.fetch_config()
+        assert status == "json_decode"
+        assert config is None
+        assert err is not None
+
+    @pytest.mark.asyncio
+    async def test_timeout_classified_explicitly(self):
+        import asyncio
+        from updater.vendors.tachyon.client import TachyonClient
+        client = TachyonClient("10.0.0.1", "root", "pass")
+        with patch.object(client, "_curl", new=AsyncMock(side_effect=asyncio.TimeoutError())):
+            config, status, err = await client.fetch_config()
+        assert status == "timeout"
+        assert config is None
+
+    @pytest.mark.asyncio
+    async def test_curl_runtime_error_classified_unknown(self):
+        from updater.vendors.tachyon.client import TachyonClient
+        client = TachyonClient("10.0.0.1", "root", "pass")
+        with patch.object(client, "_curl", new=AsyncMock(side_effect=RuntimeError("curl: connection refused"))):
+            config, status, err = await client.fetch_config()
+        assert status == "unknown"
+        assert "connection refused" in err
+
+
+class TestPollerWritesPollStatus:
+    """Issue #52: `_fetch_and_store_config` should persist the per-device
+    poll outcome so the dashboard can surface failures with a reason."""
+
+    @pytest.mark.asyncio
+    async def test_records_ok_status_on_success(self, scoped_db):
+        poller = NetworkPoller()
+        fake_client = MagicMock()
+        fake_client.connect = AsyncMock(return_value=True)
+        fake_client.fetch_config = AsyncMock(return_value=({"x": 1}, "ok", None))
+        fake_client.get_hardware_id = MagicMock(return_value="tn-110")
+        with patch("updater.poller.get_driver", return_value=lambda *a, **kw: fake_client):
+            await poller._fetch_and_store_config("10.0.0.1", "root", "pass", "TNA-301")
+        row = scoped_db.execute(
+            "SELECT last_config_poll_status, last_config_poll_error "
+            "FROM devices WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert row["last_config_poll_status"] == "ok"
+        assert row["last_config_poll_error"] is None
+
+    @pytest.mark.asyncio
+    async def test_records_failure_classification(self, scoped_db):
+        poller = NetworkPoller()
+        fake_client = MagicMock()
+        fake_client.connect = AsyncMock(return_value=True)
+        fake_client.fetch_config = AsyncMock(
+            return_value=(None, "http_status", "HTTP 500")
+        )
+        with patch("updater.poller.get_driver", return_value=lambda *a, **kw: fake_client):
+            await poller._fetch_and_store_config("10.0.0.1", "root", "pass")
+        row = scoped_db.execute(
+            "SELECT last_config_poll_status, last_config_poll_error "
+            "FROM devices WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert row["last_config_poll_status"] == "http_status"
+        assert row["last_config_poll_error"] == "HTTP 500"
+
+    @pytest.mark.asyncio
+    async def test_records_auth_failure_when_login_fails(self, scoped_db):
+        poller = NetworkPoller()
+        fake_client = MagicMock()
+        fake_client.connect = AsyncMock(return_value="bad password")
+        with patch("updater.poller.get_driver", return_value=lambda *a, **kw: fake_client):
+            await poller._fetch_and_store_config("10.0.0.1", "root", "wrong")
+        row = scoped_db.execute(
+            "SELECT last_config_poll_status, last_config_poll_error "
+            "FROM devices WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert row["last_config_poll_status"] == "auth"
+        assert "bad password" in row["last_config_poll_error"]
+
+    @pytest.mark.asyncio
+    async def test_http_401_reclassified_as_auth(self, scoped_db):
+        """A 401/403 mid-session (cookie expired) is an auth problem, not a
+        generic HTTP one — should land as `auth` for clearer operator signal."""
+        poller = NetworkPoller()
+        fake_client = MagicMock()
+        fake_client.connect = AsyncMock(return_value=True)
+        fake_client.fetch_config = AsyncMock(
+            return_value=(None, "http_status", "HTTP 401")
+        )
+        with patch("updater.poller.get_driver", return_value=lambda *a, **kw: fake_client):
+            await poller._fetch_and_store_config("10.0.0.1", "root", "pass")
+        row = scoped_db.execute(
+            "SELECT last_config_poll_status FROM devices WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert row["last_config_poll_status"] == "auth"
+
+    @pytest.mark.asyncio
+    async def test_http_403_reclassified_as_auth(self, scoped_db):
+        poller = NetworkPoller()
+        fake_client = MagicMock()
+        fake_client.connect = AsyncMock(return_value=True)
+        fake_client.fetch_config = AsyncMock(
+            return_value=(None, "http_status", "HTTP 403")
+        )
+        with patch("updater.poller.get_driver", return_value=lambda *a, **kw: fake_client):
+            await poller._fetch_and_store_config("10.0.0.1", "root", "pass")
+        row = scoped_db.execute(
+            "SELECT last_config_poll_status FROM devices WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert row["last_config_poll_status"] == "auth"
+
+    @pytest.mark.asyncio
+    async def test_http_500_stays_as_http_status(self, scoped_db):
+        """Non-auth HTTP errors should stay classified as http_status."""
+        poller = NetworkPoller()
+        fake_client = MagicMock()
+        fake_client.connect = AsyncMock(return_value=True)
+        fake_client.fetch_config = AsyncMock(
+            return_value=(None, "http_status", "HTTP 500")
+        )
+        with patch("updater.poller.get_driver", return_value=lambda *a, **kw: fake_client):
+            await poller._fetch_and_store_config("10.0.0.1", "root", "pass")
+        row = scoped_db.execute(
+            "SELECT last_config_poll_status FROM devices WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert row["last_config_poll_status"] == "http_status"
