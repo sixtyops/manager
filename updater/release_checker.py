@@ -797,6 +797,43 @@ async def apply_update() -> dict:
                 "message": "Could not determine current version for rollback",
             }
 
+        # Detect uncommitted changes to tracked files BEFORE attempting checkout.
+        # `git checkout <tag>` aborts with "Your local changes would be overwritten"
+        # if any tracked file is dirty, leaving the operator with a confusing error
+        # and no in-app affordance to recover. Surface a structured response instead
+        # so the UI can render a clear "resolve dirty files on host and retry"
+        # message. Untracked (??) and ignored (!!) files don't block checkout,
+        # so don't flag them.
+        status_result = subprocess.run(
+            git_cmd + ["status", "--porcelain"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if status_result.returncode == 0 and status_result.stdout.strip():
+            dirty_files = []
+            for line in status_result.stdout.splitlines():
+                if len(line) < 4:
+                    continue
+                code, path = line[:2], line[3:]
+                if code[0] in "?!" and code[1] in "?!":
+                    continue
+                dirty_files.append(path)
+            if dirty_files:
+                return {
+                    "success": False,
+                    "dirty_tree": True,
+                    "dirty_files": dirty_files,
+                    "message": (
+                        f"Cannot apply update: {len(dirty_files)} tracked file(s) "
+                        "in the manager repo on the host have uncommitted local "
+                        "changes that would be overwritten. Resolve them on the "
+                        "host (stash, commit, or revert) and retry."
+                    ),
+                    "suggested_command": (
+                        f"git -C {repo_dir} stash push -m 'pre-update auto-stash' -- "
+                        + " ".join(dirty_files)
+                    ),
+                }
+
         # Fetch the specific release tag (not all of main)
         logger.info(f"Fetching tag {target_tag} in {repo_dir}...")
         fetch_result = subprocess.run(
