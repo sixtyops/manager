@@ -93,7 +93,11 @@ Users on the dev update channel will receive pre-releases automatically.
 - Standard deployment command uses both compose files:
   `docker compose -f docker-compose.yml -f docker-compose.standalone.yml up -d --build`.
 - Base compose publishes `8000/tcp` and `1812/udp`; standalone overlay adds
-  nginx ports `80/443` and certbot renewal loop (12h).
+  nginx ports `80/443` and certbot renewal loop (12h). The base publishes
+  are env-overridable: set `BIND_IP=<host-ip>`, `HOST_PORT=<port>`, and/or
+  `RADIUS_HOST_PORT=<port>` to bind to a specific host IP / different host
+  port without editing `docker-compose.yml` (which would leave the tree
+  dirty and break the in-app self-update path).
 - Persistent directories are bind mounts: `./data`, `./firmware`, `./backups`,
   plus nginx/certbot directories in standalone mode.
 - Host directories must be writable by UID/GID `1500` (container `appuser`);
