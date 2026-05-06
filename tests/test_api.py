@@ -830,9 +830,13 @@ class TestConfigsAPI:
         assert resp.status_code == 404
 
     def test_download_config_tar(self, authed_client, mock_db):
+        from updater import __version__
         self._seed_config(mock_db, "10.0.0.1")
-        row = mock_db.execute("SELECT id FROM device_configs WHERE ip = '10.0.0.1'").fetchone()
+        row = mock_db.execute(
+            "SELECT id, config_hash FROM device_configs WHERE ip = '10.0.0.1'"
+        ).fetchone()
         config_id = row[0]
+        expected_hash = row[1]
         resp = authed_client.get(f"/api/configs/10.0.0.1/download/{config_id}")
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "application/x-tar"
@@ -848,9 +852,15 @@ class TestConfigsAPI:
             config_file = tar.extractfile("config.json")
             config_data = json.loads(config_file.read())
             assert config_data["network"]["hostname"] == "ap-test"
-            # Verify CONTROL contents
-            control_file = tar.extractfile("CONTROL")
-            assert control_file.read().decode() == "tn-110-prs"
+            # Verify CONTROL contents — key=value manifest with integrity fields
+            control_text = tar.extractfile("CONTROL").read().decode()
+            fields = dict(
+                line.split("=", 1) for line in control_text.strip().splitlines()
+            )
+            assert fields["hardware_id"] == "tn-110-prs"
+            assert fields["fetched_at"] == "2026-02-19T12:00:00"
+            assert fields["config_hash"] == expected_hash
+            assert fields["manager_version"] == __version__
 
     def test_download_config_tar_not_found(self, authed_client):
         resp = authed_client.get("/api/configs/10.0.0.1/download/9999")
