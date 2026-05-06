@@ -6731,9 +6731,11 @@ async def rollback_device_config(ip: str, request: Request, session: dict = Depe
     """Rollback a device to a specific or previous config snapshot."""
     # Parse optional body for arbitrary snapshot selection
     target_config_id = None
+    force = False
     try:
         body = await request.json()
         target_config_id = body.get("config_id")
+        force = bool(body.get("force"))
     except Exception:
         pass  # No body = legacy behavior (previous snapshot)
 
@@ -6770,7 +6772,11 @@ async def rollback_device_config(ip: str, request: Request, session: dict = Depe
     if login_result is not True:
         raise HTTPException(502, f"Login failed: {login_result}")
 
-    # Safety: save current config before rollback so rollback itself is reversible
+    # Safety: save current config before rollback so rollback itself is reversible.
+    # If we can't capture this snapshot, refuse to proceed unless the operator
+    # explicitly opts in with force=true — otherwise the rollback is one-way.
+    safety_snapshot_saved = False
+    safety_snapshot_error: Optional[str] = None
     try:
         current_config = await client.get_config()
         if current_config:
@@ -6779,8 +6785,40 @@ async def rollback_device_config(ip: str, request: Request, session: dict = Depe
             model = device.get("model")
             hardware_id = client.get_hardware_id(model)
             db.save_device_config(ip, pre_json, pre_hash, model, hardware_id)
-    except Exception:
-        pass  # Continue with rollback — dry-run will catch invalid configs
+            safety_snapshot_saved = True
+        else:
+            safety_snapshot_error = "device returned empty config"
+    except Exception as e:
+        safety_snapshot_error = str(e) or e.__class__.__name__
+
+    if not safety_snapshot_saved:
+        if not force:
+            logger.error(
+                "Pre-rollback safety snapshot for %s failed (%s); refusing rollback. "
+                "Pass force=true to override.",
+                ip, safety_snapshot_error or "unknown error",
+            )
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "safety_snapshot_failed",
+                    "message": (
+                        f"Pre-rollback safety snapshot failed: "
+                        f"{safety_snapshot_error or 'unknown error'}. "
+                        "Pass force=true to roll back without a safety snapshot."
+                    ),
+                    "snapshot_error": safety_snapshot_error or "unknown error",
+                },
+            )
+        logger.warning(
+            "Rolling back %s without pre-rollback safety snapshot (force=true by %s): %s",
+            ip, session["username"], safety_snapshot_error or "unknown error",
+        )
+        db.log_audit(
+            session["username"], "config.rollback.force", "device", ip,
+            f"Forced rollback without safety snapshot: {safety_snapshot_error or 'unknown error'}",
+            _client_ip(request),
+        )
 
     dry_result = await client.apply_config(rollback_config, dry_run=True)
     if not dry_result.get("success"):
@@ -6797,7 +6835,12 @@ async def rollback_device_config(ip: str, request: Request, session: dict = Depe
     if poller:
         asyncio.create_task(poller.poll_configs_for_ips([ip]))
 
-    return {"status": "success", "ip": ip, "rolled_back_to": target_snapshot["fetched_at"]}
+    return {
+        "status": "success",
+        "ip": ip,
+        "rolled_back_to": target_snapshot["fetched_at"],
+        "safety_snapshot_saved": safety_snapshot_saved,
+    }
 
 
 # ---------------------------------------------------------------------------

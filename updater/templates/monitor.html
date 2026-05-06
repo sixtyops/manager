@@ -9003,16 +9003,29 @@
                 { title: 'Restore Config Snapshot', confirmText: 'Restore', danger: true }
             );
             if (!confirmed) return;
-            try {
+            const doRollback = async (force) => {
                 const resp = await fetch(`/api/config-push/rollback/${encodeURIComponent(ip)}`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({config_id: configId}),
+                    body: JSON.stringify(force ? {config_id: configId, force: true} : {config_id: configId}),
                 });
-                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Rollback failed'); }
-                const data = await resp.json();
-                showToast('Config restored to ' + data.rolled_back_to);
-                // Close the config modal and refresh
+                return { resp, body: await resp.json().catch(() => ({})) };
+            };
+            const detailString = (d) => (typeof d === 'string' ? d : (d && d.message) || '');
+            try {
+                let { resp, body } = await doRollback(false);
+                if (resp.status === 409 && body.detail && body.detail.code === 'safety_snapshot_failed') {
+                    const proceed = await showConfirmDialog(
+                        body.detail.message + '\n\nProceeding will roll back without a safety net — you will not be able to undo this rollback automatically.',
+                        { title: 'Safety Snapshot Failed', confirmText: 'Force Rollback', danger: true }
+                    );
+                    if (!proceed) return;
+                    ({ resp, body } = await doRollback(true));
+                }
+                if (!resp.ok) throw new Error(detailString(body.detail) || 'Rollback failed');
+                const msg = 'Config restored to ' + body.rolled_back_to
+                    + (body.safety_snapshot_saved === false ? ' (no safety snapshot)' : '');
+                showToast(msg);
                 document.querySelectorAll('.backup-overlay').forEach(o => o.remove());
             } catch (e) {
                 showToast('Restore failed: ' + e.message);

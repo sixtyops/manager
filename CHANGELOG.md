@@ -43,6 +43,7 @@ All notable changes to this project are documented in this file.
 - `trigger_canary_now` no longer raises `ValueError` when settings like `parallel_updates` or `min_temperature_c` are malformed; uses the safe `_as_int` / `_as_float` helpers
 - Time-source drift validation samples the system clock after the external HTTP response so request latency cannot register as drift
 - Stale job-completion events post-restart are now logged and reconciled if the active rollout still tracks the job_id, instead of silent drop
+- Pre-rollback safety snapshot is now mandatory: if `/api/config-push/rollback/{ip}` can't capture the current config (device unreachable for fetch, empty response), the rollback is refused with HTTP 409 instead of proceeding silently. Operators can override with `force=true` in the request body, which logs a warning and writes a `config.rollback.force` audit-log entry. The response now includes `safety_snapshot_saved`, and the UI re-prompts the operator before forcing
 
 ## 1.3.0 - 2026-04-08
 
