@@ -6,7 +6,7 @@ import logging
 import math
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from . import database as db
@@ -690,6 +690,15 @@ class NetworkPoller:
         Without this, a manager that restarts after the daily window would lose
         the in-memory _last_config_poll and skip the day silently.
 
+        Fallback: if the `last_config_poll_at` setting is missing or
+        unparseable but `device_configs` has live rows, derive the timestamp
+        from MAX(fetched_at). This unblocks managers upgraded from a build
+        that predates the persistence added in #67 — without it, those
+        managers would silently wait for the next 04:00 window even though
+        cached configs are days stale. Real fresh installs (no setting AND
+        no rows) keep the previous behavior: `_last_config_poll` stays None
+        and `_poll_missing_configs` handles brand-new devices.
+
         Note: _last_config_poll is intentionally a *naive* datetime — it
         records the wall-clock instant we polled, and the catch-up branch
         compares it via duration math (datetime.now() - _last_config_poll).
@@ -699,12 +708,42 @@ class NetworkPoller:
             return
         self._last_config_poll_hydrated = True
         raw = db.get_setting("last_config_poll_at")
-        if not raw:
-            return
+        if raw:
+            try:
+                self._last_config_poll = datetime.fromisoformat(raw)
+                return
+            except (ValueError, TypeError):
+                logger.warning("Stored last_config_poll_at is unparseable: %r", raw)
+
+        fallback = db.get_latest_config_fetched_at()
+        if fallback:
+            self._last_config_poll = self._parse_fallback_fetched_at(fallback)
+
+    @staticmethod
+    def _parse_fallback_fetched_at(raw: str) -> Optional[datetime]:
+        """Parse a `device_configs.fetched_at` value for hydration fallback.
+
+        Two writers produce this column. `save_device_config` uses
+        `datetime.now().isoformat()` — naive local, `T` separator. The
+        schema's `CURRENT_TIMESTAMP` default would produce naive UTC with
+        a space separator. Map both to naive local so catch-up math stays
+        in one timezone, then clamp to `datetime.now()` so a future-dated
+        row (clock skew, residual UTC quirk) can't suppress catch-up by
+        making `stale_for` negative.
+        """
         try:
-            self._last_config_poll = datetime.fromisoformat(raw)
+            parsed = datetime.fromisoformat(raw)
         except (ValueError, TypeError):
-            logger.warning("Stored last_config_poll_at is unparseable: %r", raw)
+            logger.warning("Fallback fetched_at unparseable: %r", raw)
+            return None
+        if "T" not in raw:
+            parsed = (
+                parsed.replace(tzinfo=timezone.utc)
+                .astimezone()
+                .replace(tzinfo=None)
+            )
+        now = datetime.now()
+        return now if parsed > now else parsed
 
     def _record_last_config_poll(self) -> None:
         """Stamp _last_config_poll and persist it so a restart after the daily
