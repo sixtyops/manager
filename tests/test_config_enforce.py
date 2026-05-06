@@ -623,6 +623,49 @@ class TestConfigPollCatchup:
         assert poller._last_config_poll == datetime.fromisoformat(ts)
         assert poller._last_config_poll_hydrated is True
 
+    def test_hydrate_corrupt_setting_falls_back_to_rows(self, scoped_db):
+        """Corrupt persisted setting plus live config rows: fall back to
+        MAX(fetched_at) instead of leaving `_last_config_poll` as None.
+        `test_hydrate_handles_corrupt_value` covers the no-rows case; this
+        locks in the precedence (parse-fail ⇒ try fallback) when rows do
+        exist."""
+        from datetime import datetime
+
+        db.set_setting("last_config_poll_at", "not-a-timestamp")
+        ts = "2026-05-01T04:00:00"
+        scoped_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.1", "{}", "h", ts),
+        )
+        scoped_db.commit()
+
+        poller = NetworkPoller()
+        poller._hydrate_last_config_poll()
+
+        assert poller._last_config_poll == datetime.fromisoformat(ts)
+
+    def test_hydrate_setting_wins_over_rows_when_present(self, scoped_db):
+        """Precedence contract: a parseable setting is authoritative even
+        if `device_configs` has a newer row. The setting means "manager
+        observed a poll completion"; rows can advance ahead of it (e.g.,
+        priming runs) and shouldn't override the canonical value."""
+        from datetime import datetime
+
+        setting_ts = datetime(2026, 4, 1, 4, 0, 0)
+        db.set_setting("last_config_poll_at", setting_ts.isoformat())
+        scoped_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.1", "{}", "h", "2026-05-01T04:00:00"),
+        )
+        scoped_db.commit()
+
+        poller = NetworkPoller()
+        poller._hydrate_last_config_poll()
+
+        assert poller._last_config_poll == setting_ts
+
     def test_hydrate_fallback_ignores_soft_deleted_rows(self, scoped_db):
         """If every config row is soft-deleted, no fallback timestamp.
         Preserves fresh-install semantics for the recycle-bin-only state."""

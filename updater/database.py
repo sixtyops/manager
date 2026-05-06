@@ -2783,6 +2783,15 @@ def get_latest_config_fetched_at() -> Optional[str]:
     and `poll_configs_for_ips` post-push refetch — so it is *not* equivalent
     to "the manager observed a successful daily poll completion". The
     poller treats it as a conservative lower bound on freshness.
+
+    Caveat: `fetched_at` is TEXT and SQLite compares lexicographically. The
+    column has two writer formats — `save_device_config` writes T-separated
+    local time; the schema's `CURRENT_TIMESTAMP` default writes space-
+    separated UTC. ASCII space (0x20) sorts below `T` (0x54), so at the
+    same wall-clock instant the space-separator row sorts lower and `MAX`
+    prefers the T-separator row. The chosen timestamp may therefore be
+    slightly earlier than the true freshest insert when the formats are
+    mixed — only ever over-eager for catch-up, never suppressive.
     """
     with get_db() as db:
         row = db.execute(
