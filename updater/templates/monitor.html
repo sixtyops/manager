@@ -10330,6 +10330,7 @@
                     if (!tbody) return;
                     tbody.innerHTML = '';
                     const users = data.users || [];
+                    const oidcAdminGroupConfigured = !!data.oidc_admin_group_configured;
                     const adminCount = users.filter(u => u.role === 'admin' && u.enabled).length;
                     users.forEach(u => {
                         const row = document.createElement('tr');
@@ -10345,13 +10346,17 @@
                             ? 'You cannot disable your own account'
                             : (u.enabled ? 'Disable user' : 'Enable user');
                         const disableBlocked = isSelf && u.enabled;
+                        const roleManagedByIdp = u.auth_method === 'oidc' && oidcAdminGroupConfigured;
+                        const roleSelectAttrs = roleManagedByIdp
+                            ? ' disabled title="Role is managed by your identity provider\'s admin group"'
+                            : '';
                         row.innerHTML = `
                             <td style="font-weight:500;">${escapeHtml(u.username)}${isSelf ? ' <span class="u-text-xxs-dim">(you)</span>' : ''}</td>
                             <td>${escapeHtml(u.role)}</td>
                             <td>${escapeHtml(u.auth_method || 'local')}</td>
                             <td><span class="${statusCls}">${statusText}</span></td>
                             <td><div class="user-actions">
-                                <select onchange="changeUserRole(${u.id}, this.value)" class="user-role-select" aria-label="Change role">
+                                <select onchange="changeUserRole(${u.id}, this.value)" class="user-role-select" aria-label="Change role"${roleSelectAttrs}>
                                     <option value="admin"${u.role==='admin'?' selected':''}>Admin</option>
                                     <option value="operator"${u.role==='operator'?' selected':''}>Operator</option>
                                     <option value="viewer"${u.role==='viewer'?' selected':''}>Viewer</option>
@@ -10400,18 +10405,19 @@
                 body: JSON.stringify({role: newRole})
             })
             .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.detail); }); return r.json(); })
-            .then(() => loadUsers())
+            .then(() => { showToast('Role updated', 'success'); loadUsers(); })
             .catch(err => { alert('Error: ' + err.message); loadUsers(); });
         }
 
         function toggleUserEnabled(userId, enabled) {
+            const targetEnabled = enabled === 'true' || enabled === true;
             fetch(`/api/users/${userId}`, {
                 method: 'PUT',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({enabled: enabled === 'true' || enabled === true})
+                body: JSON.stringify({enabled: targetEnabled})
             })
             .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.detail); }); return r.json(); })
-            .then(() => loadUsers())
+            .then(() => { showToast(targetEnabled ? 'User enabled' : 'User disabled', 'success'); loadUsers(); })
             .catch(err => { alert('Error: ' + err.message); loadUsers(); });
         }
 

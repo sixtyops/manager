@@ -15,6 +15,7 @@ import bcrypt as _bcrypt
 from fastapi import Depends, Request, WebSocket, HTTPException
 
 from . import database as db
+from . import oidc_config
 
 logger = logging.getLogger(__name__)
 
@@ -196,8 +197,6 @@ def authenticate_oidc_user(email: str, groups: list[str]) -> Optional[str]:
 
     Returns the email as session username if authorized, None otherwise.
     """
-    from . import oidc_config
-
     config = oidc_config.get_oidc_config()
     if not config.enabled or not config.allowed_group:
         return None
@@ -214,15 +213,21 @@ def authenticate_oidc_user(email: str, groups: list[str]) -> Optional[str]:
 def ensure_oidc_user(email: str, groups: list[str] | None = None) -> dict:
     """Ensure an OIDC user exists in the users table. Returns user dict.
 
-    If an admin_group is configured and the user belongs to it, they get
-    the admin role. Otherwise they fall back to viewer while that mapping
-    is configured, or to oidc_default_role when no admin_group is set.
-    Role is re-evaluated on every login so group changes take effect.
-    """
+    If an admin_group is configured, role is re-evaluated from the IdP
+    groups on every login (admin_group members get admin, everyone else
+    gets viewer) so group changes take effect immediately.
 
+    If no admin_group is configured, oidc_default_role is used only when
+    the user is first created; on subsequent logins the stored role is
+    preserved so admin overrides made in the UI are not clobbered.
+    """
     user = db.get_user(email)
     if user:
-        if user.get("auth_method") == "oidc" and groups is not None:
+        if (
+            user.get("auth_method") == "oidc"
+            and groups is not None
+            and oidc_config.get_oidc_config().admin_group
+        ):
             role = _resolve_oidc_role(groups)
             if user["role"] != role:
                 db.update_user(user["id"], role=role)
@@ -237,8 +242,6 @@ def ensure_oidc_user(email: str, groups: list[str] | None = None) -> dict:
 
 def _resolve_oidc_role(groups: list[str] | None) -> str:
     """Determine the role for an OIDC user based on their group membership."""
-    from . import oidc_config
-
     config = oidc_config.get_oidc_config()
     normalized_groups = _normalize_oidc_groups(groups)
     if config.admin_group:

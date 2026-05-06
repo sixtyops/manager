@@ -3099,7 +3099,10 @@ async def get_current_user(session: dict = Depends(require_auth)):
 @app.get("/api/users", tags=["auth"], dependencies=[Depends(require_role("admin"))])
 async def list_users_api():
     """List all users (admin only)."""
-    return {"users": db.list_users()}
+    return {
+        "users": db.list_users(),
+        "oidc_admin_group_configured": bool(oidc_config.get_oidc_config().admin_group),
+    }
 
 
 @app.post("/api/users", tags=["auth"])
