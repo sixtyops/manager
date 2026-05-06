@@ -30,7 +30,9 @@ def test_compose_yaml_parses(compose_doc):
 def test_publish_ports_use_env_substitution(compose_doc):
     """Each `ports:` entry must use ${VAR:-default} syntax so deployments
     can override BIND_IP / HOST_PORT / RADIUS_HOST_PORT without editing the
-    file in place."""
+    file in place. Specifically guard the BIND_IP knob — that one is
+    load-bearing for multi-tenant hosts (a refactor to ${PORT:-8000}:8000
+    that drops the bind-IP would still pass a generic ${ check)."""
     ports = compose_doc["services"]["sixtyops-mgmt"]["ports"]
     assert ports, "sixtyops-mgmt must declare published ports"
     for entry in ports:
@@ -40,6 +42,10 @@ def test_publish_ports_use_env_substitution(compose_doc):
         assert "${" in entry, (
             f"Port entry {entry!r} hardcodes its host bind. Use "
             "${BIND_IP:-0.0.0.0}:${HOST_PORT:-...}:<container_port> instead."
+        )
+        assert "${BIND_IP" in entry, (
+            f"Port entry {entry!r} dropped the BIND_IP knob — operators on "
+            "multi-tenant hosts need this to bind a specific IP."
         )
 
 

@@ -97,7 +97,13 @@ Users on the dev update channel will receive pre-releases automatically.
   are env-overridable: set `BIND_IP=<host-ip>`, `HOST_PORT=<port>`, and/or
   `RADIUS_HOST_PORT=<port>` to bind to a specific host IP / different host
   port without editing `docker-compose.yml` (which would leave the tree
-  dirty and break the in-app self-update path).
+  dirty and break the in-app self-update path). Set them in a `.env` file
+  next to `docker-compose.yml` or export them in the shell that runs
+  `docker compose up` — these are *Compose substitution* vars, not the
+  service's own `environment:` block. If the deployment also has a
+  `docker-compose.override.yml` re-publishing the same port, drop that
+  override after switching to env vars or Compose's list-merge will append
+  both entries.
 - Persistent directories are bind mounts: `./data`, `./firmware`, `./backups`,
   plus nginx/certbot directories in standalone mode.
 - Host directories must be writable by UID/GID `1500` (container `appuser`);
