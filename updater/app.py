@@ -5933,14 +5933,28 @@ async def download_config_tar(ip: str, config_id: int, session: dict = Depends(r
     pretty_json = json.dumps(config_data, indent=2)
 
     hardware_id = config.get("hardware_id") or "tn-110-prs"
+    fetched_at = config.get("fetched_at") or ""
+    config_hash = config.get("config_hash") or ""
+    if not fetched_at or not config_hash:
+        # Defensive: device_configs columns are populated on every save, so a
+        # missing field here means a corrupt or partially-restored row. Log
+        # so an operator can spot it; still emit the manifest with empty
+        # fields rather than 500ing on an otherwise-valid download.
+        logger.warning(
+            "Config tar for %s id=%s missing integrity fields "
+            "(fetched_at=%r, config_hash=%r)",
+            ip, config_id, fetched_at, config_hash,
+        )
 
-    # CONTROL is now a key=value manifest so an importer can verify integrity
-    # before applying. Fields are newline-delimited; hardware_id stays first
-    # so any tool reading just the first line still gets the right value.
+    # CONTROL is a key=value manifest so a future importer can verify
+    # integrity before applying. Fields are newline-delimited (os-release
+    # style); this format is a deliberate break from the prior bare
+    # hardware_id text — there's no current importer to be backward-
+    # compatible with (per issue #43).
     control_lines = [
         f"hardware_id={hardware_id}",
-        f"fetched_at={config.get('fetched_at') or ''}",
-        f"config_hash={config.get('config_hash') or ''}",
+        f"fetched_at={fetched_at}",
+        f"config_hash={config_hash}",
         f"manager_version={__version__}",
     ]
     control_text = "\n".join(control_lines) + "\n"
