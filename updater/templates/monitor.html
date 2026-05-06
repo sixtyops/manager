@@ -5035,16 +5035,16 @@
                 ap: ap,
             }));
 
-            if (chart) {
-                chart.data.datasets[0].data = cpeData;
-                chart.data.datasets[1].data = offlineData;
-                chart.update();
-            } else {
-                try {
+            try {
+                if (chart) {
+                    chart.data.datasets[0].data = cpeData;
+                    chart.data.datasets[1].data = offlineData;
+                    chart.update();
+                } else {
                     initChart(cpeData, offlineData);
-                } catch (e) {
-                    console.error('Signal vs Distance chart failed to initialize:', e);
                 }
+            } catch (e) {
+                console.error('Signal vs Distance chart failed to render:', e);
             }
         }
 
@@ -5156,15 +5156,16 @@
                             grid: { color: '#e5e7eb' },
                             ticks: {
                                 color: '#6b7280',
-                                // Coerce + guard: when every CPE in scope has null link_distance,
-                                // all data sits at x=0 and Chart.js can hand the callback a
-                                // non-numeric value during the degenerate-range layout. The
-                                // un-guarded `meters.toFixed` inside formatDistance throws,
-                                // aborting the render before axes, grid, or threshold lines draw.
-                                callback: (v) => {
-                                    const n = Number(v);
-                                    return Number.isFinite(n) ? formatDistance(n) : '';
-                                },
+                                // Strict-type guard: when every CPE in scope has null
+                                // link_distance, all data sits at x=0 and Chart.js can hand
+                                // the callback a non-numeric value during the degenerate-range
+                                // layout. The un-guarded `meters.toFixed` inside formatDistance
+                                // throws, aborting the render before axes, grid, or threshold
+                                // lines draw. Reject non-numbers outright instead of coercing
+                                // (Number(null) → 0 would silently mislabel a tick as "0 m").
+                                callback: (v) => (typeof v === 'number' && Number.isFinite(v)
+                                    ? formatDistance(v)
+                                    : ''),
                             },
                             min: 0,
                             suggestedMax: 100,
