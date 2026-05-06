@@ -80,6 +80,166 @@ class TestAccessPoints:
         assert db.get_access_point("10.0.0.1") is None
 
 
+class TestDeleteDeviceCascade:
+    """Issue #56: deleting a device should cascade-clean audit/history rows
+    keyed by IP so they don't leak into a future device that reuses the IP."""
+
+    def _seed_history_rows(self, mock_db, ip: str):
+        mock_db.execute(
+            "INSERT INTO config_enforce_log (ip, status) VALUES (?, 'compliant')",
+            (ip,),
+        )
+        mock_db.execute(
+            "INSERT INTO device_update_history (ip, role, status) "
+            "VALUES (?, 'ap', 'success')",
+            (ip,),
+        )
+        mock_db.execute(
+            "INSERT INTO device_uptime_events (ip, device_type, event, occurred_at) "
+            "VALUES (?, 'ap', 'up', '2026-01-01T00:00:00')",
+            (ip,),
+        )
+        mock_db.commit()
+
+    def _count(self, mock_db, table: str, ip: str) -> int:
+        return mock_db.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE ip = ?", (ip,)
+        ).fetchone()[0]
+
+    def test_delete_device_purges_audit_history_rows(self, mock_db):
+        db.upsert_access_point("10.0.0.1", "root", "pass")
+        self._seed_history_rows(mock_db, "10.0.0.1")
+        # Sanity: rows exist before delete
+        assert self._count(mock_db, "config_enforce_log", "10.0.0.1") == 1
+        assert self._count(mock_db, "device_update_history", "10.0.0.1") == 1
+        assert self._count(mock_db, "device_uptime_events", "10.0.0.1") == 1
+
+        db.delete_access_point("10.0.0.1")
+
+        assert self._count(mock_db, "config_enforce_log", "10.0.0.1") == 0
+        assert self._count(mock_db, "device_update_history", "10.0.0.1") == 0
+        assert self._count(mock_db, "device_uptime_events", "10.0.0.1") == 0
+
+    def test_delete_ap_also_purges_cpe_history_rows(self, mock_db):
+        db.upsert_access_point("10.0.0.1", "root", "pass")
+        db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1"})
+        self._seed_history_rows(mock_db, "10.0.0.1")
+        self._seed_history_rows(mock_db, "1.1.1.1")
+
+        db.delete_access_point("10.0.0.1")
+
+        # CPE history is gone too — the CPE rode along when its parent AP
+        # was deleted, so its audit trail should not orphan
+        for table in (
+            "config_enforce_log",
+            "device_update_history",
+            "device_uptime_events",
+        ):
+            assert self._count(mock_db, table, "10.0.0.1") == 0
+            assert self._count(mock_db, table, "1.1.1.1") == 0
+
+    def test_delete_does_not_touch_other_devices_history(self, mock_db):
+        db.upsert_access_point("10.0.0.1", "root", "pass")
+        db.upsert_access_point("10.0.0.2", "root", "pass")
+        self._seed_history_rows(mock_db, "10.0.0.1")
+        self._seed_history_rows(mock_db, "10.0.0.2")
+
+        db.delete_access_point("10.0.0.1")
+
+        # Other device's rows untouched
+        assert self._count(mock_db, "config_enforce_log", "10.0.0.2") == 1
+        assert self._count(mock_db, "device_update_history", "10.0.0.2") == 1
+        assert self._count(mock_db, "device_uptime_events", "10.0.0.2") == 1
+
+    def test_delete_preserves_config_recycle_bin(self, mock_db):
+        """device_configs intentionally uses soft-delete (recycle bin),
+        not hard-delete — make sure the cascade fix didn't break that."""
+        import json
+        db.upsert_access_point("10.0.0.1", "root", "pass")
+        mock_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash) VALUES (?, ?, ?)",
+            ("10.0.0.1", json.dumps({"x": 1}), "h1"),
+        )
+        mock_db.commit()
+
+        db.delete_access_point("10.0.0.1")
+
+        # Row still exists, but with deleted_at set (recycle bin)
+        row = mock_db.execute(
+            "SELECT deleted_at FROM device_configs WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert row is not None
+        assert row["deleted_at"] is not None
+
+
+class TestCleanupOrphanedDeviceData:
+    """Issue #56: one-time migration script that purges audit rows whose
+    device was deleted before the cascade fix landed."""
+
+    def test_cleanup_removes_orphaned_rows_only(self, tmp_path):
+        # Build a fresh sqlite DB on disk so the script can open it directly.
+        import sqlite3
+        from scripts.cleanup_orphaned_device_data import cleanup
+
+        db_path = tmp_path / "sixtyops.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript("""
+            CREATE TABLE devices (ip TEXT PRIMARY KEY);
+            CREATE TABLE config_enforce_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT, status TEXT);
+            CREATE TABLE device_update_history (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT, role TEXT, status TEXT);
+            CREATE TABLE device_uptime_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT, device_type TEXT, event TEXT, occurred_at TEXT);
+        """)
+        conn.execute("INSERT INTO devices (ip) VALUES ('10.0.0.1')")
+        # 10.0.0.1 is live — these rows should stay
+        conn.execute("INSERT INTO config_enforce_log (ip, status) VALUES ('10.0.0.1', 'ok')")
+        conn.execute("INSERT INTO device_update_history (ip, role, status) VALUES ('10.0.0.1', 'ap', 'success')")
+        conn.execute("INSERT INTO device_uptime_events (ip, device_type, event, occurred_at) VALUES ('10.0.0.1', 'ap', 'up', '2026-01-01')")
+        # 10.0.0.99 is orphaned — these rows should be deleted
+        conn.execute("INSERT INTO config_enforce_log (ip, status) VALUES ('10.0.0.99', 'ok')")
+        conn.execute("INSERT INTO device_update_history (ip, role, status) VALUES ('10.0.0.99', 'ap', 'success')")
+        conn.execute("INSERT INTO device_uptime_events (ip, device_type, event, occurred_at) VALUES ('10.0.0.99', 'ap', 'up', '2026-01-01')")
+        conn.commit()
+        conn.close()
+
+        counts = cleanup(db_path, dry_run=False)
+        assert counts == {
+            "config_enforce_log": 1,
+            "device_update_history": 1,
+            "device_uptime_events": 1,
+        }
+
+        # Verify only the orphan rows were removed
+        verify = sqlite3.connect(str(db_path))
+        for table in ("config_enforce_log", "device_update_history", "device_uptime_events"):
+            rows = verify.execute(f"SELECT ip FROM {table}").fetchall()
+            assert rows == [("10.0.0.1",)], f"{table} should keep only the live IP"
+        verify.close()
+
+    def test_cleanup_dry_run_modifies_nothing(self, tmp_path):
+        import sqlite3
+        from scripts.cleanup_orphaned_device_data import cleanup
+
+        db_path = tmp_path / "sixtyops.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript("""
+            CREATE TABLE devices (ip TEXT PRIMARY KEY);
+            CREATE TABLE config_enforce_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT, status TEXT);
+            CREATE TABLE device_update_history (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT, role TEXT, status TEXT);
+            CREATE TABLE device_uptime_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT, device_type TEXT, event TEXT, occurred_at TEXT);
+        """)
+        conn.execute("INSERT INTO config_enforce_log (ip, status) VALUES ('10.0.0.99', 'ok')")
+        conn.commit()
+        conn.close()
+
+        counts = cleanup(db_path, dry_run=True)
+        assert counts["config_enforce_log"] == 1
+
+        verify = sqlite3.connect(str(db_path))
+        n = verify.execute("SELECT COUNT(*) FROM config_enforce_log").fetchone()[0]
+        assert n == 1, "dry-run should not delete anything"
+        verify.close()
+
+
 class TestCPECache:
     def test_upsert_and_get(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "green"})
