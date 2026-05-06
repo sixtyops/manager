@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import pytest
 
 from updater.oidc_config import OIDCConfig, get_oidc_config, set_oidc_config, is_oidc_enabled
-from updater.auth import authenticate_oidc_user
+from updater.auth import authenticate_oidc_user, ensure_oidc_user
 
 
 class TestOIDCConfig:
@@ -343,3 +343,136 @@ class TestOIDCLogout:
                     return_value="https://auth.example.com/end-session"):
             client.post("/logout", follow_redirects=False)
         assert db.get_session(session_id) is None
+
+
+class TestEnsureOIDCUserRolePersistence:
+    """Regression tests: manually set OIDC user roles must persist across logins
+    when no admin_group is configured. When admin_group IS configured, the IdP
+    is the source of truth and roles re-sync on every login.
+    """
+
+    def _set_config(self, admin_group=""):
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/",
+            client_id="c",
+            client_secret="s",
+            allowed_group="users",
+            admin_group=admin_group,
+        ))
+
+    def test_creates_user_with_oidc_default_role_when_no_admin_group(self, mock_db):
+        """First login creates user with oidc_default_role when admin_group unset."""
+        from updater import database as db
+        self._set_config(admin_group="")
+        db.set_setting("oidc_default_role", "viewer")
+
+        user = ensure_oidc_user("new@example.com", ["users"])
+        assert user["role"] == "viewer"
+        assert user["auth_method"] == "oidc"
+
+    def test_manual_role_override_persists_when_no_admin_group(self, mock_db):
+        """Regression: when admin_group is unset, an admin's manual role change
+        must NOT be reverted on the user's next login.
+        """
+        from updater import database as db
+        self._set_config(admin_group="")
+        db.set_setting("oidc_default_role", "viewer")
+
+        user = ensure_oidc_user("isaac@example.com", ["users"])
+        assert user["role"] == "viewer"
+
+        db.update_user(user["id"], role="admin")
+        assert db.get_user("isaac@example.com")["role"] == "admin"
+
+        user = ensure_oidc_user("isaac@example.com", ["users"])
+        assert user["role"] == "admin", (
+            "Manual role override must persist when admin_group is not configured"
+        )
+
+    def test_manual_role_override_persists_when_groups_change(self, mock_db):
+        """Even if the IdP returns different groups on each login, no admin_group
+        means the stored role wins.
+        """
+        from updater import database as db
+        self._set_config(admin_group="")
+        db.set_setting("oidc_default_role", "viewer")
+
+        ensure_oidc_user("isaac@example.com", ["users"])
+        user = db.get_user("isaac@example.com")
+        db.update_user(user["id"], role="operator")
+
+        ensure_oidc_user("isaac@example.com", ["different-group", "another"])
+        assert db.get_user("isaac@example.com")["role"] == "operator"
+
+    def test_manual_role_override_persists_when_groups_missing(self, mock_db):
+        """Login with no groups claim still preserves the manual role."""
+        from updater import database as db
+        self._set_config(admin_group="")
+        db.set_setting("oidc_default_role", "viewer")
+
+        ensure_oidc_user("isaac@example.com", [])
+        user = db.get_user("isaac@example.com")
+        db.update_user(user["id"], role="admin")
+
+        ensure_oidc_user("isaac@example.com", None)
+        assert db.get_user("isaac@example.com")["role"] == "admin"
+
+    def test_admin_group_promotes_member_on_every_login(self, mock_db):
+        """When admin_group is set and user is in it, role is forced to admin."""
+        from updater import database as db
+        self._set_config(admin_group="sixtyops-admins")
+
+        user_id = db.create_user("alice@example.com", None, "viewer", "oidc")
+
+        ensure_oidc_user("alice@example.com", ["users", "sixtyops-admins"])
+        assert db.get_user_by_id(user_id)["role"] == "admin"
+
+    def test_admin_group_demotes_non_member_on_every_login(self, mock_db):
+        """When admin_group is set and user is NOT in it, role is forced to viewer
+        even if an admin manually promoted them in the UI. IdP wins.
+        """
+        from updater import database as db
+        self._set_config(admin_group="sixtyops-admins")
+
+        user_id = db.create_user("bob@example.com", None, "admin", "oidc")
+
+        ensure_oidc_user("bob@example.com", ["users"])
+        assert db.get_user_by_id(user_id)["role"] == "viewer"
+
+    def test_local_users_unaffected_by_oidc_login(self, mock_db):
+        """ensure_oidc_user must not touch a row whose auth_method is 'local'."""
+        from updater import database as db
+        self._set_config(admin_group="sixtyops-admins")
+
+        user_id = db.create_user("admin2@example.com", "$bcrypt$hash", "admin", "local")
+
+        ensure_oidc_user("admin2@example.com", ["users"])
+        assert db.get_user_by_id(user_id)["role"] == "admin"
+        assert db.get_user_by_id(user_id)["auth_method"] == "local"
+
+
+class TestUsersListEndpoint:
+    """Regression tests for the GET /api/users response shape used by the
+    Local Users panel to know whether to disable the role dropdown.
+    """
+
+    def test_response_includes_oidc_admin_group_flag_false_by_default(self, authed_client):
+        resp = authed_client.get("/api/users")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "users" in data
+        assert data.get("oidc_admin_group_configured") is False
+
+    def test_response_flag_true_when_admin_group_configured(self, authed_client, mock_db):
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/",
+            client_id="c",
+            client_secret="s",
+            allowed_group="users",
+            admin_group="sixtyops-admins",
+        ))
+        resp = authed_client.get("/api/users")
+        assert resp.status_code == 200
+        assert resp.json()["oidc_admin_group_configured"] is True

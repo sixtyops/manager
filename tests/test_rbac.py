@@ -343,7 +343,11 @@ class TestOIDCUserCreation:
         user = ensure_oidc_user("demote@example.com", ["sixtyops-users"])
         assert user["role"] == "viewer"
 
-    def test_existing_oidc_user_is_re_evaluated_when_admin_group_mapping_is_removed(self, mock_db):
+    def test_stored_role_is_preserved_when_admin_group_mapping_is_removed(self, mock_db):
+        """Removing admin_group hands role management back to the UI: existing
+        users keep whatever role they already had (regardless of
+        oidc_default_role) so that admin overrides are not silently rewritten.
+        """
         from updater.oidc_config import OIDCConfig, set_oidc_config
 
         set_oidc_config(OIDCConfig(
@@ -368,7 +372,7 @@ class TestOIDCUserCreation:
         ))
 
         user = ensure_oidc_user("operator@example.com", ["sixtyops-users"])
-        assert user["role"] == "operator"
+        assert user["role"] == "admin"
 
 
 # ---------------------------------------------------------------------------
