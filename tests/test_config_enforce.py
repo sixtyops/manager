@@ -685,7 +685,7 @@ class TestPollerWritesPollStatus:
         fake_client = MagicMock()
         fake_client.connect = AsyncMock(return_value=True)
         fake_client.fetch_config = AsyncMock(
-            return_value=(None, "http_status", "HTTP 401")
+            return_value=(None, "http_status", "HTTP 500")
         )
         with patch("updater.poller.get_driver", return_value=lambda *a, **kw: fake_client):
             await poller._fetch_and_store_config("10.0.0.1", "root", "pass")
@@ -694,7 +694,7 @@ class TestPollerWritesPollStatus:
             "FROM devices WHERE ip = '10.0.0.1'"
         ).fetchone()
         assert row["last_config_poll_status"] == "http_status"
-        assert row["last_config_poll_error"] == "HTTP 401"
+        assert row["last_config_poll_error"] == "HTTP 500"
 
     @pytest.mark.asyncio
     async def test_records_auth_failure_when_login_fails(self, scoped_db):
@@ -709,3 +709,51 @@ class TestPollerWritesPollStatus:
         ).fetchone()
         assert row["last_config_poll_status"] == "auth"
         assert "bad password" in row["last_config_poll_error"]
+
+    @pytest.mark.asyncio
+    async def test_http_401_reclassified_as_auth(self, scoped_db):
+        """A 401/403 mid-session (cookie expired) is an auth problem, not a
+        generic HTTP one — should land as `auth` for clearer operator signal."""
+        poller = NetworkPoller()
+        fake_client = MagicMock()
+        fake_client.connect = AsyncMock(return_value=True)
+        fake_client.fetch_config = AsyncMock(
+            return_value=(None, "http_status", "HTTP 401")
+        )
+        with patch("updater.poller.get_driver", return_value=lambda *a, **kw: fake_client):
+            await poller._fetch_and_store_config("10.0.0.1", "root", "pass")
+        row = scoped_db.execute(
+            "SELECT last_config_poll_status FROM devices WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert row["last_config_poll_status"] == "auth"
+
+    @pytest.mark.asyncio
+    async def test_http_403_reclassified_as_auth(self, scoped_db):
+        poller = NetworkPoller()
+        fake_client = MagicMock()
+        fake_client.connect = AsyncMock(return_value=True)
+        fake_client.fetch_config = AsyncMock(
+            return_value=(None, "http_status", "HTTP 403")
+        )
+        with patch("updater.poller.get_driver", return_value=lambda *a, **kw: fake_client):
+            await poller._fetch_and_store_config("10.0.0.1", "root", "pass")
+        row = scoped_db.execute(
+            "SELECT last_config_poll_status FROM devices WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert row["last_config_poll_status"] == "auth"
+
+    @pytest.mark.asyncio
+    async def test_http_500_stays_as_http_status(self, scoped_db):
+        """Non-auth HTTP errors should stay classified as http_status."""
+        poller = NetworkPoller()
+        fake_client = MagicMock()
+        fake_client.connect = AsyncMock(return_value=True)
+        fake_client.fetch_config = AsyncMock(
+            return_value=(None, "http_status", "HTTP 500")
+        )
+        with patch("updater.poller.get_driver", return_value=lambda *a, **kw: fake_client):
+            await poller._fetch_and_store_config("10.0.0.1", "root", "pass")
+        row = scoped_db.execute(
+            "SELECT last_config_poll_status FROM devices WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert row["last_config_poll_status"] == "http_status"
