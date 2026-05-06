@@ -9011,17 +9011,18 @@
                 });
                 return { resp, body: await resp.json().catch(() => ({})) };
             };
+            const detailString = (d) => (typeof d === 'string' ? d : (d && d.message) || '');
             try {
                 let { resp, body } = await doRollback(false);
-                if (resp.status === 409 && body.detail && /safety snapshot/i.test(body.detail)) {
+                if (resp.status === 409 && body.detail && body.detail.code === 'safety_snapshot_failed') {
                     const proceed = await showConfirmDialog(
-                        body.detail + '\n\nProceeding will roll back without a safety net — you will not be able to undo this rollback automatically.',
+                        body.detail.message + '\n\nProceeding will roll back without a safety net — you will not be able to undo this rollback automatically.',
                         { title: 'Safety Snapshot Failed', confirmText: 'Force Rollback', danger: true }
                     );
                     if (!proceed) return;
                     ({ resp, body } = await doRollback(true));
                 }
-                if (!resp.ok) throw new Error(body.detail || 'Rollback failed');
+                if (!resp.ok) throw new Error(detailString(body.detail) || 'Rollback failed');
                 const msg = 'Config restored to ' + body.rolled_back_to
                     + (body.safety_snapshot_saved === false ? ' (no safety snapshot)' : '');
                 showToast(msg);

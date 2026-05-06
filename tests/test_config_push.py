@@ -274,15 +274,19 @@ class TestRollbackSafetySnapshot:
         with ctx:
             resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
         assert resp.status_code == 409, resp.text
-        assert "safety snapshot" in resp.json()["detail"].lower()
-        assert "force=true" in resp.json()["detail"]
+        detail = resp.json()["detail"]
+        assert detail["code"] == "safety_snapshot_failed"
+        assert "force=true" in detail["message"]
+        assert "device unreachable" in detail["snapshot_error"]
 
     def test_rollback_refuses_when_get_config_returns_empty(self, operator_client, rollback_db):
         ctx, _ = self._patch_client(get_config_result=None)
         with ctx:
             resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
         assert resp.status_code == 409, resp.text
-        assert "empty config" in resp.json()["detail"].lower()
+        detail = resp.json()["detail"]
+        assert detail["code"] == "safety_snapshot_failed"
+        assert "empty config" in detail["snapshot_error"].lower()
 
     def test_rollback_refuses_when_force_is_false(self, operator_client, rollback_db):
         ctx, _ = self._patch_client(get_config_raises=RuntimeError("boom"))

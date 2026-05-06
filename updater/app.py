@@ -6800,8 +6800,15 @@ async def rollback_device_config(ip: str, request: Request, session: dict = Depe
             )
             raise HTTPException(
                 409,
-                f"Pre-rollback safety snapshot failed: {safety_snapshot_error or 'unknown error'}. "
-                "Pass force=true to roll back without a safety snapshot.",
+                detail={
+                    "code": "safety_snapshot_failed",
+                    "message": (
+                        f"Pre-rollback safety snapshot failed: "
+                        f"{safety_snapshot_error or 'unknown error'}. "
+                        "Pass force=true to roll back without a safety snapshot."
+                    ),
+                    "snapshot_error": safety_snapshot_error or "unknown error",
+                },
             )
         logger.warning(
             "Rolling back %s without pre-rollback safety snapshot (force=true by %s): %s",
