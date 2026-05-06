@@ -2,9 +2,17 @@ services:
   sixtyops-mgmt:
     build: .
     container_name: sixtyops-management
+    # Host port publishes are env-overridable so site-specific deployments
+    # (e.g. a fork that needs to bind a single host IP, or shift the host
+    # port off 8000 / 1812 because something else owns them) don't have to
+    # hand-edit this file before every release — which would block the
+    # in-app self-update path. Set BIND_IP / HOST_PORT / RADIUS_HOST_PORT
+    # in a .env file next to this one or in the shell that runs
+    # `docker compose up`. Defaults match the historical 0.0.0.0:8000 /
+    # 0.0.0.0:1812 publishes.
     ports:
-      - "8000:8000"
-      - "1812:1812/udp"
+      - "${BIND_IP:-0.0.0.0}:${HOST_PORT:-8000}:8000"
+      - "${BIND_IP:-0.0.0.0}:${RADIUS_HOST_PORT:-1812}:1812/udp"
     volumes:
       # Persist firmware files
       - ./firmware:/app/firmware
