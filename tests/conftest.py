@@ -122,6 +122,9 @@ def memory_db():
             signal_health TEXT,
             auth_status TEXT DEFAULT NULL,
             last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_config_poll_at TEXT,
+            last_config_poll_status TEXT,
+            last_config_poll_error TEXT,
             UNIQUE(ap_ip, ip)
         );
         CREATE INDEX idx_cpe_ap ON cpe_cache(ap_ip);
