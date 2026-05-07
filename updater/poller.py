@@ -357,9 +357,10 @@ class NetworkPoller:
             # Get connected CPEs
             cpes = await client.get_connected_cpes()
 
-            # Clear old CPEs and insert new ones
-            db.clear_cpes_for_ap(ip)
-
+            # Upsert current CPEs, then prune any that are no longer attached.
+            # The previous clear-then-upsert pattern destroyed per-poll outcome
+            # columns (last_config_poll_at/status/error) populated by the
+            # config poller every cycle.
             for cpe in cpes:
                 cpe_data = {
                     "ip": cpe.ip,
@@ -378,6 +379,7 @@ class NetworkPoller:
                     "signal_health": cpe.signal_health.value,
                 }
                 db.upsert_cpe(ip, cpe_data)
+            db.prune_stale_cpes(ip, [cpe.ip for cpe in cpes if cpe.ip])
 
             logger.debug(f"Polled {ip}: {len(cpes)} CPEs")
 
