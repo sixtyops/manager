@@ -599,6 +599,153 @@ class TestConfigPollCatchup:
 
         poll.assert_not_called()
 
+    def test_hydrate_falls_back_to_latest_config_when_setting_missing(self, scoped_db):
+        """Upgrade path: setting wasn't written by an older build, but
+        `device_configs` has live rows. Hydrate should pick MAX(fetched_at)."""
+        from datetime import datetime
+
+        ts = "2026-05-01T04:00:00"
+        scoped_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.1", "{}", "h", ts),
+        )
+        scoped_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.2", "{}", "h", "2026-04-15T04:00:00"),
+        )
+        scoped_db.commit()
+
+        poller = NetworkPoller()
+        poller._hydrate_last_config_poll()
+
+        assert poller._last_config_poll == datetime.fromisoformat(ts)
+        assert poller._last_config_poll_hydrated is True
+
+    def test_hydrate_corrupt_setting_falls_back_to_rows(self, scoped_db):
+        """Corrupt persisted setting plus live config rows: fall back to
+        MAX(fetched_at) instead of leaving `_last_config_poll` as None.
+        `test_hydrate_handles_corrupt_value` covers the no-rows case; this
+        locks in the precedence (parse-fail ⇒ try fallback) when rows do
+        exist."""
+        from datetime import datetime
+
+        db.set_setting("last_config_poll_at", "not-a-timestamp")
+        ts = "2026-05-01T04:00:00"
+        scoped_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.1", "{}", "h", ts),
+        )
+        scoped_db.commit()
+
+        poller = NetworkPoller()
+        poller._hydrate_last_config_poll()
+
+        assert poller._last_config_poll == datetime.fromisoformat(ts)
+
+    def test_hydrate_setting_wins_over_rows_when_present(self, scoped_db):
+        """Precedence contract: a parseable setting is authoritative even
+        if `device_configs` has a newer row. The setting means "manager
+        observed a poll completion"; rows can advance ahead of it (e.g.,
+        priming runs) and shouldn't override the canonical value."""
+        from datetime import datetime
+
+        setting_ts = datetime(2026, 4, 1, 4, 0, 0)
+        db.set_setting("last_config_poll_at", setting_ts.isoformat())
+        scoped_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.1", "{}", "h", "2026-05-01T04:00:00"),
+        )
+        scoped_db.commit()
+
+        poller = NetworkPoller()
+        poller._hydrate_last_config_poll()
+
+        assert poller._last_config_poll == setting_ts
+
+    def test_hydrate_fallback_ignores_soft_deleted_rows(self, scoped_db):
+        """If every config row is soft-deleted, no fallback timestamp.
+        Preserves fresh-install semantics for the recycle-bin-only state."""
+        scoped_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at, deleted_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("10.0.0.1", "{}", "h", "2026-05-01T04:00:00", "2026-05-02T00:00:00"),
+        )
+        scoped_db.commit()
+
+        poller = NetworkPoller()
+        poller._hydrate_last_config_poll()
+
+        assert poller._last_config_poll is None
+
+    def test_hydrate_fallback_handles_utc_space_separator(self, scoped_db):
+        """`CURRENT_TIMESTAMP` writes naive UTC with a space separator. The
+        fallback parser must accept it without crashing and the resulting
+        local-time datetime must not be in the future."""
+        from datetime import datetime
+
+        scoped_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.1", "{}", "h", "2026-05-01 04:00:00"),
+        )
+        scoped_db.commit()
+
+        poller = NetworkPoller()
+        poller._hydrate_last_config_poll()
+
+        assert poller._last_config_poll is not None
+        assert poller._last_config_poll <= datetime.now()
+
+    def test_hydrate_fallback_clamps_future_timestamps(self, scoped_db):
+        """A future-dated `fetched_at` (clock skew or residual UTC quirk)
+        must not produce a `_last_config_poll` newer than now, otherwise
+        `stale_for` goes negative and catch-up never fires."""
+        from datetime import datetime, timedelta
+
+        future = (datetime.now() + timedelta(hours=1)).isoformat()
+        scoped_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.1", "{}", "h", future),
+        )
+        scoped_db.commit()
+
+        poller = NetworkPoller()
+        poller._hydrate_last_config_poll()
+
+        assert poller._last_config_poll is not None
+        assert poller._last_config_poll <= datetime.now()
+
+    @pytest.mark.asyncio
+    async def test_catchup_runs_after_version_transition(self, scoped_db):
+        """Manager upgraded from a build that didn't persist
+        `last_config_poll_at`: setting absent, but device_configs has stale
+        rows. Catch-up branch should fire on next tick instead of waiting
+        for the daily window."""
+        from datetime import datetime, timedelta
+
+        stale = (datetime.now() - timedelta(hours=30)).isoformat()
+        scoped_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.1", "{}", "h", stale),
+        )
+        scoped_db.commit()
+
+        db.set_setting("config_auto_enforce", "false")
+        next_hour = (datetime.now().hour + 6) % 24
+        db.set_setting("config_enforce_hour", str(next_hour))
+
+        poller = NetworkPoller()
+        with patch.object(poller, "poll_all_configs", new=AsyncMock()) as poll:
+            await poller._maybe_poll_configs()
+
+        poll.assert_awaited_once()
+
 
 # ---------------------------------------------------------------------------
 # Per-device polling-failure surfacing (issue #52)

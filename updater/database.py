@@ -2772,6 +2772,35 @@ def get_all_latest_configs() -> dict:
         return {row["ip"]: dict(row) for row in rows}
 
 
+def get_latest_config_fetched_at() -> Optional[str]:
+    """Return MAX(fetched_at) across live device_configs rows, or None.
+
+    Used by the poller as a fallback hydration source for
+    `last_config_poll_at` when that setting hasn't been written yet (e.g.,
+    after upgrading from a build that predates the persistence added in #67).
+    Soft-deleted rows are excluded. Note that this MAX advances on any
+    insert into device_configs — including `_poll_missing_configs` priming
+    and `poll_configs_for_ips` post-push refetch — so it is *not* equivalent
+    to "the manager observed a successful daily poll completion". The
+    poller treats it as a conservative lower bound on freshness.
+
+    Caveat: `fetched_at` is TEXT and SQLite compares lexicographically. The
+    column has two writer formats — `save_device_config` writes T-separated
+    local time; the schema's `CURRENT_TIMESTAMP` default writes space-
+    separated UTC. ASCII space (0x20) sorts below `T` (0x54), so at the
+    same wall-clock instant the space-separator row sorts lower and `MAX`
+    prefers the T-separator row. The chosen timestamp may therefore be
+    slightly earlier than the true freshest insert when the formats are
+    mixed — only ever over-eager for catch-up, never suppressive.
+    """
+    with get_db() as db:
+        row = db.execute(
+            "SELECT MAX(fetched_at) AS ts FROM device_configs "
+            "WHERE deleted_at IS NULL"
+        ).fetchone()
+        return row["ts"] if row and row["ts"] else None
+
+
 def get_latest_config_hash(ip: str) -> Optional[str]:
     """Get the hash of the most recent live config for a device."""
     with get_db() as db:
