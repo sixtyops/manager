@@ -1652,6 +1652,29 @@ def clear_cpes_for_ap(ap_ip: str):
         db.execute("DELETE FROM cpe_cache WHERE ap_ip = ?", (ap_ip,))
 
 
+def prune_stale_cpes(ap_ip: str, current_ips: list[str]) -> int:
+    """Delete CPE rows for an AP whose IP is not in the current set.
+
+    Used by the AP poll cycle to drop CPEs that are no longer attached to
+    this AP, while preserving the rows (and their per-poll outcome columns
+    populated by the config poller) for CPEs that are still attached.
+    Replaces the older clear-then-upsert pattern, which destroyed
+    `last_config_poll_at/status/error` on every poll cycle.
+
+    Returns the number of stale rows deleted.
+    """
+    with get_db() as db:
+        if not current_ips:
+            cur = db.execute("DELETE FROM cpe_cache WHERE ap_ip = ?", (ap_ip,))
+            return cur.rowcount
+        placeholders = ",".join("?" * len(current_ips))
+        cur = db.execute(
+            f"DELETE FROM cpe_cache WHERE ap_ip = ? AND ip NOT IN ({placeholders})",
+            (ap_ip, *current_ips),
+        )
+        return cur.rowcount
+
+
 def get_health_summary() -> dict:
     """Get overall signal health summary."""
     with get_db() as db:

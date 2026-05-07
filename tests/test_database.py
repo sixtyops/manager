@@ -334,6 +334,36 @@ class TestCPECache:
         db.clear_cpes_for_ap("10.0.0.1")
         assert len(db.get_cpes_for_ap("10.0.0.1")) == 0
 
+    def test_prune_stale_drops_unlisted(self, mock_db):
+        db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1"})
+        db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.2"})
+        db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.3"})
+        n = db.prune_stale_cpes("10.0.0.1", ["1.1.1.1", "1.1.1.3"])
+        ips = {c["ip"] for c in db.get_cpes_for_ap("10.0.0.1")}
+        assert n == 1
+        assert ips == {"1.1.1.1", "1.1.1.3"}
+
+    def test_prune_empty_list_clears_all(self, mock_db):
+        db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1"})
+        db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.2"})
+        n = db.prune_stale_cpes("10.0.0.1", [])
+        assert n == 2
+        assert len(db.get_cpes_for_ap("10.0.0.1")) == 0
+
+    def test_prune_preserves_poll_outcome_for_remaining(self, mock_db):
+        """The whole point of prune-vs-clear: poll outcome columns survive
+        a re-sync as long as the CPE is still attached."""
+        db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1"})
+        db.update_device_config_poll_status("1.1.1.1", "ok", None)
+        db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "green"})
+        db.prune_stale_cpes("10.0.0.1", ["1.1.1.1"])
+        row = mock_db.execute(
+            "SELECT last_config_poll_status, last_config_poll_at "
+            "FROM cpe_cache WHERE ip = '1.1.1.1'"
+        ).fetchone()
+        assert row["last_config_poll_status"] == "ok"
+        assert row["last_config_poll_at"] is not None
+
 
 class TestSettings:
     def test_get_default(self, mock_db):
