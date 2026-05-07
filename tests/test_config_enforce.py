@@ -904,3 +904,39 @@ class TestPollerWritesPollStatus:
             "SELECT last_config_poll_status FROM devices WHERE ip = '10.0.0.1'"
         ).fetchone()
         assert row["last_config_poll_status"] == "http_status"
+
+    @pytest.mark.asyncio
+    async def test_records_unknown_when_connect_throws(self, scoped_db):
+        """A connect()-raised exception (network unreachable, timeout, SSL
+        error, etc.) used to bypass every status write and leave the device
+        looking like it had never been polled. The outer except now writes
+        an `unknown` status so operators see the failure."""
+        poller = NetworkPoller()
+        fake_client = MagicMock()
+        fake_client.connect = AsyncMock(side_effect=TimeoutError("network unreachable"))
+        with patch("updater.poller.get_driver", return_value=lambda *a, **kw: fake_client):
+            await poller._fetch_and_store_config("10.0.0.1", "root", "pass")
+        row = scoped_db.execute(
+            "SELECT last_config_poll_status, last_config_poll_error "
+            "FROM devices WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert row["last_config_poll_status"] == "unknown"
+        assert "network unreachable" in row["last_config_poll_error"]
+
+    @pytest.mark.asyncio
+    async def test_records_unknown_for_cpe_when_connect_throws(self, scoped_db):
+        """Same path for CPEs — `_fetch_and_store_config` is shared across
+        roles, and the new outcome write must reach `cpe_cache` too."""
+        from updater import database as db
+        db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1"})
+        poller = NetworkPoller()
+        fake_client = MagicMock()
+        fake_client.connect = AsyncMock(side_effect=ConnectionRefusedError("ECONNREFUSED"))
+        with patch("updater.poller.get_driver", return_value=lambda *a, **kw: fake_client):
+            await poller._fetch_and_store_config("1.1.1.1", "root", "pass")
+        row = scoped_db.execute(
+            "SELECT last_config_poll_status, last_config_poll_error "
+            "FROM cpe_cache WHERE ip = '1.1.1.1'"
+        ).fetchone()
+        assert row["last_config_poll_status"] == "unknown"
+        assert "ECONNREFUSED" in row["last_config_poll_error"]
