@@ -100,6 +100,16 @@ def _migrate(db):
     if "last_config_poll_error" not in dev_columns:
         db.execute("ALTER TABLE devices ADD COLUMN last_config_poll_error TEXT")
 
+    # Mirror config-poll outcome columns onto cpe_cache so per-CPE polls
+    # become diagnosable (PR #52 originally only covered AP/switch).
+    cpe_columns = [row[1] for row in db.execute("PRAGMA table_info(cpe_cache)").fetchall()]
+    if "last_config_poll_at" not in cpe_columns:
+        db.execute("ALTER TABLE cpe_cache ADD COLUMN last_config_poll_at TEXT")
+    if "last_config_poll_status" not in cpe_columns:
+        db.execute("ALTER TABLE cpe_cache ADD COLUMN last_config_poll_status TEXT")
+    if "last_config_poll_error" not in cpe_columns:
+        db.execute("ALTER TABLE cpe_cache ADD COLUMN last_config_poll_error TEXT")
+
     # Add performance indexes for scaling
     db.execute("CREATE INDEX IF NOT EXISTS idx_schedule_log_timestamp ON schedule_log(timestamp DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_device_durations_job ON device_durations(job_id)")
@@ -454,6 +464,9 @@ def init_db():
                 link_uptime INTEGER,
                 signal_health TEXT,
                 last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_config_poll_at TEXT,
+                last_config_poll_status TEXT,
+                last_config_poll_error TEXT,
                 UNIQUE(ap_ip, ip)
             );
 
@@ -1243,17 +1256,26 @@ def update_device_status(ip: str, last_seen: str = None, last_error: str = _UNSE
 
 
 def update_device_config_poll_status(ip: str, status: str, error: Optional[str] = None) -> None:
-    """Record the outcome of a config-poll attempt for a device.
+    """Record the outcome of a config-poll attempt for any managed IP.
 
     `status` is one of: ok, timeout, http_status, json_decode, auth, unknown.
     `error` carries a short human-readable detail (for surfacing in the UI).
-    Quietly no-ops on rows not in the devices table (e.g. CPEs in cpe_cache).
+
+    APs/switches live in `devices`; CPEs live in `cpe_cache`. We update both
+    tables — exactly one will match for a given IP, the other is a no-op.
+    Unknown IPs (no row in either table) silently no-op.
     """
+    ts = datetime.now().isoformat()
     with get_db() as db:
         db.execute(
             "UPDATE devices SET last_config_poll_at = ?, last_config_poll_status = ?, "
             "last_config_poll_error = ? WHERE ip = ?",
-            (datetime.now().isoformat(), status, error, ip),
+            (ts, status, error, ip),
+        )
+        db.execute(
+            "UPDATE cpe_cache SET last_config_poll_at = ?, last_config_poll_status = ?, "
+            "last_config_poll_error = ? WHERE ip = ?",
+            (ts, status, error, ip),
         )
 
 
