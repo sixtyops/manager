@@ -993,7 +993,17 @@ class NetworkPoller:
             logger.info(f"Config poll: saved new config for {ip} (hash: {config_hash[:12]})")
 
         except Exception as e:
+            # Capture the failure on the device row so the operator sees *why*
+            # polling stopped, instead of an indefinite gap masquerading as
+            # "config unchanged". connect() exceptions (timeout, ECONNREFUSED,
+            # SSL errors, etc.) bubble here without ever reaching the
+            # in-loop status writes — which is exactly the case we'd
+            # otherwise lose visibility on.
             logger.debug(f"Config poll: error fetching config from {ip}: {e}")
+            try:
+                db.update_device_config_poll_status(ip, "unknown", str(e)[:200])
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Config auto-enforce
