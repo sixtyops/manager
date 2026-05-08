@@ -899,11 +899,11 @@ def init_db():
             "parallel_updates": "2",
             "bandwidth_limit_kbps": "0",
             "bank_mode": "one",
-            "allow_downgrade": "false",
+            "allow_downgrade": "true",
             "timezone": "auto",
             "zip_code": "",
             "weather_check_enabled": "true",
-            "min_temperature_c": "-10",
+            "min_temperature_c": "-4",
             "temperature_unit": "auto",  # "auto", "c", or "f"
             "schedule_scope": "all",
             "schedule_scope_data": "",
