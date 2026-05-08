@@ -5459,6 +5459,22 @@
             return div.innerHTML;
         }
 
+        // The manager container runs in UTC and stores timestamps via
+        // `datetime.now().isoformat()`, which produces naive ISO strings
+        // with no `Z` or offset. `new Date(naiveStr)` then parses those
+        // as the *browser's* local time, off by the user's TZ offset
+        // (e.g. UTC 21:21 becomes "9:21 PM" in a CDT browser instead of
+        // the correct "4:21 PM"). Treat strings without explicit TZ
+        // info as UTC so `.toLocaleString()` converts to the user's
+        // wall clock correctly. `loadAppUpdateStatus` had the same
+        // fix inline; this is the shared version.
+        function parseTimestampToDate(s) {
+            if (!s) return null;
+            const hasTz = /Z$|[+-]\d{2}:?\d{2}$/.test(s);
+            const d = new Date(hasTz ? s : s + 'Z');
+            return isNaN(d.getTime()) ? null : d;
+        }
+
         // Close user dropdown on outside click
         document.addEventListener('click', (e) => {
             const menu = document.querySelector('.user-menu');
@@ -7480,8 +7496,8 @@
                     row.onmouseleave = function() { this.style.background = ''; };
                     row.onclick = function() { toggleHistoryDetail(this, entry); };
 
-                    const d = entry.completed_at ? new Date(entry.completed_at) : null;
-                    const timeStr = d && !isNaN(d.getTime()) ? d.toLocaleString() : '-';
+                    const d = parseTimestampToDate(entry.completed_at);
+                    const timeStr = d ? d.toLocaleString() : '-';
                     const verStr = entry.old_version && entry.new_version
                         ? `${entry.old_version} → ${entry.new_version}`
                         : entry.new_version || entry.old_version || '-';
@@ -7559,8 +7575,8 @@
                     const row = document.createElement('tr');
                     row.className = 'u-history-row';
                     row.onclick = function() { toggleJobDetail(this, job); };
-                    const d = job.completed_at ? new Date(job.completed_at) : null;
-                    const timeStr = d && !isNaN(d.getTime()) ? d.toLocaleString() : '-';
+                    const d = parseTimestampToDate(job.completed_at);
+                    const timeStr = d ? d.toLocaleString() : '-';
                     const durStr = job.duration ? Math.round(job.duration) + 's' : '-';
                     row.innerHTML = `
                         <td class="u-history-cell-time">${escapeHtml(timeStr)}</td>
