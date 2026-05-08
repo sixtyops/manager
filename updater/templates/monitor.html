@@ -2831,13 +2831,13 @@
                             <a href="/backup-setup" class="backup-btn u-bg-muted-cta" style="text-decoration:none;text-align:center;">Open SFTP Setup</a>
                             <span id="backupRunStatus" class="u-text-xs-muted"></span>
                         </div>
-
-                        <div style="margin-top:16px;">
-                            <label class="u-label-xs" style="color:var(--text-dim);margin-bottom:4px;">Remote Backups (SFTP) <span class="danger-badge">DANGEROUS</span></label>
-                            <div id="remoteBackupsList" style="max-height:160px;overflow-y:auto;border:1px solid var(--border-light);border-radius:6px;background:var(--input-bg);padding:4px;">
-                                <div style="padding:10px;text-align:center;font-size:0.75rem;color:var(--text-muted);">Loading backups...</div>
-                            </div>
-                        </div>
+                        <!-- Remote Backups (SFTP) restore panel hidden until the
+                             feature is finished. The list-and-restore flow
+                             still has rough edges (no auth check, "DANGEROUS"
+                             label was the placeholder). The corresponding
+                             loadRemoteBackups / restoreRemoteBackup JS is left
+                             in place so reviving this panel is a one-line
+                             markup add. -->
                     </div>
 
                     <hr class="u-hr">
@@ -8482,7 +8482,8 @@
                     const statusText = data.last_status || 'never run';
                     const lastRun = data.last_run || 'Never';
                     el.innerHTML = `Status: <strong style="color:${statusColor}">${escapeHtml(statusText)}</strong> · Last run: ${escapeHtml(lastRun)}${data.sftp_display ? ` · ${escapeHtml(data.sftp_display)}` : ''}`;
-                    loadRemoteBackups();
+                    // Remote backups list panel hidden until the feature is
+                    // finished — see the markup note in systemSub-backup.
                 }
             } catch (e) {
                 el.textContent = 'Could not load backup status';
