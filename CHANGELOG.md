@@ -30,6 +30,7 @@ All notable changes to this project are documented in this file.
 - System > Updates panel normalized into a label/control grid; RADIUS Server stat cards removed; RADIUS Clients & Logs rewritten for clarity; About panel redesigned with inline version chip
 
 ### Removed
+- Settings > Backup & Restore "Remote Backups (SFTP)" list-and-restore panel hidden until the feature is finished. The placeholder "DANGEROUS" badge and "Loading backups…" spinner were the only thing visible to operators on instances without an SFTP server configured. The Run Now / Open SFTP Setup buttons remain so configuration still works; the JS (`loadRemoteBackups`, `restoreRemoteBackup`) is left in place so reviving the panel is a one-line markup change
 - Appliance build infrastructure (OVA/QCOW2 image generation, Packer configs, build-appliance workflow)
 
 ### Fixed
