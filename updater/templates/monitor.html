@@ -10033,7 +10033,13 @@
             if (cancelBtn) cancelBtn.style.display = isActive ? '' : 'none';
             if (resumeBtn) resumeBtn.style.display = (r && r.status === 'paused') ? '' : 'none';
 
-            if (!r || r.status === 'cancelled' || (!isActive && r.status !== 'completed')) {
+            // Only render phase pills while a rollout is in flight. Once it
+            // completes (or is cancelled), the toast already announced the
+            // outcome and leaving the pills behind makes them look like the
+            // current state of *whatever the operator is doing now* — e.g.
+            // a Check Compliance click that has nothing to do with the
+            // finished rollout.
+            if (!isActive) {
                 phasesEl.innerHTML = '';
                 return;
             }
@@ -10055,10 +10061,10 @@
                 let detail = '';
                 let onclick = '';
 
-                if (r.status === 'completed') {
-                    dotClass += ' completed';
-                    if (phaseCount) detail = `<span class="bar-phase-detail">${phaseDone}/${phaseCount}</span>`;
-                } else if (i < currentIdx) {
+                // Status is guaranteed to be 'active' or 'paused' here —
+                // the early-return above handles 'completed' / 'cancelled'
+                // by clearing the bar entirely.
+                if (i < currentIdx) {
                     dotClass += ' completed';
                     if (phaseCount) detail = `<span class="bar-phase-detail">${phaseDone}/${phaseCount}</span>`;
                 } else if (i === currentIdx) {
