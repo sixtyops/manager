@@ -2296,15 +2296,15 @@
                 <div class="chart-legend">
                     <div class="legend-item">
                         <div class="dot success"></div>
-                        <span>Strong (&gt; &minus;65 dBm)</span>
+                        <span>Strong (&ge; &minus;60 dBm)</span>
                     </div>
                     <div class="legend-item">
                         <div class="dot warning"></div>
-                        <span>Low (&minus;65 to &minus;75 dBm)</span>
+                        <span>Low (&minus;61 to &minus;65 dBm)</span>
                     </div>
                     <div class="legend-item">
                         <div class="dot danger"></div>
-                        <span>Critical (&lt; &minus;75 dBm)</span>
+                        <span>Marginal (&lt; &minus;65 dBm)</span>
                     </div>
                     <div class="legend-item">
                         <div class="dot u-dot-offline"></div>
@@ -4460,7 +4460,7 @@
                 return `<span class="status-icon-cell offline" title="${authLabel}"></span>`;
             }
             if (signalHealth) {
-                const healthTitle = signalHealth === 'green' ? 'Good' : signalHealth === 'yellow' ? 'Low' : 'Weak';
+                const healthTitle = signalHealth === 'green' ? 'Strong' : signalHealth === 'yellow' ? 'Low' : 'Marginal';
                 const healthClass = signalHealth === 'green' ? 'online' : signalHealth === 'yellow' ? 'warning' : 'critical';
                 return `<span class="status-icon-cell ${healthClass}" title="${healthTitle}"></span>`;
             }
@@ -4540,7 +4540,7 @@
                 const cpeIp = cpe.ip || '';
                 const signalVal = cpe.primary_signal;
                 const signalClass = signalVal != null
-                    ? (signalVal > -65 ? 'signal-good' : (signalVal > -75 ? 'signal-low' : 'signal-critical'))
+                    ? (signalVal >= -60 ? 'signal-good' : (signalVal >= -65 ? 'signal-low' : 'signal-critical'))
                     : '';
                 const isCpeSelected = selectedNode?.type === 'cpe' && selectedNode?.data?.ip === cpe.ip;
 
@@ -5067,32 +5067,34 @@
                     const yAxis = chart.scales.y;
                     const xAxis = chart.scales.x;
 
-                    // -65 dBm line (primary threshold)
-                    const y65 = yAxis.getPixelForValue(-65);
+                    // -60 dBm line — Strong / Low boundary.
+                    const y60 = yAxis.getPixelForValue(-60);
                     ctx.save();
                     ctx.setLineDash([6, 4]);
                     ctx.strokeStyle = '#10b981';
                     ctx.lineWidth = 2;
                     ctx.beginPath();
-                    ctx.moveTo(xAxis.left, y65);
-                    ctx.lineTo(xAxis.right, y65);
+                    ctx.moveTo(xAxis.left, y60);
+                    ctx.lineTo(xAxis.right, y60);
                     ctx.stroke();
-                    // Label
                     ctx.fillStyle = '#10b981';
                     ctx.font = '10px monospace';
-                    ctx.fillText('Low Signal', xAxis.right - 62, y65 - 4);
+                    ctx.fillText('Strong', xAxis.right - 42, y60 - 4);
                     ctx.restore();
 
-                    // -75 dBm line
-                    const y75 = yAxis.getPixelForValue(-75);
+                    // -65 dBm line — Low / Marginal boundary.
+                    const y65 = yAxis.getPixelForValue(-65);
                     ctx.save();
                     ctx.setLineDash([6, 4]);
                     ctx.strokeStyle = '#ef4444';
                     ctx.lineWidth = 1;
                     ctx.beginPath();
-                    ctx.moveTo(xAxis.left, y75);
-                    ctx.lineTo(xAxis.right, y75);
+                    ctx.moveTo(xAxis.left, y65);
+                    ctx.lineTo(xAxis.right, y65);
                     ctx.stroke();
+                    ctx.fillStyle = '#ef4444';
+                    ctx.font = '10px monospace';
+                    ctx.fillText('Marginal', xAxis.right - 52, y65 + 12);
                     ctx.restore();
                 },
             };

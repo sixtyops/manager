@@ -13,19 +13,25 @@ class DeviceType(str, Enum):
 
 
 class SignalHealth(str, Enum):
-    """Signal health classification based on dBm thresholds."""
-    GREEN = "green"   # > -65 dBm (strong)
-    YELLOW = "yellow"  # -65 to -75 dBm (acceptable)
-    RED = "red"       # < -75 dBm (weak)
+    """Signal health classification based on dBm thresholds.
+
+    Frontend bucket labels: Strong / Low / Marginal. Boundaries are kept
+    consistent across the API model, the legend on the Signal vs Distance
+    chart, the chart's reference dotted lines, and the per-row signal
+    coloring helper in monitor.html.
+    """
+    GREEN = "green"   # >= -60 dBm (strong)
+    YELLOW = "yellow"  # -65 to -61 dBm (low)
+    RED = "red"       # < -65 dBm (marginal)
 
     @classmethod
     def from_signal(cls, signal_dbm: Optional[float]) -> "SignalHealth":
         """Determine health classification from signal strength."""
         if signal_dbm is None:
             return cls.RED
-        if signal_dbm > -65:
+        if signal_dbm >= -60:
             return cls.GREEN
-        if signal_dbm >= -75:
+        if signal_dbm >= -65:
             return cls.YELLOW
         return cls.RED
 
