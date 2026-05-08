@@ -4526,7 +4526,7 @@
                 <td><div class="actions-cell">${actionsCell('ap', ap.ip, apName)}</div></td>
                 ` : `
                 <td>${configStatusCell(ap.ip)}</td>
-                <td>${configLastBackupCell(ap.ip)}</td>
+                <td>${configLastCheckedCell(ap.ip)}</td>
                 <td><div class="actions-cell">${configActionsCell(ap.ip)}</div></td>
                 `}
             </tr>`;
@@ -4564,7 +4564,7 @@
                     <td><div class="actions-cell">${actionsCell('cpe', cpe.ip, cpeName)}</div></td>
                     ` : `
                     <td>${cpeIp ? configStatusCell(cpeIp) : ''}</td>
-                    <td>${cpeIp ? configLastBackupCell(cpeIp) : ''}</td>
+                    <td>${cpeIp ? configLastCheckedCell(cpeIp) : ''}</td>
                     <td><div class="actions-cell">${cpeIp ? configActionsCell(cpeIp) : ''}</div></td>
                     `}
                 </tr>`;
@@ -4636,7 +4636,7 @@
                     <th data-sort="name" onclick="sortTable('name')"><input type="checkbox" id="checkAllBox" onclick="toggleCheckAll(event);event.stopPropagation();" style="margin-right:6px;vertical-align:middle;"> Name / IP <span class="sort-arrow"></span></th>
                     <th data-sort="model" data-filterable="model" onclick="handleHeaderClick('model',this,event)">Model <span class="sort-arrow"></span></th>
                     <th>Config Status</th>
-                    <th>Last Backup</th>
+                    <th>Last Checked</th>
                     <th>Actions</th>`;
             }
         }
@@ -4800,7 +4800,7 @@
                         <td><div class="actions-cell">${actionsCell('switch', sw.ip, swName)}</div></td>
                         ` : `
                         <td>${configStatusCell(sw.ip)}</td>
-                        <td>${configLastBackupCell(sw.ip)}</td>
+                        <td>${configLastCheckedCell(sw.ip)}</td>
                         <td><div class="actions-cell">${configActionsCell(sw.ip)}</div></td>
                         `}
                     </tr>`;
@@ -8849,15 +8849,33 @@
             return '<span class="config-compliance-warn" title="Non-compliant">&#9888;</span>';
         }
 
-        function configLastBackupCell(ip) {
+        function configLastCheckedCell(ip) {
             const cfg = configSummary[ip];
-            if (!cfg || !cfg.fetched_at) return '<span class="u-text-dim">&#8212;</span>';
-            const d = new Date(cfg.fetched_at);
+            if (!cfg) return '<span class="u-text-dim">&#8212;</span>';
+            const primary = cfg.last_polled_at || cfg.fetched_at;
+            if (!primary) return '<span class="u-text-dim">&#8212;</span>';
+            const d = new Date(primary);
             if (isNaN(d.getTime())) return '<span class="u-text-dim">&#8212;</span>';
             const mm = String(d.getMonth() + 1).padStart(2, '0');
             const dd = String(d.getDate()).padStart(2, '0');
             const yy = String(d.getFullYear()).slice(-2);
-            return `<span title="${d.toLocaleString()}">${mm}/${dd}/${yy}</span>`;
+            const tooltipLines = [];
+            if (cfg.last_polled_at) {
+                tooltipLines.push('Last successful config poll: ' + new Date(cfg.last_polled_at).toLocaleString());
+            }
+            if (cfg.fetched_at) {
+                tooltipLines.push('Last config change: ' + new Date(cfg.fetched_at).toLocaleString());
+            }
+            const status = cfg.last_poll_status;
+            const showWarn = status && status !== 'ok';
+            if (showWarn) {
+                const errLine = cfg.last_poll_error ? ('Last poll error (' + status + '): ' + cfg.last_poll_error) : ('Last poll status: ' + status);
+                tooltipLines.unshift(errLine);
+            }
+            const title = tooltipLines.join('\n') || d.toLocaleString();
+            const titleAttr = title.replace(/"/g, '&quot;');
+            const warnGlyph = showWarn ? ' <span class="config-compliance-warn">&#9888;</span>' : '';
+            return `<span title="${titleAttr}">${mm}/${dd}/${yy}${warnGlyph}</span>`;
         }
 
         function configActionsCell(ip) {

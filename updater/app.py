@@ -5829,6 +5829,9 @@ async def get_configs_summary(session: dict = Depends(require_auth), _pro=Depend
             "config_hash": cfg["config_hash"],
             "model": cfg["model"],
             "fetched_at": cfg["fetched_at"],
+            "last_polled_at": cfg.get("last_config_poll_at"),
+            "last_poll_status": cfg.get("last_config_poll_status"),
+            "last_poll_error": cfg.get("last_config_poll_error"),
         }
     return {"configs": result}
 
