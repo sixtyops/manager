@@ -6215,9 +6215,14 @@ async def get_config_compliance(
                 global_templates = db.get_config_templates_for_device(ip, site_id=None)
             device_templates = global_templates
         compliant = _check_config_compliance(config_data, device_templates)
+        # Prefer the last successful poll timestamp (advances every poll
+        # cycle, even when the config doesn't drift) over the snapshot
+        # `fetched_at` (only advances when a new snapshot row is written).
+        # Fall back to `fetched_at` for legacy rows that predate the
+        # per-device poll-outcome columns.
         devices[ip] = {
             "compliant": compliant,
-            "checked_at": cfg["fetched_at"],
+            "checked_at": cfg.get("last_config_poll_at") or cfg["fetched_at"],
         }
 
     return {"devices": devices, "polled": polled}

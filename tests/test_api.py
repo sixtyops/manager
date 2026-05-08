@@ -1038,6 +1038,39 @@ class TestConfigComplianceAPI:
         resp = client.get("/api/config-compliance", follow_redirects=False)
         assert resp.status_code in (401, 303)
 
+    def test_checked_at_prefers_last_config_poll_at(self, authed_client, mock_db):
+        """`checked_at` should reflect the last successful poll, not the
+        last snapshot insert. Otherwise the dashboard date stays frozen at
+        whenever the config last drifted, making a successfully-polled
+        fleet look weeks stale."""
+        self._seed_config(mock_db, "10.0.0.1", {"services": {}})
+        # Snapshot row was inserted weeks ago when the config last changed.
+        # The poller has since checked this device and stamped a fresh
+        # `last_config_poll_at` on the AP row.
+        mock_db.execute(
+            "INSERT INTO access_points (ip, tower_site_id, username, password, enabled) "
+            "VALUES ('10.0.0.1', NULL, 'admin', 'pw', 1)"
+        )
+        mock_db.execute(
+            "UPDATE devices SET last_config_poll_at = ?, last_config_poll_status = 'ok' "
+            "WHERE ip = '10.0.0.1'",
+            ("2026-05-08T15:49:00",),
+        )
+        mock_db.commit()
+        resp = authed_client.get("/api/config-compliance")
+        body = resp.json()
+        assert body["devices"]["10.0.0.1"]["checked_at"] == "2026-05-08T15:49:00"
+
+    def test_checked_at_falls_back_to_fetched_at_for_legacy_rows(self, authed_client, mock_db):
+        """Devices that have a stored snapshot but no per-device poll
+        outcome (pre-PR-#67 data, or IPs not in `devices`/`cpe_cache`)
+        should still get a `checked_at`; sourcing from the snapshot is
+        the only choice."""
+        self._seed_config(mock_db, "10.0.0.1", {"services": {}})
+        resp = authed_client.get("/api/config-compliance")
+        body = resp.json()
+        assert body["devices"]["10.0.0.1"]["checked_at"] == "2026-02-19T12:00:00"
+
 
 # ============================================================================
 # Config Prefill Tests
