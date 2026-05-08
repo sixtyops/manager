@@ -1897,6 +1897,19 @@
             color: #1d4ed8;
         }
 
+        /* The "next phase, ready to start" pill — louder than .clickable
+           so it actually reads as a CTA on a mostly-muted phase bar. */
+        .status-bar-phases .bar-phase-dot.next-up {
+            background: #dbeafe;
+            color: #1d4ed8;
+            box-shadow: inset 0 0 0 1.5px var(--primary);
+            animation: pulse 2s infinite;
+        }
+
+        .status-bar-phases .bar-phase-dot.next-up:hover {
+            background: #bfdbfe;
+        }
+
         .status-bar-phases .bar-phase-detail {
             font-size: 0.55rem;
             font-weight: 400;
@@ -10066,6 +10079,32 @@
             const progress = r.progress || {};
             const devices = r.devices || [];
 
+            // When the current phase is done and we're waiting on the
+            // operator, the actionable pill should be the *next* phase
+            // (with devices) — not the just-completed one. Putting the
+            // click on the next pill matches what users expect: "tap the
+            // thing you want to start next." Falls back to the current
+            // pill when no later phase has devices (e.g. 1-device rollouts
+            // where pct10/50/100 are empty), in which case clicking
+            // walks straight through to completed via PR #88.
+            const currentPhaseDevices = devices.filter(d => d.phase_assigned === r.phase);
+            const currentPhaseDone = currentPhaseDevices.length > 0 &&
+                currentPhaseDevices.every(d => d.status !== 'pending');
+            const awaitingAdvance = (r.status === 'active' && currentPhaseDone);
+            let nextActionableIdx = -1;
+            if (awaitingAdvance) {
+                for (let j = currentIdx + 1; j < CONFIG_PUSH_PHASES.length; j++) {
+                    const ph = CONFIG_PUSH_PHASES[j];
+                    if (devices.some(d => d.phase_assigned === ph)) {
+                        nextActionableIdx = j;
+                        break;
+                    }
+                }
+                // No later phase has devices — make the current pill
+                // clickable to walk-through-and-finish instead.
+                if (nextActionableIdx === -1) nextActionableIdx = currentIdx;
+            }
+
             let html = '';
             for (let i = 0; i < CONFIG_PUSH_PHASES.length; i++) {
                 const phase = CONFIG_PUSH_PHASES[i];
@@ -10089,21 +10128,28 @@
                     if (r.status === 'paused') {
                         dotClass += ' paused';
                         detail = `<span class="bar-phase-detail">${phaseDone}/${phaseCount}${phaseFailed ? ` (${phaseFailed} failed)` : ''}</span>`;
-                    } else {
-                        const pending = phaseDevices.filter(d => d.status === 'pending').length;
-                        if (pending > 0) {
-                            dotClass += ' active';
-                            detail = `<span class="bar-phase-detail">${phaseDone}/${phaseCount}</span>`;
-                        } else {
-                            // Phase done, waiting for user to advance
-                            dotClass += ' completed clickable';
-                            onclick = ` onclick="advanceConfigPushRollout(${r.id});event.stopPropagation();" title="Advance to next phase"`;
-                            detail = `<span class="bar-phase-detail">${phaseDone}/${phaseCount} ✓</span>`;
+                    } else if (currentPhaseDone) {
+                        dotClass += ' completed';
+                        detail = `<span class="bar-phase-detail">${phaseDone}/${phaseCount} ✓</span>`;
+                        if (i === nextActionableIdx) {
+                            // 1-device fallback: walk-through-and-finish lives here.
+                            dotClass += ' clickable';
+                            onclick = ` onclick="advanceConfigPushRollout(${r.id});event.stopPropagation();" title="Tap to finish rollout"`;
+                            detail = `<span class="bar-phase-detail">${phaseDone}/${phaseCount} ✓ · Tap to finish</span>`;
                         }
+                    } else {
+                        dotClass += ' active';
+                        detail = `<span class="bar-phase-detail">${phaseDone}/${phaseCount}</span>`;
                     }
                 } else {
                     // Future phase
-                    if (phaseCount) detail = `<span class="bar-phase-detail">${phaseCount} devices</span>`;
+                    if (i === nextActionableIdx && phaseCount) {
+                        dotClass += ' clickable next-up';
+                        onclick = ` onclick="advanceConfigPushRollout(${r.id});event.stopPropagation();" title="Tap to push to ${label} (${phaseCount} device${phaseCount === 1 ? '' : 's'})"`;
+                        detail = `<span class="bar-phase-detail">${phaseCount} device${phaseCount === 1 ? '' : 's'} · Tap to push</span>`;
+                    } else if (phaseCount) {
+                        detail = `<span class="bar-phase-detail">${phaseCount} devices</span>`;
+                    }
                 }
 
                 html += `<div class="${dotClass}"${onclick}>${label}${detail}</div>`;
