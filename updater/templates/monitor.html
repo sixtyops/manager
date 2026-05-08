@@ -585,7 +585,25 @@
         .updates-banner-title { font-weight:600; font-size:0.82rem; color:#1e40af; }
         .updates-banner-link { font-size:0.7rem; color:#2563eb; text-decoration:none; }
         .updates-banner-link:hover { text-decoration:underline; }
-        .updates-banner-btn { margin-top:10px; background:#16a34a; color:#fff; }
+        /* Explicit border/padding/font so the global `* { padding:0 }` reset
+           doesn't strand the user-agent default button styling on top of
+           the green background — that's what made the "Update Now" label
+           render as faint white on faded grey instead of white on green. */
+        .updates-banner-btn {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background: #16a34a;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .updates-banner-btn:hover { background: #15803d; }
+        .updates-banner-btn:active { background: #166534; }
+        .updates-banner-btn:disabled { background: #9ca3af; color: #f3f4f6; cursor: not-allowed; }
 
         /* About panel */
         .about-header { display:flex; align-items:baseline; gap:10px; margin-bottom:6px; }
@@ -615,6 +633,17 @@
 
         .release-notes-content ul {
             list-style: disc;
+            /* Global `* { padding:0 }` reset removed the default ul indent,
+               so default `list-style-position: outside` markers landed in
+               the parent's left edge and wrapped text re-flowed flush left
+               under the bullet instead of indenting under the previous
+               line's text. Restore enough left padding for the marker. */
+            padding-left: 1.5em;
+            margin: 6px 0;
+        }
+        .release-notes-content li {
+            margin: 2px 0;
+            line-height: 1.45;
         }
 
         .release-notes-content a {
