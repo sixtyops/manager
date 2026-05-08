@@ -4073,16 +4073,28 @@ def _extract_version_from_filename(filename: str) -> str:
     """Extract normalized version from firmware filename.
 
     'tna-30x-2.5.1-r54970.bin' -> '2.5.1.54970'
+    'tns-1.12.8-r54729-...-tns-100-...bin' -> '1.12.8.54729'
+
+    Tachyon switch firmware uses a bare `tns-` prefix (no model number)
+    where APs use `tna-30x-` or `tna-303l-`. Without the `tns` alternate,
+    the primary regex misses the switch convention, the fallback drops the
+    revision, and `_compare_versions` then sees the device as "ahead" of
+    target (bug surfaced once `allow_downgrade` is on — PR #92).
     """
     match = re.search(
-        r"(?:tna-30x|tna30x|tna-303l|tna303l|tns-100|tns100)-(\d+\.\d+\.\d+)-r(\d+)",
+        r"(?:tna-30x|tna30x|tna-303l|tna303l|tns-100|tns100|tns)-(\d+\.\d+\.\d+)-r(\d+)",
         filename,
         re.IGNORECASE,
     )
     if match:
         return f"{match.group(1)}.{match.group(2)}"
-    match2 = re.search(r"(\d+\.\d+\.\d+)", filename)
+    # Fallback: capture the revision too when present, so a future
+    # filename convention we don't yet recognize doesn't silently lose
+    # the build number.
+    match2 = re.search(r"(\d+\.\d+\.\d+)(?:-r(\d+))?", filename)
     if match2:
+        if match2.group(2):
+            return f"{match2.group(1)}.{match2.group(2)}"
         return match2.group(1)
     return ""
 

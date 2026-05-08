@@ -632,3 +632,59 @@ class TestSchedulerCooldown:
             last_update_iso=last_upd,
             cooldown_days=0
         ) is True
+
+
+
+class TestExtractVersionFromFilename:
+    """Pulled out separately because the regex has historically dropped
+    information silently — the bug that motivates these tests is that
+    a TNS-100 switch's firmware filename uses a bare `tns-` prefix
+    rather than `tns-100-`, the strict regex missed it, the fallback
+    captured only `1.12.8` (no revision), and `_compare_versions` then
+    saw a device on `1.12.8.54729` as *ahead* of target `1.12.8` —
+    triggering the up-arrow on the Updates tab once `allow_downgrade`
+    was on. Test both the app and scheduler copies to keep them
+    drift-free."""
+
+    @pytest.fixture(params=[
+        "updater.app._extract_version_from_filename",
+        "updater.scheduler._extract_version_from_filename",
+    ])
+    def extract(self, request):
+        from importlib import import_module
+        modpath, attr = request.param.rsplit(".", 1)
+        return getattr(import_module(modpath), attr)
+
+    def test_tna_30x_prefix(self, extract):
+        assert extract("tna-30x-1.12.3-r55002-20260219-tn-110-prs-squashfs-sysupgrade.bin") == "1.12.3.55002"
+
+    def test_tna_303l_prefix(self, extract):
+        assert extract("tna-303l-1.12.4-r7782-20251209-sysupgrade.bin") == "1.12.4.7782"
+
+    def test_tns_bare_prefix_keeps_revision(self, extract):
+        # The bug: this filename uses `tns-` (no model number) as the
+        # leading prefix, with `tns-100` appearing only later in the
+        # filename. The strict regex must accept the bare prefix or the
+        # fallback must keep the `-rN` revision — either way the
+        # returned version must include `.54729`.
+        result = extract("tns-1.12.8-r54729-20251121-tns-100-squashfs-sysupgrade.bin")
+        assert result == "1.12.8.54729"
+
+    def test_tns_100_explicit_prefix_still_works(self, extract):
+        # If the filename naming convention ever changes to include the
+        # model number explicitly, that path must keep working.
+        assert extract("tns-100-1.12.8-r54729-sysupgrade.bin") == "1.12.8.54729"
+
+    def test_unknown_prefix_keeps_revision_via_fallback(self, extract):
+        # Future-proofing: a vendor adds a new model whose filename we
+        # don't have an alternate for yet. The fallback should still
+        # capture the build revision instead of dropping it silently.
+        assert extract("tnp-9000-2.0.1-r12345-sysupgrade.bin") == "2.0.1.12345"
+
+    def test_unknown_prefix_no_revision(self, extract):
+        # Filename without a `-rN` revision — fallback returns just
+        # the three-segment version. Unchanged from prior behavior.
+        assert extract("tnp-9000-2.0.1-sysupgrade.bin") == "2.0.1"
+
+    def test_empty_returns_empty(self, extract):
+        assert extract("") == ""
