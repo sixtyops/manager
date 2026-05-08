@@ -7067,17 +7067,29 @@ async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(r
     if pending:
         raise HTTPException(400, "Current phase still has pending devices")
 
-    # Require at least one successful device before advancing (Gap 7)
-    updated = [d for d in phase_devices if d["status"] == "updated"]
-    if not updated:
-        raise HTTPException(400, "Cannot advance: no devices succeeded in the current phase")
+    # Require at least one successful device before advancing (Gap 7).
+    # Empty phases (no devices assigned) are exempt: small rollouts (1–3
+    # devices) leave one or more of pct10/pct50/pct100 unfilled because
+    # `_compute_phase_batch_size` allocates per-phase floors of 1, and the
+    # canary always consumes the first device.
+    if phase_devices:
+        updated = [d for d in phase_devices if d["status"] == "updated"]
+        if not updated:
+            raise HTTPException(400, "Cannot advance: no devices succeeded in the current phase")
 
     # Load templates from snapshot (or fallback to DB)
     templates = _load_rollout_templates(rollout)
 
-    # Advance phase
-    db.advance_config_push_rollout_phase(rollout_id)
-    rollout = db.get_config_push_rollout(rollout_id)
+    # Advance the phase, walking past any subsequent empty phases in one
+    # call so a single-device rollout doesn't require the operator to click
+    # advance four times to traverse pct10/pct50/pct100 placeholders.
+    while True:
+        db.advance_config_push_rollout_phase(rollout_id)
+        rollout = db.get_config_push_rollout(rollout_id)
+        if rollout["status"] == "completed":
+            break
+        if db.get_config_push_rollout_devices(rollout_id, rollout["phase"]):
+            break
 
     if rollout["status"] == "completed":
         await _broadcast_config_push_rollout_state(rollout_id)
