@@ -2802,16 +2802,29 @@ def get_device_config_by_id(config_id: int) -> Optional[dict]:
 
 
 def get_all_latest_configs() -> dict:
-    """Latest live config per device. Returns {ip: row_dict}."""
+    """Latest live config per device. Returns {ip: row_dict}.
+
+    Each row also carries the per-device config-poll outcome
+    (`last_config_poll_at/_status/_error`) coalesced from `devices` (APs and
+    switches) and `cpe_cache` (CPEs), so callers can distinguish "last
+    successful poll" from "last config change" (`fetched_at`).
+    """
     with get_db() as db:
         rows = db.execute("""
-            SELECT dc.* FROM device_configs dc
+            SELECT
+                dc.*,
+                COALESCE(d.last_config_poll_at, c.last_config_poll_at) AS last_config_poll_at,
+                COALESCE(d.last_config_poll_status, c.last_config_poll_status) AS last_config_poll_status,
+                COALESCE(d.last_config_poll_error, c.last_config_poll_error) AS last_config_poll_error
+            FROM device_configs dc
             INNER JOIN (
                 SELECT ip, MAX(fetched_at) as max_fetched
                 FROM device_configs
                 WHERE deleted_at IS NULL
                 GROUP BY ip
             ) latest ON dc.ip = latest.ip AND dc.fetched_at = latest.max_fetched
+            LEFT JOIN devices d ON d.ip = dc.ip
+            LEFT JOIN cpe_cache c ON c.ip = dc.ip
             WHERE dc.deleted_at IS NULL
         """).fetchall()
         return {row["ip"]: dict(row) for row in rows}

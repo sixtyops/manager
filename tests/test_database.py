@@ -315,6 +315,54 @@ class TestUpdateDeviceConfigPollStatus:
         assert cpe_row["last_config_poll_status"] == "timeout"
 
 
+class TestGetAllLatestConfigsPollOutcome:
+    """`get_all_latest_configs` should join the per-device poll outcome onto
+    each row so the Config tab can show "last successful poll" alongside the
+    snapshot capture time (`fetched_at`)."""
+
+    def test_includes_devices_poll_outcome(self, mock_db):
+        db.upsert_access_point("10.0.0.1", "root", "pass")
+        db.save_device_config("10.0.0.1", "{}", "hash-ap", model="TNA-301")
+        db.update_device_config_poll_status("10.0.0.1", "ok", None)
+
+        configs = db.get_all_latest_configs()
+        assert "10.0.0.1" in configs
+        row = configs["10.0.0.1"]
+        assert row["config_hash"] == "hash-ap"
+        assert row["fetched_at"] is not None
+        assert row["last_config_poll_at"] is not None
+        assert row["last_config_poll_status"] == "ok"
+        assert row["last_config_poll_error"] is None
+
+    def test_includes_cpe_poll_outcome(self, mock_db):
+        db.upsert_access_point("10.0.0.1", "root", "pass")
+        db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1"})
+        db.save_device_config("1.1.1.1", "{}", "hash-cpe", model="TNA-303L-65")
+        db.update_device_config_poll_status("1.1.1.1", "timeout", "request timed out")
+
+        configs = db.get_all_latest_configs()
+        assert "1.1.1.1" in configs
+        row = configs["1.1.1.1"]
+        assert row["config_hash"] == "hash-cpe"
+        assert row["last_config_poll_status"] == "timeout"
+        assert row["last_config_poll_error"] == "request timed out"
+        assert row["last_config_poll_at"] is not None
+
+    def test_missing_poll_outcome_yields_none(self, mock_db):
+        # Snapshot exists, but the device was never poll-tracked (e.g.
+        # legacy data from before issue #52). Row should still appear; the
+        # poll-outcome columns are simply NULL.
+        db.upsert_access_point("10.0.0.1", "root", "pass")
+        db.save_device_config("10.0.0.1", "{}", "hash-ap", model="TNA-301")
+
+        configs = db.get_all_latest_configs()
+        row = configs["10.0.0.1"]
+        assert row["fetched_at"] is not None
+        assert row["last_config_poll_at"] is None
+        assert row["last_config_poll_status"] is None
+        assert row["last_config_poll_error"] is None
+
+
 class TestCPECache:
     def test_upsert_and_get(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "green"})
