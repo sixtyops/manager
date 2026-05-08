@@ -644,7 +644,8 @@ Delete a config template. Requires admin or operator role.
 ### `GET /api/config-compliance`
 Get per-device config compliance status using scoped templates. Classified as a dangerous feature.
 
-- **Response**: `{ "devices": { [ip]: { "compliant", "checked_at" } } }`
+- **Query params**: `refresh=true` polls fresh configs from all enabled APs and switches before computing compliance.
+- **Response**: `{ "devices": { [ip]: { "compliant", "checked_at" } }, "polled": <int> }`. `checked_at` is the timestamp of the most recent successful config poll for that device (`devices.last_config_poll_at` / `cpe_cache.last_config_poll_at`), falling back to the snapshot's `fetched_at` for legacy rows that pre-date per-device poll-outcome tracking.
 
 ### `GET /api/config-enforce/status`
 Get current auto-enforce status and recent log entries.
