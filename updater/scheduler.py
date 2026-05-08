@@ -35,20 +35,28 @@ def _parse_version(version: str) -> tuple:
 
 
 def _extract_version_from_filename(filename: str) -> str:
-    """Extract normalized version from a firmware filename."""
+    """Extract normalized version from a firmware filename.
+
+    Mirrors `app._extract_version_from_filename`; keep the two in sync.
+    See that copy for why the regex must match the bare `tns-` prefix.
+    """
     import re
 
     if not filename:
         return ""
     match = re.search(
-        r"(?:tna-30x|tna30x|tna-303l|tna303l|tns-100|tns100)-(\d+\.\d+\.\d+)-r(\d+)",
+        r"(?:tna-30x|tna30x|tna-303l|tna303l|tns-100|tns100|tns)-(\d+\.\d+\.\d+)-r(\d+)",
         filename,
         re.IGNORECASE,
     )
     if match:
         return f"{match.group(1)}.{match.group(2)}"
-    match = re.search(r"(\d+\.\d+\.\d+)", filename)
-    return match.group(1) if match else ""
+    match = re.search(r"(\d+\.\d+\.\d+)(?:-r(\d+))?", filename)
+    if match:
+        if match.group(2):
+            return f"{match.group(1)}.{match.group(2)}"
+        return match.group(1)
+    return ""
 
 
 def _firmware_type_for_model(model: Optional[str]) -> str:
