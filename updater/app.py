@@ -449,6 +449,60 @@ def _recover_crashed_device_jobs():
         logger.warning(f"Recovered {len(active)} crashed job(s) from previous run")
 
 
+def _migrate_users_template_password_hashing() -> None:
+    """One-shot startup migration: hash any plaintext device-user passwords
+    stored in `config_templates` rows whose category is `users`.
+
+    Templates created before the at-rest hashing fix shipped have plaintext
+    passwords in `config_fragment.system.users[*].password` and the matching
+    `form_data.users[*].password`. Walk those rows once and hash anything
+    that doesn't already start with `$1$`. Idempotent — re-running on a
+    fully-hashed DB is a no-op.
+    """
+    try:
+        templates = db.get_config_templates()
+    except Exception as exc:
+        logger.warning(f"Users-template hash migration: skipped (db error: {exc})")
+        return
+    migrated = 0
+    for t in templates:
+        if (t.get("category") or "").lower() != "users":
+            continue
+        try:
+            frag_raw = t.get("config_fragment")
+            form_raw = t.get("form_data")
+            frag = json.loads(frag_raw) if isinstance(frag_raw, str) else frag_raw
+            form = json.loads(form_raw) if isinstance(form_raw, str) else form_raw
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        # Snapshot current state to detect whether the migration actually
+        # changed anything; avoids touching templates already on hashes.
+        before = json.dumps([frag, form], sort_keys=True, default=str)
+        from .config_utils import hash_template_user_passwords as _hash
+        _hash(
+            frag if isinstance(frag, dict) else None,
+            form if isinstance(form, dict) else None,
+            prior_fragment=None,
+        )
+        after = json.dumps([frag, form], sort_keys=True, default=str)
+        if before == after:
+            continue
+        try:
+            db.update_config_template(
+                t["id"],
+                config_fragment=json.dumps(frag) if isinstance(frag, dict) else frag_raw,
+                form_data=(json.dumps(form) if isinstance(form, dict) else form_raw),
+            )
+            migrated += 1
+        except Exception as exc:
+            logger.warning(
+                f"Users-template hash migration: row id={t.get('id')} update failed: {exc}"
+            )
+    if migrated:
+        logger.info(f"Users-template hash migration: hashed plaintext passwords in {migrated} template(s)")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
@@ -456,6 +510,7 @@ async def lifespan(app: FastAPI):
     init_vendors()
     ensure_admin_user()
     db.cleanup_expired_sessions()
+    _migrate_users_template_password_hashing()
 
     if DEV_MODE:
         from .devmode import seed_database, DevModePoller
@@ -5861,6 +5916,7 @@ from .config_utils import (
     check_config_compliance as _check_config_compliance,
     fragment_matches as _fragment_matches,
     filter_templates_by_device_type as _filter_templates_by_device_type,
+    hash_template_user_passwords as _hash_template_user_passwords,
 )
 
 
@@ -6107,6 +6163,39 @@ async def poll_all_configs(session: dict = Depends(require_role("admin", "operat
 # Config Templates
 # ============================================================================
 
+def _scrub_stored_user_password_hashes(template: dict) -> None:
+    """Strip `$1$<salt>$<hash>` password values from `system.users[*]` and
+    `form_data.users[*]` before returning a Users-category template to the
+    browser.
+
+    The DB still holds the hash (we want to push it back to the device on
+    enforce); we just don't echo it back to the API response. The form input
+    then renders empty with a "(leave blank to keep current)" placeholder, so
+    typing a new password replaces cleanly without splicing onto a hash, and
+    DevTools-snooping doesn't expose even the hashed credential. A new
+    `users[*].has_stored_password: bool` flag is added so the front-end can
+    pick the right placeholder copy.
+    """
+    if (template.get("category") or "").lower() != "users":
+        return
+    fragment = template.get("config_fragment")
+    if isinstance(fragment, dict):
+        for u in (fragment.get("system") or {}).get("users") or []:
+            if isinstance(u, dict):
+                pw = u.get("password")
+                u["has_stored_password"] = isinstance(pw, str) and pw.startswith("$1$")
+                if u["has_stored_password"]:
+                    u["password"] = ""
+    form = template.get("form_data")
+    if isinstance(form, dict):
+        for u in form.get("users") or []:
+            if isinstance(u, dict):
+                pw = u.get("password")
+                u["has_stored_password"] = isinstance(pw, str) and pw.startswith("$1$")
+                if u["has_stored_password"]:
+                    u["password"] = ""
+
+
 @app.get("/api/config-templates", tags=["config"])
 async def list_config_templates(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """List all config templates."""
@@ -6115,6 +6204,7 @@ async def list_config_templates(session: dict = Depends(require_auth), _pro=Depe
         t["config_fragment"] = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
         if t.get("form_data"):
             t["form_data"] = json.loads(t["form_data"]) if isinstance(t["form_data"], str) else t["form_data"]
+        _scrub_stored_user_password_hashes(t)
     return {"templates": templates}
 
 
@@ -6139,8 +6229,15 @@ async def create_config_template(request: Request, session: dict = Depends(requi
     except ValueError as e:
         raise HTTPException(400, str(e))
 
+    # Hash any plaintext device-user passwords in place before persistence —
+    # storing operator-entered plaintext was a soft-secret leak (SQL dumps,
+    # CSV backups, anyone with `config_templates` read access). $1$-prefixed
+    # values pass through. See `hash_template_user_passwords` in config_utils.
+    form_data_dict = data.get("form_data") if isinstance(data.get("form_data"), dict) else None
+    _hash_template_user_passwords(config_fragment, form_data_dict, prior_fragment=None)
+
     fragment_str = json.dumps(config_fragment)
-    form_data_str = json.dumps(data["form_data"]) if data.get("form_data") else None
+    form_data_str = json.dumps(form_data_dict) if form_data_dict else (json.dumps(data["form_data"]) if data.get("form_data") else None)
 
     scope = data.get("scope", "global")
     site_id = data.get("site_id")
@@ -6187,6 +6284,21 @@ async def update_config_template_api(template_id: int, request: Request, session
         updates["name"] = data["name"]
     if "category" in data:
         updates["category"] = data["category"]
+
+    # If either config_fragment or form_data is being updated, hash any
+    # plaintext user passwords in place. The existing template's stored
+    # config_fragment is passed as `prior` so empty-password fields preserve
+    # the prior hash (operator left the field blank → "no change").
+    prior_fragment_for_hash = None
+    incoming_fragment_for_hash = None
+    incoming_form_data_for_hash = None
+    if "config_fragment" in data or "form_data" in data:
+        prior_raw = existing.get("config_fragment")
+        try:
+            prior_fragment_for_hash = json.loads(prior_raw) if isinstance(prior_raw, str) else prior_raw
+        except (json.JSONDecodeError, TypeError):
+            prior_fragment_for_hash = None
+
     if "config_fragment" in data:
         frag = data["config_fragment"]
         if isinstance(frag, str):
@@ -6198,9 +6310,24 @@ async def update_config_template_api(template_id: int, request: Request, session
             _validate_fragment_safety(frag)
         except ValueError as e:
             raise HTTPException(400, str(e))
-        updates["config_fragment"] = json.dumps(frag)
+        incoming_fragment_for_hash = frag if isinstance(frag, dict) else None
+    if "form_data" in data and isinstance(data["form_data"], dict):
+        incoming_form_data_for_hash = data["form_data"]
+
+    if incoming_fragment_for_hash is not None or incoming_form_data_for_hash is not None:
+        _hash_template_user_passwords(
+            incoming_fragment_for_hash,
+            incoming_form_data_for_hash,
+            prior_fragment=prior_fragment_for_hash,
+        )
+
+    if "config_fragment" in data:
+        updates["config_fragment"] = json.dumps(incoming_fragment_for_hash if incoming_fragment_for_hash is not None else data["config_fragment"])
     if "form_data" in data:
-        updates["form_data"] = json.dumps(data["form_data"]) if isinstance(data["form_data"], dict) else data["form_data"]
+        if incoming_form_data_for_hash is not None:
+            updates["form_data"] = json.dumps(incoming_form_data_for_hash)
+        else:
+            updates["form_data"] = data["form_data"]
     if "description" in data:
         updates["description"] = data["description"]
     if "enabled" in data:

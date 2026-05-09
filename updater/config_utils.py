@@ -7,6 +7,87 @@ from copy import deepcopy
 PROTECTED_CONFIG_KEYS = {"network", "ethernet"}
 
 
+def _md5_crypt(plain: str) -> str:
+    """Hash a plaintext password into Tachyon's `$1$<salt>$<hash>` format.
+
+    34-char modular crypt MD5 — what the device stores in `system.users[*].password`
+    and what the validator accepts on write. Mirrors the algorithm used by
+    `updater.vendors.tachyon.client._normalize_user_passwords`; kept here as a
+    shared utility so the at-rest hashing path doesn't pull in a vendor-specific
+    import.
+    """
+    import os
+    from passlib.hash import md5_crypt
+    salt = os.urandom(4).hex()  # 8 hex chars; passlib clamps to 8 max
+    return md5_crypt.using(salt=salt).hash(plain)
+
+
+def hash_template_user_passwords(
+    config_fragment: dict | None,
+    form_data: dict | None,
+    prior_fragment: dict | None = None,
+) -> None:
+    """Hash plaintext `system.users[*].password` and `form_data.users[*].password`
+    values in place, *before* the template is persisted.
+
+    Storing operator-entered plaintext for device users in the manager DB is a
+    soft-secret leak: anyone with read access to `config_templates` (a SQL dump,
+    a CSV backup, an SFTP backup) sees the credentials. Hashing at rest in the
+    same `$1$<salt>$<hash>` format the device stores means worst-case exposure
+    is a brute-forceable hash, not the password itself.
+
+    Rules per user (matched by username):
+      - `password` starts with `$1$`  → already hashed; keep as-is.
+      - `password` is a non-empty plaintext string → hash it.
+      - `password` is empty/missing AND `prior_fragment` has a matching username
+        with a stored hash → copy the prior hash forward (operator left the
+        field blank, indicating "no change").
+      - `password` is empty/missing AND no prior → drop the field. The device
+        treats an empty `password` as "no change" anyway, but a missing field
+        is what the read API returns for users without a set password.
+
+    Both `config_fragment.system.users` and `form_data.users` are walked so the
+    two stay in sync. `prior_fragment` is used to look up the previous hash by
+    username; pass `None` on creation, the existing row's `config_fragment` on
+    update.
+    """
+    prior_users_by_name: dict[str, str] = {}
+    if isinstance(prior_fragment, dict):
+        prior_users = ((prior_fragment.get("system") or {}).get("users") or [])
+        for u in prior_users:
+            if isinstance(u, dict):
+                name = u.get("username")
+                pw = u.get("password")
+                if isinstance(name, str) and isinstance(pw, str) and pw.startswith("$1$"):
+                    prior_users_by_name[name] = pw
+
+    def _resolve(user: dict) -> None:
+        pw = user.get("password")
+        if isinstance(pw, str) and pw.startswith("$1$"):
+            return  # already hashed
+        if isinstance(pw, str) and pw:
+            user["password"] = _md5_crypt(pw)
+            return
+        # empty or missing → preserve prior hash if we have one
+        name = user.get("username")
+        if isinstance(name, str) and name in prior_users_by_name:
+            user["password"] = prior_users_by_name[name]
+        else:
+            user.pop("password", None)
+
+    if isinstance(config_fragment, dict):
+        users = (config_fragment.get("system") or {}).get("users") or []
+        for u in users:
+            if isinstance(u, dict):
+                _resolve(u)
+
+    if isinstance(form_data, dict):
+        users = form_data.get("users") or []
+        for u in users:
+            if isinstance(u, dict):
+                _resolve(u)
+
+
 def validate_fragment_safety(fragment: dict):
     """Raise ValueError if fragment tries to modify protected config sections."""
     if not isinstance(fragment, dict):
