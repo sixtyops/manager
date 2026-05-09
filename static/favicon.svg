@@ -1,9 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
   <rect width="32" height="32" rx="6" fill="#0D9488"/>
-  <rect x="4" y="10" width="3" height="12" rx="1" fill="white" opacity="0.9"/>
-  <rect x="9" y="7" width="3" height="18" rx="1" fill="white"/>
-  <rect x="14" y="4" width="3" height="24" rx="1" fill="white"/>
-  <path d="M20 11 L28 7" stroke="white" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/>
-  <path d="M20 16 L29 16" stroke="white" stroke-width="1.8" stroke-linecap="round" opacity="0.8"/>
-  <path d="M20 21 L28 25" stroke="white" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/>
+  <rect x="5" y="10" width="2.5" height="12" rx="1" fill="white" opacity="0.9"/>
+  <rect x="9.5" y="8" width="2.5" height="16" rx="1" fill="white"/>
+  <rect x="14" y="6" width="2.5" height="20" rx="1" fill="white"/>
+  <path d="M19 12 L27 8" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+  <path d="M19 16 L28 16" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/>
+  <path d="M19 20 L27 24" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
 </svg>
+</content>
+</invoke>
