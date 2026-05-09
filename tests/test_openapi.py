@@ -39,19 +39,36 @@ class TestOpenAPISchema:
         if "get" in analytics_path:
             assert "analytics" in analytics_path["get"].get("tags", [])
 
-    def test_docs_page_accessible(self):
-        """Swagger UI should be accessible without auth."""
-        from updater.app import app
-        client = TestClient(app)
-        resp = client.get("/docs")
-        assert resp.status_code == 200
+    def test_docs_page_requires_auth(self, client):
+        """Swagger UI is auth-gated; unauthenticated callers get redirected
+        (HTML accept) or 401 (API accept). Avoids anonymously exposing the
+        list of every API route."""
+        resp = client.get("/docs", follow_redirects=False)
+        assert resp.status_code in (401, 303)
 
-    def test_redoc_page_accessible(self):
-        """ReDoc should be accessible without auth."""
-        from updater.app import app
-        client = TestClient(app)
-        resp = client.get("/redoc")
+    def test_docs_page_accessible_when_authed(self, authed_client):
+        resp = authed_client.get("/docs")
         assert resp.status_code == 200
+        # Should reference the locally-vendored Swagger UI assets, not
+        # cdn.jsdelivr.net — content blockers were dropping the CDN
+        # request and leaving the page blank.
+        assert "/static/vendor/swagger-ui-bundle.js" in resp.text
+        assert "/static/vendor/swagger-ui.css" in resp.text
+        assert "jsdelivr" not in resp.text
+
+    def test_redoc_page_requires_auth(self, client):
+        resp = client.get("/redoc", follow_redirects=False)
+        assert resp.status_code in (401, 303)
+
+    def test_redoc_page_accessible_when_authed(self, authed_client):
+        resp = authed_client.get("/redoc")
+        assert resp.status_code == 200
+        assert "/static/vendor/redoc.standalone.js" in resp.text
+        assert "jsdelivr" not in resp.text
+
+    def test_openapi_json_requires_auth(self, client):
+        resp = client.get("/openapi.json", follow_redirects=False)
+        assert resp.status_code in (401, 303)
 
     def test_all_api_routes_tagged(self, authed_client):
         """Verify that most /api/ routes have tags."""
