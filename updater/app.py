@@ -534,6 +534,15 @@ app = FastAPI(
     description="Automated firmware update management for Tachyon wireless network devices (APs, CPEs, switches).",
     version=__version__,
     lifespan=lifespan,
+    # Disable the default unauthenticated /docs, /redoc, /openapi.json endpoints.
+    # Custom auth-gated replacements that point at locally-vendored assets are
+    # registered below — content blockers were silently dropping the default
+    # FastAPI HTML's jsdelivr.net script tags (same root cause as the Chart.js
+    # vendoring), and an unauthenticated openapi.json was an unnecessary
+    # information-disclosure surface.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
     openapi_tags=[
         {"name": "devices", "description": "Device inventory management (APs, CPEs, switches)"},
         {"name": "firmware", "description": "Firmware file management and updates"},
@@ -591,6 +600,43 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+# ---------------------------------------------------------------------------
+# API docs (auth-gated, locally-vendored assets)
+# ---------------------------------------------------------------------------
+# Replaces FastAPI's default /docs /redoc /openapi.json. Each route is now
+# behind require_auth so the API surface isn't anonymously discoverable, and
+# the Swagger UI / ReDoc HTML points at static/vendor assets instead of
+# jsdelivr.net (browser content blockers were dropping the default CDN
+# requests, leaving the pages blank — same root cause as the Chart.js fix).
+@app.get("/openapi.json", include_in_schema=False)
+async def openapi_schema(session: dict = Depends(require_auth)):
+    return app.openapi()
+
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_ui_html(session: dict = Depends(require_auth)):
+    from fastapi.openapi.docs import get_swagger_ui_html
+    return get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title=f"{app.title} - Swagger UI",
+        swagger_js_url="/static/vendor/swagger-ui-bundle.js",
+        swagger_css_url="/static/vendor/swagger-ui.css",
+        swagger_favicon_url="/static/favicon.png",
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+async def redoc_html(session: dict = Depends(require_auth)):
+    from fastapi.openapi.docs import get_redoc_html
+    return get_redoc_html(
+        openapi_url="/openapi.json",
+        title=f"{app.title} - ReDoc",
+        redoc_js_url="/static/vendor/redoc.standalone.js",
+        redoc_favicon_url="/static/favicon.png",
+        with_google_fonts=False,
+    )
 
 
 @app.get("/healthz")
