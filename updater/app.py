@@ -623,7 +623,7 @@ async def swagger_ui_html(session: dict = Depends(require_auth)):
         title=f"{app.title} - Swagger UI",
         swagger_js_url="/static/vendor/swagger-ui-bundle.js",
         swagger_css_url="/static/vendor/swagger-ui.css",
-        swagger_favicon_url="/static/favicon.png",
+        swagger_favicon_url="/static/favicon.svg",
     )
 
 
@@ -634,7 +634,7 @@ async def redoc_html(session: dict = Depends(require_auth)):
         openapi_url="/openapi.json",
         title=f"{app.title} - ReDoc",
         redoc_js_url="/static/vendor/redoc.standalone.js",
-        redoc_favicon_url="/static/favicon.png",
+        redoc_favicon_url="/static/favicon.svg",
         with_google_fonts=False,
     )
 
