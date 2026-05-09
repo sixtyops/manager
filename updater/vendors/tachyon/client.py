@@ -32,6 +32,46 @@ logger = logging.getLogger(__name__)
 VERIFY_SSL = os.environ.get("TACHYON_VERIFY_SSL", "").lower() in ("1", "true", "yes")
 
 
+def _normalize_user_passwords(config: dict) -> dict:
+    """Hash plaintext `system.users[*].password` values into `$1$<salt>$<hash>`
+    MD5-crypt format (in-place).
+
+    Tachyon's write validator only knows the JSON key `password`. The
+    `password_hash` key is silently dropped as an unknown property, so any
+    attempt to send `password_hash: <hash>` produces the misleading "key
+    required but not included" error. Within `password`, the validator
+    accepts plaintext OR a 34-char `$1$...$...` MD5-crypt string for users
+    that already exist on the device — but for *new* users (e.g. when a
+    Users template merge expands the user list), it strictly requires the
+    34-char hash. Auto-enforce was failing every 4 AM cycle on dev because
+    of this asymmetry.
+
+    Always-hash means the manager doesn't have to know whether a given
+    user is new or existing on a target device. Existing `$1$...` values
+    (already hashed by a prior cycle, or pasted from `openssl passwd -1`)
+    pass through untouched. Empty strings are left alone — the device
+    treats those as "no change".
+
+    Uses `passlib.hash.md5_crypt` for cross-version compatibility — the
+    stdlib `crypt` module was deprecated in 3.12 and removed in 3.13, so
+    relying on it would break on newer interpreters.
+    """
+    import os
+    from passlib.hash import md5_crypt
+    users = (config.get("system") or {}).get("users") or []
+    for user in users:
+        if not isinstance(user, dict):
+            continue
+        pw = user.get("password")
+        if not isinstance(pw, str) or not pw:
+            continue
+        if pw.startswith("$1$"):
+            continue  # Already a crypt hash; leave as-is
+        salt = os.urandom(4).hex()  # 8 hex chars; md5_crypt salt is 1-8 chars
+        user["password"] = md5_crypt.using(salt=salt).hash(pw)
+    return config
+
+
 def _extract_version_from_firmware(firmware_path: str) -> str:
     """Extract normalized version from firmware filename.
 
@@ -984,13 +1024,20 @@ class TachyonClient:
     async def apply_config(self, config: dict, dry_run: bool = False) -> dict:
         """Apply full config to device via POST /cgi.lua/config.
 
+        Plaintext `system.users[*].password` values are MD5-crypt hashed
+        in place before send (see `_normalize_user_passwords`); the
+        validator rejects plaintext for users that don't already exist
+        on the device, so always hashing means the manager doesn't need
+        to track per-device user state.
+
         Args:
-            config: Full device configuration dict.
+            config: Full device configuration dict. Mutated in place.
             dry_run: If True, validate without applying.
 
         Returns:
             Dict with 'success' bool and response details.
         """
+        config = _normalize_user_passwords(config)
         endpoint = "/cgi.lua/config"
         if dry_run:
             endpoint += "?dry_run=true"

@@ -940,3 +940,80 @@ class TestPollerWritesPollStatus:
         ).fetchone()
         assert row["last_config_poll_status"] == "unknown"
         assert "ECONNREFUSED" in row["last_config_poll_error"]
+
+
+
+class TestNormalizeUserPasswords:
+    """Tachyon's write validator only knows the JSON key `password` —
+    `password_hash` is silently dropped. For users that don't already
+    exist on the device (e.g. when a Users template merge expands the
+    user list), `password` must be a 34-char `$1$<salt>$<hash>` MD5
+    crypt string. `_normalize_user_passwords` hashes plaintext values
+    in place before send. Tested for every state the merge can hand it."""
+
+    @pytest.fixture
+    def normalize(self):
+        from updater.vendors.tachyon.client import _normalize_user_passwords
+        return _normalize_user_passwords
+
+    def test_plaintext_gets_hashed(self, normalize):
+        cfg = {"system": {"users": [{"username": "root", "password": "secret"}]}}
+        normalize(cfg)
+        pw = cfg["system"]["users"][0]["password"]
+        assert pw.startswith("$1$")
+        # $1$ + 8-char salt + $ + 22-char hash = 34
+        assert len(pw) == 34
+
+    def test_existing_crypt_hash_passes_through(self, normalize):
+        # If a prior cycle already hashed the password (or the operator
+        # pasted an `openssl passwd -1` value), don't re-hash. Re-hashing
+        # would break the device's stored hash because crypt(plaintext)
+        # uses a fresh random salt each time.
+        already = "$1$abcdefgh$SbLlAj1nnaSEyBXEfwtQM/"
+        cfg = {"system": {"users": [{"username": "root", "password": already}]}}
+        normalize(cfg)
+        assert cfg["system"]["users"][0]["password"] == already
+
+    def test_empty_password_left_alone(self, normalize):
+        # Tachyon treats empty `password` as "no change". Don't hash it
+        # (would store a hash of the empty string, not the device's
+        # current password).
+        cfg = {"system": {"users": [{"username": "root", "password": ""}]}}
+        normalize(cfg)
+        assert cfg["system"]["users"][0]["password"] == ""
+
+    def test_missing_password_field_left_alone(self, normalize):
+        cfg = {"system": {"users": [{"username": "root", "enabled": True}]}}
+        normalize(cfg)
+        assert "password" not in cfg["system"]["users"][0]
+
+    def test_no_users_section(self, normalize):
+        cfg = {"system": {"hostname": "ap-1"}, "services": {}}
+        normalize(cfg)
+        assert cfg == {"system": {"hostname": "ap-1"}, "services": {}}
+
+    def test_no_system_section(self, normalize):
+        cfg = {"services": {"snmp": {"enabled": True}}}
+        normalize(cfg)
+        assert cfg == {"services": {"snmp": {"enabled": True}}}
+
+    def test_mixed_users_each_handled_independently(self, normalize):
+        already = "$1$abcdefgh$SbLlAj1nnaSEyBXEfwtQM/"
+        cfg = {"system": {"users": [
+            {"username": "root", "password": "plain1"},
+            {"username": "admin", "password": already},
+            {"username": "rwapi", "password": "plain2"},
+        ]}}
+        normalize(cfg)
+        users = cfg["system"]["users"]
+        assert users[0]["password"].startswith("$1$") and users[0]["password"] != "plain1"
+        assert users[1]["password"] == already  # untouched
+        assert users[2]["password"].startswith("$1$") and users[2]["password"] != "plain2"
+
+    def test_non_string_password_skipped(self, normalize):
+        # Defensive: a malformed template that put a non-string in
+        # `password` shouldn't crash the push. Leave the field alone
+        # so the device validator surfaces a clearer error.
+        cfg = {"system": {"users": [{"username": "root", "password": None}]}}
+        normalize(cfg)
+        assert cfg["system"]["users"][0]["password"] is None
