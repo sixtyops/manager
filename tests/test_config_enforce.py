@@ -940,3 +940,42 @@ class TestPollerWritesPollStatus:
         ).fetchone()
         assert row["last_config_poll_status"] == "unknown"
         assert "ECONNREFUSED" in row["last_config_poll_error"]
+
+
+
+class TestFilterTemplatesForAutoEnforce:
+    """Auto-enforce must skip the Users category — Tachyon's write validator
+    inconsistently demands `system.users.*.password_hash` (a 34-char field
+    the read API doesn't return). Pushing it via auto-enforce fails dry-run
+    every cycle. Operators can still push manually via Push to Devices."""
+
+    def test_drops_users_category(self):
+        from updater.config_utils import filter_templates_for_auto_enforce
+        templates = [
+            {"id": 1, "name": "NTP", "category": "ntp"},
+            {"id": 2, "name": "Users Standard", "category": "users"},
+            {"id": 3, "name": "SNMP", "category": "snmp"},
+        ]
+        eligible, skipped = filter_templates_for_auto_enforce(templates)
+        assert [t["id"] for t in eligible] == [1, 3]
+        assert [t["id"] for t in skipped] == [2]
+
+    def test_category_match_is_case_insensitive(self):
+        from updater.config_utils import filter_templates_for_auto_enforce
+        templates = [{"id": 1, "name": "x", "category": "USERS"}]
+        eligible, skipped = filter_templates_for_auto_enforce(templates)
+        assert eligible == []
+        assert [t["id"] for t in skipped] == [1]
+
+    def test_missing_category_is_eligible(self):
+        # Older/imported templates may not have a category populated.
+        # Default to eligible — only the explicit unsupported set is skipped.
+        from updater.config_utils import filter_templates_for_auto_enforce
+        templates = [{"id": 1, "name": "x", "category": None}, {"id": 2, "name": "y"}]
+        eligible, skipped = filter_templates_for_auto_enforce(templates)
+        assert [t["id"] for t in eligible] == [1, 2]
+        assert skipped == []
+
+    def test_empty_input(self):
+        from updater.config_utils import filter_templates_for_auto_enforce
+        assert filter_templates_for_auto_enforce([]) == ([], [])

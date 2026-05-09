@@ -17,6 +17,7 @@ from .config_utils import (
     check_config_compliance,
     validate_fragment_safety,
     filter_templates_by_device_type,
+    filter_templates_for_auto_enforce,
 )
 from .tachyon import TachyonClient  # kept for fallback/type compat
 from .vendors import get_driver
@@ -1058,10 +1059,24 @@ class NetworkPoller:
             device_type = "ap" if ap else "switch"
             # Filter templates by device_types (custom category may target specific types)
             applicable, _excluded = filter_templates_by_device_type(templates, device_type)
-            if not applicable:
+            # Drop categories the auto-enforce path can't push (e.g. `users`
+            # — Tachyon's write validator requires a 34-char `password_hash`
+            # that we don't compute and that the read API doesn't return,
+            # so the dry-run rejects every cycle). Compliance is still
+            # evaluated against the *applicable* set so the dashboard's
+            # Compliant/Non-Compliant chip stays accurate; we just don't
+            # try to push the unsupported categories.
+            enforceable, skipped = filter_templates_for_auto_enforce(applicable)
+            if skipped:
+                names = ", ".join(t.get("name") or f"id={t.get('id')}" for t in skipped)
+                logger.info(
+                    f"Config enforce: {ip} skipping unsupported categories "
+                    f"(manual push only): {names}"
+                )
+            if not enforceable:
                 continue
-            if not check_config_compliance(config_data, applicable):
-                non_compliant.append((ip, device_type, applicable))
+            if not check_config_compliance(config_data, enforceable):
+                non_compliant.append((ip, device_type, enforceable))
 
         if not non_compliant:
             logger.info("Config enforce: all devices compliant")

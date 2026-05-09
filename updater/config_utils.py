@@ -6,6 +6,32 @@ from copy import deepcopy
 
 PROTECTED_CONFIG_KEYS = {"network", "ethernet"}
 
+# Template categories that we never push via the auto-enforce path. The
+# Tachyon write validator inconsistently demands `system.users.*.password_hash`
+# (a 34-char MD5-crypt-style field) when a Users template merge replaces the
+# device's user list, even though the read endpoint never returns that field
+# and a plain round-trip succeeds. Until we either (a) compute device-side
+# password hashes ourselves or (b) the device firmware accepts plaintext
+# replacements symmetrically, an enforce-driven Users push fails dry-run
+# every cycle. Operators can still use the explicit "Push to Devices" flow
+# manually with this category.
+AUTO_ENFORCE_UNSUPPORTED_CATEGORIES = {"users"}
+
+
+def filter_templates_for_auto_enforce(
+    templates: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Split templates into (eligible, skipped) for the auto-enforce path."""
+    eligible: list[dict] = []
+    skipped: list[dict] = []
+    for t in templates:
+        cat = (t.get("category") or "").lower()
+        if cat in AUTO_ENFORCE_UNSUPPORTED_CATEGORIES:
+            skipped.append(t)
+        else:
+            eligible.append(t)
+    return eligible, skipped
+
 
 def validate_fragment_safety(fragment: dict):
     """Raise ValueError if fragment tries to modify protected config sections."""
