@@ -112,13 +112,74 @@ def deep_merge(base: dict, overlay: dict) -> dict:
     return result
 
 
-def fragment_matches(config: dict, fragment: dict) -> bool:
-    """Check if all keys in fragment match corresponding values in config."""
+def _is_stored_user_password_hash(value) -> bool:
+    """A 34-char `$1$<8-char salt>$<22-char hash>` MD5-crypt string. Both
+    sides of a Users-template compliance check end up with one of these,
+    *with different salts* — every push generates a fresh salt, so naïve
+    string equality flags drift on every cycle even when the underlying
+    plaintext credential is unchanged."""
+    return (
+        isinstance(value, str)
+        and value.startswith("$1$")
+        and len(value) == 34
+    )
+
+
+def _user_lists_compatible(device_users, template_users) -> bool:
+    """Per-username comparison for the `system.users` list under the Users
+    template. The list is matched by `username` (not by index — devices
+    return users in factory order which need not match the template's
+    order). Each per-user field is compared exactly *except* `password`:
+    if both sides hold a valid stored `$1$<salt>$<hash>` value, that's
+    treated as compatible regardless of the hash bytes (different salts
+    encode the same plaintext but never compare equal as strings, which
+    would otherwise flag every fleet as non-compliant immediately after
+    push). Plaintext or empty `password` on either side falls back to
+    exact equality — that surfaces factory-default credentials (which
+    appear as plaintext or empty) as drift, which is the actual goal of
+    the Users template compliance check."""
+    if not isinstance(device_users, list) or not isinstance(template_users, list):
+        return False
+    device_by_name = {
+        u.get("username"): u for u in device_users
+        if isinstance(u, dict) and isinstance(u.get("username"), str)
+    }
+    for tu in template_users:
+        if not isinstance(tu, dict):
+            continue
+        name = tu.get("username")
+        if not isinstance(name, str):
+            continue
+        du = device_by_name.get(name)
+        if du is None:
+            return False
+        for k, v in tu.items():
+            if k == "password":
+                if _is_stored_user_password_hash(v) and _is_stored_user_password_hash(du.get("password")):
+                    continue  # both sides have a stored hash; treat as compatible
+                if du.get("password") != v:
+                    return False
+            elif du.get(k) != v:
+                return False
+    return True
+
+
+def fragment_matches(config: dict, fragment: dict, _path: tuple = ()) -> bool:
+    """Check if all keys in fragment match corresponding values in config.
+
+    The Users-template path (`system.users`) is special-cased: the list is
+    matched by `username` and per-user `password` values are compared
+    via `_user_lists_compatible` (which tolerates differing `$1$<salt>$<hash>`
+    salts on both sides — see that helper's docstring for why)."""
     for key, value in fragment.items():
         if key not in config:
             return False
+        new_path = _path + (key,)
         if isinstance(value, dict) and isinstance(config[key], dict):
-            if not fragment_matches(config[key], value):
+            if not fragment_matches(config[key], value, _path=new_path):
+                return False
+        elif new_path == ("system", "users") and isinstance(value, list):
+            if not _user_lists_compatible(config[key], value):
                 return False
         elif config[key] != value:
             return False

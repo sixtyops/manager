@@ -3320,13 +3320,31 @@ def get_config_push_unassigned_count(rollout_id: int) -> int:
 
 
 def get_enforce_failures(since_hours: int = 24) -> list[dict]:
-    """Get recent enforcement failures."""
+    """Get recent enforcement failures that haven't been resolved by a
+    subsequent successful push for the same device.
+
+    The dashboard's `failure_count` chip is the visible signal — if a
+    transient failure (auth, timeout, validator hiccup) was followed by a
+    clean push for the same IP, the operator already saw the resolution
+    in the log; pinning the failure to the chip just adds noise. The row
+    stays in `config_enforce_log` for diagnostics; we just stop counting
+    it as live drift once a success lands."""
     cutoff = (datetime.now() - timedelta(hours=since_hours)).isoformat()
     with get_db() as db:
+        # Compare (enforced_at, id) so ties on `enforced_at` (which defaults
+        # to `CURRENT_TIMESTAMP` and has 1-second resolution — fast successive
+        # inserts collide) tie-break on the monotonic auto-increment id.
         rows = db.execute(
-            """SELECT * FROM config_enforce_log
-               WHERE status = 'failed' AND enforced_at >= ?
-               ORDER BY enforced_at DESC""",
+            """SELECT f.* FROM config_enforce_log f
+               WHERE f.status = 'failed'
+                 AND f.enforced_at >= ?
+                 AND NOT EXISTS (
+                   SELECT 1 FROM config_enforce_log s
+                   WHERE s.ip = f.ip
+                     AND s.status = 'success'
+                     AND (s.enforced_at, s.id) > (f.enforced_at, f.id)
+                 )
+               ORDER BY f.enforced_at DESC""",
             (cutoff,)
         ).fetchall()
         return [dict(row) for row in rows]

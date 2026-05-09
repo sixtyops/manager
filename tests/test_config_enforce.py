@@ -1281,3 +1281,124 @@ class TestUsersTemplateMigration:
         ).fetchone()
         # Untouched — both the field and value preserved verbatim.
         assert "weird" in row["config_fragment"]
+
+
+class TestUserListsCompatible:
+    """Compliance check for the Users template tolerates differing
+    `$1$<salt>$<hash>` salts on both sides — every push generates a
+    fresh salt, so naïve string-equal would flag every fleet as
+    non-compliant immediately after a successful push. This is the
+    edge-case lane operators kept hitting on dev15."""
+
+    @pytest.fixture
+    def matches(self):
+        from updater.config_utils import fragment_matches
+        return fragment_matches
+
+    def test_different_hashes_match_when_both_are_stored(self, matches):
+        # Both sides are 34-char $1$ strings but with different salts —
+        # this is the case that was lighting up "non-compliant" forever.
+        device = {"system": {"users": [
+            {"username": "root", "password": "$1$aabbccdd$AAAAAAAAAAAAAAAAAAAAA0", "level": 0, "enabled": True},
+        ]}}
+        template = {"system": {"users": [
+            {"username": "root", "password": "$1$xxxxyyyy$BBBBBBBBBBBBBBBBBBBBB0", "level": 0, "enabled": True},
+        ]}}
+        assert matches(device, template) is True
+
+    def test_plaintext_password_on_device_flags_drift(self, matches):
+        # Factory defaults + post-reset states return plaintext `password`
+        # rather than `$1$` hash. The compliance check must surface those
+        # as drift so the manager re-pushes the operator's preferred creds.
+        device = {"system": {"users": [
+            {"username": "root", "password": "admin", "level": 0, "enabled": True},
+        ]}}
+        template = {"system": {"users": [
+            {"username": "root", "password": "$1$xxxxyyyy$BBBBBBBBBBBBBBBBBBBBB0", "level": 0, "enabled": True},
+        ]}}
+        assert matches(device, template) is False
+
+    def test_missing_username_on_device_flags_drift(self, matches):
+        device = {"system": {"users": [
+            {"username": "root", "password": "$1$aabbccdd$AAAAAAAAAAAAAAAAAAAAA0"},
+        ]}}
+        template = {"system": {"users": [
+            {"username": "root", "password": "$1$xxxxyyyy$BBBBBBBBBBBBBBBBBBBBB0"},
+            {"username": "admin", "password": "$1$qqqqrrrr$CCCCCCCCCCCCCCCCCCCCC0"},
+        ]}}
+        assert matches(device, template) is False
+
+    def test_username_order_independent(self, matches):
+        # Devices return users in factory-defined order which is rarely
+        # the same as the template's order — match by username, not index.
+        # Hashes are 34-char `$1$<8-char salt>$<22-char hash>`.
+        device = {"system": {"users": [
+            {"username": "admin", "password": "$1$11111111$" + "a" * 22},
+            {"username": "root",  "password": "$1$22222222$" + "b" * 22},
+        ]}}
+        template = {"system": {"users": [
+            {"username": "root",  "password": "$1$33333333$" + "c" * 22},
+            {"username": "admin", "password": "$1$44444444$" + "d" * 22},
+        ]}}
+        assert matches(device, template) is True
+
+    def test_level_mismatch_still_flagged(self, matches):
+        # Password tolerance applies *only* to the password field —
+        # level/enabled/etc. still compare exactly. Level=9 (read-only)
+        # vs level=0 (admin) is a real drift.
+        device = {"system": {"users": [
+            {"username": "root", "password": "$1$aabbccdd$AAAAAAAAAAAAAAAAAAAAA0", "level": 9},
+        ]}}
+        template = {"system": {"users": [
+            {"username": "root", "password": "$1$xxxxyyyy$BBBBBBBBBBBBBBBBBBBBB0", "level": 0},
+        ]}}
+        assert matches(device, template) is False
+
+    def test_other_password_paths_unaffected(self, matches):
+        # The Users tolerance is path-scoped to `system.users`. SNMP v3
+        # passwords (and any other `password` field) still compare exactly.
+        device = {"services": {"snmp": {"v3": {"ro": {"password": "x"}}}}}
+        template = {"services": {"snmp": {"v3": {"ro": {"password": "y"}}}}}
+        assert matches(device, template) is False
+
+
+class TestEnforceFailuresAutoClear:
+    """Stale failure entries shouldn't pad the dashboard's `failure_count`
+    chip after the underlying issue has been resolved by a subsequent
+    successful push for the same device."""
+
+    def test_failure_followed_by_success_is_filtered(self, mock_db):
+        from updater import database as db
+        # Yesterday's failure...
+        db.save_config_enforce_log("10.0.0.1", "ap", "canary", "failed", error="timeout")
+        # ...resolved by a subsequent success on the same IP.
+        db.save_config_enforce_log("10.0.0.1", "ap", "canary", "success", template_ids=[1])
+        failures = db.get_enforce_failures(since_hours=24)
+        assert failures == []
+
+    def test_unresolved_failure_still_counted(self, mock_db):
+        from updater import database as db
+        db.save_config_enforce_log("10.0.0.1", "ap", "canary", "failed", error="timeout")
+        # No subsequent success row.
+        failures = db.get_enforce_failures(since_hours=24)
+        assert len(failures) == 1
+        assert failures[0]["ip"] == "10.0.0.1"
+
+    def test_per_ip_resolution(self, mock_db):
+        from updater import database as db
+        # Two failures, only one resolved. The other should still count.
+        db.save_config_enforce_log("10.0.0.1", "ap", "canary", "failed")
+        db.save_config_enforce_log("10.0.0.2", "ap", "canary", "failed")
+        db.save_config_enforce_log("10.0.0.1", "ap", "canary", "success", template_ids=[1])
+        failures = db.get_enforce_failures(since_hours=24)
+        assert [f["ip"] for f in failures] == ["10.0.0.2"]
+
+    def test_failure_after_success_is_still_counted(self, mock_db):
+        # Old success, then a fresh failure — the failure is *new* drift,
+        # don't accidentally suppress it just because a success exists in
+        # the log somewhere.
+        from updater import database as db
+        db.save_config_enforce_log("10.0.0.1", "ap", "canary", "success", template_ids=[1])
+        db.save_config_enforce_log("10.0.0.1", "ap", "canary", "failed", error="auth")
+        failures = db.get_enforce_failures(since_hours=24)
+        assert len(failures) == 1
