@@ -9478,6 +9478,14 @@
             const container = document.getElementById('cfgUserRows');
             const row = document.createElement('div');
             row.className = 'config-user-row';
+            // Server scrubs the stored hash from the GET response and sets
+            // `has_stored_password: true` instead. Render the field empty
+            // with a "(unchanged)" placeholder so typing replaces cleanly
+            // — leaving the field blank tells the server to keep the prior
+            // hash. Brand-new rows fall back to the original "password"
+            // placeholder.
+            const hasStored = !!(userData && userData.has_stored_password);
+            const passPlaceholder = hasStored ? '(unchanged — leave blank)' : 'password';
             row.innerHTML = `
                 <div>
                     <label>Username
@@ -9486,7 +9494,7 @@
                 </div>
                 <div>
                     <label>Password
-                    <input type="password" class="cfg-user-pass u-w-full" value="${escapeHtml(userData?.password || '')}" placeholder="password" autocomplete="off" data-1p-ignore>
+                    <input type="password" class="cfg-user-pass u-w-full" value="" placeholder="${escapeHtml(passPlaceholder)}" autocomplete="off" data-1p-ignore>
                     </label>
                 </div>
                 <div>

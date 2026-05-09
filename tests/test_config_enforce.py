@@ -1017,3 +1017,267 @@ class TestNormalizeUserPasswords:
         cfg = {"system": {"users": [{"username": "root", "password": None}]}}
         normalize(cfg)
         assert cfg["system"]["users"][0]["password"] is None
+
+
+class TestHashTemplateUserPasswordsAtRest:
+    """Storing operator-entered plaintext passwords for device users in
+    `config_templates` was a soft-secret leak (SQL dumps, CSV backups, anyone
+    with read access). Saved templates are now hashed in-place at the
+    `$1$<salt>$<hash>` modular-crypt-MD5 format the device stores. These
+    tests cover the helper that does the in-place hashing on save."""
+
+    @pytest.fixture
+    def hash_helper(self):
+        from updater.config_utils import hash_template_user_passwords
+        return hash_template_user_passwords
+
+    def test_plaintext_hashed_in_both_fragment_and_form(self, hash_helper):
+        frag = {"system": {"users": [{"username": "root", "password": "secret1"}]}}
+        form = {"users": [{"username": "root", "password": "secret1"}]}
+        hash_helper(frag, form, prior_fragment=None)
+        assert frag["system"]["users"][0]["password"].startswith("$1$")
+        assert len(frag["system"]["users"][0]["password"]) == 34
+        assert form["users"][0]["password"].startswith("$1$")
+        assert len(form["users"][0]["password"]) == 34
+
+    def test_existing_crypt_hash_preserved(self, hash_helper):
+        # If someone re-saves a template whose API response already contained
+        # the stored hash (or an admin pasted an `openssl passwd -1` output),
+        # we must not re-hash — that would generate a fresh salt and break
+        # the device's stored credential.
+        already = "$1$abcdefgh$SbLlAj1nnaSEyBXEfwtQM/"
+        frag = {"system": {"users": [{"username": "root", "password": already}]}}
+        hash_helper(frag, None, prior_fragment=None)
+        assert frag["system"]["users"][0]["password"] == already
+
+    def test_empty_password_with_prior_hash_preserved(self, hash_helper):
+        # Operator left the password field blank — this is the "no change"
+        # signal. Look up the username in `prior_fragment` and copy its
+        # hash forward instead of dropping the credential.
+        prior_hash = "$1$xxxxxxxx$AaaaaaaaaaaaaaaaaaaaA0"
+        prior = {"system": {"users": [{"username": "root", "password": prior_hash}]}}
+        frag = {"system": {"users": [{"username": "root", "password": ""}]}}
+        form = {"users": [{"username": "root", "password": ""}]}
+        hash_helper(frag, form, prior_fragment=prior)
+        assert frag["system"]["users"][0]["password"] == prior_hash
+        assert form["users"][0]["password"] == prior_hash
+
+    def test_empty_password_without_prior_drops_field(self, hash_helper):
+        # No prior hash for this username + operator left it blank → drop
+        # the password key entirely. The device treats a missing field as
+        # "user has no set password" which matches what we'd want anyway.
+        frag = {"system": {"users": [{"username": "newuser", "password": ""}]}}
+        hash_helper(frag, None, prior_fragment=None)
+        assert "password" not in frag["system"]["users"][0]
+
+    def test_plaintext_overrides_prior_hash(self, hash_helper):
+        # Operator typed a new password for a user who already had one.
+        # Hash the new value; the prior is replaced.
+        prior_hash = "$1$old00000$zzzzzzzzzzzzzzzzzzzzzz"
+        prior = {"system": {"users": [{"username": "root", "password": prior_hash}]}}
+        frag = {"system": {"users": [{"username": "root", "password": "newvalue"}]}}
+        hash_helper(frag, None, prior_fragment=prior)
+        new_pw = frag["system"]["users"][0]["password"]
+        assert new_pw.startswith("$1$")
+        assert new_pw != prior_hash
+
+    def test_user_list_can_grow_via_prior_lookup(self, hash_helper):
+        # Mixed update: existing user (empty → preserved), new user
+        # (plaintext → hashed). Demonstrates per-user resolution.
+        prior_hash = "$1$rrrrrrrr$zzzzzzzzzzzzzzzzzzzzzz"
+        prior = {"system": {"users": [{"username": "root", "password": prior_hash}]}}
+        frag = {"system": {"users": [
+            {"username": "root", "password": ""},
+            {"username": "admin", "password": "freshpass"},
+        ]}}
+        hash_helper(frag, None, prior_fragment=prior)
+        users = frag["system"]["users"]
+        assert users[0]["password"] == prior_hash
+        assert users[1]["password"].startswith("$1$") and users[1]["password"] != "freshpass"
+
+    def test_handles_missing_sections(self, hash_helper):
+        # Defensive: empty/None inputs shouldn't crash. The Users category
+        # template editor can technically POST a fragment that lacks
+        # `system.users`; just no-op rather than throw.
+        hash_helper({}, {}, prior_fragment=None)
+        hash_helper({"system": {}}, None, prior_fragment=None)
+        hash_helper(None, None, prior_fragment=None)
+
+    def test_non_string_password_skipped(self, hash_helper):
+        # Defensive: malformed payload shouldn't raise. Drop the bogus
+        # value via the empty-password branch.
+        frag = {"system": {"users": [{"username": "root", "password": None}]}}
+        hash_helper(frag, None, prior_fragment=None)
+        assert "password" not in frag["system"]["users"][0]
+
+
+class TestUsersTemplateAPIHashing:
+    """End-to-end: POST/PUT /api/config-templates with category='users'
+    persists hashes in the DB rather than the operator-entered plaintext.
+    GET scrubs the stored hash from the response so the form can't echo
+    even the hashed value back to the browser."""
+
+    def test_post_hashes_plaintext_passwords(self, operator_client, mock_db):
+        import json as _json
+        resp = operator_client.post("/api/config-templates", json={
+            "name": "Users Test",
+            "category": "users",
+            "config_fragment": {"system": {"users": [
+                {"username": "root", "password": "topsecret"},
+            ]}},
+            "form_data": {"users": [{"username": "root", "password": "topsecret"}]},
+        })
+        assert resp.status_code == 200, resp.text
+        # The DB row should have a hashed password, not "topsecret".
+        row = mock_db.execute(
+            "SELECT config_fragment, form_data FROM config_templates WHERE name = 'Users Test'"
+        ).fetchone()
+        frag = _json.loads(row["config_fragment"])
+        form = _json.loads(row["form_data"])
+        assert "topsecret" not in row["config_fragment"]
+        assert "topsecret" not in row["form_data"]
+        assert frag["system"]["users"][0]["password"].startswith("$1$")
+        assert form["users"][0]["password"].startswith("$1$")
+
+    def test_get_scrubs_stored_hash_and_flags_users(self, authed_client, mock_db):
+        # Seed a Users template with a pre-hashed password directly so the
+        # GET path is what's under test, not the POST hashing.
+        import json as _json
+        already = "$1$abcdefgh$SbLlAj1nnaSEyBXEfwtQM/"
+        frag = {"system": {"users": [{"username": "root", "password": already}]}}
+        form = {"users": [{"username": "root", "password": already}]}
+        mock_db.execute(
+            "INSERT INTO config_templates (name, category, config_fragment, form_data, enabled) "
+            "VALUES (?, ?, ?, ?, 1)",
+            ("Users Seed", "users", _json.dumps(frag), _json.dumps(form)),
+        )
+        mock_db.commit()
+        resp = authed_client.get("/api/config-templates")
+        assert resp.status_code == 200
+        seed = next(t for t in resp.json()["templates"] if t["name"] == "Users Seed")
+        # Stored hash must not appear anywhere in the response body — neither
+        # in `config_fragment.system.users` nor `form_data.users`.
+        assert already not in resp.text
+        # Frontend gets `has_stored_password=True` so it can render a
+        # "(unchanged)" placeholder instead of leaving the field looking empty.
+        u_frag = seed["config_fragment"]["system"]["users"][0]
+        u_form = seed["form_data"]["users"][0]
+        assert u_frag["has_stored_password"] is True
+        assert u_form["has_stored_password"] is True
+        assert u_frag["password"] == ""
+        assert u_form["password"] == ""
+
+    def test_put_with_empty_password_preserves_prior_hash(self, operator_client, mock_db):
+        # Re-saving a Users template with an empty password field must not
+        # drop the existing credential — empty is the "leave alone" signal.
+        import json as _json
+        prior_hash = "$1$rrrrrrrr$xxxxxxxxxxxxxxxxxxxxxx"
+        cur = mock_db.execute(
+            "INSERT INTO config_templates (name, category, config_fragment, form_data, enabled) "
+            "VALUES (?, ?, ?, ?, 1)",
+            ("Users PUT", "users",
+             _json.dumps({"system": {"users": [{"username": "root", "password": prior_hash}]}}),
+             _json.dumps({"users": [{"username": "root", "password": prior_hash}]})),
+        )
+        mock_db.commit()
+        tid = cur.lastrowid
+        # Simulate the form sending back an empty password (frontend sends
+        # "" when the operator didn't touch the masked field).
+        resp = operator_client.put(f"/api/config-templates/{tid}", json={
+            "config_fragment": {"system": {"users": [{"username": "root", "password": ""}]}},
+            "form_data": {"users": [{"username": "root", "password": ""}]},
+        })
+        assert resp.status_code == 200, resp.text
+        row = mock_db.execute(
+            "SELECT config_fragment, form_data FROM config_templates WHERE id = ?", (tid,)
+        ).fetchone()
+        frag = _json.loads(row["config_fragment"])
+        form = _json.loads(row["form_data"])
+        assert frag["system"]["users"][0]["password"] == prior_hash
+        assert form["users"][0]["password"] == prior_hash
+
+    def test_put_with_new_plaintext_replaces_prior_hash(self, operator_client, mock_db):
+        import json as _json
+        prior_hash = "$1$rrrrrrrr$xxxxxxxxxxxxxxxxxxxxxx"
+        cur = mock_db.execute(
+            "INSERT INTO config_templates (name, category, config_fragment, form_data, enabled) "
+            "VALUES (?, ?, ?, ?, 1)",
+            ("Users Replace", "users",
+             _json.dumps({"system": {"users": [{"username": "root", "password": prior_hash}]}}),
+             _json.dumps({"users": [{"username": "root", "password": prior_hash}]})),
+        )
+        mock_db.commit()
+        tid = cur.lastrowid
+        resp = operator_client.put(f"/api/config-templates/{tid}", json={
+            "config_fragment": {"system": {"users": [{"username": "root", "password": "newpass"}]}},
+            "form_data": {"users": [{"username": "root", "password": "newpass"}]},
+        })
+        assert resp.status_code == 200, resp.text
+        row = mock_db.execute(
+            "SELECT config_fragment FROM config_templates WHERE id = ?", (tid,)
+        ).fetchone()
+        new_pw = _json.loads(row["config_fragment"])["system"]["users"][0]["password"]
+        assert new_pw.startswith("$1$")
+        assert new_pw != prior_hash
+        assert "newpass" not in row["config_fragment"]
+
+
+class TestUsersTemplateMigration:
+    """The `_migrate_users_template_password_hashing` startup hook hashes
+    pre-existing plaintext rows once. Idempotent on already-hashed data."""
+
+    def test_migrates_plaintext_users_row(self, mock_db):
+        import json as _json
+        from updater.app import _migrate_users_template_password_hashing
+        mock_db.execute(
+            "INSERT INTO config_templates (name, category, config_fragment, form_data, enabled) "
+            "VALUES (?, ?, ?, ?, 1)",
+            ("Legacy Users", "users",
+             _json.dumps({"system": {"users": [{"username": "root", "password": "leakable"}]}}),
+             _json.dumps({"users": [{"username": "root", "password": "leakable"}]})),
+        )
+        mock_db.commit()
+        _migrate_users_template_password_hashing()
+        row = mock_db.execute(
+            "SELECT config_fragment, form_data FROM config_templates WHERE name = 'Legacy Users'"
+        ).fetchone()
+        assert "leakable" not in row["config_fragment"]
+        assert "leakable" not in row["form_data"]
+        assert _json.loads(row["config_fragment"])["system"]["users"][0]["password"].startswith("$1$")
+
+    def test_already_hashed_unchanged(self, mock_db):
+        import json as _json
+        from updater.app import _migrate_users_template_password_hashing
+        already = "$1$abcdefgh$SbLlAj1nnaSEyBXEfwtQM/"
+        mock_db.execute(
+            "INSERT INTO config_templates (name, category, config_fragment, form_data, enabled) "
+            "VALUES (?, ?, ?, ?, 1)",
+            ("Users Hashed", "users",
+             _json.dumps({"system": {"users": [{"username": "root", "password": already}]}}),
+             _json.dumps({"users": [{"username": "root", "password": already}]})),
+        )
+        mock_db.commit()
+        _migrate_users_template_password_hashing()
+        row = mock_db.execute(
+            "SELECT config_fragment FROM config_templates WHERE name = 'Users Hashed'"
+        ).fetchone()
+        assert _json.loads(row["config_fragment"])["system"]["users"][0]["password"] == already
+
+    def test_non_users_categories_untouched(self, mock_db):
+        import json as _json
+        from updater.app import _migrate_users_template_password_hashing
+        # An NTP template happens to have a `password`-named field somewhere
+        # — migration must not touch it (only walks the Users category).
+        mock_db.execute(
+            "INSERT INTO config_templates (name, category, config_fragment, enabled) "
+            "VALUES (?, ?, ?, 1)",
+            ("NTP", "ntp",
+             _json.dumps({"services": {"ntp": {"servers": ["time.google.com"], "password": "weird"}}})),
+        )
+        mock_db.commit()
+        _migrate_users_template_password_hashing()
+        row = mock_db.execute(
+            "SELECT config_fragment FROM config_templates WHERE name = 'NTP'"
+        ).fetchone()
+        # Untouched — both the field and value preserved verbatim.
+        assert "weird" in row["config_fragment"]
