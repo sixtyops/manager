@@ -7510,6 +7510,19 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
 
     if failed_any:
         db.update_config_push_rollout_status(rollout_id, "paused", "One or more devices failed")
+    else:
+        # Auto-finalize: when this phase finished with no failures and there
+        # are no pending devices in any phase (i.e. everything that was
+        # going to push has pushed), mark the rollout `completed` rather
+        # than make the operator click `Advance` once more on a fully-green
+        # bar. Mirrors the empty-phase walk-through in
+        # `advance_config_push_rollout` (PR #88) but without the manual click.
+        all_devices = db.get_config_push_rollout_devices(rollout_id)
+        any_pending = any(
+            (d.get("status") or "") == "pending" for d in all_devices
+        )
+        if not any_pending:
+            db.update_config_push_rollout_status(rollout_id, "completed")
 
     # Re-poll configs for pushed devices
     poller = get_poller()
