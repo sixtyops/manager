@@ -161,7 +161,6 @@ Same profile, larger fleets: 1000–5000 devices. Probably requires Postgres mig
 
 ## Working Doc References
 
-- `.context/plans/sixtyops-manager-go-to-market-plan.md` — three-week tactical detail
 - GitHub issues labelled [`phase-1`](https://github.com/sixtyops/manager/issues?q=is%3Aissue+label%3Aphase-1) — current execution scope
 - GitHub issues labelled [`launch-p0`](https://github.com/sixtyops/manager/issues?q=is%3Aissue+label%3Alaunch-p0) — must-close before design partners
 - GitHub issues labelled [`phase-2`](https://github.com/sixtyops/manager/issues?q=is%3Aissue+label%3Aphase-2) — monetization workstream
