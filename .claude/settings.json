@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(*.env)",
+      "Read(.admin_password)",
+      "Read(data/**)",
+      "Read(backups/**)",
+      "Read(certbot/**)",
+      "Read(nginx/ssl/**)",
+      "Edit(.env)",
+      "Edit(.env.*)",
+      "Edit(*.env)",
+      "Edit(.admin_password)",
+      "Edit(data/**)",
+      "Edit(backups/**)",
+      "Edit(certbot/**)",
+      "Edit(nginx/ssl/**)",
+      "Edit(.github/workflows/**)",
+      "Write(.env)",
+      "Write(.env.*)",
+      "Write(*.env)",
+      "Write(.admin_password)",
+      "Write(data/**)",
+      "Write(backups/**)",
+      "Write(certbot/**)",
+      "Write(nginx/ssl/**)",
+      "Write(.github/workflows/**)",
+      "Bash(cat .env*)",
+      "Bash(cat *.env)",
+      "Bash(cat .admin_password)",
+      "Bash(printenv*)",
+      "Bash(env)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)"
+    ],
+    "ask": [
+      "Bash(git push*)",
+      "Bash(gh pr merge*)",
+      "Bash(docker compose*)",
+      "Bash(docker-compose*)"
+    ],
+    "allow": [
+      "Bash(pytest*)",
+      "Bash(python -m pytest*)",
+      "Bash(./dev.sh*)",
+      "Bash(./dev-docker.sh*)",
+      "Bash(git status)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git branch*)",
+      "Bash(git fetch*)",
+      "Bash(git show*)",
+      "Bash(gh pr view*)",
+      "Bash(gh pr list*)",
+      "Bash(gh run view*)",
+      "Bash(gh run list*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/deny-env-bash.py"
+          }
+        ]
+      }
+    ]
+  }
+}

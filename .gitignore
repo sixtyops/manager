@@ -32,7 +32,13 @@ nginx/ssl/
 
 # Environment
 .env
+.env.*
+!.env.example
 .admin_password
+
+# Claude Code (personal/local overrides)
+.claude/settings.local.json
+.claude/.credentials.json
 
 # Logs
 *.log
