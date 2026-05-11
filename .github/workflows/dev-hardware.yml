@@ -63,7 +63,7 @@ jobs:
             echo
             echo "Missing inputs: \`$missing_csv\`"
             echo
-            echo "Live-dev validation is soft-skipped until the live-dev secrets or variables are wired (tracked in issue #28). Re-run after secrets are populated."
+            echo "Live-dev validation is soft-skipped until the live-dev secrets or variables are wired (tracked in issue #117). Re-run after secrets are populated."
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
 

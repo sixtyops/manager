@@ -6,6 +6,18 @@ SixtyOps Manager — automated firmware update tool for Tachyon wireless
 network devices (APs, CPEs, switches). Python/FastAPI backend, single-page
 HTML/JS frontend, SQLite database, Docker deployment.
 
+## Strategy & Roadmap
+
+- **North Star:** see `docs/north-star.md` — vision, target customer, phases,
+  success metrics.
+- **Current phase:** Phase 1 (Lean Launch). Filter open issues by label
+  `phase-1` for in-scope work; `launch-p0` for must-close-before-design-partners.
+- **Monetization:** per-AP + per-switch billing; SMs (CPEs) are free. Phase 2
+  workstream (label `phase-2`, `gtm`).
+- **Repo state:** `sixtyops/manager` is PRIVATE. Branch protection on private
+  repos requires GitHub Team plan (currently Free) — merge gating is being
+  worked in issue #116.
+
 ## Branching Model
 
 - **`main`** — The only long-lived branch. Always deployable.
