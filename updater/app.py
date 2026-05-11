@@ -1699,7 +1699,16 @@ async def get_all_cpes(session: dict = Depends(require_auth)):
 # ============================================================================
 
 def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
-    """Build the auto-login HTML page for a device."""
+    """Build the auto-login HTML page for a device.
+
+    Browsers silently block iframe/XHR requests to a host with an untrusted
+    self-signed cert; only top-level navigations show the warning UI. So we
+    probe the device's cert with a hidden <img>, and if it fails we ask the
+    user to open the device once (in a popup) to accept the cert. As soon as
+    the cert is trusted, we close the popup, submit the iframe login form,
+    and redirect the main window — that flow now actually works because the
+    browser trusts the device origin for the rest of the session.
+    """
     escaped_ip = html_module.escape(ip)
     return f"""<!DOCTYPE html>
 <html>
@@ -1711,43 +1720,166 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
             display: flex; justify-content: center; align-items: center;
             min-height: 100vh; margin: 0; background: #111827; color: #e5e7eb;
         }}
-        .container {{ text-align: center; }}
+        .container {{ text-align: center; max-width: 480px; padding: 0 24px; }}
         .spinner {{
             width: 40px; height: 40px; margin: 0 auto 16px;
             border: 3px solid #374151; border-top-color: #60a5fa;
             border-radius: 50%; animation: spin 0.8s linear infinite;
         }}
         @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
-        .fallback {{ display: none; margin-top: 20px; font-size: 0.9rem; color: #9ca3af; }}
-        .fallback a {{ color: #60a5fa; text-decoration: none; }}
-        .fallback a:hover {{ text-decoration: underline; }}
+        h1 {{ font-size: 1.05rem; font-weight: 500; margin: 0 0 8px; }}
+        p {{ margin: 8px 0; line-height: 1.5; }}
+        .muted {{ font-size: 0.85rem; color: #9ca3af; }}
+        .muted a {{ color: #60a5fa; text-decoration: none; }}
+        .muted a:hover {{ text-decoration: underline; }}
+        button {{
+            background: #2563eb; color: white; border: none;
+            padding: 10px 20px; border-radius: 6px; font-size: 0.95rem;
+            font-weight: 500; cursor: pointer; margin-top: 16px;
+        }}
+        button:hover {{ background: #1d4ed8; }}
+        .hidden {{ display: none; }}
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="spinner" id="spinner"></div>
-        <p id="status">Logging in to {escaped_ip}...</p>
-        <div id="fallback" class="fallback">
+        <div id="view-probing">
+            <div class="spinner"></div>
+            <p>Connecting to {escaped_ip}...</p>
+        </div>
+        <div id="view-cert-prompt" class="hidden">
+            <h1>Accept the certificate for {escaped_ip}</h1>
+            <p class="muted">
+                This device uses a self-signed certificate. Click below to open
+                it once and accept the warning &mdash; we'll log you in
+                automatically and close that tab.
+            </p>
+            <button id="accept-cert-btn">Accept certificate &amp; log in</button>
+            <p id="popup-blocked-msg" class="muted hidden">
+                Popup was blocked.
+                <a href="https://{escaped_ip}/" target="_blank" rel="noopener noreferrer">
+                Open {escaped_ip} manually</a>, accept the certificate,
+                then return to this tab.
+            </p>
+        </div>
+        <div id="view-waiting" class="hidden">
+            <div class="spinner"></div>
+            <p>Waiting for certificate acceptance...</p>
+            <p class="muted">Accept the warning in the other tab. We'll take it from there.</p>
+        </div>
+        <div id="view-logging-in" class="hidden">
+            <div class="spinner"></div>
+            <p>Logging in to {escaped_ip}...</p>
+        </div>
+        <div id="view-fallback" class="hidden">
             <p>Auto-login may not have succeeded.</p>
-            <p><a href="https://{escaped_ip}/">Open {escaped_ip} manually</a></p>
+            <p class="muted">
+                <a href="https://{escaped_ip}/" target="_blank" rel="noopener noreferrer">
+                Open {escaped_ip} manually</a>
+            </p>
         </div>
     </div>
     <iframe name="loginFrame" style="display:none;"></iframe>
     <form id="loginForm" method="POST" action="https://{escaped_ip}/cgi.lua/login"
           target="loginFrame" enctype="text/plain" style="display:none;">
         <input name='{safe_form_name}' value='"}}'>
-
     </form>
     <script>
-        document.getElementById('loginForm').submit();
-        setTimeout(function() {{
-            window.location.href = 'https://{escaped_ip}/';
-        }}, 2000);
-        setTimeout(function() {{
-            document.getElementById('fallback').style.display = 'block';
-            document.getElementById('spinner').style.display = 'none';
-            document.getElementById('status').textContent = 'Redirecting...';
-        }}, 5000);
+        (function() {{
+            var ip = "{escaped_ip}";
+            var submitted = false;
+            var popup = null;
+            var pollTimer = null;
+            var popupCloseTimer = null;
+            var views = ['probing', 'cert-prompt', 'waiting', 'logging-in', 'fallback'];
+
+            function show(name) {{
+                for (var i = 0; i < views.length; i++) {{
+                    var el = document.getElementById('view-' + views[i]);
+                    if (views[i] === name) el.classList.remove('hidden');
+                    else el.classList.add('hidden');
+                }}
+            }}
+
+            function probeCert() {{
+                return new Promise(function(resolve) {{
+                    var img = new Image();
+                    var done = false;
+                    function finish(ok) {{
+                        if (done) return;
+                        done = true;
+                        img.onload = img.onerror = null;
+                        resolve(ok);
+                    }}
+                    img.onload = function() {{ finish(true); }};
+                    img.onerror = function() {{ finish(false); }};
+                    setTimeout(function() {{ finish(false); }}, 4000);
+                    img.src = "https://" + ip + "/favicon.png?_p=" + Date.now();
+                }});
+            }}
+
+            function stopTimers() {{
+                if (pollTimer) {{ clearInterval(pollTimer); pollTimer = null; }}
+                if (popupCloseTimer) {{ clearInterval(popupCloseTimer); popupCloseTimer = null; }}
+            }}
+
+            function doAutoLogin() {{
+                if (submitted) return;
+                submitted = true;
+                stopTimers();
+                if (popup && !popup.closed) {{
+                    try {{ popup.close(); }} catch (e) {{}}
+                }}
+                show('logging-in');
+                document.getElementById('loginForm').submit();
+                setTimeout(function() {{
+                    window.location.href = "https://" + ip + "/";
+                }}, 1500);
+                setTimeout(function() {{ show('fallback'); }}, 8000);
+            }}
+
+            function startPolling() {{
+                stopTimers();
+                pollTimer = setInterval(function() {{
+                    if (submitted) return;
+                    probeCert().then(function(ok) {{ if (ok) doAutoLogin(); }});
+                }}, 1000);
+                popupCloseTimer = setInterval(function() {{
+                    if (submitted) return;
+                    if (popup && popup.closed) {{
+                        stopTimers();
+                        popup = null;
+                        // Probe one more time in case they accepted just before closing.
+                        probeCert().then(function(ok) {{
+                            if (ok) doAutoLogin();
+                            else show('cert-prompt');
+                        }});
+                    }}
+                }}, 500);
+            }}
+
+            document.getElementById('accept-cert-btn').addEventListener('click', function() {{
+                popup = window.open("https://" + ip + "/", "_blank");
+                if (!popup) {{
+                    document.getElementById('popup-blocked-msg').classList.remove('hidden');
+                    return;
+                }}
+                show('waiting');
+                startPolling();
+            }});
+
+            window.addEventListener('focus', function() {{
+                if (submitted) return;
+                probeCert().then(function(ok) {{ if (ok) doAutoLogin(); }});
+            }});
+
+            // Initial probe — if the cert is already trusted (subsequent visit
+            // in the same browser session), skip straight to auto-login.
+            probeCert().then(function(ok) {{
+                if (ok) doAutoLogin();
+                else show('cert-prompt');
+            }});
+        }})();
     </script>
 </body>
 </html>"""

@@ -723,6 +723,11 @@ class TestDevicePortalAPI:
         assert "text/html" in resp.headers["content-type"]
         assert "10.0.0.1" in resp.text
         assert "loginForm" in resp.text
+        # Cert-acceptance probe + popup-driven prompt must be wired in,
+        # otherwise self-signed devices fall back to the silent-failure bug.
+        assert "favicon.png" in resp.text
+        assert "accept-cert-btn" in resp.text
+        assert "window.open" in resp.text
 
     def test_portal_switch(self, authed_client, mock_db):
         """Returns auto-login HTML for a known switch."""
