@@ -141,6 +141,7 @@ Background polling keeps data current. Check here before scheduling updates to u
 - **[Release System](docs/release-system.md)** — Release channels, versioning, and self-update behavior
 - **[API Reference](docs/api.md)** — REST endpoints and WebSocket protocol
 - **[Architecture](docs/architecture.md)** — System design and data flow
+- **[Troubleshooting](docs/troubleshooting.md)** — Top failure modes with symptom → diagnose → recover
 
 ## API Integration
 
