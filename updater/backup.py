@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from . import database as db
+from .crypto import decrypt_password, is_encrypted
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,12 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
             cfg_writer = csv.DictWriter(buf, fieldnames=CONFIG_EXPORT_COLUMNS)
             cfg_writer.writeheader()
             for r in rows:
+                # config_json is Fernet-wrapped at rest with the storage key
+                # (#35); unwrap before re-wrapping with the passphrase key so
+                # the export remains decryptable on a new manager install
+                # whose storage key won't match.
+                stored = r["config_json"] or ""
+                cleartext = decrypt_password(stored) if is_encrypted(stored) else stored
                 cfg_writer.writerow({
                     "ip": r["ip"],
                     "fetched_at": r["fetched_at"] or "",
@@ -164,7 +171,7 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
                     "mac": r["mac"] or "",
                     "deleted_at": r["deleted_at"] or "",
                     "device_label": _safe_cell(r["device_label"] or ""),
-                    "config_json": fernet.encrypt((r["config_json"] or "").encode()).decode(),
+                    "config_json": fernet.encrypt(cleartext.encode()).decode(),
                 })
     except Exception:
         logger.debug("Could not export device_configs", exc_info=True)
@@ -342,53 +349,49 @@ def process_csv_import(csv_content: str, passphrase: str, conflict_mode: str = "
                         "SELECT ip, fetched_at FROM device_configs"
                     ).fetchall()
                 }
-                for row in cfg_reader:
-                    ip = (row.get("ip") or "").strip()
-                    fetched_at = (row.get("fetched_at") or "").strip()
-                    if not ip or not fetched_at:
-                        results["device_configs"]["failed"] += 1
-                        continue
-                    if (ip, fetched_at) in existing_keys:
-                        results["device_configs"]["skipped"] += 1
-                        continue
-                    try:
-                        config_json = fernet.decrypt(row["config_json"].encode()).decode()
-                    except InvalidToken:
-                        results["device_configs"]["failed"] += 1
-                        results["device_configs"]["errors"].append(
-                            f"{ip}@{fetched_at}: wrong passphrase or corrupted"
-                        )
-                        continue
-                    except Exception as e:
-                        results["device_configs"]["failed"] += 1
-                        results["device_configs"]["errors"].append(
-                            f"{ip}@{fetched_at}: decrypt error — {e}"
-                        )
-                        continue
-                    mac_value = (row.get("mac") or "").strip().upper() or None
-                    try:
-                        conn.execute(
-                            """INSERT INTO device_configs
-                                   (ip, config_json, config_hash, model, hardware_id, mac,
-                                    fetched_at, deleted_at, device_label)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                            (
-                                ip,
-                                config_json,
-                                row.get("config_hash") or "",
-                                row.get("model") or None,
-                                row.get("hardware_id") or None,
-                                mac_value,
-                                fetched_at,
-                                row.get("deleted_at") or None,
-                                _unsafe_cell(row.get("device_label") or "") or None,
-                            ),
-                        )
-                        existing_keys.add((ip, fetched_at))
-                        results["device_configs"]["added"] += 1
-                    except Exception as e:
-                        results["device_configs"]["failed"] += 1
-                        results["device_configs"]["errors"].append(f"{ip}@{fetched_at}: {e}")
+            for row in cfg_reader:
+                ip = (row.get("ip") or "").strip()
+                fetched_at = (row.get("fetched_at") or "").strip()
+                if not ip or not fetched_at:
+                    results["device_configs"]["failed"] += 1
+                    continue
+                if (ip, fetched_at) in existing_keys:
+                    results["device_configs"]["skipped"] += 1
+                    continue
+                try:
+                    config_json = fernet.decrypt(row["config_json"].encode()).decode()
+                except InvalidToken:
+                    results["device_configs"]["failed"] += 1
+                    results["device_configs"]["errors"].append(
+                        f"{ip}@{fetched_at}: wrong passphrase or corrupted"
+                    )
+                    continue
+                except Exception as e:
+                    results["device_configs"]["failed"] += 1
+                    results["device_configs"]["errors"].append(
+                        f"{ip}@{fetched_at}: decrypt error — {e}"
+                    )
+                    continue
+                mac_value = (row.get("mac") or "").strip().upper() or None
+                try:
+                    # Routes through the DAL so the storage Fernet wraps
+                    # cleartext JSON on the way to disk (#35).
+                    db.insert_imported_device_config(
+                        ip=ip,
+                        config_json=config_json,
+                        config_hash=row.get("config_hash") or "",
+                        fetched_at=fetched_at,
+                        model=row.get("model") or None,
+                        hardware_id=row.get("hardware_id") or None,
+                        mac=mac_value,
+                        deleted_at=row.get("deleted_at") or None,
+                        device_label=_unsafe_cell(row.get("device_label") or "") or None,
+                    )
+                    existing_keys.add((ip, fetched_at))
+                    results["device_configs"]["added"] += 1
+                except Exception as e:
+                    results["device_configs"]["failed"] += 1
+                    results["device_configs"]["errors"].append(f"{ip}@{fetched_at}: {e}")
         except Exception:
             logger.debug("Could not import device_configs", exc_info=True)
 
