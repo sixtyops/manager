@@ -1,11 +1,10 @@
 #!/bin/bash
 # Remote installer for SixtyOps Manager
-# Usage: curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo bash
-#    or: wget -qO- https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo bash
+# Usage: curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo SIXTYOPS_GH_TOKEN=ghp_xxx bash
+#    or: wget -qO- https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo SIXTYOPS_GH_TOKEN=ghp_xxx bash
 
 set -e
 
-REPO_URL="${SIXTYOPS_REPO_URL:-https://github.com/sixtyops/manager.git}"
 INSTALL_DIR="${SIXTYOPS_INSTALL_DIR:-/opt/sixtyops}"
 BRANCH="${SIXTYOPS_BRANCH:-main}"
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.standalone.yml"
@@ -20,6 +19,21 @@ if [ "$EUID" -ne 0 ]; then
     echo "Please run as root or with sudo"
     exit 1
 fi
+
+# Require GitHub token (sixtyops/manager is private)
+if [ -z "${SIXTYOPS_GH_TOKEN:-}" ]; then
+    echo "ERROR: SIXTYOPS_GH_TOKEN is required (sixtyops/manager is private)."
+    echo
+    echo "Create a fine-grained PAT with 'Contents: Read' on sixtyops/manager,"
+    echo "then re-run with the token inline with sudo:"
+    echo "  curl -sSL <install-url> | sudo SIXTYOPS_GH_TOKEN=ghp_xxx bash"
+    echo
+    echo "(sudo does not preserve env vars across the pipe by default, so the"
+    echo "token must be passed on the sudo line.)"
+    exit 1
+fi
+
+REPO_URL="${SIXTYOPS_REPO_URL:-https://oauth2:${SIXTYOPS_GH_TOKEN}@github.com/sixtyops/manager.git}"
 
 # Check for docker
 if ! command -v docker &> /dev/null; then
@@ -48,11 +62,13 @@ if [ -d "$INSTALL_DIR" ]; then
     echo "Updating existing installation..."
     git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
     cd "$INSTALL_DIR"
+    # Refresh remote URL so token rotation works without reinstall.
+    git -c safe.directory="$INSTALL_DIR" remote set-url origin "$REPO_URL"
     git -c safe.directory="$INSTALL_DIR" fetch origin
     git -c safe.directory="$INSTALL_DIR" reset --hard "origin/$BRANCH"
 else
     echo "Cloning repository..."
-    git clone --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+    git clone --quiet --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
     cd "$INSTALL_DIR"
 fi
 
@@ -68,6 +84,9 @@ chmod 755 firmware backups nginx/conf.d
 # Make repo writable by appuser for self-update (git pull from inside container)
 chown -R 1500:1500 .git
 chmod -R u+w .git
+# .git/config holds the tokenized remote URL; restrict to owner-only.
+# Must come after chmod -R u+w .git so it isn't clobbered.
+chmod 600 .git/config
 
 # Build and start
 echo "Building and starting services..."

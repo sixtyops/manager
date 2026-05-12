@@ -31,6 +31,12 @@ CHECK_INTERVAL = int(os.environ.get("AUTOUPDATE_CHECK_INTERVAL", 604800))  # 7 d
 APPLIANCE_MODE = os.environ.get("SIXTYOPS_APPLIANCE", "") == "1"
 GHCR_IMAGE = os.environ.get("SIXTYOPS_IMAGE", "ghcr.io/sixtyops/manager")
 
+# GitHub PAT for hitting the releases API on the private sixtyops/manager
+# repo. Required for the release-check path; the git-based update path
+# itself uses the tokenized remote URL persisted in .git/config by
+# scripts/install.sh.
+SIXTYOPS_GH_TOKEN = os.environ.get("SIXTYOPS_GH_TOKEN", "").strip()
+
 # Appliance platform version file (written during OVA build)
 APPLIANCE_VERSION_FILE = Path("/etc/sixtyops/appliance-version")
 
@@ -116,6 +122,19 @@ class ReleaseChecker:
             "error": None,
         }
 
+        if not SIXTYOPS_GH_TOKEN:
+            result["error"] = (
+                "Self-update token not configured. Set SIXTYOPS_GH_TOKEN in the "
+                "deployment .env file and restart the container."
+            )
+            logger.warning(result["error"])
+            return result
+
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {SIXTYOPS_GH_TOKEN}",
+        }
+
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 if channel == "dev":
@@ -123,7 +142,7 @@ class ReleaseChecker:
                     resp = await client.get(
                         GITHUB_API_RELEASES,
                         params={"per_page": 10},
-                        headers={"Accept": "application/vnd.github+json"},
+                        headers=headers,
                     )
                     resp.raise_for_status()
                     releases = resp.json()
@@ -133,7 +152,7 @@ class ReleaseChecker:
                     # Stable: only the latest non-prerelease
                     resp = await client.get(
                         GITHUB_API_LATEST,
-                        headers={"Accept": "application/vnd.github+json"},
+                        headers=headers,
                     )
                     resp.raise_for_status()
                     data = resp.json()
@@ -188,7 +207,14 @@ class ReleaseChecker:
                         f"update_available={result['update_available']}")
 
         except httpx.HTTPStatusError as e:
-            result["error"] = f"GitHub API error: {e.response.status_code}"
+            if e.response.status_code in (401, 403):
+                result["error"] = (
+                    "GitHub rejected the self-update token "
+                    f"(HTTP {e.response.status_code}). Verify SIXTYOPS_GH_TOKEN "
+                    "is valid and has 'Contents: Read' on sixtyops/manager."
+                )
+            else:
+                result["error"] = f"GitHub API error: {e.response.status_code}"
             logger.error(result["error"])
         except Exception as e:
             result["error"] = str(e)

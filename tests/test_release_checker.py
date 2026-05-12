@@ -18,6 +18,13 @@ class TestVersionComparison:
     def _patch_db(self, mock_db):
         pass
 
+    @pytest.fixture(autouse=True)
+    def _patch_token(self):
+        # The release-check path short-circuits when SIXTYOPS_GH_TOKEN is unset,
+        # so existing behavior tests need a populated token.
+        with patch("updater.release_checker.SIXTYOPS_GH_TOKEN", "ghp_test_token"):
+            yield
+
     async def _check(self, current, latest_tag):
         with patch("updater.release_checker.__version__", current):
             from updater.release_checker import ReleaseChecker
@@ -136,11 +143,105 @@ class TestVersionComparison:
         assert result["update_available"] is True
         assert result["latest_version"] == "1.0.1"
         assert result["release_channel"] == "stable"
-        # Verify it called the /latest endpoint
+        # Verify it called the /latest endpoint with auth + accept headers.
         mock_client.get.assert_called_once_with(
             GITHUB_API_LATEST,
-            headers={"Accept": "application/vnd.github+json"},
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": "Bearer ghp_test_token",
+            },
         )
+
+
+# ---------------------------------------------------------------------------
+# GitHub API token auth (private-repo release check)
+# ---------------------------------------------------------------------------
+
+class TestTokenAuth:
+    """The release-check API call must require and send SIXTYOPS_GH_TOKEN."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_db(self, mock_db):
+        pass
+
+    @pytest.mark.asyncio
+    async def test_missing_token_short_circuits(self):
+        """No token => return a clear error and make no API call."""
+        from updater.release_checker import ReleaseChecker
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock()
+
+        with patch("updater.release_checker.SIXTYOPS_GH_TOKEN", ""), \
+             patch("updater.release_checker.httpx.AsyncClient", return_value=mock_client):
+            checker = ReleaseChecker(broadcast_func=AsyncMock())
+            result = await checker.check_for_updates()
+
+        assert result["error"] is not None
+        assert "token not configured" in result["error"].lower()
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_token_sent_in_authorization_header(self):
+        """When the token is set, every API call carries Bearer auth."""
+        from updater.release_checker import ReleaseChecker
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "tag_name": "v1.0.0",
+            "html_url": "https://github.com/sixtyops/manager/releases/tag/v1.0.0",
+            "body": "notes",
+        }
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        with patch("updater.release_checker.SIXTYOPS_GH_TOKEN", "ghp_xyz"), \
+             patch("updater.release_checker.httpx.AsyncClient", return_value=mock_client), \
+             patch("updater.release_checker.__version__", "1.0.0"):
+            checker = ReleaseChecker(broadcast_func=AsyncMock())
+            await checker.check_for_updates()
+
+        # Both call shapes use kwargs for headers; pull from the last call.
+        call_kwargs = mock_client.get.call_args.kwargs
+        assert call_kwargs["headers"]["Authorization"] == "Bearer ghp_xyz"
+
+    @pytest.mark.asyncio
+    async def test_401_surfaces_token_specific_message(self):
+        """A 401/403 must produce a user-readable token-rejection message."""
+        import httpx
+        from updater.release_checker import ReleaseChecker
+
+        # Build a fake 401 response that triggers raise_for_status.
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+        mock_resp.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "401",
+                request=MagicMock(),
+                response=MagicMock(status_code=401),
+            )
+        )
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        with patch("updater.release_checker.SIXTYOPS_GH_TOKEN", "ghp_bad"), \
+             patch("updater.release_checker.httpx.AsyncClient", return_value=mock_client):
+            checker = ReleaseChecker(broadcast_func=AsyncMock())
+            result = await checker.check_for_updates()
+
+        assert result["error"] is not None
+        assert "rejected" in result["error"].lower()
+        assert "401" in result["error"]
 
 
 # ---------------------------------------------------------------------------

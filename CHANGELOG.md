@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Changed
+- Installer and self-update now require `SIXTYOPS_GH_TOKEN` (a fine-grained GitHub PAT with `Contents: Read` on `sixtyops/manager`) since the source repo is private. Pass it on the same line as `sudo` (`curl -sSL ... | sudo SIXTYOPS_GH_TOKEN=ghp_xxx bash`), and set it in the deployment `.env` so the running container can hit the release-check API. Settings > Updates now surfaces a clear "Self-update token not configured" message when missing and "GitHub rejected the self-update token" when invalid, instead of silently failing. The container image at `ghcr.io/sixtyops/manager` is published unauthenticated so appliance-mode `docker pull` keeps working without a registry token
+
 ### Added
 - Troubleshooting one-pager at `docs/troubleshooting.md` covering the top five operator failure modes (device unreachable, RADIUS auth, hung update jobs, SSL renewal, SFTP backup) with symptom → diagnose → recover for each. Linked from README's Documentation section and the in-app About panel footer (#124)
 - Switch → AP topology cascade: APs are now nested under their upstream switch in the device tree, with a port badge showing the switch port they're connected to (ordered by port number)
