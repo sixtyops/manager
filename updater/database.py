@@ -187,6 +187,9 @@ def _migrate(db):
     # Encrypt any plaintext device passwords
     _migrate_encrypt_passwords(db)
 
+    # Encrypt any plaintext device_configs.config_json (#35)
+    _migrate_encrypt_device_configs(db)
+
     # Add soft-delete + label + mac columns to device_configs (recycle bin + rebind support)
     dc_columns = [row[1] for row in db.execute("PRAGMA table_info(device_configs)").fetchall()]
     if "deleted_at" not in dc_columns:
@@ -323,6 +326,33 @@ def _migrate_encrypt_passwords(db):
                 migrated += 1
     if migrated:
         logger.info(f"Encrypted {migrated} plaintext device password(s)")
+
+
+def _migrate_encrypt_device_configs(db):
+    """One-time migration: encrypt any plaintext device_configs.config_json in-place.
+
+    Configs hold RADIUS shared secrets, WPA PSKs, SNMP communities and 802.1X
+    creds. Pre-#35 builds wrote them as plaintext JSON. Mirrors the password
+    pattern: skip rows that already look Fernet-encrypted (`is_encrypted()`),
+    so this is safe to re-run.
+    """
+    try:
+        rows = db.execute(
+            "SELECT id, config_json FROM device_configs"
+        ).fetchall()
+    except Exception:
+        return
+    migrated = 0
+    for row in rows:
+        cfg = row[1]
+        if cfg and not is_encrypted(cfg):
+            db.execute(
+                "UPDATE device_configs SET config_json = ? WHERE id = ?",
+                (encrypt_password(cfg), row[0]),
+            )
+            migrated += 1
+    if migrated:
+        logger.info(f"Encrypted {migrated} plaintext device_configs row(s)")
 
 
 def init_db():
@@ -2756,23 +2786,90 @@ def cleanup_old_device_update_history(max_age_days: int = 180):
 
 # Device Config operations
 
+def _decrypt_config_json_field(value):
+    """Decrypt a stored config_json blob. Tolerates legacy plaintext rows so
+    reads never fail mid-migration; the migration itself converts those rows
+    on the next `init_db()`.
+    """
+    if not value:
+        return value
+    if is_encrypted(value):
+        return decrypt_password(value)
+    return value
+
+
+def _decrypt_row_config_json(row: Optional[dict]) -> Optional[dict]:
+    """Return the row dict with `config_json` decrypted in place."""
+    if row is None:
+        return None
+    if "config_json" in row:
+        row["config_json"] = _decrypt_config_json_field(row["config_json"])
+    return row
+
+
 def save_device_config(ip: str, config_json: str, config_hash: str,
                        model: str = None, hardware_id: str = None,
                        mac: str = None) -> int:
     """Save a device config snapshot. Returns the new row id.
+
+    `config_json` is encrypted at rest with the same Fernet key used for
+    device passwords (#35). Callers pass cleartext canonical JSON; the hash
+    is also computed on cleartext and stored unencrypted so change-detection
+    queries (`get_latest_config_hash`) stay cheap.
 
     `mac` is the per-unit identifier used for auto-rebind on IP changes;
     it should be normalized to upper-case (no separators or with `:`).
     Callers without a known MAC may pass None — rebind will simply not fire.
     """
     normalized_mac = mac.upper() if mac else None
+    encrypted_json = encrypt_password(config_json) if config_json else config_json
     with get_db() as db:
         cursor = db.execute(
             """INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id, mac, fetched_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (ip, config_json, config_hash, model, hardware_id, normalized_mac, datetime.now().isoformat())
+            (ip, encrypted_json, config_hash, model, hardware_id, normalized_mac, datetime.now().isoformat())
         )
         return cursor.lastrowid
+
+
+def insert_imported_device_config(
+    ip: str,
+    config_json: str,
+    config_hash: str,
+    fetched_at: str,
+    model: Optional[str] = None,
+    hardware_id: Optional[str] = None,
+    mac: Optional[str] = None,
+    deleted_at: Optional[str] = None,
+    device_label: Optional[str] = None,
+) -> None:
+    """Insert a device-config row from a backup import.
+
+    Differs from `save_device_config` in that the caller controls
+    `fetched_at`, `deleted_at`, and `device_label` (so recycle-bin entries
+    survive a backup round-trip). `config_json` is cleartext on the way in
+    and gets Fernet-wrapped on the way to disk, same as `save_device_config`.
+    """
+    normalized_mac = mac.upper() if mac else None
+    encrypted_json = encrypt_password(config_json) if config_json else config_json
+    with get_db() as db:
+        db.execute(
+            """INSERT INTO device_configs
+                   (ip, config_json, config_hash, model, hardware_id, mac,
+                    fetched_at, deleted_at, device_label)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                ip,
+                encrypted_json,
+                config_hash,
+                model,
+                hardware_id,
+                normalized_mac,
+                fetched_at,
+                deleted_at,
+                device_label,
+            ),
+        )
 
 
 def get_latest_device_config(ip: str) -> Optional[dict]:
@@ -2784,7 +2881,7 @@ def get_latest_device_config(ip: str) -> Optional[dict]:
                 ORDER BY fetched_at DESC LIMIT 1""",
             (ip,)
         ).fetchone()
-        return dict(row) if row else None
+        return _decrypt_row_config_json(dict(row)) if row else None
 
 
 def get_device_config_history(ip: str, limit: int = 20) -> list[dict]:
@@ -2806,7 +2903,7 @@ def get_device_config_by_id(config_id: int) -> Optional[dict]:
         row = db.execute(
             "SELECT * FROM device_configs WHERE id = ?", (config_id,)
         ).fetchone()
-        return dict(row) if row else None
+        return _decrypt_row_config_json(dict(row)) if row else None
 
 
 def get_all_latest_configs() -> dict:
@@ -2835,7 +2932,7 @@ def get_all_latest_configs() -> dict:
             LEFT JOIN cpe_cache c ON c.ip = dc.ip
             WHERE dc.deleted_at IS NULL
         """).fetchall()
-        return {row["ip"]: dict(row) for row in rows}
+        return {row["ip"]: _decrypt_row_config_json(dict(row)) for row in rows}
 
 
 def get_latest_config_fetched_at() -> Optional[str]:

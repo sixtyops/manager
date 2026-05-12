@@ -327,6 +327,98 @@ class TestAutoEnforce:
         ]
         assert len(stopped_msgs) >= 1
 
+    @pytest.mark.asyncio
+    async def test_skip_when_manual_push_in_flight(self, scoped_db):
+        """Enforce must defer when an immediate /api/config-push is running."""
+        from updater import app as updater_app
+        db.save_config_template(
+            name="SNMP", category="snmp",
+            config_fragment='{"services":{"snmp":{"community":"secret"}}}',
+            scope="global"
+        )
+        config = json.dumps({"services": {"snmp": {"community": "public"}}},
+                            sort_keys=True, separators=(",", ":"))
+        import hashlib
+        config_hash = hashlib.sha256(config.encode()).hexdigest()
+        scoped_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id) VALUES (?, ?, ?, ?, ?)",
+            ("10.0.0.1", config, config_hash, "TN-110-PRS", "tn-110-prs")
+        )
+        scoped_db.commit()
+
+        original_jobs = dict(updater_app._config_push_jobs)
+        updater_app._config_push_jobs.clear()
+        updater_app._config_push_jobs["job-in-flight"] = {"done": False}
+        try:
+            broadcast = AsyncMock()
+            poller = NetworkPoller(broadcast_func=broadcast)
+            await poller._run_enforce_phases()
+        finally:
+            updater_app._config_push_jobs.clear()
+            updater_app._config_push_jobs.update(original_jobs)
+
+        skipped_msgs = [
+            c[0][0] for c in broadcast.call_args_list
+            if c[0][0].get("status") == "skipped"
+        ]
+        assert len(skipped_msgs) == 1
+        assert "manual config push" in skipped_msgs[0]["message"].lower()
+        assert len(db.get_config_enforce_log()) == 0
+
+    @pytest.mark.asyncio
+    async def test_proceeds_when_only_completed_jobs(self, scoped_db):
+        """Stale done=True entries must not block enforce."""
+        from updater import app as updater_app
+        db.save_config_template(
+            name="SNMP", category="snmp",
+            config_fragment='{"services":{"snmp":{"community":"public"}}}',
+            scope="global"
+        )
+        # Compliant config so the run reaches the idle broadcast quickly.
+        config = json.dumps({"services": {"snmp": {"community": "public"}}},
+                            sort_keys=True, separators=(",", ":"))
+        import hashlib
+        config_hash = hashlib.sha256(config.encode()).hexdigest()
+        scoped_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id) VALUES (?, ?, ?, ?, ?)",
+            ("10.0.0.1", config, config_hash, "TN-110-PRS", "tn-110-prs")
+        )
+        scoped_db.commit()
+
+        original_jobs = dict(updater_app._config_push_jobs)
+        updater_app._config_push_jobs.clear()
+        updater_app._config_push_jobs["job-done"] = {"done": True}
+        try:
+            broadcast = AsyncMock()
+            poller = NetworkPoller(broadcast_func=broadcast)
+            await poller._run_enforce_phases()
+        finally:
+            updater_app._config_push_jobs.clear()
+            updater_app._config_push_jobs.update(original_jobs)
+
+        skipped_msgs = [
+            c[0][0] for c in broadcast.call_args_list
+            if c[0][0].get("status") == "skipped"
+        ]
+        assert skipped_msgs == []
+
+
+def test_has_active_config_push_helper():
+    """`app.has_active_config_push` counts non-done jobs only."""
+    from updater import app as updater_app
+
+    original = dict(updater_app._config_push_jobs)
+    updater_app._config_push_jobs.clear()
+    try:
+        assert updater_app.has_active_config_push() == 0
+        updater_app._config_push_jobs["a"] = {"done": False}
+        updater_app._config_push_jobs["b"] = {"done": True}
+        updater_app._config_push_jobs["c"] = {"done": False}
+        assert updater_app.has_active_config_push() == 2
+    finally:
+        updater_app._config_push_jobs.clear()
+        updater_app._config_push_jobs.update(original)
+
 
 # ---------------------------------------------------------------------------
 # Canary retry / failure classification (#49)

@@ -1051,6 +1051,23 @@ class NetworkPoller:
             logger.info("Config enforce: skipping — a config push rollout is active")
             return
 
+        # Skip if an immediate (non-rollout) /api/config-push is in flight —
+        # cached compliance reads would race against the operator's push and
+        # the next enforce pass would clobber what the operator just changed.
+        from . import app as _app  # lazy import to avoid module-load cycle
+        active_pushes = _app.has_active_config_push()
+        if active_pushes:
+            logger.info(
+                f"Config enforce: skipping — {active_pushes} manual push(es) in flight"
+            )
+            if self.broadcast_func:
+                await self.broadcast_func({
+                    "type": "config_enforce_status",
+                    "status": "skipped",
+                    "message": f"Manual config push in progress ({active_pushes} job(s))",
+                })
+            return
+
         # Get effective templates per device (global + site overrides resolved)
         effective = db.get_all_effective_templates()
         if not effective:
