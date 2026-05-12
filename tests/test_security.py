@@ -438,6 +438,151 @@ class TestCryptoModule:
 
 
 # =========================================================================
+# Device config encryption at rest (#35)
+# =========================================================================
+
+class TestDeviceConfigEncryption:
+    """Tests for device_configs.config_json encryption at rest."""
+
+    def test_config_encrypted_on_save(self, mock_db):
+        from updater import database as db
+        from updater.crypto import is_encrypted
+        cleartext = '{"radius_secret":"hunter2","wpa_psk":"correct horse battery"}'
+        db.save_device_config("10.0.0.1", cleartext, "abc123", model="tn-110-prs")
+        row = mock_db.execute(
+            "SELECT config_json FROM device_configs WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert is_encrypted(row[0]), "config_json must be Fernet-encrypted at rest"
+        assert row[0] != cleartext
+        assert "hunter2" not in row[0]
+        assert "correct horse" not in row[0]
+
+    def test_config_decrypted_on_get_latest(self, mock_db):
+        from updater import database as db
+        cleartext = '{"foo":"bar"}'
+        db.save_device_config("10.0.0.1", cleartext, "h1", model="tn-110-prs")
+        latest = db.get_latest_device_config("10.0.0.1")
+        assert latest["config_json"] == cleartext
+
+    def test_config_decrypted_on_get_by_id(self, mock_db):
+        from updater import database as db
+        cleartext = '{"snmp_community":"public"}'
+        db.save_device_config("10.0.0.1", cleartext, "h2", model="tn-110-prs")
+        row = mock_db.execute(
+            "SELECT id FROM device_configs WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        snap = db.get_device_config_by_id(row[0])
+        assert snap["config_json"] == cleartext
+
+    def test_config_decrypted_on_get_all_latest(self, mock_db):
+        from updater import database as db
+        cleartext_a = '{"name":"A"}'
+        cleartext_b = '{"name":"B"}'
+        # Seed managed devices so the JOIN in get_all_latest_configs returns
+        # both rows (otherwise we'd still see them, since the query is left-
+        # joined, but this matches realistic shape).
+        db.upsert_access_point("10.0.0.1", "root", "pw")
+        db.upsert_access_point("10.0.0.2", "root", "pw")
+        db.save_device_config("10.0.0.1", cleartext_a, "ha", model="tn-110-prs")
+        db.save_device_config("10.0.0.2", cleartext_b, "hb", model="tn-110-prs")
+        latest = db.get_all_latest_configs()
+        assert latest["10.0.0.1"]["config_json"] == cleartext_a
+        assert latest["10.0.0.2"]["config_json"] == cleartext_b
+
+    def test_hash_is_plaintext(self, mock_db):
+        """config_hash stays plaintext so change-detection queries stay cheap."""
+        from updater import database as db
+        db.save_device_config("10.0.0.1", '{"x":1}', "deadbeef", model="m")
+        row = mock_db.execute(
+            "SELECT config_hash FROM device_configs WHERE ip = '10.0.0.1'"
+        ).fetchone()
+        assert row[0] == "deadbeef"
+        assert db.get_latest_config_hash("10.0.0.1") == "deadbeef"
+
+    def test_imported_config_encrypted(self, mock_db):
+        """insert_imported_device_config (used by backup restore) encrypts on insert."""
+        from updater import database as db
+        from updater.crypto import is_encrypted
+        cleartext = '{"radius_secret":"importsecret"}'
+        db.insert_imported_device_config(
+            ip="10.0.0.7",
+            config_json=cleartext,
+            config_hash="h7",
+            fetched_at="2026-05-11T10:00:00",
+            model="tn-110-prs",
+        )
+        row = mock_db.execute(
+            "SELECT config_json FROM device_configs WHERE ip = '10.0.0.7'"
+        ).fetchone()
+        assert is_encrypted(row[0])
+        assert "importsecret" not in row[0]
+        snap = db.get_latest_device_config("10.0.0.7")
+        assert snap["config_json"] == cleartext
+
+    def test_imported_config_preserves_metadata(self, mock_db):
+        """Backup-restore must preserve fetched_at and recycle-bin fields."""
+        from updater import database as db
+        db.insert_imported_device_config(
+            ip="10.0.0.8",
+            config_json='{"x":1}',
+            config_hash="h8",
+            fetched_at="2026-01-01T00:00:00",
+            model="tn-110-prs",
+            deleted_at="2026-01-02T00:00:00",
+            device_label="AP-Lobby",
+        )
+        row = mock_db.execute(
+            """SELECT fetched_at, deleted_at, device_label
+                 FROM device_configs WHERE ip = '10.0.0.8'"""
+        ).fetchone()
+        assert row[0] == "2026-01-01T00:00:00"
+        assert row[1] == "2026-01-02T00:00:00"
+        assert row[2] == "AP-Lobby"
+
+    def test_migrate_encrypts_plaintext_rows(self, mock_db):
+        """Pre-#35 plaintext rows get encrypted in-place on next init."""
+        from updater.database import _migrate_encrypt_device_configs
+        from updater.crypto import is_encrypted
+        # Insert plaintext directly, simulating a pre-migration row
+        mock_db.execute(
+            """INSERT INTO device_configs (ip, config_json, config_hash, model, fetched_at)
+                 VALUES (?, ?, ?, ?, ?)""",
+            ("10.0.0.99", '{"plain":"json"}', "h99", "m", "2026-01-01T00:00:00"),
+        )
+        mock_db.commit()
+        _migrate_encrypt_device_configs(mock_db)
+        row = mock_db.execute(
+            "SELECT config_json FROM device_configs WHERE ip = '10.0.0.99'"
+        ).fetchone()
+        assert is_encrypted(row[0])
+
+    def test_migrate_idempotent(self, mock_db):
+        """Running the migration twice does not double-encrypt."""
+        from updater import database as db
+        from updater.database import _migrate_encrypt_device_configs
+        cleartext = '{"x":1}'
+        db.save_device_config("10.0.0.1", cleartext, "h1")  # already encrypted
+        _migrate_encrypt_device_configs(mock_db)
+        _migrate_encrypt_device_configs(mock_db)
+        # Decrypt should still succeed
+        snap = db.get_latest_device_config("10.0.0.1")
+        assert snap["config_json"] == cleartext
+
+    def test_legacy_plaintext_row_decrypts_on_read(self, mock_db):
+        """Reads tolerate legacy plaintext rows (in case migration hasn't
+        run yet on a hot read path)."""
+        from updater import database as db
+        mock_db.execute(
+            """INSERT INTO device_configs (ip, config_json, config_hash, model, fetched_at)
+                 VALUES (?, ?, ?, ?, ?)""",
+            ("10.0.0.50", '{"legacy":"plaintext"}', "h50", "m", "2026-01-01T00:00:00"),
+        )
+        mock_db.commit()
+        snap = db.get_latest_device_config("10.0.0.50")
+        assert snap["config_json"] == '{"legacy":"plaintext"}'
+
+
+# =========================================================================
 # Security headers
 # =========================================================================
 

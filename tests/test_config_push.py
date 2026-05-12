@@ -323,19 +323,16 @@ class TestRollbackSafetySnapshot:
     def test_rollback_succeeds_and_saves_snapshot_on_happy_path(
         self, operator_client, rollback_db
     ):
+        from updater import database as db
         ctx, instance = self._patch_client(get_config_result={"v": "current"})
         with ctx:
             resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["safety_snapshot_saved"] is True
-        # The pre-rollback snapshot landed in device_configs
-        snapshots = rollback_db.execute(
-            "SELECT config_json FROM device_configs WHERE ip = '10.0.0.5' "
-            "ORDER BY id DESC"
-        ).fetchall()
-        # Latest row is the safety snapshot we just took
-        assert json.loads(snapshots[0]["config_json"]) == {"v": "current"}
+        # The pre-rollback snapshot landed in device_configs (DAL decrypts on read)
+        latest = db.get_latest_device_config("10.0.0.5")
+        assert json.loads(latest["config_json"]) == {"v": "current"}
 
 
 class TestConfigPushRolloutAdvance:
