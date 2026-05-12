@@ -999,6 +999,10 @@ def init_db():
             # Number of times to retry a transient canary failure before
             # treating it as a real policy failure (0-3, default 1).
             "config_enforce_canary_retry_count": "1",
+            # If non-zero, auto-rollback the most recent enforce phase when
+            # the post-enforce re-poll shows this percent of devices are
+            # still non-compliant (0-100, default 0 = off).
+            "config_enforce_auto_rollback_threshold_pct": "0",
             # Vendor feature flags
             "mikrotik_enabled": "false",
             # License configuration
@@ -2754,8 +2758,8 @@ def cleanup_old_device_update_history(max_age_days: int = 180):
 
 def save_device_config(ip: str, config_json: str, config_hash: str,
                        model: str = None, hardware_id: str = None,
-                       mac: str = None):
-    """Save a device config snapshot.
+                       mac: str = None) -> int:
+    """Save a device config snapshot. Returns the new row id.
 
     `mac` is the per-unit identifier used for auto-rebind on IP changes;
     it should be normalized to upper-case (no separators or with `:`).
@@ -2763,11 +2767,12 @@ def save_device_config(ip: str, config_json: str, config_hash: str,
     """
     normalized_mac = mac.upper() if mac else None
     with get_db() as db:
-        db.execute(
+        cursor = db.execute(
             """INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id, mac, fetched_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (ip, config_json, config_hash, model, hardware_id, normalized_mac, datetime.now().isoformat())
         )
+        return cursor.lastrowid
 
 
 def get_latest_device_config(ip: str) -> Optional[dict]:

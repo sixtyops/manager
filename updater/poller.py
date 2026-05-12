@@ -1104,6 +1104,20 @@ class NetworkPoller:
             canary_retry_count = 1
         canary_retry_count = max(0, min(canary_retry_count, 3))
 
+        try:
+            rollback_threshold_pct = int(db.get_setting("config_enforce_auto_rollback_threshold_pct", "0"))
+        except (TypeError, ValueError):
+            rollback_threshold_pct = 0
+        rollback_threshold_pct = max(0, min(rollback_threshold_pct, 100))
+
+        # Track per-IP pre-enforce snapshot IDs (used by auto-rollback) and
+        # which devices were pushed in the most recently completed phase.
+        pre_snapshots: dict[str, int] = {}
+        last_phase: Optional[str] = None
+        last_phase_ips: list[str] = []
+        templates_by_ip: dict[str, list[dict]] = {ip: t for ip, _, t in non_compliant}
+        device_type_by_ip: dict[str, str] = {ip: dt for ip, dt, _ in non_compliant}
+
         remaining = list(non_compliant)
         for phase in PHASE_ORDER:
             if not remaining:
@@ -1158,17 +1172,26 @@ class NetworkPoller:
                     # Unexpected raise (e.g., cancellation) — treat as policy.
                     failure_class = "policy"
                     error_msg = str(result)
+                    snapshot_id = None
                     retries_used = 0
                 elif isinstance(result, tuple) and result[0]:
                     batch_successes += 1
+                    if len(result) >= 4 and result[3] is not None:
+                        pre_snapshots[ip] = result[3]
                     continue
                 elif isinstance(result, tuple):
-                    _, failure_class, error_msg = result
+                    failure_class = result[1]
+                    error_msg = result[2]
+                    snapshot_id = result[3] if len(result) >= 4 else None
                     retries_used = 0
                 else:
                     failure_class = "policy"
                     error_msg = "Unknown enforce result"
+                    snapshot_id = None
                     retries_used = 0
+
+                if snapshot_id is not None:
+                    pre_snapshots[ip] = snapshot_id
 
                 # Canary retry loop for transient failures
                 while (phase == "canary"
@@ -1181,13 +1204,17 @@ class NetworkPoller:
                     )
                     await asyncio.sleep(3.0)
                     retry_result = await self._enforce_device(ip, dtype, templates, phase, sem)
-                    if isinstance(retry_result, tuple) and retry_result[0]:
-                        batch_successes += 1
-                        failure_class = None
-                        error_msg = None
-                        break
                     if isinstance(retry_result, tuple):
-                        _, failure_class, error_msg = retry_result
+                        retry_snapshot = retry_result[3] if len(retry_result) >= 4 else None
+                        if retry_snapshot is not None:
+                            pre_snapshots[ip] = retry_snapshot
+                        if retry_result[0]:
+                            batch_successes += 1
+                            failure_class = None
+                            error_msg = None
+                            break
+                        failure_class = retry_result[1]
+                        error_msg = retry_result[2]
 
                 if failure_class is None:
                     continue
@@ -1206,6 +1233,11 @@ class NetworkPoller:
             batch_ips = {b[0] for b in batch}
             remaining = [(ip, dt, t) for ip, dt, t in remaining
                          if ip not in batch_ips]
+
+            # Remember which phase actually pushed devices, for the
+            # post-enforce rollback decision below.
+            last_phase = phase
+            last_phase_ips = list(batch_ips)
 
             # If canary phase failed, stop the enforce run to protect the fleet
             if phase == "canary" and batch_failures > 0 and batch_successes == 0:
@@ -1236,12 +1268,114 @@ class NetworkPoller:
         if enforced_ips:
             await self.poll_configs_for_ips(enforced_ips)
 
+        # Optional auto-rollback: if the last completed phase shows a mass
+        # post-poll failure rate, push each affected device's pre-enforce
+        # snapshot back. Default threshold is 0 → feature off.
+        if rollback_threshold_pct > 0 and last_phase_ips:
+            failures = []
+            for ip in last_phase_ips:
+                applicable = templates_by_ip.get(ip)
+                if not applicable:
+                    continue
+                latest = db.get_latest_device_config(ip)
+                if not latest:
+                    failures.append(ip)
+                    continue
+                try:
+                    cfg = json.loads(latest["config_json"])
+                except (json.JSONDecodeError, TypeError):
+                    failures.append(ip)
+                    continue
+                if not check_config_compliance(cfg, applicable):
+                    failures.append(ip)
+
+            if last_phase_ips:
+                failure_pct = (len(failures) / len(last_phase_ips)) * 100
+            else:
+                failure_pct = 0
+
+            if failure_pct > rollback_threshold_pct:
+                logger.warning(
+                    f"Config enforce: post-poll failure rate "
+                    f"{failure_pct:.0f}% on phase {last_phase} exceeds "
+                    f"threshold {rollback_threshold_pct}% — auto-rolling back "
+                    f"{len(failures)} device(s)"
+                )
+                rolled = 0
+                for ip in failures:
+                    snapshot_id = pre_snapshots.get(ip)
+                    if snapshot_id is None:
+                        continue
+                    if await self._auto_rollback_device(
+                        ip, device_type_by_ip.get(ip, "ap"), snapshot_id
+                    ):
+                        rolled += 1
+                if self.broadcast_func:
+                    await self.broadcast_func({
+                        "type": "config_enforce_status",
+                        "status": "rolled_back",
+                        "phase": last_phase,
+                        "message": (
+                            f"Auto-rollback triggered: {rolled} device(s) reverted "
+                            f"(threshold={rollback_threshold_pct}%)"
+                        ),
+                    })
+                return
+
         if self.broadcast_func:
             await self.broadcast_func({
                 "type": "config_enforce_status",
                 "status": "idle",
                 "message": "Enforce completed",
             })
+
+    async def _auto_rollback_device(self, ip: str, device_type: str,
+                                    snapshot_id: int) -> bool:
+        """Revert a device to a pre-enforce snapshot.
+
+        Used by the post-enforce mass-failure path. Note: this does not take
+        the per-IP `_config_push_lock` from app.py — a manual push that starts
+        mid-rollback would race, but the #48 guard already prevents enforce
+        *entry* while a push is in flight, and a rollback that finishes what
+        enforce started is the safer of the two paths to finish first.
+        """
+        try:
+            snapshot = db.get_device_config_by_id(snapshot_id)
+            if not snapshot or not snapshot.get("config_json"):
+                raise RuntimeError("Pre-enforce snapshot missing")
+            rollback_cfg = json.loads(snapshot["config_json"])
+
+            device = db.get_access_point(ip) or db.get_switch(ip)
+            if not device:
+                raise RuntimeError("Device not found")
+
+            vendor = device.get("vendor", "tachyon")
+            driver_cls = get_driver(vendor)
+            client = driver_cls(ip, device["username"], device["password"], timeout=15)
+            login_result = await client.connect()
+            if login_result is not True:
+                raise RuntimeError(f"Login failed: {login_result}")
+
+            dry = await client.apply_config(rollback_cfg, dry_run=True)
+            if not dry.get("success"):
+                raise RuntimeError(
+                    f"Dry run rejected: {dry.get('error') or dry.get('raw_response')}"
+                )
+
+            result = await client.apply_config(rollback_cfg)
+            if not result.get("success"):
+                raise RuntimeError(
+                    f"Apply failed: {result.get('error') or result.get('raw_response')}"
+                )
+
+            db.save_config_enforce_log(ip, device_type, "rollback", "success")
+            logger.info(f"Auto-rollback: {ip} reverted to pre-enforce snapshot")
+            return True
+        except Exception as e:
+            db.save_config_enforce_log(ip, device_type, "rollback", "failed",
+                                       error=str(e))
+            logger.warning(f"Auto-rollback failed for {ip}: {e}")
+            return False
 
     def _phase_batch_size(self, phase: str, total: int) -> int:
         """Return batch size for a phase."""
@@ -1256,16 +1390,21 @@ class NetworkPoller:
 
     async def _enforce_device(self, ip: str, device_type: str,
                               templates: list[dict], phase: str,
-                              sem: asyncio.Semaphore) -> tuple[bool, Optional[str], Optional[str]]:
+                              sem: asyncio.Semaphore) -> tuple[bool, Optional[str], Optional[str], Optional[int]]:
         """Push templates to a single device.
 
-        Returns (success, failure_class, error_msg):
+        Returns (success, failure_class, error_msg, pre_snapshot_id):
           - success=True on apply success; the success log row is written here.
           - success=False with failure_class in {"transient", "policy"} on failure.
             The caller is responsible for writing the failure log row, because
             the caller knows whether the device will be retried in canary and
             needs that context in the audit trail.
+          - pre_snapshot_id is the device_configs row id of the snapshot taken
+            *before* this device's config was modified (or None if we never
+            got that far — login/fetch-config failures, or device-not-found).
+            Used by the auto-rollback path to find the snapshot to revert to.
         """
+        pre_snapshot_id: Optional[int] = None
         async with sem:
             try:
                 # Get device credentials
@@ -1287,13 +1426,14 @@ class NetworkPoller:
                 if current_config is None:
                     raise TransientEnforceError("Failed to fetch current config")
 
-                # Save pre-enforce config snapshot (backup)
+                # Save pre-enforce config snapshot (backup) and remember its id
+                # so the auto-rollback path can find it without a re-query.
                 import hashlib
                 pre_json = json.dumps(current_config, sort_keys=True, separators=(",", ":"))
                 pre_hash = hashlib.sha256(pre_json.encode()).hexdigest()
                 model = device.get("model")
                 hardware_id = client.get_hardware_id((model or "").lower())
-                db.save_device_config(ip, pre_json, pre_hash, model, hardware_id)
+                pre_snapshot_id = db.save_device_config(ip, pre_json, pre_hash, model, hardware_id)
 
                 # Merge all template fragments into current config
                 merged = current_config
@@ -1318,19 +1458,19 @@ class NetworkPoller:
                 db.save_config_enforce_log(ip, device_type, phase, "success",
                                            template_ids=template_ids)
                 logger.info(f"Config enforce: {ip} corrected successfully ({phase})")
-                return (True, None, None)
+                return (True, None, None, pre_snapshot_id)
 
             except TransientEnforceError as e:
                 logger.warning(f"Config enforce: {ip} failed ({phase}, transient): {e}")
-                return (False, "transient", str(e))
+                return (False, "transient", str(e), pre_snapshot_id)
             except PolicyEnforceError as e:
                 logger.warning(f"Config enforce: {ip} failed ({phase}, policy): {e}")
-                return (False, "policy", str(e))
+                return (False, "policy", str(e), pre_snapshot_id)
             except Exception as e:
                 # Unknown failure — treat as policy so we don't burn retry
                 # budget on something we can't explain.
                 logger.warning(f"Config enforce: {ip} failed ({phase}, unknown): {e}")
-                return (False, "policy", str(e))
+                return (False, "policy", str(e), pre_snapshot_id)
 
     def get_topology(self) -> dict:
         """Build topology dict from database."""
