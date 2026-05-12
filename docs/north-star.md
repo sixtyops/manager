@@ -74,7 +74,7 @@ Same profile, larger fleets: 1000–5000 devices. Probably requires Postgres mig
 
 ### Phase 0 — Foundation *(today)*
 
-**State:** repo just went private; feature-complete on engineering; QA + docs + monetization unwired.
+**State:** repo private; feature-complete on engineering; v1.3.0 shipped as open-source (billing/licensing stripped out — to be re-introduced in Phase 2). Docs hardening (quickstart, troubleshooting one-pager) has landed; remaining gaps tracked under the `phase-1` / `launch-p0` labels.
 
 **Exit criteria:** clean understanding of gaps; immediate private-repo-migration fallout closed; team aligned on phases.
 
@@ -89,7 +89,11 @@ Same profile, larger fleets: 1000–5000 devices. Probably requires Postgres mig
 - Live-hardware CI lane hard-required on every PR merge
 - A non-team-member can install + onboard their first AP using only `docs/quickstart.md` in <15 minutes
 - 3+ design partners on weekly feedback cadence
-- Zero P0 bugs from partners in the last week of the phase
+- Zero P0 bugs from partners in the last week of the phase [^p0]
+
+[^p0]: **P0** = data loss, total outage, security incident, or auth lockout. Target: acknowledge within 4 business hours, fix within 24.
+
+**Design-partner commitments:** Free to use during Phase 1. In exchange we ask for a weekly feedback sync, prompt P0 reporting, and permission to learn from their telemetry. When billing turns on in Phase 2, design partners get founder pricing honored for the life of the customer relationship.
 
 ### Phase 2 — First Revenue *(weeks 4–12)*
 
@@ -97,11 +101,13 @@ Same profile, larger fleets: 1000–5000 devices. Probably requires Postgres mig
 
 **Themes:** license-key system, pricing decided, comms to existing users, first paid invoices.
 
+> **Context:** v1.3.0 (2026-04-08) removed all licensing/billing/Stripe code as part of the open-source conversion. Phase 2 re-introduces a thin license-key validation layer on top of that baseline — see issues [#129](https://github.com/sixtyops/manager/issues/129) (bill counter), [#130](https://github.com/sixtyops/manager/issues/130) (license-key validation), [#131](https://github.com/sixtyops/manager/issues/131) (pricing tiers), [#132](https://github.com/sixtyops/manager/issues/132) (trial UX), [#133](https://github.com/sixtyops/manager/issues/133) (rollout comms).
+
 **Exit criteria:**
 
-- License-key validation shipped and verified (offline-friendly, signed)
-- Pricing tiers locked from partner feedback
-- ≥10 paying customers OR ≥$X MRR target (number TBD with team)
+- License-key validation shipped and verified (offline-friendly, signed) — [#130](https://github.com/sixtyops/manager/issues/130)
+- Pricing tiers locked from partner feedback — [#131](https://github.com/sixtyops/manager/issues/131)
+- ≥10 paying customers OR MRR target (number set in [#131](https://github.com/sixtyops/manager/issues/131))
 - Founder-pricing commitment honored to design partners
 
 ### Phase 3 — Harden & Observe *(months 3–9)*
@@ -135,10 +141,12 @@ Same profile, larger fleets: 1000–5000 devices. Probably requires Postgres mig
 
 | Phase | North-star metric | Supporting metrics |
 |-------|------------------|---------------------|
-| 1 | Design partners installed and active | install→first-update time, weekly active operators, P0 bug count |
+| 1 | Design partners installed and active [^active] | install→first-update time, weekly active operators, P0 bug count |
 | 2 | Paying customers | MRR, free→paid conversion, license-key install errors |
 | 3 | Operator confidence | job error rate, P0 incident count, mean time to detect, NPS from existing customers |
 | 4 | Market reach | tenants per MSP customer, non-Tachyon device share, hosted vs self-host mix |
+
+[^active]: **Active design partner** = attended a feedback sync in the last 7 days AND the install reported a telemetry heartbeat in the last 7 days.
 
 ---
 
