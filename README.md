@@ -67,6 +67,8 @@ These are marked **DANGEROUS** in the UI and should only be used after testing i
 
 Both options below include a bundled nginx reverse proxy with automatic HTTPS — self-signed out of the box, with Let's Encrypt available via the setup wizard.
 
+For a step-by-step walkthrough from install to first device polled (about 10 minutes), see [docs/quickstart.md](docs/quickstart.md).
+
 ### Production Deployment
 
 ```bash
@@ -135,6 +137,7 @@ Background polling keeps data current. Check here before scheduling updates to u
 
 ## Documentation
 
+- **[Quickstart](docs/quickstart.md)** — Install to first device polled in ~10 minutes
 - **[Deployment Guide](docs/deployment.md)** — HTTPS, RADIUS, environment variables
 - **[RADIUS Guide](docs/radius.md)** — Built-in RADIUS setup, client overrides, and device rollout workflow
 - **[Gradual Rollout](docs/gradual-rollout.md)** — How the 4-night rollout works
