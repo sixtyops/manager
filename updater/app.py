@@ -6022,8 +6022,20 @@ async def get_job_devices_api(
 # Tracks IPs currently being pushed to, preventing overlapping pushes
 _config_pushing_ips: set = set()
 _config_push_lock = asyncio.Lock()
-# Tracks immediate config push jobs for status/cancellation
+# Tracks immediate config push jobs for status/cancellation. Single-process
+# state — manager runs as one process today, so the poller can consult this
+# directly when gating auto-enforce.
 _config_push_jobs: dict = {}  # {job_id: {"task": Task, "cancelled": bool, "success": 0, "failed": 0, "total": 0, "done": bool}}
+
+
+def has_active_config_push() -> int:
+    """Count of immediate /api/config-push jobs still running.
+
+    Used by the poller to skip auto-enforce while manual pushes are in flight,
+    so cached snapshots can't drive an enforce that overwrites an operator's
+    in-progress change.
+    """
+    return sum(1 for j in _config_push_jobs.values() if not j.get("done"))
 
 # ============================================================================
 # ============================================================================
