@@ -20,8 +20,10 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Require GitHub token (sixtyops/manager is private)
-if [ -z "${SIXTYOPS_GH_TOKEN:-}" ]; then
+# Require a GitHub token when we're cloning from the default (private)
+# sixtyops/manager URL. If the caller has overridden SIXTYOPS_REPO_URL
+# (CI smoke tests, mirrored fork, etc.) they own the auth for that URL.
+if [ -z "${SIXTYOPS_REPO_URL:-}" ] && [ -z "${SIXTYOPS_GH_TOKEN:-}" ]; then
     echo "ERROR: SIXTYOPS_GH_TOKEN is required (sixtyops/manager is private)."
     echo
     echo "Create a fine-grained PAT with 'Contents: Read' on sixtyops/manager,"
