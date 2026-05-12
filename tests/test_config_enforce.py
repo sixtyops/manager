@@ -1,5 +1,6 @@
 """Tests for config auto-enforce: scoping, enforce log, template resolution."""
 
+import asyncio
 import json
 import math
 from contextlib import contextmanager
@@ -325,6 +326,598 @@ class TestAutoEnforce:
             if c[0][0].get("status") == "stopped"
         ]
         assert len(stopped_msgs) >= 1
+
+    @pytest.mark.asyncio
+    async def test_skip_when_manual_push_in_flight(self, scoped_db):
+        """Enforce must defer when an immediate /api/config-push is running."""
+        from updater import app as updater_app
+        db.save_config_template(
+            name="SNMP", category="snmp",
+            config_fragment='{"services":{"snmp":{"community":"secret"}}}',
+            scope="global"
+        )
+        config = json.dumps({"services": {"snmp": {"community": "public"}}},
+                            sort_keys=True, separators=(",", ":"))
+        import hashlib
+        config_hash = hashlib.sha256(config.encode()).hexdigest()
+        scoped_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id) VALUES (?, ?, ?, ?, ?)",
+            ("10.0.0.1", config, config_hash, "TN-110-PRS", "tn-110-prs")
+        )
+        scoped_db.commit()
+
+        original_jobs = dict(updater_app._config_push_jobs)
+        updater_app._config_push_jobs.clear()
+        updater_app._config_push_jobs["job-in-flight"] = {"done": False}
+        try:
+            broadcast = AsyncMock()
+            poller = NetworkPoller(broadcast_func=broadcast)
+            await poller._run_enforce_phases()
+        finally:
+            updater_app._config_push_jobs.clear()
+            updater_app._config_push_jobs.update(original_jobs)
+
+        skipped_msgs = [
+            c[0][0] for c in broadcast.call_args_list
+            if c[0][0].get("status") == "skipped"
+        ]
+        assert len(skipped_msgs) == 1
+        assert "manual config push" in skipped_msgs[0]["message"].lower()
+        assert len(db.get_config_enforce_log()) == 0
+
+    @pytest.mark.asyncio
+    async def test_proceeds_when_only_completed_jobs(self, scoped_db):
+        """Stale done=True entries must not block enforce."""
+        from updater import app as updater_app
+        db.save_config_template(
+            name="SNMP", category="snmp",
+            config_fragment='{"services":{"snmp":{"community":"public"}}}',
+            scope="global"
+        )
+        # Compliant config so the run reaches the idle broadcast quickly.
+        config = json.dumps({"services": {"snmp": {"community": "public"}}},
+                            sort_keys=True, separators=(",", ":"))
+        import hashlib
+        config_hash = hashlib.sha256(config.encode()).hexdigest()
+        scoped_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id) VALUES (?, ?, ?, ?, ?)",
+            ("10.0.0.1", config, config_hash, "TN-110-PRS", "tn-110-prs")
+        )
+        scoped_db.commit()
+
+        original_jobs = dict(updater_app._config_push_jobs)
+        updater_app._config_push_jobs.clear()
+        updater_app._config_push_jobs["job-done"] = {"done": True}
+        try:
+            broadcast = AsyncMock()
+            poller = NetworkPoller(broadcast_func=broadcast)
+            await poller._run_enforce_phases()
+        finally:
+            updater_app._config_push_jobs.clear()
+            updater_app._config_push_jobs.update(original_jobs)
+
+        skipped_msgs = [
+            c[0][0] for c in broadcast.call_args_list
+            if c[0][0].get("status") == "skipped"
+        ]
+        assert skipped_msgs == []
+
+
+def test_has_active_config_push_helper():
+    """`app.has_active_config_push` counts non-done jobs only."""
+    from updater import app as updater_app
+
+    original = dict(updater_app._config_push_jobs)
+    updater_app._config_push_jobs.clear()
+    try:
+        assert updater_app.has_active_config_push() == 0
+        updater_app._config_push_jobs["a"] = {"done": False}
+        updater_app._config_push_jobs["b"] = {"done": True}
+        updater_app._config_push_jobs["c"] = {"done": False}
+        assert updater_app.has_active_config_push() == 2
+    finally:
+        updater_app._config_push_jobs.clear()
+        updater_app._config_push_jobs.update(original)
+
+
+# ---------------------------------------------------------------------------
+# Canary retry / failure classification (#49)
+# ---------------------------------------------------------------------------
+
+class TestCanaryRetry:
+    """Verify _run_enforce_phases classifies failures and retries transient
+    ones on canary only."""
+
+    def _seed_non_compliant(self, scoped_db, ips):
+        """Seed a global SNMP template and non-matching device configs."""
+        db.save_config_template(
+            name="SNMP", category="snmp",
+            config_fragment='{"services":{"snmp":{"community":"secret"}}}',
+            scope="global"
+        )
+        config = json.dumps({"services": {"snmp": {"community": "public"}}},
+                            sort_keys=True, separators=(",", ":"))
+        import hashlib
+        config_hash = hashlib.sha256(config.encode()).hexdigest()
+        for ip in ips:
+            scoped_db.execute(
+                "INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id) VALUES (?, ?, ?, ?, ?)",
+                (ip, config, config_hash, "TN-110-PRS", "tn-110-prs")
+            )
+        scoped_db.commit()
+        # Use the setter so the settings cache is invalidated.
+        db.set_setting("config_auto_enforce", "true")
+
+    @pytest.mark.asyncio
+    async def test_canary_transient_retried_and_succeeds(self, scoped_db):
+        """A transient canary failure that succeeds on retry must not stop the run."""
+        self._seed_non_compliant(scoped_db, ["10.0.0.1"])
+
+        poller = NetworkPoller()
+        # First call fails transient, second call (the retry) succeeds.
+        side_effects = [
+            (False, "transient", "Login failed: timeout"),
+            (True, None, None),
+        ]
+
+        async def fake_enforce(ip, dtype, templates, phase, sem):
+            return side_effects.pop(0)
+
+        with patch.object(NetworkPoller, "_enforce_device", side_effect=fake_enforce, autospec=False), \
+             patch.object(NetworkPoller, "poll_configs_for_ips", new=AsyncMock()), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            await poller._run_enforce_phases()
+
+        logs = db.get_config_enforce_log()
+        # Only the second attempt's success log row is written by _enforce_device
+        # (our patched fake doesn't write any). We don't assert on success rows
+        # here; we assert that NO failure row was written, because the retry
+        # succeeded and the caller only writes the failure row if the retry
+        # also failed.
+        failures = [r for r in logs if r["status"] == "failed"]
+        assert failures == []
+        # Both attempts were consumed: the retry happened.
+        assert side_effects == []
+
+    @pytest.mark.asyncio
+    async def test_canary_policy_failure_no_retry(self, scoped_db):
+        """A policy-class canary failure must NOT be retried and must stop the run."""
+        self._seed_non_compliant(scoped_db, ["10.0.0.1", "10.0.0.2"])
+
+        poller = NetworkPoller(broadcast_func=AsyncMock())
+        call_count = 0
+
+        async def fake_enforce(ip, dtype, templates, phase, sem):
+            nonlocal call_count
+            call_count += 1
+            return (False, "policy", "Dry run rejected: invalid syntax")
+
+        with patch.object(NetworkPoller, "_enforce_device", side_effect=fake_enforce, autospec=False), \
+             patch.object(NetworkPoller, "poll_configs_for_ips", new=AsyncMock()), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            await poller._run_enforce_phases()
+
+        # Exactly one call to _enforce_device: canary, no retry.
+        assert call_count == 1
+        logs = db.get_config_enforce_log()
+        failures = [r for r in logs if r["status"] == "failed"]
+        assert len(failures) == 1
+        assert failures[0]["error"].startswith("policy: ")
+        assert "retries" not in failures[0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_retry_count_zero_disables_retry(self, scoped_db):
+        """Setting retry count to 0 reverts to current behavior (no retry on transient)."""
+        self._seed_non_compliant(scoped_db, ["10.0.0.1"])
+        # Use the setter so the settings cache is invalidated.
+        db.set_setting("config_enforce_canary_retry_count", "0")
+
+        poller = NetworkPoller(broadcast_func=AsyncMock())
+        call_count = 0
+
+        async def fake_enforce(ip, dtype, templates, phase, sem):
+            nonlocal call_count
+            call_count += 1
+            return (False, "transient", "Login failed: connection refused")
+
+        with patch.object(NetworkPoller, "_enforce_device", side_effect=fake_enforce, autospec=False), \
+             patch.object(NetworkPoller, "poll_configs_for_ips", new=AsyncMock()), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            await poller._run_enforce_phases()
+
+        assert call_count == 1  # No retry
+        logs = db.get_config_enforce_log()
+        failures = [r for r in logs if r["status"] == "failed"]
+        assert len(failures) == 1
+        assert failures[0]["error"].startswith("transient: ")
+
+    @pytest.mark.asyncio
+    async def test_log_includes_retry_count_suffix(self, scoped_db):
+        """When a transient canary failure exhausts retries, the log records the count."""
+        self._seed_non_compliant(scoped_db, ["10.0.0.1"])
+
+        poller = NetworkPoller(broadcast_func=AsyncMock())
+        call_count = 0
+
+        async def fake_enforce(ip, dtype, templates, phase, sem):
+            nonlocal call_count
+            call_count += 1
+            return (False, "transient", "Failed to fetch current config")
+
+        with patch.object(NetworkPoller, "_enforce_device", side_effect=fake_enforce, autospec=False), \
+             patch.object(NetworkPoller, "poll_configs_for_ips", new=AsyncMock()), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            await poller._run_enforce_phases()
+
+        # 1 initial + 1 retry (default count is 1) = 2 attempts
+        assert call_count == 2
+        logs = db.get_config_enforce_log()
+        failures = [r for r in logs if r["status"] == "failed"]
+        assert len(failures) == 1
+        assert "transient:" in failures[0]["error"]
+        assert "(1/1 retries)" in failures[0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_no_retry_in_non_canary_phases(self, scoped_db):
+        """Transient failures outside canary must not be retried — wasted time."""
+        # 10 non-compliant devices: canary=1, pct10=1, pct50=4, pct100=4.
+        ips = [f"10.1.0.{i}" for i in range(1, 11)]
+        for ip in ips:
+            scoped_db.execute(
+                "INSERT INTO access_points (ip, username, password, enabled) VALUES (?, 'admin', 'pass', 1)",
+                (ip,)
+            )
+        self._seed_non_compliant(scoped_db, ips)
+
+        poller = NetworkPoller(broadcast_func=AsyncMock())
+        canary_calls = 0
+        pct10_calls = 0
+
+        async def fake_enforce(ip, dtype, templates, phase, sem):
+            nonlocal canary_calls, pct10_calls
+            if phase == "canary":
+                canary_calls += 1
+                return (True, None, None)  # canary passes so we proceed
+            if phase == "pct10":
+                pct10_calls += 1
+                return (False, "transient", "Login failed")
+            return (False, "policy", "Should not reach here")
+
+        with patch.object(NetworkPoller, "_enforce_device", side_effect=fake_enforce, autospec=False), \
+             patch.object(NetworkPoller, "poll_configs_for_ips", new=AsyncMock()), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            await poller._run_enforce_phases()
+
+        # pct10 phase should run exactly once per device (1 of 10 devices) — no retry.
+        assert pct10_calls == 1
+
+
+class TestEnforceErrorClassification:
+    """Verify _enforce_device raises the right error class at each failure site.
+
+    Note: the snapshot id (4th tuple element) is included to distinguish
+    failures that captured a pre-enforce snapshot (dry-run, apply) from those
+    that failed before the snapshot was taken (login, fetch-config).
+    """
+
+    @pytest.mark.asyncio
+    async def test_login_failure_classified_transient(self, scoped_db):
+        poller = NetworkPoller()
+
+        # Patch the driver to fail login.
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock(return_value="bad password")
+        mock_client.get_hardware_id = MagicMock(return_value="tn-110-prs")
+        mock_driver_cls = MagicMock(return_value=mock_client)
+
+        with patch("updater.poller.get_driver", return_value=mock_driver_cls):
+            sem = asyncio.Semaphore(1)
+            result = await poller._enforce_device(
+                "10.0.0.1", "ap", [{"id": 1, "config_fragment": "{}"}], "canary", sem
+            )
+        # Login failed before snapshot was captured
+        assert result == (False, "transient", "Login failed: bad password", None)
+
+    @pytest.mark.asyncio
+    async def test_fetch_config_failure_classified_transient(self, scoped_db):
+        poller = NetworkPoller()
+
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock(return_value=True)
+        mock_client.get_config = AsyncMock(return_value=None)
+        mock_client.get_hardware_id = MagicMock(return_value="tn-110-prs")
+        mock_driver_cls = MagicMock(return_value=mock_client)
+
+        with patch("updater.poller.get_driver", return_value=mock_driver_cls):
+            sem = asyncio.Semaphore(1)
+            result = await poller._enforce_device(
+                "10.0.0.1", "ap", [{"id": 1, "config_fragment": "{}"}], "canary", sem
+            )
+        # Fetch failed before snapshot was captured
+        assert result == (False, "transient", "Failed to fetch current config", None)
+
+    @pytest.mark.asyncio
+    async def test_dry_run_rejection_classified_policy(self, scoped_db):
+        poller = NetworkPoller()
+
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock(return_value=True)
+        mock_client.get_config = AsyncMock(return_value={"services": {"snmp": {"community": "old"}}})
+        mock_client.apply_config = AsyncMock(return_value={"success": False, "error": "schema error"})
+        mock_client.get_hardware_id = MagicMock(return_value="tn-110-prs")
+        mock_driver_cls = MagicMock(return_value=mock_client)
+
+        with patch("updater.poller.get_driver", return_value=mock_driver_cls):
+            sem = asyncio.Semaphore(1)
+            result = await poller._enforce_device(
+                "10.0.0.1", "ap",
+                [{"id": 1, "config_fragment": '{"services":{"snmp":{"community":"new"}}}'}],
+                "canary", sem
+            )
+        # Snapshot was captured before dry-run rejection
+        success, failure_class, error_msg, snapshot_id = result
+        assert success is False
+        assert failure_class == "policy"
+        assert error_msg == "Dry run rejected: schema error"
+        assert isinstance(snapshot_id, int) and snapshot_id > 0
+
+    @pytest.mark.asyncio
+    async def test_device_not_found_classified_policy(self, scoped_db):
+        poller = NetworkPoller()
+        sem = asyncio.Semaphore(1)
+        result = await poller._enforce_device(
+            "10.99.99.99", "ap", [{"id": 1, "config_fragment": "{}"}], "canary", sem
+        )
+        assert result == (False, "policy", "Device not found in database", None)
+
+
+# ---------------------------------------------------------------------------
+# Auto-rollback on post-enforce mass failure (#50)
+# ---------------------------------------------------------------------------
+
+class TestAutoRollback:
+    """Verify the optional auto-rollback path runs when the post-enforce
+    re-poll shows the last phase exceeded the configured failure threshold."""
+
+    def _seed_non_compliant(self, scoped_db, ips):
+        """Seed a global SNMP template and non-matching configs for the given IPs.
+
+        Uses save_device_config (not raw SQL) so the snapshot timestamps match
+        the local-time ISO format that the production code writes. Mixing
+        SQLite's CURRENT_TIMESTAMP (UTC) with the Python local-time strings
+        breaks `ORDER BY fetched_at DESC` when the host TZ is not UTC.
+        """
+        db.save_config_template(
+            name="SNMP", category="snmp",
+            config_fragment='{"services":{"snmp":{"community":"secret"}}}',
+            scope="global"
+        )
+        config = json.dumps({"services": {"snmp": {"community": "public"}}},
+                            sort_keys=True, separators=(",", ":"))
+        import hashlib
+        config_hash = hashlib.sha256(config.encode()).hexdigest()
+        for ip in ips:
+            db.save_device_config(ip, config, config_hash, "TN-110-PRS", "tn-110-prs")
+        db.set_setting("config_auto_enforce", "true")
+
+    @pytest.mark.asyncio
+    async def test_no_rollback_when_threshold_zero(self, scoped_db):
+        """Default (off): no rollback regardless of post-poll outcome."""
+        self._seed_non_compliant(scoped_db, ["10.0.0.1"])
+        # Threshold stays at default "0".
+
+        poller = NetworkPoller(broadcast_func=AsyncMock())
+        rollback_called = MagicMock()
+
+        async def fake_enforce(ip, dtype, templates, phase, sem):
+            return (True, None, None, 999)  # apply success, fake snapshot id
+
+        async def fake_rollback(ip, dtype, snapshot_id):
+            rollback_called(ip, snapshot_id)
+            return True
+
+        with patch.object(NetworkPoller, "_enforce_device", side_effect=fake_enforce, autospec=False), \
+             patch.object(NetworkPoller, "_auto_rollback_device", side_effect=fake_rollback, autospec=False), \
+             patch.object(NetworkPoller, "poll_configs_for_ips", new=AsyncMock()), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            await poller._run_enforce_phases()
+
+        rollback_called.assert_not_called()
+        logs = db.get_config_enforce_log()
+        assert [r for r in logs if r["phase"] == "rollback"] == []
+
+    @pytest.mark.asyncio
+    async def test_rollback_fires_when_threshold_exceeded(self, scoped_db):
+        """Post-poll still non-compliant for all of last phase → rollback runs."""
+        self._seed_non_compliant(scoped_db, ["10.0.0.1", "10.0.0.2"])
+        db.set_setting("config_enforce_auto_rollback_threshold_pct", "50")
+
+        poller = NetworkPoller(broadcast_func=AsyncMock())
+        # Track snapshot id to verify it's passed through.
+        rollback_calls = []
+
+        async def fake_enforce(ip, dtype, templates, phase, sem):
+            # Apply succeeds but device's stored config wasn't updated, so
+            # the post-poll re-check below still finds non-compliance.
+            return (True, None, None, 42 if ip == "10.0.0.1" else 43)
+
+        async def fake_rollback(ip, dtype, snapshot_id):
+            rollback_calls.append((ip, snapshot_id))
+            db.save_config_enforce_log(ip, dtype, "rollback", "success")
+            return True
+
+        # Default: device_configs are still non-compliant after re-poll.
+        # poll_configs_for_ips is a no-op in tests.
+        with patch.object(NetworkPoller, "_enforce_device", side_effect=fake_enforce, autospec=False), \
+             patch.object(NetworkPoller, "_auto_rollback_device", side_effect=fake_rollback, autospec=False), \
+             patch.object(NetworkPoller, "poll_configs_for_ips", new=AsyncMock()), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            await poller._run_enforce_phases()
+
+        # With 2 non-compliant devices: canary=1 (pushed first), pct10=1.
+        # pct100 has 0 remaining devices, so last_phase_ips is the final
+        # non-empty batch (pct10 with 10.0.0.2 — or whichever IP got pushed
+        # in the final non-empty batch). Both devices remain non-compliant
+        # post-poll because we don't actually update the snapshot.
+        assert len(rollback_calls) >= 1, f"Expected rollback, got: {rollback_calls}"
+        rollback_logs = [
+            r for r in db.get_config_enforce_log() if r["phase"] == "rollback"
+        ]
+        assert len(rollback_logs) >= 1
+        assert all(r["status"] == "success" for r in rollback_logs)
+
+    @pytest.mark.asyncio
+    async def test_no_rollback_when_devices_now_compliant(self, scoped_db):
+        """If the re-poll shows the last-phase devices are compliant, no rollback."""
+        self._seed_non_compliant(scoped_db, ["10.0.0.1"])
+        db.set_setting("config_enforce_auto_rollback_threshold_pct", "50")
+
+        # Stub poll_configs_for_ips to overwrite the snapshot with a compliant one.
+        async def fake_poll(ips):
+            compliant_config = json.dumps(
+                {"services": {"snmp": {"community": "secret"}}},
+                sort_keys=True, separators=(",", ":")
+            )
+            import hashlib
+            h = hashlib.sha256(compliant_config.encode()).hexdigest()
+            for ip in ips:
+                db.save_device_config(ip, compliant_config, h, "TN-110-PRS", "tn-110-prs")
+
+        poller = NetworkPoller(broadcast_func=AsyncMock())
+        rollback_called = MagicMock()
+
+        async def fake_enforce(ip, dtype, templates, phase, sem):
+            return (True, None, None, 99)
+
+        async def fake_rollback(ip, dtype, snapshot_id):
+            rollback_called(ip, snapshot_id)
+            return True
+
+        with patch.object(NetworkPoller, "_enforce_device", side_effect=fake_enforce, autospec=False), \
+             patch.object(NetworkPoller, "_auto_rollback_device", side_effect=fake_rollback, autospec=False), \
+             patch.object(NetworkPoller, "poll_configs_for_ips", side_effect=fake_poll, autospec=False), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            await poller._run_enforce_phases()
+
+        rollback_called.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rolled_back_broadcast_emitted(self, scoped_db):
+        """When rollback fires, broadcast status=rolled_back with the rolled count."""
+        self._seed_non_compliant(scoped_db, ["10.0.0.1"])
+        db.set_setting("config_enforce_auto_rollback_threshold_pct", "50")
+
+        broadcast = AsyncMock()
+        poller = NetworkPoller(broadcast_func=broadcast)
+
+        async def fake_enforce(ip, dtype, templates, phase, sem):
+            return (True, None, None, 42)
+
+        async def fake_rollback(ip, dtype, snapshot_id):
+            db.save_config_enforce_log(ip, dtype, "rollback", "success")
+            return True
+
+        with patch.object(NetworkPoller, "_enforce_device", side_effect=fake_enforce, autospec=False), \
+             patch.object(NetworkPoller, "_auto_rollback_device", side_effect=fake_rollback, autospec=False), \
+             patch.object(NetworkPoller, "poll_configs_for_ips", new=AsyncMock()), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            await poller._run_enforce_phases()
+
+        rolled_back_msgs = [
+            c[0][0] for c in broadcast.call_args_list
+            if c[0][0].get("status") == "rolled_back"
+        ]
+        assert len(rolled_back_msgs) == 1
+        assert "rollback" in rolled_back_msgs[0]["message"].lower()
+        # The final "Enforce completed" broadcast must be suppressed when
+        # rollback fires — operators shouldn't see a green "completed" event
+        # right after the rollback.
+        idle_completed = [
+            c[0][0] for c in broadcast.call_args_list
+            if c[0][0].get("status") == "idle"
+            and c[0][0].get("message") == "Enforce completed"
+        ]
+        assert idle_completed == []
+
+
+class TestAutoRollbackDevice:
+    """Verify _auto_rollback_device's connect → dry-run → apply sequence and
+    its enforce-log writes."""
+
+    @pytest.mark.asyncio
+    async def test_writes_success_log_on_apply(self, scoped_db):
+        # Insert a snapshot
+        snapshot_id = db.save_device_config(
+            "10.0.0.1",
+            json.dumps({"services": {"snmp": {"community": "old"}}}),
+            "abc123", "TN-110-PRS", "tn-110-prs"
+        )
+
+        poller = NetworkPoller()
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock(return_value=True)
+        mock_client.apply_config = AsyncMock(return_value={"success": True})
+        mock_driver_cls = MagicMock(return_value=mock_client)
+
+        with patch("updater.poller.get_driver", return_value=mock_driver_cls):
+            result = await poller._auto_rollback_device("10.0.0.1", "ap", snapshot_id)
+
+        assert result is True
+        # Two apply_config calls: dry-run and real apply
+        assert mock_client.apply_config.call_count == 2
+        rollback_logs = [
+            r for r in db.get_config_enforce_log("10.0.0.1")
+            if r["phase"] == "rollback"
+        ]
+        assert len(rollback_logs) == 1
+        assert rollback_logs[0]["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_writes_failed_log_on_dry_run_rejection(self, scoped_db):
+        snapshot_id = db.save_device_config(
+            "10.0.0.1",
+            json.dumps({"services": {"snmp": {"community": "old"}}}),
+            "abc123", "TN-110-PRS", "tn-110-prs"
+        )
+
+        poller = NetworkPoller()
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock(return_value=True)
+        # Dry-run rejection
+        mock_client.apply_config = AsyncMock(return_value={"success": False, "error": "bad schema"})
+        mock_driver_cls = MagicMock(return_value=mock_client)
+
+        with patch("updater.poller.get_driver", return_value=mock_driver_cls):
+            result = await poller._auto_rollback_device("10.0.0.1", "ap", snapshot_id)
+
+        assert result is False
+        rollback_logs = [
+            r for r in db.get_config_enforce_log("10.0.0.1")
+            if r["phase"] == "rollback"
+        ]
+        assert len(rollback_logs) == 1
+        assert rollback_logs[0]["status"] == "failed"
+        assert "Dry run rejected" in rollback_logs[0]["error"]
+
+
+def test_save_device_config_returns_row_id(scoped_db):
+    """save_device_config must return the new row id for the auto-rollback path."""
+    rid1 = db.save_device_config(
+        "10.0.0.1",
+        json.dumps({"a": 1}, sort_keys=True),
+        "hash1", "TN-110", "tn-110"
+    )
+    rid2 = db.save_device_config(
+        "10.0.0.1",
+        json.dumps({"a": 2}, sort_keys=True),
+        "hash2", "TN-110", "tn-110"
+    )
+    assert isinstance(rid1, int) and rid1 > 0
+    assert isinstance(rid2, int) and rid2 > rid1
+    # Confirm we can round-trip the id back to the snapshot
+    snap = db.get_device_config_by_id(rid1)
+    assert snap is not None
+    assert snap["ip"] == "10.0.0.1"
 
 
 # ---------------------------------------------------------------------------

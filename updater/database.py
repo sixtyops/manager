@@ -1026,6 +1026,13 @@ def init_db():
             # Config auto-enforce
             "config_auto_enforce": "false",
             "config_enforce_cooldown_minutes": "10",
+            # Number of times to retry a transient canary failure before
+            # treating it as a real policy failure (0-3, default 1).
+            "config_enforce_canary_retry_count": "1",
+            # If non-zero, auto-rollback the most recent enforce phase when
+            # the post-enforce re-poll shows this percent of devices are
+            # still non-compliant (0-100, default 0 = off).
+            "config_enforce_auto_rollback_threshold_pct": "0",
             # Vendor feature flags
             "mikrotik_enabled": "false",
             # License configuration
@@ -2802,8 +2809,8 @@ def _decrypt_row_config_json(row: Optional[dict]) -> Optional[dict]:
 
 def save_device_config(ip: str, config_json: str, config_hash: str,
                        model: str = None, hardware_id: str = None,
-                       mac: str = None):
-    """Save a device config snapshot.
+                       mac: str = None) -> int:
+    """Save a device config snapshot. Returns the new row id.
 
     `config_json` is encrypted at rest with the same Fernet key used for
     device passwords (#35). Callers pass cleartext canonical JSON; the hash
@@ -2817,11 +2824,12 @@ def save_device_config(ip: str, config_json: str, config_hash: str,
     normalized_mac = mac.upper() if mac else None
     encrypted_json = encrypt_password(config_json) if config_json else config_json
     with get_db() as db:
-        db.execute(
+        cursor = db.execute(
             """INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id, mac, fetched_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (ip, encrypted_json, config_hash, model, hardware_id, normalized_mac, datetime.now().isoformat())
         )
+        return cursor.lastrowid
 
 
 def insert_imported_device_config(
