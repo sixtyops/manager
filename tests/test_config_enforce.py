@@ -1,5 +1,6 @@
 """Tests for config auto-enforce: scoping, enforce log, template resolution."""
 
+import asyncio
 import json
 import math
 from contextlib import contextmanager
@@ -325,6 +326,246 @@ class TestAutoEnforce:
             if c[0][0].get("status") == "stopped"
         ]
         assert len(stopped_msgs) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Canary retry / failure classification (#49)
+# ---------------------------------------------------------------------------
+
+class TestCanaryRetry:
+    """Verify _run_enforce_phases classifies failures and retries transient
+    ones on canary only."""
+
+    def _seed_non_compliant(self, scoped_db, ips):
+        """Seed a global SNMP template and non-matching device configs."""
+        db.save_config_template(
+            name="SNMP", category="snmp",
+            config_fragment='{"services":{"snmp":{"community":"secret"}}}',
+            scope="global"
+        )
+        config = json.dumps({"services": {"snmp": {"community": "public"}}},
+                            sort_keys=True, separators=(",", ":"))
+        import hashlib
+        config_hash = hashlib.sha256(config.encode()).hexdigest()
+        for ip in ips:
+            scoped_db.execute(
+                "INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id) VALUES (?, ?, ?, ?, ?)",
+                (ip, config, config_hash, "TN-110-PRS", "tn-110-prs")
+            )
+        scoped_db.commit()
+        # Use the setter so the settings cache is invalidated.
+        db.set_setting("config_auto_enforce", "true")
+
+    @pytest.mark.asyncio
+    async def test_canary_transient_retried_and_succeeds(self, scoped_db):
+        """A transient canary failure that succeeds on retry must not stop the run."""
+        self._seed_non_compliant(scoped_db, ["10.0.0.1"])
+
+        poller = NetworkPoller()
+        # First call fails transient, second call (the retry) succeeds.
+        side_effects = [
+            (False, "transient", "Login failed: timeout"),
+            (True, None, None),
+        ]
+
+        async def fake_enforce(ip, dtype, templates, phase, sem):
+            return side_effects.pop(0)
+
+        with patch.object(NetworkPoller, "_enforce_device", side_effect=fake_enforce, autospec=False), \
+             patch.object(NetworkPoller, "poll_configs_for_ips", new=AsyncMock()), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            await poller._run_enforce_phases()
+
+        logs = db.get_config_enforce_log()
+        # Only the second attempt's success log row is written by _enforce_device
+        # (our patched fake doesn't write any). We don't assert on success rows
+        # here; we assert that NO failure row was written, because the retry
+        # succeeded and the caller only writes the failure row if the retry
+        # also failed.
+        failures = [r for r in logs if r["status"] == "failed"]
+        assert failures == []
+        # Both attempts were consumed: the retry happened.
+        assert side_effects == []
+
+    @pytest.mark.asyncio
+    async def test_canary_policy_failure_no_retry(self, scoped_db):
+        """A policy-class canary failure must NOT be retried and must stop the run."""
+        self._seed_non_compliant(scoped_db, ["10.0.0.1", "10.0.0.2"])
+
+        poller = NetworkPoller(broadcast_func=AsyncMock())
+        call_count = 0
+
+        async def fake_enforce(ip, dtype, templates, phase, sem):
+            nonlocal call_count
+            call_count += 1
+            return (False, "policy", "Dry run rejected: invalid syntax")
+
+        with patch.object(NetworkPoller, "_enforce_device", side_effect=fake_enforce, autospec=False), \
+             patch.object(NetworkPoller, "poll_configs_for_ips", new=AsyncMock()), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            await poller._run_enforce_phases()
+
+        # Exactly one call to _enforce_device: canary, no retry.
+        assert call_count == 1
+        logs = db.get_config_enforce_log()
+        failures = [r for r in logs if r["status"] == "failed"]
+        assert len(failures) == 1
+        assert failures[0]["error"].startswith("policy: ")
+        assert "retries" not in failures[0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_retry_count_zero_disables_retry(self, scoped_db):
+        """Setting retry count to 0 reverts to current behavior (no retry on transient)."""
+        self._seed_non_compliant(scoped_db, ["10.0.0.1"])
+        # Use the setter so the settings cache is invalidated.
+        db.set_setting("config_enforce_canary_retry_count", "0")
+
+        poller = NetworkPoller(broadcast_func=AsyncMock())
+        call_count = 0
+
+        async def fake_enforce(ip, dtype, templates, phase, sem):
+            nonlocal call_count
+            call_count += 1
+            return (False, "transient", "Login failed: connection refused")
+
+        with patch.object(NetworkPoller, "_enforce_device", side_effect=fake_enforce, autospec=False), \
+             patch.object(NetworkPoller, "poll_configs_for_ips", new=AsyncMock()), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            await poller._run_enforce_phases()
+
+        assert call_count == 1  # No retry
+        logs = db.get_config_enforce_log()
+        failures = [r for r in logs if r["status"] == "failed"]
+        assert len(failures) == 1
+        assert failures[0]["error"].startswith("transient: ")
+
+    @pytest.mark.asyncio
+    async def test_log_includes_retry_count_suffix(self, scoped_db):
+        """When a transient canary failure exhausts retries, the log records the count."""
+        self._seed_non_compliant(scoped_db, ["10.0.0.1"])
+
+        poller = NetworkPoller(broadcast_func=AsyncMock())
+        call_count = 0
+
+        async def fake_enforce(ip, dtype, templates, phase, sem):
+            nonlocal call_count
+            call_count += 1
+            return (False, "transient", "Failed to fetch current config")
+
+        with patch.object(NetworkPoller, "_enforce_device", side_effect=fake_enforce, autospec=False), \
+             patch.object(NetworkPoller, "poll_configs_for_ips", new=AsyncMock()), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            await poller._run_enforce_phases()
+
+        # 1 initial + 1 retry (default count is 1) = 2 attempts
+        assert call_count == 2
+        logs = db.get_config_enforce_log()
+        failures = [r for r in logs if r["status"] == "failed"]
+        assert len(failures) == 1
+        assert "transient:" in failures[0]["error"]
+        assert "(1/1 retries)" in failures[0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_no_retry_in_non_canary_phases(self, scoped_db):
+        """Transient failures outside canary must not be retried — wasted time."""
+        # 10 non-compliant devices: canary=1, pct10=1, pct50=4, pct100=4.
+        ips = [f"10.1.0.{i}" for i in range(1, 11)]
+        for ip in ips:
+            scoped_db.execute(
+                "INSERT INTO access_points (ip, username, password, enabled) VALUES (?, 'admin', 'pass', 1)",
+                (ip,)
+            )
+        self._seed_non_compliant(scoped_db, ips)
+
+        poller = NetworkPoller(broadcast_func=AsyncMock())
+        canary_calls = 0
+        pct10_calls = 0
+
+        async def fake_enforce(ip, dtype, templates, phase, sem):
+            nonlocal canary_calls, pct10_calls
+            if phase == "canary":
+                canary_calls += 1
+                return (True, None, None)  # canary passes so we proceed
+            if phase == "pct10":
+                pct10_calls += 1
+                return (False, "transient", "Login failed")
+            return (False, "policy", "Should not reach here")
+
+        with patch.object(NetworkPoller, "_enforce_device", side_effect=fake_enforce, autospec=False), \
+             patch.object(NetworkPoller, "poll_configs_for_ips", new=AsyncMock()), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            await poller._run_enforce_phases()
+
+        # pct10 phase should run exactly once per device (1 of 10 devices) — no retry.
+        assert pct10_calls == 1
+
+
+class TestEnforceErrorClassification:
+    """Verify _enforce_device raises the right error class at each failure site."""
+
+    @pytest.mark.asyncio
+    async def test_login_failure_classified_transient(self, scoped_db):
+        from updater.poller import TransientEnforceError
+        poller = NetworkPoller()
+
+        # Patch the driver to fail login.
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock(return_value="bad password")
+        mock_client.get_hardware_id = MagicMock(return_value="tn-110-prs")
+        mock_driver_cls = MagicMock(return_value=mock_client)
+
+        with patch("updater.poller.get_driver", return_value=mock_driver_cls):
+            sem = asyncio.Semaphore(1)
+            result = await poller._enforce_device(
+                "10.0.0.1", "ap", [{"id": 1, "config_fragment": "{}"}], "canary", sem
+            )
+        assert result == (False, "transient", "Login failed: bad password")
+
+    @pytest.mark.asyncio
+    async def test_fetch_config_failure_classified_transient(self, scoped_db):
+        poller = NetworkPoller()
+
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock(return_value=True)
+        mock_client.get_config = AsyncMock(return_value=None)
+        mock_client.get_hardware_id = MagicMock(return_value="tn-110-prs")
+        mock_driver_cls = MagicMock(return_value=mock_client)
+
+        with patch("updater.poller.get_driver", return_value=mock_driver_cls):
+            sem = asyncio.Semaphore(1)
+            result = await poller._enforce_device(
+                "10.0.0.1", "ap", [{"id": 1, "config_fragment": "{}"}], "canary", sem
+            )
+        assert result == (False, "transient", "Failed to fetch current config")
+
+    @pytest.mark.asyncio
+    async def test_dry_run_rejection_classified_policy(self, scoped_db):
+        poller = NetworkPoller()
+
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock(return_value=True)
+        mock_client.get_config = AsyncMock(return_value={"services": {"snmp": {"community": "old"}}})
+        mock_client.apply_config = AsyncMock(return_value={"success": False, "error": "schema error"})
+        mock_client.get_hardware_id = MagicMock(return_value="tn-110-prs")
+        mock_driver_cls = MagicMock(return_value=mock_client)
+
+        with patch("updater.poller.get_driver", return_value=mock_driver_cls):
+            sem = asyncio.Semaphore(1)
+            result = await poller._enforce_device(
+                "10.0.0.1", "ap",
+                [{"id": 1, "config_fragment": '{"services":{"snmp":{"community":"new"}}}'}],
+                "canary", sem
+            )
+        assert result == (False, "policy", "Dry run rejected: schema error")
+
+    @pytest.mark.asyncio
+    async def test_device_not_found_classified_policy(self, scoped_db):
+        poller = NetworkPoller()
+        sem = asyncio.Semaphore(1)
+        result = await poller._enforce_device(
+            "10.99.99.99", "ap", [{"id": 1, "config_fragment": "{}"}], "canary", sem
+        )
+        assert result == (False, "policy", "Device not found in database")
 
 
 # ---------------------------------------------------------------------------

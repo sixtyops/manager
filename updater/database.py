@@ -996,6 +996,9 @@ def init_db():
             # Config auto-enforce
             "config_auto_enforce": "false",
             "config_enforce_cooldown_minutes": "10",
+            # Number of times to retry a transient canary failure before
+            # treating it as a real policy failure (0-3, default 1).
+            "config_enforce_canary_retry_count": "1",
             # Vendor feature flags
             "mikrotik_enabled": "false",
             # License configuration

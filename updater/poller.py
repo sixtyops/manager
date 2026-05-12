@@ -25,6 +25,24 @@ from .models import SignalHealth
 
 PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
 
+
+class TransientEnforceError(RuntimeError):
+    """Network/auth/fetch failure during enforce — safe to retry once on canary.
+
+    A canary device that fails for this reason is more likely flaky-right-now
+    than evidence that the new policy breaks the device.
+    """
+
+
+class PolicyEnforceError(RuntimeError):
+    """Dry-run/apply/permanent failure during enforce — do not retry.
+
+    This is the signal canary is meant to catch: the new policy itself is the
+    problem, retrying won't change the outcome, and the fleet should be
+    protected from a wider rollout.
+    """
+
+
 logger = logging.getLogger(__name__)
 
 _MAX_CLIENT_CACHE = 500
@@ -1080,6 +1098,12 @@ class NetworkPoller:
         except (TypeError, ValueError):
             cooldown_minutes = 10
 
+        try:
+            canary_retry_count = int(db.get_setting("config_enforce_canary_retry_count", "1"))
+        except (TypeError, ValueError):
+            canary_retry_count = 1
+        canary_retry_count = max(0, min(canary_retry_count, 3))
+
         remaining = list(non_compliant)
         for phase in PHASE_ORDER:
             if not remaining:
@@ -1119,14 +1143,64 @@ class NetworkPoller:
                 return_exceptions=True,
             )
 
-            # Count successes and failures in this batch
+            # Decode results and, in canary phase only, retry transient failures
+            # once (up to canary_retry_count) before logging a permanent failure.
+            # Retrying in later phases would only delay the daily cycle without
+            # adding safety — canary is the gate; later phases run on devices
+            # that already passed it.
             batch_successes = 0
             batch_failures = 0
             for i, result in enumerate(results):
-                if result is True:
+                ip, dtype, templates = batch[i]
+                template_ids = [t["id"] for t in templates]
+
+                if isinstance(result, BaseException):
+                    # Unexpected raise (e.g., cancellation) — treat as policy.
+                    failure_class = "policy"
+                    error_msg = str(result)
+                    retries_used = 0
+                elif isinstance(result, tuple) and result[0]:
                     batch_successes += 1
+                    continue
+                elif isinstance(result, tuple):
+                    _, failure_class, error_msg = result
+                    retries_used = 0
                 else:
-                    batch_failures += 1
+                    failure_class = "policy"
+                    error_msg = "Unknown enforce result"
+                    retries_used = 0
+
+                # Canary retry loop for transient failures
+                while (phase == "canary"
+                       and failure_class == "transient"
+                       and retries_used < canary_retry_count):
+                    retries_used += 1
+                    logger.info(
+                        f"Config enforce: retrying transient canary failure for "
+                        f"{ip} ({retries_used}/{canary_retry_count})"
+                    )
+                    await asyncio.sleep(3.0)
+                    retry_result = await self._enforce_device(ip, dtype, templates, phase, sem)
+                    if isinstance(retry_result, tuple) and retry_result[0]:
+                        batch_successes += 1
+                        failure_class = None
+                        error_msg = None
+                        break
+                    if isinstance(retry_result, tuple):
+                        _, failure_class, error_msg = retry_result
+
+                if failure_class is None:
+                    continue
+
+                batch_failures += 1
+                retry_suffix = ""
+                if retries_used > 0:
+                    retry_suffix = f" ({retries_used}/{canary_retry_count} retries)"
+                db.save_config_enforce_log(
+                    ip, dtype, phase, "failed",
+                    error=f"{failure_class}: {error_msg}{retry_suffix}",
+                    template_ids=template_ids,
+                )
 
             # Remove all batch devices from remaining (don't retry failures)
             batch_ips = {b[0] for b in batch}
@@ -1182,8 +1256,16 @@ class NetworkPoller:
 
     async def _enforce_device(self, ip: str, device_type: str,
                               templates: list[dict], phase: str,
-                              sem: asyncio.Semaphore) -> bool:
-        """Push templates to a single device. Returns True on success."""
+                              sem: asyncio.Semaphore) -> tuple[bool, Optional[str], Optional[str]]:
+        """Push templates to a single device.
+
+        Returns (success, failure_class, error_msg):
+          - success=True on apply success; the success log row is written here.
+          - success=False with failure_class in {"transient", "policy"} on failure.
+            The caller is responsible for writing the failure log row, because
+            the caller knows whether the device will be retried in canary and
+            needs that context in the audit trail.
+        """
         async with sem:
             try:
                 # Get device credentials
@@ -1191,18 +1273,19 @@ class NetworkPoller:
                 if not device:
                     device = db.get_switch(ip)
                 if not device:
-                    raise RuntimeError("Device not found in database")
+                    # Permanent state — retrying won't conjure the device.
+                    raise PolicyEnforceError("Device not found in database")
 
                 vendor = device.get("vendor", "tachyon")
                 driver_cls = get_driver(vendor)
                 client = driver_cls(ip, device["username"], device["password"], timeout=15)
                 login_result = await client.connect()
                 if login_result is not True:
-                    raise RuntimeError(f"Login failed: {login_result}")
+                    raise TransientEnforceError(f"Login failed: {login_result}")
 
                 current_config = await client.get_config()
                 if current_config is None:
-                    raise RuntimeError("Failed to fetch current config")
+                    raise TransientEnforceError("Failed to fetch current config")
 
                 # Save pre-enforce config snapshot (backup)
                 import hashlib
@@ -1223,26 +1306,31 @@ class NetworkPoller:
                 dry_result = await client.apply_config(merged, dry_run=True)
                 if not dry_result.get("success"):
                     error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run failed"))
-                    raise RuntimeError(f"Dry run rejected: {error_msg}")
+                    raise PolicyEnforceError(f"Dry run rejected: {error_msg}")
 
                 # Apply
                 result = await client.apply_config(merged)
                 if not result.get("success"):
                     error_msg = result.get("error", result.get("raw_response", "Apply failed"))
-                    raise RuntimeError(f"Apply failed: {error_msg}")
+                    raise PolicyEnforceError(f"Apply failed: {error_msg}")
 
                 template_ids = [t["id"] for t in templates]
                 db.save_config_enforce_log(ip, device_type, phase, "success",
                                            template_ids=template_ids)
                 logger.info(f"Config enforce: {ip} corrected successfully ({phase})")
-                return True
+                return (True, None, None)
 
+            except TransientEnforceError as e:
+                logger.warning(f"Config enforce: {ip} failed ({phase}, transient): {e}")
+                return (False, "transient", str(e))
+            except PolicyEnforceError as e:
+                logger.warning(f"Config enforce: {ip} failed ({phase}, policy): {e}")
+                return (False, "policy", str(e))
             except Exception as e:
-                template_ids = [t["id"] for t in templates]
-                db.save_config_enforce_log(ip, device_type, phase, "failed",
-                                           error=str(e), template_ids=template_ids)
-                logger.warning(f"Config enforce: {ip} failed ({phase}): {e}")
-                return False
+                # Unknown failure — treat as policy so we don't burn retry
+                # budget on something we can't explain.
+                logger.warning(f"Config enforce: {ip} failed ({phase}, unknown): {e}")
+                return (False, "policy", str(e))
 
     def get_topology(self) -> dict:
         """Build topology dict from database."""
