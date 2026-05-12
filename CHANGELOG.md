@@ -5,6 +5,7 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- Post-deploy operator checklist at `docs/post-deploy-checklist.md`: ten-item, five-minute smoke test the operator runs after install (admin login, site, AP, poll, config compliance, notification test, audit log via API, backups decision, HTTPS, update channel). Audit-log step uses `curl` against `GET /api/audit-log` and links forward to #136 for the in-UI panel. Linked from the README's Quick Start pointer and Documentation section (#122)
 - Operator quickstart at `docs/quickstart.md`: ~10-minute install-to-first-device walkthrough (install → first login → setup wizard → first tower site → first AP → first poll). Screenshot placeholders only this pass; real captures land in a follow-up. Linked from the README's Quick Start and Documentation sections (#123)
 - Troubleshooting one-pager at `docs/troubleshooting.md` covering the top five operator failure modes (device unreachable, RADIUS auth, hung update jobs, SSL renewal, SFTP backup) with symptom → diagnose → recover for each. Linked from README's Documentation section and the in-app About panel footer (#124)
 - Switch → AP topology cascade: APs are now nested under their upstream switch in the device tree, with a port badge showing the switch port they're connected to (ordered by port number)
