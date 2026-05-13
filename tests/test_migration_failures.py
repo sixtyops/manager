@@ -122,7 +122,7 @@ class TestPartialMigrationRecovery:
         try:
             conn.execute(
                 "INSERT INTO devices (ip, role, username, password) VALUES (?, ?, ?, ?)",
-                ("10.0.0.1", "ap", "admin", "pw-encrypted-stub"),
+                ("10.0.0.1", "ap", "admin", "gAAAAA-stub"),
             )
             conn.execute(
                 "INSERT INTO settings (key, value) VALUES (?, ?)",
@@ -173,7 +173,7 @@ class TestSchemaDowngrade:
             conn.execute("ALTER TABLE devices ADD COLUMN future_field TEXT DEFAULT 'x'")
             conn.execute(
                 "INSERT INTO devices (ip, role, username, password) VALUES (?, ?, ?, ?)",
-                ("10.0.0.2", "ap", "admin", "pw"),
+                ("10.0.0.2", "ap", "admin", "gAAAAA-stub"),
             )
             conn.commit()
         finally:
@@ -229,7 +229,7 @@ class TestConcurrentWriterContention:
         assert "last_config_poll_error" in _column_names(fresh_db, "devices")
         assert _integrity_ok(fresh_db)
 
-    def test_init_during_unbreakable_lock_fails_without_corruption(self, fresh_db):
+    def test_init_during_unbreakable_lock_fails_without_corruption(self, fresh_db, monkeypatch):
         """If the lock is held longer than busy_timeout, init_db() raises — but
         the DB file is still structurally intact. This is the contract the
         recovery runbook depends on: a failed init_db() means 'try again', not
@@ -242,9 +242,11 @@ class TestConcurrentWriterContention:
         finally:
             conn.close()
 
-        # Reduce the busy_timeout so the test is fast. The contract is the same
-        # at 5s as it is at 200ms — only the wall time differs.
-        original_get_db = database.get_db
+        # The patched get_db keeps the migration's own writes fast (200ms
+        # busy_timeout). init_db()'s up-front check_conn opens its own
+        # sqlite3.connect with timeout=10, so the wall time of this test is
+        # still dominated by that first PRAGMA incremental_vacuum blocking
+        # against the exclusive lock; expect ~10s.
         from contextlib import contextmanager
 
         @contextmanager
@@ -269,11 +271,10 @@ class TestConcurrentWriterContention:
         )
 
         try:
-            database.get_db = short_timeout_get_db
+            monkeypatch.setattr(database, "get_db", short_timeout_get_db)
             with pytest.raises(sqlite3.OperationalError, match="locked"):
                 database.init_db()
         finally:
-            database.get_db = original_get_db
             long_writer.commit()
             long_writer.close()
 
