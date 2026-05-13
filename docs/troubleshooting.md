@@ -218,6 +218,22 @@ remote SFTP server.
 
 ---
 
+## 6. App won't start after self-update (database error)
+
+### Symptom
+The `sixtyops-mgmt` container restarts on a loop after applying an in-app
+update. Logs end in `sqlite3.OperationalError`, `no such column`, or
+`Database integrity check failed`.
+
+### Diagnose & recover
+This is a database-migration issue. The full recovery procedure
+(restart → restore from backup → manual repair) is in
+[docs/migration-recovery.md](migration-recovery.md). Start with Path 1
+(simple container restart) — `init_db()` is idempotent and resolves
+most cases on its own.
+
+---
+
 ## Still stuck?
 
 Email **support@sixtyops.net** with:
