@@ -3690,7 +3690,8 @@
         let _uiDebounceTimer = null;
         let autoUpdateEnabled = false; // Whether auto-update scheduler is active
         let lastSchedulerStatus = null; // Last scheduler_status message
-        let lastNextWindow = '';       // Next maintenance window text
+        let lastNextWindow = '';       // Next maintenance window text (legacy "3:00-4:00 on tue,wed,thu")
+        let lastNextWindowIso = null;  // Next maintenance window start (ISO datetime)
         let lastBehindCount = 0;       // Devices needing update
         let lastFleetTotal = 0;        // Total devices
         let lastPreRolloutPredictions = null; // Pre-rollout estimate
@@ -4121,6 +4122,32 @@
             const info = fleetStatusMap.get(ip);
             if (!info || !info.target_version) return 'unknown';
             return info.status || 'unknown';
+        }
+
+        function formatWhen(iso) {
+            if (!iso) return '';
+            const dt = new Date(iso);
+            if (Number.isNaN(dt.getTime())) return '';
+            const now = new Date();
+            const isToday = dt.toDateString() === now.toDateString();
+            const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+            const isTomorrow = dt.toDateString() === tomorrow.toDateString();
+            const time = dt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            if (isToday) return `today at ${time}`;
+            if (isTomorrow) return `tomorrow at ${time}`;
+            const day = dt.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            return `${day} at ${time}`;
+        }
+
+        function nextAttemptTooltip(ip) {
+            const info = fleetStatusMap.get(ip);
+            if (!info) return '';
+            if (info.next_attempt_iso) {
+                const when = formatWhen(info.next_attempt_iso);
+                return when ? `Next attempt ${when}` : '';
+            }
+            if (info.next_attempt_reason) return info.next_attempt_reason;
+            return '';
         }
 
         function compareVersions(a, b) {
@@ -4624,9 +4651,17 @@
                     const label = autoUpdateEnabled ? 'Auto-update scheduled' : 'Update available';
                     return `<span class="status-icon-cell" title="${label}" style="color:var(--text-muted);">&#8593;</span>`;
                 }
-                const title = autoUpdateEnabled ? 'Auto-update scheduled \u2013 click to update now' : 'Update available \u2013 click to update now';
+                let title;
+                if (autoUpdateEnabled) {
+                    const next = nextAttemptTooltip(ip);
+                    title = next
+                        ? `${next} \u2014 click to update now`
+                        : 'Auto-update scheduled \u2013 click to update now';
+                } else {
+                    title = 'Update available \u2013 click to update now';
+                }
                 const cls = autoUpdateEnabled ? 'scheduled' : 'behind';
-                return `<button class="update-action ${cls}" title="${title}" onclick="triggerUpdate('${type}','${ip}');event.stopPropagation();">&#8593;</button>`;
+                return `<button class="update-action ${cls}" title="${escapeHtml(title)}" onclick="triggerUpdate('${type}','${ip}');event.stopPropagation();">&#8593;</button>`;
             }
             return '';
         }
@@ -7091,39 +7126,43 @@
                 return;
             }
 
-            // Icons for each state
-            const stateIcons = {
-                idle: '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="currentColor"/></svg></span>',
-                waiting: '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 4v4l3 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>',
-                running: '<span class="status-icon spinner"></span>',
-                blocked_weather: '<span class="status-icon"><svg viewBox="0 0 16 16"><path d="M8 1l1.5 4.5H14l-3.5 2.5 1.5 4.5L8 10l-4 2.5 1.5-4.5L2 5.5h4.5z" fill="currentColor"/></svg></span>',
-                blocked_time: '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 4v4l3 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>',
-                blocked_no_firmware: '<span class="status-icon"><svg viewBox="0 0 16 16"><path d="M8 2L2 14h12L8 2z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 6v4M8 11v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>',
-                blocked_all_current: '<span class="status-icon"><svg viewBox="0 0 16 16"><path d="M3 8l3 3 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>',
-                blocked_quarantine: '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6 6l4 4M10 6l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>',
-            };
-            const stateLabels = {
-                idle: 'Idle', waiting: 'Waiting', running: 'Running',
-                blocked_weather: 'Blocked', blocked_time: 'Blocked',
-                blocked_no_firmware: 'No firmware', blocked_all_current: 'All current',
-                blocked_quarantine: 'On Hold',
-            };
-            const icon = stateIcons[state] || '';
-            badge.innerHTML = icon + (stateLabels[state] || state.replace(/_/g, ' '));
+            // Collapse 8+ internal states to 4 user-facing labels.
+            // Internal state codes remain unchanged in logs/metrics.
+            const SCHEDULED_ICON = '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 4v4l3 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>';
+            const RUNNING_ICON = '<span class="status-icon spinner"></span>';
+            const PAUSED_ICON = '<span class="status-icon"><svg viewBox="0 0 16 16"><path d="M5 4h2v8H5zM9 4h2v8H9z" fill="currentColor"/></svg></span>';
+            const CURRENT_ICON = '<span class="status-icon"><svg viewBox="0 0 16 16"><path d="M3 8l3 3 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
 
-            const stateStyles = {
-                idle: 'idle', waiting: 'waiting', running: 'running',
-                blocked_weather: 'blocked', blocked_time: 'blocked',
-                blocked_no_firmware: 'blocked', blocked_all_current: 'current',
-                blocked_quarantine: 'waiting',
+            const PUBLIC = {
+                idle:                { label: 'Scheduled', cls: 'idle',    icon: SCHEDULED_ICON },
+                waiting:             { label: 'Scheduled', cls: 'idle',    icon: SCHEDULED_ICON },
+                running:             { label: 'Updating',  cls: 'running', icon: RUNNING_ICON },
+                blocked_weather:     { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
+                blocked_time:        { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
+                blocked_no_firmware: { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
+                blocked_quarantine:  { label: 'Scheduled', cls: 'idle',    icon: SCHEDULED_ICON },
+                frozen:              { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
+                blocked_all_current: { label: 'Up to date', cls: 'current', icon: CURRENT_ICON },
             };
-            const cls = stateStyles[state];
-            if (cls) badge.classList.add(cls);
+            const view = PUBLIC[state] || { label: state.replace(/_/g, ' '), cls: 'idle', icon: SCHEDULED_ICON };
+            badge.innerHTML = view.icon + view.label;
+            badge.classList.add(view.cls);
 
-            // Don't show block_reason when "All current" - the badge already says it
-            if (status.block_reason && state !== 'blocked_all_current') {
-                reason.textContent = status.block_reason;
+            // Subtitle: friendly "Next: today at 3:00 AM" for scheduled states;
+            // raw block_reason for paused states.
+            let subtitle = '';
+            if (view.label === 'Scheduled') {
+                if (state === 'blocked_quarantine' && status.block_reason) {
+                    subtitle = status.block_reason;
+                } else if (status.next_window_iso) {
+                    subtitle = 'Next: ' + formatWhen(status.next_window_iso);
+                } else if (status.block_reason) {
+                    subtitle = status.block_reason;
+                }
+            } else if (view.label === 'Paused' && status.block_reason) {
+                subtitle = status.block_reason;
             }
+            reason.textContent = subtitle;
 
             // Track state changes for UI updates
             const prevState = lastAutoState;
@@ -7132,6 +7171,7 @@
             // Store next window for use in device count text
             lastNextWindow = status.next_window || '';
             lastPreRolloutPredictions = status.predictions || null;
+            lastNextWindowIso = status.next_window_iso || null;
             updateBarDeviceCount();
 
             // Hide device count section when all current - badge already conveys this
@@ -8513,6 +8553,9 @@
                     fleetStatusMap.set(d.ip, {
                         target_version: d.target_version,
                         status: d.status,
+                        auto_update_eligible: d.auto_update_eligible,
+                        next_attempt_iso: d.next_attempt_iso,
+                        next_attempt_reason: d.next_attempt_reason,
                     });
                 }
 
@@ -8537,12 +8580,15 @@
                 return;
             }
 
+            const nextWindowText = lastNextWindowIso
+                ? 'Next: ' + formatWhen(lastNextWindowIso)
+                : lastNextWindow;
+
             // Hide "pending" text when a rollout is actively running - progress is shown in rollout UI
             if (currentRolloutId && lastAutoState === 'running') {
-                // Show schedule window only (no "pending" count during active rollout)
-                if (lastNextWindow) {
+                if (nextWindowText) {
                     setHidden(section, false);
-                    count.textContent = lastNextWindow;
+                    count.textContent = nextWindowText;
                 } else {
                     setHidden(section, true);
                 }
@@ -8551,8 +8597,9 @@
 
             if (lastBehindCount > 0) {
                 setHidden(section, false);
-                let text = lastBehindCount + ' pending';
-                if (lastNextWindow) text += ' · ' + lastNextWindow;
+                const label = lastBehindCount === 1 ? '1 device pending' : `${lastBehindCount} devices pending`;
+                let text = label;
+                if (nextWindowText) text += ' · ' + nextWindowText;
                 count.textContent = text;
                 // Refresh idle phase indicators with prediction details
                 if (!currentRolloutId) renderIdlePhases();
