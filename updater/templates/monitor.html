@@ -5657,6 +5657,13 @@
 
         async function maybePromptTelemetryOptIn() {
             try {
+                // Verify admin role server-side so non-admins never see a
+                // dialog whose save would fail with 403.
+                const meResp = await fetch('/api/users/me');
+                if (!meResp.ok) return;
+                const me = await meResp.json();
+                if (me.role !== 'admin') return;
+
                 const resp = await fetch('/api/settings');
                 const data = await resp.json();
                 if (data.settings?.telemetry_prompt_seen === 'true') return;
@@ -5665,7 +5672,7 @@
                     'Share anonymous update results with SixtyOps?\n\nThis includes counts, device models, timing, and error categories. It never includes IP addresses, names, locations, or passwords.',
                     { title: 'Share Update Results', confirmText: 'Share' }
                 );
-                await fetch('/api/settings', {
+                const putResp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -5673,6 +5680,9 @@
                         telemetry_prompt_seen: 'true',
                     }),
                 });
+                if (!putResp.ok) {
+                    throw new Error('Failed to persist telemetry choice: ' + putResp.status);
+                }
             } catch (e) {
                 console.warn('Telemetry opt-in prompt failed:', e);
             }
@@ -8135,6 +8145,10 @@
                 await openAppSettingsModal('system', 'https');
                 maybePromptTelemetryOptIn();
             }, 500);
+            {% else %}
+            // Upgraders never trigger the first-run modal, so surface the
+            // telemetry opt-in here after the role/auth handshake completes.
+            setTimeout(() => { maybePromptTelemetryOptIn(); }, 1500);
             {% endif %}
 
             const filterQueryEl = document.getElementById('deviceFilterQuery');
