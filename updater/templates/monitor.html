@@ -151,6 +151,22 @@
         .role-badge[data-role="operator"] { background: #d1fae5; color: #047857; }
         .role-badge[data-role="viewer"] { background: var(--border); color: var(--text-muted); }
 
+        .viewer-locked {
+            cursor: not-allowed;
+            opacity: 0.55;
+            pointer-events: none;
+        }
+        .viewer-locked-tree {
+            pointer-events: none;
+        }
+        .viewer-locked-tree input,
+        .viewer-locked-tree select,
+        .viewer-locked-tree textarea,
+        .viewer-locked-tree button,
+        .viewer-locked-tree a {
+            cursor: not-allowed;
+        }
+
         .user-menu {
             position: relative;
         }
@@ -2493,7 +2509,7 @@
             <!-- Firmware/Updates bar (shown when firmware mode active) -->
             <div class="drawer-handle-half active" id="drawerHandleLeft">
                 <div class="status-bar-section">
-                    <button class="toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-pressed="false" onclick="toggleAutoSchedule(event)"></button>
+                    <button class="toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-pressed="false" onclick="toggleAutoSchedule(event)" data-min-role-disable="operator"></button>
                     <span class="status-bar-label">Auto-Update</span>
                     <span class="status-badge status-bar-badge" id="barStateBadge">Off</span>
                     <span class="status-bar-reason" id="barBlockReason"></span>
@@ -2507,8 +2523,8 @@
                     <span class="status-bar-muted u-status-note" id="barRolloutPrediction"></span>
                     <div id="barRolloutFailedDevices" style="display:none;flex-wrap:wrap;gap:4px;"></div>
                     <div class="status-bar-actions" id="barRolloutActions">
-                        <button class="btn btn-sm btn-warning hidden" id="barResumeBtn" onclick="resumeRollout();event.stopPropagation();">Resume</button>
-                        <button class="btn btn-sm btn-danger hidden" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();">Cancel</button>
+                        <button class="btn btn-sm btn-warning hidden" id="barResumeBtn" onclick="resumeRollout();event.stopPropagation();" data-min-role="operator">Resume</button>
+                        <button class="btn btn-sm btn-danger hidden" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();" data-min-role="operator">Cancel</button>
                     </div>
                 </div>
                 <span class="drawer-unsaved-dot" id="drawerUnsavedDot" title="Unsaved changes"></span>
@@ -2523,23 +2539,25 @@
                 <div class="status-bar-section">
                     <button class="toggle" id="configAutoEnforceToggle" type="button"
                             aria-label="Toggle auto-enforce" aria-pressed="false"
-                            onclick="toggleConfigAutoEnforce(!this.classList.contains('active'));event.stopPropagation();"></button>
+                            onclick="toggleConfigAutoEnforce(!this.classList.contains('active'));event.stopPropagation();"
+                            data-min-role-disable="operator"></button>
                     <span class="status-bar-label" title="Checks compliance and pushes corrections daily">Auto-Enforce</span>
                     <span class="status-badge" id="configEnforceStatusBadge" style="display:none;"></span>
                     <span id="configEnforceAtLabel" class="u-text-xxs-dim" style="display:none;">daily at</span>
                     <select id="configEnforceHour" name="configEnforceHour" class="u-w-64" style="display:none;font-size:var(--text-xs);"
                             title="Daily enforce time — checks compliance and pushes corrections to non-compliant devices" aria-label="Daily enforce hour"
-                            onchange="updateEnforceHour(this.value)" onclick="event.stopPropagation();"></select>
+                            onchange="updateEnforceHour(this.value)" onclick="event.stopPropagation();"
+                            data-min-role-disable="operator"></select>
                 </div>
                 <div class="status-bar-section status-bar-rollout u-ml-auto" id="configRolloutSection">
                     <div class="status-bar-phases" id="configPushRolloutPhases"></div>
                     <div class="status-bar-phases" id="configEnforcePhases" style="display:none;"></div>
                     <span class="status-bar-muted" id="configEnforceProgress" style="display:none;"></span>
                     <div class="status-bar-actions">
-                        <button class="btn btn-sm btn-ghost" id="configCancelBtn" onclick="cancelConfigPushRollout();event.stopPropagation();" style="display:none;">Cancel</button>
-                        <button class="btn btn-sm btn-warning" id="configResumeBtn" onclick="resumeConfigPushRollout();event.stopPropagation();" style="display:none;">Resume</button>
-                        <button class="btn btn-sm btn-secondary" id="checkComplianceBtn" onclick="checkCompliance();event.stopPropagation();">Check Compliance</button>
-                        <button class="btn btn-sm btn-primary hidden" id="configPushBtn" onclick="showConfigPushDialog();event.stopPropagation();">Push to Devices</button>
+                        <button class="btn btn-sm btn-ghost" id="configCancelBtn" onclick="cancelConfigPushRollout();event.stopPropagation();" style="display:none;" data-min-role="operator">Cancel</button>
+                        <button class="btn btn-sm btn-warning" id="configResumeBtn" onclick="resumeConfigPushRollout();event.stopPropagation();" style="display:none;" data-min-role="operator">Resume</button>
+                        <button class="btn btn-sm btn-secondary" id="checkComplianceBtn" onclick="checkCompliance();event.stopPropagation();" data-min-role="operator">Check Compliance</button>
+                        <button class="btn btn-sm btn-primary hidden" id="configPushBtn" onclick="showConfigPushDialog();event.stopPropagation();" data-min-role="operator">Push to Devices</button>
                     </div>
                 </div>
             </div>
@@ -2551,22 +2569,22 @@
                  aria-label="Resize drawer" title="Drag to resize · double-click to reset"></div>
             <!-- Updates drawer content -->
             <div id="drawerContent-updates">
-            <div class="drawer-panel-inner">
+            <div class="drawer-panel-inner" data-min-role-disable-tree="operator">
                 <div class="drawer-settings-grid">
                     <div class="drawer-col">
                         <div class="drawer-section-title">Schedule</div>
                         <label>Days</label>
                         <div class="drawer-days" id="drawerDays">
-                            <button class="drawer-day-btn" data-day="mon" onclick="toggleDrawerDay(this)">Mon</button>
-                            <button class="drawer-day-btn" data-day="tue" onclick="toggleDrawerDay(this)">Tue</button>
-                            <button class="drawer-day-btn" data-day="wed" onclick="toggleDrawerDay(this)">Wed</button>
-                            <button class="drawer-day-btn" data-day="thu" onclick="toggleDrawerDay(this)">Thu</button>
-                            <button class="drawer-day-btn" data-day="fri" onclick="toggleDrawerDay(this)">Fri</button>
-                            <button class="drawer-day-btn" data-day="sat" onclick="toggleDrawerDay(this)">Sat</button>
-                            <button class="drawer-day-btn" data-day="sun" onclick="toggleDrawerDay(this)">Sun</button>
+                            <button class="drawer-day-btn" data-day="mon" onclick="toggleDrawerDay(this)" data-min-role-disable="operator">Mon</button>
+                            <button class="drawer-day-btn" data-day="tue" onclick="toggleDrawerDay(this)" data-min-role-disable="operator">Tue</button>
+                            <button class="drawer-day-btn" data-day="wed" onclick="toggleDrawerDay(this)" data-min-role-disable="operator">Wed</button>
+                            <button class="drawer-day-btn" data-day="thu" onclick="toggleDrawerDay(this)" data-min-role-disable="operator">Thu</button>
+                            <button class="drawer-day-btn" data-day="fri" onclick="toggleDrawerDay(this)" data-min-role-disable="operator">Fri</button>
+                            <button class="drawer-day-btn" data-day="sat" onclick="toggleDrawerDay(this)" data-min-role-disable="operator">Sat</button>
+                            <button class="drawer-day-btn" data-day="sun" onclick="toggleDrawerDay(this)" data-min-role-disable="operator">Sun</button>
                         </div>
                         <div style="display:flex;gap:8px;margin-top:8px;">
-                            <div style="flex:1;"><label for="drawerStartHour">Start</label><select id="drawerStartHour" name="drawerStartHour">
+                            <div style="flex:1;"><label for="drawerStartHour">Start</label><select id="drawerStartHour" name="drawerStartHour" data-min-role-disable="operator">
                                 <option value="0">12 AM</option><option value="1">1 AM</option><option value="2">2 AM</option>
                                 <option value="3">3 AM</option><option value="4">4 AM</option><option value="5">5 AM</option>
                                 <option value="6">6 AM</option><option value="7">7 AM</option><option value="8">8 AM</option>
@@ -2576,7 +2594,7 @@
                                 <option value="18">6 PM</option><option value="19">7 PM</option><option value="20">8 PM</option>
                                 <option value="21">9 PM</option><option value="22">10 PM</option><option value="23">11 PM</option>
                             </select></div>
-                            <div style="flex:1;"><label for="drawerEndHour">End</label><select id="drawerEndHour" name="drawerEndHour">
+                            <div style="flex:1;"><label for="drawerEndHour">End</label><select id="drawerEndHour" name="drawerEndHour" data-min-role-disable="operator">
                                 <option value="1">1 AM</option><option value="2">2 AM</option><option value="3">3 AM</option>
                                 <option value="4">4 AM</option><option value="5">5 AM</option><option value="6">6 AM</option>
                                 <option value="7">7 AM</option><option value="8">8 AM</option><option value="9">9 AM</option>
@@ -2592,44 +2610,44 @@
                     <div class="drawer-col">
                         <div class="drawer-section-title">Settings</div>
                         <label for="drawerBankMode">Update Mode</label>
-                        <select id="drawerBankMode" name="drawerBankMode">
+                        <select id="drawerBankMode" name="drawerBankMode" data-min-role-disable="operator">
                             <option value="one">Single Bank (recommended)</option>
                             <option value="both">Both Banks</option>
                         </select>
                         <div style="margin-top:8px;">
-                            <label for="drawerParallel">Parallel</label><input type="number" id="drawerParallel" name="drawerParallel" value="2" min="1" max="10">
+                            <label for="drawerParallel">Parallel</label><input type="number" id="drawerParallel" name="drawerParallel" value="2" min="1" max="10" data-min-role-disable="operator">
                         </div>
                     </div>
 
                     <div class="drawer-col-wide">
                         <div class="drawer-section-title">Options</div>
                         <div class="toggle-sm-row">
-                            <button class="toggle-sm active" id="drawerPreRebootToggle" type="button" aria-label="Toggle pre-update reboot" aria-pressed="true" onclick="toggleDrawerPreReboot()"></button>
+                            <button class="toggle-sm active" id="drawerPreRebootToggle" type="button" aria-label="Toggle pre-update reboot" aria-pressed="true" onclick="toggleDrawerPreReboot()" data-min-role-disable="operator"></button>
                             <span class="toggle-sm-label">Pre-update Reboot</span>
                         </div>
                         <div class="toggle-sm-row">
-                            <button class="toggle-sm" id="drawerDowngradeToggle" type="button" aria-label="Toggle allow downgrade" aria-pressed="false" onclick="toggleDrawerDowngrade()"></button>
+                            <button class="toggle-sm" id="drawerDowngradeToggle" type="button" aria-label="Toggle allow downgrade" aria-pressed="false" onclick="toggleDrawerDowngrade()" data-min-role-disable="operator"></button>
                             <span class="toggle-sm-label">Allow Downgrade</span>
                         </div>
                         <div class="toggle-sm-row">
-                            <button class="toggle-sm" id="drawerWeatherToggle" type="button" aria-label="Toggle weather lockout" aria-pressed="false" onclick="toggleDrawerWeather()"></button>
+                            <button class="toggle-sm" id="drawerWeatherToggle" type="button" aria-label="Toggle weather lockout" aria-pressed="false" onclick="toggleDrawerWeather()" data-min-role-disable="operator"></button>
                             <span class="toggle-sm-label">Weather Guard &lt;</span>
-                            <input type="number" id="drawerMinTemp" name="drawerMinTemp" value="14" min="-40" max="120" aria-label="Minimum temperature" class="u-w-48">
+                            <input type="number" id="drawerMinTemp" name="drawerMinTemp" value="14" min="-40" max="120" aria-label="Minimum temperature" class="u-w-48" data-min-role-disable="operator">
                             <span id="drawerTempUnit" class="u-text-xs-muted">&deg;F</span>
                             <span id="drawerWeatherTemp" class="u-text-sm-muted" style="margin-left:auto;"></span>
                         </div>
                         <div class="toggle-sm-row">
                             <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerZipCode">Postal / Zip</label>
-                            <input type="text" id="drawerZipCode" name="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56">
+                            <input type="text" id="drawerZipCode" name="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56" data-min-role-disable="operator">
                         </div>
                         <div class="toggle-sm-row">
                             <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerQuarantineDays" title="Canary devices soak-test new firmware for this many days before the rest of the fleet upgrades">Quarantine Period</label>
-                            <input type="number" id="drawerQuarantineDays" name="drawerQuarantineDays" value="7" min="0" max="90" class="u-w-48">
+                            <input type="number" id="drawerQuarantineDays" name="drawerQuarantineDays" value="7" min="0" max="90" class="u-w-48" data-min-role-disable="operator">
                             <span class="u-text-xxs-dim">days</span>
                         </div>
                         <div class="toggle-sm-row">
                             <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerCooldownDays" title="Prevents rapidly re-updating a device after a firmware update. Device will skip auto-updates if it was updated within this window.">Update Cooldown</label>
-                            <input type="number" id="drawerCooldownDays" name="drawerCooldownDays" value="30" min="0" max="365" class="u-w-48">
+                            <input type="number" id="drawerCooldownDays" name="drawerCooldownDays" value="30" min="0" max="365" class="u-w-48" data-min-role-disable="operator">
                             <span class="u-text-xxs-dim">days</span>
                         </div>
                     </div>
@@ -2637,14 +2655,14 @@
                     <div class="drawer-col-wide drawer-firmware-card">
                         <div class="drawer-section-title">Firmware</div>
                         <div class="toggle-sm-row">
-                            <button class="toggle-sm" id="drawerBetaToggle" type="button" aria-label="Toggle beta firmware" aria-pressed="false" onclick="toggleDrawerBeta()"></button>
+                            <button class="toggle-sm" id="drawerBetaToggle" type="button" aria-label="Toggle beta firmware" aria-pressed="false" onclick="toggleDrawerBeta()" data-min-role-disable="operator"></button>
                             <span class="toggle-sm-label">Beta Firmware</span>
                         </div>
                         <div class="drawer-fw-list" id="drawerFwList">
                             <span class="drawer-fw-empty">No firmware files</span>
                         </div>
                         <div class="drawer-fw-meta" id="drawerFwMeta"></div>
-                        <div class="drawer-upload" id="drawerUpload">
+                        <div class="drawer-upload" id="drawerUpload" data-min-role="operator">
                             <input type="file" id="drawerFwInput" name="drawerFwInput" accept=".bin,.img,.npk,.tar,.gz" aria-label="Upload firmware file" class="hidden">
                             <span>Drop or browse</span>
                             <span class="drawer-upload-status" id="drawerUploadStatus"></span>
@@ -2652,7 +2670,7 @@
                     </div>
                 </div>
 
-                <div class="drawer-save-row" id="drawerSaveRow">
+                <div class="drawer-save-row" id="drawerSaveRow" data-min-role="operator">
                     <button class="drawer-save-btn" id="drawerSaveBtn" onclick="saveDrawerSettings()" disabled>Save</button>
                     <span class="drawer-save-status" id="drawerSaveStatus"></span>
                 </div>
@@ -2661,7 +2679,7 @@
 
             <!-- Config drawer content -->
             <div id="drawerContent-config" class="hidden" autocomplete="off" data-1p-ignore>
-                <div class="drawer-panel-inner">
+                <div class="drawer-panel-inner" data-min-role-disable-tree="operator">
                 <p style="margin:0 0 8px;font-size:11px;color:var(--text-muted);line-height:1.4;">Enforced policies fully replace the matching config section on each device.</p>
                 <div class="drawer-settings-grid" autocomplete="off">
                     <!-- Column 1: Network -->
@@ -2669,7 +2687,7 @@
                         <div class="drawer-section-title">Network</div>
 
                         <div class="config-section" id="cfgSection-snmp">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-snmp" type="button" data-category="snmp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>SNMP</span><span class="config-section-status" id="cfgStatus-snmp"></span><button class="cfg-save-btn" id="cfgSave-snmp" onclick="saveConfigSection('snmp');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-snmp" type="button" data-category="snmp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>SNMP</span><span class="config-section-status" id="cfgStatus-snmp"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-snmp" onclick="saveConfigSection('snmp');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgSnmpEnabled" name="cfgSnmpEnabled"> Enabled</label>
                                 <fieldset style="border:1px solid var(--border-light);border-radius:4px;padding:6px;margin-top:6px;">
@@ -2701,7 +2719,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-ntp">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-ntp" type="button" data-category="ntp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>NTP</span><span class="config-section-status" id="cfgStatus-ntp"></span><button class="cfg-save-btn" id="cfgSave-ntp" onclick="saveConfigSection('ntp');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-ntp" type="button" data-category="ntp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>NTP</span><span class="config-section-status" id="cfgStatus-ntp"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-ntp" onclick="saveConfigSection('ntp');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgNtpEnabled" name="cfgNtpEnabled" checked> Enable NTP</label>
                                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
@@ -2712,7 +2730,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-discovery">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-discovery" type="button" data-category="discovery" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Discovery</span><span class="config-section-status" id="cfgStatus-discovery"></span><button class="cfg-save-btn" id="cfgSave-discovery" onclick="saveConfigSection('discovery');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-discovery" type="button" data-category="discovery" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Discovery</span><span class="config-section-status" id="cfgStatus-discovery"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-discovery" onclick="saveConfigSection('discovery');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgDiscEnabled" name="cfgDiscEnabled" checked> Enabled</label>
                                 <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;">
@@ -2725,7 +2743,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-syslog">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-syslog" type="button" data-category="syslog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Syslog</span><span class="config-section-status" id="cfgStatus-syslog"></span><button class="cfg-save-btn" id="cfgSave-syslog" onclick="saveConfigSection('syslog');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-syslog" type="button" data-category="syslog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Syslog</span><span class="config-section-status" id="cfgStatus-syslog"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-syslog" onclick="saveConfigSection('syslog');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgSyslogEnabled" name="cfgSyslogEnabled"> Enable Remote Syslog</label>
                                 <div style="display:grid;grid-template-columns:1fr 80px 80px;gap:6px;margin-top:6px;">
@@ -2742,7 +2760,7 @@
                         <div class="drawer-section-title">Security</div>
 
                         <div class="config-section" id="cfgSection-users">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-users" type="button" data-category="users" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Users</span><span class="config-section-status" id="cfgStatus-users"></span><button class="cfg-save-btn" id="cfgSave-users" onclick="saveConfigSection('users');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-users" type="button" data-category="users" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Users</span><span class="config-section-status" id="cfgStatus-users"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-users" onclick="saveConfigSection('users');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <div id="cfgUserRows"></div>
                                 <button class="btn btn-sm btn-secondary" onclick="addConfigUserRow()" style="margin-top:6px;">+ Add User</button>
@@ -2750,7 +2768,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-radius">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-radius" type="button" data-category="radius" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>RADIUS</span><span class="config-section-status" id="cfgStatus-radius"></span><button class="cfg-save-btn" id="cfgSave-radius" onclick="saveConfigSection('radius');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-radius" type="button" data-category="radius" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>RADIUS</span><span class="config-section-status" id="cfgStatus-radius"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-radius" onclick="saveConfigSection('radius');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <div style="margin-bottom:6px;">
                                     <label for="cfgRadiusMethod">Auth Method</label>
@@ -2776,7 +2794,7 @@
                         <div class="drawer-section-title">System</div>
 
                         <div class="config-section" id="cfgSection-watchdog">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-watchdog" type="button" data-category="watchdog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Watchdog</span><span class="config-section-status" id="cfgStatus-watchdog"></span><button class="cfg-save-btn" id="cfgSave-watchdog" onclick="saveConfigSection('watchdog');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-watchdog" type="button" data-category="watchdog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Watchdog</span><span class="config-section-status" id="cfgStatus-watchdog"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-watchdog" onclick="saveConfigSection('watchdog');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgWatchdogEnabled" name="cfgWatchdogEnabled"> Enable Ping Watchdog</label>
                                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:6px;">
@@ -2792,7 +2810,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-custom">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-custom" type="button" data-category="custom" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Custom JSON</span><span class="config-section-status" id="cfgStatus-custom"></span><button class="cfg-save-btn" id="cfgSave-custom" onclick="saveConfigSection('custom');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-custom" type="button" data-category="custom" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Custom JSON</span><span class="config-section-status" id="cfgStatus-custom"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-custom" onclick="saveConfigSection('custom');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <textarea id="cfgCustomJson" name="cfgCustomJson" aria-label="Custom JSON config" rows="5" placeholder='{"services": {"ssh": {"enabled": true}}}' style="width:100%;font-family:monospace;font-size:var(--text-sm);"></textarea>
                             </div>
@@ -2846,7 +2864,7 @@
                     <button class="settings-subtab" data-subtab="backup" onclick="switchSystemSubtab('backup')">Backup & Restore</button>
                 </div>
 
-                <div class="system-subpanel active" id="systemSub-updates">
+                <div class="system-subpanel active" id="systemSub-updates" data-min-role-disable-tree="operator">
                     <div class="updates-grid">
                         <div class="updates-row">
                             <span class="updates-label">Current Version</span>
@@ -2883,7 +2901,7 @@
                     </div>
                 </div>
 
-                <div class="system-subpanel" id="systemSub-https">
+                <div class="system-subpanel" id="systemSub-https" data-min-role-disable-tree="operator">
                     <div style="margin-bottom:12px;">
                         <label class="settings-section-title">HTTPS Certificate</label>
                     </div>
@@ -2909,7 +2927,7 @@
                     </p>
                 </div>
 
-                <div class="system-subpanel" id="systemSub-backup">
+                <div class="system-subpanel" id="systemSub-backup" data-min-role-disable-tree="operator">
                     <div style="margin-bottom:16px;">
                         <label class="settings-section-title">Backup & Restore</label>
                         <div id="backupStatusInfo" style="font-size:0.75rem;color:var(--text-muted);padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;">Loading...</div>
@@ -2969,7 +2987,7 @@
                 </div>
 
                 <!-- Slack sub-panel -->
-                <div class="notif-subpanel active" id="notifSub-slack">
+                <div class="notif-subpanel active" id="notifSub-slack" data-min-role-disable-tree="operator">
                     <label for="notifSlackWebhook">Slack Webhook <a href="https://api.slack.com/messaging/webhooks" target="_blank" title="How to create an Incoming Webhook in Slack" style="color:var(--primary);font-size:0.7rem;text-decoration:none;font-weight:400;">?</a></label>
                     <div class="u-flex-col-gap8">
                         <input type="text" id="notifSlackWebhook" name="notifSlackWebhook" placeholder="https://hooks.slack.com/services/..." class="u-input-compact">
@@ -2982,7 +3000,7 @@
                 </div>
 
                 <!-- Email sub-panel -->
-                <div class="notif-subpanel" id="notifSub-email">
+                <div class="notif-subpanel" id="notifSub-email" data-min-role-disable-tree="operator">
                     <label class="settings-section-title">Email (SMTP)</label>
                     <div class="u-flex-col-gap8">
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -3036,7 +3054,7 @@
                 </div>
 
                 <!-- SNMP Traps sub-panel -->
-                <div class="notif-subpanel" id="notifSub-snmp">
+                <div class="notif-subpanel" id="notifSub-snmp" data-min-role-disable-tree="operator">
                     <label class="settings-section-title">SNMP Traps</label>
                     <div class="u-flex-col-gap8">
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -3066,7 +3084,7 @@
                 </div>
 
                 <!-- Webhooks sub-panel -->
-                <div class="notif-subpanel" id="notifSub-webhooks">
+                <div class="notif-subpanel" id="notifSub-webhooks" data-min-role-disable-tree="operator">
                     <label class="settings-section-title">Webhooks</label>
                     <div class="u-flex-col-gap8">
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -3253,7 +3271,7 @@
                     <button class="settings-subtab" data-subtab="clients" onclick="switchRadiusSubtab('clients')">Clients & Logs</button>
                 </div>
 
-                <div class="radius-subpanel active" id="radiusSub-server">
+                <div class="radius-subpanel active" id="radiusSub-server" data-min-role-disable-tree="operator">
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
                         <label class="settings-section-title" style="margin:0;">Built-in RADIUS Server</label>
                         <span id="authRadiusBadge" class="auth-status-badge">Inactive</span>
@@ -3349,7 +3367,7 @@
                     <p class="u-note-inline" style="margin-top:10px;">Reserved usernames <code>admin</code> and <code>root</code> are blocked from RADIUS authentication.</p>
                 </div>
 
-                <div class="radius-subpanel" id="radiusSub-clients">
+                <div class="radius-subpanel" id="radiusSub-clients" data-min-role-disable-tree="operator">
                     <div style="margin-bottom:16px;">
                         <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:4px;">
                             <h5 class="settings-section-title" style="margin:0;">Manual Client Overrides</h5>
@@ -3481,17 +3499,55 @@
             }
         }
 
-        function applyRoleVisibility() {
+        function applyRoleVisibility(root) {
             const hierarchy = {admin: 3, operator: 2, viewer: 1};
             const level = hierarchy[currentUserRole] || 1;
-            document.querySelectorAll('[data-min-role]').forEach(el => {
+            const scope = root || document;
+            const lock = (el) => {
+                el.setAttribute('disabled', '');
+                el.setAttribute('aria-disabled', 'true');
+                el.classList.add('viewer-locked');
+            };
+            const unlock = (el) => {
+                el.removeAttribute('disabled');
+                el.removeAttribute('aria-disabled');
+                el.classList.remove('viewer-locked');
+            };
+            scope.querySelectorAll('[data-min-role]').forEach(el => {
                 const minLevel = hierarchy[el.dataset.minRole] || 1;
                 if (level < minLevel) {
                     el.style.display = 'none';
-                } else {
+                    el.dataset.roleHidden = '1';
+                } else if (el.dataset.roleHidden === '1') {
                     el.style.display = '';
+                    delete el.dataset.roleHidden;
                 }
             });
+            scope.querySelectorAll('[data-min-role-disable]').forEach(el => {
+                const minLevel = hierarchy[el.dataset.minRoleDisable] || 1;
+                if (level < minLevel) lock(el); else unlock(el);
+            });
+            scope.querySelectorAll('[data-min-role-disable-tree]').forEach(container => {
+                const minLevel = hierarchy[container.dataset.minRoleDisableTree] || 1;
+                const inputs = container.querySelectorAll('input, select, textarea, button');
+                if (level < minLevel) {
+                    container.classList.add('viewer-locked-tree');
+                    inputs.forEach(lock);
+                } else {
+                    container.classList.remove('viewer-locked-tree');
+                    inputs.forEach(unlock);
+                }
+            });
+        }
+
+        async function readSaveError(resp, fallback) {
+            if (resp.status === 403) return 'Read-only access — ask an admin';
+            try {
+                const err = await resp.json();
+                return err.detail || fallback || 'Save failed';
+            } catch (e) {
+                return fallback || 'Save failed';
+            }
         }
 
         // License state (loaded on init, updated via WebSocket)
@@ -4564,6 +4620,10 @@
                 return '<span class="status-current" title="Current">&#10003;</span>';
             }
             if (vs === 'behind') {
+                if (currentUserRole === 'viewer') {
+                    const label = autoUpdateEnabled ? 'Auto-update scheduled' : 'Update available';
+                    return `<span class="status-icon-cell" title="${label}" style="color:var(--text-muted);">&#8593;</span>`;
+                }
                 const title = autoUpdateEnabled ? 'Auto-update scheduled \u2013 click to update now' : 'Update available \u2013 click to update now';
                 const cls = autoUpdateEnabled ? 'scheduled' : 'behind';
                 return `<button class="update-action ${cls}" title="${title}" onclick="triggerUpdate('${type}','${ip}');event.stopPropagation();">&#8593;</button>`;
@@ -5920,14 +5980,11 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(settings),
                 });
-                if (!resp.ok) {
-                    const err = await resp.json();
-                    throw new Error(err.detail || 'Save failed');
-                }
+                if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
                 statusEl.style.color = '#10b981';
             } catch (e) {
-                statusEl.textContent = 'Failed to save: ' + e.message;
+                statusEl.textContent = e.message || 'Failed to save';
                 statusEl.style.color = '#ef4444';
             }
         }
@@ -5993,14 +6050,11 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(settings),
                 });
-                if (!resp.ok) {
-                    const err = await resp.json();
-                    throw new Error(err.detail || 'Save failed');
-                }
+                if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
                 statusEl.style.color = '#10b981';
             } catch (e) {
-                statusEl.textContent = 'Failed to save: ' + e.message;
+                statusEl.textContent = e.message || 'Failed to save';
                 statusEl.style.color = '#ef4444';
             }
         }
@@ -8152,7 +8206,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(settings),
                 });
-                if (!resp.ok) throw new Error('Save failed');
+                if (!resp.ok) throw new Error(await readSaveError(resp));
 
                 clearDrawerDirty();
                 showSavedIndicator();
@@ -8163,7 +8217,7 @@
                 loadDrawerFirmware();
                 loadFleetStatus();
             } catch (e) {
-                if (status) { status.textContent = 'Save failed'; status.style.color = '#dc2626'; }
+                if (status) { status.textContent = e.message || 'Save failed'; status.style.color = '#dc2626'; }
                 if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = 'Save'; }
             }
         }
