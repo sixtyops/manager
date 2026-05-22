@@ -1289,7 +1289,8 @@
             gap: 12px;
             font-size: var(--text-base);
             min-height: 48px;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
+            overflow-x: auto;
             cursor: pointer;
             user-select: none;
         }
@@ -1299,7 +1300,8 @@
             gap: 8px;
             flex: 1;
             padding: 4px 8px;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
+            min-width: 0;
         }
         .drawer-handle-half.active { display: flex; }
         .drawer-mode-tabs {
@@ -1415,8 +1417,31 @@
         }
 
         .bottom-drawer.open .drawer-panel {
-            max-height: 50vh;
+            max-height: var(--drawer-panel-height, 50vh);
             overflow-y: auto;
+        }
+
+        .bottom-drawer.open .drawer-panel.dragging {
+            transition: none;
+        }
+
+        .drawer-resize-handle {
+            display: none;
+            height: 6px;
+            cursor: ns-resize;
+            background: transparent;
+            border-top: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            touch-action: none;
+        }
+        .bottom-drawer.open .drawer-resize-handle {
+            display: block;
+        }
+        .drawer-resize-handle:hover,
+        .drawer-resize-handle.dragging {
+            background: var(--border-light);
         }
 
         .drawer-panel-inner {
@@ -2263,6 +2288,11 @@
                 padding: 10px 16px;
                 gap: 6px 8px;
                 min-height: auto;
+                flex-wrap: wrap;
+                overflow-x: visible;
+            }
+            .drawer-handle-half {
+                flex-wrap: wrap;
             }
             .status-bar-section {
                 flex-wrap: wrap;
@@ -2516,6 +2546,9 @@
             <div class="drawer-chevron" id="drawerChevron">&#9650;</div>
         </div>
         <div class="drawer-panel" id="drawerPanel">
+            <div class="drawer-resize-handle" id="drawerResizeHandle"
+                 role="separator" aria-orientation="horizontal"
+                 aria-label="Resize drawer" title="Drag to resize · double-click to reset"></div>
             <!-- Updates drawer content -->
             <div id="drawerContent-updates">
             <div class="drawer-panel-inner">
@@ -7388,11 +7421,11 @@
             renderTable();
             // Lazy-load config data on first switch
             if (mode === 'config' && !configLoaded) loadConfigData();
-            // Update body padding for new bar height
-            requestAnimationFrame(() => {
-                const drawer = document.getElementById('bottomDrawer');
-                document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
-            });
+        }
+
+        function syncDrawerPadding() {
+            const drawer = document.getElementById('bottomDrawer');
+            if (drawer) document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
         }
 
         function handleTabClick(mode) {
@@ -7409,12 +7442,69 @@
                     if (mode === 'firmware') loadDrawerSettings();
                 }
             }
-            requestAnimationFrame(() => {
-                setTimeout(() => {
-                    document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
-                }, 320);
-            });
+            setTimeout(syncDrawerPadding, 320);
         }
+
+        // ── Drawer resize (drag the top edge of the open panel) ──
+        (function setupDrawerResize() {
+            const STORAGE_KEY = 'drawerPanelHeightPx';
+            const MIN_HEIGHT = 120;
+            const TOP_GAP = 80;
+            const drawer = document.getElementById('bottomDrawer');
+            const handle = document.getElementById('drawerResizeHandle');
+            const panel = document.getElementById('drawerPanel');
+            if (!drawer || !handle || !panel) return;
+
+            function applyHeight(px) {
+                const max = Math.max(MIN_HEIGHT, window.innerHeight - TOP_GAP);
+                const clamped = Math.min(Math.max(px, MIN_HEIGHT), max);
+                drawer.style.setProperty('--drawer-panel-height', clamped + 'px');
+                return clamped;
+            }
+
+            try {
+                const saved = parseInt(localStorage.getItem(STORAGE_KEY), 10);
+                if (!isNaN(saved) && saved > 0) applyHeight(saved);
+            } catch (e) {}
+
+            handle.addEventListener('pointerdown', (e) => {
+                if (e.button !== undefined && e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+                panel.classList.add('dragging');
+                handle.classList.add('dragging');
+                const onMove = (ev) => {
+                    applyHeight(window.innerHeight - ev.clientY - handle.offsetHeight / 2);
+                    syncDrawerPadding();
+                };
+                const onUp = (ev) => {
+                    handle.removeEventListener('pointermove', onMove);
+                    handle.removeEventListener('pointerup', onUp);
+                    handle.removeEventListener('pointercancel', onUp);
+                    try { handle.releasePointerCapture(ev.pointerId); } catch (err) {}
+                    panel.classList.remove('dragging');
+                    handle.classList.remove('dragging');
+                    const cur = drawer.style.getPropertyValue('--drawer-panel-height').trim();
+                    if (cur.endsWith('px')) {
+                        try { localStorage.setItem(STORAGE_KEY, String(parseInt(cur, 10))); } catch (err) {}
+                    }
+                    syncDrawerPadding();
+                };
+                handle.addEventListener('pointermove', onMove);
+                handle.addEventListener('pointerup', onUp);
+                handle.addEventListener('pointercancel', onUp);
+            });
+
+            handle.addEventListener('dblclick', (e) => {
+                e.stopPropagation();
+                drawer.style.removeProperty('--drawer-panel-height');
+                try { localStorage.removeItem(STORAGE_KEY); } catch (err) {}
+                syncDrawerPadding();
+            });
+
+            handle.addEventListener('click', (e) => e.stopPropagation());
+        })();
 
         // ── History ──
 
