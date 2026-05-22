@@ -628,6 +628,12 @@
         .about-meta { font-size:0.72rem; color:var(--text-muted,#6b7280); margin-bottom:10px; }
         .about-meta code { font-size:0.7rem; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
         .about-blurb { font-size:0.75rem; color:var(--text-muted,#6b7280); margin:0 0 16px 0; line-height:1.5; }
+        .about-whats-new { margin:0 0 14px 0; padding:12px 14px; border:1px solid var(--border-light,#f3f4f6); border-radius:8px; background:#fff; }
+        .about-whats-new-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
+        .about-whats-new-title { font-size:0.82rem; font-weight:700; color:var(--text,#111827); }
+        .about-whats-new-version { font-size:0.72rem; font-weight:700; color:var(--text-muted,#6b7280); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; white-space:nowrap; }
+        .about-whats-new-body { font-size:0.74rem; color:var(--text-muted,#6b7280); line-height:1.45; }
+        .about-whats-new-body .release-notes-content { margin-top:0; max-height:160px; }
         .about-support { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 14px; border:1px solid #FCD34D; border-radius:10px; background:linear-gradient(135deg,#FFF7CC 0%,#FFFDF4 100%); flex-wrap:wrap; }
         .about-support-text { min-width:200px; flex:1; }
         .about-support-title { font-size:0.82rem; font-weight:700; color:#92400E; margin-bottom:2px; }
@@ -3145,6 +3151,7 @@
                     <button class="settings-subtab active" data-subtab="users" data-min-role="admin" onclick="switchAccessSubtab('users')">Local Users</button>
                     <button class="settings-subtab" data-subtab="sso" data-min-role="admin" onclick="switchAccessSubtab('sso')">SSO / OIDC</button>
                     <button class="settings-subtab" data-subtab="devices" data-min-role="admin" onclick="switchAccessSubtab('devices')">Device Login</button>
+                    <button class="settings-subtab" data-subtab="audit" data-min-role="admin" onclick="switchAccessSubtab('audit')">Audit Log</button>
                 </div>
 
                 <div class="access-subpanel active" id="accessSub-users" data-min-role="admin">
@@ -3260,6 +3267,28 @@
                         <button class="backup-btn" onclick="saveDeviceConfig()">Save Device Credentials</button>
                         <span id="deviceStatus" class="u-text-xs-muted"></span>
                     </div>
+                </div>
+
+                <div class="access-subpanel" id="accessSub-audit" data-min-role="admin">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
+                        <label class="settings-section-title">Recent Admin Activity</label>
+                        <button class="backup-btn u-bg-muted-cta" onclick="loadAuditLog()">Refresh</button>
+                    </div>
+                    <table class="users-table" id="audit-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>User</th>
+                                <th>Action</th>
+                                <th>Target</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody id="audit-table-body">
+                            <tr><td colspan="5" class="u-text-xs-muted">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                    <div id="auditStatus" class="u-text-xs-muted" style="margin-top:8px;"></div>
                 </div>
             </div>
 
@@ -3415,9 +3444,16 @@
                     Instance ID: <code id="aboutInstanceId"></code>
                 </div>
                 <p class="about-blurb">
-                    Open-source firmware management for Tachyon wireless networks. All features are unlocked.
+                    Source-available firmware management for Tachyon wireless networks. All features are unlocked.
                     Features marked <span class="danger-badge">DANGEROUS</span> involve untested or high-impact operations — use with care.
                 </p>
+                <div class="about-whats-new">
+                    <div class="about-whats-new-head">
+                        <div class="about-whats-new-title">What's New</div>
+                        <div class="about-whats-new-version" id="aboutWhatsNewVersion"></div>
+                    </div>
+                    <div class="about-whats-new-body" id="aboutWhatsNewBody">Checking for release notes...</div>
+                </div>
                 <div class="about-support">
                     <div class="about-support-text">
                         <div class="about-support-title">Support SixtyOps</div>
@@ -3659,6 +3695,33 @@
             } catch (e) {}
             const verEl = document.getElementById('aboutVersionText');
             if (verEl) verEl.textContent = document.getElementById('appVersionDisplay')?.textContent || '';
+
+            const whatsNewVersion = document.getElementById('aboutWhatsNewVersion');
+            const whatsNewBody = document.getElementById('aboutWhatsNewBody');
+            if (!whatsNewBody) return;
+
+            try {
+                const resp = await fetch('/api/updates', { signal: AbortSignal.timeout(3000) });
+                const data = await resp.json();
+                const currentVersion = data.current_version ? 'v' + data.current_version : '';
+                if (verEl && currentVersion) verEl.textContent = currentVersion;
+
+                if (data.update_available && data.available_version) {
+                    if (whatsNewVersion) whatsNewVersion.textContent = 'v' + data.available_version;
+                    if (data.release_notes) {
+                        whatsNewBody.innerHTML = '<div class="release-notes-content">' + renderReleaseNotes(data.release_notes) + '</div>';
+                    } else {
+                        whatsNewBody.textContent = 'A newer version is available.';
+                    }
+                    return;
+                }
+
+                if (whatsNewVersion) whatsNewVersion.textContent = currentVersion;
+                whatsNewBody.textContent = 'You are running the latest version on the selected release channel.';
+            } catch (e) {
+                if (whatsNewVersion) whatsNewVersion.textContent = '';
+                whatsNewBody.textContent = 'Release notes are not available right now.';
+            }
         }
 
         let tempUnit = 'f';  // Will be set from settings/location
@@ -5678,6 +5741,7 @@
                 oidc: { tab: 'access', subtab: 'sso' },
                 devices: { tab: 'access', subtab: 'devices' },
                 radius: { tab: 'radius', subtab: 'server' },
+                audit: { tab: 'access', subtab: 'audit' },
             };
             const target = aliases[tab] ? { ...aliases[tab] } : { tab, subtab };
             if (!target.subtab) {
@@ -5731,6 +5795,39 @@
             if (target.tab === 'access' && target.subtab === 'users') loadUsers();
         }
 
+        async function maybePromptTelemetryOptIn() {
+            try {
+                // Verify admin role server-side so non-admins never see a
+                // dialog whose save would fail with 403.
+                const meResp = await fetch('/api/users/me');
+                if (!meResp.ok) return;
+                const me = await meResp.json();
+                if (me.role !== 'admin') return;
+
+                const resp = await fetch('/api/settings');
+                const data = await resp.json();
+                if (data.settings?.telemetry_prompt_seen === 'true') return;
+
+                const accepted = await showConfirmDialog(
+                    'Share anonymous update results with SixtyOps?\n\nThis includes counts, device models, timing, and error categories. It never includes IP addresses, names, locations, or passwords.',
+                    { title: 'Share Update Results', confirmText: 'Share' }
+                );
+                const putResp = await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        telemetry_enabled: accepted ? 'true' : 'false',
+                        telemetry_prompt_seen: 'true',
+                    }),
+                });
+                if (!putResp.ok) {
+                    throw new Error('Failed to persist telemetry choice: ' + putResp.status);
+                }
+            } catch (e) {
+                console.warn('Telemetry opt-in prompt failed:', e);
+            }
+        }
+
         function closeAppSettingsModal() {
             document.getElementById('appSettingsOverlay').classList.remove('open');
             // Clear status messages
@@ -5760,6 +5857,7 @@
         function switchAccessSubtab(name) {
             const activeName = activateScopedSubtab('accessSubtabs', '.access-subpanel', 'accessSub-', name, currentUserRole === 'admin' ? 'users' : 'sso');
             if (activeName === 'users') loadUsers();
+            if (activeName === 'audit') loadAuditLog();
         }
 
         function switchRadiusSubtab(name) {
@@ -7094,6 +7192,45 @@
             }
         }
 
+        async function loadAuditLog() {
+            const body = document.getElementById('audit-table-body');
+            const statusEl = document.getElementById('auditStatus');
+            if (!body) return;
+            body.innerHTML = '<tr><td colspan="5" class="u-text-xs-muted">Loading...</td></tr>';
+            if (statusEl) statusEl.textContent = '';
+
+            try {
+                const resp = await fetch('/api/audit-log?limit=50');
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to load activity');
+                const entries = data.entries || [];
+
+                if (!entries.length) {
+                    body.innerHTML = '<tr><td colspan="5" class="u-text-xs-muted">No activity recorded yet.</td></tr>';
+                    return;
+                }
+
+                body.innerHTML = entries.map(entry => {
+                    const d = parseTimestampToDate(entry.created_at);
+                    const time = d ? d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+                    const target = [entry.target_type, entry.target_id].filter(Boolean).join(' ');
+                    return `
+                        <tr>
+                            <td>${escapeHtml(time)}</td>
+                            <td>${escapeHtml(entry.username || '')}</td>
+                            <td>${escapeHtml(entry.action || '')}</td>
+                            <td>${escapeHtml(target)}</td>
+                            <td>${escapeHtml(entry.details || '')}</td>
+                        </tr>
+                    `;
+                }).join('');
+                if (statusEl) statusEl.textContent = `${entries.length} of ${data.total || entries.length} shown`;
+            } catch (e) {
+                body.innerHTML = '<tr><td colspan="5" class="u-text-xs-muted">Activity could not be loaded.</td></tr>';
+                if (statusEl) statusEl.textContent = e.message || 'Failed to load activity';
+            }
+        }
+
         // ── Status Bar ──
 
         const PHASES = ['canary', 'pct10', 'pct50', 'pct100'];
@@ -8200,7 +8337,14 @@
             // Auto-open App Settings on first run
             {% if show_settings %}
             window._firstRunSetup = true;
-            setTimeout(() => openAppSettingsModal('system', 'https'), 500);
+            setTimeout(async () => {
+                await openAppSettingsModal('system', 'https');
+                maybePromptTelemetryOptIn();
+            }, 500);
+            {% else %}
+            // Upgraders never trigger the first-run modal, so surface the
+            // telemetry opt-in here after the role/auth handshake completes.
+            setTimeout(() => { maybePromptTelemetryOptIn(); }, 1500);
             {% endif %}
 
             const filterQueryEl = document.getElementById('deviceFilterQuery');

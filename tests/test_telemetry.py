@@ -5,6 +5,7 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 from updater.telemetry import (
     build_telemetry_payload,
+    is_telemetry_enabled,
     send_telemetry,
     _aggregate_error_types,
     _aggregate_model_stats,
@@ -155,8 +156,19 @@ class TestAggregateRoleStats:
 
 
 class TestSendTelemetry:
+    def test_requires_explicit_opt_in(self, mock_db):
+        from updater import database as db
+
+        db.set_setting("telemetry_enabled", "false")
+        with patch("updater.telemetry.TELEMETRY_ENABLED", True):
+            assert is_telemetry_enabled() is False
+
+        db.set_setting("telemetry_enabled", "true")
+        with patch("updater.telemetry.TELEMETRY_ENABLED", True):
+            assert is_telemetry_enabled() is True
+
     @pytest.mark.asyncio
-    async def test_disabled_returns_false(self):
+    async def test_env_disabled_returns_false(self):
         with patch("updater.telemetry.TELEMETRY_ENABLED", False):
             result = await send_telemetry(
                 job_id="test", success_count=1, failed_count=0,
@@ -166,8 +178,11 @@ class TestSendTelemetry:
             assert result is False
 
     @pytest.mark.asyncio
-    async def test_no_endpoint_returns_false(self):
-        with patch("updater.telemetry.TELEMETRY_ENDPOINT", None):
+    async def test_not_opted_in_returns_false(self, mock_db):
+        from updater import database as db
+
+        db.set_setting("telemetry_enabled", "false")
+        with patch("updater.telemetry.TELEMETRY_ENABLED", True):
             result = await send_telemetry(
                 job_id="test", success_count=1, failed_count=0,
                 skipped_count=0, cancelled_count=0, duration_seconds=10.0,
@@ -176,7 +191,24 @@ class TestSendTelemetry:
             assert result is False
 
     @pytest.mark.asyncio
-    async def test_successful_send(self):
+    async def test_no_endpoint_returns_false(self, mock_db):
+        from updater import database as db
+
+        db.set_setting("telemetry_enabled", "true")
+        with patch("updater.telemetry.TELEMETRY_ENABLED", True), \
+             patch("updater.telemetry.TELEMETRY_ENDPOINT", None):
+            result = await send_telemetry(
+                job_id="test", success_count=1, failed_count=0,
+                skipped_count=0, cancelled_count=0, duration_seconds=10.0,
+                bank_mode="both", is_scheduled=False, devices={},
+            )
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_successful_send(self, mock_db):
+        from updater import database as db
+
+        db.set_setting("telemetry_enabled", "true")
         mock_response = AsyncMock()
         mock_response.status = 200
         mock_response.__aenter__ = AsyncMock(return_value=mock_response)
@@ -187,7 +219,8 @@ class TestSendTelemetry:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("updater.telemetry.TELEMETRY_ENDPOINT", "https://example.com/telemetry"), \
+        with patch("updater.telemetry.TELEMETRY_ENABLED", True), \
+             patch("updater.telemetry.TELEMETRY_ENDPOINT", "https://example.com/telemetry"), \
              patch("aiohttp.ClientSession", return_value=mock_session):
             result = await send_telemetry(
                 job_id="test", success_count=1, failed_count=0,
@@ -199,8 +232,12 @@ class TestSendTelemetry:
             mock_session.post.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_network_error_returns_false(self):
-        with patch("updater.telemetry.TELEMETRY_ENDPOINT", "https://example.com/telemetry"), \
+    async def test_network_error_returns_false(self, mock_db):
+        from updater import database as db
+
+        db.set_setting("telemetry_enabled", "true")
+        with patch("updater.telemetry.TELEMETRY_ENABLED", True), \
+             patch("updater.telemetry.TELEMETRY_ENDPOINT", "https://example.com/telemetry"), \
              patch("aiohttp.ClientSession", side_effect=Exception("Network error")):
             result = await send_telemetry(
                 job_id="test", success_count=1, failed_count=0,

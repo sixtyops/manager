@@ -382,6 +382,18 @@ class TestAutoUpdateAPI:
         assert resp.json()["update_available"] is False
         mock_checker.check_for_updates.assert_awaited_once()
 
+    def test_update_telemetry_opt_in_settings(self, authed_client, mock_db):
+        from updater import database as db
+
+        resp = authed_client.put("/api/settings", json={
+            "telemetry_enabled": "true",
+            "telemetry_prompt_seen": "true",
+        })
+
+        assert resp.status_code == 200
+        assert db.get_setting("telemetry_enabled") == "true"
+        assert db.get_setting("telemetry_prompt_seen") == "true"
+
     def test_check_for_updates_finds_new_version(self, authed_client):
         mock_checker = MagicMock()
         mock_checker.check_for_updates = AsyncMock(return_value={
