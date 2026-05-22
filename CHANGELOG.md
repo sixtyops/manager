@@ -11,6 +11,7 @@ All notable changes to this project are documented in this file.
 - Switch → AP topology cascade: APs are now nested under their upstream switch in the device tree, with a port badge showing the switch port they're connected to (ordered by port number)
 - OIDC admin group mapping: configure an "Admin Group" in SSO settings to auto-promote members to admin role on login
 - Role badge in the header shows the current user's role; write-operation UI (Add Devices, delete, bulk actions) is hidden from viewer accounts
+- Viewer UI is now consistently read-only across the Updates/Config drawers and the Settings modal: toggles, schedule inputs, firmware selectors, config policies, notifications, RADIUS, backup/restore, and HTTPS controls are visibly locked rather than appearing editable. Action buttons (Save, Upload, Push, Resume/Cancel, Check Compliance) are hidden. When a write does land on the server (e.g. via a stale tab), the inline status now reads "Read-only access — ask an admin" instead of the generic "Save failed"
 - Initial config priming: devices without a cached config are polled on the next poll cycle instead of waiting until the 4 AM daily run, so compliance works from day one
 - Check Compliance now triggers a fresh config poll (`?refresh=true`) with visible "Polling devices…" feedback instead of reading stale cache
 - NTP server defaults (132.163.97.1 and 129.6.15.28) in the config template editor; toggle stays off by default

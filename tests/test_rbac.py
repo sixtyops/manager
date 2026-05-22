@@ -58,6 +58,60 @@ class TestRoleEnforcement:
         resp = viewer_client.get("/api/users")
         assert resp.status_code == 403
 
+    # -- Updates drawer write endpoints --
+
+    def test_viewer_cannot_save_drawer_settings(self, viewer_client):
+        resp = viewer_client.post(
+            "/api/settings/save",
+            json={"firmware_beta_enabled": "true"},
+        )
+        assert resp.status_code == 403
+
+    def test_viewer_cannot_trigger_firmware_fetch(self, viewer_client):
+        resp = viewer_client.post("/api/firmware-fetch")
+        assert resp.status_code == 403
+
+    def test_viewer_cannot_reselect_firmware(self, viewer_client):
+        resp = viewer_client.post("/api/firmware-reselect")
+        assert resp.status_code == 403
+
+    def test_viewer_cannot_poll_ap(self, viewer_client):
+        resp = viewer_client.post("/api/aps/10.0.0.1/poll")
+        assert resp.status_code == 403
+
+    def test_viewer_cannot_resume_rollout(self, viewer_client):
+        resp = viewer_client.post("/api/rollout/1/resume")
+        assert resp.status_code == 403
+
+    def test_viewer_cannot_cancel_rollout(self, viewer_client):
+        resp = viewer_client.post("/api/rollout/1/cancel")
+        assert resp.status_code == 403
+
+    # -- Config drawer write endpoints --
+
+    def test_viewer_cannot_push_config(self, viewer_client):
+        resp = viewer_client.post(
+            "/api/config-push",
+            json={"template_ids": [1], "targets": []},
+        )
+        assert resp.status_code == 403
+
+    def test_viewer_cannot_resume_config_push_rollout(self, viewer_client):
+        resp = viewer_client.post("/api/config-push/rollout/1/resume")
+        assert resp.status_code == 403
+
+    def test_viewer_cannot_cancel_config_push_rollout(self, viewer_client):
+        resp = viewer_client.post("/api/config-push/rollout/1/cancel")
+        assert resp.status_code == 403
+
+    def test_viewer_cannot_restore_recycle_bin(self, viewer_client):
+        resp = viewer_client.post("/api/configs/recycle-bin/10.0.0.1/restore")
+        assert resp.status_code == 403
+
+    def test_viewer_cannot_purge_recycle_bin(self, viewer_client):
+        resp = viewer_client.delete("/api/configs/recycle-bin/10.0.0.1")
+        assert resp.status_code == 403
+
 
 # ---------------------------------------------------------------------------
 # User management API
