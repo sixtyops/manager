@@ -2015,6 +2015,7 @@ _SETTINGS_WRITABLE = {
     "snmp_traps_enabled", "snmp_trap_host", "snmp_trap_port",
     "snmp_trap_community", "snmp_trap_version",
     "autoupdate_enabled", "release_channel",
+    "telemetry_enabled", "telemetry_prompt_seen",
     "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
     "pre_update_reboot",
     "smoke_test_strict", "canary_auto_cancel",

@@ -65,15 +65,24 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
+from . import database as db
+
 logger = logging.getLogger(__name__)
 
 # AWS Lambda endpoint for telemetry
 TELEMETRY_ENDPOINT = "https://yv7ychij6cpafomyrxy627o7iu0phbdx.lambda-url.us-east-1.on.aws/"
 
-# Telemetry is enabled by default. To disable, set the DISABLE_TELEMETRY
-# environment variable (e.g., DISABLE_TELEMETRY=1 in docker-compose.yml).
-# See the TELEMETRY DISCLOSURE above for details on what is sent.
+# Telemetry requires an in-app opt-in. DISABLE_TELEMETRY remains as an
+# operator-level hard kill switch for deployments that do not want any telemetry
+# path available even if an admin later opts in.
 TELEMETRY_ENABLED = os.environ.get("DISABLE_TELEMETRY", "").lower() not in ("1", "true", "yes")
+
+
+def is_telemetry_enabled() -> bool:
+    """Return True only when telemetry is not disabled and admin opted in."""
+    if not TELEMETRY_ENABLED:
+        return False
+    return db.get_setting("telemetry_enabled", "false").lower() == "true"
 
 
 def _generate_anonymous_install_id() -> str:
@@ -243,7 +252,7 @@ async def send_telemetry(
 
     Returns True if telemetry was sent successfully, False otherwise.
     """
-    if not TELEMETRY_ENABLED:
+    if not is_telemetry_enabled():
         logger.debug("Telemetry disabled, skipping send")
         return False
 
