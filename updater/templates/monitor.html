@@ -658,15 +658,27 @@
         }
 
         .top-section {
-            display: grid;
-            grid-template-columns: 320px 1fr;
+            display: flex;
             gap: 20px;
             margin-bottom: 20px;
+            align-items: stretch;
+        }
+
+        .top-section > .card[data-min-role="operator"] {
+            flex: 0 0 320px;
+        }
+
+        .top-section > .chart-card {
+            flex: 1;
+            min-width: 0;
         }
 
         @media (max-width: 900px) {
             .top-section {
-                grid-template-columns: 1fr;
+                flex-direction: column;
+            }
+            .top-section > .card[data-min-role="operator"] {
+                flex: 0 0 auto;
             }
         }
 
