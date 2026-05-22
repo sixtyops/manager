@@ -4123,6 +4123,26 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
     sites = db.get_tower_sites()
     site_names = {s["id"]: s["name"] for s in sites}
 
+    # Resolve scheduler context once so per-device next-attempt is cheap.
+    scheduler = get_scheduler()
+    active_rollout = db.get_active_rollout() if scheduler else None
+    rollout_devices_by_ip = (
+        {d["ip"]: d for d in db.get_rollout_devices(active_rollout["id"])}
+        if active_rollout else {}
+    )
+    scope_ips = set(scheduler._resolve_scope(settings)) if scheduler else set()
+    switch_scope = set(scheduler._resolve_switch_scope(settings)) if scheduler else set()
+
+    def _next_attempt(ip: str, role: str, parent_ap_ip: Optional[str] = None) -> dict:
+        if not scheduler:
+            return {"auto_update_eligible": False, "next_attempt_iso": None,
+                    "reason": "Auto-update is off"}
+        return scheduler.compute_next_attempt(
+            ip, role, parent_ap_ip=parent_ap_ip, settings=settings,
+            rollout=active_rollout, rollout_devices_by_ip=rollout_devices_by_ip,
+            scope_ips=scope_ips, switch_scope=switch_scope,
+        )
+
     # Collect all devices
     devices = []
     aps = db.get_access_points(enabled_only=False)
@@ -4141,6 +4161,7 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
         summary["total"] += 1
         summary[status] += 1
 
+        next_info = _next_attempt(ap["ip"], "ap")
         devices.append({
             "ip": ap["ip"],
             "system_name": ap.get("system_name"),
@@ -4157,6 +4178,9 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             "status": status,
             "auth_status": None,
             "enabled": bool(ap.get("enabled", 1)),
+            "auto_update_eligible": next_info["auto_update_eligible"],
+            "next_attempt_iso": next_info["next_attempt_iso"],
+            "next_attempt_reason": next_info["reason"],
         })
 
         for cpe in cpes_by_ap.get(ap["ip"], []):
@@ -4167,6 +4191,7 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             summary["total"] += 1
             summary[cpe_status] += 1
 
+            cpe_next = _next_attempt(cpe["ip"], "cpe", parent_ap_ip=ap["ip"])
             devices.append({
                 "ip": cpe["ip"],
                 "system_name": cpe.get("system_name"),
@@ -4183,6 +4208,9 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
                 "status": cpe_status,
                 "auth_status": cpe.get("auth_status"),
                 "enabled": bool(ap.get("enabled", 1)),
+                "auto_update_eligible": cpe_next["auto_update_eligible"],
+                "next_attempt_iso": cpe_next["next_attempt_iso"],
+                "next_attempt_reason": cpe_next["reason"],
             })
 
     # Include switches
@@ -4195,6 +4223,7 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
         summary["total"] += 1
         summary[status] += 1
 
+        sw_next = _next_attempt(sw["ip"], "switch")
         devices.append({
             "ip": sw["ip"],
             "system_name": sw.get("system_name"),
@@ -4211,6 +4240,9 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             "status": status,
             "auth_status": None,
             "enabled": bool(sw.get("enabled", 1)),
+            "auto_update_eligible": sw_next["auto_update_eligible"],
+            "next_attempt_iso": sw_next["next_attempt_iso"],
+            "next_attempt_reason": sw_next["reason"],
         })
 
     return {"devices": devices, "summary": summary, "targets": targets}

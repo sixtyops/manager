@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import math
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Callable, Optional, Set
 
 from . import database as db
@@ -14,6 +14,69 @@ logger = logging.getLogger(__name__)
 
 # Do not start new scheduled jobs when the window has this many minutes or less remaining.
 SCHEDULE_END_BUFFER_MINUTES = 15
+
+_DAY_INDEX = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+_UNSET = object()
+
+
+def _parse_schedule_days(schedule_days) -> set[int]:
+    """Convert schedule_days (csv string or list) to a set of weekday integers."""
+    if not schedule_days:
+        return set()
+    if isinstance(schedule_days, str):
+        parts = [d.strip().lower() for d in schedule_days.split(",")]
+    else:
+        parts = [str(d).strip().lower() for d in schedule_days]
+    return {_DAY_INDEX[p] for p in parts if p in _DAY_INDEX}
+
+
+def upcoming_window_starts(
+    now: datetime,
+    schedule_days,
+    start_hour: int,
+    end_hour: int,
+    count: int = 1,
+    earliest_after: Optional[datetime] = None,
+) -> list[datetime]:
+    """Return the next `count` maintenance-window start datetimes after `now`.
+
+    A window "starts" at `start_hour` on any day whose weekday is in
+    `schedule_days`. Today's window counts if it has not yet ended (i.e.
+    `now.hour < end_hour`); the start it returns is then clamped to `now`
+    when we're already inside the window. Overnight windows
+    (start_hour > end_hour) are not modelled here — the scheduler treats
+    them by day-of-start, so we match.
+
+    `earliest_after` lets callers push the answer past a hold/freeze clear
+    date (e.g. firmware quarantine).
+    """
+    active_days = _parse_schedule_days(schedule_days)
+    if not active_days:
+        return []
+
+    floor = max(now, earliest_after) if earliest_after else now
+    results: list[datetime] = []
+    for offset in range(0, 60):
+        candidate_date = floor.date() + timedelta(days=offset)
+        if candidate_date.weekday() not in active_days:
+            continue
+        window_start = datetime.combine(
+            candidate_date,
+            datetime.min.time().replace(hour=start_hour),
+            tzinfo=floor.tzinfo,
+        )
+        window_end = datetime.combine(
+            candidate_date,
+            datetime.min.time().replace(hour=end_hour),
+            tzinfo=floor.tzinfo,
+        )
+        if window_end <= floor:
+            continue
+        results.append(max(window_start, floor))
+        if len(results) >= count:
+            break
+    return results
 
 
 def _parse_version(version: str) -> tuple:
@@ -1272,28 +1335,10 @@ class AutoUpdateScheduler:
                     remaining_switch_candidates.remove(ip)
 
         remaining_windows = 1 + len([p for p in remaining_phases if p["estimated_devices"] > 0])
-        day_abbrs = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
-        active_days = set()
-        for d in schedule_days.split(","):
-            d = d.strip().lower()
-            if d in day_abbrs:
-                active_days.add(day_abbrs[d])
-
-        estimated_completion = None
-        if active_days:
-            from datetime import date
-
-            current = date.today()
-            now = datetime.now()
-            start_offset = 1 if now.hour >= end_hour else 0
-            windows_counted = 0
-            for offset in range(start_offset, 60):
-                check = current + timedelta(days=offset)
-                if check.weekday() in active_days:
-                    windows_counted += 1
-                    if windows_counted >= remaining_windows:
-                        estimated_completion = check.isoformat()
-                        break
+        windows = upcoming_window_starts(
+            datetime.now(), schedule_days, start_hour, end_hour, count=remaining_windows
+        )
+        estimated_completion = windows[-1].date().isoformat() if len(windows) >= remaining_windows else None
 
         return {
             "current_phase": current_phase_info,
@@ -1303,6 +1348,116 @@ class AutoUpdateScheduler:
             "total_candidates": total_candidates,
             "window_minutes": window_minutes,
         }
+
+    def compute_next_attempt(
+        self,
+        ip: str,
+        role: str,
+        parent_ap_ip: Optional[str] = None,
+        settings: Optional[dict] = None,
+        rollout: Optional[dict] = _UNSET,
+        rollout_devices_by_ip: Optional[dict] = None,
+        scope_ips: Optional[set] = None,
+        switch_scope: Optional[set] = None,
+    ) -> dict:
+        """Return when this device is expected to receive its next auto-update.
+
+        Returns a dict with:
+          - auto_update_eligible: bool — whether the scheduler will ever pick
+            this device up given current scope/settings
+          - next_attempt_iso: ISO datetime string or None
+          - reason: short user-facing string when eligible is False or the
+            attempt is blocked (e.g. waiting on quarantine clearance)
+
+        Callers iterating over many devices (e.g. /api/fleet-status) should
+        pre-resolve `settings`, `scope_ips`, `switch_scope`, `rollout`, and
+        `rollout_devices_by_ip` and pass them in to avoid N×DB queries.
+        Pass `rollout=None` explicitly to say "no active rollout"; omit the
+        argument to let this method look it up.
+        """
+        settings = settings or db.get_all_settings()
+
+        if settings.get("schedule_enabled") != "true":
+            return {"auto_update_eligible": False, "next_attempt_iso": None,
+                    "reason": "Auto-update is off"}
+
+        schedule_days = settings.get("schedule_days", "")
+        start_hour = _as_int(settings.get("schedule_start_hour", "3"), 3)
+        end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
+        if not _parse_schedule_days(schedule_days):
+            return {"auto_update_eligible": False, "next_attempt_iso": None,
+                    "reason": "No maintenance days configured"}
+
+        # Resolve scope membership. CPEs piggy-back on their parent AP.
+        if role == "switch":
+            if switch_scope is None:
+                switch_scope = set(self._resolve_switch_scope(settings))
+            in_scope = ip in switch_scope
+        elif role == "cpe":
+            if scope_ips is None:
+                scope_ips = set(self._resolve_scope(settings))
+            in_scope = bool(parent_ap_ip) and parent_ap_ip in scope_ips
+        else:
+            if scope_ips is None:
+                scope_ips = set(self._resolve_scope(settings))
+            in_scope = ip in scope_ips
+        if not in_scope:
+            return {"auto_update_eligible": False, "next_attempt_iso": None,
+                    "reason": "Not in auto-update scope"}
+
+        fw_30x = settings.get("selected_firmware_30x", "")
+        if not fw_30x:
+            return {"auto_update_eligible": True, "next_attempt_iso": None,
+                    "reason": "Waiting for firmware to be selected"}
+
+        # Honour quarantine: don't promise an attempt until the hold clears.
+        earliest: Optional[datetime] = None
+        hold_days = _as_int(settings.get("firmware_quarantine_days", "7"), 7)
+        if hold_days > 0:
+            hold_info = db.get_firmware_hold_info(fw_30x, hold_days)
+            clears_at = hold_info.get("clears_at")
+            if not hold_info.get("cleared") and clears_at:
+                try:
+                    earliest = datetime.fromisoformat(clears_at)
+                except (TypeError, ValueError):
+                    earliest = None
+
+        # If the device is already in an active rollout, use its assigned phase
+        # to figure out how many windows away it lands.
+        if rollout is _UNSET:
+            rollout = db.get_active_rollout()
+        phase_idx = 0
+        if rollout:
+            if rollout_devices_by_ip is None:
+                rollout_devices_by_ip = {d["ip"]: d for d in db.get_rollout_devices(rollout["id"])}
+            device = rollout_devices_by_ip.get(parent_ap_ip if role == "cpe" else ip)
+            current_phase = rollout.get("phase", "canary")
+            current_idx = db.PHASE_ORDER.index(current_phase) if current_phase in db.PHASE_ORDER else 0
+            if device:
+                if device["status"] == "updated":
+                    return {"auto_update_eligible": True, "next_attempt_iso": None,
+                            "reason": "Updated"}
+                assigned = device.get("phase_assigned")
+                assigned_idx = db.PHASE_ORDER.index(assigned) if assigned in db.PHASE_ORDER else current_idx
+                phase_idx = max(0, assigned_idx - current_idx)
+            else:
+                # Unassigned but rollout active — it will land in a later phase.
+                phase_idx = 1 if current_idx < len(db.PHASE_ORDER) - 1 else 0
+
+        windows = upcoming_window_starts(
+            datetime.now(), schedule_days, start_hour, end_hour,
+            count=phase_idx + 1, earliest_after=earliest,
+        )
+        if not windows or len(windows) <= phase_idx:
+            return {"auto_update_eligible": True, "next_attempt_iso": None,
+                    "reason": None}
+        target = windows[phase_idx]
+        reason = None
+        if earliest and target.date() == earliest.date():
+            reason = "Waiting for new-firmware hold to clear"
+        return {"auto_update_eligible": True,
+                "next_attempt_iso": target.isoformat(),
+                "reason": reason}
 
     def get_status(self) -> dict:
         """Return current scheduler status for UI."""
@@ -1348,6 +1503,11 @@ class AutoUpdateScheduler:
                 quarantine["firmware"] = fw_30x
                 quarantine["quarantine_days"] = quarantine_days
 
+        next_windows = upcoming_window_starts(
+            datetime.now(), schedule_days, start_hour, end_hour, count=1
+        )
+        next_window_iso = next_windows[0].isoformat() if next_windows else None
+
         return {
             "state": self._state,
             "block_reason": self._block_reason,
@@ -1356,6 +1516,9 @@ class AutoUpdateScheduler:
             "last_run_time": self._last_run_time,
             "current_job_id": self._current_job_id,
             "next_window": f"{start_hour}:00-{end_hour}:00 on {schedule_days}",
+            "next_window_iso": next_window_iso,
+            "schedule_start_hour": start_hour,
+            "schedule_end_hour": end_hour,
             "rollout": rollout_info,
             "predictions": pre_rollout_predictions,
             "quarantine": quarantine,
