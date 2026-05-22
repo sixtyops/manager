@@ -54,9 +54,13 @@ pytest -m "integration and dev_sso" -v
 
 - `.github/workflows/dev-hardware.yml` runs the merge-gating `dev_blocking` lane on `pull_request`, `workflow_dispatch`, and `schedule`.
 - `.github/workflows/dev-sso.yml` runs the separate `dev_sso` lane on `workflow_dispatch` and `schedule`.
+- `.github/workflows/dev-host-deploy.yml` manually deploys a branch to the shared dev host, or restores the host to the latest `-dev` tag.
+- `.github/workflows/dev-host-drift.yml` checks daily that the shared dev host is running the latest `-dev` tag.
 - The Actions workflows accept repository variables or secrets for the non-sensitive host and device inputs, and secrets for passwords.
-- On `pull_request`, `Dev Hardware Validation` soft-skips with a warning if the live-dev inputs are not configured yet.
-- On `workflow_dispatch` and `schedule`, missing live-dev inputs are still treated as hard failures.
+- `Dev Hardware Validation` and `Dev Host Deploy` share one queue because both mutate the same dev host and lab devices; during busy periods, later runs will wait instead of overlapping.
+- Missing `dev_blocking` inputs are hard failures in every trigger mode.
+
+Manual deploy requires `SIXTYOPS_DEV_HOST`, `SIXTYOPS_DEV_USER`, `SIXTYOPS_DEV_SSH_KEY`, and optionally `SIXTYOPS_DEV_DEPLOY_DIR` if the install is not in `/opt/sixtyops`.
 
 ## Branch Protection
 

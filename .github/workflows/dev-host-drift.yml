@@ -1,0 +1,135 @@
+name: Dev Host Drift
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "03 6 * * *"
+
+concurrency:
+  group: dev-host-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      SIXTYOPS_TEST_URL: ${{ vars.SIXTYOPS_TEST_URL || secrets.SIXTYOPS_TEST_URL }}
+      SIXTYOPS_TEST_USER: ${{ vars.SIXTYOPS_TEST_USER || secrets.SIXTYOPS_TEST_USER }}
+      SIXTYOPS_TEST_PASS: ${{ secrets.SIXTYOPS_TEST_PASS }}
+    steps:
+      - name: Validate required inputs
+        run: |
+          missing=()
+          for name in \
+            SIXTYOPS_TEST_URL \
+            SIXTYOPS_TEST_USER \
+            SIXTYOPS_TEST_PASS
+          do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -ne 0 ]; then
+            missing_csv="$(IFS=,; echo "${missing[*]}")"
+            echo "::error::Dev-host drift check cannot run because required inputs are not configured: $missing_csv"
+            {
+              echo "### Dev-host drift check blocked"
+              echo
+              echo "Missing inputs: \`$missing_csv\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Read running dev-host version
+        run: |
+          base_url="${SIXTYOPS_TEST_URL%/}"
+          login_code=$(curl -sk -c /tmp/sixtyops-drift-cookies.txt \
+            -o /tmp/sixtyops-drift-login.out \
+            -w "%{http_code}" \
+            -X POST \
+            -d "username=$SIXTYOPS_TEST_USER&password=$SIXTYOPS_TEST_PASS" \
+            "$base_url/login")
+          if [ "$login_code" != "303" ]; then
+            echo "::error::Unexpected /login status from dev host: $login_code"
+            cat /tmp/sixtyops-drift-login.out
+            exit 1
+          fi
+
+          curl -fsk -b /tmp/sixtyops-drift-cookies.txt \
+            "$base_url/api/system/info" \
+            -o /tmp/sixtyops-system-info.json
+
+          running_version=$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("/tmp/sixtyops-system-info.json").read_text())
+          print(data.get("version", ""))
+          PY
+          )
+          if [ -z "$running_version" ]; then
+            echo "::error::Dev host did not return a manager version"
+            cat /tmp/sixtyops-system-info.json
+            exit 1
+          fi
+
+          echo "RUNNING_VERSION=$running_version" >> "$GITHUB_ENV"
+
+      - name: Read latest dev release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=50" \
+            -o /tmp/sixtyops-releases.json
+
+          latest_dev_tag=$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          releases = json.loads(Path("/tmp/sixtyops-releases.json").read_text())
+          for release in releases:
+              tag = release.get("tag_name") or ""
+              if release.get("prerelease") and "-dev" in tag:
+                  print(tag)
+                  break
+          PY
+          )
+          if [ -z "$latest_dev_tag" ]; then
+            echo "::error::No dev prerelease found in GitHub Releases"
+            exit 1
+          fi
+
+          echo "LATEST_DEV_TAG=$latest_dev_tag" >> "$GITHUB_ENV"
+          echo "LATEST_DEV_VERSION=${latest_dev_tag#v}" >> "$GITHUB_ENV"
+
+      - name: Compare dev host to latest dev tag
+        run: |
+          {
+            echo "### Dev-host drift check"
+            echo
+            echo "- Running dev host: \`$RUNNING_VERSION\`"
+            echo "- Latest dev tag: \`$LATEST_DEV_TAG\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$RUNNING_VERSION" != "$LATEST_DEV_VERSION" ]; then
+            echo "::error::Dev host drift detected: running $RUNNING_VERSION, expected $LATEST_DEV_VERSION ($LATEST_DEV_TAG)"
+            exit 1
+          fi
+
+          echo "Dev host is on the latest dev tag: $LATEST_DEV_TAG"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f \
+            /tmp/sixtyops-drift-cookies.txt \
+            /tmp/sixtyops-drift-login.out \
+            /tmp/sixtyops-system-info.json \
+            /tmp/sixtyops-releases.json
