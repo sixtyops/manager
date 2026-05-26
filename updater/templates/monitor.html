@@ -2647,8 +2647,8 @@
                             <input type="text" id="drawerZipCode" name="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56" data-min-role-disable="operator">
                         </div>
                         <div class="toggle-sm-row">
-                            <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerQuarantineDays" title="Canary devices soak-test new firmware for this many days before the rest of the fleet upgrades">Quarantine Period</label>
-                            <input type="number" id="drawerQuarantineDays" name="drawerQuarantineDays" value="7" min="0" max="90" class="u-w-48" data-min-role-disable="operator">
+                            <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerCanaryHoldDays" title="Canary devices soak-test new firmware for at least this many days before the rest of the fleet upgrades">Canary Hold</label>
+                            <input type="number" id="drawerCanaryHoldDays" name="drawerCanaryHoldDays" value="6" min="6" max="90" class="u-w-48" data-min-role-disable="operator">
                             <span class="u-text-xxs-dim">days</span>
                         </div>
                         <div class="toggle-sm-row">
@@ -7277,7 +7277,7 @@
                 blocked_weather:     { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_time:        { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_no_firmware: { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
-                blocked_quarantine:  { label: 'Scheduled', cls: 'idle',    icon: SCHEDULED_ICON },
+                blocked_canary_hold: { label: 'Running',   cls: 'running', icon: RUNNING_ICON },
                 frozen:              { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_all_current: { label: 'Up to date', cls: 'current', icon: CURRENT_ICON },
             };
@@ -7286,17 +7286,16 @@
             badge.classList.add(view.cls);
 
             // Subtitle: friendly "Next: today at 3:00 AM" for scheduled states;
-            // raw block_reason for paused states.
+            // raw block_reason for paused/holding states.
             let subtitle = '';
             if (view.label === 'Scheduled') {
-                if (state === 'blocked_quarantine' && status.block_reason) {
-                    subtitle = status.block_reason;
-                } else if (status.next_window_iso) {
+                if (status.next_window_iso) {
                     subtitle = 'Next: ' + formatWhen(status.next_window_iso);
                 } else if (status.block_reason) {
                     subtitle = status.block_reason;
                 }
-            } else if (view.label === 'Paused' && status.block_reason) {
+            } else if ((view.label === 'Paused' || view.label === 'Running')
+                       && status.block_reason) {
                 subtitle = status.block_reason;
             }
             reason.textContent = subtitle;
@@ -7388,42 +7387,38 @@
             return dateParts.length ? dateParts.join(' · ') : '';
         }
 
-        function _formatLockLabel(quarantine) {
-            if (!quarantine || !quarantine.clears_at) return '';
-            const clearsAt = new Date(quarantine.clears_at);
+        function _formatLockLabel(hold) {
+            if (!hold || !hold.clears_at) return '';
+            const clearsAt = new Date(hold.clears_at);
             if (isNaN(clearsAt.getTime())) return '';
             const now = new Date();
-            if (clearsAt <= now) return 'Clearing soon\u2026';
+            if (clearsAt <= now) return 'Advancing soon\u2026';
             const hoursLeft = (clearsAt - now) / 3600000;
             if (hoursLeft < 24) {
-                return `Locked for ${Math.ceil(hoursLeft)}h`;
+                return `Holding ${Math.ceil(hoursLeft)}h more`;
             }
-            return 'Locked until ' + clearsAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+            return 'Advances ' + clearsAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
                    ', ' + clearsAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
         }
 
         function renderIdlePhases() {
             const indicator = document.getElementById('barPhaseIndicator');
             const pred = lastPreRolloutPredictions;
-            const isQuarantine = lastSchedulerStatus && lastSchedulerStatus.state === 'blocked_quarantine';
-            const lockLabel = isQuarantine ? _formatLockLabel(lastSchedulerStatus.quarantine) : '';
+            // Idle view never shows a canary hold lock — the hold only applies
+            // once a rollout has finished canary and is waiting to advance.
             let html = '';
             for (let i = 0; i < PHASES.length; i++) {
                 const isCanaryTrigger = i === 0 && canTriggerManualCanary(pred);
                 const detail = _phaseDetail(pred, i);
                 const detailHtml = detail ? `<span class="bar-phase-detail">${detail}</span>` : '';
                 let dotClass, onclick = '';
-                if (i === 0 && isQuarantine) {
-                    dotClass = 'bar-phase-dot locked';
-                } else if (isCanaryTrigger) {
+                if (isCanaryTrigger) {
                     dotClass = 'bar-phase-dot clickable';
                     onclick = ' onclick="triggerCanaryNow(event)" title="Run canary now"';
                 } else {
                     dotClass = 'bar-phase-dot';
                 }
-                const lockHtml = (i === 0 && isQuarantine && lockLabel)
-                    ? `<span class="bar-phase-lock-info">${lockLabel}</span>` : '';
-                html += `<div class="${dotClass}"${onclick}>${PHASE_LABELS[PHASES[i]]}${detailHtml}${lockHtml}</div>`;
+                html += `<div class="${dotClass}"${onclick}>${PHASE_LABELS[PHASES[i]]}${detailHtml}</div>`;
                 if (i < PHASES.length - 1) html += `<div class="bar-phase-line"></div>`;
             }
             indicator.innerHTML = html;
@@ -7477,8 +7472,10 @@
             const phaseIdx = PHASES.indexOf(rollout.phase);
             const indicator = document.getElementById('barPhaseIndicator');
             const pred = rollout.predictions;
-            const isQuarantine = lastSchedulerStatus && lastSchedulerStatus.state === 'blocked_quarantine';
-            const lockLabel = isQuarantine ? _formatLockLabel(lastSchedulerStatus.quarantine) : '';
+            // Canary-hold lock applies to the canary phase of the current rollout
+            // while it waits to advance past canary.
+            const isCanaryHold = lastSchedulerStatus && lastSchedulerStatus.state === 'blocked_canary_hold';
+            const lockLabel = isCanaryHold ? _formatLockLabel(lastSchedulerStatus.canary_hold) : '';
             let phaseHtml = '';
             for (let i = 0; i < PHASES.length; i++) {
                 const phase = PHASES[i];
@@ -7489,7 +7486,7 @@
                     dotClass += ' completed';
                     lineClass += ' completed';
                 } else if (i === phaseIdx) {
-                    if (isQuarantine && phase === 'canary') {
+                    if (isCanaryHold && phase === 'canary') {
                         dotClass += ' locked';
                     } else {
                         dotClass += rollout.status === 'paused' ? ' paused' : ' active';
@@ -7498,7 +7495,7 @@
 
                 const detail = _phaseDetail(pred, i);
                 const detailHtml = detail ? `<span class="bar-phase-detail">${detail}</span>` : '';
-                const lockHtml = (i === phaseIdx && isQuarantine && phase === 'canary' && lockLabel)
+                const lockHtml = (i === phaseIdx && isCanaryHold && phase === 'canary' && lockLabel)
                     ? `<span class="bar-phase-lock-info">${lockLabel}</span>` : '';
                 phaseHtml += `<div class="${dotClass}">${PHASE_LABELS[phase]}${detailHtml}${lockHtml}</div>`;
                 if (i < PHASES.length - 1) phaseHtml += `<div class="${lineClass}"></div>`;
@@ -8251,8 +8248,8 @@
                 // Postal code
                 document.getElementById('drawerZipCode').value = s.zip_code || '';
 
-                // Quarantine & Cooldown
-                document.getElementById('drawerQuarantineDays').value = s.firmware_quarantine_days || '7';
+                // New-firmware canary hold & per-device cooldown
+                document.getElementById('drawerCanaryHoldDays').value = s.firmware_canary_hold_days || '6';
                 document.getElementById('drawerCooldownDays').value = s.firmware_update_cooldown_days || '30';
 
                 drawerSettingsLoaded = true;
@@ -8328,7 +8325,7 @@
         document.addEventListener('DOMContentLoaded', () => {
             ['drawerStartHour', 'drawerEndHour', 'drawerBankMode',
              'drawerParallel', 'drawerMinTemp', 'drawerZipCode',
-             'drawerQuarantineDays', 'drawerCooldownDays'].forEach(id => {
+             'drawerCanaryHoldDays', 'drawerCooldownDays'].forEach(id => {
 
                 const el = document.getElementById(id);
                 if (el) el.addEventListener('change', markDrawerDirty);
@@ -8372,7 +8369,7 @@
                 schedule_scope: 'all',
                 min_temperature_c: String(storageTemp(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
                 zip_code: document.getElementById('drawerZipCode').value,
-                firmware_quarantine_days: document.getElementById('drawerQuarantineDays').value,
+                firmware_canary_hold_days: document.getElementById('drawerCanaryHoldDays').value,
                 firmware_update_cooldown_days: document.getElementById('drawerCooldownDays').value,
                 firmware_beta_enabled: drawerBetaEnabled ? 'true' : 'false',
                 allow_downgrade: document.getElementById('drawerDowngradeToggle').classList.contains('active') ? 'true' : 'false',
@@ -8540,18 +8537,18 @@
                     const isBeta = f.channel === 'beta';
                     const isActive = drawerFwSelected[type] === f.name;
                     const escapedName = f.name.replace(/'/g, "\\'");
-                    const inQuarantine = !f.quarantine_cleared && f.quarantine_remaining_hours > 0;
-                    html += `<span class="drawer-fw-chip${isActive ? ' active' : ''}${isBeta ? ' beta' : ''}${inQuarantine ? ' quarantine' : ''}" onclick="selectDrawerFw('${escapedName}','${type}')"`;
-                    if (inQuarantine) {
-                        const h = f.quarantine_remaining_hours;
+                    const inHold = !f.hold_cleared && f.hold_remaining_hours > 0;
+                    html += `<span class="drawer-fw-chip${isActive ? ' active' : ''}${isBeta ? ' beta' : ''}${inHold ? ' quarantine' : ''}" onclick="selectDrawerFw('${escapedName}','${type}')"`;
+                    if (inHold) {
+                        const h = f.hold_remaining_hours;
                         const qLabel = h > 24 ? `${(h / 24).toFixed(0)}d` : `${h.toFixed(0)}h`;
-                        html += ` title="Available in ${qLabel}"`;
+                        html += ` title="Canary hold clears in ${qLabel}"`;
                     }
                     html += `>`;
                     html += `${versionLabel}`;
                     if (isBeta) html += `<span class="drawer-fw-beta-label">beta</span>`;
-                    if (inQuarantine) {
-                        const h = f.quarantine_remaining_hours;
+                    if (inHold) {
+                        const h = f.hold_remaining_hours;
                         const qLabel = h > 24 ? `${(h / 24).toFixed(0)}d` : `${h.toFixed(0)}h`;
                         html += `<span class="drawer-fw-quarantine-label">${qLabel}</span>`;
                     }

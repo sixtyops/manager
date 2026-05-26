@@ -111,9 +111,9 @@ class TestComputeNextAttempt:
         mock_db.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('selected_firmware_30x', 'fw-1.0.bin')"
         )
-        # Disable quarantine for this test.
+        # Disable canary hold for this test.
         mock_db.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('firmware_quarantine_days', '0')"
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('firmware_canary_hold_days', '0')"
         )
         mock_db.commit()
 
@@ -138,7 +138,7 @@ class TestComputeNextAttempt:
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('selected_firmware_30x', 'fw-1.0.bin')"
         )
         mock_db.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('firmware_quarantine_days', '0')"
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('firmware_canary_hold_days', '0')"
         )
         mock_db.commit()
 

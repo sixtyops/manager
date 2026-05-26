@@ -2010,7 +2010,7 @@ _SETTINGS_WRITABLE = {
     "weather_check_enabled", "min_temperature_c", "temperature_unit",
     "schedule_scope", "schedule_scope_data",
     "rollout_canary_aps", "rollout_canary_switches",
-    "firmware_beta_enabled", "firmware_quarantine_days",
+    "firmware_beta_enabled", "firmware_canary_hold_days",
     "slack_webhook_url",
     "snmp_traps_enabled", "snmp_trap_host", "snmp_trap_port",
     "snmp_trap_community", "snmp_trap_version",
@@ -2154,10 +2154,10 @@ def _validate_settings(filtered: dict):
         bw = _parse_int_field(filtered["bandwidth_limit_kbps"], "bandwidth_limit_kbps")
         if bw < 0 or bw > 1000000:
             raise HTTPException(400, "bandwidth_limit_kbps must be between 0 and 1000000 (0 = unlimited)")
-    if "firmware_quarantine_days" in filtered:
-        hold_days = _parse_int_field(filtered["firmware_quarantine_days"], "firmware_quarantine_days")
-        if hold_days < 0 or hold_days > 365:
-            raise HTTPException(400, "firmware_quarantine_days must be between 0 and 365")
+    if "firmware_canary_hold_days" in filtered:
+        hold_days = _parse_int_field(filtered["firmware_canary_hold_days"], "firmware_canary_hold_days")
+        if hold_days < 6 or hold_days > 365:
+            raise HTTPException(400, "firmware_canary_hold_days must be between 6 and 365")
     if "min_temperature_c" in filtered:
         min_temp = _parse_float_field(filtered["min_temperature_c"], "min_temperature_c")
         if min_temp < -100 or min_temp > 100:
@@ -4015,15 +4015,15 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
         channels = {}
 
     try:
-        quarantine_days = int(db.get_setting("firmware_quarantine_days", "7"))
+        hold_days = int(db.get_setting("firmware_canary_hold_days", "6"))
     except (TypeError, ValueError):
-        quarantine_days = 7
+        hold_days = 6
     registry = {r["filename"]: r for r in db.get_firmware_registry()}
 
     files = []
     for f in FIRMWARE_DIR.iterdir():
         if f.is_file() and f.suffix in {".bin", ".img", ".npk", ".tar", ".gz"}:
-            q_info = db.get_firmware_quarantine_info(f.name, quarantine_days)
+            info = db.get_firmware_hold_info(f.name, hold_days)
             reg = registry.get(f.name)
             files.append({
                 "name": f.name,
@@ -4032,13 +4032,13 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
                 "source": "auto" if f.name in auto_fetched else "manual",
                 "channel": channels.get(f.name, ""),
                 "added_at": reg["added_at"] if reg else None,
-                "quarantine_cleared": q_info["cleared"],
-                "quarantine_clears_at": q_info["clears_at"],
-                "quarantine_remaining_hours": q_info["remaining_hours"],
+                "hold_cleared": info["cleared"],
+                "hold_clears_at": info.get("clears_at"),
+                "hold_remaining_hours": round(info.get("remaining_days", 0) * 24, 1),
             })
     return {
         "files": sorted(files, key=lambda x: x["modified"], reverse=True),
-        "quarantine_days": quarantine_days,
+        "canary_hold_days": hold_days,
     }
 
 

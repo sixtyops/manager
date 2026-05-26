@@ -181,6 +181,31 @@ def _migrate(db):
         _license_keys,
     )
 
+    # Rename firmware_quarantine_days → firmware_canary_hold_days.
+    # The old key blocked all rollout activity for N days; the new key only
+    # gates canary→pct10 advancement. Carry forward any operator-set value,
+    # clamped to the new minimum of 6 days.
+    try:
+        old = db.execute(
+            "SELECT value FROM settings WHERE key = 'firmware_quarantine_days'"
+        ).fetchone()
+        new = db.execute(
+            "SELECT value FROM settings WHERE key = 'firmware_canary_hold_days'"
+        ).fetchone()
+        if old and not new:
+            try:
+                carried = max(6, int(old[0]))
+            except (TypeError, ValueError):
+                carried = 6
+            db.execute(
+                "INSERT INTO settings (key, value) VALUES ('firmware_canary_hold_days', ?)",
+                (str(carried),),
+            )
+        if old:
+            db.execute("DELETE FROM settings WHERE key = 'firmware_quarantine_days'")
+    except Exception as e:
+        logger.warning(f"Setting rename quarantine→canary_hold skipped: {e}")
+
     # Migrate data from access_points/switches into unified devices table
     _migrate_to_devices_table(db)
 
@@ -943,7 +968,7 @@ def init_db():
             "firmware_auto_fetched_files": "",
             "setup_completed": "false",
             "admin_password_hash": "",
-            "firmware_quarantine_days": "7",
+            "firmware_canary_hold_days": "6",
             "firmware_update_cooldown_days": "30",
             "slack_webhook_url": "",
             # Notification health tracking
@@ -1898,12 +1923,6 @@ def is_firmware_hold_cleared(filename: str, hold_days: int = 7) -> bool:
     return datetime.now() >= added_dt + timedelta(days=hold_days)
 
 
-# Alias for backwards compatibility
-def is_firmware_quarantine_cleared(filename: str, quarantine_days: int = 7) -> bool:
-    """Alias for is_firmware_hold_cleared (backwards compatibility)."""
-    return is_firmware_hold_cleared(filename, quarantine_days)
-
-
 def get_firmware_hold_info(filename: str, hold_days: int = 7) -> dict:
     """Get hold period status info for a firmware file.
 
@@ -1935,19 +1954,6 @@ def get_firmware_hold_info(filename: str, hold_days: int = 7) -> dict:
         "reference_type": reference_type,
         "clears_at": clears_at.isoformat(),
         "remaining_days": round(remaining_days, 1),
-    }
-
-
-# Alias for backwards compatibility
-def get_firmware_quarantine_info(filename: str, quarantine_days: int = 7) -> dict:
-    """Alias for get_firmware_hold_info (backwards compatibility)."""
-    info = get_firmware_hold_info(filename, quarantine_days)
-    # Map new fields to old field names for compatibility
-    return {
-        "cleared": info["cleared"],
-        "added_at": info.get("reference_date"),
-        "clears_at": info.get("clears_at"),
-        "remaining_hours": round(info.get("remaining_days", 0) * 24, 1),
     }
 
 
@@ -2185,8 +2191,29 @@ def get_rollout(rollout_id: int) -> Optional[dict]:
 
 
 def create_rollout(firmware_file: str, firmware_file_303l: str = None, firmware_file_tns100: str = None) -> int:
-    """Create a new rollout. Returns the rollout ID."""
+    """Create a new rollout. Returns the rollout ID.
+
+    If a rollout for the same firmware set was created within the last 60
+    seconds, returns that existing id instead of inserting a duplicate.
+    Guards against a scheduler tick-loop creating one no-op rollout per tick
+    when eligibility checks disagree.
+    """
     with get_db() as db:
+        existing = db.execute(
+            "SELECT id FROM rollouts "
+            "WHERE firmware_file = ? "
+            "AND COALESCE(firmware_file_303l, '') = COALESCE(?, '') "
+            "AND COALESCE(firmware_file_tns100, '') = COALESCE(?, '') "
+            "AND created_at > datetime('now', '-60 seconds') "
+            "ORDER BY id DESC LIMIT 1",
+            (firmware_file, firmware_file_303l, firmware_file_tns100)
+        ).fetchone()
+        if existing:
+            logger.warning(
+                f"create_rollout: duplicate suppressed; returning existing id={existing['id']} "
+                f"for {firmware_file!r}"
+            )
+            return existing["id"]
         cursor = db.execute(
             "INSERT INTO rollouts (firmware_file, firmware_file_303l, firmware_file_tns100) VALUES (?, ?, ?)",
             (firmware_file, firmware_file_303l, firmware_file_tns100)

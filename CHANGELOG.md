@@ -4,6 +4,31 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Fixed
+- Auto-update scheduler no longer spawns duplicate no-op rollouts when the
+  per-tick eligibility check disagrees with the per-phase assignment check
+  (cooldown days defaulted to `0` in the dedup path while the assignment
+  step applied the configured cooldown). Both paths now use the same
+  cooldown value, and `db.create_rollout` refuses to insert a second
+  rollout for the same firmware set within 60s as a belt-and-suspenders
+  guard. On `sixtyops-dev` this bug had produced 265 identical rollouts
+  for one firmware filename, created in clustered 3-minute bursts during
+  Tue/Wed/Thu maintenance windows whenever CPE versions drifted relative
+  to the AP.
+
+### Changed
+- "Firmware quarantine" is now "Canary hold," and the hold no longer blocks
+  the whole rollout — it only gates the canary→pct10 advance. The canary
+  phase itself now runs immediately, so a newly-uploaded firmware gets
+  soaked on the configured canary AP instead of sitting unused for a week.
+  Setting key renamed from `firmware_quarantine_days` (default 7, min 0)
+  to `firmware_canary_hold_days` (default 6, min 6); operator-set values
+  are migrated automatically on startup and clamped to the new minimum.
+  WebSocket scheduler status field renamed from `quarantine` to
+  `canary_hold`; firmware-files API renamed `quarantine_*` fields to
+  `hold_*`. UI state label is "Running" with a per-rollout countdown
+  ("Holding 3d 12h more") instead of a top-level "Scheduled" badge.
+
 ### Added
 - Post-deploy operator checklist at `docs/post-deploy-checklist.md`: ten-item, five-minute smoke test the operator runs after install (admin login, site, AP, poll, config compliance, notification test, audit log via API, backups decision, HTTPS, update channel). Audit-log step uses `curl` against `GET /api/audit-log` and links forward to #136 for the in-UI panel. Linked from the README's Quick Start pointer and Documentation section (#122)
 - Operator quickstart at `docs/quickstart.md`: ~10-minute install-to-first-device walkthrough (install → first login → setup wizard → first tower site → first AP → first poll). Screenshot placeholders only this pass; real captures land in a follow-up. Linked from the README's Quick Start and Documentation sections (#123)
