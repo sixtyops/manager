@@ -49,7 +49,7 @@ def upcoming_window_starts(
     them by day-of-start, so we match.
 
     `earliest_after` lets callers push the answer past a hold/freeze clear
-    date (e.g. firmware quarantine).
+    date (e.g. new-firmware canary hold).
     """
     active_days = _parse_schedule_days(schedule_days)
     if not active_days:
@@ -194,7 +194,7 @@ class AutoUpdateScheduler:
         "blocked_time",
         "blocked_no_firmware",
         "blocked_all_current",
-        "blocked_quarantine",
+        "blocked_canary_hold",
     )
 
     def __init__(self, broadcast_func: Callable, start_update_func: Callable, check_interval: int = 60):
@@ -452,11 +452,12 @@ class AutoUpdateScheduler:
                 switch_scope = self._resolve_switch_scope(settings)
 
                 target_versions = self._target_versions(settings, None)
+                cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
                 needs_update = self._filter_devices_needing_update(
-                    scope_ips, target_versions, allow_downgrade
+                    scope_ips, target_versions, allow_downgrade, cooldown_days=cooldown_days
                 )
                 needs_switch_update = self._filter_switches_needing_update(
-                    switch_scope, target_versions, allow_downgrade
+                    switch_scope, target_versions, allow_downgrade, cooldown_days=cooldown_days
                 )
                 if not needs_update and not needs_switch_update:
                     if self._state != "blocked_all_current":
@@ -550,22 +551,6 @@ class AutoUpdateScheduler:
         fw_303l = settings.get("selected_firmware_303l", "")
         fw_tns100 = settings.get("selected_firmware_tns100", "")
 
-        hold_days = _as_int(settings.get("firmware_quarantine_days", "7"), 7)
-        if hold_days > 0:
-            for fw_name in (fw_30x, fw_303l, fw_tns100):
-                if not fw_name:
-                    continue
-                hold_info = db.get_firmware_hold_info(fw_name, hold_days)
-                if not hold_info["cleared"]:
-                    self._state = "blocked_quarantine"
-                    remaining_days = hold_info["remaining_days"]
-                    remaining_str = f"{remaining_days:.1f} days" if remaining_days >= 1 else f"{remaining_days * 24:.0f} hours"
-                    self._block_reason = f"On hold ({remaining_str}) - new firmware waiting period"
-                    db.log_schedule_event("blocked_quarantine", self._block_reason)
-                    logger.info(f"Scheduler blocked: {self._block_reason}")
-                    await self._broadcast_status()
-                    return
-
         rollout = db.get_active_rollout()
 
         if rollout and self._firmware_changed(rollout, fw_30x, fw_303l, fw_tns100):
@@ -581,11 +566,12 @@ class AutoUpdateScheduler:
                 switch_scope = self._resolve_switch_scope(settings)
 
                 target_versions = self._target_versions(settings, None)
+                cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
                 needs_update = self._filter_devices_needing_update(
-                    scope_ips, target_versions, allow_downgrade
+                    scope_ips, target_versions, allow_downgrade, cooldown_days=cooldown_days
                 )
                 needs_switch_update = self._filter_switches_needing_update(
-                    switch_scope, target_versions, allow_downgrade
+                    switch_scope, target_versions, allow_downgrade, cooldown_days=cooldown_days
                 )
                 if not needs_update and not needs_switch_update:
                     self._state = "blocked_all_current"
@@ -625,6 +611,24 @@ class AutoUpdateScheduler:
 
         if not batch_ips and not batch_switches:
             current_phase = rollout["phase"]
+
+            # Gate the canary→pct10 transition on the new-firmware soak period.
+            # Canary itself runs immediately; only advancement past canary waits.
+            if current_phase == "canary":
+                hold_info = self._canary_hold_info(rollout, settings)
+                if hold_info is not None:
+                    self._state = "blocked_canary_hold"
+                    remaining_days = hold_info["remaining_days"]
+                    remaining_str = (
+                        f"{remaining_days:.1f} days" if remaining_days >= 1
+                        else f"{remaining_days * 24:.0f} hours"
+                    )
+                    self._block_reason = f"Holding new firmware in canary ({remaining_str} remaining)"
+                    db.log_schedule_event("blocked_canary_hold", self._block_reason)
+                    logger.info(f"Scheduler: {self._block_reason}")
+                    await self._broadcast_status()
+                    return
+
             db.complete_rollout_phase(rollout["id"])
             refreshed = db.get_rollout(rollout["id"])
 
@@ -738,17 +742,6 @@ class AutoUpdateScheduler:
         fw_tns100 = settings.get("selected_firmware_tns100", "")
         allow_downgrade = settings.get("allow_downgrade", "false") == "true"
 
-        hold_days = _as_int(settings.get("firmware_quarantine_days", "7"), 7)
-        if hold_days > 0:
-            for fw_name in (fw_30x, fw_303l, fw_tns100):
-                if not fw_name:
-                    continue
-                hold_info = db.get_firmware_hold_info(fw_name, hold_days)
-                if not hold_info["cleared"]:
-                    remaining_days = hold_info["remaining_days"]
-                    remaining_str = f"{remaining_days:.1f} days" if remaining_days >= 1 else f"{remaining_days * 24:.0f} hours"
-                    raise RuntimeError(f"On hold ({remaining_str}) - new firmware waiting period")
-
         rollout = db.get_active_rollout()
         if rollout and self._firmware_changed(rollout, fw_30x, fw_303l, fw_tns100):
             db.cancel_rollout(rollout["id"])
@@ -767,11 +760,12 @@ class AutoUpdateScheduler:
             last = db.get_last_rollout_for_firmware_set(fw_30x, fw_303l, fw_tns100)
             if last and last["status"] == "completed":
                 target_versions = self._target_versions(settings, None)
+                cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
                 needs_update = self._filter_devices_needing_update(
-                    scope_ips, target_versions, allow_downgrade
+                    scope_ips, target_versions, allow_downgrade, cooldown_days=cooldown_days
                 )
                 needs_switch_update = self._filter_switches_needing_update(
-                    switch_scope, target_versions, allow_downgrade
+                    switch_scope, target_versions, allow_downgrade, cooldown_days=cooldown_days
                 )
                 if not needs_update and not needs_switch_update:
                     raise RuntimeError("All devices are already current")
@@ -821,6 +815,30 @@ class AutoUpdateScheduler:
             self._block_reason = "Failed to start canary"
             await self._broadcast_status()
             raise
+
+    def _canary_hold_info(self, rollout: dict, settings: dict) -> Optional[dict]:
+        """If the current canary phase is still in soak period, return hold info.
+
+        Returns None when the hold has cleared (or is disabled), allowing the
+        rollout to advance past canary. Returns the first active hold info dict
+        otherwise (so the caller can surface a countdown).
+        """
+        if rollout.get("phase") != "canary":
+            return None
+        hold_days = _as_int(settings.get("firmware_canary_hold_days", "6"), 6)
+        if hold_days <= 0:
+            return None
+        for fw_name in (
+            rollout.get("firmware_file"),
+            rollout.get("firmware_file_303l"),
+            rollout.get("firmware_file_tns100"),
+        ):
+            if not fw_name:
+                continue
+            info = db.get_firmware_hold_info(fw_name, hold_days)
+            if not info["cleared"]:
+                return info
+        return None
 
     def _target_versions(self, settings: dict, rollout: Optional[dict]) -> dict[str, str]:
         """Build target versions for each firmware family."""
@@ -1367,7 +1385,7 @@ class AutoUpdateScheduler:
             this device up given current scope/settings
           - next_attempt_iso: ISO datetime string or None
           - reason: short user-facing string when eligible is False or the
-            attempt is blocked (e.g. waiting on quarantine clearance)
+            attempt is blocked (e.g. waiting on canary hold to clear)
 
         Callers iterating over many devices (e.g. /api/fleet-status) should
         pre-resolve `settings`, `scope_ips`, `switch_scope`, `rollout`, and
@@ -1410,17 +1428,18 @@ class AutoUpdateScheduler:
             return {"auto_update_eligible": True, "next_attempt_iso": None,
                     "reason": "Waiting for firmware to be selected"}
 
-        # Honour quarantine: don't promise an attempt until the hold clears.
-        earliest: Optional[datetime] = None
-        hold_days = _as_int(settings.get("firmware_quarantine_days", "7"), 7)
+        # New-firmware hold only delays advancement past canary; the canary
+        # device itself is attempted on the next maintenance window.
+        hold_clears_at: Optional[datetime] = None
+        hold_days = _as_int(settings.get("firmware_canary_hold_days", "6"), 6)
         if hold_days > 0:
             hold_info = db.get_firmware_hold_info(fw_30x, hold_days)
             clears_at = hold_info.get("clears_at")
             if not hold_info.get("cleared") and clears_at:
                 try:
-                    earliest = datetime.fromisoformat(clears_at)
+                    hold_clears_at = datetime.fromisoformat(clears_at)
                 except (TypeError, ValueError):
-                    earliest = None
+                    hold_clears_at = None
 
         # If the device is already in an active rollout, use its assigned phase
         # to figure out how many windows away it lands.
@@ -1443,6 +1462,9 @@ class AutoUpdateScheduler:
             else:
                 # Unassigned but rollout active — it will land in a later phase.
                 phase_idx = 1 if current_idx < len(db.PHASE_ORDER) - 1 else 0
+
+        # Canary devices ignore the hold; later phases must wait for it to clear.
+        earliest = hold_clears_at if phase_idx > 0 else None
 
         windows = upcoming_window_starts(
             datetime.now(), schedule_days, start_hour, end_hour,
@@ -1494,14 +1516,14 @@ class AutoUpdateScheduler:
             except Exception as e:
                 logger.debug(f"Pre-rollout prediction failed: {e}")
 
-        quarantine_days = _as_int(settings.get("firmware_quarantine_days", "7"), 7)
-        quarantine = None
-        if quarantine_days > 0:
+        hold_days = _as_int(settings.get("firmware_canary_hold_days", "6"), 6)
+        canary_hold = None
+        if hold_days > 0:
             fw_30x = settings.get("selected_firmware_30x", "")
             if fw_30x:
-                quarantine = db.get_firmware_quarantine_info(fw_30x, quarantine_days)
-                quarantine["firmware"] = fw_30x
-                quarantine["quarantine_days"] = quarantine_days
+                canary_hold = db.get_firmware_hold_info(fw_30x, hold_days)
+                canary_hold["firmware"] = fw_30x
+                canary_hold["hold_days"] = hold_days
 
         next_windows = upcoming_window_starts(
             datetime.now(), schedule_days, start_hour, end_hour, count=1
@@ -1521,7 +1543,7 @@ class AutoUpdateScheduler:
             "schedule_end_hour": end_hour,
             "rollout": rollout_info,
             "predictions": pre_rollout_predictions,
-            "quarantine": quarantine,
+            "canary_hold": canary_hold,
         }
 
     async def _broadcast_status(self):
