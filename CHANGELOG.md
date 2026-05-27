@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
+- External time validation no longer consults `worldtimeapi.org`. That
+  endpoint started timing out on roughly every request (>1 fail per minute
+  observed on sixtyops-dev in 2026-05), and `timeapi.io` — the existing
+  fallback — was always picking up the work anyway. `get_external_time`
+  now goes straight to `timeapi.io`. No setting change required (#163).
 - `config_enforce_hour` is now explicitly seeded to `"4"` on fresh
   installs. The poller already defaulted to 4 AM local when the row was
   absent (`poller.py:801`), but a missing row made the value invisible
@@ -12,6 +17,18 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Device portal: rebuilt the cert-untrusted fallback as a single
+  "Sign in" button that opens a small popup, POSTs the login form into
+  it (top-level navigation, which Firefox honours per the existing
+  per-origin cert exception), then closes the popup as soon as the
+  user does — or after 5s — and redirects the main window onto the
+  device's now-logged-in home. Replaces the previous two-button
+  cert-accept-then-poll flow that left Firefox users stuck because
+  Firefox doesn't extend a manually-accepted self-signed cert
+  exception to cross-origin subresource requests (the favicon probe
+  and iframe login POST added in #110 both stayed silently blocked).
+  Chrome's fast path is unchanged: when the probe succeeds, the
+  iframe POST + redirect runs with no popup at all.
 - Auto-update scheduler no longer spawns duplicate no-op rollouts when the
   per-tick eligibility check disagrees with the per-phase assignment check
   (cooldown days defaulted to `0` in the dedup path while the assignment
