@@ -6112,6 +6112,7 @@ def _compute_config_hash(config: dict) -> str:
 from .config_utils import (
     PROTECTED_CONFIG_KEYS,
     validate_fragment_safety as _validate_fragment_safety,
+    validate_ping_watchdog_safety as _validate_ping_watchdog_safety,
     deep_merge,
     generate_config_diff,
     check_config_compliance as _check_config_compliance,
@@ -6427,6 +6428,7 @@ async def create_config_template(request: Request, session: dict = Depends(requi
             raise HTTPException(400, f"Invalid JSON in config_fragment: {e}")
     try:
         _validate_fragment_safety(config_fragment)
+        _validate_ping_watchdog_safety(config_fragment)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -6509,6 +6511,7 @@ async def update_config_template_api(template_id: int, request: Request, session
                 raise HTTPException(400, f"Invalid JSON in config_fragment: {e}")
         try:
             _validate_fragment_safety(frag)
+            _validate_ping_watchdog_safety(frag)
         except ValueError as e:
             raise HTTPException(400, str(e))
         incoming_fragment_for_hash = frag if isinstance(frag, dict) else None
@@ -6813,8 +6816,9 @@ async def preview_config_merge(request: Request, session: dict = Depends(require
         fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
         try:
             _validate_fragment_safety(fragment)
+            _validate_ping_watchdog_safety(fragment)
         except ValueError as e:
-            raise HTTPException(400, f"Template '{t['name']}' contains unsafe keys: {e}")
+            raise HTTPException(400, f"Template '{t['name']}' rejected: {e}")
         templates.append({
             "id": t["id"],
             "name": t["name"],
@@ -6905,8 +6909,9 @@ async def push_config_templates(request: Request, session: dict = Depends(requir
         # Safety net: re-validate even though creation should have caught this
         try:
             _validate_fragment_safety(fragment)
+            _validate_ping_watchdog_safety(fragment)
         except ValueError as e:
-            raise HTTPException(400, f"Template '{t['name']}' contains unsafe keys: {e}")
+            raise HTTPException(400, f"Template '{t['name']}' rejected: {e}")
         templates.append({
             "id": t["id"],
             "name": t["name"],
@@ -7396,6 +7401,7 @@ async def start_config_push_rollout(request: Request, session: dict = Depends(re
             raise HTTPException(404, f"Template {tid} not found")
         fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
         _validate_fragment_safety(fragment)
+        _validate_ping_watchdog_safety(fragment)
         templates.append({
             "id": t["id"],
             "name": t["name"],
