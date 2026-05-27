@@ -27,6 +27,20 @@ GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest
 GITHUB_API_RELEASES = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 CHECK_INTERVAL = int(os.environ.get("AUTOUPDATE_CHECK_INTERVAL", 604800))  # 7 days
 
+
+def _github_auth_headers() -> dict:
+    """Add an Authorization header if GITHUB_TOKEN is set.
+
+    Private repos (sixtyops/manager is one) return 404 to unauthenticated
+    GitHub API requests, which is the exact failure mode that hid behind
+    the previous silent "no updates available" UI message for 18 days on
+    sixtyops-dev. A read-only token with `repo` scope is enough.
+    """
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if token:
+        return {"Authorization": f"token {token}"}
+    return {}
+
 # Appliance mode: use docker pull from GHCR instead of git-based updates
 APPLIANCE_MODE = os.environ.get("SIXTYOPS_APPLIANCE", "") == "1"
 GHCR_IMAGE = os.environ.get("SIXTYOPS_IMAGE", "ghcr.io/sixtyops/manager")
@@ -117,13 +131,15 @@ class ReleaseChecker:
         }
 
         try:
+            common_headers = {"Accept": "application/vnd.github+json"}
+            common_headers.update(_github_auth_headers())
             async with httpx.AsyncClient(timeout=30) as client:
                 if channel == "dev":
                     # Fetch recent releases including pre-releases
                     resp = await client.get(
                         GITHUB_API_RELEASES,
                         params={"per_page": 10},
-                        headers={"Accept": "application/vnd.github+json"},
+                        headers=common_headers,
                     )
                     resp.raise_for_status()
                     releases = resp.json()
@@ -133,7 +149,7 @@ class ReleaseChecker:
                     # Stable: only the latest non-prerelease
                     resp = await client.get(
                         GITHUB_API_LATEST,
-                        headers={"Accept": "application/vnd.github+json"},
+                        headers=common_headers,
                     )
                     resp.raise_for_status()
                     data = resp.json()
@@ -167,8 +183,11 @@ class ReleaseChecker:
                     except Exception:
                         logger.warning(f"Could not parse appliance versions: current={current_appliance}, min={min_ver}")
 
-            # Store in database
+            # Store in database. Success path also clears any prior error so
+            # the UI doesn't display a stale "Update check failed" after we
+            # recover from an outage (e.g. token added, GitHub back up).
             db.set_setting("autoupdate_last_check", datetime.now().isoformat())
+            db.set_setting("autoupdate_last_check_error", "")
             db.set_setting("autoupdate_available_version", latest if result["update_available"] else "")
             db.set_setting("autoupdate_release_url", result["release_url"] if result["update_available"] else "")
             db.set_setting("autoupdate_release_notes", result["release_notes"] if result["update_available"] else "")
@@ -189,10 +208,20 @@ class ReleaseChecker:
 
         except httpx.HTTPStatusError as e:
             result["error"] = f"GitHub API error: {e.response.status_code}"
+            if e.response.status_code in (401, 403, 404):
+                # Common cause for private repos: no GITHUB_TOKEN configured.
+                result["error"] += " (private repo? set GITHUB_TOKEN env var)"
             logger.error(result["error"])
         except Exception as e:
             result["error"] = str(e)
             logger.exception(f"Release check failed: {e}")
+
+        # Always record the attempt time and the error (or clear of it) so the
+        # UI can show "Last attempted X — failed: Y" instead of silently
+        # reporting "up to date" forever when the fetch never succeeds.
+        if result["error"]:
+            db.set_setting("autoupdate_last_check", datetime.now().isoformat())
+            db.set_setting("autoupdate_last_check_error", result["error"])
 
         return result
 
@@ -204,6 +233,7 @@ class ReleaseChecker:
             "release_channel": db.get_setting("release_channel", "stable"),
             "enabled": db.get_setting("autoupdate_enabled", "false") == "true",
             "last_check": db.get_setting("autoupdate_last_check", ""),
+            "last_check_error": db.get_setting("autoupdate_last_check_error", ""),
             "available_version": db.get_setting("autoupdate_available_version", ""),
             "release_url": db.get_setting("autoupdate_release_url", ""),
             "release_notes": db.get_setting("autoupdate_release_notes", ""),

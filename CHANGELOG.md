@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Fixed
+- In-app self-update no longer silently reports "up to date" when the
+  release check fails. The `release_checker` now persists a fresh
+  `autoupdate_last_check` timestamp on every attempt and a new
+  `autoupdate_last_check_error` setting whenever the GitHub fetch
+  errors; the Settings > Updates panel surfaces the message inline in
+  red ("Last check 12:34 — failed: GitHub API error: 404 (private
+  repo? set GITHUB_TOKEN env var)") so operators can fix the root
+  cause. The checker also honours a `GITHUB_TOKEN` env var on the
+  host, which the private `sixtyops/manager` repo needs to be
+  reachable through the GitHub API at all. Documented in the
+  post-deploy checklist (#164).
 - Auto-update scheduler no longer spawns duplicate no-op rollouts when the
   per-tick eligibility check disagrees with the per-phase assignment check
   (cooldown days defaulted to `0` in the dedup path while the assignment

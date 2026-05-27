@@ -128,6 +128,13 @@ Renewal failures and DNS / rate-limit issues are in
   firmware rollouts and maintenance windows; details in
   [docs/release-system.md](release-system.md).
 
+**If the check shows `Last check ... — failed: GitHub API error: 404`:**
+the manager is hitting GitHub anonymously and the `sixtyops/manager`
+repo is private, so the API returns 404. Set the `GITHUB_TOKEN` env var
+on the host (any token with `repo` scope read access is enough) and
+restart the container. Without this the in-app updater silently shows
+"up to date" forever — manual deploys are the only way to upgrade.
+
 ---
 
 ## All ten pass?

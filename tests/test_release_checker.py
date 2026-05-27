@@ -143,6 +143,108 @@ class TestVersionComparison:
         )
 
 
+class TestErrorPersistence:
+    """A failed release check must be visible to operators, not silently
+    swallowed. This was issue #164: sixtyops-dev's autoupdate_last_check
+    sat 18 days stale because the private repo was returning 404 and the
+    UI happily reported 'up to date'."""
+
+    @pytest.mark.asyncio
+    async def test_failed_check_persists_error_and_timestamp(self, mock_db, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        from updater.release_checker import ReleaseChecker
+        from updater import database
+
+        # Force a 404 from GitHub (the exact failure mode for private repos).
+        import httpx
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mock_resp.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError("Not Found", request=MagicMock(), response=mock_resp)
+        )
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        with patch("updater.release_checker.httpx.AsyncClient", return_value=mock_client):
+            checker = ReleaseChecker(broadcast_func=AsyncMock())
+            result = await checker.check_for_updates()
+
+        assert result["error"] is not None
+        assert "404" in result["error"]
+        assert "GITHUB_TOKEN" in result["error"]
+        # The error and a fresh timestamp are persisted so the UI can show them.
+        assert "404" in database.get_setting("autoupdate_last_check_error", "")
+        assert database.get_setting("autoupdate_last_check", "") != ""
+
+    @pytest.mark.asyncio
+    async def test_subsequent_success_clears_error(self, mock_db, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        from updater.release_checker import ReleaseChecker
+        from updater import database
+
+        # Pre-seed an error so we can prove the success path clears it.
+        database.set_setting("autoupdate_last_check_error", "prior failure")
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "tag_name": "v1.0.0",
+            "html_url": "https://github.com/test/releases/tag/v1.0.0",
+            "body": "notes",
+        }
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        with patch("updater.release_checker.httpx.AsyncClient", return_value=mock_client), \
+             patch("updater.release_checker.__version__", "1.0.0"):
+            checker = ReleaseChecker(broadcast_func=AsyncMock())
+            await checker.check_for_updates()
+
+        assert database.get_setting("autoupdate_last_check_error", "") == ""
+
+    @pytest.mark.asyncio
+    async def test_github_token_added_to_authorization_header(self, mock_db, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_testtoken123")
+        from updater.release_checker import ReleaseChecker
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "tag_name": "v1.0.0",
+            "html_url": "https://example.com",
+            "body": "",
+        }
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        with patch("updater.release_checker.httpx.AsyncClient", return_value=mock_client), \
+             patch("updater.release_checker.__version__", "1.0.0"):
+            checker = ReleaseChecker(broadcast_func=AsyncMock())
+            await checker.check_for_updates()
+
+        headers = mock_client.get.call_args.kwargs["headers"]
+        assert headers.get("Authorization") == "token ghp_testtoken123"
+
+    def test_get_update_status_includes_last_check_error(self, mock_db):
+        from updater.release_checker import ReleaseChecker
+        from updater import database
+        database.set_setting("autoupdate_last_check_error", "GitHub API error: 404")
+        checker = ReleaseChecker(broadcast_func=AsyncMock())
+        status = checker.get_update_status()
+        assert status["last_check_error"] == "GitHub API error: 404"
+
+
 # ---------------------------------------------------------------------------
 # apply_update guardrails
 # ---------------------------------------------------------------------------
