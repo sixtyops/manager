@@ -29,6 +29,28 @@ All notable changes to this project are documented in this file.
   empty encodes "not configured" downstream. `set_setting`,
   `set_settings`, and `get_setting`/`get_all_settings` wrap and
   unwrap at the DB boundary so all callers keep seeing cleartext (#175).
+- Settings > Updates no longer sits on a stale "Last check: 18 days ago"
+  when the periodic background release-check has been failing. The error
+  is now persisted to the new `autoupdate_last_check_error` setting on
+  every failure (and cleared on success), and the panel surfaces it
+  inline in red ("Last check 12:34 — failed: ..."). Follow-up to #144,
+  which made the *manual* `Check now` button return errors but left
+  the periodic check silently swallowing them so the panel never
+  reflected them (#164).
+- Config-push rollout `advance` and `resume` now revalidate the loaded
+  `templates_snapshot` against the same `ping_watchdog` safety floor
+  introduced in #167. A rollout started *before* that PR landed (with
+  the old 15-minute `Watchdog Standard`) could otherwise still be
+  advanced after the deploy because the snapshot is replayed verbatim
+  and never went back through `validate_ping_watchdog_safety`.
+  `_load_rollout_templates` now raises `ValueError` on any unsafe
+  fragment; the two endpoints return HTTP 400 ("Cannot
+  advance/resume — rollout snapshot is unsafe") and resume also flips
+  the rollout to `paused` so the operator notices. Defense-in-depth:
+  `_run_config_push_phase` revalidates the *merged* per-device config
+  before the device's own dry-run, catching the edge case where two
+  individually-safe templates `deep_merge` into an unsafe combo
+  (e.g. one sets `enabled=true`, another lowers `failure`).
 - `config_templates.config_fragment` is now Fernet-encrypted at rest with
   the same key (`data/.encryption_key`) used for device passwords
   (#35) and device-config snapshots. Templates carry SNMP RW

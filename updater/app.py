@@ -7321,20 +7321,40 @@ def _resolve_config_push_targets(targets: list[dict]) -> list[dict]:
 
 
 def _load_rollout_templates(rollout: dict) -> list:
-    """Load templates from rollout snapshot, falling back to DB if no snapshot."""
+    """Load templates from rollout snapshot, falling back to DB if no snapshot.
+
+    Re-validates the loaded fragments against the same safety rules that
+    `start_config_push_rollout` enforces at creation time. A rollout that
+    was created with an unsafe `Watchdog Standard` template *before* the
+    #167 validator landed can still sit paused on disk; advance/resume
+    must not push it. Raises `ValueError` (callers translate to HTTP 400)
+    if any fragment in the snapshot would now be rejected on save.
+    """
     snapshot = rollout.get("templates_snapshot")
+    templates: list
     if snapshot:
         try:
-            return json.loads(snapshot)
+            templates = json.loads(snapshot)
         except (json.JSONDecodeError, TypeError):
-            pass
-    # Fallback: load from DB by template IDs
+            templates = None  # fall through to DB fallback below
+        else:
+            for t in templates:
+                fragment = t.get("fragment", {})
+                _validate_fragment_safety(fragment)
+                _validate_ping_watchdog_safety(fragment)
+            return templates
+
+    # Fallback: load from DB by template IDs. DB rows go through the same
+    # validators at save time, but re-validate here too so a row hand-edited
+    # in SQLite can't slip past.
     template_ids = json.loads(rollout["template_ids"])
     templates = []
     for tid in template_ids:
         t = db.get_config_template(tid)
         if t:
             fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
+            _validate_fragment_safety(fragment)
+            _validate_ping_watchdog_safety(fragment)
             templates.append({
                 "id": t["id"],
                 "name": t["name"],
@@ -7474,8 +7494,13 @@ async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(r
         if not updated:
             raise HTTPException(400, "Cannot advance: no devices succeeded in the current phase")
 
-    # Load templates from snapshot (or fallback to DB)
-    templates = _load_rollout_templates(rollout)
+    # Load templates from snapshot (or fallback to DB) and re-validate them
+    # — a rollout started before the #167 ping_watchdog floor landed could
+    # still hold an unsafe fragment in its snapshot.
+    try:
+        templates = _load_rollout_templates(rollout)
+    except ValueError as e:
+        raise HTTPException(400, f"Cannot advance — rollout snapshot is unsafe: {e}")
 
     # Advance the phase, walking past any subsequent empty phases in one
     # call so a single-device rollout doesn't require the operator to click
@@ -7521,8 +7546,14 @@ async def resume_config_push_rollout(rollout_id: int, session: dict = Depends(re
         if d["status"] == "failed":
             db.mark_config_push_device(rollout_id, d["ip"], "pending")
 
-    # Load templates from snapshot (or fallback to DB)
-    templates = _load_rollout_templates(rollout)
+    # Load templates from snapshot (or fallback to DB) and re-validate — see
+    # the same call site in the advance endpoint for the gory details on why.
+    try:
+        templates = _load_rollout_templates(rollout)
+    except ValueError as e:
+        # Roll status back so the operator can cancel and start fresh.
+        db.update_config_push_rollout_status(rollout_id, "paused", pause_reason=f"Snapshot unsafe: {e}")
+        raise HTTPException(400, f"Cannot resume — rollout snapshot is unsafe: {e}")
 
     all_devices = _resolve_all_rollout_device_credentials(rollout_id)
 
@@ -7662,6 +7693,19 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
                 merged = current_config
                 for t in applicable:
                     merged = deep_merge(merged, t["fragment"])
+
+                # Defense-in-depth: even when each template individually
+                # cleared `_validate_ping_watchdog_safety`, the deep_merge
+                # of two templates that each touch the same `ping_watchdog`
+                # block can produce an unsafe combination (e.g. one sets
+                # `enabled=true` and another sets `failure=3`). Reject the
+                # final config before handing it to the device's dry-run.
+                try:
+                    _validate_ping_watchdog_safety(merged)
+                except ValueError as merge_err:
+                    raise RuntimeError(
+                        f"Merged config rejected before dry-run: {merge_err}"
+                    )
 
                 # Dry-run validation
                 await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "validating", "phase": phase})
