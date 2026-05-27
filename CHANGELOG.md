@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Fixed
+- Device portal: rebuilt the cert-untrusted fallback as a single
+  "Sign in" button that opens a small popup, POSTs the login form into
+  it (top-level navigation, which Firefox honours per the existing
+  per-origin cert exception), then closes the popup as soon as the
+  user does — or after 5s — and redirects the main window onto the
+  device's now-logged-in home. Replaces the previous two-button
+  cert-accept-then-poll flow that left Firefox users stuck because
+  Firefox doesn't extend a manually-accepted self-signed cert
+  exception to cross-origin subresource requests (the favicon probe
+  and iframe login POST added in #110 both stayed silently blocked).
+  Chrome's fast path is unchanged: when the probe succeeds, the
+  iframe POST + redirect runs with no popup at all.
 - Auto-update scheduler no longer spawns duplicate no-op rollouts when the
   per-tick eligibility check disagrees with the per-phase assignment check
   (cooldown days defaulted to `0` in the dedup path while the assignment
