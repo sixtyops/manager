@@ -1708,6 +1708,15 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
     the cert is trusted, we close the popup, submit the iframe login form,
     and redirect the main window — that flow now actually works because the
     browser trusts the device origin for the rest of the session.
+
+    Escape hatch: Firefox does *not* extend a manually-accepted cert
+    exception to cross-origin subresource requests, so the probe stays
+    blocked forever even after the user has trusted the device. The
+    "Log in anyway" links on the cert-prompt and waiting views skip the
+    probe gate and fire `doAutoLogin()` directly; if the cert really is
+    trusted the iframe POST succeeds and the redirect lands logged in,
+    and if it isn't the user falls through to the device's normal cert
+    warning on the top-level redirect.
     """
     escaped_ip = html_module.escape(ip)
     return f"""<!DOCTYPE html>
@@ -1761,11 +1770,18 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
                 Open {escaped_ip} manually</a>, accept the certificate,
                 then return to this tab.
             </p>
+            <p class="muted">
+                Already trusted this device's certificate?
+                <a href="#" class="skip-probe-link">Log in anyway</a>
+            </p>
         </div>
         <div id="view-waiting" class="hidden">
             <div class="spinner"></div>
             <p>Waiting for certificate acceptance...</p>
             <p class="muted">Accept the warning in the other tab. We'll take it from there.</p>
+            <p class="muted">
+                Already trusted? <a href="#" class="skip-probe-link">Log in anyway</a>
+            </p>
         </div>
         <div id="view-logging-in" class="hidden">
             <div class="spinner"></div>
@@ -1867,6 +1883,17 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
                 show('waiting');
                 startPolling();
             }});
+
+            // "Log in anyway" escape hatch — needed for Firefox, where a
+            // manually-accepted self-signed cert exception doesn't apply to
+            // cross-origin subresource probes from the portal page.
+            var skipLinks = document.querySelectorAll('.skip-probe-link');
+            for (var i = 0; i < skipLinks.length; i++) {{
+                skipLinks[i].addEventListener('click', function(e) {{
+                    e.preventDefault();
+                    doAutoLogin();
+                }});
+            }}
 
             window.addEventListener('focus', function() {{
                 if (submitted) return;
