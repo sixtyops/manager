@@ -328,7 +328,7 @@ Get all configuration settings as key-value pairs. Sensitive values (password ha
 ### `PUT /api/settings`
 Update settings. Only whitelisted keys are accepted:
 
-`schedule_enabled`, `schedule_days`, `schedule_start_hour`, `schedule_end_hour`, `parallel_updates`, `bank_mode`, `allow_downgrade`, `timezone`, `zip_code`, `weather_check_enabled`, `min_temperature_c`, `temperature_unit`, `schedule_scope`, `schedule_scope_data`, `rollout_canary_aps`, `rollout_canary_switches`, `firmware_beta_enabled`, `firmware_quarantine_days`, `firmware_update_cooldown_days`, `slack_webhook_url`, `autoupdate_enabled`
+`schedule_enabled`, `schedule_days`, `schedule_start_hour`, `schedule_end_hour`, `parallel_updates`, `bank_mode`, `allow_downgrade`, `timezone`, `zip_code`, `weather_check_enabled`, `min_temperature_c`, `temperature_unit`, `schedule_scope`, `schedule_scope_data`, `rollout_canary_aps`, `rollout_canary_switches`, `firmware_beta_enabled`, `firmware_canary_hold_days`, `firmware_update_cooldown_days`, `slack_webhook_url`, `autoupdate_enabled`
 
 - **Body** (JSON): Object of key-value pairs to set
 - **Notes**:

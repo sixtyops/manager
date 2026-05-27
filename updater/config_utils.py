@@ -100,6 +100,53 @@ def validate_fragment_safety(fragment: dict):
             )
 
 
+# Tachyon's ping_watchdog reboots the device when it fails to ping all
+# configured addresses `failure` consecutive times at `interval`-second
+# spacing. With the previously-seeded defaults (interval=300, failure=3)
+# a single upstream blip lasting 15 minutes — well within normal ISP-side
+# maintenance — rebooted every device on a bench in lockstep on
+# 2026-05-27 (issue #162). 30 minutes is the floor we'll accept; operators
+# can still pick any combo of `interval` and `failure` that clears it.
+MIN_PING_WATCHDOG_REBOOT_SECONDS = 1800
+
+
+def validate_ping_watchdog_safety(fragment: dict):
+    """Raise ValueError if an enabled ping_watchdog block would trigger
+    reboot in under MIN_PING_WATCHDOG_REBOOT_SECONDS seconds.
+
+    Inspects `fragment.services.ping_watchdog`. Disabled watchdogs and
+    malformed values pass through (the latter is caught downstream by
+    the device's own config validator).
+    """
+    if not isinstance(fragment, dict):
+        return
+    services = fragment.get("services")
+    if not isinstance(services, dict):
+        return
+    pw = services.get("ping_watchdog")
+    if not isinstance(pw, dict):
+        return
+    if not pw.get("enabled"):
+        return
+    try:
+        interval = int(pw.get("interval", 0))
+        failure = int(pw.get("failure", 0))
+    except (TypeError, ValueError):
+        return
+    if interval <= 0 or failure <= 0:
+        return
+    reboot_after = interval * failure
+    if reboot_after < MIN_PING_WATCHDOG_REBOOT_SECONDS:
+        raise ValueError(
+            f"ping_watchdog would reboot the device after {reboot_after}s "
+            f"of ping failure (interval={interval}, failure={failure}). "
+            f"Must be at least {MIN_PING_WATCHDOG_REBOOT_SECONDS}s "
+            f"({MIN_PING_WATCHDOG_REBOOT_SECONDS // 60} min). Raise "
+            f"'interval' or 'failure' so brief upstream blips don't reboot "
+            f"the fleet."
+        )
+
+
 def deep_merge(base: dict, overlay: dict) -> dict:
     """Recursively merge overlay into base. Overlay values win for scalars.
     Lists in overlay replace lists in base entirely."""

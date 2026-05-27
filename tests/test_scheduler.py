@@ -485,7 +485,7 @@ class TestTriggerCanarySettingsSafety:
             "weather_check_enabled": "false",
             "parallel_updates": "auto",
             "min_temperature_c": "",
-            "firmware_quarantine_days": "",
+            "firmware_canary_hold_days": "",
             "schedule_end_hour": "not-a-number",
             "rollout_canary_aps": "10.0.0.11",
         })

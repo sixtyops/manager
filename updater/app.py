@@ -1701,13 +1701,24 @@ async def get_all_cpes(session: dict = Depends(require_auth)):
 def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
     """Build the auto-login HTML page for a device.
 
-    Browsers silently block iframe/XHR requests to a host with an untrusted
-    self-signed cert; only top-level navigations show the warning UI. So we
-    probe the device's cert with a hidden <img>, and if it fails we ask the
-    user to open the device once (in a popup) to accept the cert. As soon as
-    the cert is trusted, we close the popup, submit the iframe login form,
-    and redirect the main window — that flow now actually works because the
-    browser trusts the device origin for the rest of the session.
+    Two paths, picked by a one-shot probe:
+
+    1. Inline (fast): a hidden <img> probes the device's cert. If it loads,
+       the browser already trusts the cert AND extends that trust to
+       cross-origin subresources — which is true in Chrome. We submit the
+       login form into a hidden iframe and redirect. No popup, no clicks.
+
+    2. Popup-POST (reliable): if the probe fails, the user clicks a single
+       "Sign in" button. We open a small popup and re-target the login form
+       at it; POSTing into a popup is a *top-level* navigation, so the
+       browser uses any per-origin cert exception the user has already
+       granted (Firefox, importantly, doesn't extend that exception to
+       cross-origin subresources — which is why path 1 doesn't work
+       there). If no exception exists yet, the cert warning shows inline
+       in the popup; once accepted, the POST completes and the device
+       sets the session cookie. We close the popup as soon as the user
+       does (or after 5s as a hard ceiling) and redirect the main window
+       onto the device's now-logged-in home.
     """
     escaped_ip = html_module.escape(ip)
     return f"""<!DOCTYPE html>
@@ -1748,28 +1759,23 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
             <p>Connecting to {escaped_ip}...</p>
         </div>
         <div id="view-cert-prompt" class="hidden">
-            <h1>Accept the certificate for {escaped_ip}</h1>
+            <h1>Sign in to {escaped_ip}</h1>
             <p class="muted">
-                This device uses a self-signed certificate. Click below to open
-                it once and accept the warning &mdash; we'll log you in
-                automatically and close that tab.
+                We'll open a small window to log you in. If your browser
+                shows a certificate warning, accept it &mdash; the window
+                closes itself when sign-in is done.
             </p>
-            <button id="accept-cert-btn">Accept certificate &amp; log in</button>
+            <button id="accept-cert-btn">Sign in</button>
             <p id="popup-blocked-msg" class="muted hidden">
                 Popup was blocked.
                 <a href="https://{escaped_ip}/" target="_blank" rel="noopener noreferrer">
-                Open {escaped_ip} manually</a>, accept the certificate,
-                then return to this tab.
+                Open {escaped_ip} manually</a> and sign in there.
             </p>
-        </div>
-        <div id="view-waiting" class="hidden">
-            <div class="spinner"></div>
-            <p>Waiting for certificate acceptance...</p>
-            <p class="muted">Accept the warning in the other tab. We'll take it from there.</p>
         </div>
         <div id="view-logging-in" class="hidden">
             <div class="spinner"></div>
             <p>Logging in to {escaped_ip}...</p>
+            <p class="muted">Close the small window once you see the device response.</p>
         </div>
         <div id="view-fallback" class="hidden">
             <p>Auto-login may not have succeeded.</p>
@@ -1788,10 +1794,7 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
         (function() {{
             var ip = "{escaped_ip}";
             var submitted = false;
-            var popup = null;
-            var pollTimer = null;
-            var popupCloseTimer = null;
-            var views = ['probing', 'cert-prompt', 'waiting', 'logging-in', 'fallback'];
+            var views = ['probing', 'cert-prompt', 'logging-in', 'fallback'];
 
             function show(name) {{
                 for (var i = 0; i < views.length; i++) {{
@@ -1818,18 +1821,12 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
                 }});
             }}
 
-            function stopTimers() {{
-                if (pollTimer) {{ clearInterval(pollTimer); pollTimer = null; }}
-                if (popupCloseTimer) {{ clearInterval(popupCloseTimer); popupCloseTimer = null; }}
-            }}
-
-            function doAutoLogin() {{
+            // Fast path (Chrome): cert is trusted, the iframe POST works,
+            // and the main-window redirect lands logged-in. No popup, no
+            // visible JSON, no clicks.
+            function doAutoLoginInline() {{
                 if (submitted) return;
                 submitted = true;
-                stopTimers();
-                if (popup && !popup.closed) {{
-                    try {{ popup.close(); }} catch (e) {{}}
-                }}
                 show('logging-in');
                 document.getElementById('loginForm').submit();
                 setTimeout(function() {{
@@ -1838,45 +1835,72 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
                 setTimeout(function() {{ show('fallback'); }}, 8000);
             }}
 
-            function startPolling() {{
-                stopTimers();
-                pollTimer = setInterval(function() {{
-                    if (submitted) return;
-                    probeCert().then(function(ok) {{ if (ok) doAutoLogin(); }});
-                }}, 1000);
-                popupCloseTimer = setInterval(function() {{
-                    if (submitted) return;
-                    if (popup && popup.closed) {{
-                        stopTimers();
-                        popup = null;
-                        // Probe one more time in case they accepted just before closing.
-                        probeCert().then(function(ok) {{
-                            if (ok) doAutoLogin();
-                            else show('cert-prompt');
-                        }});
-                    }}
-                }}, 500);
-            }}
+            // Reliable path (Firefox, or any browser where the inline iframe
+            // POST is blocked): open a popup, re-target the login form at it
+            // so the POST is a top-level navigation. If the popup needs a
+            // cert prompt, the user accepts it inline there. We close the
+            // popup as soon as the user does — or 5s later — and redirect
+            // the main window onto the now-logged-in device home.
+            function doAutoLoginViaPopupPost() {{
+                if (submitted) return;
+                submitted = true;
+                show('logging-in');
 
-            document.getElementById('accept-cert-btn').addEventListener('click', function() {{
-                popup = window.open("https://" + ip + "/", "_blank");
-                if (!popup) {{
+                var popupName = 'sixtyops_devlogin_' + Date.now();
+                var loginPopup = window.open('about:blank', popupName,
+                    'width=480,height=320,noopener=false');
+                if (!loginPopup) {{
                     document.getElementById('popup-blocked-msg').classList.remove('hidden');
+                    show('cert-prompt');
+                    submitted = false;
                     return;
                 }}
-                show('waiting');
-                startPolling();
-            }});
 
-            window.addEventListener('focus', function() {{
-                if (submitted) return;
-                probeCert().then(function(ok) {{ if (ok) doAutoLogin(); }});
-            }});
+                var form = document.getElementById('loginForm');
+                form.target = popupName;
+                form.submit();
 
-            // Initial probe — if the cert is already trusted (subsequent visit
-            // in the same browser session), skip straight to auto-login.
+                var navigated = false;
+                function finishNavigate() {{
+                    if (navigated) return;
+                    navigated = true;
+                    if (loginPopup && !loginPopup.closed) {{
+                        try {{ loginPopup.close(); }} catch (e) {{}}
+                    }}
+                    window.location.href = "https://" + ip + "/";
+                }}
+
+                // If the user closes the popup themselves — the natural
+                // move once the JSON response is on screen — navigate
+                // immediately. 100 ms keeps the perceived delay tight.
+                var closePoll = setInterval(function() {{
+                    if (loginPopup.closed) {{
+                        clearInterval(closePoll);
+                        finishNavigate();
+                    }}
+                }}, 100);
+
+                // Hard ceiling. Has to absorb Firefox's two-step
+                // first-visit flow: "Accept risk and continue" on the
+                // cert warning, then "Resend form data?" on the
+                // automatic retry. 12 s is generous for that and
+                // largely irrelevant on repeat visits because the
+                // close poll fires first.
+                setTimeout(function() {{
+                    clearInterval(closePoll);
+                    finishNavigate();
+                }}, 12000);
+                setTimeout(function() {{ show('fallback'); }}, 16000);
+            }}
+
+            document.getElementById('accept-cert-btn').addEventListener('click',
+                doAutoLoginViaPopupPost);
+
+            // Initial probe — if cert is already trusted in a browser that
+            // honours the exception for cross-origin subresources (Chrome),
+            // we can skip the popup entirely and inline-submit.
             probeCert().then(function(ok) {{
-                if (ok) doAutoLogin();
+                if (ok) doAutoLoginInline();
                 else show('cert-prompt');
             }});
         }})();
@@ -2010,11 +2034,12 @@ _SETTINGS_WRITABLE = {
     "weather_check_enabled", "min_temperature_c", "temperature_unit",
     "schedule_scope", "schedule_scope_data",
     "rollout_canary_aps", "rollout_canary_switches",
-    "firmware_beta_enabled", "firmware_quarantine_days",
+    "firmware_beta_enabled", "firmware_canary_hold_days",
     "slack_webhook_url",
     "snmp_traps_enabled", "snmp_trap_host", "snmp_trap_port",
     "snmp_trap_community", "snmp_trap_version",
     "autoupdate_enabled", "release_channel",
+    "telemetry_enabled", "telemetry_prompt_seen",
     "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
     "pre_update_reboot",
     "smoke_test_strict", "canary_auto_cancel",
@@ -2153,10 +2178,10 @@ def _validate_settings(filtered: dict):
         bw = _parse_int_field(filtered["bandwidth_limit_kbps"], "bandwidth_limit_kbps")
         if bw < 0 or bw > 1000000:
             raise HTTPException(400, "bandwidth_limit_kbps must be between 0 and 1000000 (0 = unlimited)")
-    if "firmware_quarantine_days" in filtered:
-        hold_days = _parse_int_field(filtered["firmware_quarantine_days"], "firmware_quarantine_days")
-        if hold_days < 0 or hold_days > 365:
-            raise HTTPException(400, "firmware_quarantine_days must be between 0 and 365")
+    if "firmware_canary_hold_days" in filtered:
+        hold_days = _parse_int_field(filtered["firmware_canary_hold_days"], "firmware_canary_hold_days")
+        if hold_days < 6 or hold_days > 365:
+            raise HTTPException(400, "firmware_canary_hold_days must be between 6 and 365")
     if "min_temperature_c" in filtered:
         min_temp = _parse_float_field(filtered["min_temperature_c"], "min_temperature_c")
         if min_temp < -100 or min_temp > 100:
@@ -4014,15 +4039,15 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
         channels = {}
 
     try:
-        quarantine_days = int(db.get_setting("firmware_quarantine_days", "7"))
+        hold_days = int(db.get_setting("firmware_canary_hold_days", "6"))
     except (TypeError, ValueError):
-        quarantine_days = 7
+        hold_days = 6
     registry = {r["filename"]: r for r in db.get_firmware_registry()}
 
     files = []
     for f in FIRMWARE_DIR.iterdir():
         if f.is_file() and f.suffix in {".bin", ".img", ".npk", ".tar", ".gz"}:
-            q_info = db.get_firmware_quarantine_info(f.name, quarantine_days)
+            info = db.get_firmware_hold_info(f.name, hold_days)
             reg = registry.get(f.name)
             files.append({
                 "name": f.name,
@@ -4031,13 +4056,13 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
                 "source": "auto" if f.name in auto_fetched else "manual",
                 "channel": channels.get(f.name, ""),
                 "added_at": reg["added_at"] if reg else None,
-                "quarantine_cleared": q_info["cleared"],
-                "quarantine_clears_at": q_info["clears_at"],
-                "quarantine_remaining_hours": q_info["remaining_hours"],
+                "hold_cleared": info["cleared"],
+                "hold_clears_at": info.get("clears_at"),
+                "hold_remaining_hours": round(info.get("remaining_days", 0) * 24, 1),
             })
     return {
         "files": sorted(files, key=lambda x: x["modified"], reverse=True),
-        "quarantine_days": quarantine_days,
+        "canary_hold_days": hold_days,
     }
 
 
@@ -4123,6 +4148,26 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
     sites = db.get_tower_sites()
     site_names = {s["id"]: s["name"] for s in sites}
 
+    # Resolve scheduler context once so per-device next-attempt is cheap.
+    scheduler = get_scheduler()
+    active_rollout = db.get_active_rollout() if scheduler else None
+    rollout_devices_by_ip = (
+        {d["ip"]: d for d in db.get_rollout_devices(active_rollout["id"])}
+        if active_rollout else {}
+    )
+    scope_ips = set(scheduler._resolve_scope(settings)) if scheduler else set()
+    switch_scope = set(scheduler._resolve_switch_scope(settings)) if scheduler else set()
+
+    def _next_attempt(ip: str, role: str, parent_ap_ip: Optional[str] = None) -> dict:
+        if not scheduler:
+            return {"auto_update_eligible": False, "next_attempt_iso": None,
+                    "reason": "Auto-update is off"}
+        return scheduler.compute_next_attempt(
+            ip, role, parent_ap_ip=parent_ap_ip, settings=settings,
+            rollout=active_rollout, rollout_devices_by_ip=rollout_devices_by_ip,
+            scope_ips=scope_ips, switch_scope=switch_scope,
+        )
+
     # Collect all devices
     devices = []
     aps = db.get_access_points(enabled_only=False)
@@ -4141,6 +4186,7 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
         summary["total"] += 1
         summary[status] += 1
 
+        next_info = _next_attempt(ap["ip"], "ap")
         devices.append({
             "ip": ap["ip"],
             "system_name": ap.get("system_name"),
@@ -4157,6 +4203,9 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             "status": status,
             "auth_status": None,
             "enabled": bool(ap.get("enabled", 1)),
+            "auto_update_eligible": next_info["auto_update_eligible"],
+            "next_attempt_iso": next_info["next_attempt_iso"],
+            "next_attempt_reason": next_info["reason"],
         })
 
         for cpe in cpes_by_ap.get(ap["ip"], []):
@@ -4167,6 +4216,7 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             summary["total"] += 1
             summary[cpe_status] += 1
 
+            cpe_next = _next_attempt(cpe["ip"], "cpe", parent_ap_ip=ap["ip"])
             devices.append({
                 "ip": cpe["ip"],
                 "system_name": cpe.get("system_name"),
@@ -4183,6 +4233,9 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
                 "status": cpe_status,
                 "auth_status": cpe.get("auth_status"),
                 "enabled": bool(ap.get("enabled", 1)),
+                "auto_update_eligible": cpe_next["auto_update_eligible"],
+                "next_attempt_iso": cpe_next["next_attempt_iso"],
+                "next_attempt_reason": cpe_next["reason"],
             })
 
     # Include switches
@@ -4195,6 +4248,7 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
         summary["total"] += 1
         summary[status] += 1
 
+        sw_next = _next_attempt(sw["ip"], "switch")
         devices.append({
             "ip": sw["ip"],
             "system_name": sw.get("system_name"),
@@ -4211,6 +4265,9 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             "status": status,
             "auth_status": None,
             "enabled": bool(sw.get("enabled", 1)),
+            "auto_update_eligible": sw_next["auto_update_eligible"],
+            "next_attempt_iso": sw_next["next_attempt_iso"],
+            "next_attempt_reason": sw_next["reason"],
         })
 
     return {"devices": devices, "summary": summary, "targets": targets}
@@ -6022,8 +6079,20 @@ async def get_job_devices_api(
 # Tracks IPs currently being pushed to, preventing overlapping pushes
 _config_pushing_ips: set = set()
 _config_push_lock = asyncio.Lock()
-# Tracks immediate config push jobs for status/cancellation
+# Tracks immediate config push jobs for status/cancellation. Single-process
+# state — manager runs as one process today, so the poller can consult this
+# directly when gating auto-enforce.
 _config_push_jobs: dict = {}  # {job_id: {"task": Task, "cancelled": bool, "success": 0, "failed": 0, "total": 0, "done": bool}}
+
+
+def has_active_config_push() -> int:
+    """Count of immediate /api/config-push jobs still running.
+
+    Used by the poller to skip auto-enforce while manual pushes are in flight,
+    so cached snapshots can't drive an enforce that overwrites an operator's
+    in-progress change.
+    """
+    return sum(1 for j in _config_push_jobs.values() if not j.get("done"))
 
 # ============================================================================
 # ============================================================================
@@ -6043,6 +6112,7 @@ def _compute_config_hash(config: dict) -> str:
 from .config_utils import (
     PROTECTED_CONFIG_KEYS,
     validate_fragment_safety as _validate_fragment_safety,
+    validate_ping_watchdog_safety as _validate_ping_watchdog_safety,
     deep_merge,
     generate_config_diff,
     check_config_compliance as _check_config_compliance,
@@ -6358,6 +6428,7 @@ async def create_config_template(request: Request, session: dict = Depends(requi
             raise HTTPException(400, f"Invalid JSON in config_fragment: {e}")
     try:
         _validate_fragment_safety(config_fragment)
+        _validate_ping_watchdog_safety(config_fragment)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -6440,6 +6511,7 @@ async def update_config_template_api(template_id: int, request: Request, session
                 raise HTTPException(400, f"Invalid JSON in config_fragment: {e}")
         try:
             _validate_fragment_safety(frag)
+            _validate_ping_watchdog_safety(frag)
         except ValueError as e:
             raise HTTPException(400, str(e))
         incoming_fragment_for_hash = frag if isinstance(frag, dict) else None
@@ -6744,8 +6816,9 @@ async def preview_config_merge(request: Request, session: dict = Depends(require
         fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
         try:
             _validate_fragment_safety(fragment)
+            _validate_ping_watchdog_safety(fragment)
         except ValueError as e:
-            raise HTTPException(400, f"Template '{t['name']}' contains unsafe keys: {e}")
+            raise HTTPException(400, f"Template '{t['name']}' rejected: {e}")
         templates.append({
             "id": t["id"],
             "name": t["name"],
@@ -6836,8 +6909,9 @@ async def push_config_templates(request: Request, session: dict = Depends(requir
         # Safety net: re-validate even though creation should have caught this
         try:
             _validate_fragment_safety(fragment)
+            _validate_ping_watchdog_safety(fragment)
         except ValueError as e:
-            raise HTTPException(400, f"Template '{t['name']}' contains unsafe keys: {e}")
+            raise HTTPException(400, f"Template '{t['name']}' rejected: {e}")
         templates.append({
             "id": t["id"],
             "name": t["name"],
@@ -7327,6 +7401,7 @@ async def start_config_push_rollout(request: Request, session: dict = Depends(re
             raise HTTPException(404, f"Template {tid} not found")
         fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
         _validate_fragment_safety(fragment)
+        _validate_ping_watchdog_safety(fragment)
         templates.append({
             "id": t["id"],
             "name": t["name"],

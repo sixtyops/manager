@@ -6,12 +6,71 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 - Installer and self-update now require `SIXTYOPS_GH_TOKEN` (a fine-grained GitHub PAT with `Contents: Read` on `sixtyops/manager`) since the source repo is private. Pass it on the same line as `sudo` (`curl -sSL ... | sudo SIXTYOPS_GH_TOKEN=ghp_xxx bash`), and set it in the deployment `.env` so the running container can hit the release-check API. Settings > Updates now surfaces a clear "Self-update token not configured" message when missing and "GitHub rejected the self-update token" when invalid, instead of silently failing. The container image at `ghcr.io/sixtyops/manager` is published unauthenticated so appliance-mode `docker pull` keeps working without a registry token
+- External time validation no longer consults `worldtimeapi.org`. That
+  endpoint started timing out on roughly every request (>1 fail per minute
+  observed on sixtyops-dev in 2026-05), and `timeapi.io` — the existing
+  fallback — was always picking up the work anyway. `get_external_time`
+  now goes straight to `timeapi.io`. No setting change required (#163).
+- `config_enforce_hour` is now explicitly seeded to `"4"` on fresh
+  installs. The poller already defaulted to 4 AM local when the row was
+  absent (`poller.py:801`), but a missing row made the value invisible
+  in the settings table to anyone inspecting the DB directly. Behaviour
+  unchanged; just visibility (#166).
+
+### Fixed
+- Config templates that enable `ping_watchdog` with a reboot trigger
+  shorter than 30 minutes are now rejected by the template-save and
+  config-push paths. The previously-seeded `Watchdog Standard` default
+  of `interval=300, failure=3, addresses=[8.8.8.8, 1.1.1.1]` rebooted
+  every device on a bench in lockstep when a brief upstream blip made
+  both public IPs unreachable for 15 minutes (issue #162). The template
+  form default for "Failures" is now `6` (30-min trigger). Operators
+  can still use any combination of `interval` and `failure` that
+  clears the 1800-second floor.
+- Device portal: rebuilt the cert-untrusted fallback as a single
+  "Sign in" button that opens a small popup, POSTs the login form into
+  it (top-level navigation, which Firefox honours per the existing
+  per-origin cert exception), then closes the popup as soon as the
+  user does — or after 5s — and redirects the main window onto the
+  device's now-logged-in home. Replaces the previous two-button
+  cert-accept-then-poll flow that left Firefox users stuck because
+  Firefox doesn't extend a manually-accepted self-signed cert
+  exception to cross-origin subresource requests (the favicon probe
+  and iframe login POST added in #110 both stayed silently blocked).
+  Chrome's fast path is unchanged: when the probe succeeds, the
+  iframe POST + redirect runs with no popup at all.
+- Auto-update scheduler no longer spawns duplicate no-op rollouts when the
+  per-tick eligibility check disagrees with the per-phase assignment check
+  (cooldown days defaulted to `0` in the dedup path while the assignment
+  step applied the configured cooldown). Both paths now use the same
+  cooldown value, and `db.create_rollout` refuses to insert a second
+  rollout for the same firmware set within 60s as a belt-and-suspenders
+  guard. On `sixtyops-dev` this bug had produced 265 identical rollouts
+  for one firmware filename, created in clustered 3-minute bursts during
+  Tue/Wed/Thu maintenance windows whenever CPE versions drifted relative
+  to the AP.
+
+### Changed
+- "Firmware quarantine" is now "Canary hold," and the hold no longer blocks
+  the whole rollout — it only gates the canary→pct10 advance. The canary
+  phase itself now runs immediately, so a newly-uploaded firmware gets
+  soaked on the configured canary AP instead of sitting unused for a week.
+  Setting key renamed from `firmware_quarantine_days` (default 7, min 0)
+  to `firmware_canary_hold_days` (default 6, min 6); operator-set values
+  are migrated automatically on startup and clamped to the new minimum.
+  WebSocket scheduler status field renamed from `quarantine` to
+  `canary_hold`; firmware-files API renamed `quarantine_*` fields to
+  `hold_*`. UI state label is "Running" with a per-rollout countdown
+  ("Holding 3d 12h more") instead of a top-level "Scheduled" badge.
 
 ### Added
+- Post-deploy operator checklist at `docs/post-deploy-checklist.md`: ten-item, five-minute smoke test the operator runs after install (admin login, site, AP, poll, config compliance, notification test, audit log via API, backups decision, HTTPS, update channel). Audit-log step uses `curl` against `GET /api/audit-log` and links forward to #136 for the in-UI panel. Linked from the README's Quick Start pointer and Documentation section (#122)
+- Operator quickstart at `docs/quickstart.md`: ~10-minute install-to-first-device walkthrough (install → first login → setup wizard → first tower site → first AP → first poll). Screenshot placeholders only this pass; real captures land in a follow-up. Linked from the README's Quick Start and Documentation sections (#123)
 - Troubleshooting one-pager at `docs/troubleshooting.md` covering the top five operator failure modes (device unreachable, RADIUS auth, hung update jobs, SSL renewal, SFTP backup) with symptom → diagnose → recover for each. Linked from README's Documentation section and the in-app About panel footer (#124)
 - Switch → AP topology cascade: APs are now nested under their upstream switch in the device tree, with a port badge showing the switch port they're connected to (ordered by port number)
 - OIDC admin group mapping: configure an "Admin Group" in SSO settings to auto-promote members to admin role on login
 - Role badge in the header shows the current user's role; write-operation UI (Add Devices, delete, bulk actions) is hidden from viewer accounts
+- Viewer UI is now consistently read-only across the Updates/Config drawers and the Settings modal: toggles, schedule inputs, firmware selectors, config policies, notifications, RADIUS, backup/restore, and HTTPS controls are visibly locked rather than appearing editable. Action buttons (Save, Upload, Push, Resume/Cancel, Check Compliance) are hidden. When a write does land on the server (e.g. via a stale tab), the inline status now reads "Read-only access — ask an admin" instead of the generic "Save failed"
 - Initial config priming: devices without a cached config are polled on the next poll cycle instead of waiting until the 4 AM daily run, so compliance works from day one
 - Check Compliance now triggers a fresh config poll (`?refresh=true`) with visible "Polling devices…" feedback instead of reading stale cache
 - NTP server defaults (132.163.97.1 and 129.6.15.28) in the config template editor; toggle stays off by default
@@ -20,8 +79,13 @@ All notable changes to this project are documented in this file.
 - Config snapshot recycle bin: deleting a device now soft-deletes its config history rather than orphaning rows. Deleting an AP also cascades to its CPEs' snapshots. A new "Config Snapshot Recycle Bin" panel in the Config drawer lets admins restore or permanently purge entries
 - MAC-based config-history auto-rebind: when a managed device's IP changes (DHCP renumber, replacement at the same MAC), its prior config history is automatically re-linked to the new IP. The UI surfaces a toast and refreshes when this happens
 - Manager backup export now includes device config snapshots and the recycle bin (Fernet-encrypted with the same passphrase). Re-import is idempotent on `(ip, fetched_at)` so DR no longer resets config history
+- `device_configs.config_json` is now Fernet-encrypted at rest with the same key (`data/.encryption_key`) used for device passwords (#35). Configs typically contain RADIUS shared secrets, WPA PSKs, SNMP communities and 802.1X creds; previously these sat in plaintext in SQLite, so anyone with read access to the DB file could lift them. Existing rows are migrated in-place on next startup (idempotent — checks for the Fernet `gAAAAA` prefix). The `config_hash` column stays plaintext so change-detection queries (`get_latest_config_hash`) remain cheap. Backup tar export still re-wraps with the export passphrase so DR works across managers with different storage keys
 
 ### Changed
+- Updates tab clarifies "when next" for both the fleet and individual devices. The Auto-Update status badge collapses to four user-facing labels — **Off**, **Scheduled**, **Updating**, **Paused**, **Up to date** — replacing the eight internal terms (Idle, Waiting, Blocked, On Hold, No firmware, All current, …) the badge used to surface. Each Scheduled/Paused state shows a concrete subtitle ("Next: tomorrow at 3:00 AM" or the block reason) instead of the abbreviated `3:00-4:00 on tue,wed,thu` window string. Hovering the orange ↑ on a device row now shows that device's next expected attempt ("Next attempt tomorrow at 3:00 AM — click to update now"), computed from its rollout phase, the maintenance window, and any firmware-quarantine hold. Internal scheduler state names are unchanged, so logs and `schedule_log` history are unaffected
+- Config auto-enforce can now auto-rollback the last enforce phase when the post-enforce re-poll shows mass failure. New setting `config_enforce_auto_rollback_threshold_pct` (default `0` = off, range `0-100`). When non-zero, after the post-enforce re-poll the percent of last-phase devices still non-compliant is compared against the threshold; if exceeded, each affected device's pre-enforce snapshot is pushed back and the action is logged with `phase=rollback`. A `config_enforce_status` event with `status="rolled_back"` is broadcast so operators see what happened. The pre-enforce snapshot already existed for manual `/api/config-push/rollback/{ip}` — this just closes the loop automatically (#50)
+- Config auto-enforce now classifies canary failures and retries transient ones (login failed, fetch-config failed) up to `config_enforce_canary_retry_count` times (default 1, range 0-3) before declaring the canary failed. Policy failures (dry-run rejected, apply failed) still stop the run immediately — they're the signal canary is meant to catch. The `config_enforce_log.error` column now prefixes the message with `"transient: "` or `"policy: "`, and exhausted retries append a `(N/N retries)` suffix so the audit trail makes sense (#49)
+- Config auto-enforce now defers when an immediate `/api/config-push` job is in flight, in addition to the existing rollout check. Closes the race where a 4 AM enforce run could overwrite an operator's manual change by acting on cached compliance data. The skip is broadcast as a `config_enforce_status` event with `status="skipped"` so it shows up in the audit trail (#48)
 - API documentation routes (`/docs`, `/redoc`, `/openapi.json`) are now auth-gated and serve locally-vendored Swagger UI / ReDoc assets instead of `cdn.jsdelivr.net`. Two issues addressed in one change: (1) browser content blockers were silently dropping the default FastAPI HTML's CDN script tags, leaving the doc pages blank — same root cause as the Chart.js vendoring fix. (2) Anonymously-accessible docs were leaking the full API surface (every route, request/response schema, validator constraints) to anyone who could reach the manager. New `static/vendor/swagger-ui.css` (155 KB), `static/vendor/swagger-ui-bundle.js` (1.4 MB, swagger-ui-dist 5.21.0), `static/vendor/redoc.standalone.js` (911 KB, redoc 2.5.0). The schema content itself is unchanged
 - Config push rollouts now put the "advance" affordance on the **next** phase pill instead of the just-completed one. After canary finishes, the 10% pill lights up with a pulsing blue background and explicit "Tap to push" copy — instead of the previous design where the canary pill became clickable with only a 1-pixel inset shadow and a hover-tooltip nudge. Operators were missing the affordance entirely and assuming the next phase would auto-run. For 1-device rollouts (no later phase has any devices), the current pill remains clickable with "Tap to finish" copy and walks straight through the empty phases via PR #88's empty-phase logic
 - Signal health classification tightened to match the network's actual operating envelope: Strong (≥ −60 dBm), Low (−61 to −65 dBm), Marginal (< −65 dBm). Was Strong (> −65), Low (−65 to −75), Critical (< −75) — much more lenient than the network actually performs at. The Signal vs Distance chart's reference dotted lines now sit at −60 (Strong/Low boundary) and −65 (Low/Marginal boundary) instead of −65 and −75. The "Critical" tier was renamed to "Marginal" everywhere it surfaces (chart legend, per-row signal coloring, CPE status tooltip — internal CSS class `signal-critical` kept for diff size). `SignalHealth.GREEN/YELLOW/RED` API values are unchanged so external consumers keep working

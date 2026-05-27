@@ -181,11 +181,39 @@ def _migrate(db):
         _license_keys,
     )
 
+    # Rename firmware_quarantine_days → firmware_canary_hold_days.
+    # The old key blocked all rollout activity for N days; the new key only
+    # gates canary→pct10 advancement. Carry forward any operator-set value,
+    # clamped to the new minimum of 6 days.
+    try:
+        old = db.execute(
+            "SELECT value FROM settings WHERE key = 'firmware_quarantine_days'"
+        ).fetchone()
+        new = db.execute(
+            "SELECT value FROM settings WHERE key = 'firmware_canary_hold_days'"
+        ).fetchone()
+        if old and not new:
+            try:
+                carried = max(6, int(old[0]))
+            except (TypeError, ValueError):
+                carried = 6
+            db.execute(
+                "INSERT INTO settings (key, value) VALUES ('firmware_canary_hold_days', ?)",
+                (str(carried),),
+            )
+        if old:
+            db.execute("DELETE FROM settings WHERE key = 'firmware_quarantine_days'")
+    except Exception as e:
+        logger.warning(f"Setting rename quarantine→canary_hold skipped: {e}")
+
     # Migrate data from access_points/switches into unified devices table
     _migrate_to_devices_table(db)
 
     # Encrypt any plaintext device passwords
     _migrate_encrypt_passwords(db)
+
+    # Encrypt any plaintext device_configs.config_json (#35)
+    _migrate_encrypt_device_configs(db)
 
     # Add soft-delete + label + mac columns to device_configs (recycle bin + rebind support)
     dc_columns = [row[1] for row in db.execute("PRAGMA table_info(device_configs)").fetchall()]
@@ -323,6 +351,33 @@ def _migrate_encrypt_passwords(db):
                 migrated += 1
     if migrated:
         logger.info(f"Encrypted {migrated} plaintext device password(s)")
+
+
+def _migrate_encrypt_device_configs(db):
+    """One-time migration: encrypt any plaintext device_configs.config_json in-place.
+
+    Configs hold RADIUS shared secrets, WPA PSKs, SNMP communities and 802.1X
+    creds. Pre-#35 builds wrote them as plaintext JSON. Mirrors the password
+    pattern: skip rows that already look Fernet-encrypted (`is_encrypted()`),
+    so this is safe to re-run.
+    """
+    try:
+        rows = db.execute(
+            "SELECT id, config_json FROM device_configs"
+        ).fetchall()
+    except Exception:
+        return
+    migrated = 0
+    for row in rows:
+        cfg = row[1]
+        if cfg and not is_encrypted(cfg):
+            db.execute(
+                "UPDATE device_configs SET config_json = ? WHERE id = ?",
+                (encrypt_password(cfg), row[0]),
+            )
+            migrated += 1
+    if migrated:
+        logger.info(f"Encrypted {migrated} plaintext device_configs row(s)")
 
 
 def init_db():
@@ -913,7 +968,7 @@ def init_db():
             "firmware_auto_fetched_files": "",
             "setup_completed": "false",
             "admin_password_hash": "",
-            "firmware_quarantine_days": "7",
+            "firmware_canary_hold_days": "6",
             "firmware_update_cooldown_days": "30",
             "slack_webhook_url": "",
             # Notification health tracking
@@ -996,6 +1051,17 @@ def init_db():
             # Config auto-enforce
             "config_auto_enforce": "false",
             "config_enforce_cooldown_minutes": "10",
+            # Hour (0-23, device-local TZ) the daily compliance poll runs.
+            # 4 puts the run right after the 3-4 AM maintenance window so any
+            # auto-enforce push lands while devices are still in off-hours.
+            "config_enforce_hour": "4",
+            # Number of times to retry a transient canary failure before
+            # treating it as a real policy failure (0-3, default 1).
+            "config_enforce_canary_retry_count": "1",
+            # If non-zero, auto-rollback the most recent enforce phase when
+            # the post-enforce re-poll shows this percent of devices are
+            # still non-compliant (0-100, default 0 = off).
+            "config_enforce_auto_rollback_threshold_pct": "0",
             # Vendor feature flags
             "mikrotik_enabled": "false",
             # License configuration
@@ -1861,12 +1927,6 @@ def is_firmware_hold_cleared(filename: str, hold_days: int = 7) -> bool:
     return datetime.now() >= added_dt + timedelta(days=hold_days)
 
 
-# Alias for backwards compatibility
-def is_firmware_quarantine_cleared(filename: str, quarantine_days: int = 7) -> bool:
-    """Alias for is_firmware_hold_cleared (backwards compatibility)."""
-    return is_firmware_hold_cleared(filename, quarantine_days)
-
-
 def get_firmware_hold_info(filename: str, hold_days: int = 7) -> dict:
     """Get hold period status info for a firmware file.
 
@@ -1898,19 +1958,6 @@ def get_firmware_hold_info(filename: str, hold_days: int = 7) -> dict:
         "reference_type": reference_type,
         "clears_at": clears_at.isoformat(),
         "remaining_days": round(remaining_days, 1),
-    }
-
-
-# Alias for backwards compatibility
-def get_firmware_quarantine_info(filename: str, quarantine_days: int = 7) -> dict:
-    """Alias for get_firmware_hold_info (backwards compatibility)."""
-    info = get_firmware_hold_info(filename, quarantine_days)
-    # Map new fields to old field names for compatibility
-    return {
-        "cleared": info["cleared"],
-        "added_at": info.get("reference_date"),
-        "clears_at": info.get("clears_at"),
-        "remaining_hours": round(info.get("remaining_days", 0) * 24, 1),
     }
 
 
@@ -2148,8 +2195,29 @@ def get_rollout(rollout_id: int) -> Optional[dict]:
 
 
 def create_rollout(firmware_file: str, firmware_file_303l: str = None, firmware_file_tns100: str = None) -> int:
-    """Create a new rollout. Returns the rollout ID."""
+    """Create a new rollout. Returns the rollout ID.
+
+    If a rollout for the same firmware set was created within the last 60
+    seconds, returns that existing id instead of inserting a duplicate.
+    Guards against a scheduler tick-loop creating one no-op rollout per tick
+    when eligibility checks disagree.
+    """
     with get_db() as db:
+        existing = db.execute(
+            "SELECT id FROM rollouts "
+            "WHERE firmware_file = ? "
+            "AND COALESCE(firmware_file_303l, '') = COALESCE(?, '') "
+            "AND COALESCE(firmware_file_tns100, '') = COALESCE(?, '') "
+            "AND created_at > datetime('now', '-60 seconds') "
+            "ORDER BY id DESC LIMIT 1",
+            (firmware_file, firmware_file_303l, firmware_file_tns100)
+        ).fetchone()
+        if existing:
+            logger.warning(
+                f"create_rollout: duplicate suppressed; returning existing id={existing['id']} "
+                f"for {firmware_file!r}"
+            )
+            return existing["id"]
         cursor = db.execute(
             "INSERT INTO rollouts (firmware_file, firmware_file_303l, firmware_file_tns100) VALUES (?, ?, ?)",
             (firmware_file, firmware_file_303l, firmware_file_tns100)
@@ -2749,21 +2817,89 @@ def cleanup_old_device_update_history(max_age_days: int = 180):
 
 # Device Config operations
 
+def _decrypt_config_json_field(value):
+    """Decrypt a stored config_json blob. Tolerates legacy plaintext rows so
+    reads never fail mid-migration; the migration itself converts those rows
+    on the next `init_db()`.
+    """
+    if not value:
+        return value
+    if is_encrypted(value):
+        return decrypt_password(value)
+    return value
+
+
+def _decrypt_row_config_json(row: Optional[dict]) -> Optional[dict]:
+    """Return the row dict with `config_json` decrypted in place."""
+    if row is None:
+        return None
+    if "config_json" in row:
+        row["config_json"] = _decrypt_config_json_field(row["config_json"])
+    return row
+
+
 def save_device_config(ip: str, config_json: str, config_hash: str,
                        model: str = None, hardware_id: str = None,
-                       mac: str = None):
-    """Save a device config snapshot.
+                       mac: str = None) -> int:
+    """Save a device config snapshot. Returns the new row id.
+
+    `config_json` is encrypted at rest with the same Fernet key used for
+    device passwords (#35). Callers pass cleartext canonical JSON; the hash
+    is also computed on cleartext and stored unencrypted so change-detection
+    queries (`get_latest_config_hash`) stay cheap.
 
     `mac` is the per-unit identifier used for auto-rebind on IP changes;
     it should be normalized to upper-case (no separators or with `:`).
     Callers without a known MAC may pass None — rebind will simply not fire.
     """
     normalized_mac = mac.upper() if mac else None
+    encrypted_json = encrypt_password(config_json) if config_json else config_json
     with get_db() as db:
-        db.execute(
+        cursor = db.execute(
             """INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id, mac, fetched_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (ip, config_json, config_hash, model, hardware_id, normalized_mac, datetime.now().isoformat())
+            (ip, encrypted_json, config_hash, model, hardware_id, normalized_mac, datetime.now().isoformat())
+        )
+        return cursor.lastrowid
+
+
+def insert_imported_device_config(
+    ip: str,
+    config_json: str,
+    config_hash: str,
+    fetched_at: str,
+    model: Optional[str] = None,
+    hardware_id: Optional[str] = None,
+    mac: Optional[str] = None,
+    deleted_at: Optional[str] = None,
+    device_label: Optional[str] = None,
+) -> None:
+    """Insert a device-config row from a backup import.
+
+    Differs from `save_device_config` in that the caller controls
+    `fetched_at`, `deleted_at`, and `device_label` (so recycle-bin entries
+    survive a backup round-trip). `config_json` is cleartext on the way in
+    and gets Fernet-wrapped on the way to disk, same as `save_device_config`.
+    """
+    normalized_mac = mac.upper() if mac else None
+    encrypted_json = encrypt_password(config_json) if config_json else config_json
+    with get_db() as db:
+        db.execute(
+            """INSERT INTO device_configs
+                   (ip, config_json, config_hash, model, hardware_id, mac,
+                    fetched_at, deleted_at, device_label)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                ip,
+                encrypted_json,
+                config_hash,
+                model,
+                hardware_id,
+                normalized_mac,
+                fetched_at,
+                deleted_at,
+                device_label,
+            ),
         )
 
 
@@ -2776,7 +2912,7 @@ def get_latest_device_config(ip: str) -> Optional[dict]:
                 ORDER BY fetched_at DESC LIMIT 1""",
             (ip,)
         ).fetchone()
-        return dict(row) if row else None
+        return _decrypt_row_config_json(dict(row)) if row else None
 
 
 def get_device_config_history(ip: str, limit: int = 20) -> list[dict]:
@@ -2798,7 +2934,7 @@ def get_device_config_by_id(config_id: int) -> Optional[dict]:
         row = db.execute(
             "SELECT * FROM device_configs WHERE id = ?", (config_id,)
         ).fetchone()
-        return dict(row) if row else None
+        return _decrypt_row_config_json(dict(row)) if row else None
 
 
 def get_all_latest_configs() -> dict:
@@ -2827,7 +2963,7 @@ def get_all_latest_configs() -> dict:
             LEFT JOIN cpe_cache c ON c.ip = dc.ip
             WHERE dc.deleted_at IS NULL
         """).fetchall()
-        return {row["ip"]: dict(row) for row in rows}
+        return {row["ip"]: _decrypt_row_config_json(dict(row)) for row in rows}
 
 
 def get_latest_config_fetched_at() -> Optional[str]:

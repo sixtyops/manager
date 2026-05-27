@@ -151,6 +151,22 @@
         .role-badge[data-role="operator"] { background: #d1fae5; color: #047857; }
         .role-badge[data-role="viewer"] { background: var(--border); color: var(--text-muted); }
 
+        .viewer-locked {
+            cursor: not-allowed;
+            opacity: 0.55;
+            pointer-events: none;
+        }
+        .viewer-locked-tree {
+            pointer-events: none;
+        }
+        .viewer-locked-tree input,
+        .viewer-locked-tree select,
+        .viewer-locked-tree textarea,
+        .viewer-locked-tree button,
+        .viewer-locked-tree a {
+            cursor: not-allowed;
+        }
+
         .user-menu {
             position: relative;
         }
@@ -612,6 +628,12 @@
         .about-meta { font-size:0.72rem; color:var(--text-muted,#6b7280); margin-bottom:10px; }
         .about-meta code { font-size:0.7rem; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
         .about-blurb { font-size:0.75rem; color:var(--text-muted,#6b7280); margin:0 0 16px 0; line-height:1.5; }
+        .about-whats-new { margin:0 0 14px 0; padding:12px 14px; border:1px solid var(--border-light,#f3f4f6); border-radius:8px; background:#fff; }
+        .about-whats-new-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
+        .about-whats-new-title { font-size:0.82rem; font-weight:700; color:var(--text,#111827); }
+        .about-whats-new-version { font-size:0.72rem; font-weight:700; color:var(--text-muted,#6b7280); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; white-space:nowrap; }
+        .about-whats-new-body { font-size:0.74rem; color:var(--text-muted,#6b7280); line-height:1.45; }
+        .about-whats-new-body .release-notes-content { margin-top:0; max-height:160px; }
         .about-support { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 14px; border:1px solid #FCD34D; border-radius:10px; background:linear-gradient(135deg,#FFF7CC 0%,#FFFDF4 100%); flex-wrap:wrap; }
         .about-support-text { min-width:200px; flex:1; }
         .about-support-title { font-size:0.82rem; font-weight:700; color:#92400E; margin-bottom:2px; }
@@ -658,15 +680,27 @@
         }
 
         .top-section {
-            display: grid;
-            grid-template-columns: 320px 1fr;
+            display: flex;
             gap: 20px;
             margin-bottom: 20px;
+            align-items: stretch;
+        }
+
+        .top-section > .card[data-min-role="operator"] {
+            flex: 0 0 320px;
+        }
+
+        .top-section > .chart-card {
+            flex: 1;
+            min-width: 0;
         }
 
         @media (max-width: 900px) {
             .top-section {
-                grid-template-columns: 1fr;
+                flex-direction: column;
+            }
+            .top-section > .card[data-min-role="operator"] {
+                flex: 0 0 auto;
             }
         }
 
@@ -1277,7 +1311,8 @@
             gap: 12px;
             font-size: var(--text-base);
             min-height: 48px;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
+            overflow-x: auto;
             cursor: pointer;
             user-select: none;
         }
@@ -1287,7 +1322,8 @@
             gap: 8px;
             flex: 1;
             padding: 4px 8px;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
+            min-width: 0;
         }
         .drawer-handle-half.active { display: flex; }
         .drawer-mode-tabs {
@@ -1403,8 +1439,31 @@
         }
 
         .bottom-drawer.open .drawer-panel {
-            max-height: 50vh;
+            max-height: var(--drawer-panel-height, 50vh);
             overflow-y: auto;
+        }
+
+        .bottom-drawer.open .drawer-panel.dragging {
+            transition: none;
+        }
+
+        .drawer-resize-handle {
+            display: none;
+            height: 6px;
+            cursor: ns-resize;
+            background: transparent;
+            border-top: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            touch-action: none;
+        }
+        .bottom-drawer.open .drawer-resize-handle {
+            display: block;
+        }
+        .drawer-resize-handle:hover,
+        .drawer-resize-handle.dragging {
+            background: var(--border-light);
         }
 
         .drawer-panel-inner {
@@ -2251,6 +2310,11 @@
                 padding: 10px 16px;
                 gap: 6px 8px;
                 min-height: auto;
+                flex-wrap: wrap;
+                overflow-x: visible;
+            }
+            .drawer-handle-half {
+                flex-wrap: wrap;
             }
             .status-bar-section {
                 flex-wrap: wrap;
@@ -2451,7 +2515,7 @@
             <!-- Firmware/Updates bar (shown when firmware mode active) -->
             <div class="drawer-handle-half active" id="drawerHandleLeft">
                 <div class="status-bar-section">
-                    <button class="toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-pressed="false" onclick="toggleAutoSchedule(event)"></button>
+                    <button class="toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-pressed="false" onclick="toggleAutoSchedule(event)" data-min-role-disable="operator"></button>
                     <span class="status-bar-label">Auto-Update</span>
                     <span class="status-badge status-bar-badge" id="barStateBadge">Off</span>
                     <span class="status-bar-reason" id="barBlockReason"></span>
@@ -2465,8 +2529,8 @@
                     <span class="status-bar-muted u-status-note" id="barRolloutPrediction"></span>
                     <div id="barRolloutFailedDevices" style="display:none;flex-wrap:wrap;gap:4px;"></div>
                     <div class="status-bar-actions" id="barRolloutActions">
-                        <button class="btn btn-sm btn-warning hidden" id="barResumeBtn" onclick="resumeRollout();event.stopPropagation();">Resume</button>
-                        <button class="btn btn-sm btn-danger hidden" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();">Cancel</button>
+                        <button class="btn btn-sm btn-warning hidden" id="barResumeBtn" onclick="resumeRollout();event.stopPropagation();" data-min-role="operator">Resume</button>
+                        <button class="btn btn-sm btn-danger hidden" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();" data-min-role="operator">Cancel</button>
                     </div>
                 </div>
                 <span class="drawer-unsaved-dot" id="drawerUnsavedDot" title="Unsaved changes"></span>
@@ -2481,47 +2545,52 @@
                 <div class="status-bar-section">
                     <button class="toggle" id="configAutoEnforceToggle" type="button"
                             aria-label="Toggle auto-enforce" aria-pressed="false"
-                            onclick="toggleConfigAutoEnforce(!this.classList.contains('active'));event.stopPropagation();"></button>
+                            onclick="toggleConfigAutoEnforce(!this.classList.contains('active'));event.stopPropagation();"
+                            data-min-role-disable="operator"></button>
                     <span class="status-bar-label" title="Checks compliance and pushes corrections daily">Auto-Enforce</span>
                     <span class="status-badge" id="configEnforceStatusBadge" style="display:none;"></span>
                     <span id="configEnforceAtLabel" class="u-text-xxs-dim" style="display:none;">daily at</span>
                     <select id="configEnforceHour" name="configEnforceHour" class="u-w-64" style="display:none;font-size:var(--text-xs);"
                             title="Daily enforce time — checks compliance and pushes corrections to non-compliant devices" aria-label="Daily enforce hour"
-                            onchange="updateEnforceHour(this.value)" onclick="event.stopPropagation();"></select>
+                            onchange="updateEnforceHour(this.value)" onclick="event.stopPropagation();"
+                            data-min-role-disable="operator"></select>
                 </div>
                 <div class="status-bar-section status-bar-rollout u-ml-auto" id="configRolloutSection">
                     <div class="status-bar-phases" id="configPushRolloutPhases"></div>
                     <div class="status-bar-phases" id="configEnforcePhases" style="display:none;"></div>
                     <span class="status-bar-muted" id="configEnforceProgress" style="display:none;"></span>
                     <div class="status-bar-actions">
-                        <button class="btn btn-sm btn-ghost" id="configCancelBtn" onclick="cancelConfigPushRollout();event.stopPropagation();" style="display:none;">Cancel</button>
-                        <button class="btn btn-sm btn-warning" id="configResumeBtn" onclick="resumeConfigPushRollout();event.stopPropagation();" style="display:none;">Resume</button>
-                        <button class="btn btn-sm btn-secondary" id="checkComplianceBtn" onclick="checkCompliance();event.stopPropagation();">Check Compliance</button>
-                        <button class="btn btn-sm btn-primary hidden" id="configPushBtn" onclick="showConfigPushDialog();event.stopPropagation();">Push to Devices</button>
+                        <button class="btn btn-sm btn-ghost" id="configCancelBtn" onclick="cancelConfigPushRollout();event.stopPropagation();" style="display:none;" data-min-role="operator">Cancel</button>
+                        <button class="btn btn-sm btn-warning" id="configResumeBtn" onclick="resumeConfigPushRollout();event.stopPropagation();" style="display:none;" data-min-role="operator">Resume</button>
+                        <button class="btn btn-sm btn-secondary" id="checkComplianceBtn" onclick="checkCompliance();event.stopPropagation();" data-min-role="operator">Check Compliance</button>
+                        <button class="btn btn-sm btn-primary hidden" id="configPushBtn" onclick="showConfigPushDialog();event.stopPropagation();" data-min-role="operator">Push to Devices</button>
                     </div>
                 </div>
             </div>
             <div class="drawer-chevron" id="drawerChevron">&#9650;</div>
         </div>
         <div class="drawer-panel" id="drawerPanel">
+            <div class="drawer-resize-handle" id="drawerResizeHandle"
+                 role="separator" aria-orientation="horizontal"
+                 aria-label="Resize drawer" title="Drag to resize · double-click to reset"></div>
             <!-- Updates drawer content -->
             <div id="drawerContent-updates">
-            <div class="drawer-panel-inner">
+            <div class="drawer-panel-inner" data-min-role-disable-tree="operator">
                 <div class="drawer-settings-grid">
                     <div class="drawer-col">
                         <div class="drawer-section-title">Schedule</div>
                         <label>Days</label>
                         <div class="drawer-days" id="drawerDays">
-                            <button class="drawer-day-btn" data-day="mon" onclick="toggleDrawerDay(this)">Mon</button>
-                            <button class="drawer-day-btn" data-day="tue" onclick="toggleDrawerDay(this)">Tue</button>
-                            <button class="drawer-day-btn" data-day="wed" onclick="toggleDrawerDay(this)">Wed</button>
-                            <button class="drawer-day-btn" data-day="thu" onclick="toggleDrawerDay(this)">Thu</button>
-                            <button class="drawer-day-btn" data-day="fri" onclick="toggleDrawerDay(this)">Fri</button>
-                            <button class="drawer-day-btn" data-day="sat" onclick="toggleDrawerDay(this)">Sat</button>
-                            <button class="drawer-day-btn" data-day="sun" onclick="toggleDrawerDay(this)">Sun</button>
+                            <button class="drawer-day-btn" data-day="mon" onclick="toggleDrawerDay(this)" data-min-role-disable="operator">Mon</button>
+                            <button class="drawer-day-btn" data-day="tue" onclick="toggleDrawerDay(this)" data-min-role-disable="operator">Tue</button>
+                            <button class="drawer-day-btn" data-day="wed" onclick="toggleDrawerDay(this)" data-min-role-disable="operator">Wed</button>
+                            <button class="drawer-day-btn" data-day="thu" onclick="toggleDrawerDay(this)" data-min-role-disable="operator">Thu</button>
+                            <button class="drawer-day-btn" data-day="fri" onclick="toggleDrawerDay(this)" data-min-role-disable="operator">Fri</button>
+                            <button class="drawer-day-btn" data-day="sat" onclick="toggleDrawerDay(this)" data-min-role-disable="operator">Sat</button>
+                            <button class="drawer-day-btn" data-day="sun" onclick="toggleDrawerDay(this)" data-min-role-disable="operator">Sun</button>
                         </div>
                         <div style="display:flex;gap:8px;margin-top:8px;">
-                            <div style="flex:1;"><label for="drawerStartHour">Start</label><select id="drawerStartHour" name="drawerStartHour">
+                            <div style="flex:1;"><label for="drawerStartHour">Start</label><select id="drawerStartHour" name="drawerStartHour" data-min-role-disable="operator">
                                 <option value="0">12 AM</option><option value="1">1 AM</option><option value="2">2 AM</option>
                                 <option value="3">3 AM</option><option value="4">4 AM</option><option value="5">5 AM</option>
                                 <option value="6">6 AM</option><option value="7">7 AM</option><option value="8">8 AM</option>
@@ -2531,7 +2600,7 @@
                                 <option value="18">6 PM</option><option value="19">7 PM</option><option value="20">8 PM</option>
                                 <option value="21">9 PM</option><option value="22">10 PM</option><option value="23">11 PM</option>
                             </select></div>
-                            <div style="flex:1;"><label for="drawerEndHour">End</label><select id="drawerEndHour" name="drawerEndHour">
+                            <div style="flex:1;"><label for="drawerEndHour">End</label><select id="drawerEndHour" name="drawerEndHour" data-min-role-disable="operator">
                                 <option value="1">1 AM</option><option value="2">2 AM</option><option value="3">3 AM</option>
                                 <option value="4">4 AM</option><option value="5">5 AM</option><option value="6">6 AM</option>
                                 <option value="7">7 AM</option><option value="8">8 AM</option><option value="9">9 AM</option>
@@ -2547,44 +2616,44 @@
                     <div class="drawer-col">
                         <div class="drawer-section-title">Settings</div>
                         <label for="drawerBankMode">Update Mode</label>
-                        <select id="drawerBankMode" name="drawerBankMode">
+                        <select id="drawerBankMode" name="drawerBankMode" data-min-role-disable="operator">
                             <option value="one">Single Bank (recommended)</option>
                             <option value="both">Both Banks</option>
                         </select>
                         <div style="margin-top:8px;">
-                            <label for="drawerParallel">Parallel</label><input type="number" id="drawerParallel" name="drawerParallel" value="2" min="1" max="10">
+                            <label for="drawerParallel">Parallel</label><input type="number" id="drawerParallel" name="drawerParallel" value="2" min="1" max="10" data-min-role-disable="operator">
                         </div>
                     </div>
 
                     <div class="drawer-col-wide">
                         <div class="drawer-section-title">Options</div>
                         <div class="toggle-sm-row">
-                            <button class="toggle-sm active" id="drawerPreRebootToggle" type="button" aria-label="Toggle pre-update reboot" aria-pressed="true" onclick="toggleDrawerPreReboot()"></button>
+                            <button class="toggle-sm active" id="drawerPreRebootToggle" type="button" aria-label="Toggle pre-update reboot" aria-pressed="true" onclick="toggleDrawerPreReboot()" data-min-role-disable="operator"></button>
                             <span class="toggle-sm-label">Pre-update Reboot</span>
                         </div>
                         <div class="toggle-sm-row">
-                            <button class="toggle-sm" id="drawerDowngradeToggle" type="button" aria-label="Toggle allow downgrade" aria-pressed="false" onclick="toggleDrawerDowngrade()"></button>
+                            <button class="toggle-sm" id="drawerDowngradeToggle" type="button" aria-label="Toggle allow downgrade" aria-pressed="false" onclick="toggleDrawerDowngrade()" data-min-role-disable="operator"></button>
                             <span class="toggle-sm-label">Allow Downgrade</span>
                         </div>
                         <div class="toggle-sm-row">
-                            <button class="toggle-sm" id="drawerWeatherToggle" type="button" aria-label="Toggle weather lockout" aria-pressed="false" onclick="toggleDrawerWeather()"></button>
+                            <button class="toggle-sm" id="drawerWeatherToggle" type="button" aria-label="Toggle weather lockout" aria-pressed="false" onclick="toggleDrawerWeather()" data-min-role-disable="operator"></button>
                             <span class="toggle-sm-label">Weather Guard &lt;</span>
-                            <input type="number" id="drawerMinTemp" name="drawerMinTemp" value="14" min="-40" max="120" aria-label="Minimum temperature" class="u-w-48">
+                            <input type="number" id="drawerMinTemp" name="drawerMinTemp" value="14" min="-40" max="120" aria-label="Minimum temperature" class="u-w-48" data-min-role-disable="operator">
                             <span id="drawerTempUnit" class="u-text-xs-muted">&deg;F</span>
                             <span id="drawerWeatherTemp" class="u-text-sm-muted" style="margin-left:auto;"></span>
                         </div>
                         <div class="toggle-sm-row">
                             <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerZipCode">Postal / Zip</label>
-                            <input type="text" id="drawerZipCode" name="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56">
+                            <input type="text" id="drawerZipCode" name="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56" data-min-role-disable="operator">
                         </div>
                         <div class="toggle-sm-row">
-                            <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerQuarantineDays" title="Canary devices soak-test new firmware for this many days before the rest of the fleet upgrades">Quarantine Period</label>
-                            <input type="number" id="drawerQuarantineDays" name="drawerQuarantineDays" value="7" min="0" max="90" class="u-w-48">
+                            <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerCanaryHoldDays" title="Canary devices soak-test new firmware for at least this many days before the rest of the fleet upgrades">Canary Hold</label>
+                            <input type="number" id="drawerCanaryHoldDays" name="drawerCanaryHoldDays" value="6" min="6" max="90" class="u-w-48" data-min-role-disable="operator">
                             <span class="u-text-xxs-dim">days</span>
                         </div>
                         <div class="toggle-sm-row">
                             <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerCooldownDays" title="Prevents rapidly re-updating a device after a firmware update. Device will skip auto-updates if it was updated within this window.">Update Cooldown</label>
-                            <input type="number" id="drawerCooldownDays" name="drawerCooldownDays" value="30" min="0" max="365" class="u-w-48">
+                            <input type="number" id="drawerCooldownDays" name="drawerCooldownDays" value="30" min="0" max="365" class="u-w-48" data-min-role-disable="operator">
                             <span class="u-text-xxs-dim">days</span>
                         </div>
                     </div>
@@ -2592,14 +2661,14 @@
                     <div class="drawer-col-wide drawer-firmware-card">
                         <div class="drawer-section-title">Firmware</div>
                         <div class="toggle-sm-row">
-                            <button class="toggle-sm" id="drawerBetaToggle" type="button" aria-label="Toggle beta firmware" aria-pressed="false" onclick="toggleDrawerBeta()"></button>
+                            <button class="toggle-sm" id="drawerBetaToggle" type="button" aria-label="Toggle beta firmware" aria-pressed="false" onclick="toggleDrawerBeta()" data-min-role-disable="operator"></button>
                             <span class="toggle-sm-label">Beta Firmware</span>
                         </div>
                         <div class="drawer-fw-list" id="drawerFwList">
                             <span class="drawer-fw-empty">No firmware files</span>
                         </div>
                         <div class="drawer-fw-meta" id="drawerFwMeta"></div>
-                        <div class="drawer-upload" id="drawerUpload">
+                        <div class="drawer-upload" id="drawerUpload" data-min-role="operator">
                             <input type="file" id="drawerFwInput" name="drawerFwInput" accept=".bin,.img,.npk,.tar,.gz" aria-label="Upload firmware file" class="hidden">
                             <span>Drop or browse</span>
                             <span class="drawer-upload-status" id="drawerUploadStatus"></span>
@@ -2607,7 +2676,7 @@
                     </div>
                 </div>
 
-                <div class="drawer-save-row" id="drawerSaveRow">
+                <div class="drawer-save-row" id="drawerSaveRow" data-min-role="operator">
                     <button class="drawer-save-btn" id="drawerSaveBtn" onclick="saveDrawerSettings()" disabled>Save</button>
                     <span class="drawer-save-status" id="drawerSaveStatus"></span>
                 </div>
@@ -2616,7 +2685,7 @@
 
             <!-- Config drawer content -->
             <div id="drawerContent-config" class="hidden" autocomplete="off" data-1p-ignore>
-                <div class="drawer-panel-inner">
+                <div class="drawer-panel-inner" data-min-role-disable-tree="operator">
                 <p style="margin:0 0 8px;font-size:11px;color:var(--text-muted);line-height:1.4;">Enforced policies fully replace the matching config section on each device.</p>
                 <div class="drawer-settings-grid" autocomplete="off">
                     <!-- Column 1: Network -->
@@ -2624,7 +2693,7 @@
                         <div class="drawer-section-title">Network</div>
 
                         <div class="config-section" id="cfgSection-snmp">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-snmp" type="button" data-category="snmp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>SNMP</span><span class="config-section-status" id="cfgStatus-snmp"></span><button class="cfg-save-btn" id="cfgSave-snmp" onclick="saveConfigSection('snmp');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-snmp" type="button" data-category="snmp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>SNMP</span><span class="config-section-status" id="cfgStatus-snmp"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-snmp" onclick="saveConfigSection('snmp');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgSnmpEnabled" name="cfgSnmpEnabled"> Enabled</label>
                                 <fieldset style="border:1px solid var(--border-light);border-radius:4px;padding:6px;margin-top:6px;">
@@ -2656,7 +2725,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-ntp">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-ntp" type="button" data-category="ntp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>NTP</span><span class="config-section-status" id="cfgStatus-ntp"></span><button class="cfg-save-btn" id="cfgSave-ntp" onclick="saveConfigSection('ntp');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-ntp" type="button" data-category="ntp" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>NTP</span><span class="config-section-status" id="cfgStatus-ntp"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-ntp" onclick="saveConfigSection('ntp');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgNtpEnabled" name="cfgNtpEnabled" checked> Enable NTP</label>
                                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
@@ -2667,7 +2736,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-discovery">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-discovery" type="button" data-category="discovery" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Discovery</span><span class="config-section-status" id="cfgStatus-discovery"></span><button class="cfg-save-btn" id="cfgSave-discovery" onclick="saveConfigSection('discovery');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-discovery" type="button" data-category="discovery" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Discovery</span><span class="config-section-status" id="cfgStatus-discovery"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-discovery" onclick="saveConfigSection('discovery');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgDiscEnabled" name="cfgDiscEnabled" checked> Enabled</label>
                                 <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;">
@@ -2680,7 +2749,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-syslog">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-syslog" type="button" data-category="syslog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Syslog</span><span class="config-section-status" id="cfgStatus-syslog"></span><button class="cfg-save-btn" id="cfgSave-syslog" onclick="saveConfigSection('syslog');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-syslog" type="button" data-category="syslog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Syslog</span><span class="config-section-status" id="cfgStatus-syslog"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-syslog" onclick="saveConfigSection('syslog');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgSyslogEnabled" name="cfgSyslogEnabled"> Enable Remote Syslog</label>
                                 <div style="display:grid;grid-template-columns:1fr 80px 80px;gap:6px;margin-top:6px;">
@@ -2697,7 +2766,7 @@
                         <div class="drawer-section-title">Security</div>
 
                         <div class="config-section" id="cfgSection-users">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-users" type="button" data-category="users" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Users</span><span class="config-section-status" id="cfgStatus-users"></span><button class="cfg-save-btn" id="cfgSave-users" onclick="saveConfigSection('users');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-users" type="button" data-category="users" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Users</span><span class="config-section-status" id="cfgStatus-users"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-users" onclick="saveConfigSection('users');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <div id="cfgUserRows"></div>
                                 <button class="btn btn-sm btn-secondary" onclick="addConfigUserRow()" style="margin-top:6px;">+ Add User</button>
@@ -2705,7 +2774,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-radius">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-radius" type="button" data-category="radius" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>RADIUS</span><span class="config-section-status" id="cfgStatus-radius"></span><button class="cfg-save-btn" id="cfgSave-radius" onclick="saveConfigSection('radius');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-radius" type="button" data-category="radius" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>RADIUS</span><span class="config-section-status" id="cfgStatus-radius"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-radius" onclick="saveConfigSection('radius');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <div style="margin-bottom:6px;">
                                     <label for="cfgRadiusMethod">Auth Method</label>
@@ -2731,13 +2800,13 @@
                         <div class="drawer-section-title">System</div>
 
                         <div class="config-section" id="cfgSection-watchdog">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-watchdog" type="button" data-category="watchdog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Watchdog</span><span class="config-section-status" id="cfgStatus-watchdog"></span><button class="cfg-save-btn" id="cfgSave-watchdog" onclick="saveConfigSection('watchdog');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-watchdog" type="button" data-category="watchdog" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Watchdog</span><span class="config-section-status" id="cfgStatus-watchdog"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-watchdog" onclick="saveConfigSection('watchdog');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <label><input type="checkbox" id="cfgWatchdogEnabled" name="cfgWatchdogEnabled"> Enable Ping Watchdog</label>
                                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:6px;">
                                     <div><label for="cfgWatchdogInterval">Interval</label><input type="number" id="cfgWatchdogInterval" name="cfgWatchdogInterval" value="300" style="width:100%;"></div>
                                     <div><label for="cfgWatchdogStartupDelay">Delay</label><input type="number" id="cfgWatchdogStartupDelay" name="cfgWatchdogStartupDelay" value="300" style="width:100%;"></div>
-                                    <div><label for="cfgWatchdogFailureCount">Failures</label><input type="number" id="cfgWatchdogFailureCount" name="cfgWatchdogFailureCount" value="3" style="width:100%;"></div>
+                                    <div><label for="cfgWatchdogFailureCount">Failures</label><input type="number" id="cfgWatchdogFailureCount" name="cfgWatchdogFailureCount" value="6" min="6" style="width:100%;"></div>
                                 </div>
                                 <div style="margin-top:6px;">
                                     <label for="cfgWatchdogPingTargets">Ping Targets</label>
@@ -2747,7 +2816,7 @@
                         </div>
 
                         <div class="config-section" id="cfgSection-custom">
-                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-custom" type="button" data-category="custom" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Custom JSON</span><span class="config-section-status" id="cfgStatus-custom"></span><button class="cfg-save-btn" id="cfgSave-custom" onclick="saveConfigSection('custom');event.stopPropagation();">Save</button></div>
+                            <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-custom" type="button" data-category="custom" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Custom JSON</span><span class="config-section-status" id="cfgStatus-custom"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-custom" onclick="saveConfigSection('custom');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
                                 <textarea id="cfgCustomJson" name="cfgCustomJson" aria-label="Custom JSON config" rows="5" placeholder='{"services": {"ssh": {"enabled": true}}}' style="width:100%;font-family:monospace;font-size:var(--text-sm);"></textarea>
                             </div>
@@ -2801,7 +2870,7 @@
                     <button class="settings-subtab" data-subtab="backup" onclick="switchSystemSubtab('backup')">Backup & Restore</button>
                 </div>
 
-                <div class="system-subpanel active" id="systemSub-updates">
+                <div class="system-subpanel active" id="systemSub-updates" data-min-role-disable-tree="operator">
                     <div class="updates-grid">
                         <div class="updates-row">
                             <span class="updates-label">Current Version</span>
@@ -2838,7 +2907,7 @@
                     </div>
                 </div>
 
-                <div class="system-subpanel" id="systemSub-https">
+                <div class="system-subpanel" id="systemSub-https" data-min-role-disable-tree="operator">
                     <div style="margin-bottom:12px;">
                         <label class="settings-section-title">HTTPS Certificate</label>
                     </div>
@@ -2864,7 +2933,7 @@
                     </p>
                 </div>
 
-                <div class="system-subpanel" id="systemSub-backup">
+                <div class="system-subpanel" id="systemSub-backup" data-min-role-disable-tree="operator">
                     <div style="margin-bottom:16px;">
                         <label class="settings-section-title">Backup & Restore</label>
                         <div id="backupStatusInfo" style="font-size:0.75rem;color:var(--text-muted);padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;">Loading...</div>
@@ -2924,7 +2993,7 @@
                 </div>
 
                 <!-- Slack sub-panel -->
-                <div class="notif-subpanel active" id="notifSub-slack">
+                <div class="notif-subpanel active" id="notifSub-slack" data-min-role-disable-tree="operator">
                     <label for="notifSlackWebhook">Slack Webhook <a href="https://api.slack.com/messaging/webhooks" target="_blank" title="How to create an Incoming Webhook in Slack" style="color:var(--primary);font-size:0.7rem;text-decoration:none;font-weight:400;">?</a></label>
                     <div class="u-flex-col-gap8">
                         <input type="text" id="notifSlackWebhook" name="notifSlackWebhook" placeholder="https://hooks.slack.com/services/..." class="u-input-compact">
@@ -2937,7 +3006,7 @@
                 </div>
 
                 <!-- Email sub-panel -->
-                <div class="notif-subpanel" id="notifSub-email">
+                <div class="notif-subpanel" id="notifSub-email" data-min-role-disable-tree="operator">
                     <label class="settings-section-title">Email (SMTP)</label>
                     <div class="u-flex-col-gap8">
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -2991,7 +3060,7 @@
                 </div>
 
                 <!-- SNMP Traps sub-panel -->
-                <div class="notif-subpanel" id="notifSub-snmp">
+                <div class="notif-subpanel" id="notifSub-snmp" data-min-role-disable-tree="operator">
                     <label class="settings-section-title">SNMP Traps</label>
                     <div class="u-flex-col-gap8">
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -3021,7 +3090,7 @@
                 </div>
 
                 <!-- Webhooks sub-panel -->
-                <div class="notif-subpanel" id="notifSub-webhooks">
+                <div class="notif-subpanel" id="notifSub-webhooks" data-min-role-disable-tree="operator">
                     <label class="settings-section-title">Webhooks</label>
                     <div class="u-flex-col-gap8">
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -3082,6 +3151,7 @@
                     <button class="settings-subtab active" data-subtab="users" data-min-role="admin" onclick="switchAccessSubtab('users')">Local Users</button>
                     <button class="settings-subtab" data-subtab="sso" data-min-role="admin" onclick="switchAccessSubtab('sso')">SSO / OIDC</button>
                     <button class="settings-subtab" data-subtab="devices" data-min-role="admin" onclick="switchAccessSubtab('devices')">Device Login</button>
+                    <button class="settings-subtab" data-subtab="audit" data-min-role="admin" onclick="switchAccessSubtab('audit')">Audit Log</button>
                 </div>
 
                 <div class="access-subpanel active" id="accessSub-users" data-min-role="admin">
@@ -3198,6 +3268,28 @@
                         <span id="deviceStatus" class="u-text-xs-muted"></span>
                     </div>
                 </div>
+
+                <div class="access-subpanel" id="accessSub-audit" data-min-role="admin">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
+                        <label class="settings-section-title">Recent Admin Activity</label>
+                        <button class="backup-btn u-bg-muted-cta" onclick="loadAuditLog()">Refresh</button>
+                    </div>
+                    <table class="users-table" id="audit-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>User</th>
+                                <th>Action</th>
+                                <th>Target</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody id="audit-table-body">
+                            <tr><td colspan="5" class="u-text-xs-muted">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                    <div id="auditStatus" class="u-text-xs-muted" style="margin-top:8px;"></div>
+                </div>
             </div>
 
             <!-- Radius Panel -->
@@ -3208,7 +3300,7 @@
                     <button class="settings-subtab" data-subtab="clients" onclick="switchRadiusSubtab('clients')">Clients & Logs</button>
                 </div>
 
-                <div class="radius-subpanel active" id="radiusSub-server">
+                <div class="radius-subpanel active" id="radiusSub-server" data-min-role-disable-tree="operator">
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
                         <label class="settings-section-title" style="margin:0;">Built-in RADIUS Server</label>
                         <span id="authRadiusBadge" class="auth-status-badge">Inactive</span>
@@ -3304,7 +3396,7 @@
                     <p class="u-note-inline" style="margin-top:10px;">Reserved usernames <code>admin</code> and <code>root</code> are blocked from RADIUS authentication.</p>
                 </div>
 
-                <div class="radius-subpanel" id="radiusSub-clients">
+                <div class="radius-subpanel" id="radiusSub-clients" data-min-role-disable-tree="operator">
                     <div style="margin-bottom:16px;">
                         <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:4px;">
                             <h5 class="settings-section-title" style="margin:0;">Manual Client Overrides</h5>
@@ -3352,9 +3444,16 @@
                     Instance ID: <code id="aboutInstanceId"></code>
                 </div>
                 <p class="about-blurb">
-                    Open-source firmware management for Tachyon wireless networks. All features are unlocked.
+                    Source-available firmware management for Tachyon wireless networks. All features are unlocked.
                     Features marked <span class="danger-badge">DANGEROUS</span> involve untested or high-impact operations — use with care.
                 </p>
+                <div class="about-whats-new">
+                    <div class="about-whats-new-head">
+                        <div class="about-whats-new-title">What's New</div>
+                        <div class="about-whats-new-version" id="aboutWhatsNewVersion"></div>
+                    </div>
+                    <div class="about-whats-new-body" id="aboutWhatsNewBody">Checking for release notes...</div>
+                </div>
                 <div class="about-support">
                     <div class="about-support-text">
                         <div class="about-support-title">Support SixtyOps</div>
@@ -3434,17 +3533,55 @@
             }
         }
 
-        function applyRoleVisibility() {
+        function applyRoleVisibility(root) {
             const hierarchy = {admin: 3, operator: 2, viewer: 1};
             const level = hierarchy[currentUserRole] || 1;
-            document.querySelectorAll('[data-min-role]').forEach(el => {
+            const scope = root || document;
+            const lock = (el) => {
+                el.setAttribute('disabled', '');
+                el.setAttribute('aria-disabled', 'true');
+                el.classList.add('viewer-locked');
+            };
+            const unlock = (el) => {
+                el.removeAttribute('disabled');
+                el.removeAttribute('aria-disabled');
+                el.classList.remove('viewer-locked');
+            };
+            scope.querySelectorAll('[data-min-role]').forEach(el => {
                 const minLevel = hierarchy[el.dataset.minRole] || 1;
                 if (level < minLevel) {
                     el.style.display = 'none';
-                } else {
+                    el.dataset.roleHidden = '1';
+                } else if (el.dataset.roleHidden === '1') {
                     el.style.display = '';
+                    delete el.dataset.roleHidden;
                 }
             });
+            scope.querySelectorAll('[data-min-role-disable]').forEach(el => {
+                const minLevel = hierarchy[el.dataset.minRoleDisable] || 1;
+                if (level < minLevel) lock(el); else unlock(el);
+            });
+            scope.querySelectorAll('[data-min-role-disable-tree]').forEach(container => {
+                const minLevel = hierarchy[container.dataset.minRoleDisableTree] || 1;
+                const inputs = container.querySelectorAll('input, select, textarea, button');
+                if (level < minLevel) {
+                    container.classList.add('viewer-locked-tree');
+                    inputs.forEach(lock);
+                } else {
+                    container.classList.remove('viewer-locked-tree');
+                    inputs.forEach(unlock);
+                }
+            });
+        }
+
+        async function readSaveError(resp, fallback) {
+            if (resp.status === 403) return 'Read-only access — ask an admin';
+            try {
+                const err = await resp.json();
+                return err.detail || fallback || 'Save failed';
+            } catch (e) {
+                return fallback || 'Save failed';
+            }
         }
 
         // License state (loaded on init, updated via WebSocket)
@@ -3556,6 +3693,33 @@
             } catch (e) {}
             const verEl = document.getElementById('aboutVersionText');
             if (verEl) verEl.textContent = document.getElementById('appVersionDisplay')?.textContent || '';
+
+            const whatsNewVersion = document.getElementById('aboutWhatsNewVersion');
+            const whatsNewBody = document.getElementById('aboutWhatsNewBody');
+            if (!whatsNewBody) return;
+
+            try {
+                const resp = await fetch('/api/updates', { signal: AbortSignal.timeout(3000) });
+                const data = await resp.json();
+                const currentVersion = data.current_version ? 'v' + data.current_version : '';
+                if (verEl && currentVersion) verEl.textContent = currentVersion;
+
+                if (data.update_available && data.available_version) {
+                    if (whatsNewVersion) whatsNewVersion.textContent = 'v' + data.available_version;
+                    if (data.release_notes) {
+                        whatsNewBody.innerHTML = '<div class="release-notes-content">' + renderReleaseNotes(data.release_notes) + '</div>';
+                    } else {
+                        whatsNewBody.textContent = 'A newer version is available.';
+                    }
+                    return;
+                }
+
+                if (whatsNewVersion) whatsNewVersion.textContent = currentVersion;
+                whatsNewBody.textContent = 'You are running the latest version on the selected release channel.';
+            } catch (e) {
+                if (whatsNewVersion) whatsNewVersion.textContent = '';
+                whatsNewBody.textContent = 'Release notes are not available right now.';
+            }
         }
 
         let tempUnit = 'f';  // Will be set from settings/location
@@ -3587,7 +3751,8 @@
         let _uiDebounceTimer = null;
         let autoUpdateEnabled = false; // Whether auto-update scheduler is active
         let lastSchedulerStatus = null; // Last scheduler_status message
-        let lastNextWindow = '';       // Next maintenance window text
+        let lastNextWindow = '';       // Next maintenance window text (legacy "3:00-4:00 on tue,wed,thu")
+        let lastNextWindowIso = null;  // Next maintenance window start (ISO datetime)
         let lastBehindCount = 0;       // Devices needing update
         let lastFleetTotal = 0;        // Total devices
         let lastPreRolloutPredictions = null; // Pre-rollout estimate
@@ -4020,6 +4185,32 @@
             return info.status || 'unknown';
         }
 
+        function formatWhen(iso) {
+            if (!iso) return '';
+            const dt = new Date(iso);
+            if (Number.isNaN(dt.getTime())) return '';
+            const now = new Date();
+            const isToday = dt.toDateString() === now.toDateString();
+            const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+            const isTomorrow = dt.toDateString() === tomorrow.toDateString();
+            const time = dt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            if (isToday) return `today at ${time}`;
+            if (isTomorrow) return `tomorrow at ${time}`;
+            const day = dt.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            return `${day} at ${time}`;
+        }
+
+        function nextAttemptTooltip(ip) {
+            const info = fleetStatusMap.get(ip);
+            if (!info) return '';
+            if (info.next_attempt_iso) {
+                const when = formatWhen(info.next_attempt_iso);
+                return when ? `Next attempt ${when}` : '';
+            }
+            if (info.next_attempt_reason) return info.next_attempt_reason;
+            return '';
+        }
+
         function compareVersions(a, b) {
             const pa = a.split('.').map(Number);
             const pb = b.split('.').map(Number);
@@ -4057,7 +4248,7 @@
                 for (const ap of walkSiteAPs(site)) {
                     values.add(getDeviceColumnValue(ap, 'ap', column));
                     for (const cpe of (ap.cpes || [])) {
-                        values.add(getDeviceColumnValue(cpe, 'cpe', column, ap.ip));
+                        values.add(getDeviceColumnValue(cpe, 'cpe', column, ap));
                     }
                 }
                 for (const sw of (site.switches || [])) {
@@ -4380,10 +4571,12 @@
             }
         }
 
-        function getDeviceStatusForFilter(device, kind, parentApIp) {
+        function getDeviceStatusForFilter(device, kind, parentAp) {
+            const parentApIp = parentAp?.ip;
             if (kind === 'cpe' && parentApIp && updatingDevices.has(parentApIp)) return 'updating';
             if (updatingDevices.has(device.ip)) return 'updating';
             if (device.last_error) return 'offline';
+            if (kind === 'cpe' && parentAp && parentAp.last_error) return 'offline';
             if (kind === 'cpe' && device.auth_status && device.auth_status !== 'ok') return 'offline';
             const vs = versionStatus(device.ip);
             if (vs === 'behind') return 'behind';
@@ -4391,21 +4584,21 @@
             return 'unknown';
         }
 
-        function getDeviceColumnValue(device, kind, column, parentApIp) {
+        function getDeviceColumnValue(device, kind, column, parentAp) {
             switch (column) {
                 case 'model': return device.model || '';
                 case 'firmware': return device.firmware_version || '';
-                case 'status': return getDeviceStatusForFilter(device, kind, parentApIp);
+                case 'status': return getDeviceStatusForFilter(device, kind, parentAp);
                 default: return '';
             }
         }
 
-        function matchesDeviceFilters(device, siteName, kind, parentApIp) {
+        function matchesDeviceFilters(device, siteName, kind, parentAp) {
             if (!device) return false;
             // Check column filters
             for (const [col, allowedSet] of Object.entries(columnFilters)) {
                 if (!allowedSet || allowedSet.size === 0) continue;
-                const val = getDeviceColumnValue(device, kind, col, parentApIp);
+                const val = getDeviceColumnValue(device, kind, col, parentAp);
                 if (!allowedSet.has(val)) return false;
             }
             const query = deviceFilterState.query;
@@ -4484,13 +4677,16 @@
 
         const loadingDotsHtml = '<span class="loading-dots"><span></span><span></span><span></span></span>';
 
-        function statusCell(ip, isOffline, signalHealth, authStatus, parentApIp) {
+        function statusCell(ip, isOffline, signalHealth, authStatus, parentApIp, parentApOffline) {
             if (updatingDevices.has(ip)) {
                 return '<span class="status-icon-cell updating" title="Updating"></span>';
             }
             // Show loading dots if parent AP is updating
             if (parentApIp && updatingDevices.has(parentApIp)) {
                 return loadingDotsHtml;
+            }
+            if (parentApOffline) {
+                return '<span class="status-icon-cell offline" title="Stale — parent AP unreachable"></span>';
             }
             if (isOffline) {
                 return '<span class="status-icon-cell offline" title="Offline"></span>';
@@ -4517,9 +4713,21 @@
                 return '<span class="status-current" title="Current">&#10003;</span>';
             }
             if (vs === 'behind') {
-                const title = autoUpdateEnabled ? 'Auto-update scheduled \u2013 click to update now' : 'Update available \u2013 click to update now';
+                if (currentUserRole === 'viewer') {
+                    const label = autoUpdateEnabled ? 'Auto-update scheduled' : 'Update available';
+                    return `<span class="status-icon-cell" title="${label}" style="color:var(--text-muted);">&#8593;</span>`;
+                }
+                let title;
+                if (autoUpdateEnabled) {
+                    const next = nextAttemptTooltip(ip);
+                    title = next
+                        ? `${next} \u2014 click to update now`
+                        : 'Auto-update scheduled \u2013 click to update now';
+                } else {
+                    title = 'Update available \u2013 click to update now';
+                }
                 const cls = autoUpdateEnabled ? 'scheduled' : 'behind';
-                return `<button class="update-action ${cls}" title="${title}" onclick="triggerUpdate('${type}','${ip}');event.stopPropagation();">&#8593;</button>`;
+                return `<button class="update-action ${cls}" title="${escapeHtml(title)}" onclick="triggerUpdate('${type}','${ip}');event.stopPropagation();">&#8593;</button>`;
             }
             return '';
         }
@@ -4576,16 +4784,17 @@
 
             const sortedCPEs = [...cpes].sort(deviceComparator());
             for (const cpe of sortedCPEs) {
-                const health = cpe.signal_health || 'red';
+                const parentOffline = isOffline;
+                const health = parentOffline ? 'red' : (cpe.signal_health || 'red');
                 const cpeName = cpe.system_name || cpe.mac || 'Unknown';
                 const cpeIp = cpe.ip || '';
                 const signalVal = cpe.primary_signal;
-                const signalClass = signalVal != null
-                    ? (signalVal >= -60 ? 'signal-good' : (signalVal >= -65 ? 'signal-low' : 'signal-critical'))
-                    : '';
+                const signalClass = parentOffline || signalVal == null
+                    ? ''
+                    : (signalVal >= -60 ? 'signal-good' : (signalVal >= -65 ? 'signal-low' : 'signal-critical'));
                 const isCpeSelected = selectedNode?.type === 'cpe' && selectedNode?.data?.ip === cpe.ip;
 
-                out += `<tr class="row-cpe ${isCpeSelected ? 'row-selected' : ''}" onclick="selectCPE('${cpe.ip}')">
+                out += `<tr class="row-cpe ${parentOffline ? 'row-offline' : ''} ${isCpeSelected ? 'row-selected' : ''}" onclick="selectCPE('${cpe.ip}')">
                     <td>
                         <div class="name-cell tree-indent-${cpeIndent}">
                             <input type="checkbox" ${checkedDevices.has(cpe.ip) ? 'checked' : ''} onclick="toggleCheck('${cpe.ip}',event);event.stopPropagation();">
@@ -4599,7 +4808,7 @@
                     <td>${versionCell(cpe)}</td>
                     <td class="${signalClass}">${signalVal != null ? signalVal.toFixed(1) + ' dBm' : ''}</td>
                     <td>${formatDistance(cpe.link_distance)}</td>
-                    <td>${statusCell(cpe.ip, false, health, cpe.auth_status, ap.ip)}</td>
+                    <td>${statusCell(cpe.ip, false, health, cpe.auth_status, ap.ip, parentOffline)}</td>
                     <td>${updateCell('cpe', cpe.ip, ap.ip)}</td>
                     <td></td>
                     <td><div class="actions-cell">${actionsCell('cpe', cpe.ip, cpeName)}</div></td>
@@ -4715,7 +4924,7 @@
                     }
                     const filteredCpes = cpes.filter(cpe => {
                         totalRows += 1;
-                        return matchesDeviceFilters(cpe, siteName, 'cpe', ap.ip);
+                        return matchesDeviceFilters(cpe, siteName, 'cpe', ap);
                     });
                     const apMatch = matchesDeviceFilters(ap, siteName, 'ap');
                     if (apMatch || filteredCpes.length > 0) {
@@ -4800,7 +5009,7 @@
                     for (const nap of rawNested) {
                         const ncpes = nap.cpes || [];
                         if (queryOnlySiteFilter) { nestedAps.push(nap); continue; }
-                        const filtered = ncpes.filter(cpe => matchesDeviceFilters(cpe, siteName, 'cpe', nap.ip));
+                        const filtered = ncpes.filter(cpe => matchesDeviceFilters(cpe, siteName, 'cpe', nap));
                         if (matchesDeviceFilters(nap, siteName, 'ap') || filtered.length > 0) {
                             nestedAps.push({ ...nap, cpes: filtered });
                         }
@@ -5536,6 +5745,7 @@
                 oidc: { tab: 'access', subtab: 'sso' },
                 devices: { tab: 'access', subtab: 'devices' },
                 radius: { tab: 'radius', subtab: 'server' },
+                audit: { tab: 'access', subtab: 'audit' },
             };
             const target = aliases[tab] ? { ...aliases[tab] } : { tab, subtab };
             if (!target.subtab) {
@@ -5589,6 +5799,39 @@
             if (target.tab === 'access' && target.subtab === 'users') loadUsers();
         }
 
+        async function maybePromptTelemetryOptIn() {
+            try {
+                // Verify admin role server-side so non-admins never see a
+                // dialog whose save would fail with 403.
+                const meResp = await fetch('/api/users/me');
+                if (!meResp.ok) return;
+                const me = await meResp.json();
+                if (me.role !== 'admin') return;
+
+                const resp = await fetch('/api/settings');
+                const data = await resp.json();
+                if (data.settings?.telemetry_prompt_seen === 'true') return;
+
+                const accepted = await showConfirmDialog(
+                    'Share anonymous update results with SixtyOps?\n\nThis includes counts, device models, timing, and error categories. It never includes IP addresses, names, locations, or passwords.',
+                    { title: 'Share Update Results', confirmText: 'Share' }
+                );
+                const putResp = await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        telemetry_enabled: accepted ? 'true' : 'false',
+                        telemetry_prompt_seen: 'true',
+                    }),
+                });
+                if (!putResp.ok) {
+                    throw new Error('Failed to persist telemetry choice: ' + putResp.status);
+                }
+            } catch (e) {
+                console.warn('Telemetry opt-in prompt failed:', e);
+            }
+        }
+
         function closeAppSettingsModal() {
             document.getElementById('appSettingsOverlay').classList.remove('open');
             // Clear status messages
@@ -5618,6 +5861,7 @@
         function switchAccessSubtab(name) {
             const activeName = activateScopedSubtab('accessSubtabs', '.access-subpanel', 'accessSub-', name, currentUserRole === 'admin' ? 'users' : 'sso');
             if (activeName === 'users') loadUsers();
+            if (activeName === 'audit') loadAuditLog();
         }
 
         function switchRadiusSubtab(name) {
@@ -5873,14 +6117,11 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(settings),
                 });
-                if (!resp.ok) {
-                    const err = await resp.json();
-                    throw new Error(err.detail || 'Save failed');
-                }
+                if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
                 statusEl.style.color = '#10b981';
             } catch (e) {
-                statusEl.textContent = 'Failed to save: ' + e.message;
+                statusEl.textContent = e.message || 'Failed to save';
                 statusEl.style.color = '#ef4444';
             }
         }
@@ -5946,14 +6187,11 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(settings),
                 });
-                if (!resp.ok) {
-                    const err = await resp.json();
-                    throw new Error(err.detail || 'Save failed');
-                }
+                if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
                 statusEl.style.color = '#10b981';
             } catch (e) {
-                statusEl.textContent = 'Failed to save: ' + e.message;
+                statusEl.textContent = e.message || 'Failed to save';
                 statusEl.style.color = '#ef4444';
             }
         }
@@ -6958,6 +7196,45 @@
             }
         }
 
+        async function loadAuditLog() {
+            const body = document.getElementById('audit-table-body');
+            const statusEl = document.getElementById('auditStatus');
+            if (!body) return;
+            body.innerHTML = '<tr><td colspan="5" class="u-text-xs-muted">Loading...</td></tr>';
+            if (statusEl) statusEl.textContent = '';
+
+            try {
+                const resp = await fetch('/api/audit-log?limit=50');
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to load activity');
+                const entries = data.entries || [];
+
+                if (!entries.length) {
+                    body.innerHTML = '<tr><td colspan="5" class="u-text-xs-muted">No activity recorded yet.</td></tr>';
+                    return;
+                }
+
+                body.innerHTML = entries.map(entry => {
+                    const d = parseTimestampToDate(entry.created_at);
+                    const time = d ? d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+                    const target = [entry.target_type, entry.target_id].filter(Boolean).join(' ');
+                    return `
+                        <tr>
+                            <td>${escapeHtml(time)}</td>
+                            <td>${escapeHtml(entry.username || '')}</td>
+                            <td>${escapeHtml(entry.action || '')}</td>
+                            <td>${escapeHtml(target)}</td>
+                            <td>${escapeHtml(entry.details || '')}</td>
+                        </tr>
+                    `;
+                }).join('');
+                if (statusEl) statusEl.textContent = `${entries.length} of ${data.total || entries.length} shown`;
+            } catch (e) {
+                body.innerHTML = '<tr><td colspan="5" class="u-text-xs-muted">Activity could not be loaded.</td></tr>';
+                if (statusEl) statusEl.textContent = e.message || 'Failed to load activity';
+            }
+        }
+
         // ── Status Bar ──
 
         const PHASES = ['canary', 'pct10', 'pct50', 'pct100'];
@@ -6990,39 +7267,42 @@
                 return;
             }
 
-            // Icons for each state
-            const stateIcons = {
-                idle: '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="currentColor"/></svg></span>',
-                waiting: '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 4v4l3 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>',
-                running: '<span class="status-icon spinner"></span>',
-                blocked_weather: '<span class="status-icon"><svg viewBox="0 0 16 16"><path d="M8 1l1.5 4.5H14l-3.5 2.5 1.5 4.5L8 10l-4 2.5 1.5-4.5L2 5.5h4.5z" fill="currentColor"/></svg></span>',
-                blocked_time: '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 4v4l3 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>',
-                blocked_no_firmware: '<span class="status-icon"><svg viewBox="0 0 16 16"><path d="M8 2L2 14h12L8 2z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 6v4M8 11v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>',
-                blocked_all_current: '<span class="status-icon"><svg viewBox="0 0 16 16"><path d="M3 8l3 3 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>',
-                blocked_quarantine: '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6 6l4 4M10 6l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>',
-            };
-            const stateLabels = {
-                idle: 'Idle', waiting: 'Waiting', running: 'Running',
-                blocked_weather: 'Blocked', blocked_time: 'Blocked',
-                blocked_no_firmware: 'No firmware', blocked_all_current: 'All current',
-                blocked_quarantine: 'On Hold',
-            };
-            const icon = stateIcons[state] || '';
-            badge.innerHTML = icon + (stateLabels[state] || state.replace(/_/g, ' '));
+            // Collapse 8+ internal states to 4 user-facing labels.
+            // Internal state codes remain unchanged in logs/metrics.
+            const SCHEDULED_ICON = '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 4v4l3 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>';
+            const RUNNING_ICON = '<span class="status-icon spinner"></span>';
+            const PAUSED_ICON = '<span class="status-icon"><svg viewBox="0 0 16 16"><path d="M5 4h2v8H5zM9 4h2v8H9z" fill="currentColor"/></svg></span>';
+            const CURRENT_ICON = '<span class="status-icon"><svg viewBox="0 0 16 16"><path d="M3 8l3 3 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
 
-            const stateStyles = {
-                idle: 'idle', waiting: 'waiting', running: 'running',
-                blocked_weather: 'blocked', blocked_time: 'blocked',
-                blocked_no_firmware: 'blocked', blocked_all_current: 'current',
-                blocked_quarantine: 'waiting',
+            const PUBLIC = {
+                idle:                { label: 'Scheduled', cls: 'idle',    icon: SCHEDULED_ICON },
+                waiting:             { label: 'Scheduled', cls: 'idle',    icon: SCHEDULED_ICON },
+                running:             { label: 'Updating',  cls: 'running', icon: RUNNING_ICON },
+                blocked_weather:     { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
+                blocked_time:        { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
+                blocked_no_firmware: { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
+                blocked_canary_hold: { label: 'Running',   cls: 'running', icon: RUNNING_ICON },
+                frozen:              { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
+                blocked_all_current: { label: 'Up to date', cls: 'current', icon: CURRENT_ICON },
             };
-            const cls = stateStyles[state];
-            if (cls) badge.classList.add(cls);
+            const view = PUBLIC[state] || { label: state.replace(/_/g, ' '), cls: 'idle', icon: SCHEDULED_ICON };
+            badge.innerHTML = view.icon + view.label;
+            badge.classList.add(view.cls);
 
-            // Don't show block_reason when "All current" - the badge already says it
-            if (status.block_reason && state !== 'blocked_all_current') {
-                reason.textContent = status.block_reason;
+            // Subtitle: friendly "Next: today at 3:00 AM" for scheduled states;
+            // raw block_reason for paused/holding states.
+            let subtitle = '';
+            if (view.label === 'Scheduled') {
+                if (status.next_window_iso) {
+                    subtitle = 'Next: ' + formatWhen(status.next_window_iso);
+                } else if (status.block_reason) {
+                    subtitle = status.block_reason;
+                }
+            } else if ((view.label === 'Paused' || view.label === 'Running')
+                       && status.block_reason) {
+                subtitle = status.block_reason;
             }
+            reason.textContent = subtitle;
 
             // Track state changes for UI updates
             const prevState = lastAutoState;
@@ -7031,6 +7311,7 @@
             // Store next window for use in device count text
             lastNextWindow = status.next_window || '';
             lastPreRolloutPredictions = status.predictions || null;
+            lastNextWindowIso = status.next_window_iso || null;
             updateBarDeviceCount();
 
             // Hide device count section when all current - badge already conveys this
@@ -7110,42 +7391,38 @@
             return dateParts.length ? dateParts.join(' · ') : '';
         }
 
-        function _formatLockLabel(quarantine) {
-            if (!quarantine || !quarantine.clears_at) return '';
-            const clearsAt = new Date(quarantine.clears_at);
+        function _formatLockLabel(hold) {
+            if (!hold || !hold.clears_at) return '';
+            const clearsAt = new Date(hold.clears_at);
             if (isNaN(clearsAt.getTime())) return '';
             const now = new Date();
-            if (clearsAt <= now) return 'Clearing soon\u2026';
+            if (clearsAt <= now) return 'Advancing soon\u2026';
             const hoursLeft = (clearsAt - now) / 3600000;
             if (hoursLeft < 24) {
-                return `Locked for ${Math.ceil(hoursLeft)}h`;
+                return `Holding ${Math.ceil(hoursLeft)}h more`;
             }
-            return 'Locked until ' + clearsAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+            return 'Advances ' + clearsAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
                    ', ' + clearsAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
         }
 
         function renderIdlePhases() {
             const indicator = document.getElementById('barPhaseIndicator');
             const pred = lastPreRolloutPredictions;
-            const isQuarantine = lastSchedulerStatus && lastSchedulerStatus.state === 'blocked_quarantine';
-            const lockLabel = isQuarantine ? _formatLockLabel(lastSchedulerStatus.quarantine) : '';
+            // Idle view never shows a canary hold lock — the hold only applies
+            // once a rollout has finished canary and is waiting to advance.
             let html = '';
             for (let i = 0; i < PHASES.length; i++) {
                 const isCanaryTrigger = i === 0 && canTriggerManualCanary(pred);
                 const detail = _phaseDetail(pred, i);
                 const detailHtml = detail ? `<span class="bar-phase-detail">${detail}</span>` : '';
                 let dotClass, onclick = '';
-                if (i === 0 && isQuarantine) {
-                    dotClass = 'bar-phase-dot locked';
-                } else if (isCanaryTrigger) {
+                if (isCanaryTrigger) {
                     dotClass = 'bar-phase-dot clickable';
                     onclick = ' onclick="triggerCanaryNow(event)" title="Run canary now"';
                 } else {
                     dotClass = 'bar-phase-dot';
                 }
-                const lockHtml = (i === 0 && isQuarantine && lockLabel)
-                    ? `<span class="bar-phase-lock-info">${lockLabel}</span>` : '';
-                html += `<div class="${dotClass}"${onclick}>${PHASE_LABELS[PHASES[i]]}${detailHtml}${lockHtml}</div>`;
+                html += `<div class="${dotClass}"${onclick}>${PHASE_LABELS[PHASES[i]]}${detailHtml}</div>`;
                 if (i < PHASES.length - 1) html += `<div class="bar-phase-line"></div>`;
             }
             indicator.innerHTML = html;
@@ -7199,8 +7476,10 @@
             const phaseIdx = PHASES.indexOf(rollout.phase);
             const indicator = document.getElementById('barPhaseIndicator');
             const pred = rollout.predictions;
-            const isQuarantine = lastSchedulerStatus && lastSchedulerStatus.state === 'blocked_quarantine';
-            const lockLabel = isQuarantine ? _formatLockLabel(lastSchedulerStatus.quarantine) : '';
+            // Canary-hold lock applies to the canary phase of the current rollout
+            // while it waits to advance past canary.
+            const isCanaryHold = lastSchedulerStatus && lastSchedulerStatus.state === 'blocked_canary_hold';
+            const lockLabel = isCanaryHold ? _formatLockLabel(lastSchedulerStatus.canary_hold) : '';
             let phaseHtml = '';
             for (let i = 0; i < PHASES.length; i++) {
                 const phase = PHASES[i];
@@ -7211,7 +7490,7 @@
                     dotClass += ' completed';
                     lineClass += ' completed';
                 } else if (i === phaseIdx) {
-                    if (isQuarantine && phase === 'canary') {
+                    if (isCanaryHold && phase === 'canary') {
                         dotClass += ' locked';
                     } else {
                         dotClass += rollout.status === 'paused' ? ' paused' : ' active';
@@ -7220,7 +7499,7 @@
 
                 const detail = _phaseDetail(pred, i);
                 const detailHtml = detail ? `<span class="bar-phase-detail">${detail}</span>` : '';
-                const lockHtml = (i === phaseIdx && isQuarantine && phase === 'canary' && lockLabel)
+                const lockHtml = (i === phaseIdx && isCanaryHold && phase === 'canary' && lockLabel)
                     ? `<span class="bar-phase-lock-info">${lockLabel}</span>` : '';
                 phaseHtml += `<div class="${dotClass}">${PHASE_LABELS[phase]}${detailHtml}${lockHtml}</div>`;
                 if (i < PHASES.length - 1) phaseHtml += `<div class="${lineClass}"></div>`;
@@ -7374,11 +7653,11 @@
             renderTable();
             // Lazy-load config data on first switch
             if (mode === 'config' && !configLoaded) loadConfigData();
-            // Update body padding for new bar height
-            requestAnimationFrame(() => {
-                const drawer = document.getElementById('bottomDrawer');
-                document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
-            });
+        }
+
+        function syncDrawerPadding() {
+            const drawer = document.getElementById('bottomDrawer');
+            if (drawer) document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
         }
 
         function handleTabClick(mode) {
@@ -7395,12 +7674,69 @@
                     if (mode === 'firmware') loadDrawerSettings();
                 }
             }
-            requestAnimationFrame(() => {
-                setTimeout(() => {
-                    document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
-                }, 320);
-            });
+            setTimeout(syncDrawerPadding, 320);
         }
+
+        // ── Drawer resize (drag the top edge of the open panel) ──
+        (function setupDrawerResize() {
+            const STORAGE_KEY = 'drawerPanelHeightPx';
+            const MIN_HEIGHT = 120;
+            const TOP_GAP = 80;
+            const drawer = document.getElementById('bottomDrawer');
+            const handle = document.getElementById('drawerResizeHandle');
+            const panel = document.getElementById('drawerPanel');
+            if (!drawer || !handle || !panel) return;
+
+            function applyHeight(px) {
+                const max = Math.max(MIN_HEIGHT, window.innerHeight - TOP_GAP);
+                const clamped = Math.min(Math.max(px, MIN_HEIGHT), max);
+                drawer.style.setProperty('--drawer-panel-height', clamped + 'px');
+                return clamped;
+            }
+
+            try {
+                const saved = parseInt(localStorage.getItem(STORAGE_KEY), 10);
+                if (!isNaN(saved) && saved > 0) applyHeight(saved);
+            } catch (e) {}
+
+            handle.addEventListener('pointerdown', (e) => {
+                if (e.button !== undefined && e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+                panel.classList.add('dragging');
+                handle.classList.add('dragging');
+                const onMove = (ev) => {
+                    applyHeight(window.innerHeight - ev.clientY - handle.offsetHeight / 2);
+                    syncDrawerPadding();
+                };
+                const onUp = (ev) => {
+                    handle.removeEventListener('pointermove', onMove);
+                    handle.removeEventListener('pointerup', onUp);
+                    handle.removeEventListener('pointercancel', onUp);
+                    try { handle.releasePointerCapture(ev.pointerId); } catch (err) {}
+                    panel.classList.remove('dragging');
+                    handle.classList.remove('dragging');
+                    const cur = drawer.style.getPropertyValue('--drawer-panel-height').trim();
+                    if (cur.endsWith('px')) {
+                        try { localStorage.setItem(STORAGE_KEY, String(parseInt(cur, 10))); } catch (err) {}
+                    }
+                    syncDrawerPadding();
+                };
+                handle.addEventListener('pointermove', onMove);
+                handle.addEventListener('pointerup', onUp);
+                handle.addEventListener('pointercancel', onUp);
+            });
+
+            handle.addEventListener('dblclick', (e) => {
+                e.stopPropagation();
+                drawer.style.removeProperty('--drawer-panel-height');
+                try { localStorage.removeItem(STORAGE_KEY); } catch (err) {}
+                syncDrawerPadding();
+            });
+
+            handle.addEventListener('click', (e) => e.stopPropagation());
+        })();
 
         // ── History ──
 
@@ -7916,8 +8252,8 @@
                 // Postal code
                 document.getElementById('drawerZipCode').value = s.zip_code || '';
 
-                // Quarantine & Cooldown
-                document.getElementById('drawerQuarantineDays').value = s.firmware_quarantine_days || '7';
+                // New-firmware canary hold & per-device cooldown
+                document.getElementById('drawerCanaryHoldDays').value = s.firmware_canary_hold_days || '6';
                 document.getElementById('drawerCooldownDays').value = s.firmware_update_cooldown_days || '30';
 
                 drawerSettingsLoaded = true;
@@ -7993,7 +8329,7 @@
         document.addEventListener('DOMContentLoaded', () => {
             ['drawerStartHour', 'drawerEndHour', 'drawerBankMode',
              'drawerParallel', 'drawerMinTemp', 'drawerZipCode',
-             'drawerQuarantineDays', 'drawerCooldownDays'].forEach(id => {
+             'drawerCanaryHoldDays', 'drawerCooldownDays'].forEach(id => {
 
                 const el = document.getElementById(id);
                 if (el) el.addEventListener('change', markDrawerDirty);
@@ -8002,7 +8338,14 @@
             // Auto-open App Settings on first run
             {% if show_settings %}
             window._firstRunSetup = true;
-            setTimeout(() => openAppSettingsModal('system', 'https'), 500);
+            setTimeout(async () => {
+                await openAppSettingsModal('system', 'https');
+                maybePromptTelemetryOptIn();
+            }, 500);
+            {% else %}
+            // Upgraders never trigger the first-run modal, so surface the
+            // telemetry opt-in here after the role/auth handshake completes.
+            setTimeout(() => { maybePromptTelemetryOptIn(); }, 1500);
             {% endif %}
 
             const filterQueryEl = document.getElementById('deviceFilterQuery');
@@ -8030,7 +8373,7 @@
                 schedule_scope: 'all',
                 min_temperature_c: String(storageTemp(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
                 zip_code: document.getElementById('drawerZipCode').value,
-                firmware_quarantine_days: document.getElementById('drawerQuarantineDays').value,
+                firmware_canary_hold_days: document.getElementById('drawerCanaryHoldDays').value,
                 firmware_update_cooldown_days: document.getElementById('drawerCooldownDays').value,
                 firmware_beta_enabled: drawerBetaEnabled ? 'true' : 'false',
                 allow_downgrade: document.getElementById('drawerDowngradeToggle').classList.contains('active') ? 'true' : 'false',
@@ -8048,7 +8391,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(settings),
                 });
-                if (!resp.ok) throw new Error('Save failed');
+                if (!resp.ok) throw new Error(await readSaveError(resp));
 
                 clearDrawerDirty();
                 showSavedIndicator();
@@ -8059,7 +8402,7 @@
                 loadDrawerFirmware();
                 loadFleetStatus();
             } catch (e) {
-                if (status) { status.textContent = 'Save failed'; status.style.color = '#dc2626'; }
+                if (status) { status.textContent = e.message || 'Save failed'; status.style.color = '#dc2626'; }
                 if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = 'Save'; }
             }
         }
@@ -8198,18 +8541,18 @@
                     const isBeta = f.channel === 'beta';
                     const isActive = drawerFwSelected[type] === f.name;
                     const escapedName = f.name.replace(/'/g, "\\'");
-                    const inQuarantine = !f.quarantine_cleared && f.quarantine_remaining_hours > 0;
-                    html += `<span class="drawer-fw-chip${isActive ? ' active' : ''}${isBeta ? ' beta' : ''}${inQuarantine ? ' quarantine' : ''}" onclick="selectDrawerFw('${escapedName}','${type}')"`;
-                    if (inQuarantine) {
-                        const h = f.quarantine_remaining_hours;
+                    const inHold = !f.hold_cleared && f.hold_remaining_hours > 0;
+                    html += `<span class="drawer-fw-chip${isActive ? ' active' : ''}${isBeta ? ' beta' : ''}${inHold ? ' quarantine' : ''}" onclick="selectDrawerFw('${escapedName}','${type}')"`;
+                    if (inHold) {
+                        const h = f.hold_remaining_hours;
                         const qLabel = h > 24 ? `${(h / 24).toFixed(0)}d` : `${h.toFixed(0)}h`;
-                        html += ` title="Available in ${qLabel}"`;
+                        html += ` title="Canary hold clears in ${qLabel}"`;
                     }
                     html += `>`;
                     html += `${versionLabel}`;
                     if (isBeta) html += `<span class="drawer-fw-beta-label">beta</span>`;
-                    if (inQuarantine) {
-                        const h = f.quarantine_remaining_hours;
+                    if (inHold) {
+                        const h = f.hold_remaining_hours;
                         const qLabel = h > 24 ? `${(h / 24).toFixed(0)}d` : `${h.toFixed(0)}h`;
                         html += `<span class="drawer-fw-quarantine-label">${qLabel}</span>`;
                     }
@@ -8355,6 +8698,9 @@
                     fleetStatusMap.set(d.ip, {
                         target_version: d.target_version,
                         status: d.status,
+                        auto_update_eligible: d.auto_update_eligible,
+                        next_attempt_iso: d.next_attempt_iso,
+                        next_attempt_reason: d.next_attempt_reason,
                     });
                 }
 
@@ -8379,12 +8725,15 @@
                 return;
             }
 
+            const nextWindowText = lastNextWindowIso
+                ? 'Next: ' + formatWhen(lastNextWindowIso)
+                : lastNextWindow;
+
             // Hide "pending" text when a rollout is actively running - progress is shown in rollout UI
             if (currentRolloutId && lastAutoState === 'running') {
-                // Show schedule window only (no "pending" count during active rollout)
-                if (lastNextWindow) {
+                if (nextWindowText) {
                     setHidden(section, false);
-                    count.textContent = lastNextWindow;
+                    count.textContent = nextWindowText;
                 } else {
                     setHidden(section, true);
                 }
@@ -8393,8 +8742,9 @@
 
             if (lastBehindCount > 0) {
                 setHidden(section, false);
-                let text = lastBehindCount + ' pending';
-                if (lastNextWindow) text += ' · ' + lastNextWindow;
+                const label = lastBehindCount === 1 ? '1 device pending' : `${lastBehindCount} devices pending`;
+                let text = label;
+                if (nextWindowText) text += ' · ' + nextWindowText;
                 count.textContent = text;
                 // Refresh idle phase indicators with prediction details
                 if (!currentRolloutId) renderIdlePhases();
@@ -9562,7 +9912,7 @@
                         enabled: document.getElementById('cfgWatchdogEnabled').checked,
                         interval: parseInt(document.getElementById('cfgWatchdogInterval').value) || 300,
                         delay: parseInt(document.getElementById('cfgWatchdogStartupDelay').value) || 300,
-                        failure: parseInt(document.getElementById('cfgWatchdogFailureCount').value) || 3,
+                        failure: parseInt(document.getElementById('cfgWatchdogFailureCount').value) || 6,
                         addresses: rawTargets.filter(t => ipPattern.test(t)),
                     };
                 }
