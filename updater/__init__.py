@@ -1,3 +1,3 @@
 """Firmware Update Tool for production network devices."""
 
-__version__ = "1.3.1-dev17"
+__version__ = "1.3.1-dev18"
