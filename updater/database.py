@@ -218,6 +218,9 @@ def _migrate(db):
     # Encrypt any plaintext config_templates.config_fragment (#165)
     _migrate_encrypt_config_templates(db)
 
+    # Encrypt any plaintext config_push_rollouts.templates_snapshot (#165 follow-up)
+    _migrate_encrypt_config_push_snapshots(db)
+
     # Add soft-delete + label + mac columns to device_configs (recycle bin + rebind support)
     dc_columns = [row[1] for row in db.execute("PRAGMA table_info(device_configs)").fetchall()]
     if "deleted_at" not in dc_columns:
@@ -409,6 +412,34 @@ def _migrate_encrypt_config_templates(db):
             migrated += 1
     if migrated:
         logger.info(f"Encrypted {migrated} plaintext config_templates row(s)")
+
+
+def _migrate_encrypt_config_push_snapshots(db):
+    """One-time migration: encrypt any plaintext config_push_rollouts.templates_snapshot.
+
+    The snapshot is a frozen copy of the rendered template fragments at
+    rollout-start time — same secrets as `config_templates.config_fragment`.
+    A leaked DB or SFTP backup of an in-flight or completed rollout would
+    otherwise hand over RW communities and RADIUS passwords even after #165
+    landed.
+    """
+    try:
+        rows = db.execute(
+            "SELECT id, templates_snapshot FROM config_push_rollouts"
+        ).fetchall()
+    except Exception:
+        return
+    migrated = 0
+    for row in rows:
+        snap = row[1]
+        if snap and not is_encrypted(snap):
+            db.execute(
+                "UPDATE config_push_rollouts SET templates_snapshot = ? WHERE id = ?",
+                (encrypt_password(snap), row[0]),
+            )
+            migrated += 1
+    if migrated:
+        logger.info(f"Encrypted {migrated} plaintext config_push_rollouts snapshot(s)")
 
 
 def init_db():
@@ -3272,14 +3303,44 @@ def delete_config_template(template_id: int):
 CONFIG_PUSH_PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
 
 
+def _decrypt_templates_snapshot_field(value):
+    """Decrypt a stored templates_snapshot. Mirrors `_decrypt_config_fragment_field`:
+    tolerates legacy plaintext rows so reads never fail mid-migration.
+    """
+    if not value:
+        return value
+    if is_encrypted(value):
+        return decrypt_password(value)
+    return value
+
+
+def _decrypt_row_templates_snapshot(row: Optional[dict]) -> Optional[dict]:
+    """Return the row dict with `templates_snapshot` decrypted in place."""
+    if row is None:
+        return None
+    if "templates_snapshot" in row:
+        row["templates_snapshot"] = _decrypt_templates_snapshot_field(row["templates_snapshot"])
+    return row
+
+
 def create_config_push_rollout(template_ids_json: str, template_names: str, templates_snapshot: str = None) -> int:
+    """Create a config-push rollout.
+
+    `templates_snapshot` carries the resolved-at-start-time template
+    fragments (so advance/resume don't pick up later edits). Those
+    fragments hold SNMP RW communities, RADIUS service passwords, and
+    `system.users` password hashes — same secrets PR #165 wrapped in
+    `config_templates.config_fragment`. Wrap the snapshot at rest with
+    the same Fernet key.
+    """
     now = datetime.now().isoformat()
+    encrypted_snapshot = encrypt_password(templates_snapshot) if templates_snapshot else templates_snapshot
     with get_db() as conn:
         cursor = conn.execute(
             """INSERT INTO config_push_rollouts
                (template_ids, template_names, templates_snapshot, phase, status, created_at, updated_at)
                VALUES (?, ?, ?, 'canary', 'active', ?, ?)""",
-            (template_ids_json, template_names, templates_snapshot, now, now),
+            (template_ids_json, template_names, encrypted_snapshot, now, now),
         )
         return cursor.lastrowid
 
@@ -3289,7 +3350,7 @@ def get_active_config_push_rollout() -> Optional[dict]:
         row = conn.execute(
             "SELECT * FROM config_push_rollouts WHERE status IN ('active', 'paused') ORDER BY id DESC LIMIT 1"
         ).fetchone()
-        return dict(row) if row else None
+        return _decrypt_row_templates_snapshot(dict(row)) if row else None
 
 
 def get_current_config_push_rollout() -> Optional[dict]:
@@ -3297,7 +3358,7 @@ def get_current_config_push_rollout() -> Optional[dict]:
         row = conn.execute(
             "SELECT * FROM config_push_rollouts ORDER BY id DESC LIMIT 1"
         ).fetchone()
-        return dict(row) if row else None
+        return _decrypt_row_templates_snapshot(dict(row)) if row else None
 
 
 def get_config_push_rollout(rollout_id: int) -> Optional[dict]:
@@ -3305,7 +3366,7 @@ def get_config_push_rollout(rollout_id: int) -> Optional[dict]:
         row = conn.execute(
             "SELECT * FROM config_push_rollouts WHERE id = ?", (rollout_id,)
         ).fetchone()
-        return dict(row) if row else None
+        return _decrypt_row_templates_snapshot(dict(row)) if row else None
 
 
 def update_config_push_rollout_status(rollout_id: int, status: str, pause_reason: str = ""):

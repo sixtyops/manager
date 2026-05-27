@@ -927,6 +927,62 @@ class TestConfigTemplatesAPI:
         assert secret_value in tpl["config_fragment"]
         assert _json.loads(tpl["config_fragment"])["services"]["snmp"]["v2_ro_community"] == secret_value
 
+    def test_templates_snapshot_encrypted_at_rest(self, mock_db):
+        """A config-push rollout stores a frozen copy of template fragments in
+        `templates_snapshot`. That copy must be wrapped too — otherwise the
+        secrets PR #165 protects in `config_templates.config_fragment` are
+        still cleartext on disk for every started/in-flight/completed rollout.
+        """
+        import json as _json
+        from updater import database as _db
+        from updater.crypto import is_encrypted
+        secret_value = "rw-snmp-secret-snapshot-test"
+        snapshot = _json.dumps([
+            {"id": 1, "name": "Snmp", "fragment": {"services": {"snmp": {"v2_rw_community": secret_value}}}, "device_types": None},
+        ])
+        rollout_id = _db.create_config_push_rollout(
+            template_ids_json=_json.dumps([1]),
+            template_names="Snmp",
+            templates_snapshot=snapshot,
+        )
+        raw = mock_db.execute(
+            "SELECT templates_snapshot FROM config_push_rollouts WHERE id = ?",
+            (rollout_id,),
+        ).fetchone()
+        assert is_encrypted(raw["templates_snapshot"])
+        assert secret_value not in raw["templates_snapshot"]
+        # Public getters return cleartext.
+        for getter in (_db.get_config_push_rollout, lambda _id: _db.get_current_config_push_rollout()):
+            rec = getter(rollout_id)
+            assert rec is not None
+            assert secret_value in rec["templates_snapshot"]
+
+    def test_legacy_plaintext_snapshot_is_migrated_idempotently(self, mock_db):
+        import json as _json
+        from updater.database import _migrate_encrypt_config_push_snapshots
+        from updater.crypto import is_encrypted
+        snap = _json.dumps([{"id": 1, "name": "S", "fragment": {"x": "rotateme"}, "device_types": None}])
+        mock_db.execute(
+            "INSERT INTO config_push_rollouts (template_ids, template_names, templates_snapshot, phase, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'canary', 'paused', ?, ?)",
+            (_json.dumps([1]), "S", snap, "2026-05-01", "2026-05-01"),
+        )
+        mock_db.commit()
+        _migrate_encrypt_config_push_snapshots(mock_db)
+        mock_db.commit()
+        raw = mock_db.execute(
+            "SELECT templates_snapshot FROM config_push_rollouts WHERE template_names = 'S'"
+        ).fetchone()
+        assert is_encrypted(raw["templates_snapshot"])
+        encrypted_first = raw["templates_snapshot"]
+        # Idempotent.
+        _migrate_encrypt_config_push_snapshots(mock_db)
+        mock_db.commit()
+        raw2 = mock_db.execute(
+            "SELECT templates_snapshot FROM config_push_rollouts WHERE template_names = 'S'"
+        ).fetchone()
+        assert raw2["templates_snapshot"] == encrypted_first
+
     def test_legacy_plaintext_fragment_is_migrated_idempotently(self, mock_db):
         """Pre-#165 rows stored cleartext JSON. The startup migration wraps
         them, and re-running the migration is a no-op (idempotent)."""
