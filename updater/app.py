@@ -1701,24 +1701,24 @@ async def get_all_cpes(session: dict = Depends(require_auth)):
 def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
     """Build the auto-login HTML page for a device.
 
-    Browsers silently block iframe/XHR requests to a host with an untrusted
-    self-signed cert; only top-level navigations show the warning UI. So we
-    probe the device's cert with a hidden <img>, and if it fails we ask the
-    user to open the device once (in a popup) to accept the cert. As soon as
-    the cert is trusted, we close the popup, submit the iframe login form,
-    and redirect the main window — that flow now actually works because the
-    browser trusts the device origin for the rest of the session.
+    Two paths, picked by a one-shot probe:
 
-    Escape hatch: Firefox does *not* extend a manually-accepted cert
-    exception to cross-origin subresource requests, so both the favicon
-    probe and the iframe login POST stay blocked forever even after the
-    user has trusted the device. The "Log in anyway" links on the
-    cert-prompt and waiting views re-target the login form at a popup
-    window — POSTing into a popup is a top-level navigation, which
-    Firefox treats per the existing cert exception. The popup briefly
-    shows the device's JSON response (cookie now set browser-side), and
-    we close it and redirect the main window onto the device's now-
-    logged-in home.
+    1. Inline (fast): a hidden <img> probes the device's cert. If it loads,
+       the browser already trusts the cert AND extends that trust to
+       cross-origin subresources — which is true in Chrome. We submit the
+       login form into a hidden iframe and redirect. No popup, no clicks.
+
+    2. Popup-POST (reliable): if the probe fails, the user clicks a single
+       "Sign in" button. We open a small popup and re-target the login form
+       at it; POSTing into a popup is a *top-level* navigation, so the
+       browser uses any per-origin cert exception the user has already
+       granted (Firefox, importantly, doesn't extend that exception to
+       cross-origin subresources — which is why path 1 doesn't work
+       there). If no exception exists yet, the cert warning shows inline
+       in the popup; once accepted, the POST completes and the device
+       sets the session cookie. We close the popup as soon as the user
+       does (or after 5s as a hard ceiling) and redirect the main window
+       onto the device's now-logged-in home.
     """
     escaped_ip = html_module.escape(ip)
     return f"""<!DOCTYPE html>
@@ -1759,30 +1759,17 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
             <p>Connecting to {escaped_ip}...</p>
         </div>
         <div id="view-cert-prompt" class="hidden">
-            <h1>Accept the certificate for {escaped_ip}</h1>
+            <h1>Sign in to {escaped_ip}</h1>
             <p class="muted">
-                This device uses a self-signed certificate. Click below to open
-                it once and accept the warning &mdash; we'll log you in
-                automatically and close that tab.
+                We'll open a small window to log you in. If your browser
+                shows a certificate warning, accept it &mdash; the window
+                closes itself when sign-in is done.
             </p>
-            <button id="accept-cert-btn">Accept certificate &amp; log in</button>
+            <button id="accept-cert-btn">Sign in</button>
             <p id="popup-blocked-msg" class="muted hidden">
                 Popup was blocked.
                 <a href="https://{escaped_ip}/" target="_blank" rel="noopener noreferrer">
-                Open {escaped_ip} manually</a>, accept the certificate,
-                then return to this tab.
-            </p>
-            <p class="muted">
-                Already trusted this device's certificate?
-                <a href="#" class="skip-probe-link">Log in anyway</a>
-            </p>
-        </div>
-        <div id="view-waiting" class="hidden">
-            <div class="spinner"></div>
-            <p>Waiting for certificate acceptance...</p>
-            <p class="muted">Accept the warning in the other tab. We'll take it from there.</p>
-            <p class="muted">
-                Already trusted? <a href="#" class="skip-probe-link">Log in anyway</a>
+                Open {escaped_ip} manually</a> and sign in there.
             </p>
         </div>
         <div id="view-logging-in" class="hidden">
@@ -1806,10 +1793,7 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
         (function() {{
             var ip = "{escaped_ip}";
             var submitted = false;
-            var popup = null;
-            var pollTimer = null;
-            var popupCloseTimer = null;
-            var views = ['probing', 'cert-prompt', 'waiting', 'logging-in', 'fallback'];
+            var views = ['probing', 'cert-prompt', 'logging-in', 'fallback'];
 
             function show(name) {{
                 for (var i = 0; i < views.length; i++) {{
@@ -1836,18 +1820,12 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
                 }});
             }}
 
-            function stopTimers() {{
-                if (pollTimer) {{ clearInterval(pollTimer); pollTimer = null; }}
-                if (popupCloseTimer) {{ clearInterval(popupCloseTimer); popupCloseTimer = null; }}
-            }}
-
-            function doAutoLogin() {{
+            // Fast path (Chrome): cert is trusted, the iframe POST works,
+            // and the main-window redirect lands logged-in. No popup, no
+            // visible JSON, no clicks.
+            function doAutoLoginInline() {{
                 if (submitted) return;
                 submitted = true;
-                stopTimers();
-                if (popup && !popup.closed) {{
-                    try {{ popup.close(); }} catch (e) {{}}
-                }}
                 show('logging-in');
                 document.getElementById('loginForm').submit();
                 setTimeout(function() {{
@@ -1856,55 +1834,20 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
                 setTimeout(function() {{ show('fallback'); }}, 8000);
             }}
 
-            function startPolling() {{
-                stopTimers();
-                pollTimer = setInterval(function() {{
-                    if (submitted) return;
-                    probeCert().then(function(ok) {{ if (ok) doAutoLogin(); }});
-                }}, 1000);
-                popupCloseTimer = setInterval(function() {{
-                    if (submitted) return;
-                    if (popup && popup.closed) {{
-                        stopTimers();
-                        popup = null;
-                        // Probe one more time in case they accepted just before closing.
-                        probeCert().then(function(ok) {{
-                            if (ok) doAutoLogin();
-                            else show('cert-prompt');
-                        }});
-                    }}
-                }}, 500);
-            }}
-
-            document.getElementById('accept-cert-btn').addEventListener('click', function() {{
-                popup = window.open("https://" + ip + "/", "_blank");
-                if (!popup) {{
-                    document.getElementById('popup-blocked-msg').classList.remove('hidden');
-                    return;
-                }}
-                show('waiting');
-                startPolling();
-            }});
-
-            // "Log in anyway" escape hatch — needed for Firefox, where a
-            // manually-accepted self-signed cert exception doesn't apply to
-            // cross-origin subresource requests. We re-target the login form
-            // at a popup so the POST becomes a top-level navigation (which
-            // Firefox does allow with the trusted cert), wait for the POST
-            // to set the device session cookie, then close the popup and
-            // navigate the main window to the device home.
+            // Reliable path (Firefox, or any browser where the inline iframe
+            // POST is blocked): open a popup, re-target the login form at it
+            // so the POST is a top-level navigation. If the popup needs a
+            // cert prompt, the user accepts it inline there. We close the
+            // popup as soon as the user does — or 5s later — and redirect
+            // the main window onto the now-logged-in device home.
             function doAutoLoginViaPopupPost() {{
                 if (submitted) return;
                 submitted = true;
-                stopTimers();
-                if (popup && !popup.closed) {{
-                    try {{ popup.close(); }} catch (e) {{}}
-                }}
                 show('logging-in');
 
                 var popupName = 'sixtyops_devlogin_' + Date.now();
                 var loginPopup = window.open('about:blank', popupName,
-                    'width=520,height=360,noopener=false');
+                    'width=480,height=320,noopener=false');
                 if (!loginPopup) {{
                     document.getElementById('popup-blocked-msg').classList.remove('hidden');
                     show('cert-prompt');
@@ -1916,32 +1859,43 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
                 form.target = popupName;
                 form.submit();
 
-                setTimeout(function() {{
+                var navigated = false;
+                function finishNavigate() {{
+                    if (navigated) return;
+                    navigated = true;
                     if (loginPopup && !loginPopup.closed) {{
                         try {{ loginPopup.close(); }} catch (e) {{}}
                     }}
                     window.location.href = "https://" + ip + "/";
-                }}, 2000);
-                setTimeout(function() {{ show('fallback'); }}, 8000);
+                }}
+
+                // If the user closes the popup themselves (typical once the
+                // JSON response is on screen), navigate immediately.
+                var closePoll = setInterval(function() {{
+                    if (loginPopup.closed) {{
+                        clearInterval(closePoll);
+                        finishNavigate();
+                    }}
+                }}, 200);
+
+                // Hard ceiling: long enough to fit a cert-warning accept on
+                // a first visit (~5s) but short enough not to stall on
+                // repeat visits where the POST completes in ~200ms.
+                setTimeout(function() {{
+                    clearInterval(closePoll);
+                    finishNavigate();
+                }}, 5000);
+                setTimeout(function() {{ show('fallback'); }}, 10000);
             }}
 
-            var skipLinks = document.querySelectorAll('.skip-probe-link');
-            for (var i = 0; i < skipLinks.length; i++) {{
-                skipLinks[i].addEventListener('click', function(e) {{
-                    e.preventDefault();
-                    doAutoLoginViaPopupPost();
-                }});
-            }}
+            document.getElementById('accept-cert-btn').addEventListener('click',
+                doAutoLoginViaPopupPost);
 
-            window.addEventListener('focus', function() {{
-                if (submitted) return;
-                probeCert().then(function(ok) {{ if (ok) doAutoLogin(); }});
-            }});
-
-            // Initial probe — if the cert is already trusted (subsequent visit
-            // in the same browser session), skip straight to auto-login.
+            // Initial probe — if cert is already trusted in a browser that
+            // honours the exception for cross-origin subresources (Chrome),
+            // we can skip the popup entirely and inline-submit.
             probeCert().then(function(ok) {{
-                if (ok) doAutoLogin();
+                if (ok) doAutoLoginInline();
                 else show('cert-prompt');
             }});
         }})();
