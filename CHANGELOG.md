@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Changed
+- External time validation no longer consults `worldtimeapi.org`. That
+  endpoint started timing out on roughly every request (>1 fail per minute
+  observed on sixtyops-dev in 2026-05), and `timeapi.io` — the existing
+  fallback — was always picking up the work anyway. `get_external_time`
+  now goes straight to `timeapi.io`. No setting change required (#163).
+
 ### Fixed
 - Device portal: rebuilt the cert-untrusted fallback as a single
   "Sign in" button that opens a small popup, POSTs the login form into
