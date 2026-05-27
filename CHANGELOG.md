@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Fixed
+- Config templates that enable `ping_watchdog` with a reboot trigger
+  shorter than 30 minutes are now rejected by the template-save and
+  config-push paths. The previously-seeded `Watchdog Standard` default
+  of `interval=300, failure=3, addresses=[8.8.8.8, 1.1.1.1]` rebooted
+  every device on a bench in lockstep when a brief upstream blip made
+  both public IPs unreachable for 15 minutes (issue #162). The template
+  form default for "Failures" is now `6` (30-min trigger). Operators
+  can still use any combination of `interval` and `failure` that
+  clears the 1800-second floor.
 - Auto-update scheduler no longer spawns duplicate no-op rollouts when the
   per-tick eligibility check disagrees with the per-phase assignment check
   (cooldown days defaulted to `0` in the dedup path while the assignment

@@ -2806,7 +2806,7 @@
                                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:6px;">
                                     <div><label for="cfgWatchdogInterval">Interval</label><input type="number" id="cfgWatchdogInterval" name="cfgWatchdogInterval" value="300" style="width:100%;"></div>
                                     <div><label for="cfgWatchdogStartupDelay">Delay</label><input type="number" id="cfgWatchdogStartupDelay" name="cfgWatchdogStartupDelay" value="300" style="width:100%;"></div>
-                                    <div><label for="cfgWatchdogFailureCount">Failures</label><input type="number" id="cfgWatchdogFailureCount" name="cfgWatchdogFailureCount" value="3" style="width:100%;"></div>
+                                    <div><label for="cfgWatchdogFailureCount">Failures</label><input type="number" id="cfgWatchdogFailureCount" name="cfgWatchdogFailureCount" value="6" min="6" style="width:100%;"></div>
                                 </div>
                                 <div style="margin-top:6px;">
                                     <label for="cfgWatchdogPingTargets">Ping Targets</label>
@@ -9908,7 +9908,7 @@
                         enabled: document.getElementById('cfgWatchdogEnabled').checked,
                         interval: parseInt(document.getElementById('cfgWatchdogInterval').value) || 300,
                         delay: parseInt(document.getElementById('cfgWatchdogStartupDelay').value) || 300,
-                        failure: parseInt(document.getElementById('cfgWatchdogFailureCount').value) || 3,
+                        failure: parseInt(document.getElementById('cfgWatchdogFailureCount').value) || 6,
                         addresses: rawTargets.filter(t => ipPattern.test(t)),
                     };
                 }
