@@ -183,6 +183,79 @@ class TestTokenAuth:
         assert "token not configured" in result["error"].lower()
         mock_client.get.assert_not_called()
 
+
+class TestErrorPersistence:
+    """A failed periodic release check must be visible to operators via the
+    Updates panel, not silently swallowed. Before this, the panel's
+    `last_check` stamp only advanced on success — a permanently-failing
+    background check left a stale "Last check: 18 days ago" message and no
+    indication anything was wrong. (#164 follow-up after #144 landed.)"""
+
+    @pytest.fixture(autouse=True)
+    def _patch_db(self, mock_db):
+        pass
+
+    @pytest.mark.asyncio
+    async def test_missing_token_persists_error(self):
+        from updater.release_checker import ReleaseChecker
+        from updater import database
+        with patch("updater.release_checker.SIXTYOPS_GH_TOKEN", ""):
+            await ReleaseChecker(broadcast_func=AsyncMock()).check_for_updates()
+        assert "token not configured" in database.get_setting(
+            "autoupdate_last_check_error", ""
+        ).lower()
+        assert database.get_setting("autoupdate_last_check", "") != ""
+
+    @pytest.mark.asyncio
+    async def test_api_error_persists(self):
+        import httpx
+        from updater.release_checker import ReleaseChecker
+        from updater import database
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        mock_resp.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError("boom", request=MagicMock(), response=mock_resp)
+        )
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_resp)
+        with patch("updater.release_checker.SIXTYOPS_GH_TOKEN", "ghp_x"), \
+             patch("updater.release_checker.httpx.AsyncClient", return_value=mock_client):
+            await ReleaseChecker(broadcast_func=AsyncMock()).check_for_updates()
+        assert "500" in database.get_setting("autoupdate_last_check_error", "")
+
+    @pytest.mark.asyncio
+    async def test_subsequent_success_clears_error(self):
+        from updater.release_checker import ReleaseChecker
+        from updater import database
+        database.set_setting("autoupdate_last_check_error", "prior failure")
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "tag_name": "v1.0.0",
+            "html_url": "https://example.com",
+            "body": "",
+        }
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_resp)
+        with patch("updater.release_checker.SIXTYOPS_GH_TOKEN", "ghp_x"), \
+             patch("updater.release_checker.httpx.AsyncClient", return_value=mock_client), \
+             patch("updater.release_checker.__version__", "1.0.0"):
+            await ReleaseChecker(broadcast_func=AsyncMock()).check_for_updates()
+        assert database.get_setting("autoupdate_last_check_error", "") == ""
+
+    def test_get_update_status_exposes_last_check_error(self):
+        from updater.release_checker import ReleaseChecker
+        from updater import database
+        database.set_setting("autoupdate_last_check_error", "GitHub API error: 500")
+        status = ReleaseChecker(broadcast_func=AsyncMock()).get_update_status()
+        assert status["last_check_error"] == "GitHub API error: 500"
+
     @pytest.mark.asyncio
     async def test_token_sent_in_authorization_header(self):
         """When the token is set, every API call carries Bearer auth."""

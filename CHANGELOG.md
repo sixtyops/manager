@@ -18,6 +18,14 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Settings > Updates no longer sits on a stale "Last check: 18 days ago"
+  when the periodic background release-check has been failing. The error
+  is now persisted to the new `autoupdate_last_check_error` setting on
+  every failure (and cleared on success), and the panel surfaces it
+  inline in red ("Last check 12:34 — failed: ..."). Follow-up to #144,
+  which made the *manual* `Check now` button return errors but left
+  the periodic check silently swallowing them so the panel never
+  reflected them (#164).
 - `config_templates.config_fragment` is now Fernet-encrypted at rest with
   the same key (`data/.encryption_key`) used for device passwords
   (#35) and device-config snapshots. Templates carry SNMP RW

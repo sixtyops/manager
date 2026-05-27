@@ -7079,7 +7079,14 @@
                 const statusEl = document.getElementById('appUpdateStatus');
                 if (statusEl && result.last_check) {
                     const d = new Date(result.last_check.endsWith('Z') ? result.last_check : result.last_check + 'Z');
-                    statusEl.textContent = 'Last check: ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                    const stamp = d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                    if (result.last_check_error) {
+                        statusEl.textContent = 'Last check ' + stamp + ' — failed: ' + result.last_check_error;
+                        statusEl.style.color = '#b91c1c';
+                    } else {
+                        statusEl.textContent = 'Last check: ' + stamp;
+                        statusEl.style.color = '';
+                    }
                 }
 
                 // Show update banner if available
