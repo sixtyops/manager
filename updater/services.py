@@ -373,11 +373,12 @@ def minutes_until_window_end(now: datetime, start_hour: int, end_hour: int) -> i
 async def get_external_time(timezone: str) -> Optional[datetime]:
     """Fetch current time from an external API.
 
-    Tries worldtimeapi.org first, then timeapi.io as fallback.
-    Returns datetime or None on failure.
+    Returns datetime or None on failure. worldtimeapi.org used to be the
+    primary source but started returning 5-second timeouts on roughly every
+    request (observed 2026-05; >1 fail per minute on sixtyops-dev), so it
+    was dropped — we always fell through to timeapi.io anyway.
     """
     sources = [
-        (f"https://worldtimeapi.org/api/timezone/{timezone}", "datetime"),
         (f"https://timeapi.io/api/time/current/zone?timeZone={timezone}", "dateTime"),
     ]
     for url, key in sources:

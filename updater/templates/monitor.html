@@ -4250,7 +4250,7 @@
                 for (const ap of walkSiteAPs(site)) {
                     values.add(getDeviceColumnValue(ap, 'ap', column));
                     for (const cpe of (ap.cpes || [])) {
-                        values.add(getDeviceColumnValue(cpe, 'cpe', column, ap.ip));
+                        values.add(getDeviceColumnValue(cpe, 'cpe', column, ap));
                     }
                 }
                 for (const sw of (site.switches || [])) {
@@ -4573,10 +4573,12 @@
             }
         }
 
-        function getDeviceStatusForFilter(device, kind, parentApIp) {
+        function getDeviceStatusForFilter(device, kind, parentAp) {
+            const parentApIp = parentAp?.ip;
             if (kind === 'cpe' && parentApIp && updatingDevices.has(parentApIp)) return 'updating';
             if (updatingDevices.has(device.ip)) return 'updating';
             if (device.last_error) return 'offline';
+            if (kind === 'cpe' && parentAp && parentAp.last_error) return 'offline';
             if (kind === 'cpe' && device.auth_status && device.auth_status !== 'ok') return 'offline';
             const vs = versionStatus(device.ip);
             if (vs === 'behind') return 'behind';
@@ -4584,21 +4586,21 @@
             return 'unknown';
         }
 
-        function getDeviceColumnValue(device, kind, column, parentApIp) {
+        function getDeviceColumnValue(device, kind, column, parentAp) {
             switch (column) {
                 case 'model': return device.model || '';
                 case 'firmware': return device.firmware_version || '';
-                case 'status': return getDeviceStatusForFilter(device, kind, parentApIp);
+                case 'status': return getDeviceStatusForFilter(device, kind, parentAp);
                 default: return '';
             }
         }
 
-        function matchesDeviceFilters(device, siteName, kind, parentApIp) {
+        function matchesDeviceFilters(device, siteName, kind, parentAp) {
             if (!device) return false;
             // Check column filters
             for (const [col, allowedSet] of Object.entries(columnFilters)) {
                 if (!allowedSet || allowedSet.size === 0) continue;
-                const val = getDeviceColumnValue(device, kind, col, parentApIp);
+                const val = getDeviceColumnValue(device, kind, col, parentAp);
                 if (!allowedSet.has(val)) return false;
             }
             const query = deviceFilterState.query;
@@ -4677,13 +4679,16 @@
 
         const loadingDotsHtml = '<span class="loading-dots"><span></span><span></span><span></span></span>';
 
-        function statusCell(ip, isOffline, signalHealth, authStatus, parentApIp) {
+        function statusCell(ip, isOffline, signalHealth, authStatus, parentApIp, parentApOffline) {
             if (updatingDevices.has(ip)) {
                 return '<span class="status-icon-cell updating" title="Updating"></span>';
             }
             // Show loading dots if parent AP is updating
             if (parentApIp && updatingDevices.has(parentApIp)) {
                 return loadingDotsHtml;
+            }
+            if (parentApOffline) {
+                return '<span class="status-icon-cell offline" title="Stale — parent AP unreachable"></span>';
             }
             if (isOffline) {
                 return '<span class="status-icon-cell offline" title="Offline"></span>';
@@ -4781,16 +4786,17 @@
 
             const sortedCPEs = [...cpes].sort(deviceComparator());
             for (const cpe of sortedCPEs) {
-                const health = cpe.signal_health || 'red';
+                const parentOffline = isOffline;
+                const health = parentOffline ? 'red' : (cpe.signal_health || 'red');
                 const cpeName = cpe.system_name || cpe.mac || 'Unknown';
                 const cpeIp = cpe.ip || '';
                 const signalVal = cpe.primary_signal;
-                const signalClass = signalVal != null
-                    ? (signalVal >= -60 ? 'signal-good' : (signalVal >= -65 ? 'signal-low' : 'signal-critical'))
-                    : '';
+                const signalClass = parentOffline || signalVal == null
+                    ? ''
+                    : (signalVal >= -60 ? 'signal-good' : (signalVal >= -65 ? 'signal-low' : 'signal-critical'));
                 const isCpeSelected = selectedNode?.type === 'cpe' && selectedNode?.data?.ip === cpe.ip;
 
-                out += `<tr class="row-cpe ${isCpeSelected ? 'row-selected' : ''}" onclick="selectCPE('${cpe.ip}')">
+                out += `<tr class="row-cpe ${parentOffline ? 'row-offline' : ''} ${isCpeSelected ? 'row-selected' : ''}" onclick="selectCPE('${cpe.ip}')">
                     <td>
                         <div class="name-cell tree-indent-${cpeIndent}">
                             <input type="checkbox" ${checkedDevices.has(cpe.ip) ? 'checked' : ''} onclick="toggleCheck('${cpe.ip}',event);event.stopPropagation();">
@@ -4804,7 +4810,7 @@
                     <td>${versionCell(cpe)}</td>
                     <td class="${signalClass}">${signalVal != null ? signalVal.toFixed(1) + ' dBm' : ''}</td>
                     <td>${formatDistance(cpe.link_distance)}</td>
-                    <td>${statusCell(cpe.ip, false, health, cpe.auth_status, ap.ip)}</td>
+                    <td>${statusCell(cpe.ip, false, health, cpe.auth_status, ap.ip, parentOffline)}</td>
                     <td>${updateCell('cpe', cpe.ip, ap.ip)}</td>
                     <td></td>
                     <td><div class="actions-cell">${actionsCell('cpe', cpe.ip, cpeName)}</div></td>
@@ -4920,7 +4926,7 @@
                     }
                     const filteredCpes = cpes.filter(cpe => {
                         totalRows += 1;
-                        return matchesDeviceFilters(cpe, siteName, 'cpe', ap.ip);
+                        return matchesDeviceFilters(cpe, siteName, 'cpe', ap);
                     });
                     const apMatch = matchesDeviceFilters(ap, siteName, 'ap');
                     if (apMatch || filteredCpes.length > 0) {
@@ -5005,7 +5011,7 @@
                     for (const nap of rawNested) {
                         const ncpes = nap.cpes || [];
                         if (queryOnlySiteFilter) { nestedAps.push(nap); continue; }
-                        const filtered = ncpes.filter(cpe => matchesDeviceFilters(cpe, siteName, 'cpe', nap.ip));
+                        const filtered = ncpes.filter(cpe => matchesDeviceFilters(cpe, siteName, 'cpe', nap));
                         if (matchesDeviceFilters(nap, siteName, 'ap') || filtered.length > 0) {
                             nestedAps.push({ ...nap, cpes: filtered });
                         }
