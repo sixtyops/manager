@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Fixed
+- `config_templates.config_fragment` is now Fernet-encrypted at rest with
+  the same key (`data/.encryption_key`) used for device passwords
+  (#35) and device-config snapshots. Templates carry SNMP RW
+  communities, RADIUS service passwords, and `$1$<salt>$<hash>` device-
+  user password hashes; previously these sat in plaintext in SQLite,
+  so anyone with read access to the DB file or a CSV/SFTP backup could
+  lift them. Existing rows are migrated in-place on next startup
+  (idempotent — checks the Fernet `gAAAAA` prefix); the public
+  `db.get_config_template*` and `db.save/update_config_template`
+  helpers handle the wrap and unwrap, so callers see cleartext as
+  before (#165).
 - Auto-update scheduler no longer spawns duplicate no-op rollouts when the
   per-tick eligibility check disagrees with the per-phase assignment check
   (cooldown days defaulted to `0` in the dedup path while the assignment

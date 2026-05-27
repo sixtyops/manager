@@ -1712,6 +1712,7 @@ class TestUsersTemplateAPIHashing:
 
     def test_post_hashes_plaintext_passwords(self, operator_client, mock_db):
         import json as _json
+        from updater import database as _db
         resp = operator_client.post("/api/config-templates", json={
             "name": "Users Test",
             "category": "users",
@@ -1721,14 +1722,18 @@ class TestUsersTemplateAPIHashing:
             "form_data": {"users": [{"username": "root", "password": "topsecret"}]},
         })
         assert resp.status_code == 200, resp.text
-        # The DB row should have a hashed password, not "topsecret".
-        row = mock_db.execute(
+        # The stored row should not contain the plaintext, and the
+        # decrypted-at-rest payload should hold a $1$ hash. config_fragment is
+        # Fernet-wrapped per #165, so we read through the public API; form_data
+        # is still plaintext.
+        raw = mock_db.execute(
             "SELECT config_fragment, form_data FROM config_templates WHERE name = 'Users Test'"
         ).fetchone()
-        frag = _json.loads(row["config_fragment"])
-        form = _json.loads(row["form_data"])
-        assert "topsecret" not in row["config_fragment"]
-        assert "topsecret" not in row["form_data"]
+        assert "topsecret" not in raw["config_fragment"]  # encrypted → trivially holds
+        assert "topsecret" not in raw["form_data"]
+        tpl = next(t for t in _db.get_config_templates() if t["name"] == "Users Test")
+        frag = _json.loads(tpl["config_fragment"])
+        form = _json.loads(raw["form_data"])
         assert frag["system"]["users"][0]["password"].startswith("$1$")
         assert form["users"][0]["password"].startswith("$1$")
 
@@ -1781,16 +1786,19 @@ class TestUsersTemplateAPIHashing:
             "form_data": {"users": [{"username": "root", "password": ""}]},
         })
         assert resp.status_code == 200, resp.text
+        from updater import database as _db
+        tpl = _db.get_config_template(tid)
         row = mock_db.execute(
-            "SELECT config_fragment, form_data FROM config_templates WHERE id = ?", (tid,)
+            "SELECT form_data FROM config_templates WHERE id = ?", (tid,)
         ).fetchone()
-        frag = _json.loads(row["config_fragment"])
+        frag = _json.loads(tpl["config_fragment"])
         form = _json.loads(row["form_data"])
         assert frag["system"]["users"][0]["password"] == prior_hash
         assert form["users"][0]["password"] == prior_hash
 
     def test_put_with_new_plaintext_replaces_prior_hash(self, operator_client, mock_db):
         import json as _json
+        from updater import database as _db
         prior_hash = "$1$rrrrrrrr$xxxxxxxxxxxxxxxxxxxxxx"
         cur = mock_db.execute(
             "INSERT INTO config_templates (name, category, config_fragment, form_data, enabled) "
@@ -1806,13 +1814,15 @@ class TestUsersTemplateAPIHashing:
             "form_data": {"users": [{"username": "root", "password": "newpass"}]},
         })
         assert resp.status_code == 200, resp.text
-        row = mock_db.execute(
+        tpl = _db.get_config_template(tid)
+        raw = mock_db.execute(
             "SELECT config_fragment FROM config_templates WHERE id = ?", (tid,)
         ).fetchone()
-        new_pw = _json.loads(row["config_fragment"])["system"]["users"][0]["password"]
+        new_pw = _json.loads(tpl["config_fragment"])["system"]["users"][0]["password"]
         assert new_pw.startswith("$1$")
         assert new_pw != prior_hash
-        assert "newpass" not in row["config_fragment"]
+        # Raw stored fragment is Fernet-wrapped, so the plaintext can't appear in it.
+        assert "newpass" not in raw["config_fragment"]
 
 
 class TestUsersTemplateMigration:
@@ -1822,6 +1832,7 @@ class TestUsersTemplateMigration:
     def test_migrates_plaintext_users_row(self, mock_db):
         import json as _json
         from updater.app import _migrate_users_template_password_hashing
+        from updater import database as _db
         mock_db.execute(
             "INSERT INTO config_templates (name, category, config_fragment, form_data, enabled) "
             "VALUES (?, ?, ?, ?, 1)",
@@ -1831,16 +1842,21 @@ class TestUsersTemplateMigration:
         )
         mock_db.commit()
         _migrate_users_template_password_hashing()
-        row = mock_db.execute(
+        # After the users-hash migration writes through update_config_template,
+        # config_fragment is Fernet-wrapped at rest (#165). Read via the public
+        # API to get cleartext.
+        tpl = next(t for t in _db.get_config_templates() if t["name"] == "Legacy Users")
+        raw = mock_db.execute(
             "SELECT config_fragment, form_data FROM config_templates WHERE name = 'Legacy Users'"
         ).fetchone()
-        assert "leakable" not in row["config_fragment"]
-        assert "leakable" not in row["form_data"]
-        assert _json.loads(row["config_fragment"])["system"]["users"][0]["password"].startswith("$1$")
+        assert "leakable" not in raw["config_fragment"]
+        assert "leakable" not in raw["form_data"]
+        assert _json.loads(tpl["config_fragment"])["system"]["users"][0]["password"].startswith("$1$")
 
     def test_already_hashed_unchanged(self, mock_db):
         import json as _json
         from updater.app import _migrate_users_template_password_hashing
+        from updater import database as _db
         already = "$1$abcdefgh$SbLlAj1nnaSEyBXEfwtQM/"
         mock_db.execute(
             "INSERT INTO config_templates (name, category, config_fragment, form_data, enabled) "
@@ -1851,14 +1867,13 @@ class TestUsersTemplateMigration:
         )
         mock_db.commit()
         _migrate_users_template_password_hashing()
-        row = mock_db.execute(
-            "SELECT config_fragment FROM config_templates WHERE name = 'Users Hashed'"
-        ).fetchone()
-        assert _json.loads(row["config_fragment"])["system"]["users"][0]["password"] == already
+        tpl = next(t for t in _db.get_config_templates() if t["name"] == "Users Hashed")
+        assert _json.loads(tpl["config_fragment"])["system"]["users"][0]["password"] == already
 
     def test_non_users_categories_untouched(self, mock_db):
         import json as _json
         from updater.app import _migrate_users_template_password_hashing
+        from updater import database as _db
         # An NTP template happens to have a `password`-named field somewhere
         # — migration must not touch it (only walks the Users category).
         mock_db.execute(
@@ -1869,11 +1884,13 @@ class TestUsersTemplateMigration:
         )
         mock_db.commit()
         _migrate_users_template_password_hashing()
-        row = mock_db.execute(
+        # Migration didn't touch this row → still cleartext on disk, so the
+        # literal "weird" is in the raw bytes. (Public API also returns "weird"
+        # in the parsed JSON either way.)
+        raw = mock_db.execute(
             "SELECT config_fragment FROM config_templates WHERE name = 'NTP'"
         ).fetchone()
-        # Untouched — both the field and value preserved verbatim.
-        assert "weird" in row["config_fragment"]
+        assert "weird" in raw["config_fragment"]
 
 
 class TestUserListsCompatible:
