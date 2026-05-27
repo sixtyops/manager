@@ -1,5 +1,39 @@
 # Release System
 
+**Bottom line:** code reaches customers via three staged hops — PR → main → dev tag → stable tag — with automated validation at every hop and one human approval at the stable cut.
+
+```
+       feature branch
+            │  PR opened
+            ▼
+  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────────────┐
+  │ ci.yml           │  │ install-smoke.yml│  │ dev-hardware.yml      │
+  │ unit tests +     │  │ fresh install +  │  │ dev_blocking lane     │
+  │ docker build     │  │ upgrade idempot. │  │ vs real Tachyon hw    │
+  └──────────────────┘  └──────────────────┘  └───────────────────────┘
+                            │ all green
+                            ▼
+                          main
+                            │ maintainer tags vX.Y.Z-devN
+                            ▼
+                  release.yml (auto)
+                  → GitHub pre-release
+                  → ghcr.io/sixtyops/manager:vX.Y.Z-devN
+                            │ dev-channel installs auto-update
+                            ▼
+                  dev soak (incl. sixtyops-dev.infra.treehouse.mn)
+                            │ maintainer tags vX.Y.Z + workflow_dispatch (confirm=RELEASE)
+                            ▼
+                  release.yml (manual)
+                  → GitHub release
+                  → ghcr.io/sixtyops/manager:vX.Y.Z + :latest
+                            │
+                            ▼
+                  customer installs (stable channel)
+```
+
+Customers on the stable channel never run `main` HEAD. The dev host runs the dev channel and auto-updates from `vX.Y.Z-devN` tags as they land.
+
 This document describes how releases are produced, published, and consumed by
 the app updater.
 
@@ -87,6 +121,36 @@ Apply behavior (Docker / non-appliance mode):
   labels (`feature`, `bug`, `chore`, `docs`, `ci`, etc.).
 - PR labels are auto-applied by `.github/workflows/auto-label.yml` from
   conventional commit prefixes in the PR title.
+
+## Testing a Change on the Dev Host Without a Release Tag
+
+Cutting a `-devN` tag for every UI tweak or experimental change is heavy. To deploy a feature branch directly to the shared dev host (`sixtyops-dev.infra.treehouse.mn`) for hands-on testing without a tag:
+
+1. SSH to the dev host (see internal infrastructure runbook for the current SSH alias and key path; deploy directory is `/opt/docker/compose/sixtyops-manager`).
+2. Fetch and check out the feature branch:
+   ```bash
+   git fetch origin <branch-name>
+   git checkout <branch-name>
+   ```
+3. Rebuild and restart the management container:
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.standalone.yml up -d --build sixtyops-mgmt
+   ```
+4. Verify the new code is live:
+   ```bash
+   curl -sk https://sixtyops-dev.infra.treehouse.mn/healthz
+   docker compose logs --tail=50 sixtyops-mgmt
+   ```
+
+To return the host to the dev release channel, check out the latest dev tag and rebuild:
+
+```bash
+git fetch origin --tags --force
+git checkout vX.Y.Z-devN
+docker compose -f docker-compose.yml -f docker-compose.standalone.yml up -d --build sixtyops-mgmt
+```
+
+**Caveat — shared resource:** the dev host is a singleton. Other PRs' `dev_blocking` CI runs hit the same host while a feature branch is deployed there, so their results reflect the deployed branch, not their own. Coordinate with anyone whose PR is mid-CI before deploying, and revert to the latest dev tag when finished.
 
 ## Recommended Release Procedure
 

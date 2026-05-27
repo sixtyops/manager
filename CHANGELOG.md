@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Changed
+- Installer and self-update now require `SIXTYOPS_GH_TOKEN` (a fine-grained GitHub PAT with `Contents: Read` on `sixtyops/manager`) since the source repo is private. Pass it on the same line as `sudo` (`curl -sSL ... | sudo SIXTYOPS_GH_TOKEN=ghp_xxx bash`), and set it in the deployment `.env` so the running container can hit the release-check API. Settings > Updates now surfaces a clear "Self-update token not configured" message when missing and "GitHub rejected the self-update token" when invalid, instead of silently failing. The container image at `ghcr.io/sixtyops/manager` is published unauthenticated so appliance-mode `docker pull` keeps working without a registry token
+- External time validation no longer consults `worldtimeapi.org`. That
+  endpoint started timing out on roughly every request (>1 fail per minute
+  observed on sixtyops-dev in 2026-05), and `timeapi.io` — the existing
+  fallback — was always picking up the work anyway. `get_external_time`
+  now goes straight to `timeapi.io`. No setting change required (#163).
+- `config_enforce_hour` is now explicitly seeded to `"4"` on fresh
+  installs. The poller already defaulted to 4 AM local when the row was
+  absent (`poller.py:801`), but a missing row made the value invisible
+  in the settings table to anyone inspecting the DB directly. Behaviour
+  unchanged; just visibility (#166).
+
 ### Fixed
 - `config_templates.config_fragment` is now Fernet-encrypted at rest with
   the same key (`data/.encryption_key`) used for device passwords
@@ -16,6 +29,27 @@ All notable changes to this project are documented in this file.
   `db.get_config_template*` and `db.save/update_config_template`
   helpers handle the wrap and unwrap, so callers see cleartext as
   before (#165).
+- Config templates that enable `ping_watchdog` with a reboot trigger
+  shorter than 30 minutes are now rejected by the template-save and
+  config-push paths. The previously-seeded `Watchdog Standard` default
+  of `interval=300, failure=3, addresses=[8.8.8.8, 1.1.1.1]` rebooted
+  every device on a bench in lockstep when a brief upstream blip made
+  both public IPs unreachable for 15 minutes (issue #162). The template
+  form default for "Failures" is now `6` (30-min trigger). Operators
+  can still use any combination of `interval` and `failure` that
+  clears the 1800-second floor.
+- Device portal: rebuilt the cert-untrusted fallback as a single
+  "Sign in" button that opens a small popup, POSTs the login form into
+  it (top-level navigation, which Firefox honours per the existing
+  per-origin cert exception), then closes the popup as soon as the
+  user does — or after 5s — and redirects the main window onto the
+  device's now-logged-in home. Replaces the previous two-button
+  cert-accept-then-poll flow that left Firefox users stuck because
+  Firefox doesn't extend a manually-accepted self-signed cert
+  exception to cross-origin subresource requests (the favicon probe
+  and iframe login POST added in #110 both stayed silently blocked).
+  Chrome's fast path is unchanged: when the probe succeeds, the
+  iframe POST + redirect runs with no popup at all.
 - Auto-update scheduler no longer spawns duplicate no-op rollouts when the
   per-tick eligibility check disagrees with the per-phase assignment check
   (cooldown days defaulted to `0` in the dedup path while the assignment

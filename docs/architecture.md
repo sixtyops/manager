@@ -4,6 +4,20 @@
 
 SixtyOps Manager is a FastAPI application with an async-first architecture. The backend is Python, the frontend is server-rendered HTML with vanilla JavaScript, and real-time updates flow over WebSocket. Device-admin RADIUS authentication is provided by a built-in pyrad-based RADIUS server.
 
+## Code Promotion Flow
+
+Code reaches customers via three staged hops, with automated validation at every hop and one human approval at the stable cut:
+
+```
+feature branch  →  PR (CI + dev-hardware lane)  →  main  →  dev tag (vX.Y.Z-devN)  →  stable tag (vX.Y.Z)  →  customer install
+```
+
+- **PR → main:** every PR runs unit tests, the installer smoke test, and the live `dev_blocking` lane against real Tachyon devices on the shared dev host. Merge only after green.
+- **main → dev tag:** maintainer tags `vX.Y.Z-devN`; the GitHub release workflow auto-publishes a pre-release and a Docker image. Dev-channel installs (including the dev host itself) auto-update.
+- **dev tag → stable tag:** after dev-channel soak, maintainer tags `vX.Y.Z` and runs the release workflow with `confirm=RELEASE`. Stable-channel customers auto-update.
+
+**Customers run stable tags only** — never `main` HEAD. See [release-system.md](release-system.md) for tag and workflow mechanics, and [dev-hardware-validation.md](dev-hardware-validation.md) for the hardware test surface.
+
 ```
 ┌─────────────────────────────────────┐
 │     Browser (HTML/JS Templates)     │

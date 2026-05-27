@@ -1385,6 +1385,46 @@ class TestProtectedConfigKeys:
         with pytest.raises(ValueError, match="network"):
             _validate_fragment_safety({"network": {"ip": "1.2.3.4"}})
 
+    def test_validate_ping_watchdog_safety_direct(self):
+        import pytest
+        from updater.config_utils import (
+            validate_ping_watchdog_safety,
+            MIN_PING_WATCHDOG_REBOOT_SECONDS,
+        )
+        # Disabled — anything goes
+        validate_ping_watchdog_safety({"services": {"ping_watchdog": {
+            "enabled": False, "interval": 60, "failure": 1,
+        }}})
+        # No watchdog at all
+        validate_ping_watchdog_safety({"services": {"ntp": {"enabled": True}}})
+        # Safe: 300 * 6 = 1800s = exactly the floor
+        validate_ping_watchdog_safety({"services": {"ping_watchdog": {
+            "enabled": True, "interval": 300, "failure": 6,
+            "addresses": ["8.8.8.8"],
+        }}})
+        # Dangerous: the old default (300 * 3 = 900s = 15 min)
+        with pytest.raises(ValueError, match="900s"):
+            validate_ping_watchdog_safety({"services": {"ping_watchdog": {
+                "enabled": True, "interval": 300, "failure": 3,
+            }}})
+        # Malformed values are tolerated (caught by device validator downstream)
+        validate_ping_watchdog_safety({"services": {"ping_watchdog": {
+            "enabled": True, "interval": "fast", "failure": None,
+        }}})
+        assert MIN_PING_WATCHDOG_REBOOT_SECONDS == 1800
+
+    def test_create_template_rejects_dangerous_watchdog(self, authed_client, mock_db):
+        resp = authed_client.post("/api/config-templates", json={
+            "name": "Aggressive Watchdog",
+            "category": "watchdog",
+            "config_fragment": {"services": {"ping_watchdog": {
+                "enabled": True, "interval": 300, "failure": 3,
+                "addresses": ["8.8.8.8"],
+            }}},
+        })
+        assert resp.status_code == 400
+        assert "ping_watchdog" in resp.json()["detail"]
+
     def test_create_template_with_invalid_json_string(self, authed_client, mock_db):
         resp = authed_client.post("/api/config-templates", json={
             "name": "Bad JSON",

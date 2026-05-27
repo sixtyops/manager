@@ -1701,13 +1701,24 @@ async def get_all_cpes(session: dict = Depends(require_auth)):
 def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
     """Build the auto-login HTML page for a device.
 
-    Browsers silently block iframe/XHR requests to a host with an untrusted
-    self-signed cert; only top-level navigations show the warning UI. So we
-    probe the device's cert with a hidden <img>, and if it fails we ask the
-    user to open the device once (in a popup) to accept the cert. As soon as
-    the cert is trusted, we close the popup, submit the iframe login form,
-    and redirect the main window — that flow now actually works because the
-    browser trusts the device origin for the rest of the session.
+    Two paths, picked by a one-shot probe:
+
+    1. Inline (fast): a hidden <img> probes the device's cert. If it loads,
+       the browser already trusts the cert AND extends that trust to
+       cross-origin subresources — which is true in Chrome. We submit the
+       login form into a hidden iframe and redirect. No popup, no clicks.
+
+    2. Popup-POST (reliable): if the probe fails, the user clicks a single
+       "Sign in" button. We open a small popup and re-target the login form
+       at it; POSTing into a popup is a *top-level* navigation, so the
+       browser uses any per-origin cert exception the user has already
+       granted (Firefox, importantly, doesn't extend that exception to
+       cross-origin subresources — which is why path 1 doesn't work
+       there). If no exception exists yet, the cert warning shows inline
+       in the popup; once accepted, the POST completes and the device
+       sets the session cookie. We close the popup as soon as the user
+       does (or after 5s as a hard ceiling) and redirect the main window
+       onto the device's now-logged-in home.
     """
     escaped_ip = html_module.escape(ip)
     return f"""<!DOCTYPE html>
@@ -1748,28 +1759,23 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
             <p>Connecting to {escaped_ip}...</p>
         </div>
         <div id="view-cert-prompt" class="hidden">
-            <h1>Accept the certificate for {escaped_ip}</h1>
+            <h1>Sign in to {escaped_ip}</h1>
             <p class="muted">
-                This device uses a self-signed certificate. Click below to open
-                it once and accept the warning &mdash; we'll log you in
-                automatically and close that tab.
+                We'll open a small window to log you in. If your browser
+                shows a certificate warning, accept it &mdash; the window
+                closes itself when sign-in is done.
             </p>
-            <button id="accept-cert-btn">Accept certificate &amp; log in</button>
+            <button id="accept-cert-btn">Sign in</button>
             <p id="popup-blocked-msg" class="muted hidden">
                 Popup was blocked.
                 <a href="https://{escaped_ip}/" target="_blank" rel="noopener noreferrer">
-                Open {escaped_ip} manually</a>, accept the certificate,
-                then return to this tab.
+                Open {escaped_ip} manually</a> and sign in there.
             </p>
-        </div>
-        <div id="view-waiting" class="hidden">
-            <div class="spinner"></div>
-            <p>Waiting for certificate acceptance...</p>
-            <p class="muted">Accept the warning in the other tab. We'll take it from there.</p>
         </div>
         <div id="view-logging-in" class="hidden">
             <div class="spinner"></div>
             <p>Logging in to {escaped_ip}...</p>
+            <p class="muted">Close the small window once you see the device response.</p>
         </div>
         <div id="view-fallback" class="hidden">
             <p>Auto-login may not have succeeded.</p>
@@ -1788,10 +1794,7 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
         (function() {{
             var ip = "{escaped_ip}";
             var submitted = false;
-            var popup = null;
-            var pollTimer = null;
-            var popupCloseTimer = null;
-            var views = ['probing', 'cert-prompt', 'waiting', 'logging-in', 'fallback'];
+            var views = ['probing', 'cert-prompt', 'logging-in', 'fallback'];
 
             function show(name) {{
                 for (var i = 0; i < views.length; i++) {{
@@ -1818,18 +1821,12 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
                 }});
             }}
 
-            function stopTimers() {{
-                if (pollTimer) {{ clearInterval(pollTimer); pollTimer = null; }}
-                if (popupCloseTimer) {{ clearInterval(popupCloseTimer); popupCloseTimer = null; }}
-            }}
-
-            function doAutoLogin() {{
+            // Fast path (Chrome): cert is trusted, the iframe POST works,
+            // and the main-window redirect lands logged-in. No popup, no
+            // visible JSON, no clicks.
+            function doAutoLoginInline() {{
                 if (submitted) return;
                 submitted = true;
-                stopTimers();
-                if (popup && !popup.closed) {{
-                    try {{ popup.close(); }} catch (e) {{}}
-                }}
                 show('logging-in');
                 document.getElementById('loginForm').submit();
                 setTimeout(function() {{
@@ -1838,45 +1835,72 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
                 setTimeout(function() {{ show('fallback'); }}, 8000);
             }}
 
-            function startPolling() {{
-                stopTimers();
-                pollTimer = setInterval(function() {{
-                    if (submitted) return;
-                    probeCert().then(function(ok) {{ if (ok) doAutoLogin(); }});
-                }}, 1000);
-                popupCloseTimer = setInterval(function() {{
-                    if (submitted) return;
-                    if (popup && popup.closed) {{
-                        stopTimers();
-                        popup = null;
-                        // Probe one more time in case they accepted just before closing.
-                        probeCert().then(function(ok) {{
-                            if (ok) doAutoLogin();
-                            else show('cert-prompt');
-                        }});
-                    }}
-                }}, 500);
-            }}
+            // Reliable path (Firefox, or any browser where the inline iframe
+            // POST is blocked): open a popup, re-target the login form at it
+            // so the POST is a top-level navigation. If the popup needs a
+            // cert prompt, the user accepts it inline there. We close the
+            // popup as soon as the user does — or 5s later — and redirect
+            // the main window onto the now-logged-in device home.
+            function doAutoLoginViaPopupPost() {{
+                if (submitted) return;
+                submitted = true;
+                show('logging-in');
 
-            document.getElementById('accept-cert-btn').addEventListener('click', function() {{
-                popup = window.open("https://" + ip + "/", "_blank");
-                if (!popup) {{
+                var popupName = 'sixtyops_devlogin_' + Date.now();
+                var loginPopup = window.open('about:blank', popupName,
+                    'width=480,height=320,noopener=false');
+                if (!loginPopup) {{
                     document.getElementById('popup-blocked-msg').classList.remove('hidden');
+                    show('cert-prompt');
+                    submitted = false;
                     return;
                 }}
-                show('waiting');
-                startPolling();
-            }});
 
-            window.addEventListener('focus', function() {{
-                if (submitted) return;
-                probeCert().then(function(ok) {{ if (ok) doAutoLogin(); }});
-            }});
+                var form = document.getElementById('loginForm');
+                form.target = popupName;
+                form.submit();
 
-            // Initial probe — if the cert is already trusted (subsequent visit
-            // in the same browser session), skip straight to auto-login.
+                var navigated = false;
+                function finishNavigate() {{
+                    if (navigated) return;
+                    navigated = true;
+                    if (loginPopup && !loginPopup.closed) {{
+                        try {{ loginPopup.close(); }} catch (e) {{}}
+                    }}
+                    window.location.href = "https://" + ip + "/";
+                }}
+
+                // If the user closes the popup themselves — the natural
+                // move once the JSON response is on screen — navigate
+                // immediately. 100 ms keeps the perceived delay tight.
+                var closePoll = setInterval(function() {{
+                    if (loginPopup.closed) {{
+                        clearInterval(closePoll);
+                        finishNavigate();
+                    }}
+                }}, 100);
+
+                // Hard ceiling. Has to absorb Firefox's two-step
+                // first-visit flow: "Accept risk and continue" on the
+                // cert warning, then "Resend form data?" on the
+                // automatic retry. 12 s is generous for that and
+                // largely irrelevant on repeat visits because the
+                // close poll fires first.
+                setTimeout(function() {{
+                    clearInterval(closePoll);
+                    finishNavigate();
+                }}, 12000);
+                setTimeout(function() {{ show('fallback'); }}, 16000);
+            }}
+
+            document.getElementById('accept-cert-btn').addEventListener('click',
+                doAutoLoginViaPopupPost);
+
+            // Initial probe — if cert is already trusted in a browser that
+            // honours the exception for cross-origin subresources (Chrome),
+            // we can skip the popup entirely and inline-submit.
             probeCert().then(function(ok) {{
-                if (ok) doAutoLogin();
+                if (ok) doAutoLoginInline();
                 else show('cert-prompt');
             }});
         }})();
@@ -6088,6 +6112,7 @@ def _compute_config_hash(config: dict) -> str:
 from .config_utils import (
     PROTECTED_CONFIG_KEYS,
     validate_fragment_safety as _validate_fragment_safety,
+    validate_ping_watchdog_safety as _validate_ping_watchdog_safety,
     deep_merge,
     generate_config_diff,
     check_config_compliance as _check_config_compliance,
@@ -6403,6 +6428,7 @@ async def create_config_template(request: Request, session: dict = Depends(requi
             raise HTTPException(400, f"Invalid JSON in config_fragment: {e}")
     try:
         _validate_fragment_safety(config_fragment)
+        _validate_ping_watchdog_safety(config_fragment)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -6485,6 +6511,7 @@ async def update_config_template_api(template_id: int, request: Request, session
                 raise HTTPException(400, f"Invalid JSON in config_fragment: {e}")
         try:
             _validate_fragment_safety(frag)
+            _validate_ping_watchdog_safety(frag)
         except ValueError as e:
             raise HTTPException(400, str(e))
         incoming_fragment_for_hash = frag if isinstance(frag, dict) else None
@@ -6789,8 +6816,9 @@ async def preview_config_merge(request: Request, session: dict = Depends(require
         fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
         try:
             _validate_fragment_safety(fragment)
+            _validate_ping_watchdog_safety(fragment)
         except ValueError as e:
-            raise HTTPException(400, f"Template '{t['name']}' contains unsafe keys: {e}")
+            raise HTTPException(400, f"Template '{t['name']}' rejected: {e}")
         templates.append({
             "id": t["id"],
             "name": t["name"],
@@ -6881,8 +6909,9 @@ async def push_config_templates(request: Request, session: dict = Depends(requir
         # Safety net: re-validate even though creation should have caught this
         try:
             _validate_fragment_safety(fragment)
+            _validate_ping_watchdog_safety(fragment)
         except ValueError as e:
-            raise HTTPException(400, f"Template '{t['name']}' contains unsafe keys: {e}")
+            raise HTTPException(400, f"Template '{t['name']}' rejected: {e}")
         templates.append({
             "id": t["id"],
             "name": t["name"],
@@ -7372,6 +7401,7 @@ async def start_config_push_rollout(request: Request, session: dict = Depends(re
             raise HTTPException(404, f"Template {tid} not found")
         fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
         _validate_fragment_safety(fragment)
+        _validate_ping_watchdog_safety(fragment)
         templates.append({
             "id": t["id"],
             "name": t["name"],
