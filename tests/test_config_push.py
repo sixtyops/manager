@@ -431,3 +431,76 @@ class TestConfigPushRolloutAdvance:
         resp = authed_client.post(f"/api/config-push/rollout/{rid}/advance")
         assert resp.status_code == 400, resp.text
         assert "pending" in resp.json()["detail"]
+
+    def test_advance_rejects_snapshot_with_unsafe_watchdog(self, authed_client, mock_db):
+        """A rollout created before the #167 ping_watchdog floor landed
+        can still sit paused on disk with an unsafe snapshot. Advance/
+        resume must refuse to push it. (#167 follow-up.)"""
+        unsafe = [{
+            "id": 99, "name": "Old Watchdog",
+            "fragment": {"services": {"ping_watchdog": {
+                "enabled": True, "interval": 300, "failure": 3,
+                "addresses": ["8.8.8.8"],
+            }}},
+            "device_types": None,
+        }]
+        cur = mock_db.execute(
+            """INSERT INTO config_push_rollouts
+               (template_ids, template_names, templates_snapshot, phase, status)
+               VALUES (?, ?, ?, ?, ?)""",
+            ("[99]", "Old Watchdog", json.dumps(unsafe), "canary", "active"),
+        )
+        rid = cur.lastrowid
+        mock_db.execute(
+            """INSERT INTO config_push_rollout_devices
+               (rollout_id, ip, device_type, phase_assigned, status)
+               VALUES (?, ?, ?, ?, ?)""",
+            (rid, "10.0.0.1", "ap", "canary", "updated"),
+        )
+        mock_db.commit()
+        resp = authed_client.post(f"/api/config-push/rollout/{rid}/advance")
+        assert resp.status_code == 400, resp.text
+        assert "unsafe" in resp.json()["detail"].lower()
+        assert "ping_watchdog" in resp.json()["detail"]
+
+    def test_resume_rejects_snapshot_with_unsafe_watchdog(self, authed_client, mock_db):
+        """Same gate on the resume path."""
+        unsafe = [{
+            "id": 99, "name": "Old Watchdog",
+            "fragment": {"services": {"ping_watchdog": {
+                "enabled": True, "interval": 60, "failure": 1,
+            }}},
+            "device_types": None,
+        }]
+        cur = mock_db.execute(
+            """INSERT INTO config_push_rollouts
+               (template_ids, template_names, templates_snapshot, phase, status)
+               VALUES (?, ?, ?, ?, ?)""",
+            ("[99]", "Old Watchdog", json.dumps(unsafe), "canary", "paused"),
+        )
+        rid = cur.lastrowid
+        mock_db.commit()
+        resp = authed_client.post(f"/api/config-push/rollout/{rid}/resume")
+        assert resp.status_code == 400, resp.text
+        assert "unsafe" in resp.json()["detail"].lower()
+
+    def test_validate_ping_watchdog_safety_catches_merged_unsafe(self):
+        """Defense-in-depth: two individually-safe fragments can deep_merge
+        into an unsafe combo (one sets `enabled=true`, another lowers
+        `failure`). The merged config is rechecked before the device
+        dry-run. (#167 follow-up, run_config_push_phase merge check.)"""
+        import pytest
+        from updater.config_utils import (
+            validate_ping_watchdog_safety, deep_merge,
+        )
+        a = {"services": {"ping_watchdog": {
+            "enabled": True, "interval": 300, "failure": 6,
+        }}}
+        b = {"services": {"ping_watchdog": {"failure": 3}}}
+        # Each in isolation passes.
+        validate_ping_watchdog_safety(a)
+        validate_ping_watchdog_safety(b)
+        # Merge produces enabled=True, interval=300, failure=3 → 900s, unsafe.
+        merged = deep_merge(a, b)
+        with pytest.raises(ValueError, match="900s"):
+            validate_ping_watchdog_safety(merged)
