@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Changed
+- `config_enforce_hour` is now explicitly seeded to `"4"` on fresh
+  installs. The poller already defaulted to 4 AM local when the row was
+  absent (`poller.py:801`), but a missing row made the value invisible
+  in the settings table to anyone inspecting the DB directly. Behaviour
+  unchanged; just visibility (#166).
+
 ### Fixed
 - Auto-update scheduler no longer spawns duplicate no-op rollouts when the
   per-tick eligibility check disagrees with the per-phase assignment check
