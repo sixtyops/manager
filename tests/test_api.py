@@ -901,6 +901,60 @@ class TestConfigTemplatesAPI:
         assert resp.status_code == 200
         assert resp.json()["templates"] == []
 
+    def test_config_fragment_encrypted_at_rest(self, authed_client, mock_db):
+        """Issue #165: config_fragment on disk should be Fernet-wrapped so a
+        SQL dump can't lift SNMP RW communities or RADIUS service passwords.
+        Public API still returns cleartext for callers."""
+        import json as _json
+        from updater import database as _db
+        from updater.crypto import is_encrypted
+        secret_value = "super-secret-snmp-community-string"
+        resp = authed_client.post("/api/config-templates", json={
+            "name": "SNMP Secret",
+            "category": "snmp",
+            "config_fragment": {"services": {"snmp": {"v2_ro_community": secret_value}}},
+        })
+        assert resp.status_code == 200
+        tid = resp.json()["id"]
+        # Raw row: encrypted, secret is not in the bytes.
+        raw = mock_db.execute(
+            "SELECT config_fragment FROM config_templates WHERE id = ?", (tid,)
+        ).fetchone()
+        assert is_encrypted(raw["config_fragment"])
+        assert secret_value not in raw["config_fragment"]
+        # Public API: decrypted, secret round-trips.
+        tpl = _db.get_config_template(tid)
+        assert secret_value in tpl["config_fragment"]
+        assert _json.loads(tpl["config_fragment"])["services"]["snmp"]["v2_ro_community"] == secret_value
+
+    def test_legacy_plaintext_fragment_is_migrated_idempotently(self, mock_db):
+        """Pre-#165 rows stored cleartext JSON. The startup migration wraps
+        them, and re-running the migration is a no-op (idempotent)."""
+        import json as _json
+        from updater.database import _migrate_encrypt_config_templates
+        from updater.crypto import is_encrypted
+        mock_db.execute(
+            "INSERT INTO config_templates (name, category, config_fragment, enabled) "
+            "VALUES (?, ?, ?, 1)",
+            ("Pre165", "snmp",
+             _json.dumps({"services": {"snmp": {"v2_ro_community": "rotateme"}}})),
+        )
+        mock_db.commit()
+        _migrate_encrypt_config_templates(mock_db)
+        mock_db.commit()
+        raw = mock_db.execute(
+            "SELECT config_fragment FROM config_templates WHERE name = 'Pre165'"
+        ).fetchone()
+        assert is_encrypted(raw["config_fragment"])
+        # Idempotency: second pass leaves the value byte-identical.
+        encrypted_first = raw["config_fragment"]
+        _migrate_encrypt_config_templates(mock_db)
+        mock_db.commit()
+        raw2 = mock_db.execute(
+            "SELECT config_fragment FROM config_templates WHERE name = 'Pre165'"
+        ).fetchone()
+        assert raw2["config_fragment"] == encrypted_first
+
     def test_create_template(self, authed_client):
         resp = authed_client.post("/api/config-templates", json={
             "name": "SNMP Standard",

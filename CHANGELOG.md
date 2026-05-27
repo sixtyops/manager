@@ -18,6 +18,17 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- `config_templates.config_fragment` is now Fernet-encrypted at rest with
+  the same key (`data/.encryption_key`) used for device passwords
+  (#35) and device-config snapshots. Templates carry SNMP RW
+  communities, RADIUS service passwords, and `$1$<salt>$<hash>` device-
+  user password hashes; previously these sat in plaintext in SQLite,
+  so anyone with read access to the DB file or a CSV/SFTP backup could
+  lift them. Existing rows are migrated in-place on next startup
+  (idempotent — checks the Fernet `gAAAAA` prefix); the public
+  `db.get_config_template*` and `db.save/update_config_template`
+  helpers handle the wrap and unwrap, so callers see cleartext as
+  before (#165).
 - Config templates that enable `ping_watchdog` with a reboot trigger
   shorter than 30 minutes are now rejected by the template-save and
   config-push paths. The previously-seeded `Watchdog Standard` default
