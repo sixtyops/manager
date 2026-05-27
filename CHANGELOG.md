@@ -10,6 +10,11 @@ All notable changes to this project are documented in this file.
   observed on sixtyops-dev in 2026-05), and `timeapi.io` — the existing
   fallback — was always picking up the work anyway. `get_external_time`
   now goes straight to `timeapi.io`. No setting change required (#163).
+- `config_enforce_hour` is now explicitly seeded to `"4"` on fresh
+  installs. The poller already defaulted to 4 AM local when the row was
+  absent (`poller.py:801`), but a missing row made the value invisible
+  in the settings table to anyone inspecting the DB directly. Behaviour
+  unchanged; just visibility (#166).
 
 ### Fixed
 - Device portal: rebuilt the cert-untrusted fallback as a single
