@@ -1775,6 +1775,7 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
         <div id="view-logging-in" class="hidden">
             <div class="spinner"></div>
             <p>Logging in to {escaped_ip}...</p>
+            <p class="muted">Close the small window once you see the device response.</p>
         </div>
         <div id="view-fallback" class="hidden">
             <p>Auto-login may not have succeeded.</p>
@@ -1869,23 +1870,27 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
                     window.location.href = "https://" + ip + "/";
                 }}
 
-                // If the user closes the popup themselves (typical once the
-                // JSON response is on screen), navigate immediately.
+                // If the user closes the popup themselves — the natural
+                // move once the JSON response is on screen — navigate
+                // immediately. 100 ms keeps the perceived delay tight.
                 var closePoll = setInterval(function() {{
                     if (loginPopup.closed) {{
                         clearInterval(closePoll);
                         finishNavigate();
                     }}
-                }}, 200);
+                }}, 100);
 
-                // Hard ceiling: long enough to fit a cert-warning accept on
-                // a first visit (~5s) but short enough not to stall on
-                // repeat visits where the POST completes in ~200ms.
+                // Hard ceiling. Has to absorb Firefox's two-step
+                // first-visit flow: "Accept risk and continue" on the
+                // cert warning, then "Resend form data?" on the
+                // automatic retry. 12 s is generous for that and
+                // largely irrelevant on repeat visits because the
+                // close poll fires first.
                 setTimeout(function() {{
                     clearInterval(closePoll);
                     finishNavigate();
-                }}, 5000);
-                setTimeout(function() {{ show('fallback'); }}, 10000);
+                }}, 12000);
+                setTimeout(function() {{ show('fallback'); }}, 16000);
             }}
 
             document.getElementById('accept-cert-btn').addEventListener('click',
