@@ -18,6 +18,17 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Secret-bearing rows in the `settings` table are now Fernet-encrypted
+  at rest with the same key (`data/.encryption_key`) used elsewhere
+  (#35, #165). Affected keys: `snmp_trap_community`,
+  `email_smtp_password`, `radius_secret`, `builtin_radius_secret`,
+  `backup_sftp_password`, `radius_server_secret`,
+  `radius_server_ldap_bind_password`, `webhook_secret`. Existing rows
+  are migrated in-place on next startup (idempotent on already-wrapped
+  values via `is_encrypted()`); empty values are left alone since
+  empty encodes "not configured" downstream. `set_setting`,
+  `set_settings`, and `get_setting`/`get_all_settings` wrap and
+  unwrap at the DB boundary so all callers keep seeing cleartext (#175).
 - `config_templates.config_fragment` is now Fernet-encrypted at rest with
   the same key (`data/.encryption_key`) used for device passwords
   (#35) and device-config snapshots. Templates carry SNMP RW

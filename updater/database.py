@@ -24,6 +24,25 @@ _settings_cache_lock = threading.Lock()
 _SETTINGS_CACHE_TTL = 5  # seconds
 
 
+# `settings` keys that hold shared secrets / credentials. Values for these
+# keys are Fernet-wrapped at rest with the same key (`data/.encryption_key`)
+# used by device passwords and config-template fragments. Plaintext values
+# already on disk are converted in-place by `_migrate_encrypt_settings`.
+# Empty strings are stored as-is (no point encrypting an empty value, and
+# the absent-but-defaulted code paths in app.py and poller.py treat empty
+# as "not configured"). (#175)
+SECRET_SETTINGS_KEYS = frozenset({
+    "snmp_trap_community",
+    "email_smtp_password",
+    "radius_secret",
+    "builtin_radius_secret",
+    "backup_sftp_password",
+    "radius_server_secret",
+    "radius_server_ldap_bind_password",
+    "webhook_secret",
+})
+
+
 def _migrate(db):
     """Run schema migrations."""
     # Check if auth_status column exists on cpe_cache
@@ -218,6 +237,9 @@ def _migrate(db):
     # Encrypt any plaintext config_templates.config_fragment (#165)
     _migrate_encrypt_config_templates(db)
 
+    # Encrypt any plaintext secret-bearing settings rows (#175)
+    _migrate_encrypt_settings(db)
+
     # Add soft-delete + label + mac columns to device_configs (recycle bin + rebind support)
     dc_columns = [row[1] for row in db.execute("PRAGMA table_info(device_configs)").fetchall()]
     if "deleted_at" not in dc_columns:
@@ -409,6 +431,35 @@ def _migrate_encrypt_config_templates(db):
             migrated += 1
     if migrated:
         logger.info(f"Encrypted {migrated} plaintext config_templates row(s)")
+
+
+def _migrate_encrypt_settings(db):
+    """One-time migration: encrypt any plaintext value in `settings` whose
+    key is in `SECRET_SETTINGS_KEYS`. Same Fernet key as #35, #165;
+    idempotent via `is_encrypted()`. Empty strings are left alone — they
+    encode "not configured" and don't need wrapping.
+    """
+    if not SECRET_SETTINGS_KEYS:
+        return
+    placeholders = ",".join("?" for _ in SECRET_SETTINGS_KEYS)
+    try:
+        rows = db.execute(
+            f"SELECT key, value FROM settings WHERE key IN ({placeholders})",
+            tuple(SECRET_SETTINGS_KEYS),
+        ).fetchall()
+    except Exception:
+        return
+    migrated = 0
+    for row in rows:
+        val = row[1]
+        if val and not is_encrypted(val):
+            db.execute(
+                "UPDATE settings SET value = ? WHERE key = ?",
+                (encrypt_password(val), row[0]),
+            )
+            migrated += 1
+    if migrated:
+        logger.info(f"Encrypted {migrated} plaintext secret setting(s)")
 
 
 def init_db():
@@ -1797,8 +1848,34 @@ def _invalidate_settings_cache():
         _settings_cache_time = 0
 
 
+def _maybe_decrypt_setting(key: str, value):
+    """Return cleartext for `SECRET_SETTINGS_KEYS`, passing other values
+    through untouched. Tolerates legacy plaintext rows so reads never fail
+    mid-migration (the migration converts them on the next `init_db()`)."""
+    if not value:
+        return value
+    if key in SECRET_SETTINGS_KEYS and is_encrypted(value):
+        return decrypt_password(value)
+    return value
+
+
+def _maybe_encrypt_setting(key: str, value):
+    """Return ciphertext for `SECRET_SETTINGS_KEYS` (non-empty values);
+    pass other values through. Idempotent on already-wrapped values."""
+    if not value or key not in SECRET_SETTINGS_KEYS:
+        return value
+    if is_encrypted(value):
+        return value
+    return encrypt_password(value)
+
+
 def _get_cached_settings() -> dict:
-    """Get settings from cache or DB. Returns full settings dict."""
+    """Get settings from cache or DB. Returns full settings dict.
+
+    Secret-bearing keys (`SECRET_SETTINGS_KEYS`) are decrypted on the way
+    out so the cache and every caller see cleartext, matching the existing
+    contract. Writes go through `_maybe_encrypt_setting` at the boundary.
+    """
     global _settings_cache, _settings_cache_time
     now = time.monotonic()
     with _settings_cache_lock:
@@ -1806,7 +1883,7 @@ def _get_cached_settings() -> dict:
             return _settings_cache
     with get_db() as db:
         rows = db.execute("SELECT key, value FROM settings").fetchall()
-        result = {row["key"]: row["value"] for row in rows}
+        result = {row["key"]: _maybe_decrypt_setting(row["key"], row["value"]) for row in rows}
     with _settings_cache_lock:
         _settings_cache = result
         _settings_cache_time = time.monotonic()
@@ -1819,12 +1896,13 @@ def get_setting(key: str, default: str = None) -> Optional[str]:
 
 
 def set_setting(key: str, value: str):
-    """Set a setting value."""
+    """Set a setting value. Secret-bearing keys are Fernet-wrapped at rest."""
     _invalidate_settings_cache()
+    stored = _maybe_encrypt_setting(key, value)
     with get_db() as db:
         db.execute(
             "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
-            (key, value, datetime.now().isoformat())
+            (key, stored, datetime.now().isoformat())
         )
 
 
@@ -1867,13 +1945,14 @@ def get_all_settings() -> dict:
 
 
 def set_settings(settings: dict):
-    """Set multiple settings at once."""
+    """Set multiple settings at once. Secret-bearing keys are Fernet-wrapped at rest."""
     _invalidate_settings_cache()
     with get_db() as db:
         for key, value in settings.items():
+            stored = _maybe_encrypt_setting(key, str(value))
             db.execute(
                 "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
-                (key, str(value), datetime.now().isoformat())
+                (key, stored, datetime.now().isoformat())
             )
 
 

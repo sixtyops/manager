@@ -436,6 +436,86 @@ class TestSettings:
         assert "schedule_enabled" in settings
         assert settings["schedule_enabled"] == "true"
 
+    def test_secret_setting_encrypted_at_rest(self, mock_db):
+        """SECRET_SETTINGS_KEYS values round-trip cleartext through the public
+        API but sit Fernet-wrapped on disk. (#175)"""
+        from updater.crypto import is_encrypted
+        db.set_setting("snmp_trap_community", "rotated-community-123")
+        # Raw row: encrypted
+        row = mock_db.execute(
+            "SELECT value FROM settings WHERE key = 'snmp_trap_community'"
+        ).fetchone()
+        assert is_encrypted(row["value"])
+        assert "rotated-community-123" not in row["value"]
+        # Public API: cleartext
+        assert db.get_setting("snmp_trap_community") == "rotated-community-123"
+
+    def test_non_secret_setting_not_encrypted(self, mock_db):
+        """Only allowlisted keys are wrapped; everything else stays raw so
+        ops can still grep settings during incidents."""
+        from updater.crypto import is_encrypted
+        db.set_setting("zip_code", "55719")
+        row = mock_db.execute(
+            "SELECT value FROM settings WHERE key = 'zip_code'"
+        ).fetchone()
+        assert not is_encrypted(row["value"])
+        assert row["value"] == "55719"
+
+    def test_empty_secret_setting_left_alone(self, mock_db):
+        """Empty string means 'not configured' and shouldn't be wrapped —
+        a Fernet token of `""` would mislead `is_encrypted()` checks
+        downstream."""
+        db.set_setting("webhook_secret", "")
+        row = mock_db.execute(
+            "SELECT value FROM settings WHERE key = 'webhook_secret'"
+        ).fetchone()
+        assert row["value"] == ""
+        assert db.get_setting("webhook_secret") == ""
+
+    def test_set_settings_batch_encrypts_secrets(self, mock_db):
+        """The bulk `set_settings` helper honours the allowlist too —
+        the FastAPI settings-save endpoint goes through this path."""
+        from updater.crypto import is_encrypted
+        db.set_settings({
+            "email_smtp_password": "s3cr3t",
+            "zip_code": "55719",
+        })
+        rows = {
+            r["key"]: r["value"]
+            for r in mock_db.execute(
+                "SELECT key, value FROM settings WHERE key IN ('email_smtp_password', 'zip_code')"
+            ).fetchall()
+        }
+        assert is_encrypted(rows["email_smtp_password"])
+        assert not is_encrypted(rows["zip_code"])
+        assert db.get_setting("email_smtp_password") == "s3cr3t"
+        assert db.get_setting("zip_code") == "55719"
+
+    def test_legacy_plaintext_migrated_idempotently(self, mock_db):
+        from updater.database import _migrate_encrypt_settings
+        from updater.crypto import is_encrypted
+        mock_db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('radius_secret', 'legacy-cleartext')"
+        )
+        mock_db.commit()
+        _migrate_encrypt_settings(mock_db)
+        mock_db.commit()
+        row = mock_db.execute(
+            "SELECT value FROM settings WHERE key = 'radius_secret'"
+        ).fetchone()
+        assert is_encrypted(row["value"])
+        first = row["value"]
+        # Idempotent — second run leaves the value byte-identical.
+        _migrate_encrypt_settings(mock_db)
+        mock_db.commit()
+        row2 = mock_db.execute(
+            "SELECT value FROM settings WHERE key = 'radius_secret'"
+        ).fetchone()
+        assert row2["value"] == first
+        # And the public-API decrypt round-trips.
+        db._invalidate_settings_cache()
+        assert db.get_setting("radius_secret") == "legacy-cleartext"
+
 
 class TestHealthSummary:
     def test_summary(self, mock_db):
