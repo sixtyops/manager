@@ -13,16 +13,27 @@ Required:
 
 ### Automated install (fresh server)
 
+The `sixtyops/manager` repo is private. Create a fine-grained GitHub PAT with
+`Contents: Read` on the repo, then pass it on the same line as `sudo` (the
+curl-pipe-bash pattern does not preserve env vars across the pipe):
+
 ```bash
-curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh \
+  | sudo SIXTYOPS_GH_TOKEN=ghp_xxx bash
 ```
 
-This installs Docker if needed, clones the repo to `/opt/sixtyops`, builds and starts all services in standalone mode, and creates a systemd service for auto-start on boot.
+This installs Docker if needed, clones the repo to `/opt/sixtyops` using the
+token, restricts `/opt/sixtyops/.git/config` to mode `600`, builds and starts
+all services in standalone mode, and creates a systemd service for auto-start
+on boot. The token is persisted in the cloned repo's remote URL so subsequent
+self-update git operations reuse it. Also set `SIXTYOPS_GH_TOKEN` in the
+deployment `.env` so the running container can hit the GitHub releases API
+for self-update checks.
 
 ### Manual install
 
 ```bash
-git clone https://github.com/sixtyops/manager.git
+git clone https://oauth2:ghp_xxx@github.com/sixtyops/manager.git
 cd manager
 ./deploy.sh
 ```

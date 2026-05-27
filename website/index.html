@@ -50,7 +50,6 @@
         <div class="hidden md:flex items-center gap-8">
           <a href="#features" class="text-sm text-slate-500 hover:text-slate-900 transition-colors">Features</a>
           <a href="#download" class="text-sm text-slate-500 hover:text-slate-900 transition-colors">Alpha</a>
-          <a href="https://github.com/sixtyops/manager" class="text-sm text-brand-600 hover:text-brand-700 font-medium transition-colors">GitHub</a>
         </div>
         <button @click="open = !open" class="md:hidden p-1.5 text-slate-400 hover:text-slate-900" aria-label="Menu">
           <svg x-show="!open" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/></svg>
@@ -60,7 +59,6 @@
       <div x-show="open" x-cloak x-transition class="md:hidden pb-4 border-t border-slate-100 mt-1 pt-3 space-y-2">
         <a href="#features" @click="open=false" class="block text-sm text-slate-500 hover:text-slate-900">Features</a>
         <a href="#download" @click="open=false" class="block text-sm text-slate-500 hover:text-slate-900">Alpha</a>
-        <a href="https://github.com/sixtyops/manager" @click="open=false" class="block text-sm text-brand-600 font-medium">GitHub</a>
       </div>
     </div>
   </nav>
@@ -829,7 +827,7 @@
         Request Alpha Access
       </a>
 
-      <p class="mt-6 text-xs text-slate-400">Questions? Email <a href="mailto:hello@sixtyops.net" class="text-brand-600 font-medium">hello@sixtyops.net</a></p>
+      <p class="mt-6 text-xs text-slate-400">Or email <a href="mailto:hello@sixtyops.net" class="text-brand-600 font-medium">hello@sixtyops.net</a> directly.</p>
     </div>
   </section>
 
@@ -847,7 +845,6 @@
         <div class="flex items-center gap-6 text-xs text-slate-500">
           <a href="#features" class="hover:text-slate-700 transition-colors">Features</a>
           <a href="#download" class="hover:text-slate-700 transition-colors">Alpha</a>
-          <a href="https://github.com/sixtyops/manager" class="hover:text-slate-700 transition-colors">GitHub</a>
           <a href="terms.html" class="hover:text-slate-700 transition-colors">Terms</a>
           <a href="privacy.html" class="hover:text-slate-700 transition-colors">Privacy</a>
         </div>

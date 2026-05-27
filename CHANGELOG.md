@@ -5,6 +5,7 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
+- Installer and self-update now require `SIXTYOPS_GH_TOKEN` (a fine-grained GitHub PAT with `Contents: Read` on `sixtyops/manager`) since the source repo is private. Pass it on the same line as `sudo` (`curl -sSL ... | sudo SIXTYOPS_GH_TOKEN=ghp_xxx bash`), and set it in the deployment `.env` so the running container can hit the release-check API. Settings > Updates now surfaces a clear "Self-update token not configured" message when missing and "GitHub rejected the self-update token" when invalid, instead of silently failing. The container image at `ghcr.io/sixtyops/manager` is published unauthenticated so appliance-mode `docker pull` keeps working without a registry token
 - External time validation no longer consults `worldtimeapi.org`. That
   endpoint started timing out on roughly every request (>1 fail per minute
   observed on sixtyops-dev in 2026-05), and `timeapi.io` — the existing
