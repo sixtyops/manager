@@ -1710,13 +1710,15 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
     browser trusts the device origin for the rest of the session.
 
     Escape hatch: Firefox does *not* extend a manually-accepted cert
-    exception to cross-origin subresource requests, so the probe stays
-    blocked forever even after the user has trusted the device. The
-    "Log in anyway" links on the cert-prompt and waiting views skip the
-    probe gate and fire `doAutoLogin()` directly; if the cert really is
-    trusted the iframe POST succeeds and the redirect lands logged in,
-    and if it isn't the user falls through to the device's normal cert
-    warning on the top-level redirect.
+    exception to cross-origin subresource requests, so both the favicon
+    probe and the iframe login POST stay blocked forever even after the
+    user has trusted the device. The "Log in anyway" links on the
+    cert-prompt and waiting views re-target the login form at a popup
+    window — POSTing into a popup is a top-level navigation, which
+    Firefox treats per the existing cert exception. The popup briefly
+    shows the device's JSON response (cookie now set browser-side), and
+    we close it and redirect the main window onto the device's now-
+    logged-in home.
     """
     escaped_ip = html_module.escape(ip)
     return f"""<!DOCTYPE html>
@@ -1886,12 +1888,48 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
 
             // "Log in anyway" escape hatch — needed for Firefox, where a
             // manually-accepted self-signed cert exception doesn't apply to
-            // cross-origin subresource probes from the portal page.
+            // cross-origin subresource requests. We re-target the login form
+            // at a popup so the POST becomes a top-level navigation (which
+            // Firefox does allow with the trusted cert), wait for the POST
+            // to set the device session cookie, then close the popup and
+            // navigate the main window to the device home.
+            function doAutoLoginViaPopupPost() {{
+                if (submitted) return;
+                submitted = true;
+                stopTimers();
+                if (popup && !popup.closed) {{
+                    try {{ popup.close(); }} catch (e) {{}}
+                }}
+                show('logging-in');
+
+                var popupName = 'sixtyops_devlogin_' + Date.now();
+                var loginPopup = window.open('about:blank', popupName,
+                    'width=520,height=360,noopener=false');
+                if (!loginPopup) {{
+                    document.getElementById('popup-blocked-msg').classList.remove('hidden');
+                    show('cert-prompt');
+                    submitted = false;
+                    return;
+                }}
+
+                var form = document.getElementById('loginForm');
+                form.target = popupName;
+                form.submit();
+
+                setTimeout(function() {{
+                    if (loginPopup && !loginPopup.closed) {{
+                        try {{ loginPopup.close(); }} catch (e) {{}}
+                    }}
+                    window.location.href = "https://" + ip + "/";
+                }}, 2000);
+                setTimeout(function() {{ show('fallback'); }}, 8000);
+            }}
+
             var skipLinks = document.querySelectorAll('.skip-probe-link');
             for (var i = 0; i < skipLinks.length; i++) {{
                 skipLinks[i].addEventListener('click', function(e) {{
                     e.preventDefault();
-                    doAutoLogin();
+                    doAutoLoginViaPopupPost();
                 }});
             }}
 

@@ -5,16 +5,15 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Fixed
-- Device portal cert-probe page now has a "Log in anyway" escape hatch on
-  the cert-prompt and waiting views. Firefox does not extend a manually-
-  accepted self-signed cert exception to cross-origin subresource probes,
-  so users who had previously trusted a device's cert were getting stuck
-  on the "Accept the certificate" page forever — the favicon probe kept
-  silently failing (status 0, request blocked before network). The link
-  bypasses the probe gate and calls `doAutoLogin()` directly; if the cert
-  is in fact trusted the iframe POST works, and if it isn't the user
-  falls through to the device's normal cert warning on the redirect
-  (#110).
+- Device portal cert-probe page now has a "Log in anyway" escape hatch
+  for Firefox users. Firefox does not extend a manually-accepted self-
+  signed cert exception to cross-origin subresource requests, which
+  silently blocked both the favicon probe and the iframe login POST
+  added in #110. The new link re-targets the login form at a popup
+  window — POSTing into a popup is a top-level navigation, which Firefox
+  treats per the existing cert exception. The popup gets the device
+  session cookie set, then closes; the main window redirects onto the
+  device's logged-in home (#110).
 - Auto-update scheduler no longer spawns duplicate no-op rollouts when the
   per-tick eligibility check disagrees with the per-phase assignment check
   (cooldown days defaulted to `0` in the dedup path while the assignment
