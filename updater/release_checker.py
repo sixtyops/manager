@@ -128,6 +128,8 @@ class ReleaseChecker:
                 "deployment .env file and restart the container."
             )
             logger.warning(result["error"])
+            db.set_setting("autoupdate_last_check", datetime.now().isoformat())
+            db.set_setting("autoupdate_last_check_error", result["error"])
             return result
 
         headers = {
@@ -186,8 +188,10 @@ class ReleaseChecker:
                     except Exception:
                         logger.warning(f"Could not parse appliance versions: current={current_appliance}, min={min_ver}")
 
-            # Store in database
+            # Store in database. Success also clears any prior error so the
+            # UI panel doesn't keep showing "Last check failed" after recovery.
             db.set_setting("autoupdate_last_check", datetime.now().isoformat())
+            db.set_setting("autoupdate_last_check_error", "")
             db.set_setting("autoupdate_available_version", latest if result["update_available"] else "")
             db.set_setting("autoupdate_release_url", result["release_url"] if result["update_available"] else "")
             db.set_setting("autoupdate_release_notes", result["release_notes"] if result["update_available"] else "")
@@ -220,6 +224,15 @@ class ReleaseChecker:
             result["error"] = str(e)
             logger.exception(f"Release check failed: {e}")
 
+        # Always record the attempt time and the error so the UI panel can
+        # surface "Last check failed: ..." instead of silently sitting on a
+        # stale success timestamp when the periodic background check keeps
+        # erroring. (Manual "Check now" returned the error transiently
+        # already; the periodic check did not.)
+        if result["error"]:
+            db.set_setting("autoupdate_last_check", datetime.now().isoformat())
+            db.set_setting("autoupdate_last_check_error", result["error"])
+
         return result
 
     def get_update_status(self) -> dict:
@@ -230,6 +243,7 @@ class ReleaseChecker:
             "release_channel": db.get_setting("release_channel", "stable"),
             "enabled": db.get_setting("autoupdate_enabled", "false") == "true",
             "last_check": db.get_setting("autoupdate_last_check", ""),
+            "last_check_error": db.get_setting("autoupdate_last_check_error", ""),
             "available_version": db.get_setting("autoupdate_available_version", ""),
             "release_url": db.get_setting("autoupdate_release_url", ""),
             "release_notes": db.get_setting("autoupdate_release_notes", ""),
