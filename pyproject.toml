@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "firmware-updater"
-version = "1.0.5"
+version = "1.3.1.dev19"
 description = "Web-based firmware update tool for Tachyon devices"
 readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "MIT"}
+license = {file = "LICENSE"}
 dependencies = [
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",

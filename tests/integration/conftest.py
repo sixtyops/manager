@@ -3,7 +3,7 @@
 Blocking live-device tests require explicit test-account and test-device config.
 
 Examples:
-    SIXTYOPS_TEST_URL=https://sixtyops-dev.infra.treehouse.mn \
+    SIXTYOPS_TEST_URL=https://<your-dev-host> \
       SIXTYOPS_TEST_USER=dev-automation \
       SIXTYOPS_TEST_PASS=secret \
       SIXTYOPS_TEST_AP_IP=10.0.0.10 \
@@ -13,13 +13,13 @@ Examples:
       SIXTYOPS_TEST_RADIUS_AP_IP=10.0.0.13 \
       pytest -m "integration and dev_blocking" -v
 
-    SIXTYOPS_TEST_URL=https://sixtyops-dev.infra.treehouse.mn \
+    SIXTYOPS_TEST_URL=https://<your-dev-host> \
       SIXTYOPS_TEST_USER=dev-automation \
       SIXTYOPS_TEST_PASS=secret \
       SIXTYOPS_TEST_OIDC_PROVIDER_URL=https://auth.example.com/application/o/sixtyops/ \
       SIXTYOPS_TEST_OIDC_CLIENT_ID=client-id \
       SIXTYOPS_TEST_OIDC_CLIENT_SECRET=client-secret \
-      SIXTYOPS_TEST_OIDC_REDIRECT_URI=https://sixtyops-dev.infra.treehouse.mn/auth/oidc/callback \
+      SIXTYOPS_TEST_OIDC_REDIRECT_URI=https://<your-dev-host>/auth/oidc/callback \
       pytest -m "integration and dev_sso" -v
 """
 

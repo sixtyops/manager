@@ -375,8 +375,8 @@ async def get_external_time(timezone: str) -> Optional[datetime]:
 
     Returns datetime or None on failure. worldtimeapi.org used to be the
     primary source but started returning 5-second timeouts on roughly every
-    request (observed 2026-05; >1 fail per minute on sixtyops-dev), so it
-    was dropped — we always fell through to timeapi.io anyway.
+    request (observed 2026-05 in our dev environment; >1 fail per minute),
+    so it was dropped — we always fell through to timeapi.io anyway.
     """
     sources = [
         (f"https://timeapi.io/api/time/current/zone?timeZone={timezone}", "dateTime"),

@@ -5,12 +5,31 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
-- Installer and self-update now require `SIXTYOPS_GH_TOKEN` (a fine-grained GitHub PAT with `Contents: Read` on `sixtyops/manager`) since the source repo is private. Pass it on the same line as `sudo` (`curl -sSL ... | sudo SIXTYOPS_GH_TOKEN=ghp_xxx bash`), and set it in the deployment `.env` so the running container can hit the release-check API. Settings > Updates now surfaces a clear "Self-update token not configured" message when missing and "GitHub rejected the self-update token" when invalid, instead of silently failing. The container image at `ghcr.io/sixtyops/manager` is published unauthenticated so appliance-mode `docker pull` keeps working without a registry token
+- The repo and the `ghcr.io/sixtyops/manager` container image are now
+  public, and the self-update path no longer requires a GitHub PAT. The
+  release-check API call hits `api.github.com` anonymously by default;
+  if `SIXTYOPS_GH_TOKEN` is set in the environment it is still sent
+  (raising the per-IP rate limit from 60 to 5000 req/hour), but it is
+  no longer mandatory. Operators who set the token under the previous
+  release can leave it in place — it is now opt-in headroom rather
+  than a requirement. New installs need nothing.
+- Added an `LICENSE` file at the repo root containing the canonical
+  Elastic License 2.0 text plus a copyright header identifying the
+  licensor as "Isaac Olson, doing business as SixtyOps." README already
+  pointed at this file; the link is now live (#125).
+- The `pull_request`-triggered Actions lanes (`ci`, `install-smoke`,
+  `auto-label`) now run on GitHub-hosted `ubuntu-latest` runners
+  instead of the self-hosted lab runner. Fork PRs no longer need
+  approval to run lint/test/build, and the lab runner is no longer
+  reachable from arbitrary contributor code. The `dev-hardware` lane
+  stays on the self-hosted runner but skips fork-PR runs entirely
+  (no lab access from untrusted code; no useless red checks).
 - External time validation no longer consults `worldtimeapi.org`. That
-  endpoint started timing out on roughly every request (>1 fail per minute
-  observed on sixtyops-dev in 2026-05), and `timeapi.io` — the existing
-  fallback — was always picking up the work anyway. `get_external_time`
-  now goes straight to `timeapi.io`. No setting change required (#163).
+  endpoint started timing out on roughly every request (>1 fail per
+  minute observed in our dev environment in 2026-05), and `timeapi.io`
+  — the existing fallback — was always picking up the work anyway.
+  `get_external_time` now goes straight to `timeapi.io`. No setting
+  change required (#163).
 - `config_enforce_hour` is now explicitly seeded to `"4"` on fresh
   installs. The poller already defaulted to 4 AM local when the row was
   absent (`poller.py:801`), but a missing row made the value invisible
@@ -89,7 +108,7 @@ All notable changes to this project are documented in this file.
   step applied the configured cooldown). Both paths now use the same
   cooldown value, and `db.create_rollout` refuses to insert a second
   rollout for the same firmware set within 60s as a belt-and-suspenders
-  guard. On `sixtyops-dev` this bug had produced 265 identical rollouts
+  guard. In our dev environment this bug had produced 265 identical rollouts
   for one firmware filename, created in clustered 3-minute bursts during
   Tue/Wed/Thu maintenance windows whenever CPE versions drifted relative
   to the AP.

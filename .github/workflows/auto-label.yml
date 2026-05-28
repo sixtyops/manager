@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   label:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
       - name: Apply label from PR title

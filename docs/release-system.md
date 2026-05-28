@@ -21,7 +21,7 @@
                   → ghcr.io/sixtyops/manager:vX.Y.Z-devN
                             │ dev-channel installs auto-update
                             ▼
-                  dev soak (incl. sixtyops-dev.infra.treehouse.mn)
+                  dev soak (on the operating team's dev host)
                             │ maintainer tags vX.Y.Z + workflow_dispatch (confirm=RELEASE)
                             ▼
                   release.yml (manual)
@@ -124,9 +124,9 @@ Apply behavior (Docker / non-appliance mode):
 
 ## Testing a Change on the Dev Host Without a Release Tag
 
-Cutting a `-devN` tag for every UI tweak or experimental change is heavy. To deploy a feature branch directly to the shared dev host (`sixtyops-dev.infra.treehouse.mn`) for hands-on testing without a tag:
+Cutting a `-devN` tag for every UI tweak or experimental change is heavy. To deploy a feature branch directly to the dev host for hands-on testing without a tag:
 
-1. SSH to the dev host (see internal infrastructure runbook for the current SSH alias and key path; deploy directory is `/opt/docker/compose/sixtyops-manager`).
+1. SSH to the dev host (see your operations runbook for the SSH alias and the deploy directory — the upstream installer defaults to `/opt/sixtyops`).
 2. Fetch and check out the feature branch:
    ```bash
    git fetch origin <branch-name>
@@ -138,7 +138,7 @@ Cutting a `-devN` tag for every UI tweak or experimental change is heavy. To dep
    ```
 4. Verify the new code is live:
    ```bash
-   curl -sk https://sixtyops-dev.infra.treehouse.mn/healthz
+   curl -sk https://<your-dev-host>/healthz
    docker compose logs --tail=50 sixtyops-mgmt
    ```
 
