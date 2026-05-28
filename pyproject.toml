@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "firmware-updater"
-version = "1.3.1.dev19"
+version = "1.3.1.dev20"
 description = "Web-based firmware update tool for Tachyon devices"
 readme = "README.md"
 requires-python = ">=3.9"
