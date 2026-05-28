@@ -33,9 +33,9 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       # Set SEED_DATA=1 to populate sample devices/sites/templates on startup
       - SEED_DATA=${SEED_DATA:-}
-      # GitHub PAT used by the release-check API call (sixtyops/manager is
-      # private). Set in .env next to this file. Without it, Settings >
-      # Updates shows a "Self-update token not configured" message.
+      # Optional GitHub PAT — release-check works anonymously since the repo
+      # is public, but a token raises the API rate limit from 60 to 5000
+      # req/hour. Set in .env next to this file if you want the headroom.
       - SIXTYOPS_GH_TOKEN=${SIXTYOPS_GH_TOKEN:-}
 
     healthcheck:

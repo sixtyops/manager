@@ -31,10 +31,11 @@ CHECK_INTERVAL = int(os.environ.get("AUTOUPDATE_CHECK_INTERVAL", 604800))  # 7 d
 APPLIANCE_MODE = os.environ.get("SIXTYOPS_APPLIANCE", "") == "1"
 GHCR_IMAGE = os.environ.get("SIXTYOPS_IMAGE", "ghcr.io/sixtyops/manager")
 
-# GitHub PAT for hitting the releases API on the private sixtyops/manager
-# repo. Required for the release-check path; the git-based update path
-# itself uses the tokenized remote URL persisted in .git/config by
-# scripts/install.sh.
+# Optional GitHub PAT. The repo is public, so the releases API works
+# without auth — the token only raises the per-IP rate limit from 60
+# req/hr to 5000 req/hr, which is unnecessary at our 7-day check cadence.
+# Operators who already have a token configured (legacy private-repo
+# installs) keep their elevated rate limit; new installs need nothing.
 SIXTYOPS_GH_TOKEN = os.environ.get("SIXTYOPS_GH_TOKEN", "").strip()
 
 # Appliance platform version file (written during OVA build)
@@ -122,20 +123,9 @@ class ReleaseChecker:
             "error": None,
         }
 
-        if not SIXTYOPS_GH_TOKEN:
-            result["error"] = (
-                "Self-update token not configured. Set SIXTYOPS_GH_TOKEN in the "
-                "deployment .env file and restart the container."
-            )
-            logger.warning(result["error"])
-            db.set_setting("autoupdate_last_check", datetime.now().isoformat())
-            db.set_setting("autoupdate_last_check_error", result["error"])
-            return result
-
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {SIXTYOPS_GH_TOKEN}",
-        }
+        headers = {"Accept": "application/vnd.github+json"}
+        if SIXTYOPS_GH_TOKEN:
+            headers["Authorization"] = f"Bearer {SIXTYOPS_GH_TOKEN}"
 
         try:
             async with httpx.AsyncClient(timeout=30) as client:

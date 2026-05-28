@@ -1,7 +1,11 @@
 #!/bin/bash
 # Remote installer for SixtyOps Manager
-# Usage: curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo SIXTYOPS_GH_TOKEN=ghp_xxx bash
-#    or: wget -qO- https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo SIXTYOPS_GH_TOKEN=ghp_xxx bash
+# Usage: curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo bash
+#    or: wget -qO- https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh | sudo bash
+#
+# SIXTYOPS_GH_TOKEN is optional. The repo is public so anonymous clone
+# works. If you set the token, the self-update path uses it later for a
+# higher API rate limit — fine to leave unset.
 
 set -e
 
@@ -20,22 +24,18 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Require a GitHub token when we're cloning from the default (private)
-# sixtyops/manager URL. If the caller has overridden SIXTYOPS_REPO_URL
-# (CI smoke tests, mirrored fork, etc.) they own the auth for that URL.
-if [ -z "${SIXTYOPS_REPO_URL:-}" ] && [ -z "${SIXTYOPS_GH_TOKEN:-}" ]; then
-    echo "ERROR: SIXTYOPS_GH_TOKEN is required (sixtyops/manager is private)."
-    echo
-    echo "Create a fine-grained PAT with 'Contents: Read' on sixtyops/manager,"
-    echo "then re-run with the token inline with sudo:"
-    echo "  curl -sSL <install-url> | sudo SIXTYOPS_GH_TOKEN=ghp_xxx bash"
-    echo
-    echo "(sudo does not preserve env vars across the pipe by default, so the"
-    echo "token must be passed on the sudo line.)"
-    exit 1
+# Resolve the clone URL. Anonymous HTTPS works because sixtyops/manager
+# is public; SIXTYOPS_REPO_URL still lets CI smoke tests / mirrored forks
+# point elsewhere. If SIXTYOPS_GH_TOKEN is set, embed it so the self-update
+# git fetch (running as the container user, no SSH agent) gets a higher
+# rate limit — purely optional.
+if [ -n "${SIXTYOPS_REPO_URL:-}" ]; then
+    REPO_URL="$SIXTYOPS_REPO_URL"
+elif [ -n "${SIXTYOPS_GH_TOKEN:-}" ]; then
+    REPO_URL="https://oauth2:${SIXTYOPS_GH_TOKEN}@github.com/sixtyops/manager.git"
+else
+    REPO_URL="https://github.com/sixtyops/manager.git"
 fi
-
-REPO_URL="${SIXTYOPS_REPO_URL:-https://oauth2:${SIXTYOPS_GH_TOKEN}@github.com/sixtyops/manager.git}"
 
 # Check for docker
 if ! command -v docker &> /dev/null; then

@@ -1,6 +1,5 @@
 # SixtyOps Manager — North Star
 
-> **Audience:** internal team / co-founders. Working doc.
 > **Status:** v1.
 > **Tactical detail:** see GitHub issues filtered by phase labels (`phase-1`, `phase-2`, `launch-p0`, `gtm`).
 

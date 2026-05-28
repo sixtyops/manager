@@ -20,8 +20,8 @@ class TestVersionComparison:
 
     @pytest.fixture(autouse=True)
     def _patch_token(self):
-        # The release-check path short-circuits when SIXTYOPS_GH_TOKEN is unset,
-        # so existing behavior tests need a populated token.
+        # These tests assert the tokenized header shape, so pin the token
+        # explicitly rather than depending on the ambient env.
         with patch("updater.release_checker.SIXTYOPS_GH_TOKEN", "ghp_test_token"):
             yield
 
@@ -158,30 +158,46 @@ class TestVersionComparison:
 # ---------------------------------------------------------------------------
 
 class TestTokenAuth:
-    """The release-check API call must require and send SIXTYOPS_GH_TOKEN."""
+    """SIXTYOPS_GH_TOKEN is optional. When present, it is sent as a Bearer
+    token (raises the GitHub API rate limit from 60 to 5000 req/hour). When
+    absent, the request is anonymous — the repo is public, so the releases
+    API answers without auth."""
 
     @pytest.fixture(autouse=True)
     def _patch_db(self, mock_db):
         pass
 
     @pytest.mark.asyncio
-    async def test_missing_token_short_circuits(self):
-        """No token => return a clear error and make no API call."""
+    async def test_missing_token_omits_authorization_header(self):
+        """No token => still call the API, but without an Authorization header."""
         from updater.release_checker import ReleaseChecker
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "tag_name": "v1.0.0",
+            "html_url": "https://github.com/sixtyops/manager/releases/tag/v1.0.0",
+            "body": "notes",
+        }
 
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.get = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_resp)
 
         with patch("updater.release_checker.SIXTYOPS_GH_TOKEN", ""), \
-             patch("updater.release_checker.httpx.AsyncClient", return_value=mock_client):
+             patch("updater.release_checker.httpx.AsyncClient", return_value=mock_client), \
+             patch("updater.release_checker.__version__", "1.0.0"):
             checker = ReleaseChecker(broadcast_func=AsyncMock())
             result = await checker.check_for_updates()
 
-        assert result["error"] is not None
-        assert "token not configured" in result["error"].lower()
-        mock_client.get.assert_not_called()
+        # API was called, and no Authorization header was sent.
+        mock_client.get.assert_called_once()
+        headers = mock_client.get.call_args.kwargs["headers"]
+        assert "Authorization" not in headers
+        assert headers["Accept"] == "application/vnd.github+json"
+        assert result["error"] is None
 
 
 class TestErrorPersistence:
@@ -196,15 +212,32 @@ class TestErrorPersistence:
         pass
 
     @pytest.mark.asyncio
-    async def test_missing_token_persists_error(self):
+    async def test_missing_token_is_not_an_error(self):
+        """No token is no longer a failure mode (repo is public). The check
+        runs anonymously and persists a clean state, not an error."""
         from updater.release_checker import ReleaseChecker
         from updater import database
-        with patch("updater.release_checker.SIXTYOPS_GH_TOKEN", ""):
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "tag_name": "v1.0.0",
+            "html_url": "https://github.com/sixtyops/manager/releases/tag/v1.0.0",
+            "body": "notes",
+        }
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        with patch("updater.release_checker.SIXTYOPS_GH_TOKEN", ""), \
+             patch("updater.release_checker.httpx.AsyncClient", return_value=mock_client), \
+             patch("updater.release_checker.__version__", "1.0.0"):
             await ReleaseChecker(broadcast_func=AsyncMock()).check_for_updates()
-        assert "token not configured" in database.get_setting(
-            "autoupdate_last_check_error", ""
-        ).lower()
+
         assert database.get_setting("autoupdate_last_check", "") != ""
+        assert database.get_setting("autoupdate_last_check_error", "") == ""
 
     @pytest.mark.asyncio
     async def test_api_error_persists(self):

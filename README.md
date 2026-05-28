@@ -71,19 +71,13 @@ For a step-by-step walkthrough from install to first device polled (about 10 min
 
 ### Production Deployment
 
-The `sixtyops/manager` repo is private. Create a fine-grained GitHub PAT with
-`Contents: Read` on the repo, then pass it on the same line as `sudo` (the
-curl-pipe-bash pattern does not preserve env vars across the pipe):
-
 ```bash
 curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh \
-  | sudo SIXTYOPS_GH_TOKEN=ghp_xxx bash
+  | sudo bash
 ```
 
 Installs Docker, configures HTTPS, generates credentials, and starts the
-system. The token is persisted in `/opt/sixtyops/.git/config` (mode `600`)
-and reused for self-update. Also set it in your deployment `.env` so the
-running container can fetch release metadata from the GitHub API.
+system.
 
 Visit `https://your-server` to complete the setup wizard:
 1. Change default password

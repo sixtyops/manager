@@ -138,7 +138,7 @@ Users on the dev update channel will receive pre-releases automatically.
 pytest -v
 
 # Integration tests against real hardware (see below)
-SIXTYOPS_TEST_URL=https://sixtyops-dev.infra.treehouse.mn pytest -m integration -v
+SIXTYOPS_TEST_URL=https://<your-dev-host> pytest -m integration -v
 ```
 
 **Local dev** (`dev.sh`): Pure Python, hot-reload, localhost only. Best for
@@ -163,11 +163,12 @@ Integration tests in `tests/integration/` run against a live SixtyOps instance
 with real Tachyon devices. They are **skipped by default** — `pytest -v` won't
 run them.
 
-**Dev server:** `sixtyops-dev.infra.treehouse.mn`
+**Dev server:** set the host you operate via `SIXTYOPS_TEST_URL` — there is
+no shared dev URL committed here.
 
 ```bash
 # Run the merge-gating live-dev lane
-SIXTYOPS_TEST_URL=https://sixtyops-dev.infra.treehouse.mn \
+SIXTYOPS_TEST_URL=https://<your-dev-host> \
 SIXTYOPS_TEST_USER=<local-admin-user> \
 SIXTYOPS_TEST_PASS=<local-admin-pass> \
 SIXTYOPS_TEST_AP_IP=<ap-with-cpes> \
@@ -178,7 +179,7 @@ SIXTYOPS_TEST_RADIUS_AP_IP=<radius-test-ap> \
   pytest -m "integration and dev_blocking" -v --timeout=900
 
 # Run the separate non-blocking SSO lane
-SIXTYOPS_TEST_URL=https://sixtyops-dev.infra.treehouse.mn \
+SIXTYOPS_TEST_URL=https://<your-dev-host> \
 SIXTYOPS_TEST_USER=<local-admin-user> \
 SIXTYOPS_TEST_PASS=<local-admin-pass> \
 SIXTYOPS_TEST_OIDC_PROVIDER_URL=<provider-url> \

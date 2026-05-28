@@ -5,14 +5,15 @@ This repo now has two live-dev validation lanes:
 - `dev_blocking`: merge-gating validation against the shared dev host and dedicated lab devices
 - `dev_sso`: separate non-blocking SSO/OIDC validation lane
 
-The shared dev host is `https://sixtyops-dev.infra.treehouse.mn`.
+The dev host URL is whatever the operating team has put behind
+`SIXTYOPS_TEST_URL` — no shared URL is committed in this repo.
 
 ## Manual Commands
 
 Blocking lane:
 
 ```bash
-SIXTYOPS_TEST_URL=https://sixtyops-dev.infra.treehouse.mn \
+SIXTYOPS_TEST_URL=https://<your-dev-host> \
 SIXTYOPS_TEST_USER=<local-admin-user> \
 SIXTYOPS_TEST_PASS=<local-admin-pass> \
 SIXTYOPS_TEST_AP_IP=<ap-with-cpes> \
@@ -26,7 +27,7 @@ pytest -m "integration and dev_blocking" -v --timeout=900
 SSO lane:
 
 ```bash
-SIXTYOPS_TEST_URL=https://sixtyops-dev.infra.treehouse.mn \
+SIXTYOPS_TEST_URL=https://<your-dev-host> \
 SIXTYOPS_TEST_USER=<local-admin-user> \
 SIXTYOPS_TEST_PASS=<local-admin-pass> \
 SIXTYOPS_TEST_OIDC_PROVIDER_URL=<provider-url> \
