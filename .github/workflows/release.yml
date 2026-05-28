@@ -135,9 +135,11 @@ jobs:
         run: |
           TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           TAGS="ghcr.io/sixtyops/manager:${TAG}"
-          # Add :latest tag only for stable releases (workflow_dispatch)
+          # Floating tags: :latest on stable cuts, :dev on every dev push.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAGS="${TAGS},ghcr.io/sixtyops/manager:latest"
+          else
+            TAGS="${TAGS},ghcr.io/sixtyops/manager:dev"
           fi
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 
