@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
+- `release.yml` now publishes a floating `ghcr.io/sixtyops/manager:dev`
+  tag on every pre-release push, alongside the version tag. `:latest`
+  continues to track only stable cuts. The marketing site's docker
+  install snippet uses `:dev` so it no longer needs a per-release
+  edit (#180).
 - The repo and the `ghcr.io/sixtyops/manager` container image are now
   public, and the self-update path no longer requires a GitHub PAT. The
   release-check API call hits `api.github.com` anonymously by default;
