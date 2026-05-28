@@ -73,7 +73,7 @@ Same profile, larger fleets: 1000–5000 devices. Probably requires Postgres mig
 
 ### Phase 0 — Foundation *(today)*
 
-**State:** repo private; feature-complete on engineering; v1.3.0 shipped as open-source (billing/licensing stripped out — to be re-introduced in Phase 2). Docs hardening (quickstart, troubleshooting one-pager) has landed; remaining gaps tracked under the `phase-1` / `launch-p0` labels.
+**State:** repo public under ELv2; feature-complete on engineering; v1.3.0 shipped as open-source (billing/licensing stripped out — to be re-introduced in Phase 2). Docs hardening (quickstart, troubleshooting one-pager) has landed; remaining gaps tracked under the `phase-1` / `launch-p0` labels.
 
 **Exit criteria:** clean understanding of gaps; immediate private-repo-migration fallout closed; team aligned on phases.
 

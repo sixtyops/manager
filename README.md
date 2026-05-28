@@ -87,7 +87,7 @@ Visit `https://your-server` to complete the setup wizard:
 ### Local Testing
 
 ```bash
-git clone https://oauth2:ghp_xxx@github.com/sixtyops/manager.git
+git clone https://github.com/sixtyops/manager.git
 cd manager
 ./deploy.sh
 ```
