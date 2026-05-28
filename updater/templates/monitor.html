@@ -601,10 +601,11 @@
         .updates-banner-title { font-weight:600; font-size:0.82rem; color:#1e40af; }
         .updates-banner-link { font-size:0.7rem; color:#2563eb; text-decoration:none; }
         .updates-banner-link:hover { text-decoration:underline; }
-        /* Explicit border/padding/font so the global `* { padding:0 }` reset
-           doesn't strand the user-agent default button styling on top of
-           the green background — that's what made the "Update Now" label
-           render as faint white on faded grey instead of white on green. */
+        /* `appearance: none` is required: without it, WebKit keeps the
+           native button chrome painted over `background: #16a34a`, so the
+           white label reads as faint white on light grey until :hover
+           re-resolves the cascade. `border: none` alone is not enough — a
+           visible border or appearance:none is what drops native rendering. */
         .updates-banner-btn {
             margin-top: 10px;
             padding: 8px 16px;
@@ -616,6 +617,8 @@
             font-weight: 600;
             cursor: pointer;
             font-family: inherit;
+            -webkit-appearance: none;
+            appearance: none;
         }
         .updates-banner-btn:hover { background: #15803d; }
         .updates-banner-btn:active { background: #166534; }
