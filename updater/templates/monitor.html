@@ -5269,10 +5269,11 @@
                 const sig = cpe.primary_signal ?? cpe.combined_signal ?? cpe.rx_power ?? cpe.last_local_rssi;
                 return {
                     x: cpe.link_distance ?? 0,
-                    // -88 sits 2 dB above the chart's y-axis min (-90) so unpolled
-                    // dots stay visually distinct from the floor without colliding
-                    // with real Critical-tier readings (typically < -85).
-                    y: sig ?? -88,
+                    // -73 sits 2 dB above the chart's y-axis min (-75) so unpolled
+                    // dots stay visually distinct from the floor. Real readings
+                    // below -75 are clipped, which is acceptable: anything that
+                    // negative is already deep in Critical territory.
+                    y: sig ?? -73,
                     cpe: cpe,
                     sig: sig,
                     unpolled: sig == null,
@@ -5281,7 +5282,7 @@
 
             const offlineData = offlineAPs.map(ap => ({
                 x: 0,
-                y: -74,
+                y: -70,
                 ap: ap,
             }));
 
@@ -5426,7 +5427,7 @@
                             title: { display: true, text: 'Signal (dBm)', color: '#6b7280' },
                             grid: { color: '#e5e7eb' },
                             ticks: { color: '#6b7280' },
-                            min: -90,
+                            min: -75,
                             max: -35,
                         },
                     },
