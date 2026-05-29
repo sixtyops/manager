@@ -7812,13 +7812,32 @@
                 blocked_all_current: { label: 'Up to date', cls: 'current', icon: CURRENT_ICON },
             };
             const view = PUBLIC[state] || { label: state.replace(/_/g, ' '), cls: 'idle', icon: SCHEDULED_ICON };
+
+            // Trust the device count: nothing behind == "Up to date" even when
+            // the scheduler hasn't formally landed in blocked_all_current
+            // (e.g. firmware selected but no completed rollout yet). Internal
+            // state codes are unchanged in logs/metrics. Skip override while a
+            // rollout is actively pushing.
+            const inRollout = state === 'running' || state === 'blocked_canary_hold';
+            const effectiveAllCurrent = !inRollout && lastFleetTotal > 0 && lastBehindCount === 0;
+            if (effectiveAllCurrent) {
+                view.label = 'Up to date';
+                view.cls = 'current';
+                view.icon = CURRENT_ICON;
+            }
+
             badge.innerHTML = view.icon + view.label;
             badge.classList.add(view.cls);
 
             // Subtitle: friendly "Next: today at 3:00 AM" for scheduled states;
             // raw block_reason for paused/holding states.
             let subtitle = '';
-            if (view.label === 'Scheduled') {
+            if (effectiveAllCurrent) {
+                subtitle = 'Nothing to do';
+                if (status.next_window_iso) {
+                    subtitle += ' · next check ' + formatWhen(status.next_window_iso);
+                }
+            } else if (view.label === 'Scheduled') {
                 if (status.next_window_iso) {
                     subtitle = 'Next: ' + formatWhen(status.next_window_iso);
                 } else if (status.block_reason) {
@@ -7841,7 +7860,7 @@
             updateBarDeviceCount();
 
             // Hide device count section when all current - badge already conveys this
-            setHidden(countSection, state === 'blocked_all_current');
+            setHidden(countSection, state === 'blocked_all_current' || effectiveAllCurrent);
 
             // Update weather temp in drawer and header
             if (status.weather && status.weather.temperature_c !== null) {
@@ -7856,7 +7875,7 @@
             // Update rollout UI if there's an active rollout, otherwise show idle phases
             // Hide rollout progress when all devices are current
             const rolloutSection = document.getElementById('barRolloutSection');
-            if (state === 'blocked_all_current') {
+            if (state === 'blocked_all_current' || effectiveAllCurrent) {
                 currentRolloutId = null;
                 setHidden(rolloutSection, true);
             } else if (status.rollout) {
@@ -9274,11 +9293,9 @@
                 count.textContent = text;
                 // Refresh idle phase indicators with prediction details
                 if (!currentRolloutId) renderIdlePhases();
-            } else if (lastFleetTotal > 0) {
-                setHidden(section, false);
-                count.textContent = 'All devices current';
-                count.style.color = '#10b981';
             } else {
+                // Nothing behind — the "Up to date" badge in updateSchedulerUI
+                // is the single source of truth; suppress the duplicate pill.
                 setHidden(section, true);
             }
         }
