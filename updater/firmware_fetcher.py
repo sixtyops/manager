@@ -129,15 +129,17 @@ class FirmwareFetcher:
 
         for platform, url in FRESHDESK_PAGES.items():
             try:
-                releases = await self._scrape_page(platform, url)
+                releases, warnings = await self._scrape_page(platform, url)
                 all_releases.extend(releases)
+                errors.extend(warnings)
             except Exception as e:
                 # Retry once after a brief delay
                 logger.warning(f"Scrape {platform} failed, retrying: {e}")
                 await asyncio.sleep(5)
                 try:
-                    releases = await self._scrape_page(platform, url)
+                    releases, warnings = await self._scrape_page(platform, url)
                     all_releases.extend(releases)
+                    errors.extend(warnings)
                 except Exception as e2:
                     msg = f"Failed to scrape {platform}: {e2}"
                     logger.error(msg)
@@ -194,12 +196,15 @@ class FirmwareFetcher:
         else:
             db.set_setting("firmware_last_check_error", "")
 
-        # Broadcast update
-        if self.broadcast_func and (downloaded or replaced):
+        # Broadcast update — also fires on errors-only so a future
+        # UI listener can refresh the status line on parse warnings,
+        # not just on completed downloads.
+        if self.broadcast_func and (downloaded or replaced or errors):
             await self.broadcast_func({
                 "type": "firmware_fetched",
                 "downloaded": downloaded,
                 "replaced": replaced,
+                "errors": errors,
             })
 
         summary = {
@@ -216,8 +221,16 @@ class FirmwareFetcher:
                      f"{len(downloaded)} downloaded, {len(replaced)} replaced")
         return summary
 
-    async def _scrape_page(self, platform: str, url: str) -> list[FirmwareRelease]:
-        """Fetch a Freshdesk article page and parse firmware releases."""
+    async def _scrape_page(
+        self, platform: str, url: str
+    ) -> tuple[list[FirmwareRelease], list[str]]:
+        """Fetch a Freshdesk article page and parse firmware releases.
+
+        Returns the parsed releases plus a list of per-platform parse
+        warnings — one entry for each channel the page's summary table
+        promised that no download link ultimately matched. Treat these
+        like soft errors: surface to the operator, do not retry.
+        """
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             resp = await client.get(url)
             resp.raise_for_status()
@@ -267,10 +280,29 @@ class FirmwareFetcher:
                 filename=filename,
             ))
 
+        # Parse-sanity guard: if the summary table promised a release we
+        # never matched a download link for, surface a warning so the
+        # next vendor-side HTML drift is loud instead of silent. Only
+        # applies to pages that *have* a summary table.
+        warnings: list[str] = []
+        seen_channels = {r.channel for r in releases}
+        if stable_version and "stable" not in seen_channels:
+            warnings.append(
+                f"{platform}: summary table lists stable v{stable_version} "
+                f"but no matching download link was found"
+            )
+        if beta_version and "beta" not in seen_channels:
+            warnings.append(
+                f"{platform}: summary table lists beta v{beta_version} "
+                f"but no matching download link was found"
+            )
+
         if not releases:
             logger.warning(f"No firmware releases found on {url}")
+        for w in warnings:
+            logger.warning(w)
 
-        return releases
+        return releases, warnings
 
     async def _download_firmware(self, release: FirmwareRelease) -> bool:
         """Download a firmware .bin file with streaming."""

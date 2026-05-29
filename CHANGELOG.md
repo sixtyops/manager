@@ -42,6 +42,17 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Firmware auto-fetcher's release-page parser now writes a per-platform
+  warning to `firmware_last_check_error` whenever the Freshdesk article's
+  summary table promises a stable or beta release for which no matching
+  download link was found. Follow-up to #184: that PR patched one shape
+  of regex brittleness, but the *failure mode* — silent miss with no
+  operator signal — was still present and would have hidden any future
+  vendor-side HTML drift. The Settings > Updates panel already renders
+  `firmware_last_check_error` in red, so a future drop will now show
+  inline as e.g. "tna-30x: summary table lists beta v1.16.0 but no
+  matching download link was found" instead of leaving the operator to
+  notice that `selected_firmware_30x` hasn't moved.
 - Firmware auto-fetcher no longer silently drops a Freshdesk release when
   the vendor's version-summary table renders the version cell with a stray
   leading character. The tna-30x "Latest beta" cell on Freshdesk has been
