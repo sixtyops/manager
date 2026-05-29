@@ -78,6 +78,10 @@ def memory_db():
             active_bank INTEGER,
             last_firmware_update TEXT,
             notes TEXT,
+            channel INTEGER,
+            bandwidth_mhz INTEGER,
+            frequency_mhz INTEGER,
+            antenna_kit TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
         );
@@ -125,6 +129,12 @@ def memory_db():
             last_config_poll_at TEXT,
             last_config_poll_status TEXT,
             last_config_poll_error TEXT,
+            target_rssi_dbm REAL,
+            snr_db REAL,
+            sector_tx INTEGER,
+            sector_rx INTEGER,
+            antenna_kit TEXT,
+            max_rain_mm_hr REAL,
             UNIQUE(ap_ip, ip)
         );
         CREATE INDEX idx_cpe_ap ON cpe_cache(ap_ip);

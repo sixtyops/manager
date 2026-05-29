@@ -68,6 +68,52 @@ class TestCPEInfo:
         assert d["ip"] == "1.2.3.4"
 
 
+class TestSignalHealthFromMaxRain:
+    """When max_rain_mm_hr is set, signal_health buckets against the
+    detected climate's 99.99 %/99.9 % rates instead of bare dBm."""
+
+    def _force_zone(self, monkeypatch, zone):
+        # Override the cached climate so we don't depend on real geolocation.
+        from updater import services, rain_zones
+        monkeypatch.setattr(
+            services,
+            "get_default_rain_climate_cached",
+            lambda: {
+                "zone": zone,
+                "country": "TEST",
+                "rates_mm_hr": rain_zones.rates_for_zone(zone),
+            },
+        )
+
+    def test_max_rain_above_99_99_is_green(self, monkeypatch):
+        self._force_zone(monkeypatch, "K")  # 99.99 % = 42 mm/hr
+        cpe = CPEInfo(ip="1.2.3.4", combined_signal=-70.0, max_rain_mm_hr=80.0)
+        assert cpe.signal_health == SignalHealth.GREEN
+
+    def test_max_rain_between_99_9_and_99_99_is_yellow(self, monkeypatch):
+        self._force_zone(monkeypatch, "K")  # 99.9% = 12, 99.99% = 42
+        cpe = CPEInfo(ip="1.2.3.4", combined_signal=-70.0, max_rain_mm_hr=25.0)
+        assert cpe.signal_health == SignalHealth.YELLOW
+
+    def test_max_rain_below_99_9_is_red(self, monkeypatch):
+        self._force_zone(monkeypatch, "K")
+        cpe = CPEInfo(ip="1.2.3.4", combined_signal=-70.0, max_rain_mm_hr=3.0)
+        assert cpe.signal_health == SignalHealth.RED
+
+    def test_max_rain_zero_is_red(self, monkeypatch):
+        self._force_zone(monkeypatch, "K")
+        cpe = CPEInfo(ip="1.2.3.4", combined_signal=-70.0, max_rain_mm_hr=0.0)
+        assert cpe.signal_health == SignalHealth.RED
+
+    def test_no_max_rain_falls_back_to_legacy_thresholds(self):
+        # Regression guard: nothing about the legacy bare-dBm bucketing
+        # changes when max_rain_mm_hr isn't set. Other tests in this module
+        # already exercise the boundaries; this just spot-checks the path.
+        cpe = CPEInfo(ip="1.2.3.4", combined_signal=-62.0)
+        assert cpe.max_rain_mm_hr is None
+        assert cpe.signal_health == SignalHealth.YELLOW
+
+
 class TestAPWithCPEs:
     def test_health_summary(self):
         cpes = [

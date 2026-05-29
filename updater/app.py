@@ -1664,6 +1664,13 @@ async def poll_switch(ip: str, session: dict = Depends(require_role("admin", "op
 async def get_topology(session: dict = Depends(require_auth)):
     """Get current network topology."""
     poller = get_poller()
+    # Warm the IP-location cache opportunistically so the synchronous
+    # `get_default_rain_climate_cached()` call inside get_topology() returns
+    # the operator's actual zone after the first page load.
+    try:
+        await services.get_default_rain_climate()
+    except Exception:
+        pass
     if poller:
         return poller.get_topology()
 
@@ -1673,6 +1680,7 @@ async def get_topology(session: dict = Depends(require_auth)):
         "total_cpes": 0,
         "total_switches": 0,
         "overall_health": {"green": 0, "yellow": 0, "red": 0},
+        "climate": services.get_default_rain_climate_cached(),
     }
 
 

@@ -167,6 +167,9 @@ class TachyonClient:
         self.timeout = timeout
         self._token: Optional[str] = None
         self._base_url = f"https://{ip}"
+        # Set as a side-effect by get_connected_cpes() — channel/BW/freq/kit
+        # for the AP's radio, used by the link-budget UI.
+        self.last_radio_params: Optional[Dict[str, Any]] = None
 
     async def _curl(
         self,
@@ -754,12 +757,18 @@ class TachyonClient:
     async def get_connected_cpes(self) -> List[Dict[str, Any]]:
         """Query /cgi.lua/status?type=wireless,zones for connected peers (CPEs).
 
+        Also captures the AP's radio params (channel, channel width, center
+        frequency, antenna kit) onto `self.last_radio_params` so the poller
+        can persist them for the link-budget UI without making a second call.
+
         Returns:
-            List of CPE dictionaries with signal/distance data.
+            List of CPEInfo with signal/distance/target/SNR/sector data.
         """
         from updater.models import CPEInfo
 
-        cpes = []
+        cpes: List[CPEInfo] = []
+        self.last_radio_params = None  # reset on each call
+
         status, body = await self._curl("GET", "/cgi.lua/status?type=wireless,zones")
 
         if status != 200:
@@ -786,8 +795,31 @@ class TachyonClient:
                     rx_rate=peer.get("rxRate"),
                     mcs=peer.get("mcs"),
                     link_uptime=peer.get("linkUptime"),
+                    target_rssi_dbm=peer.get("target_rssi"),
+                    snr_db=peer.get("lastDataRxSnr"),
+                    sector_tx=peer.get("txSector"),
+                    sector_rx=peer.get("rxSector"),
+                    antenna_kit=peer.get("antenna_kit"),
                 )
                 cpes.append(cpe)
+
+            # Capture the first radio's params (today's hardware has one
+            # 60 GHz radio per AP — wlan0). Stored as a side-effect so we
+            # don't disturb the existing get_connected_cpes return contract.
+            radios = wireless.get("radios", {}) or {}
+            radio = None
+            if isinstance(radios, dict) and radios:
+                radio = next(iter(radios.values()))
+            elif isinstance(radios, list) and radios:
+                radio = radios[0]
+            if isinstance(radio, dict):
+                self.last_radio_params = {
+                    "channel": radio.get("channel"),
+                    "channel_width_mhz": radio.get("channelWidth"),
+                    "frequency_mhz": radio.get("frequency"),
+                    "antenna_kit": radio.get("antenna_kit"),
+                    "noise_dbm": radio.get("noise"),
+                }
 
             logger.info(f"Found {len(cpes)} connected CPEs on {self.ip}")
 

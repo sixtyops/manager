@@ -117,15 +117,54 @@ def seed_database() -> None:
             bank1_version=b1, bank2_version=b2, active_bank=ab,
         )
 
+    # --- AP radio params (signal-health UI: channel/BW/freq/kit) ---
+    # All seeded APs run on channel 3, 2.16 GHz wide, 60 GHz band, no kit.
+    for ap in _APS:
+        db.update_ap_radio_params(
+            ap[0], channel=3, bandwidth_mhz=2160, frequency_mhz=62640, antenna_kit="none",
+        )
+
     # --- CPEs ---
+    from . import link_budget
+
+    # Hand-picked targets so most fixtures meet expectation but a couple
+    # underperform — exercises both bar colors + the gray-pin overlay.
+    _UNDERPERFORMING_IPS = {"10.0.1.22", "10.0.3.22"}
+    _CPE_KITS = {
+        "10.0.2.10": "AK-100",
+        "10.0.2.20": "AK-150",
+        "10.0.3.10": "AK-300",
+    }
+
     for cpe in _CPES:
         ap_ip, ip, mac, sys_name, model, fw, dist, rx, combined, local_rssi, tx_rate, rx_rate, mcs, uptime, health, auth = cpe
+
+        # Live signal we'd budget against (matches the poller's choice).
+        live_signal = combined if combined is not None else rx
+        # Target = AP's expectation. Underperformers sit 3 dB below target;
+        # everyone else beats target by ~2 dB (within poll-to-poll jitter).
+        target = round(live_signal + (3 if ip in _UNDERPERFORMING_IPS else -2))
+        # SNR scales with signal strength relative to a ~-90 dBm noise floor.
+        snr = max(3, round(live_signal + 90 - 60))  # signal -60 → snr 30, signal -75 → snr 15
+        # Sector indices on the 64-sector beam (arbitrary but stable).
+        sector = (abs(hash(ip)) % 64)
+        kit = _CPE_KITS.get(ip, "none")
+        max_rain = link_budget.max_survivable_rain_mm_hr(
+            rssi_dbm=live_signal,
+            distance_m=dist,
+            channel=3,
+            channel_width_mhz=2160,
+        )
+
         db.upsert_cpe(ap_ip, {
             "ip": ip, "mac": mac, "system_name": sys_name, "model": model,
             "firmware_version": fw, "link_distance": dist, "rx_power": rx,
             "combined_signal": combined, "last_local_rssi": local_rssi,
             "tx_rate": tx_rate, "rx_rate": rx_rate, "mcs": mcs,
             "link_uptime": uptime, "signal_health": health, "auth_status": auth,
+            "target_rssi_dbm": target, "snr_db": snr,
+            "sector_tx": sector, "sector_rx": sector,
+            "antenna_kit": kit, "max_rain_mm_hr": max_rain,
         })
 
     # --- Firmware registry ---

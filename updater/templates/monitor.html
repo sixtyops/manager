@@ -6,6 +6,7 @@
     <title>SixtyOps</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <script src="/static/vendor/chart.umd.js"></script>
+    <script src="/static/vendor/chartjs-plugin-annotation.min.js"></script>
     <style>
         :root {
             --bg: #f5f5f5;
@@ -2337,6 +2338,188 @@
                 width: 100%;
             }
         }
+
+        /* ===========================================================
+         * Dynamic signal-health UI
+         * Port of .context/mockups/signal-health.html — chart card with
+         * Rain Fade / Distance toggle, climate dropdown, hover popover.
+         * =========================================================== */
+        :root {
+            --shadow-pop: 0 8px 24px rgba(0,0,0,.10);
+        }
+
+        /* Climate dropdown pill (placed inside .header) */
+        .climate-menu-wrap { position: relative; }
+        .climate-pill {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 6px 12px;
+            background: var(--primary-bg); color: var(--primary-text);
+            border: 0; border-radius: 999px;
+            font-size: 0.75rem; font-weight: 500;
+            cursor: pointer; font-family: inherit;
+        }
+        .climate-pill:hover { background: #cfe1fc; }
+        .climate-pill svg { width: 14px; height: 14px; }
+        .climate-pill .caret { width: 10px; height: 10px; opacity: .7; margin-left: 2px; }
+        .climate-menu {
+            position: absolute; right: 0; top: calc(100% + 6px);
+            min-width: 340px; background: var(--bg-card);
+            border: 1px solid var(--border); border-radius: 10px;
+            box-shadow: var(--shadow-pop); padding: 6px;
+            display: none; z-index: 60;
+        }
+        .climate-menu.open { display: block; }
+        .climate-menu-header {
+            font-size: 9px; color: var(--text-dim); text-transform: uppercase;
+            letter-spacing: .06em; font-weight: 600; padding: 8px 10px 4px;
+        }
+        .climate-option {
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 12px; width: 100%; padding: 8px 10px;
+            border: 0; background: transparent; border-radius: 6px;
+            cursor: pointer; text-align: left; font-family: inherit; color: var(--text);
+        }
+        .climate-option:hover { background: #f3f4f6; }
+        .climate-option.active { background: var(--primary-bg); }
+        .climate-option .opt-main {
+            display: inline-flex; align-items: center; gap: 8px;
+            font-size: 12px; font-weight: 500; color: var(--text); white-space: nowrap;
+        }
+        .climate-option .opt-meta {
+            color: var(--text-muted); font-size: 11px;
+            font-variant-numeric: tabular-nums; white-space: nowrap;
+        }
+        .climate-option.active .opt-main { color: var(--primary-text); font-weight: 600; }
+        .opt-badge {
+            display: inline-flex; align-items: center; gap: 4px;
+            font-size: 9px; font-weight: 700; color: #fff;
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            padding: 2px 7px 2px 5px; border-radius: 999px;
+            letter-spacing: .06em; white-space: nowrap;
+            box-shadow: 0 1px 2px rgba(37,99,235,.35); line-height: 1.3;
+        }
+        .opt-badge svg { width: 9px; height: 9px; flex: 0 0 auto; }
+
+        /* Chart card head + summary */
+        .sh-chart-head {
+            display: flex; align-items: flex-end; justify-content: space-between;
+            margin-bottom: 16px; gap: 16px; flex-wrap: wrap;
+        }
+        .sh-chart-head .titlebox h2 {
+            margin: 0; font-size: 1rem; font-weight: 600;
+            letter-spacing: -.01em; color: var(--text);
+        }
+        .sh-chart-head .titlebox .sub {
+            color: var(--text-muted); font-size: 0.75rem; margin-top: 2px;
+        }
+        .sh-summary-row {
+            display: flex; align-items: center; gap: 20px; font-size: 0.75rem;
+        }
+        .sh-summary-stat { display: flex; align-items: center; gap: 6px; color: var(--text-muted); }
+        .sh-summary-stat strong {
+            color: var(--text); font-variant-numeric: tabular-nums;
+            font-size: 0.875rem; font-weight: 600;
+        }
+        .sh-summary-stat .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+        /* New chart wrapper (taller than the legacy .chart-container) */
+        .sh-chart-wrap { height: 380px; position: relative; }
+
+        /* Legend overrides for the new chart */
+        .sh-chart-legend {
+            display: flex; flex-wrap: wrap; gap: 20px;
+            justify-content: center; padding-top: 16px;
+            font-size: 0.75rem; color: var(--text-muted);
+        }
+        .sh-chart-legend .item { display: flex; align-items: center; gap: 6px; }
+        .sh-chart-legend .dot { width: 8px; height: 8px; border-radius: 50%; }
+        .sh-chart-legend .dash {
+            width: 18px; height: 0; border-top: 1.5px dashed var(--text-dim); display: inline-block;
+        }
+
+        /* Segmented toggle (Rain fade / Distance) */
+        .sh-toggle-wrap { display: flex; justify-content: center; margin-top: 20px; }
+        .sh-segmented {
+            display: inline-flex; background: var(--bg-card);
+            border: 1px solid var(--border); border-radius: 999px;
+            padding: 4px; gap: 2px; box-shadow: 0 1px 2px rgba(0,0,0,.04);
+        }
+        .sh-segmented button {
+            appearance: none; border: 0; background: transparent;
+            color: var(--text-muted); padding: 8px 18px;
+            font-size: 0.75rem; font-weight: 500; border-radius: 999px;
+            cursor: pointer; transition: background .15s ease, color .15s ease;
+            display: inline-flex; align-items: center; gap: 6px; font-family: inherit;
+        }
+        .sh-segmented button:hover { color: var(--text); }
+        .sh-segmented button.active { background: #111827; color: #fff; }
+        .sh-segmented svg { width: 14px; height: 14px; }
+
+        /* Glanceable popover (.cpop) */
+        .cpop {
+            position: fixed; z-index: 100;
+            background: var(--bg-card); border: 1.5px solid var(--border);
+            border-radius: 8px; padding: 10px 12px;
+            box-shadow: var(--shadow-pop);
+            min-width: 200px; max-width: 240px; font-size: 11px;
+            pointer-events: none; opacity: 0;
+            transition: opacity .12s ease; display: none;
+        }
+        .cpop.show { display: block; opacity: 1; }
+        .cpop.h-green  { border-color: var(--success); }
+        .cpop.h-yellow { border-color: var(--warning); }
+        .cpop.h-red    { border-color: var(--danger-bright); }
+        .cpop-badge {
+            position: absolute; top: -9px; right: 10px;
+            padding: 2px 8px; border-radius: 999px;
+            font-size: 9px; font-weight: 600; color: #fff;
+            letter-spacing: .02em; line-height: 1.4;
+            text-transform: uppercase; box-shadow: 0 1px 2px rgba(0,0,0,.08);
+        }
+        .cpop.h-green  .cpop-badge { background: var(--success); }
+        .cpop.h-yellow .cpop-badge { background: var(--warning); }
+        .cpop.h-red    .cpop-badge { background: var(--danger-bright); }
+        .cpop-head { margin-bottom: 10px; }
+        .cpop-name { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.2; }
+        .cpop-meta { color: var(--text-muted); margin-top: 1px; font-size: 10px; }
+        .cpop-gauge { margin-top: 8px; }
+        .cpop-gauge:first-of-type { margin-top: 0; }
+        .cpop-gauge-label {
+            display: flex; justify-content: space-between; align-items: baseline;
+            margin-bottom: 3px;
+        }
+        .cpop-gauge-label .lbl {
+            font-size: 9px; color: var(--text-muted);
+            text-transform: uppercase; letter-spacing: .06em; font-weight: 500;
+        }
+        .cpop-gauge-label .val {
+            font-variant-numeric: tabular-nums; font-weight: 600;
+            color: var(--text); font-size: 11px;
+        }
+        .cpop-gauge-label .delta {
+            font-variant-numeric: tabular-nums; font-weight: 600;
+            font-size: 10px; margin-left: 6px;
+        }
+        .cpop-gauge-label .delta.up   { color: var(--success); }
+        .cpop-gauge-label .delta.down { color: var(--danger-bright); }
+        .cpop-gauge-label .delta.flat { color: var(--text-dim); }
+        .cpop-bar {
+            position: relative; height: 5px;
+            background: #eef0f3; border-radius: 3px;
+        }
+        .cpop-bar-fill {
+            position: absolute; left: 0; top: 0; bottom: 0;
+            border-radius: 3px; transition: width .15s;
+        }
+        .cpop-bar-fill.green  { background: var(--success); }
+        .cpop-bar-fill.yellow { background: var(--warning); }
+        .cpop-bar-fill.red    { background: var(--danger-bright); }
+        .cpop-bar-tick {
+            position: absolute; top: -2px; bottom: -2px;
+            width: 1.5px; background: var(--text); border-radius: 1px;
+            pointer-events: none;
+        }
+        .cpop-bar-tick.muted { background: var(--text-muted); opacity: .55; }
     </style>
 </head>
 <body>
@@ -2354,6 +2537,14 @@
         <h1><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:#0D9488;border-radius:4px;margin-right:6px;vertical-align:baseline;position:relative;top:-1px;"><svg width="14" height="14" viewBox="0 0 28 28" fill="none"><rect x="3" y="8" width="2.5" height="12" rx="1" fill="white" opacity="0.9"/><rect x="7.5" y="6" width="2.5" height="16" rx="1" fill="white"/><rect x="12" y="4" width="2.5" height="20" rx="1" fill="white"/><path d="M17 10 L25 6" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><path d="M17 14 L26 14" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/><path d="M17 18 L25 22" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg></span>Sixty<span style="color:#0D9488;">Ops</span></h1>
         <div class="header-right">
             <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:var(--text-dim);"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:var(--text-muted);"></span></span>
+            <span class="climate-menu-wrap">
+                <button type="button" class="climate-pill" id="climateBtn" aria-haspopup="true" title="Climate determines how aggressively links are flagged for rain risk">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 13v8M12 15v6M8 13v8M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"/></svg>
+                    <span id="climateLabel">Climate: …</span>
+                    <svg class="caret" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4.5 L6 7.5 L9 4.5"/></svg>
+                </button>
+                <div class="climate-menu" id="climateMenu" role="menu"></div>
+            </span>
             <button class="header-icon-btn" onclick="openHistoryModal()" title="Job History">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
@@ -2398,26 +2589,27 @@
             </div>
 
             <div class="chart-card">
-                <h3 id="chartTitle">Signal vs Distance &mdash; All Devices</h3>
-                <div class="chart-container">
+                <div class="sh-chart-head">
+                    <div class="titlebox">
+                        <h2 id="chartTitle">Rain Fade Tolerance</h2>
+                        <div class="sub" id="chartSub">Each dot is one subscriber &mdash; how much rain its link can take before dropping.</div>
+                    </div>
+                    <div class="sh-summary-row" id="summaryRow"></div>
+                </div>
+                <div class="sh-chart-wrap">
                     <canvas id="signalChart"></canvas>
                 </div>
-                <div class="chart-legend">
-                    <div class="legend-item">
-                        <div class="dot success"></div>
-                        <span>Strong (&ge; &minus;60 dBm)</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="dot warning"></div>
-                        <span>Low (&minus;61 to &minus;65 dBm)</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="dot danger"></div>
-                        <span>Marginal (&lt; &minus;65 dBm)</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="dot u-dot-offline"></div>
-                        <span>Offline</span>
+                <div class="sh-chart-legend" id="chartLegend"></div>
+                <div class="sh-toggle-wrap">
+                    <div class="sh-segmented" role="tablist">
+                        <button class="active" data-view="rain" role="tab">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 13v8M12 15v6M8 13v8M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"/></svg>
+                            Rain fade
+                        </button>
+                        <button data-view="distance" role="tab">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 14l4-4 4 4 5-5"/></svg>
+                            Distance / Signal
+                        </button>
                     </div>
                 </div>
             </div>
@@ -5224,252 +5416,527 @@
             }
         }
 
-        // ── Chart ──
+        // ── Signal-health chart (port of .context/mockups/signal-health.html) ──
+        // The original updateChart/initChart implementation was replaced with
+        // a dynamic Rain Fade / Distance toggle backed by the AP-reported
+        // target_rssi, SNR, and max_rain_mm_hr telemetry. The exported
+        // entrypoints (`updateChart`, `highlightChartPoint`) keep the same
+        // names so all upstream callers continue to work.
 
-        function updateChart() {
-            const cpes = [];
-            const offlineAPs = [];
+        const SH_CLIMATES = {
+            A: { label: 'Dry',           example: 'Arid / Egypt',           r999: 0.5, r9999: 8   },
+            E: { label: 'Light rain',    example: 'United Kingdom',          r999: 6,   r9999: 22  },
+            K: { label: 'Moderate rain', example: 'Continental US',          r999: 12,  r9999: 42  },
+            N: { label: 'Heavy rain',    example: 'US Gulf Coast / Florida', r999: 35,  r9999: 95  },
+            P: { label: 'Tropical',      example: 'Southeast Asia',          r999: 65,  r9999: 145 },
+        };
+        const SH_DEFAULT_ZONE = 'K';
+        let shAutoZone = SH_DEFAULT_ZONE;
+        let shAutoCountry = null;
+        let shSelectedZone = SH_DEFAULT_ZONE;
+        let shView = 'rain';
+        let shHoveredCpe = null;
+        let shDetachGrayHover = null;
+        let _shLastTooltipCpe = null;
+        const SH_Y_MAX_RAIN = 250;
+        const SH_MCS1_FLOOR = -70;
+        const SH_STATUS_LABEL = { green: 'Reliable', yellow: 'Mostly reliable', red: 'Unstable in rain' };
+        const SH_SIG_MIN = -75, SH_SIG_MAX = -35, SH_RAIN_MAX = 100;
+        const shColorFor  = h => h === 'green' ? '#10b981' : h === 'yellow' ? '#f59e0b' : '#ef4444';
+        const shBorderFor = h => h === 'green' ? '#34d399' : h === 'yellow' ? '#fbbf24' : '#f87171';
+        const shClamp01 = v => Math.max(0, Math.min(1, v));
+        const shActiveClimate = () => SH_CLIMATES[shSelectedZone] || SH_CLIMATES[SH_DEFAULT_ZONE];
+        function shHealthFromRain(maxR) {
+            if (maxR == null) return null;
+            const z = shActiveClimate();
+            if (maxR >= z.r9999) return 'green';
+            if (maxR >= z.r999)  return 'yellow';
+            return 'red';
+        }
 
-            let titleSuffix = 'All Devices';
-            if (selectedNode?.type === 'site') {
-                titleSuffix = selectedNode.data?.name || 'Site';
-            } else if (selectedNode?.type === 'ap') {
-                titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'AP';
-            } else if (selectedNode?.type === 'cpe') {
-                titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'CPE';
-            } else if (selectedNode?.type === 'switch') {
-                titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'Switch';
+        const shMarginLinesPlugin = {
+            id: 'shMarginLines',
+            beforeDatasetsDraw(c, _a, opts) {
+                const segs = opts && opts.segments;
+                if (!segs || !segs.length) return;
+                const { ctx: c2, chartArea, scales: { x, y } } = c;
+                c2.save();
+                c2.beginPath();
+                c2.rect(chartArea.left, chartArea.top, chartArea.width, chartArea.height);
+                c2.clip();
+                segs.forEach(s => {
+                    const xp = x.getPixelForValue(s.x);
+                    const yt = y.getPixelForValue(s.yTarget);
+                    const ys = y.getPixelForValue(s.ySignal);
+                    const isHover = shHoveredCpe && s.cpe === shHoveredCpe;
+                    c2.strokeStyle = isHover ? '#374151' : 'rgba(156,163,175,0.6)';
+                    c2.lineWidth   = isHover ? 2.5 : 1;
+                    c2.beginPath(); c2.moveTo(xp, yt); c2.lineTo(xp, ys); c2.stroke();
+                    c2.fillStyle = isHover ? '#374151' : 'rgba(156,163,175,0.85)';
+                    const r = isHover ? 4.5 : 2.5;
+                    c2.beginPath(); c2.arc(xp, yt, r, 0, Math.PI * 2); c2.fill();
+                });
+                c2.restore();
+            },
+        };
+
+        function shSetHoveredCpe(cpe) {
+            if (cpe === shHoveredCpe) return false;
+            shHoveredCpe = cpe;
+            if (chart) {
+                if (cpe) {
+                    const i = chart.data.datasets[0].data.findIndex(p => p.cpe === cpe);
+                    chart.setActiveElements(i >= 0 ? [{ datasetIndex: 0, index: i }] : []);
+                } else {
+                    chart.setActiveElements([]);
+                }
+                chart.update('none');
             }
-            document.getElementById('chartTitle').textContent = `Signal vs Distance \u2014 ${titleSuffix}`;
+            return true;
+        }
 
+        function shAttachGrayHover(targetChart, segments) {
+            const canvas = targetChart.canvas;
+            const HIT_DOT = 9, HIT_LINE = 4;
+            const onMove = (evt) => {
+                const rect = canvas.getBoundingClientRect();
+                const ex = evt.clientX - rect.left;
+                const ey = evt.clientY - rect.top;
+                const { x: xs, y: ys } = targetChart.scales;
+                if (!xs || !ys) return;
+                let foundGray = null;
+                for (const s of segments) {
+                    const px = xs.getPixelForValue(s.x);
+                    if (Math.abs(ex - px) > HIT_DOT) continue;
+                    const pyT = ys.getPixelForValue(s.yTarget);
+                    const dx = ex - px, dy = ey - pyT;
+                    if (dx*dx + dy*dy < HIT_DOT*HIT_DOT) { foundGray = s.cpe; break; }
+                    const pyS = ys.getPixelForValue(s.ySignal);
+                    if (Math.abs(dx) < HIT_LINE && ey >= Math.min(pyT,pyS) && ey <= Math.max(pyT,pyS)) {
+                        foundGray = s.cpe; break;
+                    }
+                }
+                if (foundGray) {
+                    if (!shSetHoveredCpe(foundGray)) return;
+                    shFillCpop(foundGray);
+                    const dotPx = xs.getPixelForValue(foundGray.link_distance ?? 0);
+                    const sig = foundGray.primary_signal ?? foundGray.combined_signal ?? foundGray.rx_power ?? -70;
+                    const dotPy = ys.getPixelForValue(sig);
+                    shPositionCpop(rect.left + dotPx, rect.top + dotPy);
+                    return;
+                }
+                const native = targetChart.getActiveElements();
+                const nativeCpe = native.length ? targetChart.data.datasets[0].data[native[0].index].cpe : null;
+                if (!nativeCpe && shHoveredCpe) {
+                    shSetHoveredCpe(null);
+                    shHideCpop();
+                }
+            };
+            const onLeave = () => {
+                if (shHoveredCpe !== null) { shSetHoveredCpe(null); shHideCpop(); }
+            };
+            canvas.addEventListener('mousemove', onMove);
+            canvas.addEventListener('mouseleave', onLeave);
+            return () => {
+                canvas.removeEventListener('mousemove', onMove);
+                canvas.removeEventListener('mouseleave', onLeave);
+            };
+        }
+
+        function shFillCpop(cpe) {
+            const maxR = cpe.max_rain_mm_hr;
+            const hRain = shHealthFromRain(maxR);
+            const h = hRain || (cpe.signal_health || 'red');
+            const pop = document.getElementById('cpop');
+            pop.className = 'cpop show h-' + h;
+            document.getElementById('cpopBadge').textContent = SH_STATUS_LABEL[h] || 'Unknown';
+            document.getElementById('cpopName').textContent = cpe.system_name || cpe.ip;
+            const dist = cpe.link_distance != null ? Math.round(cpe.link_distance) + ' m away' : 'distance unknown';
+            document.getElementById('cpopMeta').textContent = ((cpe.model || '') + ' \u00b7 ' + dist).trim();
+
+            const sig = cpe.primary_signal ?? cpe.combined_signal ?? cpe.rx_power;
+            const tgt = cpe.target_rssi_dbm;
+            const sigPct = sig != null ? shClamp01((sig - SH_SIG_MIN) / (SH_SIG_MAX - SH_SIG_MIN)) * 100 : 0;
+            const tgtPct = tgt != null ? shClamp01((tgt - SH_SIG_MIN) / (SH_SIG_MAX - SH_SIG_MIN)) * 100 : null;
+            const dm = (sig != null && tgt != null) ? Math.round(sig - tgt) : null;
+            const sigBucket = dm == null ? h : (dm >= 0 ? 'green' : dm >= -5 ? 'yellow' : 'red');
+            const sigFill = document.getElementById('cpopSignalFill');
+            sigFill.style.width = sigPct + '%';
+            sigFill.className = 'cpop-bar-fill ' + sigBucket;
+            const sigTickEl = document.getElementById('cpopSignalTarget');
+            if (tgtPct != null) { sigTickEl.style.display = ''; sigTickEl.style.left = tgtPct + '%'; }
+            else { sigTickEl.style.display = 'none'; }
+            const deltaHtml = dm == null
+                ? ''
+                : dm > 0 ? '<span class="delta up">\u25b2 ' + dm + '</span>'
+                : dm < 0 ? '<span class="delta down">\u25bc ' + (-dm) + '</span>'
+                : '<span class="delta up">\u25ac 0</span>';
+            document.getElementById('cpopSignalVal').innerHTML = sig != null
+                ? (sig.toFixed(0) + ' dBm ' + deltaHtml)
+                : '\u2014';
+
+            const rainPct = maxR != null ? shClamp01(Math.min(maxR, SH_RAIN_MAX) / SH_RAIN_MAX) * 100 : 0;
+            const rainFill = document.getElementById('cpopRainFill');
+            rainFill.style.width = rainPct + '%';
+            rainFill.className = 'cpop-bar-fill ' + h;
+            const z = shActiveClimate();
+            document.getElementById('cpopRain999').style.left  = (Math.min(z.r999,  SH_RAIN_MAX) / SH_RAIN_MAX * 100) + '%';
+            document.getElementById('cpopRain9999').style.left = (Math.min(z.r9999, SH_RAIN_MAX) / SH_RAIN_MAX * 100) + '%';
+            document.getElementById('cpopRainVal').textContent =
+                maxR == null ? '\u2014'
+                : (maxR >= SH_RAIN_MAX ? (SH_RAIN_MAX + '+ mm/hr') : (Math.round(maxR) + ' mm/hr'));
+        }
+        function shPositionCpop(x, y) {
+            const pop = document.getElementById('cpop');
+            pop.classList.add('show');
+            const r = pop.getBoundingClientRect();
+            let left = x + 14, top = y + 14;
+            if (left + r.width  > window.innerWidth  - 8) left = x - r.width  - 14;
+            if (top  + r.height > window.innerHeight - 8) top  = y - r.height - 14;
+            pop.style.left = left + 'px';
+            pop.style.top  = top  + 'px';
+        }
+        function shHideCpop() { document.getElementById('cpop').classList.remove('show'); }
+        function shExternalTooltip(ctx) {
+            const { chart: ch, tooltip } = ctx;
+            if (!tooltip || tooltip.opacity === 0 || !tooltip.dataPoints || !tooltip.dataPoints.length) {
+                if (_shLastTooltipCpe !== null) { _shLastTooltipCpe = null; shHideCpop(); }
+                return;
+            }
+            const raw = tooltip.dataPoints[0].raw;
+            if (!raw || !raw.cpe) {
+                if (_shLastTooltipCpe !== null) { _shLastTooltipCpe = null; shHideCpop(); }
+                return;
+            }
+            if (raw.cpe === _shLastTooltipCpe) return;
+            _shLastTooltipCpe = raw.cpe;
+            shFillCpop(raw.cpe);
+            const rect = ch.canvas.getBoundingClientRect();
+            shPositionCpop(rect.left + tooltip.caretX, rect.top + tooltip.caretY);
+        }
+
+        function shCollectCpes() {
+            const out = [];
+            let titleSuffix = 'All Devices';
+            if (selectedNode?.type === 'site')        titleSuffix = selectedNode.data?.name || 'Site';
+            else if (selectedNode?.type === 'ap')     titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'AP';
+            else if (selectedNode?.type === 'cpe')    titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'CPE';
+            else if (selectedNode?.type === 'switch') titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'Switch';
             for (const site of (topology.sites || [])) {
                 if (selectedNode?.type === 'site' && site.id !== selectedNode.data?.id) continue;
-
                 const apList = [...(site.aps || [])];
-                for (const sw of (site.switches || [])) {
-                    for (const ap of (sw.aps || [])) apList.push(ap);
-                }
+                for (const sw of (site.switches || [])) for (const ap of (sw.aps || [])) apList.push(ap);
                 const aps = selectedNode?.type === 'switch'
                     ? apList.filter(ap => ap.switch_ip === selectedNode.data?.ip)
                     : apList;
-
                 for (const ap of aps) {
                     if (selectedNode?.type === 'ap' && ap.ip !== selectedNode.data?.ip) continue;
-
-                    // Track offline APs
-                    if (ap.last_error) {
-                        offlineAPs.push(ap);
-                    }
-
                     for (const cpe of (ap.cpes || [])) {
                         if (selectedNode?.type === 'cpe' && cpe.ip !== selectedNode.data?.ip) continue;
-                        cpes.push(cpe);
+                        if (cpe.primary_signal == null) {
+                            cpe.primary_signal = cpe.combined_signal ?? cpe.rx_power ?? cpe.last_local_rssi;
+                        }
+                        out.push(cpe);
                     }
                 }
             }
+            return { cpes: out, titleSuffix };
+        }
 
-            const cpeData = cpes.map(cpe => {
-                const sig = cpe.primary_signal ?? cpe.combined_signal ?? cpe.rx_power ?? cpe.last_local_rssi;
-                return {
-                    x: cpe.link_distance ?? 0,
-                    // -73 sits 2 dB above the chart's y-axis min (-75) so unpolled
-                    // dots stay visually distinct from the floor. Real readings
-                    // below -75 are clipped, which is acceptable: anything that
-                    // negative is already deep in Critical territory.
-                    y: sig ?? -73,
-                    cpe: cpe,
-                    sig: sig,
-                    unpolled: sig == null,
-                };
-            });
+        function shBuildRainChart() {
+            const { cpes } = shCollectCpes();
+            const points = cpes
+                .filter(c => c.max_rain_mm_hr != null && c.link_distance != null)
+                .map(c => ({
+                    x: c.link_distance,
+                    y: Math.min(c.max_rain_mm_hr, SH_Y_MAX_RAIN),
+                    h: shHealthFromRain(c.max_rain_mm_hr),
+                    cpe: c,
+                }));
+            const radius = points.length > 80 ? 4 : points.length > 30 ? 5 : 7;
+            const z = shActiveClimate();
+            const annotations = {
+                bandRed:    { type: 'box', yMin: 0,        yMax: z.r999,        backgroundColor: 'rgba(239,68,68,0.06)',  borderWidth: 0 },
+                bandYellow: { type: 'box', yMin: z.r999,   yMax: z.r9999,       backgroundColor: 'rgba(245,158,11,0.06)', borderWidth: 0 },
+                bandGreen:  { type: 'box', yMin: z.r9999,  yMax: SH_Y_MAX_RAIN, backgroundColor: 'rgba(16,185,129,0.05)', borderWidth: 0 },
+                mark99: {
+                    type: 'line', yMin: z.r999, yMax: z.r999,
+                    borderColor: 'rgba(239,68,68,0.55)', borderWidth: 1.5, borderDash: [3,3],
+                    label: { display: true, content: '99.9% \u2014 ' + z.r999 + ' mm/hr', color: '#991b1b',
+                             position: 'end', backgroundColor: 'rgba(255,255,255,.92)', font: { size: 10 }, padding: 4, yAdjust: -8 },
+                },
+                mark9999: {
+                    type: 'line', yMin: z.r9999, yMax: z.r9999,
+                    borderColor: 'rgba(16,185,129,0.7)', borderWidth: 1.5, borderDash: [3,3],
+                    label: { display: true, content: '99.99% storm \u2014 ' + z.r9999 + ' mm/hr', color: '#047857',
+                             position: 'end', backgroundColor: 'rgba(255,255,255,.92)', font: { size: 10 }, padding: 4, yAdjust: 8 },
+                },
+            };
+            return {
+                type: 'scatter',
+                data: { datasets: [{
+                    label: 'CPEs', data: points,
+                    backgroundColor: c => shColorFor(c.raw.h),
+                    borderColor:     c => shBorderFor(c.raw.h),
+                    borderWidth: 1.5, pointRadius: radius, pointHoverRadius: radius + 4, clip: false,
+                }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'nearest', intersect: true },
+                    layout: { padding: { top: 8, right: 8, bottom: 4, left: 4 } },
+                    onHover: (e, els) => {
+                        const next = els.length && els[0].element?.$context?.raw ? els[0].element.$context.raw.cpe : null;
+                        if (next) shSetHoveredCpe(next);
+                    },
+                    onClick: (e, els) => {
+                        if (els.length) { const r = els[0].element?.$context?.raw; if (r?.cpe) selectCPE(r.cpe.ip); }
+                    },
+                    scales: {
+                        x: { type: 'linear', min: 0,
+                             title: { display: true, text: 'Distance (m)', color: '#6b7280', font: { size: 11 } },
+                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 } } },
+                        y: { type: 'linear', min: 0, max: SH_Y_MAX_RAIN,
+                             title: { display: true, text: 'Survives rain up to (mm/hr)', color: '#6b7280', font: { size: 11 } },
+                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 50 } },
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        annotation: { annotations },
+                        tooltip: { enabled: false, external: shExternalTooltip },
+                    },
+                },
+            };
+        }
 
-            const offlineData = offlineAPs.map(ap => ({
-                x: 0,
-                y: -70,
-                ap: ap,
-            }));
+        function shBuildDistanceChart() {
+            const { cpes } = shCollectCpes();
+            const underperformers = cpes.filter(c =>
+                c.target_rssi_dbm != null && c.primary_signal != null && c.primary_signal < c.target_rssi_dbm
+            );
+            const live = cpes
+                .filter(c => c.primary_signal != null && c.link_distance != null)
+                .map(c => ({
+                    x: c.link_distance, y: c.primary_signal,
+                    h: shHealthFromRain(c.max_rain_mm_hr) || (c.signal_health || 'red'),
+                    cpe: c,
+                }));
+            const radius = live.length > 80 ? 4 : live.length > 30 ? 5 : 7;
+            return {
+                type: 'scatter',
+                plugins: [shMarginLinesPlugin],
+                data: { datasets: [{
+                    label: 'Signal', data: live,
+                    backgroundColor: c => shColorFor(c.raw.h),
+                    borderColor:     c => shBorderFor(c.raw.h),
+                    borderWidth: 1.5, pointRadius: radius, pointHoverRadius: radius + 4, clip: false,
+                }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'nearest', intersect: true },
+                    layout: { padding: { top: 8, right: 8, bottom: 4, left: 4 } },
+                    onHover: (e, els) => {
+                        const next = els.length && els[0].element?.$context?.raw ? els[0].element.$context.raw.cpe : null;
+                        if (next) shSetHoveredCpe(next);
+                    },
+                    onClick: (e, els) => {
+                        if (els.length) { const r = els[0].element?.$context?.raw; if (r?.cpe) selectCPE(r.cpe.ip); }
+                    },
+                    scales: {
+                        x: { type: 'linear', min: 0,
+                             title: { display: true, text: 'Distance (m)', color: '#6b7280', font: { size: 11 } },
+                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 } } },
+                        y: { min: -85, max: -35,
+                             title: { display: true, text: 'Signal (dBm)', color: '#6b7280', font: { size: 11 } },
+                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 5 } },
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        annotation: {
+                            annotations: {
+                                floor: {
+                                    type: 'line', yMin: SH_MCS1_FLOOR, yMax: SH_MCS1_FLOOR,
+                                    borderColor: '#9ca3af', borderWidth: 1.5, borderDash: [4,4],
+                                    label: { display: true, content: 'MCS1 floor', color: '#6b7280', position: 'start',
+                                             backgroundColor: 'rgba(255,255,255,.9)', font: { size: 10 }, padding: 4 },
+                                },
+                            },
+                        },
+                        shMarginLines: {
+                            segments: underperformers.map(c => ({
+                                x: c.link_distance, yTarget: c.target_rssi_dbm,
+                                ySignal: c.primary_signal, cpe: c,
+                            })),
+                        },
+                        tooltip: { enabled: false, external: shExternalTooltip },
+                    },
+                },
+            };
+        }
 
-            try {
-                if (chart) {
-                    chart.data.datasets[0].data = cpeData;
-                    chart.data.datasets[1].data = offlineData;
-                    chart.update();
-                } else {
-                    initChart(cpeData, offlineData);
+        function shRenderLegend() {
+            const el = document.getElementById('chartLegend');
+            if (!el) return;
+            if (shView === 'rain') {
+                el.innerHTML =
+                    '<span class="item"><span class="dot" style="background:var(--success)"></span>Reliable</span>'
+                  + '<span class="item"><span class="dot" style="background:var(--warning)"></span>Mostly reliable</span>'
+                  + '<span class="item"><span class="dot" style="background:var(--danger-bright)"></span>Unstable</span>';
+            } else {
+                el.innerHTML =
+                    '<span class="item"><span class="dot" style="background:var(--success)"></span>Reliable</span>'
+                  + '<span class="item"><span class="dot" style="background:var(--warning)"></span>Mostly reliable</span>'
+                  + '<span class="item"><span class="dot" style="background:var(--danger-bright)"></span>Unstable</span>'
+                  + '<span class="item"><span class="dot" style="background:#9ca3af;width:6px;height:6px"></span>Underperforming \u00b7 target shown</span>'
+                  + '<span class="item"><span class="dash"></span>MCS1 floor</span>';
+            }
+        }
+        function shRenderSummary() {
+            const { cpes } = shCollectCpes();
+            const z = shActiveClimate();
+            const cnt = { green: 0, yellow: 0, red: 0, unknown: 0 };
+            for (const c of cpes) {
+                const h = shHealthFromRain(c.max_rain_mm_hr);
+                if (h == null) cnt.unknown++; else cnt[h]++;
+            }
+            const tag = shView === 'rain'
+                ? '<span class="sh-summary-stat" style="color:var(--text-dim);font-style:italic">for ' + z.label + '</span>'
+                : '';
+            const sr = document.getElementById('summaryRow');
+            if (!sr) return;
+            sr.innerHTML =
+                '<span class="sh-summary-stat"><span class="dot" style="background:var(--success)"></span><strong>' + cnt.green + '</strong> reliable</span>'
+              + '<span class="sh-summary-stat"><span class="dot" style="background:var(--warning)"></span><strong>' + cnt.yellow + '</strong> mostly reliable</span>'
+              + '<span class="sh-summary-stat"><span class="dot" style="background:var(--danger-bright)"></span><strong>' + cnt.red + '</strong> at risk</span>'
+              + tag;
+        }
+
+        function shApplyTopologyClimate(topo) {
+            const c = topo && topo.climate;
+            if (!c) return;
+            const newZone = c.zone || SH_DEFAULT_ZONE;
+            const stickWithAuto = (shSelectedZone === shAutoZone);
+            if (c.rates_mm_hr) {
+                const r999 = c.rates_mm_hr['0.1%'];
+                const r9999 = c.rates_mm_hr['0.01%'];
+                if (r999 != null && r9999 != null) {
+                    SH_CLIMATES[newZone] = Object.assign({},
+                        SH_CLIMATES[newZone] || { label: 'Zone ' + newZone, example: 'auto-detected' },
+                        { r999, r9999 });
                 }
+            }
+            shAutoZone = newZone;
+            shAutoCountry = c.country || null;
+            if (stickWithAuto) shSelectedZone = shAutoZone;
+            shRefreshClimateLabel();
+            shRenderClimateMenu();
+        }
+        function shRefreshClimateLabel() {
+            const z = shActiveClimate();
+            const isAuto = shSelectedZone === shAutoZone;
+            const country = shAutoCountry || '';
+            const el = document.getElementById('climateLabel');
+            if (!el) return;
+            el.textContent = isAuto
+                ? ('Climate: ' + z.label + (country ? ' \u00b7 ' + country : '') + ' (auto)')
+                : ('Simulating: ' + z.label);
+        }
+        function shRenderClimateMenu() {
+            const menu = document.getElementById('climateMenu');
+            if (!menu) return;
+            const zones = Object.keys(SH_CLIMATES);
+            const opt = (zoneId, isAuto) => {
+                const z = SH_CLIMATES[zoneId] || SH_CLIMATES[SH_DEFAULT_ZONE];
+                const active = zoneId === shSelectedZone;
+                const badge = isAuto
+                    ? '<span class="opt-badge"><svg viewBox="0 0 12 12" fill="currentColor"><path d="M6 0a4 4 0 0 0-4 4c0 3 4 8 4 8s4-5 4-8a4 4 0 0 0-4-4zm0 5.5A1.5 1.5 0 1 1 6 2.5a1.5 1.5 0 0 1 0 3z"/></svg>YOUR AREA</span>'
+                    : '';
+                return '<button class="climate-option ' + (active ? 'active' : '') + '" data-zone="' + zoneId + '">'
+                     +   '<span class="opt-main"><span>' + z.label + '</span>' + badge + '</span>'
+                     +   '<span class="opt-meta">' + z.example + ' \u00b7 ' + z.r9999 + ' mm/hr</span>'
+                     + '</button>';
+            };
+            menu.innerHTML =
+                '<div class="climate-menu-header">Detected from your location</div>'
+              + opt(shAutoZone, true)
+              + '<div class="climate-menu-header" style="margin-top:4px">Simulate other regions</div>'
+              + zones.filter(z => z !== shAutoZone).map(z => opt(z, false)).join('');
+            menu.querySelectorAll('.climate-option').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    shSelectedZone = btn.dataset.zone;
+                    menu.classList.remove('open');
+                    shRefreshClimateLabel();
+                    shRenderClimateMenu();
+                    updateChart();
+                });
+            });
+        }
+
+        function updateChart() {
+            const tEl = document.getElementById('chartTitle');
+            const sEl = document.getElementById('chartSub');
+            if (!tEl || !sEl) return;
+            try {
+                if (window.topology && topology.climate) shApplyTopologyClimate(topology);
+                if (shDetachGrayHover) { shDetachGrayHover(); shDetachGrayHover = null; }
+                if (chart) { chart.destroy(); chart = null; }
+                shHoveredCpe = null; _shLastTooltipCpe = null; shHideCpop();
+                const { titleSuffix } = shCollectCpes();
+                const z = shActiveClimate();
+                const auto = shSelectedZone === shAutoZone;
+                tEl.textContent = shView === 'rain' ? 'Rain Fade Tolerance' : ('Signal vs Distance \u2014 ' + titleSuffix);
+                sEl.innerHTML = shView === 'rain'
+                    ? ('Each dot is one subscriber \u2014 how much rain its link can take before dropping. ' + z.label
+                       + ' climate, 99.99% storm is <strong style="color:var(--text)">' + z.r9999 + ' mm/hr</strong>'
+                       + (auto ? '' : ' <span style="color:var(--primary);font-weight:600">\u00b7 simulating</span>') + '.')
+                    : 'Live signal readings; underperforming links show a small gray target pin.';
+                const cfg = shView === 'rain' ? shBuildRainChart() : shBuildDistanceChart();
+                chart = new Chart(document.getElementById('signalChart').getContext('2d'), cfg);
+                if (shView === 'distance') {
+                    const segs = chart.options.plugins.shMarginLines?.segments;
+                    if (segs && segs.length) shDetachGrayHover = shAttachGrayHover(chart, segs);
+                }
+                shRenderLegend();
+                shRenderSummary();
             } catch (e) {
-                console.error('Signal vs Distance chart failed to render:', e);
+                console.error('Signal-health chart failed to render:', e);
             }
         }
 
         function highlightChartPoint(ip) {
             if (!chart) return;
-            const index = chart.data.datasets[0].data.findIndex(d => d.cpe?.ip === ip);
-            if (index >= 0) {
-                chart.setActiveElements([{ datasetIndex: 0, index: index }]);
-                chart.update();
+            const idx = chart.data.datasets[0].data.findIndex(d => d.cpe?.ip === ip);
+            if (idx >= 0) {
+                chart.setActiveElements([{ datasetIndex: 0, index: idx }]);
+                chart.update('none');
             }
         }
 
-        function initChart(cpeData, offlineData) {
-            const ctx = document.getElementById('signalChart').getContext('2d');
-
-            const thresholdPlugin = {
-                id: 'thresholdLines',
-                afterDraw: (chart) => {
-                    const ctx = chart.ctx;
-                    const yAxis = chart.scales.y;
-                    const xAxis = chart.scales.x;
-
-                    // -60 dBm line — Strong / Low boundary.
-                    const y60 = yAxis.getPixelForValue(-60);
-                    ctx.save();
-                    ctx.setLineDash([6, 4]);
-                    ctx.strokeStyle = '#10b981';
-                    ctx.lineWidth = 2;
-                    ctx.beginPath();
-                    ctx.moveTo(xAxis.left, y60);
-                    ctx.lineTo(xAxis.right, y60);
-                    ctx.stroke();
-                    ctx.fillStyle = '#10b981';
-                    ctx.font = '10px monospace';
-                    ctx.fillText('Strong', xAxis.right - 42, y60 - 4);
-                    ctx.restore();
-
-                    // -65 dBm line — Low / Marginal boundary.
-                    const y65 = yAxis.getPixelForValue(-65);
-                    ctx.save();
-                    ctx.setLineDash([6, 4]);
-                    ctx.strokeStyle = '#ef4444';
-                    ctx.lineWidth = 1;
-                    ctx.beginPath();
-                    ctx.moveTo(xAxis.left, y65);
-                    ctx.lineTo(xAxis.right, y65);
-                    ctx.stroke();
-                    ctx.fillStyle = '#ef4444';
-                    ctx.font = '10px monospace';
-                    ctx.fillText('Marginal', xAxis.right - 52, y65 + 12);
-                    ctx.restore();
-                },
-            };
-
-            Chart.register(thresholdPlugin);
-
-            chart = new Chart(ctx, {
-                type: 'scatter',
-                data: {
-                    datasets: [
-                        {
-                            label: 'CPEs',
-                            data: cpeData,
-                            pointBackgroundColor: (context) => {
-                                const point = context.raw;
-                                if (!point?.cpe) return '#9ca3af';
-                                const health = point.cpe.signal_health;
-                                if (health === 'green') return '#10b981';
-                                if (health === 'yellow') return '#f59e0b';
-                                return '#ef4444';
-                            },
-                            pointBorderColor: (context) => {
-                                const point = context.raw;
-                                if (!point?.cpe) return '#6b7280';
-                                const health = point.cpe.signal_health;
-                                if (health === 'green') return '#34d399';
-                                if (health === 'yellow') return '#fbbf24';
-                                return '#f87171';
-                            },
-                            pointRadius: 8,
-                            pointHoverRadius: 12,
-                            pointBorderWidth: 2,
-                        },
-                        {
-                            label: 'Offline APs',
-                            data: offlineData,
-                            pointBackgroundColor: '#ef4444',
-                            pointBorderColor: '#991b1b',
-                            pointRadius: 7,
-                            pointHoverRadius: 10,
-                            pointBorderWidth: 2,
-                            pointStyle: 'rectRot',
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    onClick: (event, elements) => {
-                        if (elements.length > 0) {
-                            const el = elements[0];
-                            if (el.datasetIndex === 0) {
-                                const point = chart.data.datasets[0].data[el.index];
-                                if (point?.cpe) selectCPE(point.cpe.ip);
-                            }
-                        }
-                    },
-                    scales: {
-                        x: {
-                            title: { display: true, text: 'Distance', color: '#6b7280' },
-                            grid: { color: '#e5e7eb' },
-                            ticks: {
-                                color: '#6b7280',
-                                // Strict-type guard: when every CPE in scope has null
-                                // link_distance, all data sits at x=0 and Chart.js can hand
-                                // the callback a non-numeric value during the degenerate-range
-                                // layout. The un-guarded `meters.toFixed` inside formatDistance
-                                // throws, aborting the render before axes, grid, or threshold
-                                // lines draw. Reject non-numbers outright instead of coercing
-                                // (Number(null) → 0 would silently mislabel a tick as "0 m").
-                                callback: (v) => (typeof v === 'number' && Number.isFinite(v)
-                                    ? formatDistance(v)
-                                    : ''),
-                            },
-                            min: 0,
-                            suggestedMax: 100,
-                        },
-                        y: {
-                            title: { display: true, text: 'Signal (dBm)', color: '#6b7280' },
-                            grid: { color: '#e5e7eb' },
-                            ticks: { color: '#6b7280' },
-                            min: -75,
-                            max: -35,
-                        },
-                    },
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                label: (context) => {
-                                    if (context.datasetIndex === 1) {
-                                        const ap = context.raw?.ap;
-                                        if (!ap) return '';
-                                        return [ap.system_name || ap.ip, 'Status: Offline', ap.last_error || ''];
-                                    }
-                                    const cpe = context.raw?.cpe;
-                                    if (!cpe) return '';
-                                    // Use the same fallback chain (sig) the chart used to plot
-                                    // the dot — otherwise a CPE that has combined_signal but
-                                    // no primary_signal would render at the right Y but show
-                                    // "N/A dBm" in the tooltip.
-                                    const sigLine = context.raw?.unpolled
-                                        ? 'Signal: not yet polled'
-                                        : `Signal: ${context.raw?.sig?.toFixed(1) ?? 'N/A'} dBm`;
-                                    return [
-                                        cpe.system_name || cpe.ip,
-                                        sigLine,
-                                        `Distance: ${cpe.link_distance != null ? formatDistance(cpe.link_distance) : 'N/A'}`,
-                                    ];
-                                },
-                            },
-                            backgroundColor: '#ffffff',
-                            titleColor: '#111827',
-                            bodyColor: '#111827',
-                            borderColor: '#e5e7eb',
-                            borderWidth: 1,
-                        },
-                    },
-                },
+        // Climate dropdown + segmented toggle wiring (set up once on DOM ready).
+        document.addEventListener('DOMContentLoaded', () => {
+            const btn = document.getElementById('climateBtn');
+            if (btn) {
+                btn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    document.getElementById('climateMenu').classList.toggle('open');
+                });
+            }
+            document.addEventListener('click', e => {
+                if (!e.target.closest('.climate-menu-wrap')) {
+                    const m = document.getElementById('climateMenu');
+                    if (m) m.classList.remove('open');
+                }
             });
-        }
+            shRefreshClimateLabel();
+            shRenderClimateMenu();
+        });
+        document.addEventListener('click', e => {
+            const segBtn = e.target.closest('.sh-segmented button');
+            if (!segBtn) return;
+            document.querySelectorAll('.sh-segmented button').forEach(b => b.classList.remove('active'));
+            segBtn.classList.add('active');
+            shView = segBtn.dataset.view;
+            updateChart();
+        });
 
         // ── Device Actions ──
 
@@ -10955,5 +11422,29 @@
                 .catch(err => alert('Error: ' + err.message));
         }
     </script>
+
+    <!-- Glanceable per-link popover (signal-health UI) -->
+    <div class="cpop" id="cpop" role="tooltip">
+        <div class="cpop-badge" id="cpopBadge"></div>
+        <div class="cpop-head">
+            <div class="cpop-name" id="cpopName"></div>
+            <div class="cpop-meta" id="cpopMeta"></div>
+        </div>
+        <div class="cpop-gauge">
+            <div class="cpop-gauge-label"><span class="lbl">Signal</span><span class="val" id="cpopSignalVal"></span></div>
+            <div class="cpop-bar">
+                <div class="cpop-bar-fill" id="cpopSignalFill"></div>
+                <div class="cpop-bar-tick" id="cpopSignalTarget"></div>
+            </div>
+        </div>
+        <div class="cpop-gauge">
+            <div class="cpop-gauge-label"><span class="lbl">Rain tolerance</span><span class="val" id="cpopRainVal"></span></div>
+            <div class="cpop-bar">
+                <div class="cpop-bar-fill" id="cpopRainFill"></div>
+                <div class="cpop-bar-tick muted" id="cpopRain999"></div>
+                <div class="cpop-bar-tick" id="cpopRain9999"></div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

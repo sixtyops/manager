@@ -255,6 +255,34 @@ def _migrate(db):
         "CREATE INDEX IF NOT EXISTS idx_device_configs_mac ON device_configs(mac)"
     )
 
+    # Signal-health link budget columns: per-CPE link telemetry the AP already
+    # returns (we just weren't capturing it) + the derived max-rain figure
+    # used to bucket each link's reliability.
+    cpe_columns = [row[1] for row in db.execute("PRAGMA table_info(cpe_cache)").fetchall()]
+    for col, typ in (
+        ("target_rssi_dbm", "REAL"),
+        ("snr_db", "REAL"),
+        ("sector_tx", "INTEGER"),
+        ("sector_rx", "INTEGER"),
+        ("antenna_kit", "TEXT"),
+        ("max_rain_mm_hr", "REAL"),
+    ):
+        if col not in cpe_columns:
+            db.execute(f"ALTER TABLE cpe_cache ADD COLUMN {col} {typ}")
+
+    # Radio params live per-AP (one radio per AP today): channel, channel
+    # width, center frequency, and the AP-side antenna kit string. Needed by
+    # the rain-survival math and the polished signal-health UI.
+    ap_columns = [row[1] for row in db.execute("PRAGMA table_info(access_points)").fetchall()]
+    for col, typ in (
+        ("channel", "INTEGER"),
+        ("bandwidth_mhz", "INTEGER"),
+        ("frequency_mhz", "INTEGER"),
+        ("antenna_kit", "TEXT"),
+    ):
+        if col not in ap_columns:
+            db.execute(f"ALTER TABLE access_points ADD COLUMN {col} {typ}")
+
     # Backfill hardware_id and mac on device_configs rows that are missing them,
     # joining the current devices/cpe_cache tables.
     try:
@@ -547,6 +575,11 @@ def init_db():
                 enabled INTEGER DEFAULT 1,
                 last_firmware_update TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                -- Radio params for the link-budget UI
+                channel INTEGER,
+                bandwidth_mhz INTEGER,
+                frequency_mhz INTEGER,
+                antenna_kit TEXT,
                 FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
             );
 
@@ -604,6 +637,13 @@ def init_db():
                 last_config_poll_at TEXT,
                 last_config_poll_status TEXT,
                 last_config_poll_error TEXT,
+                -- Link-budget telemetry (signal-health UI)
+                target_rssi_dbm REAL,
+                snr_db REAL,
+                sector_tx INTEGER,
+                sector_rx INTEGER,
+                antenna_kit TEXT,
+                max_rain_mm_hr REAL,
                 UNIQUE(ap_ip, ip)
             );
 
@@ -1691,8 +1731,9 @@ def upsert_cpe(ap_ip: str, cpe_data: dict):
             INSERT INTO cpe_cache (ap_ip, ip, mac, system_name, model, firmware_version,
                                    link_distance, rx_power, combined_signal, last_local_rssi,
                                    tx_rate, rx_rate, mcs, link_uptime, signal_health,
-                                   auth_status, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                   auth_status, target_rssi_dbm, snr_db, sector_tx, sector_rx,
+                                   antenna_kit, max_rain_mm_hr, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ap_ip, ip) DO UPDATE SET
                 mac = excluded.mac,
                 system_name = excluded.system_name,
@@ -1708,6 +1749,12 @@ def upsert_cpe(ap_ip: str, cpe_data: dict):
                 link_uptime = excluded.link_uptime,
                 signal_health = excluded.signal_health,
                 auth_status = excluded.auth_status,
+                target_rssi_dbm = excluded.target_rssi_dbm,
+                snr_db = excluded.snr_db,
+                sector_tx = excluded.sector_tx,
+                sector_rx = excluded.sector_rx,
+                antenna_kit = excluded.antenna_kit,
+                max_rain_mm_hr = excluded.max_rain_mm_hr,
                 last_updated = excluded.last_updated
         """, (
             ap_ip, cpe_data.get("ip"), cpe_data.get("mac"), cpe_data.get("system_name"),
@@ -1717,8 +1764,27 @@ def upsert_cpe(ap_ip: str, cpe_data: dict):
             cpe_data.get("tx_rate"), cpe_data.get("rx_rate"),
             cpe_data.get("mcs"), cpe_data.get("link_uptime"),
             cpe_data.get("signal_health"), cpe_data.get("auth_status"),
+            cpe_data.get("target_rssi_dbm"), cpe_data.get("snr_db"),
+            cpe_data.get("sector_tx"), cpe_data.get("sector_rx"),
+            cpe_data.get("antenna_kit"), cpe_data.get("max_rain_mm_hr"),
             datetime.now().isoformat()
         ))
+
+
+def update_ap_radio_params(ip: str, channel: Optional[int], bandwidth_mhz: Optional[int],
+                            frequency_mhz: Optional[int], antenna_kit: Optional[str]) -> None:
+    """Record an AP's live radio parameters (channel/BW/freq/kit).
+
+    Called by the poller on each successful AP status read so the link-budget
+    UI has up-to-date channel + bandwidth for every AP.
+    """
+    with get_db() as db:
+        db.execute(
+            """UPDATE access_points
+                  SET channel = ?, bandwidth_mhz = ?, frequency_mhz = ?, antenna_kit = ?
+                WHERE ip = ?""",
+            (channel, bandwidth_mhz, frequency_mhz, antenna_kit, ip),
+        )
 
 
 def get_cpes_for_ap(ap_ip: str) -> list[dict]:
