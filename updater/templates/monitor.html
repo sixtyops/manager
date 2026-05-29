@@ -1456,9 +1456,6 @@
             cursor: ns-resize;
             background: transparent;
             border-top: 1px solid var(--border);
-            position: sticky;
-            top: 0;
-            z-index: 1;
             touch-action: none;
         }
         .bottom-drawer.open .drawer-resize-handle {
@@ -2572,10 +2569,10 @@
             </div>
             <div class="drawer-chevron" id="drawerChevron">&#9650;</div>
         </div>
+        <div class="drawer-resize-handle" id="drawerResizeHandle"
+             role="separator" aria-orientation="horizontal"
+             aria-label="Resize drawer" title="Drag to resize · double-click to reset"></div>
         <div class="drawer-panel" id="drawerPanel">
-            <div class="drawer-resize-handle" id="drawerResizeHandle"
-                 role="separator" aria-orientation="horizontal"
-                 aria-label="Resize drawer" title="Drag to resize · double-click to reset"></div>
             <!-- Updates drawer content -->
             <div id="drawerContent-updates">
             <div class="drawer-panel-inner" data-min-role-disable-tree="operator">
@@ -7722,9 +7719,9 @@
                     syncDrawerPadding();
                 };
                 const onUp = (ev) => {
-                    handle.removeEventListener('pointermove', onMove);
-                    handle.removeEventListener('pointerup', onUp);
-                    handle.removeEventListener('pointercancel', onUp);
+                    document.removeEventListener('pointermove', onMove);
+                    document.removeEventListener('pointerup', onUp);
+                    document.removeEventListener('pointercancel', onUp);
                     try { handle.releasePointerCapture(ev.pointerId); } catch (err) {}
                     panel.classList.remove('dragging');
                     handle.classList.remove('dragging');
@@ -7734,9 +7731,9 @@
                     }
                     syncDrawerPadding();
                 };
-                handle.addEventListener('pointermove', onMove);
-                handle.addEventListener('pointerup', onUp);
-                handle.addEventListener('pointercancel', onUp);
+                document.addEventListener('pointermove', onMove);
+                document.addEventListener('pointerup', onUp);
+                document.addEventListener('pointercancel', onUp);
             });
 
             handle.addEventListener('dblclick', (e) => {
