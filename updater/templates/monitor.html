@@ -4970,12 +4970,12 @@
                 case 'firmware': return device.firmware_version || '';
                 case 'status': return getDeviceStatusForFilter(device, kind, parentAp);
                 case 'signal':
-                    // Only CPEs carry a signal value. APs/switches roll up
-                    // their worst-CPE health so filtering by "Unstable"
-                    // also hides parents whose links are all green.
+                    // Only CPEs carry a signal value. APs and switches show
+                    // an aggregate dot in their name cell for at-a-glance
+                    // health, but they pass through the Signal filter
+                    // unchanged so a "show only Unstable" filter doesn't
+                    // orphan otherwise-healthy parent rows.
                     if (kind === 'cpe') return device.signal_health || '';
-                    if (kind === 'ap')  return aggregateApHealth(device) || '';
-                    if (kind === 'switch') return ''; // skip — leading dot still aggregates visually
                     return '';
                 default: return '';
             }
@@ -5016,6 +5016,10 @@
             for (const [col, allowedSet] of Object.entries(columnFilters)) {
                 if (!allowedSet || allowedSet.size === 0) continue;
                 const val = getDeviceColumnValue(device, kind, col, parentAp);
+                // A device that has no value for the filtered column passes
+                // through unchanged — this keeps parent rows (APs, switches)
+                // visible when filtering by a CPE-only column like Signal.
+                if (!val) continue;
                 if (!allowedSet.has(val)) return false;
             }
             const query = deviceFilterState.query;
