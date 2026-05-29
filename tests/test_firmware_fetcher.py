@@ -117,7 +117,7 @@ class TestScrapePage:
             "updater.firmware_fetcher.httpx.AsyncClient",
             return_value=self._make_mock_client(TNA_30X_HTML),
         ):
-            releases = asyncio.run(
+            releases, warnings = asyncio.run(
                 fetcher._scrape_page("tna-30x", "https://example/tna-30x")
             )
 
@@ -129,3 +129,82 @@ class TestScrapePage:
         assert channels["beta"].version == "1.15.0"
         assert "1.15.0" in channels["beta"].filename
         assert "1.12.3" in channels["stable"].filename
+        # Healthy parse → no warnings
+        assert warnings == []
+
+    def test_warns_when_summary_promises_release_but_no_link_matches(self, fetcher):
+        """Parse-sanity guard: summary table promised a beta, but the
+        download-link parser found nothing matching that version.
+
+        Simulates a future vendor-side HTML drift the normaliser can't
+        rescue (e.g. version cell renders as "v1.15.0" but the download
+        link's <a> text omits "Version" entirely, or carries a wholly
+        different version number)."""
+        html = """
+        <table>
+          <tr>
+            <td><strong>Latest stable</strong></td>
+            <td>v1.12.3 - notes</td>
+          </tr>
+          <tr>
+            <td><strong>Latest beta</strong></td>
+            <td>v1.15.0 beta-1 - notes</td>
+          </tr>
+        </table>
+        <p>
+          <a href="https://tachyon-networks.com/fw/tna-30x-1.12.3-r55002-20260219-tn-110-prs-squashfs-sysupgrade.bin">
+            Version 1.12.3
+          </a>
+        </p>
+        <p>
+          <!-- imagine vendor changed the beta link's text shape so the
+               download-link regex can no longer match -->
+          <a href="https://tachyon-networks.com/fw/tna-30x-1.15.0-r55142-20260521-tn-110-prs-squashfs-sysupgrade.bin">
+            Download Beta
+          </a>
+        </p>
+        """
+        with patch(
+            "updater.firmware_fetcher.httpx.AsyncClient",
+            return_value=self._make_mock_client(html),
+        ):
+            releases, warnings = asyncio.run(
+                fetcher._scrape_page("tna-30x", "https://example/tna-30x")
+            )
+
+        # Stable is fine
+        assert [r.channel for r in releases] == ["stable"]
+        # Beta dropped silently → must surface a warning
+        assert len(warnings) == 1
+        w = warnings[0]
+        assert "tna-30x" in w
+        assert "beta" in w
+        assert "1.15.0" in w
+
+    def test_no_warning_for_summary_less_page(self, fetcher):
+        """TNS-100-shape pages have no summary table; the 'first link is
+        stable' fallback applies and the guard must stay silent."""
+        html = """
+        <p>
+          <a href="https://tachyon-networks.com/fw/tns-1.12.8-r54729-20251121-tns-100-squashfs-sysupgrade.bin">
+            Version 1.12.8
+          </a>
+        </p>
+        <p>
+          <a href="https://tachyon-networks.com/fw/tns-1.12.7-r54500-20251020-tns-100-squashfs-sysupgrade.bin">
+            Version 1.12.7
+          </a>
+        </p>
+        """
+        with patch(
+            "updater.firmware_fetcher.httpx.AsyncClient",
+            return_value=self._make_mock_client(html),
+        ):
+            releases, warnings = asyncio.run(
+                fetcher._scrape_page("tns-100", "https://example/tns-100")
+            )
+
+        assert len(releases) == 1
+        assert releases[0].channel == "stable"
+        assert releases[0].version == "1.12.8"
+        assert warnings == []
