@@ -1058,6 +1058,47 @@
         .signal-good { color: var(--success); }
         .signal-low { color: var(--warning); }
         .signal-critical { color: var(--danger-bright); }
+        .sh-sig-margin {
+            font-size: var(--text-2xs); margin-left: var(--space-3);
+            font-variant-numeric: tabular-nums; font-weight: 600;
+        }
+        .sh-sig-margin.up { color: var(--success); }
+        .sh-sig-margin.down { color: var(--danger-bright); }
+        .sh-sig-margin.flat { color: var(--text-dim); }
+        .row-cpe { cursor: pointer; }
+        .cpe-sig-cell { cursor: help; }
+        /* Aggregate health dot on AP and switch name cells — picks up the
+         * worst-CPE health beneath the device so the dropped STATUS column
+         * doesn't leave parents un-flagged. */
+        .row-status-dot {
+            display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+            margin-right: 6px; vertical-align: middle; flex: 0 0 auto;
+        }
+        .row-status-dot.green   { background: var(--success); }
+        .row-status-dot.yellow  { background: var(--warning); }
+        .row-status-dot.red     { background: var(--danger-bright); }
+        .row-status-dot.offline { background: var(--text-dim); }
+        /* Firmware "standby bank" — hidden until the cell is hovered, so the
+         * common case (banks identical) doesn't visually duplicate the active
+         * version. Touch devices keep it visible (no hover). */
+        .fw-secondary {
+            color: var(--text-dim); margin-left: 6px;
+            opacity: 0; transition: opacity .12s ease;
+        }
+        .fw-cell:hover .fw-secondary { opacity: 1; }
+        @media (hover: none) { .fw-cell .fw-secondary { opacity: 1; } }
+        /* Per-value count + colored dot inside the column-filter dropdown,
+         * for the Signal column. */
+        .col-filter-dropdown label .opt-dot {
+            width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+        }
+        .col-filter-dropdown label .opt-dot.green   { background: var(--success); }
+        .col-filter-dropdown label .opt-dot.yellow  { background: var(--warning); }
+        .col-filter-dropdown label .opt-dot.red     { background: var(--danger-bright); }
+        .col-filter-dropdown label .opt-count {
+            margin-left: auto; color: var(--text-dim);
+            font-variant-numeric: tabular-nums; font-size: 0.7rem;
+        }
 
         /* Version cell */
         .version-cell {
@@ -4567,8 +4608,34 @@
             dropdown.className = 'col-filter-dropdown';
             dropdown.onclick = e => e.stopPropagation();
 
-            const sorted = Array.from(values).sort();
             const statusLabels = { behind: 'Needs update', current: 'Current', offline: 'Offline', unknown: 'Unknown', updating: 'Updating' };
+            // Order Signal options by severity (green → red), everything else
+            // alphabetically.
+            const sorted = column === 'signal'
+                ? Array.from(values).sort((a, b) => {
+                    const order = { green: 0, yellow: 1, red: 2, offline: 3 };
+                    return (order[a] ?? 99) - (order[b] ?? 99);
+                  })
+                : Array.from(values).sort();
+
+            // Pre-compute per-value counts so each row can show "(N)".
+            const counts = new Map();
+            if (topology?.sites) {
+                for (const site of topology.sites) {
+                    for (const ap of walkSiteAPs(site)) {
+                        const apVal = getDeviceColumnValue(ap, 'ap', column);
+                        if (apVal) counts.set(apVal, (counts.get(apVal) || 0) + 1);
+                        for (const cpe of (ap.cpes || [])) {
+                            const cv = getDeviceColumnValue(cpe, 'cpe', column, ap);
+                            if (cv) counts.set(cv, (counts.get(cv) || 0) + 1);
+                        }
+                    }
+                    for (const sw of (site.switches || [])) {
+                        const sv = getDeviceColumnValue(sw, 'switch', column);
+                        if (sv) counts.set(sv, (counts.get(sv) || 0) + 1);
+                    }
+                }
+            }
 
             for (const val of sorted) {
                 const label = document.createElement('label');
@@ -4576,9 +4643,21 @@
                 cb.type = 'checkbox';
                 cb.checked = activeSet.size === 0 || activeSet.has(val);
                 cb.dataset.value = val;
-                const displayVal = column === 'status' ? (statusLabels[val] || val) : val;
                 label.appendChild(cb);
+                if (column === 'signal') {
+                    const dot = document.createElement('span');
+                    dot.className = `opt-dot ${val}`;
+                    label.appendChild(dot);
+                }
+                let displayVal;
+                if (column === 'status') displayVal = statusLabels[val] || val;
+                else if (column === 'signal') displayVal = HEALTH_LABEL[val] || val;
+                else displayVal = val;
                 label.appendChild(document.createTextNode(displayVal));
+                const ct = document.createElement('span');
+                ct.className = 'opt-count';
+                ct.textContent = counts.get(val) || 0;
+                label.appendChild(ct);
                 dropdown.appendChild(label);
             }
 
@@ -4650,11 +4729,16 @@
             const container = document.getElementById('activeFilterChips');
             if (!container) return;
             const statusLabels = { behind: 'Needs update', current: 'Current', offline: 'Offline', unknown: 'Unknown', updating: 'Updating' };
-            const colNames = { model: 'Model', firmware: 'Version', status: 'Status' };
+            const colNames = { model: 'Model', firmware: 'Version', status: 'Status', signal: 'Signal' };
+            const valueLabelFor = (col, v) => {
+                if (col === 'status') return statusLabels[v] || v;
+                if (col === 'signal') return HEALTH_LABEL[v] || v;
+                return v;
+            };
             const chips = [];
             for (const [col, valSet] of Object.entries(columnFilters)) {
                 if (!valSet || valSet.size === 0) continue;
-                const vals = [...valSet].map(v => col === 'status' ? (statusLabels[v] || v) : v);
+                const vals = [...valSet].map(v => valueLabelFor(col, v));
                 const label = `${colNames[col] || col}: ${vals.join(', ')}`;
                 chips.push(`<span class="filter-chip">${escapeHtml(label)}<a onclick="clearColumnFilter('${col}')" title="Remove filter">&times;</a></span>`);
             }
@@ -4885,9 +4969,46 @@
                 case 'model': return device.model || '';
                 case 'firmware': return device.firmware_version || '';
                 case 'status': return getDeviceStatusForFilter(device, kind, parentAp);
+                case 'signal':
+                    // Only CPEs carry a signal value. APs and switches show
+                    // an aggregate dot in their name cell for at-a-glance
+                    // health, but they pass through the Signal filter
+                    // unchanged so a "show only Unstable" filter doesn't
+                    // orphan otherwise-healthy parent rows.
+                    if (kind === 'cpe') return device.signal_health || '';
+                    return '';
                 default: return '';
             }
         }
+
+        // Worst-of CPE health. Returns 'green' / 'yellow' / 'red' / 'offline'
+        // or '' when the AP has no CPEs (e.g. brand new). Used for the leading
+        // status dot on AP rows and for the Signal column filter.
+        function aggregateApHealth(ap) {
+            if (!ap) return '';
+            if (ap.last_error) return 'offline';
+            const cpes = ap.cpes || [];
+            if (!cpes.length) return '';
+            const healths = cpes.map(c => c.signal_health || 'red');
+            if (healths.includes('red'))    return 'red';
+            if (healths.includes('yellow')) return 'yellow';
+            return 'green';
+        }
+
+        function aggregateSwitchHealth(sw, allAps) {
+            if (!sw) return '';
+            if (sw.last_error) return 'offline';
+            const childAps = (allAps || []).filter(a => a.switch_ip === sw.ip);
+            if (!childAps.length) return '';
+            const rolled = childAps.map(aggregateApHealth).filter(Boolean);
+            if (rolled.includes('offline')) return 'offline';
+            if (rolled.includes('red'))     return 'red';
+            if (rolled.includes('yellow'))  return 'yellow';
+            return 'green';
+        }
+
+        // Map a health bucket to a human label for filter chips + tooltips.
+        const HEALTH_LABEL = { green: 'Reliable', yellow: 'Mostly reliable', red: 'Unstable in rain', offline: 'Offline' };
 
         function matchesDeviceFilters(device, siteName, kind, parentAp) {
             if (!device) return false;
@@ -4895,6 +5016,10 @@
             for (const [col, allowedSet] of Object.entries(columnFilters)) {
                 if (!allowedSet || allowedSet.size === 0) continue;
                 const val = getDeviceColumnValue(device, kind, col, parentAp);
+                // A device that has no value for the filtered column passes
+                // through unchanged — this keeps parent rows (APs, switches)
+                // visible when filtering by a CPE-only column like Signal.
+                if (!val) continue;
                 if (!allowedSet.has(val)) return false;
             }
             const query = deviceFilterState.query;
@@ -4963,12 +5088,15 @@
         function versionCell(device) {
             const b1 = device.bank1_version || '';
             const b2 = device.bank2_version || '';
-            if (!b1 && !b2) return device.firmware_version || '';
-            // Show active bank first, inactive second
+            if (!b1 && !b2) return `<span class="fw-cell">${escapeHtml(device.firmware_version || '')}</span>`;
+            // Show active bank first, inactive (standby) second — standby is
+            // hidden until the cell is hovered to avoid visually duplicating
+            // the active version when the two banks match.
             const activeBank = device.active_bank || 1;
             const [active, inactive] = activeBank === 1 ? [b1, b2] : [b2, b1];
-            if (!inactive) return active;
-            return `<span title="Active">${active}</span> / <span title="Inactive" style="opacity:0.6">${inactive}</span>`;
+            const title = inactive ? `Standby bank: ${inactive}` : 'Active firmware';
+            if (!inactive) return `<span class="fw-cell" title="${title}">${escapeHtml(active)}</span>`;
+            return `<span class="fw-cell" title="${title}">${escapeHtml(active)}<span class="fw-secondary">/ ${escapeHtml(inactive)}</span></span>`;
         }
 
         const loadingDotsHtml = '<span class="loading-dots"><span></span><span></span><span></span></span>';
@@ -5046,12 +5174,17 @@
                 ? `<span class="port-badge" title="Connected to switch port ${escapeHtml(ap.switch_port)}">${escapeHtml(ap.switch_port)}</span>`
                 : '';
 
+            const apHealth = aggregateApHealth(ap);
+            const apHealthDot = apHealth
+                ? `<span class="row-status-dot ${apHealth}" title="${HEALTH_LABEL[apHealth] || apHealth}"></span>`
+                : '';
+
             let out = `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isApSelected ? 'row-selected' : ''} ${isApCanary ? 'row-canary' : ''}" onclick="selectAP('${ap.ip}')">
                 <td>
                     <div class="${nameCellClass}">
                         <input type="checkbox" data-check-ap="${ap.ip}" ${checkedDevices.has(ap.ip) ? 'checked' : ''} onclick="toggleCheckAP('${ap.ip}',event);event.stopPropagation();">
                         <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
-                        <span class="device-icon ap">AP</span>
+                        ${apHealthDot}<span class="device-icon ap">AP</span>
                         <span>
                         <a href="/api/device-portal/${ap.ip}" target="_blank" class="name-link" data-ip="${ap.ip}" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>
                         ${ap.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(ap.notes)}">${escapeHtml(ap.notes)}</div>` : ''}
@@ -5065,7 +5198,6 @@
                 <td>${versionCell(ap)}</td>
                 <td></td>
                 <td></td>
-                <td>${statusCell(ap.ip, isOffline, null)}</td>
                 <td>${updateCell('ap', ap.ip)}</td>
                 <td>${lastUpdatedCell(ap.last_firmware_update)}</td>
                 <td><div class="actions-cell">${actionsCell('ap', ap.ip, apName)}</div></td>
@@ -5089,8 +5221,17 @@
                     ? ''
                     : (signalVal >= -60 ? 'signal-good' : (signalVal >= -65 ? 'signal-low' : 'signal-critical'));
                 const isCpeSelected = selectedNode?.type === 'cpe' && selectedNode?.data?.ip === cpe.ip;
+                // Inline margin badge — ▲/▼ delta vs the AP's target_rssi,
+                // hidden when the AP hasn't reported a target yet.
+                let signalMarginHtml = '';
+                if (!parentOffline && signalVal != null && cpe.target_rssi_dbm != null) {
+                    const dm = Math.round(signalVal - cpe.target_rssi_dbm);
+                    if (dm > 0)      signalMarginHtml = `<span class="sh-sig-margin up">&#9650; ${dm}</span>`;
+                    else if (dm < 0) signalMarginHtml = `<span class="sh-sig-margin down">&#9660; ${-dm}</span>`;
+                    else             signalMarginHtml = `<span class="sh-sig-margin up">&#9644; 0</span>`;
+                }
 
-                out += `<tr class="row-cpe ${parentOffline ? 'row-offline' : ''} ${isCpeSelected ? 'row-selected' : ''}" onclick="selectCPE('${cpe.ip}')">
+                out += `<tr class="row-cpe ${parentOffline ? 'row-offline' : ''} ${isCpeSelected ? 'row-selected' : ''}" onclick="selectCPE('${cpe.ip}')" data-cpe-ip="${cpe.ip}" data-ap-ip="${ap.ip}">
                     <td>
                         <div class="name-cell tree-indent-${cpeIndent}">
                             <input type="checkbox" ${checkedDevices.has(cpe.ip) ? 'checked' : ''} onclick="toggleCheck('${cpe.ip}',event);event.stopPropagation();">
@@ -5102,9 +5243,8 @@
                     <td>${cpe.model || ''}</td>
                     ${activeColumnMode === 'firmware' ? `
                     <td>${versionCell(cpe)}</td>
-                    <td class="${signalClass}">${signalVal != null ? signalVal.toFixed(1) + ' dBm' : ''}</td>
+                    <td class="${signalClass} cpe-sig-cell" data-cpe-ip="${cpe.ip}">${signalVal != null ? signalVal.toFixed(1) + ' dBm' : ''}${signalMarginHtml}</td>
                     <td>${formatDistance(cpe.link_distance)}</td>
-                    <td>${statusCell(cpe.ip, false, health, cpe.auth_status, ap.ip, parentOffline)}</td>
                     <td>${updateCell('cpe', cpe.ip, ap.ip)}</td>
                     <td></td>
                     <td><div class="actions-cell">${actionsCell('cpe', cpe.ip, cpeName)}</div></td>
@@ -5171,9 +5311,8 @@
                     <th data-sort="name" onclick="sortTable('name')"><input type="checkbox" id="checkAllBox" onclick="toggleCheckAll(event);event.stopPropagation();" style="margin-right:6px;vertical-align:middle;"> Name / IP <span class="sort-arrow"></span></th>
                     <th data-sort="model" data-filterable="model" onclick="handleHeaderClick('model',this,event)">Model <span class="sort-arrow"></span></th>
                     <th data-sort="firmware" data-filterable="firmware" onclick="handleHeaderClick('firmware',this,event)">Version <span class="sort-arrow"></span></th>
-                    <th data-sort="signal" onclick="sortTable('signal')">Signal <span class="sort-arrow"></span></th>
+                    <th data-sort="signal" data-filterable="signal" onclick="handleHeaderClick('signal',this,event)">Signal <span class="sort-arrow"></span></th>
                     <th data-sort="distance" onclick="sortTable('distance')">Distance <span class="sort-arrow"></span></th>
-                    <th data-sort="status" data-filterable="status" onclick="handleHeaderClick('status',this,event)">Status <span class="sort-arrow"></span></th>
                     <th data-sort="update" onclick="sortTable('update')">Update <span class="sort-arrow"></span></th>
                     <th data-sort="lastseen" onclick="sortTable('lastseen')">Last Updated <span class="sort-arrow"></span></th>
                     <th>Actions</th>`;
@@ -5264,7 +5403,7 @@
                 if (switches.length > 0) badgeParts.push(`${switches.length} SW`);
 
                 const siteEmptyTds = activeColumnMode === 'firmware'
-                    ? `<td></td><td></td><td></td><td></td><td></td><td>${siteUpdateCell(site.id, aps)}</td><td></td>`
+                    ? `<td></td><td></td><td></td><td></td><td>${siteUpdateCell(site.id, aps)}</td><td></td>`
                     : `<td></td><td></td><td></td>`;
                 const siteActions = activeColumnMode === 'firmware'
                     ? `${actionsCell('site', site.id, site.name)}${site.id !== null && aps.length === 0 && switches.length === 0 ? deleteActionLink('site', site.id) : ''}`
@@ -5323,12 +5462,16 @@
 
                     const isSwCanary = canarySwitches.has(sw.ip);
                     const hasChildren = nestedAps.length > 0;
+                    const swHealth = aggregateSwitchHealth(sw, aps);
+                    const swHealthDot = swHealth
+                        ? `<span class="row-status-dot ${swHealth}" title="${HEALTH_LABEL[swHealth] || swHealth}"></span>`
+                        : '';
                     html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isSwSelected ? 'row-selected' : ''} ${isSwCanary ? 'row-canary' : ''}" onclick="selectSwitch('${sw.ip}')">
                         <td>
                             <div class="name-cell tree-indent-1">
                                 <input type="checkbox" ${checkedDevices.has(sw.ip) ? 'checked' : ''} onclick="toggleCheck('${sw.ip}',event);event.stopPropagation();">
                                 <span class="expand-toggle ${hasChildren ? (swExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${swKey}',event)">&#9654;</span>
-                                <span class="device-icon ap">SW</span>
+                                ${swHealthDot}<span class="device-icon ap">SW</span>
                                 <span>
                                 <a href="/api/device-portal/${sw.ip}" target="_blank" class="name-link" data-ip="${sw.ip}" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>
                                 ${sw.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(sw.notes)}">${escapeHtml(sw.notes)}</div>` : ''}
@@ -5340,7 +5483,6 @@
                         <td>${versionCell(sw)}</td>
                         <td></td>
                         <td></td>
-                        <td>${statusCell(sw.ip, isOffline, null)}</td>
                         <td>${updateCell('switch', sw.ip)}</td>
                         <td>${lastUpdatedCell(sw.last_firmware_update)}</td>
                         <td><div class="actions-cell">${actionsCell('switch', sw.ip, swName)}</div></td>
@@ -5364,7 +5506,7 @@
                 }
             }
 
-            const colCount = activeColumnMode === 'firmware' ? 9 : 5;
+            const colCount = activeColumnMode === 'firmware' ? 8 : 5;
             if (!html) {
                 html = `<tr><td colspan="${colCount}" class="empty-state">No devices found</td></tr>`;
             }
@@ -6053,6 +6195,38 @@
             }
         }
 
+        // Look up a CPE in the cached topology by IP — used by the table-row
+        // hover popover to recover the full record without re-fetching.
+        function shFindCpeByIp(ip) {
+            if (!topology || !ip) return null;
+            for (const site of (topology.sites || [])) {
+                const apList = [...(site.aps || [])];
+                for (const sw of (site.switches || [])) for (const a of (sw.aps || [])) apList.push(a);
+                for (const ap of apList) {
+                    for (const c of (ap.cpes || [])) {
+                        if (c.ip === ip) {
+                            if (c.primary_signal == null) {
+                                c.primary_signal = c.combined_signal ?? c.rx_power ?? c.last_local_rssi;
+                            }
+                            return c;
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+        function shFindOfflineApByIp(ip) {
+            if (!topology || !ip) return null;
+            for (const site of (topology.sites || [])) {
+                const apList = [...(site.aps || [])];
+                for (const sw of (site.switches || [])) for (const a of (sw.aps || [])) apList.push(a);
+                for (const ap of apList) {
+                    if (ap.ip === ip && ap.last_error) return ap;
+                }
+            }
+            return null;
+        }
+
         // Climate dropdown + segmented toggle wiring (set up once on DOM ready).
         document.addEventListener('DOMContentLoaded', () => {
             const btn = document.getElementById('climateBtn');
@@ -6070,6 +6244,28 @@
             });
             shRefreshClimateLabel();
             shRenderClimateMenu();
+
+            // Signal-cell hover popover — re-uses the same .cpop element as
+            // the chart hover. Scoped to the signal cell (not the whole row)
+            // so it doesn't fight the row's click-to-select. Delegated on
+            // document so it survives row re-renders.
+            document.addEventListener('mouseover', e => {
+                const cell = e.target.closest('td.cpe-sig-cell[data-cpe-ip]');
+                if (!cell) return;
+                const cpe = shFindCpeByIp(cell.dataset.cpeIp);
+                if (!cpe) return;
+                if (cpe === _shLastTooltipCpe) return;
+                _shLastTooltipCpe = cpe;
+                shFillCpop(cpe);
+                const rect = cell.getBoundingClientRect();
+                shPositionCpop(rect.right - 8, rect.top + rect.height / 2);
+            });
+            document.addEventListener('mouseout', e => {
+                const cell = e.target.closest('td.cpe-sig-cell');
+                if (!cell) return;
+                if (e.relatedTarget && cell.contains(e.relatedTarget)) return;
+                if (_shLastTooltipCpe) { _shLastTooltipCpe = null; shHideCpop(); }
+            });
         });
         document.addEventListener('click', e => {
             const segBtn = e.target.closest('.sh-segmented button');
