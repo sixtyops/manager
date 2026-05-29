@@ -1663,6 +1663,17 @@ async def poll_switch(ip: str, session: dict = Depends(require_role("admin", "op
 @app.get("/api/topology", tags=["devices"])
 async def get_topology(session: dict = Depends(require_auth)):
     """Get current network topology."""
+    # Warm the IP-location cache in the background. ipwho.is can hang for the
+    # full 10 s curl timeout, and this endpoint is the dashboard's heartbeat —
+    # never await it on the request path. The synchronous cached read inside
+    # `get_topology()` falls back to the default zone until the task lands.
+    try:
+        import asyncio
+        if services._cache_get("ip_location") is None:
+            asyncio.create_task(services.get_default_rain_climate())
+    except Exception:
+        pass
+
     poller = get_poller()
     if poller:
         return poller.get_topology()
@@ -1673,6 +1684,7 @@ async def get_topology(session: dict = Depends(require_auth)):
         "total_cpes": 0,
         "total_switches": 0,
         "overall_health": {"green": 0, "yellow": 0, "red": 0},
+        "climate": services.get_default_rain_climate_cached(),
     }
 
 

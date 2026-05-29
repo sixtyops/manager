@@ -375,11 +375,35 @@ class NetworkPoller:
             # Get connected CPEs
             cpes = await client.get_connected_cpes()
 
+            # Capture this AP's live radio params (channel / BW / freq / kit)
+            # so the link-budget UI has up-to-date inputs for every AP.
+            radio = getattr(client, "last_radio_params", None) or {}
+            channel = radio.get("channel")
+            bw_mhz = radio.get("channel_width_mhz")
+            db.update_ap_radio_params(
+                ip,
+                channel=channel,
+                bandwidth_mhz=bw_mhz,
+                frequency_mhz=radio.get("frequency_mhz"),
+                antenna_kit=radio.get("antenna_kit"),
+            )
+
             # Upsert current CPEs, then prune any that are no longer attached.
             # The previous clear-then-upsert pattern destroyed per-poll outcome
             # columns (last_config_poll_at/status/error) populated by the
             # config poller every cycle.
+            from updater import link_budget
             for cpe in cpes:
+                # Derive how much rain this link can tolerate before signal
+                # drops below the MCS1 floor. Skipped (None) when any input
+                # is missing — frontend falls back to legacy dBm bucketing.
+                rssi_for_budget = cpe.combined_signal or cpe.rx_power
+                cpe.max_rain_mm_hr = link_budget.max_survivable_rain_mm_hr(
+                    rssi_dbm=rssi_for_budget,
+                    distance_m=cpe.link_distance,
+                    channel=channel,
+                    channel_width_mhz=bw_mhz,
+                )
                 cpe_data = {
                     "ip": cpe.ip,
                     "mac": cpe.mac,
@@ -395,6 +419,12 @@ class NetworkPoller:
                     "mcs": cpe.mcs,
                     "link_uptime": cpe.link_uptime,
                     "signal_health": cpe.signal_health.value,
+                    "target_rssi_dbm": cpe.target_rssi_dbm,
+                    "snr_db": cpe.snr_db,
+                    "sector_tx": cpe.sector_tx,
+                    "sector_rx": cpe.sector_rx,
+                    "antenna_kit": cpe.antenna_kit,
+                    "max_rain_mm_hr": cpe.max_rain_mm_hr,
                 }
                 db.upsert_cpe(ip, cpe_data)
             db.prune_stale_cpes(ip, [cpe.ip for cpe in cpes if cpe.ip])
@@ -1539,6 +1569,11 @@ class NetworkPoller:
                 "enabled": bool(ap["enabled"]),
                 "last_firmware_update": ap.get("last_firmware_update"),
                 "notes": ap.get("notes"),
+                # Radio params (link-budget UI)
+                "channel": ap.get("channel"),
+                "bandwidth_mhz": ap.get("bandwidth_mhz"),
+                "frequency_mhz": ap.get("frequency_mhz"),
+                "antenna_kit": ap.get("antenna_kit"),
                 "cpes": [],
                 "cpe_count": 0,
                 "health_summary": {"green": 0, "yellow": 0, "red": 0},
@@ -1568,6 +1603,13 @@ class NetworkPoller:
                     "signal_health": cpe["signal_health"],
                     "auth_status": cpe["auth_status"],
                     "primary_signal": cpe["combined_signal"] or cpe["rx_power"] or cpe["last_local_rssi"],
+                    # Link-budget telemetry (UI tooltip / rain-fade chart)
+                    "target_rssi_dbm": cpe.get("target_rssi_dbm"),
+                    "snr_db": cpe.get("snr_db"),
+                    "sector_tx": cpe.get("sector_tx"),
+                    "sector_rx": cpe.get("sector_rx"),
+                    "antenna_kit": cpe.get("antenna_kit"),
+                    "max_rain_mm_hr": cpe.get("max_rain_mm_hr"),
                 }
                 ap_data["cpes"].append(cpe_data)
 
@@ -1661,12 +1703,22 @@ class NetworkPoller:
                     total_cpes += len(ap_entry.get("cpes", []))
         total_switches = len(switches)
 
+        # Climate (rain zone) the frontend buckets per-CPE survivability
+        # against. Sync read of the location cache — async warm-up runs in
+        # the background, falls back to a moderate default when cold.
+        from . import services
+        try:
+            climate = services.get_default_rain_climate_cached()
+        except Exception:
+            climate = None
+
         return {
             "sites": sites_data,
             "total_aps": total_aps,
             "total_cpes": total_cpes,
             "total_switches": total_switches,
             "overall_health": health,
+            "climate": climate,
             "last_updated": datetime.now().isoformat(),
         }
 

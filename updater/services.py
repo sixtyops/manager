@@ -10,6 +10,8 @@ from datetime import datetime
 from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from . import rain_zones
+
 logger = logging.getLogger(__name__)
 
 # Cache for location/timezone data with TTL and size limit
@@ -117,6 +119,40 @@ async def get_location_from_ip() -> Optional[dict]:
         logger.error(f"Failed to get location from IP: {e}")
 
     return None
+
+
+async def get_default_rain_climate() -> dict:
+    """Return the auto-detected ITU-R P.837 rain climate for this manager.
+
+    Uses the cached IP geolocation to map the operator's country to a
+    representative climate zone. Falls back to a moderate continental default
+    when location is unknown. Result is shaped for direct JSON serialisation
+    to the monitor frontend, which buckets per-CPE rain survivability against
+    these rates client-side.
+    """
+    loc = await get_location_from_ip() or {}
+    return _climate_payload(loc.get("countryCode"))
+
+
+def get_default_rain_climate_cached() -> dict:
+    """Synchronous variant — reads the in-memory IP location cache only.
+
+    Used by `CPEInfo.signal_health` (a sync property) and by the poller's
+    per-CPE bucketing pass. Returns the default zone's rates if the cache
+    hasn't been warmed yet (the async path runs on every monitor page load
+    so the cache is warm in steady state).
+    """
+    loc = _cache_get("ip_location") or {}
+    return _climate_payload(loc.get("countryCode"))
+
+
+def _climate_payload(country_code: Optional[str]) -> dict:
+    zone = rain_zones.zone_for_country(country_code)
+    return {
+        "zone": zone,
+        "country": country_code,
+        "rates_mm_hr": rain_zones.rates_for_zone(zone),
+    }
 
 
 async def get_location_from_postal_code(postal_code: str) -> Optional[dict]:

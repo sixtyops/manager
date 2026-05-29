@@ -61,9 +61,39 @@ class CPEInfo(BaseModel):
     # Connection info
     link_uptime: Optional[int] = Field(None, description="Link uptime in seconds")
 
+    # Link-budget telemetry the AP already reports (used by the dynamic
+    # signal-health UI; all optional so legacy rows + tests keep working).
+    target_rssi_dbm: Optional[float] = Field(None, description="AP's expected RSSI in dBm")
+    snr_db: Optional[float] = Field(None, description="Last-data RX SNR in dB")
+    sector_tx: Optional[int] = Field(None, description="TX beam sector index")
+    sector_rx: Optional[int] = Field(None, description="RX beam sector index")
+    antenna_kit: Optional[str] = Field(None, description="CPE-side antenna kit (e.g. 'AK-150', 'none')")
+
+    # Derived in the poller from rssi + distance + channel + bandwidth; cached
+    # on the row so the frontend tooltip doesn't need to recompute.
+    max_rain_mm_hr: Optional[float] = Field(None, description="Max rain rate this link survives (mm/hr)")
+
     @property
     def signal_health(self) -> SignalHealth:
-        """Get signal health based on combined signal or rx_power."""
+        """Bucket this link's health.
+
+        When `max_rain_mm_hr` is available we use it against the auto-detected
+        climate's rain rates (GREEN survives 99.99 %, YELLOW survives 99.9 %,
+        RED neither). Otherwise we fall back to the legacy bare-dBm classifier
+        for backwards compatibility with pre-migration rows and bare-CPEInfo
+        constructions in tests.
+        """
+        if self.max_rain_mm_hr is not None:
+            # Lazy import to avoid a circular dependency at module load.
+            from . import services
+            rates = (services.get_default_rain_climate_cached() or {}).get("rates_mm_hr") or {}
+            r9999 = rates.get("0.01%")
+            r999 = rates.get("0.1%")
+            if r9999 is not None and self.max_rain_mm_hr >= r9999:
+                return SignalHealth.GREEN
+            if r999 is not None and self.max_rain_mm_hr >= r999:
+                return SignalHealth.YELLOW
+            return SignalHealth.RED
         signal = self.combined_signal or self.rx_power
         return SignalHealth.from_signal(signal)
 
