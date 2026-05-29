@@ -42,6 +42,17 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Firmware auto-fetcher no longer silently drops a Freshdesk release when
+  the vendor's version-summary table renders the version cell with a stray
+  leading character. The tna-30x "Latest beta" cell on Freshdesk has been
+  rendering as `v.1.15.0 beta-1`; the prior regex captured `.1.15.0` from
+  the table cell while the download-link parser captured `1.15.0`, so the
+  literal-equality compare in `_scrape_page` dropped the beta link and the
+  beta firmware was never downloaded or selected even with
+  `firmware_beta_enabled=true`. `RE_VERSION_TABLE` now anchors on the
+  first digit and a new `_normalize_version` helper strips
+  leading/trailing dots and whitespace before comparing. Behaviour
+  otherwise unchanged.
 - Secret-bearing rows in the `settings` table are now Fernet-encrypted
   at rest with the same key (`data/.encryption_key`) used elsewhere
   (#35, #165). Affected keys: `snmp_trap_community`,
