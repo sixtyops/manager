@@ -507,13 +507,6 @@ def init_db():
             if check_conn:
                 check_conn.close()
 
-    # Tighten DB file mode after SQLite has had a chance to create it.
-    if DB_PATH.exists():
-        try:
-            DB_PATH.chmod(0o600)
-        except OSError as e:
-            logger.warning(f"Could not chmod {DB_PATH}: {e}")
-
     with get_db() as db:
         # Pre-schema migration: drop tables with incompatible schemas (pre-release)
         for _tbl, _req in [("audit_log", {"username"}), ("api_tokens", {"user_id"})]:
@@ -1215,6 +1208,15 @@ def init_db():
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
                 (key, value)
             )
+
+    # First-run path: SQLite created the DB file inside the `with get_db()`
+    # block above, and on a fresh install it landed at whatever the process
+    # umask allowed (typically 0644). Tighten it now that the file exists.
+    # The earlier chmod block only fires when DB_PATH was already present.
+    try:
+        DB_PATH.chmod(0o600)
+    except OSError as e:
+        logger.warning(f"Could not chmod {DB_PATH}: {e}")
 
 
 @contextmanager
