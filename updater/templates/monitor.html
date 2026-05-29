@@ -7816,10 +7816,17 @@
             // Trust the device count: nothing behind == "Up to date" even when
             // the scheduler hasn't formally landed in blocked_all_current
             // (e.g. firmware selected but no completed rollout yet). Internal
-            // state codes are unchanged in logs/metrics. Skip override while a
-            // rollout is actively pushing.
-            const inRollout = state === 'running' || state === 'blocked_canary_hold';
-            const effectiveAllCurrent = !inRollout && lastFleetTotal > 0 && lastBehindCount === 0;
+            // state codes are unchanged in logs/metrics.
+            //
+            // Only override the would-be "Scheduled" states. Paused/blocked
+            // states stay visible so operators see why nothing is happening —
+            // crucially, no-firmware-selected reports behind=0 (devices read as
+            // unknown) and must NOT be silently flipped to "Up to date".
+            const OVERRIDE_STATES = { idle: true, waiting: true };
+            const effectiveAllCurrent =
+                OVERRIDE_STATES[state] === true &&
+                lastFleetTotal > 0 &&
+                lastBehindCount === 0;
             if (effectiveAllCurrent) {
                 view.label = 'Up to date';
                 view.cls = 'current';
@@ -9254,7 +9261,16 @@
 
                 lastBehindCount = data.summary?.behind || 0;
                 lastFleetTotal = data.summary?.total || 0;
-                updateBarDeviceCount();
+                // Re-drive the scheduler UI so the "Up to date" badge override
+                // picks up the freshly-loaded counts even when the fleet
+                // response arrives after the scheduler_status WebSocket frame
+                // that originally rendered the badge. Falls back to just the
+                // count text if no scheduler frame has arrived yet.
+                if (lastSchedulerStatus) {
+                    updateSchedulerUI(lastSchedulerStatus);
+                } else {
+                    updateBarDeviceCount();
+                }
             } catch (e) {}
         }
 
