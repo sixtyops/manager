@@ -67,6 +67,45 @@ def test_default_publishes_are_secure(compose_doc):
     )
 
 
+def test_app_container_caps_drop_all_with_entrypoint_minimum(compose_doc):
+    """cap_drop: [ALL] is the desired baseline. The entrypoint still runs
+    briefly as root before gosu-dropping to appuser — it chowns the bind-
+    mounted repo for self-update, manages the docker-socket group, and
+    switches user. Those operations require a small set of capabilities;
+    everything else (NET_RAW, NET_ADMIN, SYS_PTRACE, MKNOD, …) must stay
+    dropped.
+    """
+    svc = compose_doc["services"]["sixtyops-mgmt"]
+    assert svc.get("cap_drop") == ["ALL"], (
+        f"cap_drop must be [ALL]; got {svc.get('cap_drop')!r}"
+    )
+    cap_add = set(svc.get("cap_add") or [])
+    # If any of these go missing, the entrypoint silently fails inside the
+    # 500ms-from-start crash window — see install-smoke run 78532580647.
+    required = {"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"}
+    missing = required - cap_add
+    assert not missing, (
+        f"cap_add is missing entrypoint-required capabilities: {sorted(missing)}"
+    )
+    # Guard against re-adding the dangerous ones the audit asked us to drop.
+    forbidden = {"NET_RAW", "NET_ADMIN", "SYS_ADMIN", "SYS_PTRACE", "MKNOD", "ALL"}
+    over_granted = forbidden & cap_add
+    assert not over_granted, (
+        f"cap_add contains capabilities that should stay dropped: {sorted(over_granted)}"
+    )
+
+
+def test_app_container_no_new_privileges(compose_doc):
+    """no-new-privileges prevents setuid-bit escalation inside the container.
+    gosu (used by the entrypoint) uses syscalls, not the setuid bit, so it
+    is not affected. This must stay on for both services."""
+    for svc_name in ("sixtyops-mgmt", "nginx"):
+        sec_opt = compose_doc["services"][svc_name].get("security_opt") or []
+        assert "no-new-privileges:true" in sec_opt, (
+            f"{svc_name} must set security_opt: no-new-privileges:true; got {sec_opt!r}"
+        )
+
+
 def test_app_container_port_unchanged(compose_doc):
     """The container-side port (right of the final colon) must stay 8000 for
     TCP and 1812/udp — those are baked into the app, healthcheck, and

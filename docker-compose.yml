@@ -49,13 +49,22 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
-    # Drop every Linux capability — the app runs as the unprivileged
-    # appuser (UID 1500) and never needs CAP_NET_RAW (the tachyon client
-    # already has a curl fallback for environments where ping is denied)
-    # or CAP_NET_BIND_SERVICE (only the in-container 8000 + 1812 binds
-    # are above-unprivileged territory by default).
+    # Drop every Linux capability, then add back the minimum the entrypoint
+    # needs while it's still running as root (it chowns the bind-mounted
+    # repo for self-update, manages the docker-socket group, and gosu-drops
+    # to appuser). The app process — what actually serves traffic — runs
+    # as the unprivileged appuser (UID 1500) and has no caps; what's
+    # kept here is strictly for the few seconds of root bootstrap. The
+    # default Docker cap set includes NET_RAW / NET_ADMIN / SYS_PTRACE /
+    # MKNOD / KILL etc., none of which this stack needs.
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN          # chown the bind-mounted repo for self-update
+      - DAC_OVERRIDE   # write /etc/group via groupadd / usermod
+      - FOWNER         # chown crossing owner boundaries
+      - SETUID         # gosu -> appuser
+      - SETGID         # gosu -> appuser, groupadd
     security_opt:
       - no-new-privileges:true
     mem_limit: 512m
