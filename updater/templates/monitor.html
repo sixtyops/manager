@@ -2520,6 +2520,16 @@
             pointer-events: none;
         }
         .cpop-bar-tick.muted { background: var(--text-muted); opacity: .55; }
+        /* Offline-AP variant — hide the link-budget gauges, keep just the
+         * status badge + name + error message. */
+        .cpop.offline .cpop-gauge { display: none; }
+        .cpop-error {
+            margin-top: 6px; padding: 6px 8px;
+            background: var(--danger-bg); color: var(--danger-text);
+            border-radius: 4px; font-size: 10px; word-break: break-word;
+            display: none;
+        }
+        .cpop.offline .cpop-error { display: block; }
     </style>
 </head>
 <body>
@@ -5548,6 +5558,9 @@
             const hRain = shHealthFromRain(maxR);
             const h = hRain || (cpe.signal_health || 'red');
             const pop = document.getElementById('cpop');
+            // 'offline' class is only set in shFillCpopForOfflineAp; clear it
+            // here so swapping from an offline AP to a live CPE drops the
+            // hidden-gauge layout.
             pop.className = 'cpop show h-' + h;
             document.getElementById('cpopBadge').textContent = SH_STATUS_LABEL[h] || 'Unknown';
             document.getElementById('cpopName').textContent = cpe.system_name || cpe.ip;
@@ -5597,6 +5610,15 @@
             pop.style.top  = top  + 'px';
         }
         function shHideCpop() { document.getElementById('cpop').classList.remove('show'); }
+        function shFillCpopForOfflineAp(ap) {
+            const pop = document.getElementById('cpop');
+            pop.className = 'cpop show offline h-red';
+            document.getElementById('cpopBadge').textContent = 'OFFLINE';
+            document.getElementById('cpopName').textContent = ap.system_name || ap.ip;
+            const meta = ap.model ? (ap.model + ' · ' + ap.ip) : ap.ip;
+            document.getElementById('cpopMeta').textContent = meta;
+            document.getElementById('cpopError').textContent = ap.last_error || 'Unreachable';
+        }
         function shExternalTooltip(ctx) {
             const { chart: ch, tooltip } = ctx;
             if (!tooltip || tooltip.opacity === 0 || !tooltip.dataPoints || !tooltip.dataPoints.length) {
@@ -5604,19 +5626,22 @@
                 return;
             }
             const raw = tooltip.dataPoints[0].raw;
-            if (!raw || !raw.cpe) {
+            const key = raw && (raw.cpe || raw.ap);
+            if (!key) {
                 if (_shLastTooltipCpe !== null) { _shLastTooltipCpe = null; shHideCpop(); }
                 return;
             }
-            if (raw.cpe === _shLastTooltipCpe) return;
-            _shLastTooltipCpe = raw.cpe;
-            shFillCpop(raw.cpe);
+            if (key === _shLastTooltipCpe) return;
+            _shLastTooltipCpe = key;
+            if (raw.ap) shFillCpopForOfflineAp(raw.ap);
+            else        shFillCpop(raw.cpe);
             const rect = ch.canvas.getBoundingClientRect();
             shPositionCpop(rect.left + tooltip.caretX, rect.top + tooltip.caretY);
         }
 
         function shCollectCpes() {
             const out = [];
+            const offlineAps = [];
             let titleSuffix = 'All Devices';
             if (selectedNode?.type === 'site')        titleSuffix = selectedNode.data?.name || 'Site';
             else if (selectedNode?.type === 'ap')     titleSuffix = selectedNode.data?.system_name || selectedNode.data?.ip || 'AP';
@@ -5631,6 +5656,7 @@
                     : apList;
                 for (const ap of aps) {
                     if (selectedNode?.type === 'ap' && ap.ip !== selectedNode.data?.ip) continue;
+                    if (ap.last_error) offlineAps.push(ap);
                     for (const cpe of (ap.cpes || [])) {
                         if (selectedNode?.type === 'cpe' && cpe.ip !== selectedNode.data?.ip) continue;
                         if (cpe.primary_signal == null) {
@@ -5640,11 +5666,11 @@
                     }
                 }
             }
-            return { cpes: out, titleSuffix };
+            return { cpes: out, offlineAps, titleSuffix };
         }
 
         function shBuildRainChart() {
-            const { cpes } = shCollectCpes();
+            const { cpes, offlineAps } = shCollectCpes();
             const points = cpes
                 .filter(c => c.max_rain_mm_hr != null && c.link_distance != null)
                 .map(c => ({
@@ -5653,6 +5679,9 @@
                     h: shHealthFromRain(c.max_rain_mm_hr),
                     cpe: c,
                 }));
+            // Offline APs pinned at x=0, y=0 — visually anchored to the
+            // "drops in zero rain" corner, marked with rotated red squares.
+            const offlinePoints = offlineAps.map(ap => ({ x: 0, y: 0, ap }));
             const radius = points.length > 80 ? 4 : points.length > 30 ? 5 : 7;
             const z = shActiveClimate();
             const annotations = {
@@ -5674,12 +5703,20 @@
             };
             return {
                 type: 'scatter',
-                data: { datasets: [{
-                    label: 'CPEs', data: points,
-                    backgroundColor: c => shColorFor(c.raw.h),
-                    borderColor:     c => shBorderFor(c.raw.h),
-                    borderWidth: 1.5, pointRadius: radius, pointHoverRadius: radius + 4, clip: false,
-                }] },
+                data: { datasets: [
+                    {
+                        label: 'CPEs', data: points,
+                        backgroundColor: c => shColorFor(c.raw.h),
+                        borderColor:     c => shBorderFor(c.raw.h),
+                        borderWidth: 1.5, pointRadius: radius, pointHoverRadius: radius + 4, clip: false,
+                    },
+                    {
+                        label: 'Offline APs', data: offlinePoints,
+                        backgroundColor: '#ef4444', borderColor: '#991b1b',
+                        borderWidth: 2, pointRadius: 7, pointHoverRadius: 10,
+                        pointStyle: 'rectRot', clip: false,
+                    },
+                ] },
                 options: {
                     responsive: true, maintainAspectRatio: false,
                     interaction: { mode: 'nearest', intersect: true },
@@ -5709,7 +5746,7 @@
         }
 
         function shBuildDistanceChart() {
-            const { cpes } = shCollectCpes();
+            const { cpes, offlineAps } = shCollectCpes();
             const underperformers = cpes.filter(c =>
                 c.target_rssi_dbm != null && c.primary_signal != null && c.primary_signal < c.target_rssi_dbm
             );
@@ -5720,16 +5757,27 @@
                     h: shHealthFromRain(c.max_rain_mm_hr) || (c.signal_health || 'red'),
                     cpe: c,
                 }));
+            // Offline APs pinned at x=0, y=-70 — same sentinel the legacy
+            // chart used so muscle memory is preserved.
+            const offlinePoints = offlineAps.map(ap => ({ x: 0, y: -70, ap }));
             const radius = live.length > 80 ? 4 : live.length > 30 ? 5 : 7;
             return {
                 type: 'scatter',
                 plugins: [shMarginLinesPlugin],
-                data: { datasets: [{
-                    label: 'Signal', data: live,
-                    backgroundColor: c => shColorFor(c.raw.h),
-                    borderColor:     c => shBorderFor(c.raw.h),
-                    borderWidth: 1.5, pointRadius: radius, pointHoverRadius: radius + 4, clip: false,
-                }] },
+                data: { datasets: [
+                    {
+                        label: 'Signal', data: live,
+                        backgroundColor: c => shColorFor(c.raw.h),
+                        borderColor:     c => shBorderFor(c.raw.h),
+                        borderWidth: 1.5, pointRadius: radius, pointHoverRadius: radius + 4, clip: false,
+                    },
+                    {
+                        label: 'Offline APs', data: offlinePoints,
+                        backgroundColor: '#ef4444', borderColor: '#991b1b',
+                        borderWidth: 2, pointRadius: 7, pointHoverRadius: 10,
+                        pointStyle: 'rectRot', clip: false,
+                    },
+                ] },
                 options: {
                     responsive: true, maintainAspectRatio: false,
                     interaction: { mode: 'nearest', intersect: true },
@@ -5776,18 +5824,21 @@
         function shRenderLegend() {
             const el = document.getElementById('chartLegend');
             if (!el) return;
+            const offlineItem = '<span class="item"><span class="dot" style="background:#ef4444;border:2px solid #991b1b;transform:rotate(45deg);border-radius:0"></span>Offline AP</span>';
             if (shView === 'rain') {
                 el.innerHTML =
                     '<span class="item"><span class="dot" style="background:var(--success)"></span>Reliable</span>'
                   + '<span class="item"><span class="dot" style="background:var(--warning)"></span>Mostly reliable</span>'
-                  + '<span class="item"><span class="dot" style="background:var(--danger-bright)"></span>Unstable</span>';
+                  + '<span class="item"><span class="dot" style="background:var(--danger-bright)"></span>Unstable</span>'
+                  + offlineItem;
             } else {
                 el.innerHTML =
                     '<span class="item"><span class="dot" style="background:var(--success)"></span>Reliable</span>'
                   + '<span class="item"><span class="dot" style="background:var(--warning)"></span>Mostly reliable</span>'
                   + '<span class="item"><span class="dot" style="background:var(--danger-bright)"></span>Unstable</span>'
                   + '<span class="item"><span class="dot" style="background:#9ca3af;width:6px;height:6px"></span>Underperforming \u00b7 target shown</span>'
-                  + '<span class="item"><span class="dash"></span>MCS1 floor</span>';
+                  + '<span class="item"><span class="dash"></span>MCS1 floor</span>'
+                  + offlineItem;
             }
         }
         function shRenderSummary() {
@@ -11445,6 +11496,7 @@
                 <div class="cpop-bar-tick" id="cpopRain9999"></div>
             </div>
         </div>
+        <div class="cpop-error" id="cpopError"></div>
     </div>
 </body>
 </html>
