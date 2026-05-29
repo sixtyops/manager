@@ -11,8 +11,13 @@ services:
     # `docker compose up`. Defaults match the historical 0.0.0.0:8000 /
     # 0.0.0.0:1812 publishes.
     ports:
-      - "${BIND_IP:-0.0.0.0}:${HOST_PORT:-8000}:8000"
-      - "${BIND_IP:-0.0.0.0}:${RADIUS_HOST_PORT:-1812}:1812/udp"
+      # Default app port to loopback only — nginx (this stack, on the
+      # docker bridge) is the one that needs to reach 8000. Operators
+      # who terminate TLS elsewhere can set BIND_IP=0.0.0.0 (or a
+      # specific NIC). RADIUS still defaults to 0.0.0.0 because APs
+      # live on the LAN and have to hit it directly.
+      - "${BIND_IP:-127.0.0.1}:${HOST_PORT:-8000}:8000"
+      - "${RADIUS_BIND_IP:-0.0.0.0}:${RADIUS_HOST_PORT:-1812}:1812/udp"
     volumes:
       # Persist firmware files
       - ./firmware:/app/firmware
@@ -44,6 +49,24 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+    # Drop every Linux capability, then add back the minimum the entrypoint
+    # needs while it's still running as root (it chowns the bind-mounted
+    # repo for self-update, manages the docker-socket group, and gosu-drops
+    # to appuser). The app process — what actually serves traffic — runs
+    # as the unprivileged appuser (UID 1500) and has no caps; what's
+    # kept here is strictly for the few seconds of root bootstrap. The
+    # default Docker cap set includes NET_RAW / NET_ADMIN / SYS_PTRACE /
+    # MKNOD / KILL etc., none of which this stack needs.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN          # chown the bind-mounted repo for self-update
+      - DAC_OVERRIDE   # write /etc/group via groupadd / usermod
+      - FOWNER         # chown crossing owner boundaries
+      - SETUID         # gosu -> appuser
+      - SETGID         # gosu -> appuser, groupadd
+    security_opt:
+      - no-new-privileges:true
     mem_limit: 512m
     cpus: "1.0"
     restart: unless-stopped
@@ -66,6 +89,8 @@ services:
       sixtyops-mgmt:
         condition: service_healthy
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "nginx", "-t"]
       interval: 30s

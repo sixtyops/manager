@@ -25,4 +25,7 @@ echo "URL:   http://localhost:8000"
 echo "Tip:   use --fresh to re-seed the database"
 echo "========================"
 
-uvicorn updater.app:app --reload --port 8000
+# Bind loopback only — dev mode uses ADMIN_PASSWORD=admin, so we must
+# never serve it on a LAN-reachable interface even if uvicorn's default
+# changes in a future release. Use dev-docker.sh for LAN/hardware testing.
+uvicorn updater.app:app --reload --host 127.0.0.1 --port 8000

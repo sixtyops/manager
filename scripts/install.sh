@@ -83,11 +83,19 @@ chown 1500:1500 data firmware backups nginx/conf.d
 chmod 700 data
 chmod 755 firmware backups nginx/conf.d
 
+# Strip the token from the persisted remote URL. sixtyops/manager is public,
+# so the self-update path (anonymous `git fetch`) works without it; the
+# GitHub-API rate-limit benefit travels via the SIXTYOPS_GH_TOKEN env var,
+# read directly by release_checker.py — not by git. Keeping the token out of
+# .git/config means a host-side leak of /opt/sixtyops doesn't hand over a
+# usable PAT.
+CLEAN_REPO_URL="${SIXTYOPS_REPO_URL:-https://github.com/sixtyops/manager.git}"
+git -c safe.directory="$INSTALL_DIR" remote set-url origin "$CLEAN_REPO_URL"
+
 # Make repo writable by appuser for self-update (git pull from inside container)
 chown -R 1500:1500 .git
 chmod -R u+w .git
-# .git/config holds the tokenized remote URL; restrict to owner-only.
-# Must come after chmod -R u+w .git so it isn't clobbered.
+# Defense-in-depth even though the token has been stripped above.
 chmod 600 .git/config
 
 # Build and start

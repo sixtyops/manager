@@ -157,7 +157,6 @@ def get_auth_config_summary() -> dict:
             "detected_ip": _detect_host_ip(),
             "auth_port": radius_cfg.auth_port,
             "secret_set": bool(radius_cfg.shared_secret),
-            "shared_secret": radius_cfg.shared_secret,
             "configured": bool(radius_cfg.shared_secret),
             "auth_mode": radius_cfg.auth_mode,
             "client_mode": radius_cfg.client_mode,

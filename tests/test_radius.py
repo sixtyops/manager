@@ -260,7 +260,10 @@ class TestRadiusServerAPI:
         assert "auth_port" in data
         assert "has_secret" in data
         assert "auth_mode" in data
-        assert "shared_secret" in data
+        # Plaintext secrets must never be returned by this endpoint —
+        # any authenticated viewer hits it. Use has_secret/secret_set
+        # for "is one configured" checks.
+        assert "shared_secret" not in data
         assert "ldap_bind_password" not in data
 
     def test_put_config_updates_settings(self, authed_client, pro_license):

@@ -272,8 +272,17 @@ def create_session(username: str, ip_address: str) -> str:
 # ---------------------------------------------------------------------------
 
 def is_request_secure(request: Request) -> bool:
-    """Return True if the request arrived over HTTPS (directly or via proxy)."""
-    if request.headers.get("x-forwarded-proto") == "https":
+    """Return True if the request arrived over HTTPS (directly or via proxy).
+
+    X-Forwarded-Proto is trusted only when the immediate peer is a trusted
+    proxy — otherwise an attacker on a plain-HTTP path could forge the
+    header, cause us to issue Secure-flagged cookies, and break sessions
+    the next time the browser falls back to HTTP. The trusted-proxy gate
+    lives in updater.app to keep the env-var parsing in one place.
+    """
+    from .app import _is_trusted_proxy  # avoid import cycle at module load
+    peer = request.client.host if request.client else ""
+    if _is_trusted_proxy(peer) and request.headers.get("x-forwarded-proto") == "https":
         return True
     return request.url.scheme == "https"
 

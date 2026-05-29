@@ -221,6 +221,7 @@ The app listens on `localhost:8000`. Configure your proxy to forward to it with 
 | Upstream | `http://localhost:8000` | App listens on port 8000 |
 | WebSocket upgrade | `/ws` path, long timeout | Real-time status updates |
 | Max body size | 500 MB | Firmware file uploads |
+| Host header | `$http_host` (not `$host`) | Preserves the client's host **and port** so the CSRF Origin check matches on custom-port publishes (e.g. `8443:443`) |
 | Forwarded headers | `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto` | IP-based rate limiting, HTTPS detection |
 
 If you want devices to authenticate against the built-in Radius service through the same host, allow UDP `1812` only from trusted device networks or explicit source-IP allowlists. For most public deployments, NAT or port-forward only `80/443` from the internet and keep RADIUS reachable through private connectivity or filtered network rules instead of broad public exposure.
@@ -252,7 +253,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
+        proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -262,7 +263,7 @@ server {
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;

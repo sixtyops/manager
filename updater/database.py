@@ -40,7 +40,22 @@ SECRET_SETTINGS_KEYS = frozenset({
     "radius_server_secret",
     "radius_server_ldap_bind_password",
     "webhook_secret",
+    "oidc_client_secret",
 })
+
+# Prefix-match secret settings — used for dynamically-keyed rows that can't
+# fit in SECRET_SETTINGS_KEYS (e.g. `oidc_id_token_{session_id}` holds the
+# raw ID token, whose claims include email and group membership).
+SECRET_SETTINGS_PREFIXES = (
+    "oidc_id_token_",
+)
+
+
+def _is_secret_setting(key: str) -> bool:
+    """True if `key` should be Fernet-wrapped at rest."""
+    if key in SECRET_SETTINGS_KEYS:
+        return True
+    return any(key.startswith(p) for p in SECRET_SETTINGS_PREFIXES)
 
 
 def _migrate(db):
@@ -463,27 +478,24 @@ def _migrate_encrypt_config_templates(db):
 
 def _migrate_encrypt_settings(db):
     """One-time migration: encrypt any plaintext value in `settings` whose
-    key is in `SECRET_SETTINGS_KEYS`. Same Fernet key as #35, #165;
-    idempotent via `is_encrypted()`. Empty strings are left alone — they
-    encode "not configured" and don't need wrapping.
+    key is a secret-bearing key (exact match in SECRET_SETTINGS_KEYS or
+    prefix match in SECRET_SETTINGS_PREFIXES). Same Fernet key as #35,
+    #165; idempotent via `is_encrypted()`. Empty strings are left alone —
+    they encode "not configured" and don't need wrapping.
     """
-    if not SECRET_SETTINGS_KEYS:
-        return
-    placeholders = ",".join("?" for _ in SECRET_SETTINGS_KEYS)
     try:
-        rows = db.execute(
-            f"SELECT key, value FROM settings WHERE key IN ({placeholders})",
-            tuple(SECRET_SETTINGS_KEYS),
-        ).fetchall()
+        rows = db.execute("SELECT key, value FROM settings").fetchall()
     except Exception:
         return
     migrated = 0
     for row in rows:
-        val = row[1]
+        key, val = row[0], row[1]
+        if not _is_secret_setting(key):
+            continue
         if val and not is_encrypted(val):
             db.execute(
                 "UPDATE settings SET value = ? WHERE key = ?",
-                (encrypt_password(val), row[0]),
+                (encrypt_password(val), key),
             )
             migrated += 1
     if migrated:
@@ -493,9 +505,21 @@ def _migrate_encrypt_settings(db):
 def init_db():
     """Initialize the database schema."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # The DB and its parent hold Fernet-encrypted device passwords, RADIUS
+    # shared secrets, OIDC id_tokens, and bcrypt hashes — and the encryption
+    # key lives alongside in the same directory. Lock both down so a non-root
+    # shell account on the host can't slurp the file.
+    try:
+        DB_PATH.parent.chmod(0o700)
+    except OSError as e:
+        logger.warning(f"Could not chmod data dir: {e}")
 
     # Integrity check and vacuum on existing databases
     if DB_PATH.exists():
+        try:
+            DB_PATH.chmod(0o600)
+        except OSError as e:
+            logger.warning(f"Could not chmod {DB_PATH}: {e}")
         check_conn = None
         try:
             check_conn = sqlite3.connect(str(DB_PATH), timeout=10)
@@ -1225,6 +1249,15 @@ def init_db():
                 (key, value)
             )
 
+    # First-run path: SQLite created the DB file inside the `with get_db()`
+    # block above, and on a fresh install it landed at whatever the process
+    # umask allowed (typically 0644). Tighten it now that the file exists.
+    # The earlier chmod block only fires when DB_PATH was already present.
+    try:
+        DB_PATH.chmod(0o600)
+    except OSError as e:
+        logger.warning(f"Could not chmod {DB_PATH}: {e}")
+
 
 @contextmanager
 def get_db():
@@ -1915,20 +1948,20 @@ def _invalidate_settings_cache():
 
 
 def _maybe_decrypt_setting(key: str, value):
-    """Return cleartext for `SECRET_SETTINGS_KEYS`, passing other values
-    through untouched. Tolerates legacy plaintext rows so reads never fail
-    mid-migration (the migration converts them on the next `init_db()`)."""
+    """Return cleartext for secret settings, passing other values through
+    untouched. Tolerates legacy plaintext rows so reads never fail mid-
+    migration (the migration converts them on the next `init_db()`)."""
     if not value:
         return value
-    if key in SECRET_SETTINGS_KEYS and is_encrypted(value):
+    if _is_secret_setting(key) and is_encrypted(value):
         return decrypt_password(value)
     return value
 
 
 def _maybe_encrypt_setting(key: str, value):
-    """Return ciphertext for `SECRET_SETTINGS_KEYS` (non-empty values);
-    pass other values through. Idempotent on already-wrapped values."""
-    if not value or key not in SECRET_SETTINGS_KEYS:
+    """Return ciphertext for secret settings (non-empty values); pass
+    other values through. Idempotent on already-wrapped values."""
+    if not value or not _is_secret_setting(key):
         return value
     if is_encrypted(value):
         return value

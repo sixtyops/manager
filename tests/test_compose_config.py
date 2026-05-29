@@ -29,10 +29,11 @@ def test_compose_yaml_parses(compose_doc):
 
 def test_publish_ports_use_env_substitution(compose_doc):
     """Each `ports:` entry must use ${VAR:-default} syntax so deployments
-    can override BIND_IP / HOST_PORT / RADIUS_HOST_PORT without editing the
-    file in place. Specifically guard the BIND_IP knob — that one is
-    load-bearing for multi-tenant hosts (a refactor to ${PORT:-8000}:8000
-    that drops the bind-IP would still pass a generic ${ check)."""
+    can override the host bind IP / port without editing the file in
+    place. Specifically guard the bind-IP knob (BIND_IP for the app port,
+    RADIUS_BIND_IP for RADIUS) — that one is load-bearing for multi-tenant
+    hosts (a refactor to ${PORT:-8000}:8000 that drops the bind-IP would
+    still pass a generic ${ check)."""
     ports = compose_doc["services"]["sixtyops-mgmt"]["ports"]
     assert ports, "sixtyops-mgmt must declare published ports"
     for entry in ports:
@@ -41,27 +42,68 @@ def test_publish_ports_use_env_substitution(compose_doc):
         )
         assert "${" in entry, (
             f"Port entry {entry!r} hardcodes its host bind. Use "
-            "${BIND_IP:-0.0.0.0}:${HOST_PORT:-...}:<container_port> instead."
+            "${BIND_IP:-...}:${HOST_PORT:-...}:<container_port> instead."
         )
-        assert "${BIND_IP" in entry, (
-            f"Port entry {entry!r} dropped the BIND_IP knob — operators on "
+        assert "${BIND_IP" in entry or "${RADIUS_BIND_IP" in entry, (
+            f"Port entry {entry!r} dropped the bind-IP knob — operators on "
             "multi-tenant hosts need this to bind a specific IP."
         )
 
 
-def test_default_publishes_match_historical_behavior(compose_doc):
-    """With no env vars set, publishes must still bind 0.0.0.0:8000 (TCP)
-    and 0.0.0.0:1812/udp — the same shape as before this change, so existing
-    operators with no custom env see no behavior change."""
+def test_default_publishes_are_secure(compose_doc):
+    """With no env vars set, the app port (8000/tcp) must bind to loopback
+    only — nginx (same compose stack, docker bridge) is the one that needs
+    to reach it. RADIUS (1812/udp) still defaults to 0.0.0.0 because APs
+    live on the LAN and have to hit it directly. Operators who terminate
+    TLS elsewhere can set BIND_IP=0.0.0.0 (or a specific NIC)."""
     ports = compose_doc["services"]["sixtyops-mgmt"]["ports"]
     rendered = [_render_defaults(p) for p in ports]
 
-    assert "0.0.0.0:8000:8000" in rendered, (
-        f"Default TCP publish must be 0.0.0.0:8000:8000; rendered={rendered}"
+    assert "127.0.0.1:8000:8000" in rendered, (
+        f"Default TCP publish must be 127.0.0.1:8000:8000 (loopback); rendered={rendered}"
     )
     assert any(p.startswith("0.0.0.0:1812:1812") and p.endswith("/udp") for p in rendered), (
         f"Default UDP publish must be 0.0.0.0:1812:1812/udp; rendered={rendered}"
     )
+
+
+def test_app_container_caps_drop_all_with_entrypoint_minimum(compose_doc):
+    """cap_drop: [ALL] is the desired baseline. The entrypoint still runs
+    briefly as root before gosu-dropping to appuser — it chowns the bind-
+    mounted repo for self-update, manages the docker-socket group, and
+    switches user. Those operations require a small set of capabilities;
+    everything else (NET_RAW, NET_ADMIN, SYS_PTRACE, MKNOD, …) must stay
+    dropped.
+    """
+    svc = compose_doc["services"]["sixtyops-mgmt"]
+    assert svc.get("cap_drop") == ["ALL"], (
+        f"cap_drop must be [ALL]; got {svc.get('cap_drop')!r}"
+    )
+    cap_add = set(svc.get("cap_add") or [])
+    # If any of these go missing, the entrypoint silently fails inside the
+    # 500ms-from-start crash window — see install-smoke run 78532580647.
+    required = {"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"}
+    missing = required - cap_add
+    assert not missing, (
+        f"cap_add is missing entrypoint-required capabilities: {sorted(missing)}"
+    )
+    # Guard against re-adding the dangerous ones the audit asked us to drop.
+    forbidden = {"NET_RAW", "NET_ADMIN", "SYS_ADMIN", "SYS_PTRACE", "MKNOD", "ALL"}
+    over_granted = forbidden & cap_add
+    assert not over_granted, (
+        f"cap_add contains capabilities that should stay dropped: {sorted(over_granted)}"
+    )
+
+
+def test_app_container_no_new_privileges(compose_doc):
+    """no-new-privileges prevents setuid-bit escalation inside the container.
+    gosu (used by the entrypoint) uses syscalls, not the setuid bit, so it
+    is not affected. This must stay on for both services."""
+    for svc_name in ("sixtyops-mgmt", "nginx"):
+        sec_opt = compose_doc["services"][svc_name].get("security_opt") or []
+        assert "no-new-privileges:true" in sec_opt, (
+            f"{svc_name} must set security_opt: no-new-privileges:true; got {sec_opt!r}"
+        )
 
 
 def test_app_container_port_unchanged(compose_doc):

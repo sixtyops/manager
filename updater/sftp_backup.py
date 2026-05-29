@@ -206,9 +206,20 @@ async def restore_backup(archive_name: str) -> Tuple[bool, str]:
                     remote_file = f"{remote_path}/{archive_name}"
                     await sftp.get(remote_file, str(local_archive))
 
-            # Extract sixtyops.db from the archive
+            # Extract sixtyops.db from the archive. The remote SFTP server is
+            # in principle untrusted (it could be MITM'd or compromised), so
+            # guard against tar traversal / symlink overwrite: validate the
+            # member is a regular file at the expected path, and pass
+            # filter="data" so tarfile rejects unsafe attributes (absolute
+            # paths, ".." segments, device files, etc.) on extract.
             with tarfile.open(local_archive, "r:gz") as tar:
-                tar.extract("sixtyops.db", path=STAGING_DIR)
+                try:
+                    member = tar.getmember("sixtyops.db")
+                except KeyError:
+                    return False, "sixtyops.db not found in backup archive"
+                if not member.isfile() or member.name != "sixtyops.db":
+                    return False, "Unsafe archive: unexpected sixtyops.db member type"
+                tar.extract(member, path=STAGING_DIR, filter="data")
 
             extracted_db = STAGING_DIR / "sixtyops.db"
             if not extracted_db.exists():
@@ -258,13 +269,18 @@ async def _run_backup_locked() -> Tuple[bool, str]:
     logger.info(f"Starting backup: {archive_name}")
 
     try:
-        # Build archive in memory
+        # Build archive in memory. We intentionally do NOT include the
+        # per-device config snapshots (_add_device_configs) here: those
+        # contain RADIUS PSKs, WPA passphrases, SNMP write-communities, and
+        # 802.1X credentials in cleartext, and the remote SFTP server is a
+        # weaker trust boundary than the local Fernet-protected DB. The
+        # operator-driven CSV backup (build_csv_export) still ships configs,
+        # but wrapped under a PBKDF2-derived passphrase.
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
             _add_database(tar)
             _add_settings(tar)
             _add_device_inventory(tar, timestamp)
-            _add_device_configs(tar)
 
         archive_bytes = buf.getvalue()
 
