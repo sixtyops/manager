@@ -29,10 +29,11 @@ def test_compose_yaml_parses(compose_doc):
 
 def test_publish_ports_use_env_substitution(compose_doc):
     """Each `ports:` entry must use ${VAR:-default} syntax so deployments
-    can override BIND_IP / HOST_PORT / RADIUS_HOST_PORT without editing the
-    file in place. Specifically guard the BIND_IP knob — that one is
-    load-bearing for multi-tenant hosts (a refactor to ${PORT:-8000}:8000
-    that drops the bind-IP would still pass a generic ${ check)."""
+    can override the host bind IP / port without editing the file in
+    place. Specifically guard the bind-IP knob (BIND_IP for the app port,
+    RADIUS_BIND_IP for RADIUS) — that one is load-bearing for multi-tenant
+    hosts (a refactor to ${PORT:-8000}:8000 that drops the bind-IP would
+    still pass a generic ${ check)."""
     ports = compose_doc["services"]["sixtyops-mgmt"]["ports"]
     assert ports, "sixtyops-mgmt must declare published ports"
     for entry in ports:
@@ -41,23 +42,25 @@ def test_publish_ports_use_env_substitution(compose_doc):
         )
         assert "${" in entry, (
             f"Port entry {entry!r} hardcodes its host bind. Use "
-            "${BIND_IP:-0.0.0.0}:${HOST_PORT:-...}:<container_port> instead."
+            "${BIND_IP:-...}:${HOST_PORT:-...}:<container_port> instead."
         )
-        assert "${BIND_IP" in entry, (
-            f"Port entry {entry!r} dropped the BIND_IP knob — operators on "
+        assert "${BIND_IP" in entry or "${RADIUS_BIND_IP" in entry, (
+            f"Port entry {entry!r} dropped the bind-IP knob — operators on "
             "multi-tenant hosts need this to bind a specific IP."
         )
 
 
-def test_default_publishes_match_historical_behavior(compose_doc):
-    """With no env vars set, publishes must still bind 0.0.0.0:8000 (TCP)
-    and 0.0.0.0:1812/udp — the same shape as before this change, so existing
-    operators with no custom env see no behavior change."""
+def test_default_publishes_are_secure(compose_doc):
+    """With no env vars set, the app port (8000/tcp) must bind to loopback
+    only — nginx (same compose stack, docker bridge) is the one that needs
+    to reach it. RADIUS (1812/udp) still defaults to 0.0.0.0 because APs
+    live on the LAN and have to hit it directly. Operators who terminate
+    TLS elsewhere can set BIND_IP=0.0.0.0 (or a specific NIC)."""
     ports = compose_doc["services"]["sixtyops-mgmt"]["ports"]
     rendered = [_render_defaults(p) for p in ports]
 
-    assert "0.0.0.0:8000:8000" in rendered, (
-        f"Default TCP publish must be 0.0.0.0:8000:8000; rendered={rendered}"
+    assert "127.0.0.1:8000:8000" in rendered, (
+        f"Default TCP publish must be 127.0.0.1:8000:8000 (loopback); rendered={rendered}"
     )
     assert any(p.startswith("0.0.0.0:1812:1812") and p.endswith("/udp") for p in rendered), (
         f"Default UDP publish must be 0.0.0.0:1812:1812/udp; rendered={rendered}"

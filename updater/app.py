@@ -631,6 +631,7 @@ def render_template(
 # Security headers middleware
 # ---------------------------------------------------------------------------
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as _StarletteResponse
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -651,6 +652,80 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class CSRFMiddleware(BaseHTTPMiddleware):
+    """Block cross-site state-changing requests on cookie-authenticated routes.
+
+    Threat model: SameSite=Lax cookies are still sent on top-level form-POST
+    navigations from another origin, so an attacker page can hidden-form
+    POST to /api/aps, /api/users, etc. and ride the victim's session. We
+    block this by checking that the Origin header (or Referer fallback)
+    matches the request's own host.
+
+    Skipped:
+    - Safe methods (GET/HEAD/OPTIONS/TRACE).
+    - Bearer-token auth: no cookie credential, can't be forged from HTML.
+    - Requests without a session cookie: nothing to forge.
+    """
+
+    SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+
+    async def dispatch(self, request, call_next):
+        if request.method in self.SAFE_METHODS:
+            return await call_next(request)
+
+        if request.headers.get("authorization", "").lower().startswith("bearer "):
+            return await call_next(request)
+
+        if not request.cookies.get(SESSION_COOKIE_NAME):
+            return await call_next(request)
+
+        # Reconstruct the expected origin from what the server actually saw,
+        # honoring X-Forwarded-Proto only from trusted proxies (same gate as
+        # _client_ip — see SIXTYOPS_TRUSTED_PROXIES).
+        peer = request.client.host if request.client else ""
+        if _is_trusted_proxy(peer):
+            scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+        else:
+            scheme = request.url.scheme
+        host = request.headers.get("host", "")
+        expected_origin = f"{scheme}://{host}"
+
+        origin = request.headers.get("origin", "")
+        if origin:
+            if origin == expected_origin:
+                return await call_next(request)
+            return _StarletteResponse(
+                content='{"detail":"CSRF: origin mismatch"}',
+                status_code=403,
+                media_type="application/json",
+            )
+
+        referer = request.headers.get("referer", "")
+        if referer:
+            from urllib.parse import urlparse
+            try:
+                ref = urlparse(referer)
+                if f"{ref.scheme}://{ref.netloc}" == expected_origin:
+                    return await call_next(request)
+            except ValueError:
+                pass
+            return _StarletteResponse(
+                content='{"detail":"CSRF: referer mismatch"}',
+                status_code=403,
+                media_type="application/json",
+            )
+
+        return _StarletteResponse(
+            content='{"detail":"CSRF: missing origin/referer on cookie-authenticated request"}',
+            status_code=403,
+            media_type="application/json",
+        )
+
+
+# Order: Starlette inserts each new middleware at position 0, so the
+# last-added one is the outer-most. Keeping SecurityHeaders outer-most
+# means its headers are applied even on CSRF-rejected 403 responses.
+app.add_middleware(CSRFMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # Mount static files
@@ -701,7 +776,9 @@ async def healthz():
         db.get_setting("setup_completed")
         return {"status": "ok", "db": "ok"}
     except Exception as e:
-        return JSONResponse(status_code=503, content={"status": "degraded", "db": str(e)})
+        # Log the underlying error server-side; don't echo to unauthenticated callers.
+        logger.warning(f"healthz: db check failed: {e}")
+        return JSONResponse(status_code=503, content={"status": "degraded", "db": "unavailable"})
 
 
 # ============================================================================
@@ -726,12 +803,57 @@ LOGIN_RATE_LIMIT = 20
 OIDC_RATE_LIMIT = 60
 
 
+def _parse_trusted_proxies() -> list:
+    """Parse SIXTYOPS_TRUSTED_PROXIES env var (comma-separated CIDRs).
+
+    Falls back to the docker-bridge ranges plus loopback so the standard
+    "nginx in front of the app on the same compose stack" topology works
+    out of the box without configuration.
+    """
+    raw = os.environ.get("SIXTYOPS_TRUSTED_PROXIES", "").strip()
+    if raw:
+        nets = []
+        for chunk in raw.split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            try:
+                nets.append(ipaddress.ip_network(chunk, strict=False))
+            except ValueError:
+                logger.warning(f"Ignoring invalid CIDR in SIXTYOPS_TRUSTED_PROXIES: {chunk}")
+        return nets
+    return [
+        ipaddress.ip_network("127.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("::1/128"),
+    ]
+
+
+_TRUSTED_PROXIES = _parse_trusted_proxies()
+
+
+def _is_trusted_proxy(ip_str: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except (ValueError, TypeError):
+        return False
+    return any(ip in net for net in _TRUSTED_PROXIES)
+
+
 def _client_ip(request: Request) -> str:
-    """Best-effort client IP for proxied deployments."""
+    """Best-effort client IP for proxied deployments.
+
+    X-Forwarded-For is honoured only when the immediate peer is in the
+    trusted-proxy list (configured via SIXTYOPS_TRUSTED_PROXIES, defaults
+    to docker-bridge + loopback). Without this gate, anyone hitting the
+    app directly could spoof X-Forwarded-For to bypass per-IP login rate
+    limits or audit-log under someone else's address.
+    """
+    peer = request.client.host if request.client else ""
     forwarded_for = request.headers.get("x-forwarded-for", "").strip()
-    if forwarded_for:
+    if forwarded_for and _is_trusted_proxy(peer):
         return forwarded_for.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    return peer or "unknown"
 
 
 def _check_rate_limit(bucket: str, limit: int, window_seconds: int) -> bool:
@@ -1219,11 +1341,20 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 def _validate_ip(ip: str):
-    """Validate that a string is a valid IP address, raising HTTPException if not."""
+    """Validate that a string is a valid IP address, raising HTTPException if not.
+
+    Also rejects cloud-metadata endpoints (169.254.169.254 et al.) so that a
+    compromised admin account can't register one as a "device" and use the
+    poll/curl path as an SSRF springboard to steal cloud IAM creds. Real
+    device IPs are on RFC1918 / link-local / loopback — none of which we
+    block here.
+    """
     try:
-        ipaddress.ip_address(ip)
+        parsed = ipaddress.ip_address(ip)
     except ValueError:
         raise HTTPException(400, f"Invalid IP address: {ip}")
+    if parsed in webhooks.BLOCKED_OUTBOUND_IPS:
+        raise HTTPException(400, "Address blocked: cloud-metadata endpoints are not allowed")
 
 
 # ============================================================================
@@ -1910,8 +2041,13 @@ def _build_device_portal_html(ip: str, safe_form_name: str) -> str:
 
 
 @app.get("/api/device-portal/{ip}", tags=["devices"], response_class=HTMLResponse)
-async def device_portal(ip: str, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.DEVICE_PORTAL))):
-    """Auto-login portal: authenticate to a device and redirect to its web UI."""
+async def device_portal(ip: str, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.DEVICE_PORTAL))):
+    """Auto-login portal: authenticate to a device and redirect to its web UI.
+
+    Restricted to admin/operator: the response embeds the device's stored
+    password so the browser can auto-submit the login form. Viewers must
+    not be able to read device credentials.
+    """
     _validate_ip(ip)
 
     username = None
@@ -2521,7 +2657,6 @@ async def get_radius_config_api(session: dict = Depends(require_auth), _pro=Depe
         "auth_port": config.auth_port,
         "has_secret": bool(config.shared_secret),
         "secret_set": bool(config.shared_secret),
-        "shared_secret": config.shared_secret,
         "configured": bool(config.shared_secret),
         "auth_mode": config.auth_mode,
         "advertised_address": config.advertised_address,
@@ -3184,7 +3319,22 @@ async def oidc_login(request: Request, _pro=Depends(require_feature(Feature.SSO_
         "code_challenge_method": "S256",
     })
 
-    return RedirectResponse(url=f"{authorization_endpoint}?{params}", status_code=302)
+    # Bind the flow to this browser via a short-lived HttpOnly cookie. The
+    # callback rejects requests where the cookie doesn't match the query
+    # `state`, so a leaked state (referrer, log, shoulder-surf) can't be
+    # replayed from a different client. Path-scoped to the OIDC routes so
+    # the cookie isn't sent on every page load.
+    response = RedirectResponse(url=f"{authorization_endpoint}?{params}", status_code=302)
+    response.set_cookie(
+        key="oidc_state",
+        value=state,
+        httponly=True,
+        secure=is_request_secure(request),
+        max_age=600,
+        samesite="lax",
+        path="/auth/oidc/",
+    )
+    return response
 
 
 @app.get("/auth/oidc/callback")
@@ -3212,6 +3362,15 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
 
     if not code or not state:
         return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
+
+    # Client-binding: the cookie set at /auth/oidc/login must match the
+    # query `state`. This blocks state-leak replays from another browser.
+    import secrets as _secrets
+    cookie_state = request.cookies.get("oidc_state", "")
+    if not cookie_state or not _secrets.compare_digest(cookie_state, state):
+        resp = RedirectResponse(url="/login?error=invalid_state", status_code=302)
+        resp.delete_cookie(key="oidc_state", path="/auth/oidc/")
+        return resp
 
     # Validate and consume state
     stored_raw = db.get_setting(f"oidc_state_{state}", "")
@@ -3341,6 +3500,9 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
         max_age=86400,
         samesite="lax",
     )
+    # Single-use OIDC state cookie has served its purpose — clear it so
+    # a leftover doesn't get reused if another OIDC flow somehow races.
+    response.delete_cookie(key="oidc_state", path="/auth/oidc/")
     return response
 
 
@@ -3481,8 +3643,12 @@ async def list_tokens_api(session: dict = Depends(require_auth)):
 
 
 @app.post("/api/tokens", tags=["auth"])
-async def create_token_api(request: Request, session: dict = Depends(require_auth)):
-    """Create a new API token. Returns the token value (shown only once)."""
+async def create_token_api(request: Request, session: dict = Depends(require_role("admin", "operator"))):
+    """Create a new API token. Returns the token value (shown only once).
+
+    Restricted to admin/operator: tokens can carry write scope and survive
+    session revocation, so viewers must not be able to mint them.
+    """
     data = await request.json()
     name = data.get("name", "").strip()
     if not name:
@@ -3493,6 +3659,15 @@ async def create_token_api(request: Request, session: dict = Depends(require_aut
     scopes = data.get("scopes", "read")
     if scopes not in ("read", "read,write"):
         raise HTTPException(400, "Scopes must be 'read' or 'read,write'")
+    # Only admins can mint write-scoped tokens.
+    if scopes == "read,write" and session.get("role") != "admin":
+        raise HTTPException(403, "Only admins can create write-scoped tokens")
+
+    # Reject the synthetic env-fallback admin (user_id=0): tokens must be
+    # owned by a real user row so revocation/audit ties back to a person.
+    user_id = session.get("user_id", 0)
+    if not user_id:
+        raise HTTPException(403, "Token creation requires a real user account")
 
     expires_days = data.get("expires_days")
     expires_at = None
@@ -3507,7 +3682,7 @@ async def create_token_api(request: Request, session: dict = Depends(require_aut
         name=name,
         token_hash=token_hash,
         token_prefix=token_prefix,
-        user_id=session.get("user_id", 0),
+        user_id=user_id,
         scopes=scopes,
         expires_at=expires_at,
     )

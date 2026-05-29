@@ -5947,8 +5947,10 @@
                 }
                 document.getElementById('authRadiusPort').value = data.radius?.auth_port || data.radius?.port || 1812;
                 const radiusSecretEl = document.getElementById('authRadiusSecret');
-                radiusSecretEl.value = data.radius?.shared_secret || '';
-                radiusSecretEl.placeholder = 'Enter shared secret';
+                radiusSecretEl.value = '';
+                radiusSecretEl.placeholder = (data.radius?.secret_set || data.radius?.has_secret)
+                    ? '(unchanged)'
+                    : 'Enter shared secret';
                 document.getElementById('authRadiusAuthMode').value = data.radius?.auth_mode || 'local';
                 document.getElementById('radiusClientMode').value = data.radius?.client_mode || 'open';
                 // LDAP fields

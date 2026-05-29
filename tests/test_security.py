@@ -639,3 +639,219 @@ class TestAPIPasswordRedaction:
         for key in ("admin_password_hash", "oidc_client_secret", "device_default_password"):
             if key in settings and settings[key]:
                 assert settings[key] == "********", f"{key} should be masked"
+
+
+# =========================================================================
+# CSRF middleware (Origin / Referer enforcement)
+# =========================================================================
+
+class TestCSRFMiddleware:
+    """Cookie-authenticated state-changing requests must come with a same-
+    origin Origin/Referer header. SameSite=Lax alone does not block top-
+    level form POSTs from another origin."""
+
+    def test_get_is_unaffected(self, authed_client):
+        """Safe methods bypass CSRF entirely."""
+        resp = authed_client.get("/api/aps", headers={"Origin": "https://evil.example"})
+        assert resp.status_code != 403
+
+    def test_same_origin_post_allowed(self, authed_client):
+        """The conftest fixture sets Origin: http://testserver (matches base_url)."""
+        resp = authed_client.post("/api/aps", data={
+            "ip": "10.0.0.50", "username": "root", "password": "x" * 8
+        })
+        assert resp.status_code != 403, (
+            f"Same-origin POST got CSRF-blocked: {resp.status_code} {resp.text}"
+        )
+
+    def test_cross_origin_post_blocked(self, authed_client):
+        """Cross-origin POST with a cookie must be rejected."""
+        resp = authed_client.post(
+            "/api/aps",
+            data={"ip": "10.0.0.51", "username": "root", "password": "x" * 8},
+            headers={"Origin": "https://attacker.example"},
+        )
+        assert resp.status_code == 403
+        assert "csrf" in resp.text.lower()
+
+    def test_missing_origin_and_referer_blocked(self, authed_client):
+        """A cookie-auth POST with neither Origin nor Referer is rejected —
+        we have no way to verify the request originated from our own page."""
+        resp = authed_client.post(
+            "/api/aps",
+            data={"ip": "10.0.0.52", "username": "root", "password": "x" * 8},
+            headers={"Origin": "", "Referer": ""},
+        )
+        assert resp.status_code == 403
+
+    def test_referer_fallback_allows_same_origin(self, authed_client):
+        """If Origin is missing but Referer matches, allow."""
+        resp = authed_client.post(
+            "/api/aps",
+            data={"ip": "10.0.0.53", "username": "root", "password": "x" * 8},
+            headers={"Origin": "", "Referer": "http://testserver/login"},
+        )
+        assert resp.status_code != 403
+
+    def test_bearer_token_skips_csrf(self, client, mock_db):
+        """API-token auth has no cookie credential, so CSRF doesn't apply.
+        We just verify the middleware doesn't reject before auth runs."""
+        # No real token registered — we just check the response is NOT a
+        # CSRF 403 ("missing origin/referer..."). Auth will 401 instead.
+        resp = client.post(
+            "/api/aps",
+            data={"ip": "10.0.0.54", "username": "root", "password": "x" * 8},
+            headers={"Authorization": "Bearer tach_notreal"},
+        )
+        assert resp.status_code == 401
+        assert "csrf" not in resp.text.lower()
+
+    def test_anonymous_post_passes_csrf(self, client, mock_db):
+        """No session cookie -> nothing to forge against -> CSRF skips."""
+        resp = client.post(
+            "/login",
+            data={"username": "nobody", "password": "wrong"},
+            headers={"Origin": ""},
+        )
+        # 401 from auth, not 403 from CSRF.
+        assert resp.status_code != 403
+
+
+# =========================================================================
+# Trusted proxy gating for X-Forwarded-* headers
+# =========================================================================
+
+class TestTrustedProxyGate:
+    """X-Forwarded-For is only honored when the immediate peer is in the
+    trusted-proxy network list (SIXTYOPS_TRUSTED_PROXIES). Untrusted peers
+    can otherwise spoof their source IP to bypass per-IP rate limits."""
+
+    def test_loopback_peer_is_trusted_by_default(self):
+        from updater.app import _is_trusted_proxy
+        assert _is_trusted_proxy("127.0.0.1") is True
+
+    def test_docker_bridge_peer_is_trusted_by_default(self):
+        from updater.app import _is_trusted_proxy
+        assert _is_trusted_proxy("172.20.0.5") is True
+
+    def test_public_peer_is_not_trusted(self):
+        from updater.app import _is_trusted_proxy
+        assert _is_trusted_proxy("8.8.8.8") is False
+
+    def test_garbage_peer_is_not_trusted(self):
+        from updater.app import _is_trusted_proxy
+        assert _is_trusted_proxy("not-an-ip") is False
+        assert _is_trusted_proxy("") is False
+
+    def test_env_override_replaces_defaults(self):
+        """SIXTYOPS_TRUSTED_PROXIES env var replaces the default network list."""
+        from updater.app import _parse_trusted_proxies
+        with patch.dict(os.environ, {"SIXTYOPS_TRUSTED_PROXIES": "10.0.0.0/24"}, clear=False):
+            nets = _parse_trusted_proxies()
+        assert len(nets) == 1
+        assert str(nets[0]) == "10.0.0.0/24"
+
+    def test_invalid_cidr_in_env_is_ignored(self):
+        """Bad entries in the env var should not crash startup."""
+        from updater.app import _parse_trusted_proxies
+        with patch.dict(os.environ, {"SIXTYOPS_TRUSTED_PROXIES": "10.0.0.0/24,not-a-cidr"}, clear=False):
+            nets = _parse_trusted_proxies()
+        assert len(nets) == 1
+
+
+# =========================================================================
+# OIDC state cookie binding (replay protection)
+# =========================================================================
+
+class TestOIDCStateCookieBinding:
+    """Even if the OIDC state value leaks (referrer, log, link copied from
+    a chat), a different browser must not be able to complete the flow.
+    The /auth/oidc/login response sets an `oidc_state` cookie that the
+    callback validates against the query `state`."""
+
+    def _enable_oidc(self):
+        from updater.oidc_config import set_oidc_config, OIDCConfig
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/application/o/sixtyops/",
+            client_id="test-client",
+            client_secret="test-secret",
+            redirect_uri="https://sixtyops.example.com/auth/oidc/callback",
+        ))
+
+    def test_callback_rejects_state_without_matching_cookie(self, client, mock_db):
+        """A query state with no companion cookie is treated as invalid."""
+        from updater import database as db
+        self._enable_oidc()
+        # Pre-seed a DB state row so the failure must come from cookie
+        # mismatch, not from "unknown state".
+        import json as _json
+        db.set_setting("oidc_state_leaked-state-value", _json.dumps({
+            "nonce": "n", "code_verifier": "v",
+            "created_at": "2025-01-01T00:00:00",
+        }))
+        resp = client.get(
+            "/auth/oidc/callback?code=abc&state=leaked-state-value",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        assert "invalid_state" in resp.headers["location"]
+
+    def test_callback_rejects_cookie_state_mismatch(self, client, mock_db):
+        """Cookie state must match query state exactly."""
+        from updater import database as db
+        self._enable_oidc()
+        import json as _json
+        db.set_setting("oidc_state_real-state", _json.dumps({
+            "nonce": "n", "code_verifier": "v",
+            "created_at": "2025-01-01T00:00:00",
+        }))
+        client.cookies.set("oidc_state", "different-state")
+        resp = client.get(
+            "/auth/oidc/callback?code=abc&state=real-state",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        assert "invalid_state" in resp.headers["location"]
+
+
+# =========================================================================
+# Settings encryption — OIDC id_token / client_secret prefix matching
+# =========================================================================
+
+class TestOIDCSettingsEncryption:
+    """The settings table holds raw OIDC id_tokens (claims include email
+    + group membership) keyed by session id, plus the OIDC client_secret.
+    Both must be Fernet-wrapped at rest so a DB read alone doesn't leak
+    them."""
+
+    def test_id_token_setting_is_encrypted_in_db(self, mock_db):
+        from updater import database as db
+        from updater.crypto import is_encrypted
+        db.set_setting("oidc_id_token_session-xyz", "eyJ.fake.token.value")
+        row = mock_db.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            ("oidc_id_token_session-xyz",),
+        ).fetchone()
+        assert row is not None
+        assert is_encrypted(row[0]), (
+            f"Expected Fernet ciphertext, got: {row[0]!r}"
+        )
+
+    def test_id_token_round_trip(self, mock_db):
+        """Reads must transparently decrypt — callers never see ciphertext."""
+        from updater import database as db
+        db.set_setting("oidc_id_token_session-abc", "eyJ.another.token")
+        assert db.get_setting("oidc_id_token_session-abc") == "eyJ.another.token"
+
+    def test_oidc_client_secret_is_encrypted_in_db(self, mock_db):
+        from updater import database as db
+        from updater.crypto import is_encrypted
+        db.set_setting("oidc_client_secret", "super-secret-client-creds")
+        row = mock_db.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            ("oidc_client_secret",),
+        ).fetchone()
+        assert is_encrypted(row[0]), (
+            f"Expected Fernet ciphertext, got: {row[0]!r}"
+        )

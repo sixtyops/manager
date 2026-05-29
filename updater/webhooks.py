@@ -3,8 +3,10 @@
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
+import socket
 from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
@@ -16,11 +18,45 @@ from . import database as db
 logger = logging.getLogger(__name__)
 
 
+# Well-known cloud-metadata endpoints. These services hand out short-lived
+# IAM credentials to anyone who can hit them from the host's network, so an
+# admin who set a webhook URL pointing at one of these would (a) exfil
+# nothing useful to themselves but (b) leave a credential-theft pivot
+# available to anyone else who later compromises the manager. Block
+# unconditionally. We deliberately do NOT block all of RFC1918 — on-prem
+# webhook receivers are a legitimate deployment shape for this product.
+BLOCKED_OUTBOUND_IPS = frozenset({
+    ipaddress.ip_address("169.254.169.254"),  # AWS / GCP / Azure / DigitalOcean metadata
+    ipaddress.ip_address("169.254.170.2"),    # AWS ECS task-metadata v2
+    ipaddress.ip_address("100.100.100.200"),  # Alibaba Cloud metadata
+    ipaddress.ip_address("fd00:ec2::254"),    # AWS IPv6 metadata
+})
+
+
 def is_valid_webhook_url(url: str) -> bool:
-    """Validate that a URL is a valid HTTP(S) webhook endpoint."""
+    """Validate that a URL is a valid HTTP(S) webhook endpoint.
+
+    Rejects URLs whose hostname resolves to a known cloud-metadata
+    endpoint, which closes the most common SSRF pivot.
+    """
     try:
         parsed = urlparse(url)
-        return parsed.scheme in ("http", "https") and parsed.hostname is not None
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return False
+        try:
+            addrs = socket.getaddrinfo(parsed.hostname, None)
+        except socket.gaierror:
+            # Unresolvable hostnames will fail when actually sent; don't
+            # block configuration on a transient DNS hiccup.
+            return True
+        for _, _, _, _, sockaddr in addrs:
+            try:
+                ip = ipaddress.ip_address(sockaddr[0])
+            except ValueError:
+                continue
+            if ip in BLOCKED_OUTBOUND_IPS:
+                return False
+        return True
     except Exception:
         return False
 

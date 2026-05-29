@@ -682,7 +682,11 @@ def client(mock_db):
          patch("updater.app.verify_update_on_startup", new=AsyncMock()), \
          patch("updater.database.cleanup_expired_sessions"):
         from updater.app import app
-        with TestClient(app) as tc:
+        # Send Origin matching the TestClient's default base_url so the
+        # CSRF middleware accepts cookie-authenticated POST/PUT/DELETE
+        # from the test suite. Real browsers send Origin automatically;
+        # httpx-based TestClient does not.
+        with TestClient(app, headers={"Origin": "http://testserver"}) as tc:
             yield tc
 
 
