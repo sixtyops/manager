@@ -24,13 +24,26 @@ FRESHDESK_PAGES = {
     "tns-100": "https://tachyon-networks.freshdesk.com/support/solutions/articles/67000719270-tns-100-firmware-releases",
 }
 
-# Regex: extract "Latest stable" / "Latest beta" version from the summary table
-# Handles inline <span> tags and &nbsp; in the version cell
+# Regex: extract "Latest stable" / "Latest beta" version from the summary table.
+# Handles inline <span> tags and &nbsp; in the version cell, and tolerates a
+# stray character between the leading "v" and the first digit (the tna-30x
+# beta cell on Freshdesk has been observed rendering as "v.1.15.0 beta-1").
 RE_VERSION_TABLE = re.compile(
     r"<td[^>]*>\s*<strong>\s*(Latest\s+(?:stable|beta))\s*</strong>\s*</td>"
-    r"\s*<td[^>]*>(?:<[^>]+>|\s|&nbsp;)*v([\d.]+)",
+    r"\s*<td[^>]*>(?:<[^>]+>|\s|&nbsp;)*v[^\d<]*(\d+(?:\.\d+)*)",
     re.IGNORECASE,
 )
+
+
+def _normalize_version(v: str) -> str:
+    """Canonicalise a version string captured from KB HTML.
+
+    Strips whitespace and any leading/trailing dots so that "v.1.15.0",
+    ".1.15.0", and "1.15.0 " all compare equal to "1.15.0". Keeps only
+    the first whitespace-delimited token to drop any "beta-1" suffix.
+    """
+    v = v.strip().strip(".")
+    return v.split()[0] if v else v
 
 # Regex: extract download URL + version from <a> tags
 # Handles <strong> wrapper around "Version X.Y.Z" text
@@ -215,7 +228,7 @@ class FirmwareFetcher:
         stable_version = None
         beta_version = None
         for label, version in table_matches:
-            version = version.split()[0]  # strip "r7781" suffix if present
+            version = _normalize_version(version)
             if "stable" in label.lower():
                 stable_version = version
             elif "beta" in label.lower():
@@ -228,6 +241,7 @@ class FirmwareFetcher:
         has_version_table = stable_version is not None or beta_version is not None
 
         for download_url, version in link_matches:
+            version = _normalize_version(version)
             if has_version_table:
                 # Pages with a summary table: only grab stable/beta
                 if version == stable_version:
