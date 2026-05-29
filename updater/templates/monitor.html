@@ -2229,6 +2229,33 @@
             to   { opacity: 1; transform: translateX(0); }
         }
 
+        /* Hostname right-click menu */
+        .context-menu {
+            position: fixed;
+            z-index: 10001;
+            min-width: 160px;
+            padding: 4px;
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+            display: none;
+        }
+        .context-menu.open { display: block; }
+        .context-menu button {
+            display: block;
+            width: 100%;
+            padding: 6px 10px;
+            background: transparent;
+            border: 0;
+            border-radius: 4px;
+            font-size: 13px;
+            color: #1f2937;
+            text-align: left;
+            cursor: pointer;
+        }
+        .context-menu button:hover { background: #f3f4f6; }
+
         /* Utility classes */
         .u-w-48 { width: 56px !important; flex: none; }
         .u-w-56 { width: 100px !important; flex: none; }
@@ -3679,6 +3706,10 @@
 
     <div class="toast-container" id="toastContainer" aria-live="polite" aria-atomic="true"></div>
 
+    <div class="context-menu" id="ipContextMenu" role="menu">
+        <button type="button" id="ipContextMenuCopy" role="menuitem">Copy IP address</button>
+    </div>
+
     <div class="backup-overlay" id="confirmOverlay" onclick="if(event.target===this)closeConfirmDialog(false)">
         <div class="backup-modal confirm-modal">
             <h3 id="confirmTitle">Confirm Action</h3>
@@ -3805,6 +3836,69 @@
                 setTimeout(() => toast.remove(), 220);
             }, timeoutMs);
         }
+
+        async function copyTextToClipboard(text) {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(text);
+                return;
+            }
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.top = '-1000px';
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); } finally { ta.remove(); }
+        }
+
+        (function initHostnameContextMenu() {
+            const menu = document.getElementById('ipContextMenu');
+            const copyBtn = document.getElementById('ipContextMenuCopy');
+            if (!menu || !copyBtn) return;
+
+            function hideMenu() {
+                if (menu.classList.contains('open')) menu.classList.remove('open');
+            }
+
+            document.addEventListener('contextmenu', (e) => {
+                const link = e.target.closest && e.target.closest('.name-link[data-ip]');
+                if (!link) return;
+                const ip = link.dataset.ip;
+                if (!ip) return;
+                e.preventDefault();
+                menu.dataset.ip = ip;
+                menu.classList.add('open');
+                // Position; measure after opening so we know its size for viewport clamping.
+                const w = menu.offsetWidth;
+                const h = menu.offsetHeight;
+                const x = Math.min(e.clientX, window.innerWidth - w - 4);
+                const y = Math.min(e.clientY, window.innerHeight - h - 4);
+                menu.style.left = Math.max(0, x) + 'px';
+                menu.style.top = Math.max(0, y) + 'px';
+            });
+
+            copyBtn.addEventListener('click', async () => {
+                const ip = menu.dataset.ip;
+                hideMenu();
+                if (!ip) return;
+                try {
+                    await copyTextToClipboard(ip);
+                    showToast('Copied ' + ip, 'success', 1800);
+                } catch (err) {
+                    showToast('Copy failed', 'error');
+                }
+            });
+
+            document.addEventListener('click', (e) => {
+                if (!menu.contains(e.target)) hideMenu();
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') hideMenu();
+            });
+            window.addEventListener('scroll', hideMenu, true);
+            window.addEventListener('resize', hideMenu);
+        })();
 
         function showConfirmDialog(message, options = {}) {
             const overlay = document.getElementById('confirmOverlay');
@@ -4959,7 +5053,7 @@
                         <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
                         <span class="device-icon ap">AP</span>
                         <span>
-                        <a href="/api/device-portal/${ap.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>
+                        <a href="/api/device-portal/${ap.ip}" target="_blank" class="name-link" data-ip="${ap.ip}" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>
                         ${ap.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(ap.notes)}">${escapeHtml(ap.notes)}</div>` : ''}
                         </span>
                         ${portBadge}
@@ -5002,7 +5096,7 @@
                             <input type="checkbox" ${checkedDevices.has(cpe.ip) ? 'checked' : ''} onclick="toggleCheck('${cpe.ip}',event);event.stopPropagation();">
                             <span class="expand-toggle hidden">&#9654;</span>
                             <span class="device-icon cpe ${health}"></span>
-                            ${cpeIp ? `<a href="/api/device-portal/${cpeIp}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : escapeHtml(cpeName)}
+                            ${cpeIp ? `<a href="/api/device-portal/${cpeIp}" target="_blank" class="name-link" data-ip="${cpeIp}" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : escapeHtml(cpeName)}
                         </div>
                     </td>
                     <td>${cpe.model || ''}</td>
@@ -5236,7 +5330,7 @@
                                 <span class="expand-toggle ${hasChildren ? (swExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${swKey}',event)">&#9654;</span>
                                 <span class="device-icon ap">SW</span>
                                 <span>
-                                <a href="/api/device-portal/${sw.ip}" target="_blank" class="name-link" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>
+                                <a href="/api/device-portal/${sw.ip}" target="_blank" class="name-link" data-ip="${sw.ip}" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>
                                 ${sw.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(sw.notes)}">${escapeHtml(sw.notes)}</div>` : ''}
                                 </span>
                             </div>
