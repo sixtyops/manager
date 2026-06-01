@@ -6147,7 +6147,9 @@
             // Compact label \u2014 it now lives inside the Rain fade segment next
             // to the view name. The menu itself shows which entry is detected
             // from the local area, so keep the segment label stable and short.
-            el.textContent = z.label;
+            // Drop a trailing "rain" ("Light rain" -> "Light") so the segment
+            // doesn't read "Rain fade · Light rain". The dropdown keeps full names.
+            el.textContent = z.label.replace(/\s*rain$/i, '');
         }
         function shRenderClimateMenu() {
             const menu = document.getElementById('climateMenu');

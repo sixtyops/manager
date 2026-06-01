@@ -10,7 +10,9 @@ All notable changes to this project are documented in this file.
   the active climate (it colours both views). The segment keeps a stable
   desktop size but shrinks inside narrow cards, so the toggle does not
   overflow or jump when switching views or changing the climate; clicking
-  it while Rain fade is active opens the region dropdown (upward).
+  it while Rain fade is active opens the region dropdown (upward). The
+  in-segment label drops a trailing "rain" ("Light rain" → "Light") so it
+  doesn't read "Rain fade · Light rain"; the dropdown keeps the full names.
 - Removed the subtitle under both chart titles. They were verbose and
   duplicated information already on screen — the rain threshold is drawn
   as on-chart annotation lines and shown in the toggle's climate label,
