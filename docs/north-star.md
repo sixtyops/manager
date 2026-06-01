@@ -16,16 +16,10 @@
 ## What we are
 
 - A **self-hosted** firmware, config, RADIUS, and monitoring system for Tachyon networks (Mikrotik & Cambium on the roadmap).
-- **Source-available** (not open-source — ELv2, no resale/managed-service competitors).
+- **Source-available** under ELv2 — read it, run it, build on it; resale and managed-service use require a separate agreement.
 - **Infrastructure-priced** — billed per AP and per switch under management. SMs (CPEs) are free.
 - **Safety-first** — gradual rollouts, maintenance windows, environmental gates, auto-pause on failure.
-
-## What we are not
-
-- Not a SaaS. Operators run it on their own VM, on their own network, behind their own firewall.
-- Not multi-tenant (yet). One install = one operator. MSP/multi-customer use is a Phase 4 conversation.
-- Not "another open-source project." Source is available but the business model is paid.
-- Not a NOC dashboard or a billing/CRM platform — we manage the network, we don't bill the subscribers.
+- **Fleet-scoped** — firmware lifecycle, configuration conformity, RADIUS, and fleet health visibility. One install serves one operator's network. Subscriber billing, NOC alerting, and direct per-device administration have better-suited homes elsewhere.
 
 ## Operating Principles
 
@@ -35,6 +29,8 @@
 4. **Source-available, no resale.** ELv2 — read the code, run the code, don't sell it as a service.
 5. **The boring path must just work.** Install, update, push config, get a backup — none of these should require a Slack thread.
 6. **Earn the next feature.** Don't ship multi-vendor or multi-tenancy until WISP-Tachyon is rock-solid.
+7. **Fleet visibility, not device management.** The dashboard answers "is my fleet conformant and healthy?" not "what is device X doing?". Individual device metrics are allowed only where they serve fleet-level decisions — signal reliability, firmware conformity, config drift. Everything else belongs in the device's own interface.
+8. **We own the safety defaults.** Operators configure *when* and *how fast*; we decide *how safe*. Canary hold, Weather Guard, pre-reboot, auto-pause on failure, and single-bank updates are always on. Operators may override when they have a reason, but they never have to configure these to get started.
 
 ---
 
