@@ -47,10 +47,10 @@ All notable changes to this project are documented in this file.
   (e.g. "No firmware files", or a full column of "—") while their data is
   still loading — they show "Loading…" until the fetch resolves, so a slow
   first paint never reads as missing data. The firmware list is now
-  prefetched on page load and renders as soon as the file list arrives
-  (no longer blocked on the slower settings/vendors calls), and a transient
-  fetch failure self-heals on the next drawer open instead of sticking on
-  an empty state.
+  prefetched on page load and renders as soon as its files and settings
+  arrive (no longer blocked on the slower vendor-label call), and a
+  transient fetch failure self-heals on the next drawer open instead of
+  sticking on an empty state.
 - Firmware auto-fetcher's release-page parser now writes a per-platform
   warning to `firmware_last_check_error` whenever the Freshdesk article's
   summary table promises a stable or beta release for which no matching

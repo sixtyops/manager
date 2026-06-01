@@ -7367,19 +7367,28 @@
         }
 
         async function refreshRadiusData() {
-            // Show a loading state up front so the empty-state messages ("No manual
-            // client overrides configured.", etc.) only appear after the fetch resolves.
+            // Show a loading state on the content areas so their empty-state messages
+            // ("No manual client overrides configured.", etc.) only appear after the
+            // fetch resolves. radiusStatus is intentionally left alone — it's a status
+            // line the loaders/badge own, and loadRadiusStats() doesn't write it when
+            // RADIUS is disabled, so a "Loading…" there would never clear.
+            const loadingHtml = '<div class="u-text-xs-muted" style="padding:10px;">Loading…</div>';
             const clientsEl = document.getElementById('radiusClientsList');
             const loginsEl = document.getElementById('radiusRecentLogins');
-            const statusEl = document.getElementById('radiusStatus');
-            if (clientsEl) clientsEl.innerHTML = '<div class="u-text-xs-muted" style="padding:10px;">Loading…</div>';
-            if (loginsEl) loginsEl.innerHTML = '<div class="u-text-xs-muted" style="padding:10px;">Loading…</div>';
-            if (statusEl) { statusEl.textContent = 'Loading…'; statusEl.style.color = ''; }
+            if (clientsEl) clientsEl.innerHTML = loadingHtml;
+            if (loginsEl) loginsEl.innerHTML = loadingHtml;
             try {
                 await Promise.all([loadRadiusUsers(), loadRadiusClients(), loadRadiusStats(), loadRadiusRollout()]);
             } catch (e) {
-                document.getElementById('radiusStatus').textContent = e.message || 'Failed to refresh RADIUS data';
-                document.getElementById('radiusStatus').style.color = '#ef4444';
+                const statusEl = document.getElementById('radiusStatus');
+                if (statusEl) { statusEl.textContent = e.message || 'Failed to refresh RADIUS data'; statusEl.style.color = '#ef4444'; }
+                // Don't leave a content area stuck on the loading placeholder if a
+                // loader threw before it could render.
+                for (const el of [clientsEl, loginsEl]) {
+                    if (el && el.textContent.trim() === 'Loading…') {
+                        el.innerHTML = '<div class="u-text-xs-muted" style="padding:10px;">Could not load.</div>';
+                    }
+                }
             }
         }
 
@@ -9314,13 +9323,29 @@
         }
 
         async function loadDrawerFirmware() {
-            // Phase 1 — file list. This is all that's needed to show files exist, and
-            // it's the fast endpoint; render it immediately rather than waiting on the
-            // slower settings/vendors calls below.
+            // Phase 1 — file list + settings. Both are fast, and settings carries the
+            // beta flag (needed so renderDrawerFirmware filters correctly) plus the
+            // selected-firmware highlight; render as soon as they resolve rather than
+            // waiting on the slower /api/vendors label call below.
             try {
-                const fwResp = await fetch('/api/firmware-files');
+                const [fwResp, settResp] = await Promise.all([
+                    fetch('/api/firmware-files'),
+                    fetch('/api/settings'),
+                ]);
                 const fwData = await fwResp.json();
+                const settData = await settResp.json();
                 drawerFwFiles = fwData.files || [];
+                drawerFwSelected = {
+                    'tna-30x': settData.settings.selected_firmware_30x || '',
+                    'tna-303l': settData.settings.selected_firmware_303l || '',
+                    'tns-100': settData.settings.selected_firmware_tns100 || '',
+                };
+                // Sync beta state from settings BEFORE the first render, so a
+                // beta-enabled / beta-only install doesn't briefly filter every file
+                // out (default false) and flash a blank list.
+                drawerBetaEnabled = settData.settings.firmware_beta_enabled === 'true';
+                const betaToggle = document.getElementById('drawerBetaToggle');
+                if (betaToggle) setToggleActive(betaToggle, drawerBetaEnabled);
                 drawerFwLoaded = true; // only on a successful fetch
                 renderDrawerFirmware();
             } catch (e) {
@@ -9329,31 +9354,17 @@
                 // upload, Check Now) re-run this and self-heal.
                 return;
             }
-            // Phase 2 — enrich with selected-firmware highlight + vendor type labels.
-            // Slowness here can no longer block the file list from rendering.
+            // Phase 2 — vendor firmware-type labels (cosmetic; renderDrawerFirmware
+            // falls back to the built-in 30x/303L/TNS100 labels until these arrive).
             try {
-                const [settResp, vendorResp] = await Promise.all([
-                    fetch('/api/settings'),
-                    fetch('/api/vendors'),
-                ]);
-                const settData = await settResp.json();
+                const vendorResp = await fetch('/api/vendors');
                 const vendorData = await vendorResp.json();
-                drawerFwSelected = {
-                    'tna-30x': settData.settings.selected_firmware_30x || '',
-                    'tna-303l': settData.settings.selected_firmware_303l || '',
-                    'tns-100': settData.settings.selected_firmware_tns100 || '',
-                };
-                // Build firmware type data from vendor registry
                 vendorFwTypes = [];
                 for (const v of vendorData) {
                     for (const ft of (v.firmware_types || [])) {
                         vendorFwTypes.push({ key: ft.key, label: ft.label, pattern: ft.pattern, vendor: v.vendor_id });
                     }
                 }
-                // Sync beta enabled state from settings
-                drawerBetaEnabled = settData.settings.firmware_beta_enabled === 'true';
-                const betaToggle = document.getElementById('drawerBetaToggle');
-                if (betaToggle) setToggleActive(betaToggle, drawerBetaEnabled);
                 renderDrawerFirmware();
             } catch (e) {}
         }
