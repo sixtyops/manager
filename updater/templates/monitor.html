@@ -3776,6 +3776,7 @@
 
         // Config policy state (declared early to avoid TDZ errors)
         let configLoaded = false;
+        let configLoadFailed = false; // last loadConfigData() attempt errored (drop loading spinner)
         let configCompliance = {};  // {ip: {compliant, checked_at}}
         let configSummary = {};     // {ip: {id, config_hash, model, fetched_at}}
         let configTemplates = [];
@@ -10060,6 +10061,7 @@
         }
 
         async function loadConfigData() {
+            configLoadFailed = false; // reset for (re)tries
             try {
                 const [compResp, cfgResp, tplResp, rolloutResp] = await Promise.all([
                     fetch('/api/config-compliance'),
@@ -10083,7 +10085,6 @@
                 configPushRollout = rolloutData.rollout;
                 configLoaded = true;
 
-                if (activeColumnMode === 'config') renderTable();
                 updateConfigStats();
                 loadConfigTemplateUI();
                 renderConfigPushRolloutUI();
@@ -10093,6 +10094,12 @@
                 loadRecycleBin();
             } catch (e) {
                 console.error('Failed to load config data:', e);
+                configLoadFailed = true; // drop the loading spinner back to the neutral "—"
+            } finally {
+                // Repaint on every exit (success, pro-gated 403, or failure) so the
+                // Config columns always leave the loading spinner — on failure they
+                // fall back to "—" and retry on the next tab switch, never spin forever.
+                if (activeColumnMode === 'config') renderTable();
             }
         }
 
@@ -10131,7 +10138,7 @@
         }
 
         function configStatusCell(ip) {
-            if (!configLoaded) return '<span class="spinner-inline" title="Loading…"></span>';
+            if (!configLoaded && !configLoadFailed) return '<span class="spinner-inline" title="Loading…"></span>';
             const c = configCompliance[ip];
             if (!c) return '<span class="config-compliance-unknown" title="Config not yet checked">&#8212;</span>';
             if (c.compliant) return '<span class="config-compliance-ok" title="Compliant">&#10003;</span>';
@@ -10139,7 +10146,7 @@
         }
 
         function configLastCheckedCell(ip) {
-            if (!configLoaded) return '<span class="spinner-inline" title="Loading…"></span>';
+            if (!configLoaded && !configLoadFailed) return '<span class="spinner-inline" title="Loading…"></span>';
             const cfg = configSummary[ip];
             if (!cfg) return '<span class="u-text-dim">&#8212;</span>';
             const primary = cfg.last_polled_at || cfg.fetched_at;
