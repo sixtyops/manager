@@ -2502,7 +2502,7 @@
             padding: 4px; gap: 2px; box-shadow: 0 1px 2px rgba(0,0,0,.04);
             max-width: 100%;
         }
-        .sh-segmented button {
+        .sh-segmented .sh-view-tab {
             appearance: none; border: 0; background: transparent;
             color: var(--text-muted); padding: 8px 18px;
             font-size: 0.75rem; font-weight: 500; border-radius: 999px;
@@ -2510,16 +2510,18 @@
             display: inline-flex; align-items: center; gap: 6px; font-family: inherit;
             white-space: nowrap;
         }
-        .sh-segmented button:hover { color: var(--text); }
-        .sh-segmented button.active { background: #111827; color: #fff; }
-        .sh-segmented svg { width: 14px; height: 14px; }
+        .sh-segmented .sh-view-tab:focus { outline: none; }
+        .sh-segmented .sh-view-tab:focus-visible { box-shadow: inset 0 0 0 2px rgba(59,130,246,.45); }
+        .sh-segmented .sh-view-tab:hover { color: var(--text); }
+        .sh-segmented .sh-view-tab.active { background: #111827; color: #fff; }
+        .sh-segmented .sh-view-tab > svg { width: 14px; height: 14px; flex: 0 0 auto; }
         .sh-segmented .seg-label { flex: 0 0 auto; }
         /* The climate selector is merged into the Rain fade segment, which is a
            fixed width so the toggle never resizes when the view changes, the
            caret toggles, or the climate name changes — the climate label
            truncates inside its slot and the view labels never move. The
            climate stays visible in both views (it colours both). */
-        .sh-segmented button[data-view="rain"] {
+        .sh-segmented .sh-view-tab[data-view="rain"] {
             flex: none; width: 250px; min-width: 0; overflow: hidden; justify-content: flex-start;
         }
         .seg-climate {
@@ -2527,14 +2529,14 @@
             margin-left: 8px; padding-left: 8px;
             border-left: 1px solid rgba(0,0,0,.12);
         }
-        .sh-segmented button.active .seg-climate { border-left-color: rgba(255,255,255,.28); }
+        .sh-segmented .sh-view-tab.active .seg-climate { border-left-color: rgba(255,255,255,.28); }
         .seg-climate #climateLabel { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .seg-climate .caret { width: 10px; height: 10px; opacity: .8; flex: 0 0 auto; }
         /* The caret only does something when Rain fade is active (clicking opens
            the climate menu); when inactive, clicking switches view. Keep its
            space reserved (visibility, not display) so the label width — and any
            truncation — doesn't change between the active and inactive states. */
-        .sh-segmented button[data-view="rain"]:not(.active) .seg-climate .caret { visibility: hidden; }
+        .sh-segmented .sh-view-tab[data-view="rain"]:not(.active) .seg-climate .caret { visibility: hidden; }
 
         /* Glanceable popover (.cpop) */
         .cpop {
@@ -2682,14 +2684,14 @@
                 <div class="sh-toggle-wrap">
                     <div class="sh-segmented" role="tablist">
                         <span class="climate-menu-wrap">
-                            <button class="active" data-view="rain" role="tab" aria-haspopup="true" title="Rain Fade view — click again to choose the climate zone">
+                            <button class="sh-view-tab active" data-view="rain" role="tab" aria-haspopup="true" title="Rain Fade view — click again to choose the climate zone">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 13v8M12 15v6M8 13v8M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"/></svg>
                                 <span class="seg-label">Rain fade</span>
                                 <span class="seg-climate"><span id="climateLabel"></span><svg class="caret" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4.5 L6 7.5 L9 4.5"/></svg></span>
                             </button>
                             <div class="climate-menu" id="climateMenu" role="menu"></div>
                         </span>
-                        <button data-view="distance" role="tab">
+                        <button class="sh-view-tab" data-view="distance" role="tab">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 14l4-4 4 4 5-5"/></svg>
                             Distance / Signal
                         </button>
@@ -6137,12 +6139,12 @@
         }
         function shRefreshClimateLabel() {
             const z = shActiveClimate();
-            const isAuto = shSelectedZone === shAutoZone;
             const el = document.getElementById('climateLabel');
             if (!el) return;
             // Compact label \u2014 it now lives inside the Rain fade segment next
-            // to the view name, so drop the "Climate:" prefix and country.
-            el.textContent = isAuto ? (z.label + ' (auto)') : ('Simulating ' + z.label);
+            // to the view name. The menu itself shows which entry is detected
+            // from the local area, so keep the segment label stable and short.
+            el.textContent = z.label;
         }
         function shRenderClimateMenu() {
             const menu = document.getElementById('climateMenu');
@@ -6277,7 +6279,7 @@
             });
         });
         document.addEventListener('click', e => {
-            const segBtn = e.target.closest('.sh-segmented button[data-view]');
+            const segBtn = e.target.closest('.sh-segmented .sh-view-tab[data-view]');
             if (!segBtn) return;
             const view = segBtn.dataset.view;
             const menu = document.getElementById('climateMenu');
@@ -6290,7 +6292,7 @@
                 return;
             }
             if (menu) menu.classList.remove('open');
-            document.querySelectorAll('.sh-segmented button[data-view]').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.sh-segmented .sh-view-tab[data-view]').forEach(b => b.classList.remove('active'));
             segBtn.classList.add('active');
             shView = view;
             updateChart();

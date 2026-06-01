@@ -67,7 +67,7 @@ All notable changes to this project are documented in this file.
 - The signal-health chart's plot area no longer shifts horizontally when
   toggling views — both charts use a fixed y-axis width, so the
   gridlines, dots, and x-axis line up. The Rain-fade toggle segment is a
-  hard fixed width too, so a long climate name ("Simulating Heavy rain")
+  hard fixed width too, so a long climate name ("Heavy rain")
   no longer makes the toggle wider than a short one ("Dry").
 - The signal-health chart no longer fails to render (and wedge its
   canvas) when the selected view has no plottable subscribers — e.g. the
