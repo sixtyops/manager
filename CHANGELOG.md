@@ -7,10 +7,10 @@ All notable changes to this project are documented in this file.
 ### Changed
 - The rain-climate selector moved from the global top header into the
   signal-health chart's **Rain fade** toggle segment, which always shows
-  the active climate (it colours both views). The segment is a fixed
-  width so the toggle never resizes when switching views or changing the
-  climate; clicking it while Rain fade is active opens the region dropdown
-  (upward).
+  the active climate (it colours both views). The segment keeps a stable
+  desktop size but shrinks inside narrow cards, so the toggle does not
+  overflow or jump when switching views or changing the climate; clicking
+  it while Rain fade is active opens the region dropdown (upward).
 - Removed the subtitle under both chart titles. They were verbose and
   duplicated information already on screen — the rain threshold is drawn
   as on-chart annotation lines and shown in the toggle's climate label,
@@ -66,9 +66,10 @@ All notable changes to this project are documented in this file.
   "copy IP" still works. Operators/admins keep the portal link.
 - The signal-health chart's plot area no longer shifts horizontally when
   toggling views — both charts use a fixed y-axis width, so the
-  gridlines, dots, and x-axis line up. The Rain-fade toggle segment is a
-  hard fixed width too, so a long climate name ("Heavy rain")
-  no longer makes the toggle wider than a short one ("Dry").
+  gridlines, dots, and x-axis line up. The Rain-fade toggle segment has a
+  stable preferred width, so a long climate name ("Heavy rain") no longer
+  makes the toggle wider than a short one ("Dry"), while still shrinking
+  on mobile.
 - The signal-health chart no longer fails to render (and wedge its
   canvas) when the selected view has no plottable subscribers — e.g. the
   Rain-Fade view with no CPEs reporting both rain tolerance and distance.
