@@ -2935,7 +2935,7 @@
                             <span class="toggle-sm-label">Beta Firmware</span>
                         </div>
                         <div class="drawer-fw-list" id="drawerFwList">
-                            <span class="drawer-fw-empty">No firmware files</span>
+                            <span class="drawer-fw-empty">Loading&hellip;</span>
                         </div>
                         <div class="drawer-fw-meta" id="drawerFwMeta"></div>
                         <div class="drawer-upload" id="drawerUpload" data-min-role="operator">
@@ -3776,6 +3776,7 @@
 
         // Config policy state (declared early to avoid TDZ errors)
         let configLoaded = false;
+        let configLoadFailed = false; // last loadConfigData() attempt errored (drop loading spinner)
         let configCompliance = {};  // {ip: {compliant, checked_at}}
         let configSummary = {};     // {ip: {id, config_hash, model, fetched_at}}
         let configTemplates = [];
@@ -7366,11 +7367,28 @@
         }
 
         async function refreshRadiusData() {
+            // Show a loading state on the content areas so their empty-state messages
+            // ("No manual client overrides configured.", etc.) only appear after the
+            // fetch resolves. radiusStatus is intentionally left alone — it's a status
+            // line the loaders/badge own, and loadRadiusStats() doesn't write it when
+            // RADIUS is disabled, so a "Loading…" there would never clear.
+            const loadingHtml = '<div class="u-text-xs-muted" style="padding:10px;">Loading…</div>';
+            const clientsEl = document.getElementById('radiusClientsList');
+            const loginsEl = document.getElementById('radiusRecentLogins');
+            if (clientsEl) clientsEl.innerHTML = loadingHtml;
+            if (loginsEl) loginsEl.innerHTML = loadingHtml;
             try {
                 await Promise.all([loadRadiusUsers(), loadRadiusClients(), loadRadiusStats(), loadRadiusRollout()]);
             } catch (e) {
-                document.getElementById('radiusStatus').textContent = e.message || 'Failed to refresh RADIUS data';
-                document.getElementById('radiusStatus').style.color = '#ef4444';
+                const statusEl = document.getElementById('radiusStatus');
+                if (statusEl) { statusEl.textContent = e.message || 'Failed to refresh RADIUS data'; statusEl.style.color = '#ef4444'; }
+                // Don't leave a content area stuck on the loading placeholder if a
+                // loader threw before it could render.
+                for (const el of [clientsEl, loginsEl]) {
+                    if (el && el.textContent.trim() === 'Loading…') {
+                        el.innerHTML = '<div class="u-text-xs-muted" style="padding:10px;">Could not load.</div>';
+                    }
+                }
             }
         }
 
@@ -8663,7 +8681,7 @@
                                     <th>Success</th><th>Failed</th><th>Skipped</th><th>Bank Mode</th>
                                 </tr></thead>
                                 <tbody id="jobHistoryTableBody">
-                                    <tr><td colspan="7" style="text-align:center;padding:16px;color:var(--text-dim);font-size:0.75rem;">No jobs yet</td></tr>
+                                    <tr><td colspan="7" style="text-align:center;padding:16px;color:var(--text-dim);font-size:0.75rem;">Loading&hellip;</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -9254,6 +9272,7 @@
         // ── Drawer Firmware ──
 
         let drawerFwFiles = [];
+        let drawerFwLoaded = false; // false until the FIRST successful /api/firmware-files fetch
         let drawerFwSelected = {}; // { 'tna-30x': 'file.bin', 'tna-303l': 'file.bin' }
         let drawerBetaEnabled = false;
         let vendorFwTypes = []; // Loaded from /api/vendors
@@ -9304,32 +9323,48 @@
         }
 
         async function loadDrawerFirmware() {
+            // Phase 1 — file list + settings. Both are fast, and settings carries the
+            // beta flag (needed so renderDrawerFirmware filters correctly) plus the
+            // selected-firmware highlight; render as soon as they resolve rather than
+            // waiting on the slower /api/vendors label call below.
             try {
-                const [fwResp, settResp, vendorResp] = await Promise.all([
+                const [fwResp, settResp] = await Promise.all([
                     fetch('/api/firmware-files'),
                     fetch('/api/settings'),
-                    fetch('/api/vendors'),
                 ]);
                 const fwData = await fwResp.json();
                 const settData = await settResp.json();
-                const vendorData = await vendorResp.json();
                 drawerFwFiles = fwData.files || [];
                 drawerFwSelected = {
                     'tna-30x': settData.settings.selected_firmware_30x || '',
                     'tna-303l': settData.settings.selected_firmware_303l || '',
                     'tns-100': settData.settings.selected_firmware_tns100 || '',
                 };
-                // Build firmware type data from vendor registry
+                // Sync beta state from settings BEFORE the first render, so a
+                // beta-enabled / beta-only install doesn't briefly filter every file
+                // out (default false) and flash a blank list.
+                drawerBetaEnabled = settData.settings.firmware_beta_enabled === 'true';
+                const betaToggle = document.getElementById('drawerBetaToggle');
+                if (betaToggle) setToggleActive(betaToggle, drawerBetaEnabled);
+                drawerFwLoaded = true; // only on a successful fetch
+                renderDrawerFirmware();
+            } catch (e) {
+                // Leave drawerFwLoaded as-is so the panel stays on "Loading…" instead
+                // of a misleading empty state; existing triggers (drawer open, save,
+                // upload, Check Now) re-run this and self-heal.
+                return;
+            }
+            // Phase 2 — vendor firmware-type labels (cosmetic; renderDrawerFirmware
+            // falls back to the built-in 30x/303L/TNS100 labels until these arrive).
+            try {
+                const vendorResp = await fetch('/api/vendors');
+                const vendorData = await vendorResp.json();
                 vendorFwTypes = [];
                 for (const v of vendorData) {
                     for (const ft of (v.firmware_types || [])) {
                         vendorFwTypes.push({ key: ft.key, label: ft.label, pattern: ft.pattern, vendor: v.vendor_id });
                     }
                 }
-                // Sync beta enabled state from settings
-                drawerBetaEnabled = settData.settings.firmware_beta_enabled === 'true';
-                const betaToggle = document.getElementById('drawerBetaToggle');
-                if (betaToggle) setToggleActive(betaToggle, drawerBetaEnabled);
                 renderDrawerFirmware();
             } catch (e) {}
         }
@@ -9337,7 +9372,9 @@
         function renderDrawerFirmware() {
             const container = document.getElementById('drawerFwList');
             if (drawerFwFiles.length === 0) {
-                container.innerHTML = '<span class="drawer-fw-empty">No firmware files</span>';
+                container.innerHTML = drawerFwLoaded
+                    ? '<span class="drawer-fw-empty">No firmware files</span>'
+                    : '<span class="drawer-fw-empty">Loading…</span>';
                 renderFwMeta();
                 return;
             }
@@ -9667,6 +9704,7 @@
         loadAutoSettings();
         loadCanarySettings();
         loadFleetStatus();
+        loadDrawerFirmware();   // prefetch firmware list so it's ready before the drawer opens
         renderIdlePhases();
         loadLicenseState();
         initRoleVisibility();
@@ -9678,6 +9716,7 @@
         async function loadSslStatus() {
             const el = document.getElementById('sslStatusDisplay');
             if (!el) return;
+            el.innerHTML = 'Loading…';
             try {
                 const resp = await fetch('/api/ssl/status');
                 const data = await resp.json();
@@ -10033,6 +10072,7 @@
         }
 
         async function loadConfigData() {
+            configLoadFailed = false; // reset for (re)tries
             try {
                 const [compResp, cfgResp, tplResp, rolloutResp] = await Promise.all([
                     fetch('/api/config-compliance'),
@@ -10056,7 +10096,6 @@
                 configPushRollout = rolloutData.rollout;
                 configLoaded = true;
 
-                if (activeColumnMode === 'config') renderTable();
                 updateConfigStats();
                 loadConfigTemplateUI();
                 renderConfigPushRolloutUI();
@@ -10066,6 +10105,12 @@
                 loadRecycleBin();
             } catch (e) {
                 console.error('Failed to load config data:', e);
+                configLoadFailed = true; // drop the loading spinner back to the neutral "—"
+            } finally {
+                // Repaint on every exit (success, pro-gated 403, or failure) so the
+                // Config columns always leave the loading spinner — on failure they
+                // fall back to "—" and retry on the next tab switch, never spin forever.
+                if (activeColumnMode === 'config') renderTable();
             }
         }
 
@@ -10104,6 +10149,7 @@
         }
 
         function configStatusCell(ip) {
+            if (!configLoaded && !configLoadFailed) return '<span class="spinner-inline" title="Loading…"></span>';
             const c = configCompliance[ip];
             if (!c) return '<span class="config-compliance-unknown" title="Config not yet checked">&#8212;</span>';
             if (c.compliant) return '<span class="config-compliance-ok" title="Compliant">&#10003;</span>';
@@ -10111,6 +10157,7 @@
         }
 
         function configLastCheckedCell(ip) {
+            if (!configLoaded && !configLoadFailed) return '<span class="spinner-inline" title="Loading…"></span>';
             const cfg = configSummary[ip];
             if (!cfg) return '<span class="u-text-dim">&#8212;</span>';
             const primary = cfg.last_polled_at || cfg.fetched_at;
