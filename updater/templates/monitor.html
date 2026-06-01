@@ -683,6 +683,12 @@
             padding: 20px;
         }
 
+        /* Hide role-gated UI until the user's role resolves, so a viewer never
+           flashes operator/admin controls (e.g. the "Add APs" card) before
+           applyRoleVisibility() runs. The body gets .role-resolved once the
+           role is known. */
+        body:not(.role-resolved) [data-min-role] { display: none !important; }
+
         .top-section {
             display: flex;
             gap: 20px;
@@ -2496,6 +2502,7 @@
             display: inline-flex; background: var(--bg-card);
             border: 1px solid var(--border); border-radius: 999px;
             padding: 4px; gap: 2px; box-shadow: 0 1px 2px rgba(0,0,0,.04);
+            max-width: 100%;
         }
         .sh-segmented button {
             appearance: none; border: 0; background: transparent;
@@ -2503,20 +2510,31 @@
             font-size: 0.75rem; font-weight: 500; border-radius: 999px;
             cursor: pointer; transition: background .15s ease, color .15s ease;
             display: inline-flex; align-items: center; gap: 6px; font-family: inherit;
+            white-space: nowrap;
         }
         .sh-segmented button:hover { color: var(--text); }
         .sh-segmented button.active { background: #111827; color: #fff; }
         .sh-segmented svg { width: 14px; height: 14px; }
-        /* Climate selector merged into the Rain fade segment: the active
-           climate + caret show only when Rain fade is the active view, and
-           clicking the active segment opens the climate menu. */
-        .sh-segmented button[data-view="rain"] .seg-climate { display: none; }
-        .sh-segmented button[data-view="rain"].active .seg-climate {
-            display: inline-flex; align-items: center; gap: 4px;
-            margin-left: 8px; padding-left: 8px;
-            border-left: 1px solid rgba(255,255,255,.25);
+        .sh-segmented .seg-label { flex: 0 0 auto; }
+        /* The climate selector is merged into the Rain fade segment, which is a
+           fixed width so the toggle never resizes when the view changes, the
+           caret toggles, or the climate name changes — the climate label
+           truncates inside its slot and the view labels never move. The
+           climate stays visible in both views (it colours both). */
+        .sh-segmented button[data-view="rain"] {
+            flex: 0 1 252px; min-width: 0; justify-content: flex-start;
         }
-        .seg-climate .caret { width: 10px; height: 10px; opacity: .8; }
+        .seg-climate {
+            display: inline-flex; align-items: center; gap: 4px; min-width: 0;
+            margin-left: 8px; padding-left: 8px;
+            border-left: 1px solid rgba(0,0,0,.12);
+        }
+        .sh-segmented button.active .seg-climate { border-left-color: rgba(255,255,255,.28); }
+        .seg-climate #climateLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .seg-climate .caret { width: 10px; height: 10px; opacity: .8; flex: 0 0 auto; }
+        /* The caret only does something when Rain fade is active (clicking
+           opens the climate menu); when inactive, clicking switches view. */
+        .sh-segmented button[data-view="rain"]:not(.active) .seg-climate .caret { display: none; }
 
         /* Glanceable popover (.cpop) */
         .cpop {
@@ -2667,7 +2685,7 @@
                         <span class="climate-menu-wrap">
                             <button class="active" data-view="rain" role="tab" aria-haspopup="true" title="Rain Fade view — click again to choose the climate zone">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 13v8M12 15v6M8 13v8M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"/></svg>
-                                Rain fade
+                                <span class="seg-label">Rain fade</span>
                                 <span class="seg-climate"><span id="climateLabel"></span><svg class="caret" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4.5 L6 7.5 L9 4.5"/></svg></span>
                             </button>
                             <div class="climate-menu" id="climateMenu" role="menu"></div>
@@ -3800,6 +3818,8 @@
         }
 
         function applyRoleVisibility(root) {
+            // Role is now known — reveal the gated UI the CSS hid on load.
+            document.body.classList.add('role-resolved');
             const hierarchy = {admin: 3, operator: 2, viewer: 1};
             const level = hierarchy[currentUserRole] || 1;
             const scope = root || document;

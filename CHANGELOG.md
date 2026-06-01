@@ -6,10 +6,11 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 - The rain-climate selector moved from the global top header into the
-  signal-health chart's **Rain fade** toggle segment. When Rain fade is
-  the active view the segment shows the active climate and opens the
-  region dropdown (upward) on click; it drives the rain-risk coloring in
-  both chart views.
+  signal-health chart's **Rain fade** toggle segment, which always shows
+  the active climate (it colours both views). The segment is a fixed
+  width so the toggle never resizes when switching views or changing the
+  climate; clicking it while Rain fade is active opens the region dropdown
+  (upward).
 - `release.yml` now publishes a floating `ghcr.io/sixtyops/manager:dev`
   tag on every pre-release push, alongside the version tag. `:latest`
   continues to track only stable cuts. The marketing site's docker
@@ -47,6 +48,9 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- A viewer no longer briefly sees operator/admin-only controls (the "Add
+  APs" card, action buttons) flash on screen before their role loads.
+  Role-gated UI is hidden until the user's role resolves.
 - The signal-health chart no longer fails to render (and wedge its
   canvas) when the selected view has no plottable subscribers — e.g. the
   Rain-Fade view with no CPEs reporting both rain tolerance and distance.
