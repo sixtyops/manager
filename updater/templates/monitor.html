@@ -6069,9 +6069,11 @@
         function shRenderLegend() {
             const el = document.getElementById('chartLegend');
             if (!el) return;
-            // Live per-state counts live here (folded in from the old summary
-            // row) so the same health key isn't drawn twice on the card. Count
-            // by the colour each dot actually uses in the current view.
+            // Identical in both views so the shared health key never moves when
+            // toggling. Counts are folded in (no separate summary row) and are
+            // tallied by the colour each dot uses in the current view. The
+            // distance-only MCS1-floor line is labelled on the chart itself, so
+            // it isn't repeated here.
             const { cpes } = shCollectCpes();
             const cnt = { green: 0, yellow: 0, red: 0 };
             for (const c of cpes) {
@@ -6085,17 +6087,11 @@
             }
             const stat = (color, n, label) =>
                 '<span class="item"><span class="dot" style="background:' + color + '"></span><strong>' + n + '</strong> ' + label + '</span>';
-            const offlineItem = '<span class="item"><span class="dot" style="background:#ef4444;border:2px solid #991b1b;transform:rotate(45deg);border-radius:0"></span>Offline AP</span>';
-            let html =
+            el.innerHTML =
                 stat('var(--success)', cnt.green, 'Reliable')
               + stat('var(--warning)', cnt.yellow, 'Mostly reliable')
-              + stat('var(--danger-bright)', cnt.red, 'Unstable');
-            if (shView !== 'rain') {
-                html += '<span class="item"><span class="dot" style="background:#9ca3af;width:6px;height:6px"></span>Underperforming \u00b7 target shown</span>'
-                      + '<span class="item"><span class="dash"></span>MCS1 floor</span>';
-            }
-            html += offlineItem;
-            el.innerHTML = html;
+              + stat('var(--danger-bright)', cnt.red, 'Unstable')
+              + '<span class="item"><span class="dot" style="background:#ef4444;border:2px solid #991b1b;transform:rotate(45deg);border-radius:0"></span>Offline AP</span>';
         }
 
         function shApplyTopologyClimate(topo) {

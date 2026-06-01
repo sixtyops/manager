@@ -68,9 +68,11 @@ All notable changes to this project are documented in this file.
   summary wrapped below the title depending on text width. The per-state
   counts that lived in that variable-height summary row are folded into
   the chart legend — which also removes a duplicated health key (the
-  summary and legend both listed the same three states) — and the legend
-  reserves two rows so it doesn't reflow when the wider Distance legend
-  wraps but the Rain legend doesn't.
+  summary and legend both listed the same three states). The legend now
+  shows the **same items in both views** (Reliable / Mostly reliable /
+  Unstable / Offline AP), so the shared health key never shifts sideways
+  when toggling. The distance-only "MCS1 floor" marker is dropped from the
+  legend because it's already labelled on the chart's dashed line.
 - The Updates panel no longer shows the next maintenance window twice
   ("Scheduled · Next: …" and "N devices pending · Next: …" in the same
   row). The pending-count pill drops the redundant time when the schedule
