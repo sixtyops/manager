@@ -42,6 +42,16 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- The signal-health chart no longer fails to render (and wedge its
+  canvas) when the selected view has no plottable subscribers — e.g. the
+  Rain-Fade view with no CPEs reporting both rain tolerance and distance.
+  The per-point color callbacks now tolerate an empty dataset, and a
+  render error can no longer leave an orphaned chart bound to the canvas.
+- The Updates panel no longer shows the next maintenance window twice
+  ("Scheduled · Next: …" and "N devices pending · Next: …" in the same
+  row). The pending-count pill drops the redundant time when the schedule
+  badge already shows it; Paused states keep it (the badge shows the
+  block reason there instead).
 - Scheduler **Firmware** panel, the **Config** tab, and the **RADIUS** /
   **HTTPS** App Settings panels no longer show a misleading empty state
   (e.g. "No firmware files", or a full column of "—") while their data is

@@ -5940,8 +5940,8 @@
                 data: { datasets: [
                     {
                         label: 'CPEs', data: points,
-                        backgroundColor: c => shColorFor(c.raw.h),
-                        borderColor:     c => shBorderFor(c.raw.h),
+                        backgroundColor: c => shColorFor(c.raw?.h),
+                        borderColor:     c => shBorderFor(c.raw?.h),
                         borderWidth: 1.5, pointRadius: radius, pointHoverRadius: radius + 4, clip: false,
                     },
                     {
@@ -6001,8 +6001,8 @@
                 data: { datasets: [
                     {
                         label: 'Signal', data: live,
-                        backgroundColor: c => shColorFor(c.raw.h),
-                        borderColor:     c => shBorderFor(c.raw.h),
+                        backgroundColor: c => shColorFor(c.raw?.h),
+                        borderColor:     c => shBorderFor(c.raw?.h),
                         borderWidth: 1.5, pointRadius: radius, pointHoverRadius: radius + 4, clip: false,
                     },
                     {
@@ -6164,6 +6164,11 @@
                 if (window.topology && topology.climate) shApplyTopologyClimate(topology);
                 if (shDetachGrayHover) { shDetachGrayHover(); shDetachGrayHover = null; }
                 if (chart) { chart.destroy(); chart = null; }
+                // Defensive: a render that throws mid-construction leaves an
+                // orphaned Chart bound to the canvas (chart stays null, so the
+                // guard above misses it). Clear it so the canvas is always reusable.
+                const orphan = window.Chart?.getChart?.(document.getElementById('signalChart'));
+                if (orphan) orphan.destroy();
                 shHoveredCpe = null; _shLastTooltipCpe = null; shHideCpop();
                 const { titleSuffix } = shCollectCpes();
                 const z = shActiveClimate();
@@ -9634,7 +9639,12 @@
                 setHidden(section, false);
                 const label = lastBehindCount === 1 ? '1 device pending' : `${lastBehindCount} devices pending`;
                 let text = label;
-                if (nextWindowText) text += ' · ' + nextWindowText;
+                // The schedule badge already shows "Next: ..." in the Scheduled
+                // state (idle/waiting), so don't repeat it here. In Paused states
+                // the badge shows the block reason instead, so the pill stays the
+                // only place the next window appears — keep it there.
+                const badgeShowsNext = (lastAutoState === 'idle' || lastAutoState === 'waiting');
+                if (nextWindowText && !badgeShowsNext) text += ' · ' + nextWindowText;
                 count.textContent = text;
                 // Refresh idle phase indicators with prediction details
                 if (!currentRolloutId) renderIdlePhases();
