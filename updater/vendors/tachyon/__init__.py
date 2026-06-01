@@ -26,6 +26,15 @@ class TachyonDriver(VendorDriver):
         super().__init__(ip, username, password, timeout)
         self._client = TachyonClient(ip, username, password, timeout)
 
+    @property
+    def last_radio_params(self):
+        """Surface the inner client's captured AP radio params (channel / BW /
+        frequency / antenna kit) so the poller's link-budget code can read them
+        through the driver wrapper. Without this, poll_ap's
+        ``getattr(client, "last_radio_params", None)`` always saw None and
+        every CPE's rain tolerance came out null."""
+        return self._client.last_radio_params
+
     async def connect(self):
         return await self._client.login()
 

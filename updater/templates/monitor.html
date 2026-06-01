@@ -683,6 +683,12 @@
             padding: 20px;
         }
 
+        /* Hide role-gated UI until the user's role resolves, so a viewer never
+           flashes operator/admin controls (e.g. the "Add APs" card) before
+           applyRoleVisibility() runs. The body gets .role-resolved once the
+           role is known. */
+        body:not(.role-resolved) [data-min-role] { display: none !important; }
+
         .top-section {
             display: flex;
             gap: 20px;
@@ -1047,6 +1053,9 @@
         .name-link:hover {
             text-decoration: underline;
         }
+        /* Viewer device name: plain text, no link affordance (the portal would
+           401 for viewers). Right-click "copy IP" still works via data-ip. */
+        .name-static { color: var(--text); }
 
         .no-location-tag {
             color: var(--warning);
@@ -2413,21 +2422,10 @@
             --shadow-pop: 0 8px 24px rgba(0,0,0,.10);
         }
 
-        /* Climate dropdown pill (placed inside .header) */
+        /* Climate region dropdown (anchored to the Rain fade toggle segment) */
         .climate-menu-wrap { position: relative; }
-        .climate-pill {
-            display: inline-flex; align-items: center; gap: 6px;
-            padding: 6px 12px;
-            background: var(--primary-bg); color: var(--primary-text);
-            border: 0; border-radius: 999px;
-            font-size: 0.75rem; font-weight: 500;
-            cursor: pointer; font-family: inherit;
-        }
-        .climate-pill:hover { background: #cfe1fc; }
-        .climate-pill svg { width: 14px; height: 14px; }
-        .climate-pill .caret { width: 10px; height: 10px; opacity: .7; margin-left: 2px; }
         .climate-menu {
-            position: absolute; right: 0; top: calc(100% + 6px);
+            position: absolute; left: 0; bottom: calc(100% + 6px);
             min-width: 340px; background: var(--bg-card);
             border: 1px solid var(--border); border-radius: 10px;
             box-shadow: var(--shadow-pop); padding: 6px;
@@ -2465,38 +2463,32 @@
         }
         .opt-badge svg { width: 9px; height: 9px; flex: 0 0 auto; }
 
-        /* Chart card head + summary */
-        .sh-chart-head {
-            display: flex; align-items: flex-end; justify-content: space-between;
-            margin-bottom: 16px; gap: 16px; flex-wrap: wrap;
-        }
-        .sh-chart-head .titlebox h2 {
+        /* Chart card head — just the title (no subtitle). Constant height, so
+           the chart below never shifts between views. Per-state counts live in
+           the legend. */
+        .sh-chart-head { margin-bottom: 16px; }
+        .sh-chart-head h2 {
             margin: 0; font-size: 1rem; font-weight: 600;
             letter-spacing: -.01em; color: var(--text);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        .sh-chart-head .titlebox .sub {
-            color: var(--text-muted); font-size: 0.75rem; margin-top: 2px;
-        }
-        .sh-summary-row {
-            display: flex; align-items: center; gap: 20px; font-size: 0.75rem;
-        }
-        .sh-summary-stat { display: flex; align-items: center; gap: 6px; color: var(--text-muted); }
-        .sh-summary-stat strong {
-            color: var(--text); font-variant-numeric: tabular-nums;
-            font-size: 0.875rem; font-weight: 600;
-        }
-        .sh-summary-stat .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 
         /* New chart wrapper (taller than the legacy .chart-container) */
         .sh-chart-wrap { height: 380px; position: relative; }
 
         /* Legend overrides for the new chart */
         .sh-chart-legend {
-            display: flex; flex-wrap: wrap; gap: 20px;
-            justify-content: center; padding-top: 16px;
+            display: flex; flex-wrap: wrap; column-gap: 20px; row-gap: 8px;
+            justify-content: center; align-content: center; padding-top: 16px;
             font-size: 0.75rem; color: var(--text-muted);
+            /* Reserve two rows so the 6-item Distance legend and the 4-item
+               Rain legend take the same height when the card is narrow enough
+               to wrap one but not the other — toggling no longer shifts the
+               toggle below. Single-row legends stay vertically centered. */
+            min-height: 42px;
         }
         .sh-chart-legend .item { display: flex; align-items: center; gap: 6px; }
+        .sh-chart-legend .item strong { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
         .sh-chart-legend .dot { width: 8px; height: 8px; border-radius: 50%; }
         .sh-chart-legend .dash {
             width: 18px; height: 0; border-top: 1.5px dashed var(--text-dim); display: inline-block;
@@ -2508,17 +2500,46 @@
             display: inline-flex; background: var(--bg-card);
             border: 1px solid var(--border); border-radius: 999px;
             padding: 4px; gap: 2px; box-shadow: 0 1px 2px rgba(0,0,0,.04);
+            max-width: 100%;
         }
-        .sh-segmented button {
+        .sh-segmented .climate-menu-wrap {
+            display: inline-flex; flex: 0 1 250px; min-width: 0;
+        }
+        .sh-segmented .sh-view-tab {
             appearance: none; border: 0; background: transparent;
             color: var(--text-muted); padding: 8px 18px;
             font-size: 0.75rem; font-weight: 500; border-radius: 999px;
             cursor: pointer; transition: background .15s ease, color .15s ease;
             display: inline-flex; align-items: center; gap: 6px; font-family: inherit;
+            min-width: 0; white-space: nowrap; overflow: hidden;
         }
-        .sh-segmented button:hover { color: var(--text); }
-        .sh-segmented button.active { background: #111827; color: #fff; }
-        .sh-segmented svg { width: 14px; height: 14px; }
+        .sh-segmented .sh-view-tab:focus { outline: none; }
+        .sh-segmented .sh-view-tab:focus-visible { box-shadow: inset 0 0 0 2px rgba(59,130,246,.45); }
+        .sh-segmented .sh-view-tab:hover { color: var(--text); }
+        .sh-segmented .sh-view-tab.active { background: #111827; color: #fff; }
+        .sh-segmented .sh-view-tab > svg { width: 14px; height: 14px; flex: 0 0 auto; }
+        .sh-segmented .seg-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+        /* The climate selector is merged into the Rain fade segment, which uses
+           a stable preferred width but can shrink inside narrow cards. Climate
+           text truncates inside its slot, so the view labels never move. The
+           climate stays visible in both views (it colours both). */
+        .sh-segmented .sh-view-tab[data-view="rain"] {
+            flex: 1 1 auto; width: 100%; justify-content: flex-start;
+        }
+        .sh-segmented .sh-view-tab[data-view="distance"] { flex: 0 1 auto; }
+        .seg-climate {
+            display: inline-flex; align-items: center; gap: 4px; min-width: 0; flex: 1 1 auto;
+            margin-left: 8px; padding-left: 8px;
+            border-left: 1px solid rgba(0,0,0,.12);
+        }
+        .sh-segmented .sh-view-tab.active .seg-climate { border-left-color: rgba(255,255,255,.28); }
+        .seg-climate #climateLabel { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .seg-climate .caret { width: 10px; height: 10px; opacity: .8; flex: 0 0 auto; }
+        /* The caret only does something when Rain fade is active (clicking opens
+           the climate menu); when inactive, clicking switches view. Keep its
+           space reserved (visibility, not display) so the label width — and any
+           truncation — doesn't change between the active and inactive states. */
+        .sh-segmented .sh-view-tab[data-view="rain"]:not(.active) .seg-climate .caret { visibility: hidden; }
 
         /* Glanceable popover (.cpop) */
         .cpop {
@@ -2612,14 +2633,6 @@
         <h1><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:#0D9488;border-radius:4px;margin-right:6px;vertical-align:baseline;position:relative;top:-1px;"><svg width="14" height="14" viewBox="0 0 28 28" fill="none"><rect x="3" y="8" width="2.5" height="12" rx="1" fill="white" opacity="0.9"/><rect x="7.5" y="6" width="2.5" height="16" rx="1" fill="white"/><rect x="12" y="4" width="2.5" height="20" rx="1" fill="white"/><path d="M17 10 L25 6" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><path d="M17 14 L26 14" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/><path d="M17 18 L25 22" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg></span>Sixty<span style="color:#0D9488;">Ops</span></h1>
         <div class="header-right">
             <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:var(--text-dim);"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:var(--text-muted);"></span></span>
-            <span class="climate-menu-wrap">
-                <button type="button" class="climate-pill" id="climateBtn" aria-haspopup="true" title="Climate determines how aggressively links are flagged for rain risk">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 13v8M12 15v6M8 13v8M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"/></svg>
-                    <span id="climateLabel">Climate: …</span>
-                    <svg class="caret" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4.5 L6 7.5 L9 4.5"/></svg>
-                </button>
-                <div class="climate-menu" id="climateMenu" role="menu"></div>
-            </span>
             <button class="header-icon-btn" onclick="openHistoryModal()" title="Job History">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
@@ -2665,11 +2678,7 @@
 
             <div class="chart-card">
                 <div class="sh-chart-head">
-                    <div class="titlebox">
-                        <h2 id="chartTitle">Rain Fade Tolerance</h2>
-                        <div class="sub" id="chartSub">Each dot is one subscriber &mdash; how much rain its link can take before dropping.</div>
-                    </div>
-                    <div class="sh-summary-row" id="summaryRow"></div>
+                    <h2 id="chartTitle">Rain Fade Tolerance</h2>
                 </div>
                 <div class="sh-chart-wrap">
                     <canvas id="signalChart"></canvas>
@@ -2677,13 +2686,17 @@
                 <div class="sh-chart-legend" id="chartLegend"></div>
                 <div class="sh-toggle-wrap">
                     <div class="sh-segmented" role="tablist">
-                        <button class="active" data-view="rain" role="tab">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 13v8M12 15v6M8 13v8M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"/></svg>
-                            Rain fade
-                        </button>
-                        <button data-view="distance" role="tab">
+                        <span class="climate-menu-wrap">
+                            <button class="sh-view-tab active" data-view="rain" role="tab" aria-haspopup="true" title="Rain Fade view — click again to choose the climate zone">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 13v8M12 15v6M8 13v8M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"/></svg>
+                                <span class="seg-label">Rain fade</span>
+                                <span class="seg-climate"><span id="climateLabel"></span><svg class="caret" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4.5 L6 7.5 L9 4.5"/></svg></span>
+                            </button>
+                            <div class="climate-menu" id="climateMenu" role="menu"></div>
+                        </span>
+                        <button class="sh-view-tab" data-view="distance" role="tab">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 14l4-4 4 4 5-5"/></svg>
-                            Distance / Signal
+                            <span class="seg-label">Distance / Signal</span>
                         </button>
                     </div>
                 </div>
@@ -3796,6 +3809,11 @@
                     currentUsername = data.username || '';
                     applyRoleVisibility();
                     updateRoleBadge(currentUserRole);
+                    // Re-render the device table so names reflect the role
+                    // (link for operators/admins, plain text for viewers) even
+                    // if the table rendered before the role resolved. No-ops
+                    // until topology has loaded.
+                    renderTable();
                 })
                 .catch(() => { currentUserRole = 'viewer'; currentUsername = ''; applyRoleVisibility(); updateRoleBadge('viewer'); });
         }
@@ -3809,6 +3827,8 @@
         }
 
         function applyRoleVisibility(root) {
+            // Role is now known — reveal the gated UI the CSS hid on load.
+            document.body.classList.add('role-resolved');
             const hierarchy = {admin: 3, operator: 2, viewer: 1};
             const level = hierarchy[currentUserRole] || 1;
             const scope = root || document;
@@ -3904,7 +3924,7 @@
             }
 
             document.addEventListener('contextmenu', (e) => {
-                const link = e.target.closest && e.target.closest('.name-link[data-ip]');
+                const link = e.target.closest && e.target.closest('[data-ip].name-link, [data-ip].name-static');
                 if (!link) return;
                 const ip = link.dataset.ip;
                 if (!ip) return;
@@ -5187,7 +5207,7 @@
                         <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
                         ${apHealthDot}<span class="device-icon ap">AP</span>
                         <span>
-                        <a href="/api/device-portal/${ap.ip}" target="_blank" class="name-link" data-ip="${ap.ip}" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>
+                        ${deviceNameHtml(ap.ip, apName)}
                         ${ap.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(ap.notes)}">${escapeHtml(ap.notes)}</div>` : ''}
                         </span>
                         ${portBadge}
@@ -5238,7 +5258,7 @@
                             <input type="checkbox" ${checkedDevices.has(cpe.ip) ? 'checked' : ''} onclick="toggleCheck('${cpe.ip}',event);event.stopPropagation();">
                             <span class="expand-toggle hidden">&#9654;</span>
                             <span class="device-icon cpe ${health}"></span>
-                            ${cpeIp ? `<a href="/api/device-portal/${cpeIp}" target="_blank" class="name-link" data-ip="${cpeIp}" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : escapeHtml(cpeName)}
+                            ${deviceNameHtml(cpeIp, cpeName)}
                         </div>
                     </td>
                     <td>${cpe.model || ''}</td>
@@ -5302,6 +5322,18 @@
             const yy = String(d.getFullYear()).slice(-2);
             const dateText = `${mm}/${dd}/${yy}`;
             return `<span class="last-updated-text" title="${d.toLocaleString()}">${dateText}</span>`;
+        }
+
+        // Device name cell: a portal link for operators/admins; plain text for
+        // viewers (the portal would 401 for them, so the link is removed). The
+        // data-ip is kept either way so right-click "copy IP" still works.
+        function deviceNameHtml(ip, name) {
+            const safe = escapeHtml(name);
+            if (!ip) return safe;
+            if (currentUserRole === 'viewer') {
+                return `<span class="name-static" data-ip="${ip}">${safe}</span>`;
+            }
+            return `<a href="/api/device-portal/${ip}" target="_blank" class="name-link" data-ip="${ip}" onclick="event.stopPropagation();">${safe}</a>`;
         }
 
         function renderTableHeader() {
@@ -5474,7 +5506,7 @@
                                 <span class="expand-toggle ${hasChildren ? (swExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${swKey}',event)">&#9654;</span>
                                 ${swHealthDot}<span class="device-icon ap">SW</span>
                                 <span>
-                                <a href="/api/device-portal/${sw.ip}" target="_blank" class="name-link" data-ip="${sw.ip}" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>
+                                ${deviceNameHtml(sw.ip, swName)}
                                 ${sw.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(sw.notes)}">${escapeHtml(sw.notes)}</div>` : ''}
                                 </span>
                             </div>
@@ -5686,6 +5718,9 @@
         const SH_MCS1_FLOOR = -70;
         const SH_STATUS_LABEL = { green: 'Reliable', yellow: 'Mostly reliable', red: 'Unstable in rain' };
         const SH_SIG_MIN = -75, SH_SIG_MAX = -35, SH_RAIN_MAX = 100;
+        // Fixed y-axis box width so the rain and distance charts share the same
+        // plot-area left edge — the graph doesn't shift when toggling views.
+        const SH_Y_AXIS_W = 72;
         const shColorFor  = h => h === 'green' ? '#10b981' : h === 'yellow' ? '#f59e0b' : '#ef4444';
         const shBorderFor = h => h === 'green' ? '#34d399' : h === 'yellow' ? '#fbbf24' : '#f87171';
         const shClamp01 = v => Math.max(0, Math.min(1, v));
@@ -5940,8 +5975,8 @@
                 data: { datasets: [
                     {
                         label: 'CPEs', data: points,
-                        backgroundColor: c => shColorFor(c.raw.h),
-                        borderColor:     c => shBorderFor(c.raw.h),
+                        backgroundColor: c => shColorFor(c.raw?.h),
+                        borderColor:     c => shBorderFor(c.raw?.h),
                         borderWidth: 1.5, pointRadius: radius, pointHoverRadius: radius + 4, clip: false,
                     },
                     {
@@ -5967,6 +6002,7 @@
                              title: { display: true, text: 'Distance (m)', color: '#6b7280', font: { size: 11 } },
                              grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 } } },
                         y: { type: 'linear', min: 0, max: SH_Y_MAX_RAIN,
+                             afterFit: s => { s.width = SH_Y_AXIS_W; },
                              title: { display: true, text: 'Survives rain up to (mm/hr)', color: '#6b7280', font: { size: 11 } },
                              grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 50 } },
                     },
@@ -6001,8 +6037,8 @@
                 data: { datasets: [
                     {
                         label: 'Signal', data: live,
-                        backgroundColor: c => shColorFor(c.raw.h),
-                        borderColor:     c => shBorderFor(c.raw.h),
+                        backgroundColor: c => shColorFor(c.raw?.h),
+                        borderColor:     c => shBorderFor(c.raw?.h),
                         borderWidth: 1.5, pointRadius: radius, pointHoverRadius: radius + 4, clip: false,
                     },
                     {
@@ -6027,7 +6063,8 @@
                         x: { type: 'linear', min: 0,
                              title: { display: true, text: 'Distance (m)', color: '#6b7280', font: { size: 11 } },
                              grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 } } },
-                        y: { min: -85, max: -35,
+                        y: { min: SH_SIG_MIN, max: SH_SIG_MAX,
+                             afterFit: s => { s.width = SH_Y_AXIS_W; },
                              title: { display: true, text: 'Signal (dBm)', color: '#6b7280', font: { size: 11 } },
                              grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 5 } },
                     },
@@ -6058,41 +6095,29 @@
         function shRenderLegend() {
             const el = document.getElementById('chartLegend');
             if (!el) return;
-            const offlineItem = '<span class="item"><span class="dot" style="background:#ef4444;border:2px solid #991b1b;transform:rotate(45deg);border-radius:0"></span>Offline AP</span>';
-            if (shView === 'rain') {
-                el.innerHTML =
-                    '<span class="item"><span class="dot" style="background:var(--success)"></span>Reliable</span>'
-                  + '<span class="item"><span class="dot" style="background:var(--warning)"></span>Mostly reliable</span>'
-                  + '<span class="item"><span class="dot" style="background:var(--danger-bright)"></span>Unstable</span>'
-                  + offlineItem;
-            } else {
-                el.innerHTML =
-                    '<span class="item"><span class="dot" style="background:var(--success)"></span>Reliable</span>'
-                  + '<span class="item"><span class="dot" style="background:var(--warning)"></span>Mostly reliable</span>'
-                  + '<span class="item"><span class="dot" style="background:var(--danger-bright)"></span>Unstable</span>'
-                  + '<span class="item"><span class="dot" style="background:#9ca3af;width:6px;height:6px"></span>Underperforming \u00b7 target shown</span>'
-                  + '<span class="item"><span class="dash"></span>MCS1 floor</span>'
-                  + offlineItem;
-            }
-        }
-        function shRenderSummary() {
+            // Identical in both views so the shared health key never moves when
+            // toggling. Counts are folded in (no separate summary row) and are
+            // tallied by the colour each dot uses in the current view. The
+            // distance-only MCS1-floor line is labelled on the chart itself, so
+            // it isn't repeated here.
             const { cpes } = shCollectCpes();
-            const z = shActiveClimate();
-            const cnt = { green: 0, yellow: 0, red: 0, unknown: 0 };
+            const cnt = { green: 0, yellow: 0, red: 0 };
             for (const c of cpes) {
-                const h = shHealthFromRain(c.max_rain_mm_hr);
-                if (h == null) cnt.unknown++; else cnt[h]++;
+                let h = null;
+                if (shView === 'rain') {
+                    if (c.max_rain_mm_hr != null && c.link_distance != null) h = shHealthFromRain(c.max_rain_mm_hr);
+                } else if (c.primary_signal != null && c.link_distance != null) {
+                    h = shHealthFromRain(c.max_rain_mm_hr) || (c.signal_health || 'red');
+                }
+                if (h && cnt[h] != null) cnt[h]++;
             }
-            const tag = shView === 'rain'
-                ? '<span class="sh-summary-stat" style="color:var(--text-dim);font-style:italic">for ' + z.label + '</span>'
-                : '';
-            const sr = document.getElementById('summaryRow');
-            if (!sr) return;
-            sr.innerHTML =
-                '<span class="sh-summary-stat"><span class="dot" style="background:var(--success)"></span><strong>' + cnt.green + '</strong> reliable</span>'
-              + '<span class="sh-summary-stat"><span class="dot" style="background:var(--warning)"></span><strong>' + cnt.yellow + '</strong> mostly reliable</span>'
-              + '<span class="sh-summary-stat"><span class="dot" style="background:var(--danger-bright)"></span><strong>' + cnt.red + '</strong> at risk</span>'
-              + tag;
+            const stat = (color, n, label) =>
+                '<span class="item"><span class="dot" style="background:' + color + '"></span><strong>' + n + '</strong> ' + label + '</span>';
+            el.innerHTML =
+                stat('var(--success)', cnt.green, 'Reliable')
+              + stat('var(--warning)', cnt.yellow, 'Mostly reliable')
+              + stat('var(--danger-bright)', cnt.red, 'Unstable')
+              + '<span class="item"><span class="dot" style="background:#ef4444;border:2px solid #991b1b;transform:rotate(45deg);border-radius:0"></span>Offline AP</span>';
         }
 
         function shApplyTopologyClimate(topo) {
@@ -6117,13 +6142,12 @@
         }
         function shRefreshClimateLabel() {
             const z = shActiveClimate();
-            const isAuto = shSelectedZone === shAutoZone;
-            const country = shAutoCountry || '';
             const el = document.getElementById('climateLabel');
             if (!el) return;
-            el.textContent = isAuto
-                ? ('Climate: ' + z.label + (country ? ' \u00b7 ' + country : '') + ' (auto)')
-                : ('Simulating: ' + z.label);
+            // Compact label \u2014 it now lives inside the Rain fade segment next
+            // to the view name. The menu itself shows which entry is detected
+            // from the local area, so keep the segment label stable and short.
+            el.textContent = z.label;
         }
         function shRenderClimateMenu() {
             const menu = document.getElementById('climateMenu');
@@ -6158,22 +6182,19 @@
 
         function updateChart() {
             const tEl = document.getElementById('chartTitle');
-            const sEl = document.getElementById('chartSub');
-            if (!tEl || !sEl) return;
+            if (!tEl) return;
             try {
                 if (window.topology && topology.climate) shApplyTopologyClimate(topology);
                 if (shDetachGrayHover) { shDetachGrayHover(); shDetachGrayHover = null; }
                 if (chart) { chart.destroy(); chart = null; }
+                // Defensive: a render that throws mid-construction leaves an
+                // orphaned Chart bound to the canvas (chart stays null, so the
+                // guard above misses it). Clear it so the canvas is always reusable.
+                const orphan = window.Chart?.getChart?.(document.getElementById('signalChart'));
+                if (orphan) orphan.destroy();
                 shHoveredCpe = null; _shLastTooltipCpe = null; shHideCpop();
                 const { titleSuffix } = shCollectCpes();
-                const z = shActiveClimate();
-                const auto = shSelectedZone === shAutoZone;
                 tEl.textContent = shView === 'rain' ? 'Rain Fade Tolerance' : ('Signal vs Distance \u2014 ' + titleSuffix);
-                sEl.innerHTML = shView === 'rain'
-                    ? ('Each dot is one subscriber \u2014 how much rain its link can take before dropping. ' + z.label
-                       + ' climate, 99.99% storm is <strong style="color:var(--text)">' + z.r9999 + ' mm/hr</strong>'
-                       + (auto ? '' : ' <span style="color:var(--primary);font-weight:600">\u00b7 simulating</span>') + '.')
-                    : 'Live signal readings; underperforming links show a small gray target pin.';
                 const cfg = shView === 'rain' ? shBuildRainChart() : shBuildDistanceChart();
                 chart = new Chart(document.getElementById('signalChart').getContext('2d'), cfg);
                 if (shView === 'distance') {
@@ -6181,7 +6202,6 @@
                     if (segs && segs.length) shDetachGrayHover = shAttachGrayHover(chart, segs);
                 }
                 shRenderLegend();
-                shRenderSummary();
             } catch (e) {
                 console.error('Signal-health chart failed to render:', e);
             }
@@ -6230,13 +6250,6 @@
 
         // Climate dropdown + segmented toggle wiring (set up once on DOM ready).
         document.addEventListener('DOMContentLoaded', () => {
-            const btn = document.getElementById('climateBtn');
-            if (btn) {
-                btn.addEventListener('click', e => {
-                    e.stopPropagation();
-                    document.getElementById('climateMenu').classList.toggle('open');
-                });
-            }
             document.addEventListener('click', e => {
                 if (!e.target.closest('.climate-menu-wrap')) {
                     const m = document.getElementById('climateMenu');
@@ -6269,11 +6282,22 @@
             });
         });
         document.addEventListener('click', e => {
-            const segBtn = e.target.closest('.sh-segmented button');
+            const segBtn = e.target.closest('.sh-segmented .sh-view-tab[data-view]');
             if (!segBtn) return;
-            document.querySelectorAll('.sh-segmented button').forEach(b => b.classList.remove('active'));
+            const view = segBtn.dataset.view;
+            const menu = document.getElementById('climateMenu');
+            // The Rain fade segment doubles as the climate dropdown: when it
+            // is already the active view, clicking it opens the climate menu
+            // instead of re-selecting the view.
+            if (view === 'rain' && shView === 'rain') {
+                e.stopPropagation();
+                if (menu) menu.classList.toggle('open');
+                return;
+            }
+            if (menu) menu.classList.remove('open');
+            document.querySelectorAll('.sh-segmented .sh-view-tab[data-view]').forEach(b => b.classList.remove('active'));
             segBtn.classList.add('active');
-            shView = segBtn.dataset.view;
+            shView = view;
             updateChart();
         });
 
@@ -9634,7 +9658,12 @@
                 setHidden(section, false);
                 const label = lastBehindCount === 1 ? '1 device pending' : `${lastBehindCount} devices pending`;
                 let text = label;
-                if (nextWindowText) text += ' · ' + nextWindowText;
+                // The schedule badge already shows "Next: ..." in the Scheduled
+                // state (idle/waiting), so don't repeat it here. In Paused states
+                // the badge shows the block reason instead, so the pill stays the
+                // only place the next window appears — keep it there.
+                const badgeShowsNext = (lastAutoState === 'idle' || lastAutoState === 'waiting');
+                if (nextWindowText && !badgeShowsNext) text += ' · ' + nextWindowText;
                 count.textContent = text;
                 // Refresh idle phase indicators with prediction details
                 if (!currentRolloutId) renderIdlePhases();

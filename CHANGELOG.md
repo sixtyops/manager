@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
+- The rain-climate selector moved from the global top header into the
+  signal-health chart's **Rain fade** toggle segment, which always shows
+  the active climate (it colours both views). The segment keeps a stable
+  desktop size but shrinks inside narrow cards, so the toggle does not
+  overflow or jump when switching views or changing the climate; clicking
+  it while Rain fade is active opens the region dropdown (upward).
+- Removed the subtitle under both chart titles. They were verbose and
+  duplicated information already on screen — the rain threshold is drawn
+  as on-chart annotation lines and shown in the toggle's climate label,
+  and the distance caption just restated the axes.
 - `release.yml` now publishes a floating `ghcr.io/sixtyops/manager:dev`
   tag on every pre-release push, alongside the version tag. `:latest`
   continues to track only stable cuts. The marketing site's docker
@@ -42,6 +52,51 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- The signal-health **Rain Fade** view was always empty: the Tachyon
+  vendor driver wrapped the device client but didn't surface its captured
+  AP radio params (`last_radio_params`), so the poller read `None` for
+  channel/bandwidth and never computed any CPE's rain tolerance
+  (`max_rain_mm_hr` stayed null). The driver now exposes `last_radio_params`
+  from its inner client. (Not an auth issue — auth was working.)
+- A viewer no longer briefly sees operator/admin-only controls (the "Add
+  APs" card, action buttons) flash on screen before their role loads.
+  Role-gated UI is hidden until the user's role resolves.
+- A viewer's device names are no longer links to the device portal (which
+  would 401 and open a dead tab). They render as plain text; right-click
+  "copy IP" still works. Operators/admins keep the portal link.
+- The signal-health chart's plot area no longer shifts horizontally when
+  toggling views — both charts use a fixed y-axis width, so the
+  gridlines, dots, and x-axis line up. The Rain-fade toggle segment has a
+  stable preferred width, so a long climate name ("Heavy rain") no longer
+  makes the toggle wider than a short one ("Dry"), while still shrinking
+  on mobile.
+- The signal-health chart no longer fails to render (and wedge its
+  canvas) when the selected view has no plottable subscribers — e.g. the
+  Rain-Fade view with no CPEs reporting both rain tolerance and distance.
+  The per-point color callbacks now tolerate an empty dataset, and a
+  render error can no longer leave an orphaned chart bound to the canvas.
+- The **Signal vs Distance** chart's y-axis floor is back to -75 dBm
+  (it had reverted to -85 in the chart rewrite). CPEs drop the link
+  around -72 dBm, so the -75…-85 band was dead space that squashed every
+  real reading into the top half. The axis now uses the same `SH_SIG_MIN`
+  / `SH_SIG_MAX` constants as the detail popover's signal bar, so the two
+  can't drift apart again.
+- The signal-health chart no longer shifts when switching views or
+  changing the climate, at any width. The header is now a fixed height
+  (title + a two-line-clamped subtitle) instead of a flex row whose
+  summary wrapped below the title depending on text width. The per-state
+  counts that lived in that variable-height summary row are folded into
+  the chart legend — which also removes a duplicated health key (the
+  summary and legend both listed the same three states). The legend now
+  shows the **same items in both views** (Reliable / Mostly reliable /
+  Unstable / Offline AP), so the shared health key never shifts sideways
+  when toggling. The distance-only "MCS1 floor" marker is dropped from the
+  legend because it's already labelled on the chart's dashed line.
+- The Updates panel no longer shows the next maintenance window twice
+  ("Scheduled · Next: …" and "N devices pending · Next: …" in the same
+  row). The pending-count pill drops the redundant time when the schedule
+  badge already shows it; Paused states keep it (the badge shows the
+  block reason there instead).
 - Scheduler **Firmware** panel, the **Config** tab, and the **RADIUS** /
   **HTTPS** App Settings panels no longer show a misleading empty state
   (e.g. "No firmware files", or a full column of "—") while their data is
