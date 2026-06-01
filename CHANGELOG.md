@@ -47,6 +47,12 @@ All notable changes to this project are documented in this file.
   Rain-Fade view with no CPEs reporting both rain tolerance and distance.
   The per-point color callbacks now tolerate an empty dataset, and a
   render error can no longer leave an orphaned chart bound to the canvas.
+- The **Signal vs Distance** chart's y-axis floor is back to -75 dBm
+  (it had reverted to -85 in the chart rewrite). CPEs drop the link
+  around -72 dBm, so the -75…-85 band was dead space that squashed every
+  real reading into the top half. The axis now uses the same `SH_SIG_MIN`
+  / `SH_SIG_MAX` constants as the detail popover's signal bar, so the two
+  can't drift apart again.
 - The Updates panel no longer shows the next maintenance window twice
   ("Scheduled · Next: …" and "N devices pending · Next: …" in the same
   row). The pending-count pill drops the redundant time when the schedule
