@@ -11,6 +11,10 @@ All notable changes to this project are documented in this file.
   width so the toggle never resizes when switching views or changing the
   climate; clicking it while Rain fade is active opens the region dropdown
   (upward).
+- Removed the subtitle under both chart titles. They were verbose and
+  duplicated information already on screen — the rain threshold is drawn
+  as on-chart annotation lines and shown in the toggle's climate label,
+  and the distance caption just restated the axes.
 - `release.yml` now publishes a floating `ghcr.io/sixtyops/manager:dev`
   tag on every pre-release push, alongside the version tag. `:latest`
   continues to track only stable cuts. The marketing site's docker

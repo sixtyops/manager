@@ -2460,19 +2460,14 @@
         }
         .opt-badge svg { width: 9px; height: 9px; flex: 0 0 auto; }
 
-        /* Chart card head — title + a fixed two-line subtitle. The head is a
-           constant height regardless of view / climate, so the chart below
-           never shifts. Live per-state counts live in the legend, not here. */
+        /* Chart card head — just the title (no subtitle). Constant height, so
+           the chart below never shifts between views. Per-state counts live in
+           the legend. */
         .sh-chart-head { margin-bottom: 16px; }
         .sh-chart-head h2 {
             margin: 0; font-size: 1rem; font-weight: 600;
             letter-spacing: -.01em; color: var(--text);
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-        .sh-chart-head .sub {
-            color: var(--text-muted); font-size: 0.75rem; margin-top: 2px;
-            line-height: 1.4; min-height: 2.8em;
-            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
         }
 
         /* New chart wrapper (taller than the legacy .chart-container) */
@@ -2674,7 +2669,6 @@
             <div class="chart-card">
                 <div class="sh-chart-head">
                     <h2 id="chartTitle">Rain Fade Tolerance</h2>
-                    <div class="sub" id="chartSub">Each dot is one subscriber &mdash; how much rain its link can take before dropping.</div>
                 </div>
                 <div class="sh-chart-wrap">
                     <canvas id="signalChart"></canvas>
@@ -6156,8 +6150,7 @@
 
         function updateChart() {
             const tEl = document.getElementById('chartTitle');
-            const sEl = document.getElementById('chartSub');
-            if (!tEl || !sEl) return;
+            if (!tEl) return;
             try {
                 if (window.topology && topology.climate) shApplyTopologyClimate(topology);
                 if (shDetachGrayHover) { shDetachGrayHover(); shDetachGrayHover = null; }
@@ -6169,14 +6162,7 @@
                 if (orphan) orphan.destroy();
                 shHoveredCpe = null; _shLastTooltipCpe = null; shHideCpop();
                 const { titleSuffix } = shCollectCpes();
-                const z = shActiveClimate();
-                const auto = shSelectedZone === shAutoZone;
                 tEl.textContent = shView === 'rain' ? 'Rain Fade Tolerance' : ('Signal vs Distance \u2014 ' + titleSuffix);
-                sEl.innerHTML = shView === 'rain'
-                    ? ('Each dot is one subscriber \u2014 how much rain its link can take before dropping. ' + z.label
-                       + ' climate, 99.99% storm is <strong style="color:var(--text)">' + z.r9999 + ' mm/hr</strong>'
-                       + (auto ? '' : ' <span style="color:var(--primary);font-weight:600">\u00b7 simulating</span>') + '.')
-                    : 'Live signal readings; underperforming links show a small gray target pin.';
                 const cfg = shView === 'rain' ? shBuildRainChart() : shBuildDistanceChart();
                 chart = new Chart(document.getElementById('signalChart').getContext('2d'), cfg);
                 if (shView === 'distance') {
