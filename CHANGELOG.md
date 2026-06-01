@@ -52,6 +52,12 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- The signal-health **Rain Fade** view was always empty: the Tachyon
+  vendor driver wrapped the device client but didn't surface its captured
+  AP radio params (`last_radio_params`), so the poller read `None` for
+  channel/bandwidth and never computed any CPE's rain tolerance
+  (`max_rain_mm_hr` stayed null). The driver now exposes `last_radio_params`
+  from its inner client. (Not an auth issue — auth was working.)
 - A viewer no longer briefly sees operator/admin-only controls (the "Add
   APs" card, action buttons) flash on screen before their role loads.
   Role-gated UI is hidden until the user's role resolves.
