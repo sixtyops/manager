@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
+- The rain-climate selector moved from the global top header to under the
+  signal-health chart's **Rain fade / Distance** toggle, where it belongs
+  — it drives the rain-risk coloring in both chart views. The region
+  dropdown now opens upward from the toggle.
 - `release.yml` now publishes a floating `ghcr.io/sixtyops/manager:dev`
   tag on every pre-release push, alongside the version tag. `:latest`
   continues to track only stable cuts. The marketing site's docker
@@ -53,6 +57,10 @@ All notable changes to this project are documented in this file.
   real reading into the top half. The axis now uses the same `SH_SIG_MIN`
   / `SH_SIG_MAX` constants as the detail popover's signal bar, so the two
   can't drift apart again.
+- Switching between the **Rain Fade** and **Distance / Signal** chart
+  views no longer shifts the chart, legend, and toggle. The subtitle now
+  reserves two lines, so the longer Rain-Fade caption and the shorter
+  Distance caption occupy the same height.
 - The Updates panel no longer shows the next maintenance window twice
   ("Scheduled · Next: …" and "N devices pending · Next: …" in the same
   row). The pending-count pill drops the redundant time when the schedule
