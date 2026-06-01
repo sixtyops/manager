@@ -2935,7 +2935,7 @@
                             <span class="toggle-sm-label">Beta Firmware</span>
                         </div>
                         <div class="drawer-fw-list" id="drawerFwList">
-                            <span class="drawer-fw-empty">No firmware files</span>
+                            <span class="drawer-fw-empty">Loading&hellip;</span>
                         </div>
                         <div class="drawer-fw-meta" id="drawerFwMeta"></div>
                         <div class="drawer-upload" id="drawerUpload" data-min-role="operator">
@@ -7366,6 +7366,14 @@
         }
 
         async function refreshRadiusData() {
+            // Show a loading state up front so the empty-state messages ("No manual
+            // client overrides configured.", etc.) only appear after the fetch resolves.
+            const clientsEl = document.getElementById('radiusClientsList');
+            const loginsEl = document.getElementById('radiusRecentLogins');
+            const statusEl = document.getElementById('radiusStatus');
+            if (clientsEl) clientsEl.innerHTML = '<div class="u-text-xs-muted" style="padding:10px;">Loading…</div>';
+            if (loginsEl) loginsEl.innerHTML = '<div class="u-text-xs-muted" style="padding:10px;">Loading…</div>';
+            if (statusEl) { statusEl.textContent = 'Loading…'; statusEl.style.color = ''; }
             try {
                 await Promise.all([loadRadiusUsers(), loadRadiusClients(), loadRadiusStats(), loadRadiusRollout()]);
             } catch (e) {
@@ -8663,7 +8671,7 @@
                                     <th>Success</th><th>Failed</th><th>Skipped</th><th>Bank Mode</th>
                                 </tr></thead>
                                 <tbody id="jobHistoryTableBody">
-                                    <tr><td colspan="7" style="text-align:center;padding:16px;color:var(--text-dim);font-size:0.75rem;">No jobs yet</td></tr>
+                                    <tr><td colspan="7" style="text-align:center;padding:16px;color:var(--text-dim);font-size:0.75rem;">Loading&hellip;</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -9254,6 +9262,7 @@
         // ── Drawer Firmware ──
 
         let drawerFwFiles = [];
+        let drawerFwLoaded = false; // false until the FIRST successful /api/firmware-files fetch
         let drawerFwSelected = {}; // { 'tna-30x': 'file.bin', 'tna-303l': 'file.bin' }
         let drawerBetaEnabled = false;
         let vendorFwTypes = []; // Loaded from /api/vendors
@@ -9304,16 +9313,30 @@
         }
 
         async function loadDrawerFirmware() {
+            // Phase 1 — file list. This is all that's needed to show files exist, and
+            // it's the fast endpoint; render it immediately rather than waiting on the
+            // slower settings/vendors calls below.
             try {
-                const [fwResp, settResp, vendorResp] = await Promise.all([
-                    fetch('/api/firmware-files'),
+                const fwResp = await fetch('/api/firmware-files');
+                const fwData = await fwResp.json();
+                drawerFwFiles = fwData.files || [];
+                drawerFwLoaded = true; // only on a successful fetch
+                renderDrawerFirmware();
+            } catch (e) {
+                // Leave drawerFwLoaded as-is so the panel stays on "Loading…" instead
+                // of a misleading empty state; existing triggers (drawer open, save,
+                // upload, Check Now) re-run this and self-heal.
+                return;
+            }
+            // Phase 2 — enrich with selected-firmware highlight + vendor type labels.
+            // Slowness here can no longer block the file list from rendering.
+            try {
+                const [settResp, vendorResp] = await Promise.all([
                     fetch('/api/settings'),
                     fetch('/api/vendors'),
                 ]);
-                const fwData = await fwResp.json();
                 const settData = await settResp.json();
                 const vendorData = await vendorResp.json();
-                drawerFwFiles = fwData.files || [];
                 drawerFwSelected = {
                     'tna-30x': settData.settings.selected_firmware_30x || '',
                     'tna-303l': settData.settings.selected_firmware_303l || '',
@@ -9337,7 +9360,9 @@
         function renderDrawerFirmware() {
             const container = document.getElementById('drawerFwList');
             if (drawerFwFiles.length === 0) {
-                container.innerHTML = '<span class="drawer-fw-empty">No firmware files</span>';
+                container.innerHTML = drawerFwLoaded
+                    ? '<span class="drawer-fw-empty">No firmware files</span>'
+                    : '<span class="drawer-fw-empty">Loading…</span>';
                 renderFwMeta();
                 return;
             }
@@ -9667,6 +9692,7 @@
         loadAutoSettings();
         loadCanarySettings();
         loadFleetStatus();
+        loadDrawerFirmware();   // prefetch firmware list so it's ready before the drawer opens
         renderIdlePhases();
         loadLicenseState();
         initRoleVisibility();
@@ -9678,6 +9704,7 @@
         async function loadSslStatus() {
             const el = document.getElementById('sslStatusDisplay');
             if (!el) return;
+            el.innerHTML = 'Loading…';
             try {
                 const resp = await fetch('/api/ssl/status');
                 const data = await resp.json();
@@ -10104,6 +10131,7 @@
         }
 
         function configStatusCell(ip) {
+            if (!configLoaded) return '<span class="spinner-inline" title="Loading…"></span>';
             const c = configCompliance[ip];
             if (!c) return '<span class="config-compliance-unknown" title="Config not yet checked">&#8212;</span>';
             if (c.compliant) return '<span class="config-compliance-ok" title="Compliant">&#10003;</span>';
@@ -10111,6 +10139,7 @@
         }
 
         function configLastCheckedCell(ip) {
+            if (!configLoaded) return '<span class="spinner-inline" title="Loading…"></span>';
             const cfg = configSummary[ip];
             if (!cfg) return '<span class="u-text-dim">&#8212;</span>';
             const primary = cfg.last_polled_at || cfg.fetched_at;
