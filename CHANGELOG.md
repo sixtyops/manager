@@ -55,6 +55,14 @@ All notable changes to this project are documented in this file.
 - A viewer no longer briefly sees operator/admin-only controls (the "Add
   APs" card, action buttons) flash on screen before their role loads.
   Role-gated UI is hidden until the user's role resolves.
+- A viewer's device names are no longer links to the device portal (which
+  would 401 and open a dead tab). They render as plain text; right-click
+  "copy IP" still works. Operators/admins keep the portal link.
+- The signal-health chart's plot area no longer shifts horizontally when
+  toggling views — both charts use a fixed y-axis width, so the
+  gridlines, dots, and x-axis line up. The Rain-fade toggle segment is a
+  hard fixed width too, so a long climate name ("Simulating Heavy rain")
+  no longer makes the toggle wider than a short one ("Dry").
 - The signal-health chart no longer fails to render (and wedge its
   canvas) when the selected view has no plottable subscribers — e.g. the
   Rain-Fade view with no CPEs reporting both rain tolerance and distance.

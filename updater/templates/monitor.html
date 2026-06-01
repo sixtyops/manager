@@ -1053,6 +1053,9 @@
         .name-link:hover {
             text-decoration: underline;
         }
+        /* Viewer device name: plain text, no link affordance (the portal would
+           401 for viewers). Right-click "copy IP" still works via data-ip. */
+        .name-static { color: var(--text); }
 
         .no-location-tag {
             color: var(--warning);
@@ -2517,19 +2520,21 @@
            truncates inside its slot and the view labels never move. The
            climate stays visible in both views (it colours both). */
         .sh-segmented button[data-view="rain"] {
-            flex: 0 1 252px; min-width: 0; justify-content: flex-start;
+            flex: none; width: 250px; min-width: 0; overflow: hidden; justify-content: flex-start;
         }
         .seg-climate {
-            display: inline-flex; align-items: center; gap: 4px; min-width: 0;
+            display: inline-flex; align-items: center; gap: 4px; min-width: 0; flex: 1 1 auto;
             margin-left: 8px; padding-left: 8px;
             border-left: 1px solid rgba(0,0,0,.12);
         }
         .sh-segmented button.active .seg-climate { border-left-color: rgba(255,255,255,.28); }
-        .seg-climate #climateLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .seg-climate #climateLabel { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .seg-climate .caret { width: 10px; height: 10px; opacity: .8; flex: 0 0 auto; }
-        /* The caret only does something when Rain fade is active (clicking
-           opens the climate menu); when inactive, clicking switches view. */
-        .sh-segmented button[data-view="rain"]:not(.active) .seg-climate .caret { display: none; }
+        /* The caret only does something when Rain fade is active (clicking opens
+           the climate menu); when inactive, clicking switches view. Keep its
+           space reserved (visibility, not display) so the label width — and any
+           truncation — doesn't change between the active and inactive states. */
+        .sh-segmented button[data-view="rain"]:not(.active) .seg-climate .caret { visibility: hidden; }
 
         /* Glanceable popover (.cpop) */
         .cpop {
@@ -3799,6 +3804,11 @@
                     currentUsername = data.username || '';
                     applyRoleVisibility();
                     updateRoleBadge(currentUserRole);
+                    // Re-render the device table so names reflect the role
+                    // (link for operators/admins, plain text for viewers) even
+                    // if the table rendered before the role resolved. No-ops
+                    // until topology has loaded.
+                    renderTable();
                 })
                 .catch(() => { currentUserRole = 'viewer'; currentUsername = ''; applyRoleVisibility(); updateRoleBadge('viewer'); });
         }
@@ -3909,7 +3919,7 @@
             }
 
             document.addEventListener('contextmenu', (e) => {
-                const link = e.target.closest && e.target.closest('.name-link[data-ip]');
+                const link = e.target.closest && e.target.closest('[data-ip].name-link, [data-ip].name-static');
                 if (!link) return;
                 const ip = link.dataset.ip;
                 if (!ip) return;
@@ -5192,7 +5202,7 @@
                         <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
                         ${apHealthDot}<span class="device-icon ap">AP</span>
                         <span>
-                        <a href="/api/device-portal/${ap.ip}" target="_blank" class="name-link" data-ip="${ap.ip}" onclick="event.stopPropagation();">${escapeHtml(apName)}</a>
+                        ${deviceNameHtml(ap.ip, apName)}
                         ${ap.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(ap.notes)}">${escapeHtml(ap.notes)}</div>` : ''}
                         </span>
                         ${portBadge}
@@ -5243,7 +5253,7 @@
                             <input type="checkbox" ${checkedDevices.has(cpe.ip) ? 'checked' : ''} onclick="toggleCheck('${cpe.ip}',event);event.stopPropagation();">
                             <span class="expand-toggle hidden">&#9654;</span>
                             <span class="device-icon cpe ${health}"></span>
-                            ${cpeIp ? `<a href="/api/device-portal/${cpeIp}" target="_blank" class="name-link" data-ip="${cpeIp}" onclick="event.stopPropagation();">${escapeHtml(cpeName)}</a>` : escapeHtml(cpeName)}
+                            ${deviceNameHtml(cpeIp, cpeName)}
                         </div>
                     </td>
                     <td>${cpe.model || ''}</td>
@@ -5307,6 +5317,18 @@
             const yy = String(d.getFullYear()).slice(-2);
             const dateText = `${mm}/${dd}/${yy}`;
             return `<span class="last-updated-text" title="${d.toLocaleString()}">${dateText}</span>`;
+        }
+
+        // Device name cell: a portal link for operators/admins; plain text for
+        // viewers (the portal would 401 for them, so the link is removed). The
+        // data-ip is kept either way so right-click "copy IP" still works.
+        function deviceNameHtml(ip, name) {
+            const safe = escapeHtml(name);
+            if (!ip) return safe;
+            if (currentUserRole === 'viewer') {
+                return `<span class="name-static" data-ip="${ip}">${safe}</span>`;
+            }
+            return `<a href="/api/device-portal/${ip}" target="_blank" class="name-link" data-ip="${ip}" onclick="event.stopPropagation();">${safe}</a>`;
         }
 
         function renderTableHeader() {
@@ -5479,7 +5501,7 @@
                                 <span class="expand-toggle ${hasChildren ? (swExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${swKey}',event)">&#9654;</span>
                                 ${swHealthDot}<span class="device-icon ap">SW</span>
                                 <span>
-                                <a href="/api/device-portal/${sw.ip}" target="_blank" class="name-link" data-ip="${sw.ip}" onclick="event.stopPropagation();">${escapeHtml(swName)}</a>
+                                ${deviceNameHtml(sw.ip, swName)}
                                 ${sw.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(sw.notes)}">${escapeHtml(sw.notes)}</div>` : ''}
                                 </span>
                             </div>
@@ -5691,6 +5713,9 @@
         const SH_MCS1_FLOOR = -70;
         const SH_STATUS_LABEL = { green: 'Reliable', yellow: 'Mostly reliable', red: 'Unstable in rain' };
         const SH_SIG_MIN = -75, SH_SIG_MAX = -35, SH_RAIN_MAX = 100;
+        // Fixed y-axis box width so the rain and distance charts share the same
+        // plot-area left edge — the graph doesn't shift when toggling views.
+        const SH_Y_AXIS_W = 72;
         const shColorFor  = h => h === 'green' ? '#10b981' : h === 'yellow' ? '#f59e0b' : '#ef4444';
         const shBorderFor = h => h === 'green' ? '#34d399' : h === 'yellow' ? '#fbbf24' : '#f87171';
         const shClamp01 = v => Math.max(0, Math.min(1, v));
@@ -5972,6 +5997,7 @@
                              title: { display: true, text: 'Distance (m)', color: '#6b7280', font: { size: 11 } },
                              grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 } } },
                         y: { type: 'linear', min: 0, max: SH_Y_MAX_RAIN,
+                             afterFit: s => { s.width = SH_Y_AXIS_W; },
                              title: { display: true, text: 'Survives rain up to (mm/hr)', color: '#6b7280', font: { size: 11 } },
                              grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 50 } },
                     },
@@ -6033,6 +6059,7 @@
                              title: { display: true, text: 'Distance (m)', color: '#6b7280', font: { size: 11 } },
                              grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 } } },
                         y: { min: SH_SIG_MIN, max: SH_SIG_MAX,
+                             afterFit: s => { s.width = SH_Y_AXIS_W; },
                              title: { display: true, text: 'Signal (dBm)', color: '#6b7280', font: { size: 11 } },
                              grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 5 } },
                     },
