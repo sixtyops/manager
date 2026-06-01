@@ -58,11 +58,15 @@ All notable changes to this project are documented in this file.
   real reading into the top half. The axis now uses the same `SH_SIG_MIN`
   / `SH_SIG_MAX` constants as the detail popover's signal bar, so the two
   can't drift apart again.
-- Switching between the **Rain Fade** and **Distance / Signal** chart
-  views no longer shifts the chart, legend, and toggle. The subtitle
-  reserves two lines and the legend reserves two rows, so both views take
-  the same height — including narrow widths where the 6-item Distance
-  legend wraps but the 4-item Rain legend does not.
+- The signal-health chart no longer shifts when switching views or
+  changing the climate, at any width. The header is now a fixed height
+  (title + a two-line-clamped subtitle) instead of a flex row whose
+  summary wrapped below the title depending on text width. The per-state
+  counts that lived in that variable-height summary row are folded into
+  the chart legend — which also removes a duplicated health key (the
+  summary and legend both listed the same three states) — and the legend
+  reserves two rows so it doesn't reflow when the wider Distance legend
+  wraps but the Rain legend doesn't.
 - The Updates panel no longer shows the next maintenance window twice
   ("Scheduled · Next: …" and "N devices pending · Next: …" in the same
   row). The pending-count pill drops the redundant time when the schedule
