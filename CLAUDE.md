@@ -89,6 +89,8 @@ Users on the dev update channel will receive pre-releases automatically.
 | `updater/app.py` | All API routes, WebSocket, update logic |
 | `updater/templates/monitor.html` | Entire frontend (single-page app) |
 | `updater/database.py` | SQLite schema and data access |
+| `updater/scheduler.py` | Auto-update scheduler + gradual rollout (canary→10%→50%→100%) |
+| `updater/rollout_gate.py` | Fail-closed phase gate: one phase per maintenance window + canary soak |
 | `updater/release_checker.py` | Self-update: checks GitHub releases API |
 | `updater/tachyon.py` | Tachyon device communication client (hardware vendor) |
 | `scripts/install.sh` | Production installer (always pulls `main`) |
@@ -236,3 +238,11 @@ full workflow and GitHub Actions contract.
 - All PRs target `main`
 - One feature per branch/PR — don't bundle unrelated changes
 - Keep commits focused and atomic with conventional commit messages
+- **Phased rollouts must advance one phase per maintenance window** and soak
+  the canary from fleet-canary completion (not firmware release date). This is
+  enforced by the fail-closed gate in `updater/rollout_gate.py` and guarded by
+  `tests/test_rollout_invariants.py`. Don't reintroduce per-phase auto-advance
+  without routing through the gate. See [docs/gradual-rollout.md](docs/gradual-rollout.md).
+  Config-conformity and RADIUS rollouts are slated to share this gate (see
+  [docs/gradual-rollout.md](docs/gradual-rollout.md)); keep new rollout logic in
+  one place rather than copying the phase loop.
