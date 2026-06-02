@@ -79,9 +79,9 @@ Background task that checks every 60 seconds whether to start an update. Enforce
 - System clock validated against NTP sources
 - Weather conditions acceptable (optional temperature check)
 - Firmware files selected
-- Not already ran today
+- The rollout has not already run a phase in this maintenance window
 
-Manages gradual rollout progression across consecutive schedule windows.
+Manages gradual rollout progression across consecutive schedule windows. A fail-closed phase gate (`rollout_gate.py`) is the single source of truth that enforces **one phase per maintenance window** (DB-backed, survives restarts) and the **canary soak** (measured from when canary completed on the fleet, not the firmware release date), so phases cannot cascade through a single window. `tests/test_rollout_invariants.py` guards both rules.
 
 ### `poller.py` - Network Discovery
 

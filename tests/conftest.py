@@ -152,7 +152,12 @@ def memory_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             last_phase_completed_at TEXT,
-            last_job_id TEXT
+            last_job_id TEXT,
+            vendor TEXT DEFAULT 'tachyon',
+            firmware_files_json TEXT,
+            settings_json TEXT,
+            last_phase_window TEXT,
+            canary_completed_at TEXT
         );
         CREATE TABLE firmware_registry (
             filename TEXT PRIMARY KEY,

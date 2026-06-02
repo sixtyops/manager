@@ -29,7 +29,9 @@ CREATE TABLE IF NOT EXISTS rollouts (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     last_phase_completed_at TEXT,
-    last_job_id TEXT
+    last_job_id TEXT,
+    last_phase_window TEXT,            -- window date this rollout last ran a phase job (one-phase-per-window gate)
+    canary_completed_at TEXT          -- when canary finished on THIS fleet (canary soak basis)
 );
 
 CREATE TABLE IF NOT EXISTS rollout_devices (
@@ -38,7 +40,7 @@ CREATE TABLE IF NOT EXISTS rollout_devices (
     ip TEXT NOT NULL,
     device_type TEXT NOT NULL DEFAULT 'ap',
     phase_assigned TEXT,
-    status TEXT DEFAULT 'pending',     -- pending | updated | failed | skipped
+    status TEXT DEFAULT 'pending',     -- pending | updated | failed | skipped | deferred
     updated_at TEXT,
     FOREIGN KEY (rollout_id) REFERENCES rollouts(id),
     UNIQUE(rollout_id, ip)
@@ -58,6 +60,8 @@ CREATE TABLE IF NOT EXISTS rollout_devices (
 - `cancel_rollout(rollout_id)`
 - `set_rollout_target_versions(rollout_id, versions)`
 - `set_rollout_job_id(rollout_id, job_id)`
+- `set_rollout_phase_window(rollout_id, window_key)` -- stamp the window a phase job ran in (one-phase-per-window gate)
+- `set_canary_completed_at(rollout_id, completed_at)` -- record fleet-canary completion (canary soak basis)
 - `assign_device_to_rollout(rollout_id, ip, device_type, phase)`
 - `mark_rollout_device(rollout_id, ip, status)` -- mark a single device
 - `mark_rollout_phase_devices(rollout_id, phase, status)` -- bulk mark updated/failed
@@ -92,17 +96,26 @@ Steps 9+ (replaced):
    - For later phases, select `10%`, `50%`, or `100%` of the remaining APs and switches independently
    - If no candidates remain, advance phase (or complete rollout)
    - Record selected APs and switches in `rollout_devices`
-6. **Launch job** -- call `start_update_func()` with the phase APs and phase switches, store `job_id` on rollout
+6. **Launch job** -- call `start_update_func()` with the phase APs and phase switches, store `job_id` on rollout, and stamp `last_phase_window` so the next phase waits for the next window
+
+### Phase gate (`rollout_gate.py`)
+
+A single **fail-closed** function, `rollout_gate.phase_run_decision(rollout, window_key, now, canary_soak)`, is the one place that decides whether a rollout may start its current phase's job. `_check_and_run` calls it before selecting a batch; if it returns "hold", the scheduler sets state and returns. It enforces two timing rules (the device-count math — canary/10%/50%/100% — is separate, in `_select_phase_batch`):
+
+- **One phase per maintenance window.** A phase job stamps `rollouts.last_phase_window` (the window date) when it starts. While that equals the current window, the gate holds the next phase — so phases cannot cascade through a single window. This is DB-backed, so it survives a restart mid-window.
+- **Canary soak from fleet time.** The first widening past canary (`pct10`) is held until `canary_completed_at + firmware_canary_hold_days`, measured from when the canary phase actually completed on this fleet — **not** the firmware release date (which can be pre-cleared, giving zero real soak). For a rollout that was already past canary when this shipped (`canary_completed_at` is NULL), the soak falls back to `last_phase_completed_at` (the canary→pct10 advance time); if neither timestamp exists the gate holds rather than skip the soak.
+
+Any unexpected rollout state returns "hold", and every hold logs a `phase_held` (or `blocked_canary_hold`) `schedule_log` event, so the spacing is observable. `tests/test_rollout_invariants.py` drives the scheduler across multiple ticks within one window and across windows to lock both rules in.
 
 ### Manual canary trigger
 
 - `POST /api/rollout/canary/trigger` starts only the canary phase immediately
 - It still respects:
   - time-source validation
-  - firmware hold / quarantine
   - weather guardrails
   - saved canary validation and current rollout scope
   - the configured canary AP / switch selection
+- The canary soak does **not** gate canary itself (it gates the later `pct10` widening), so a manual canary always runs when the above pass
 - It intentionally skips:
   - the maintenance-window check
   - the daily `_ran_today` lockout
@@ -120,7 +133,8 @@ Added `learned_versions: dict[str, str] | None` parameter.
   - **On success**:
     - Store learned target versions per firmware family (`tna-30x`, `tna-303l`, `tns-100`) when available
     - Mark phase devices as `updated`
-    - Call `complete_rollout_phase()` (advances to next phase)
+    - When the **canary** phase completes, record `canary_completed_at` (the canary soak is measured from this)
+    - Call `complete_rollout_phase()` (advances to next phase; the next phase still waits for the next window via the phase gate)
 
 ### `get_status()` additions
 
@@ -200,8 +214,10 @@ Positioned above the scheduler status bar, showing:
 | 3 | pct50 | ~50% of remaining APs and ~50% of remaining switches | Advance to pct100 |
 | 4 | pct100 | All remaining APs and switches | Mark rollout completed |
 
+- Each phase runs on a **separate** maintenance window (night 1 canary, night 2 pct10, …), enforced by the phase gate — not several phases in one night
+- Between canary and pct10 there is an additional **soak** of `firmware_canary_hold_days` (default/min 6) measured from canary completion, so pct10 may be several nights after canary
 - "Remaining" = in-scope APs whose own firmware or manageable CPEs are behind, plus in-scope switches behind their family target, excluding devices already `updated` in this rollout
-- If a phase has 0 candidates (all already current), auto-advance to next phase immediately
+- If a phase has 0 candidates (all already current), auto-advance to next phase immediately (skipping an empty phase touches no devices, so it does not consume the window)
 - If all phases are done, rollout status = `completed`
 
 ---
@@ -209,11 +225,12 @@ Positioned above the scheduler status bar, showing:
 ## Safety Rules
 
 1. **Failure pauses rollout** -- any device failure in a phase pauses the entire rollout. User must review and resume.
-2. **One phase per night** -- existing `_ran_today` set prevents re-running. Phase advances happen logically, not by re-triggering the same night.
-3. **New firmware = new rollout** -- if `selected_firmware_30x` changes, any active rollout is cancelled and a fresh one starts from canary.
-4. **Canary validates** -- the canary phase always runs the configured canary AP / switch first when available, or falls back to a single AP / switch.
-5. **All existing safety rules preserved** -- time validation, switch/AP scope, and weather checks still apply before any phase runs.
-6. **Manual canary is isolated** -- clicking the pending `Canary` pill does not consume the nightly rollout window for later phases and does not inherit the scheduled cutoff.
+2. **One phase per maintenance window** -- enforced by the fail-closed phase gate (`rollout_gate.py`) via the DB-backed `last_phase_window` stamp, so phases cannot cascade through a single window even across a restart. (The in-memory `_ran_today` set is a secondary guard, not the authority.)
+3. **Canary soaks on your fleet** -- `pct10` is held until `canary_completed_at + firmware_canary_hold_days`, measured from when canary completed on this fleet, not the firmware release date.
+4. **New firmware = new rollout** -- if `selected_firmware_30x` changes, any active rollout is cancelled and a fresh one starts from canary.
+5. **Canary validates** -- the canary phase always runs the configured canary AP / switch first when available, or falls back to a single AP / switch.
+6. **All existing safety rules preserved** -- time validation, switch/AP scope, and weather checks still apply before any phase runs.
+7. **Manual canary is isolated** -- clicking the pending `Canary` pill does not consume the nightly rollout window for later phases and does not inherit the scheduled cutoff; it still stamps `last_phase_window` so the next phase waits for a maintenance window.
 
 ---
 
@@ -221,7 +238,9 @@ Positioned above the scheduler status bar, showing:
 
 | File | What Changes |
 |------|-------------|
-| `updater/database.py` | 2 new tables, ~16 new rollout functions |
-| `updater/scheduler.py` | Replace steps 9-11 with rollout logic, modify `on_job_completed`, update `get_status` |
+| `updater/rollout_gate.py` | Fail-closed phase gate: one-phase-per-window + fleet-time canary soak (single source of truth) |
+| `updater/database.py` | 2 new tables, ~18 rollout functions, `last_phase_window` + `canary_completed_at` columns |
+| `updater/scheduler.py` | Rollout logic in `_check_and_run`, phase gate before each job, `canary_completed_at` on canary completion |
 | `updater/app.py` | 3 new endpoints, modify `run_update_job` to pass `learned_version`, send rollout status on WS connect |
 | `updater/templates/monitor.html` | Rollout status card with phase indicator + progress + resume/cancel buttons |
+| `tests/test_rollout_invariants.py` | Regression suite: one-phase-per-window, per-window progression, canary soak, held-event logging |

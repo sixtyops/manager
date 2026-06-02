@@ -52,6 +52,16 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Phased firmware rollouts no longer push every device in a single
+  maintenance window. The scheduler advanced canary → 10% → 50% → 100%
+  back-to-back within one window because nothing gated the *timing*
+  between phases (only the device count per phase). Now a rollout runs at
+  most **one phase per maintenance window**, and the canary soak is
+  measured from when the canary actually completed on your fleet — not
+  from the firmware's release date, which could be pre-cleared and give
+  zero real soak. The per-window guard is durable (survives restarts) and
+  is enforced by a single fail-closed check so it cannot silently
+  regress; a `phase_held` event is logged whenever the next phase waits.
 - The signal-health **Rain Fade** view was always empty: the Tachyon
   vendor driver wrapped the device client but didn't surface its captured
   AP radio params (`last_radio_params`), so the poller read `None` for

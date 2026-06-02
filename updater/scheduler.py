@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from typing import Callable, Optional, Set
 
 from . import database as db
+from . import rollout_gate
 from . import services
 from .services import format_temperature
 
@@ -596,6 +597,31 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
             return
 
+        # ── Phase gate: one phase per maintenance window + canary soak ──
+        # Single source of truth in rollout_gate (fail-closed). This is what
+        # stops all phases from cascading through a single maintenance window.
+        window_key = now.strftime("%Y-%m-%d")
+        canary_soak = timedelta(days=_as_int(settings.get("firmware_canary_hold_days", "6"), 6))
+        may_run, gate_reason = rollout_gate.phase_run_decision(rollout, window_key, now, canary_soak)
+        if not may_run:
+            if gate_reason == "canary_soak":
+                _, remaining = rollout_gate.canary_soak_cleared(rollout, now, canary_soak)
+                days = remaining.total_seconds() / 86400 if remaining else 0
+                remaining_str = f"{days:.1f} days" if days >= 1 else f"{days * 24:.0f} hours"
+                new_reason = f"Holding new firmware in canary ({remaining_str} remaining)"
+                if self._block_reason != new_reason:
+                    db.log_schedule_event("blocked_canary_hold", new_reason)
+                self._state = "blocked_canary_hold"
+                self._block_reason = new_reason
+            else:
+                new_reason = "One phase per maintenance window — next phase next window"
+                if self._block_reason != new_reason:
+                    db.log_schedule_event("phase_held", f"Rollout {rollout['id']}: {gate_reason}")
+                self._state = "waiting"
+                self._block_reason = new_reason
+            await self._broadcast_status()
+            return
+
         scope_ips = self._resolve_scope(settings)
         switch_scope = self._resolve_switch_scope(settings)
 
@@ -612,23 +638,11 @@ class AutoUpdateScheduler:
         if not batch_ips and not batch_switches:
             current_phase = rollout["phase"]
 
-            # Gate the canary→pct10 transition on the new-firmware soak period.
-            # Canary itself runs immediately; only advancement past canary waits.
-            if current_phase == "canary":
-                hold_info = self._canary_hold_info(rollout, settings)
-                if hold_info is not None:
-                    self._state = "blocked_canary_hold"
-                    remaining_days = hold_info["remaining_days"]
-                    remaining_str = (
-                        f"{remaining_days:.1f} days" if remaining_days >= 1
-                        else f"{remaining_days * 24:.0f} hours"
-                    )
-                    self._block_reason = f"Holding new firmware in canary ({remaining_str} remaining)"
-                    db.log_schedule_event("blocked_canary_hold", self._block_reason)
-                    logger.info(f"Scheduler: {self._block_reason}")
-                    await self._broadcast_status()
-                    return
-
+            # The current phase has no devices left to update. Advance to find
+            # the next phase with work. The canary soak and one-phase-per-window
+            # rules are enforced by the phase gate above (rollout_gate), so this
+            # path is pure "skip an empty phase" bookkeeping — it touches no
+            # devices and therefore does not consume the window.
             db.complete_rollout_phase(rollout["id"])
             refreshed = db.get_rollout(rollout["id"])
 
@@ -689,6 +703,9 @@ class AutoUpdateScheduler:
             self._current_job_id = job_id
             self._ran_today.add(today_key)
             db.set_rollout_job_id(rollout["id"], job_id)
+            # Stamp the window so the phase gate holds the next phase until the
+            # next maintenance window (one phase per window).
+            db.set_rollout_phase_window(rollout["id"], window_key)
             db.log_schedule_event("job_started", f"Job {job_id} for rollout {rollout['id']}", job_id=job_id)
         except Exception as e:
             self._state = "idle"
@@ -808,6 +825,9 @@ class AutoUpdateScheduler:
             self._current_job_id = job_id
             self._manual_canary_job_ids.add(job_id)
             db.set_rollout_job_id(rollout["id"], job_id)
+            # Stamp the window so the next phase still waits for a maintenance
+            # window even when canary was triggered manually inside one.
+            db.set_rollout_phase_window(rollout["id"], now.strftime("%Y-%m-%d"))
             db.log_schedule_event("job_started", f"Manual canary job {job_id} for rollout {rollout['id']}", job_id=job_id)
             await self._broadcast_status()
         except Exception:
@@ -815,30 +835,6 @@ class AutoUpdateScheduler:
             self._block_reason = "Failed to start canary"
             await self._broadcast_status()
             raise
-
-    def _canary_hold_info(self, rollout: dict, settings: dict) -> Optional[dict]:
-        """If the current canary phase is still in soak period, return hold info.
-
-        Returns None when the hold has cleared (or is disabled), allowing the
-        rollout to advance past canary. Returns the first active hold info dict
-        otherwise (so the caller can surface a countdown).
-        """
-        if rollout.get("phase") != "canary":
-            return None
-        hold_days = _as_int(settings.get("firmware_canary_hold_days", "6"), 6)
-        if hold_days <= 0:
-            return None
-        for fw_name in (
-            rollout.get("firmware_file"),
-            rollout.get("firmware_file_303l"),
-            rollout.get("firmware_file_tns100"),
-        ):
-            if not fw_name:
-                continue
-            info = db.get_firmware_hold_info(fw_name, hold_days)
-            if not info["cleared"]:
-                return info
-        return None
 
     def _target_versions(self, settings: dict, rollout: Optional[dict]) -> dict[str, str]:
         """Build target versions for each firmware family."""
@@ -1120,6 +1116,11 @@ class AutoUpdateScheduler:
                         )
                         logger.info(f"Rollout {rollout['id']} phase {rollout['phase']} has {deferred_count} deferred device(s)")
                     else:
+                        # Record when canary finished on this fleet so the soak
+                        # is measured from real fleet-bake time, not the firmware
+                        # release date (see rollout_gate.canary_soak_cleared).
+                        if rollout["phase"] == "canary":
+                            db.set_canary_completed_at(rollout["id"], datetime.now().isoformat())
                         db.complete_rollout_phase(rollout["id"])
 
                         refreshed = db.get_rollout(rollout["id"])

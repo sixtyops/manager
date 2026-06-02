@@ -179,6 +179,14 @@ def _migrate(db):
         db.execute("ALTER TABLE rollouts ADD COLUMN firmware_files_json TEXT")
     if "settings_json" not in rollout_columns:
         db.execute("ALTER TABLE rollouts ADD COLUMN settings_json TEXT")
+    # Per-window phase gate + fleet-canary soak (prevents the phase cascade where
+    # all phases run in a single maintenance window). last_phase_window is the
+    # maintenance-window date in which this rollout last started a phase job;
+    # canary_completed_at is when the canary phase finished on this fleet.
+    if "last_phase_window" not in rollout_columns:
+        db.execute("ALTER TABLE rollouts ADD COLUMN last_phase_window TEXT")
+    if "canary_completed_at" not in rollout_columns:
+        db.execute("ALTER TABLE rollouts ADD COLUMN canary_completed_at TEXT")
 
     # Add templates_snapshot to config_push_rollouts
     try:
@@ -725,7 +733,9 @@ def init_db():
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 last_phase_completed_at TEXT,
-                last_job_id TEXT
+                last_job_id TEXT,
+                last_phase_window TEXT,
+                canary_completed_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS rollout_devices (
@@ -2554,6 +2564,29 @@ def set_rollout_job_id(rollout_id: int, job_id: str):
         db.execute(
             "UPDATE rollouts SET last_job_id = ?, updated_at = ? WHERE id = ?",
             (job_id, now, rollout_id)
+        )
+
+
+def set_rollout_phase_window(rollout_id: int, window_key: str):
+    """Record the maintenance-window key in which this rollout last ran a phase
+    job. The scheduler refuses to start another phase in the same window, which
+    is what guarantees one phase per maintenance window (see rollout_gate)."""
+    now = datetime.now().isoformat()
+    with get_db() as db:
+        db.execute(
+            "UPDATE rollouts SET last_phase_window = ?, updated_at = ? WHERE id = ?",
+            (window_key, now, rollout_id)
+        )
+
+
+def set_canary_completed_at(rollout_id: int, completed_at: str):
+    """Record when the canary phase completed on this fleet. The canary soak is
+    measured from this timestamp (not the firmware release date)."""
+    now = datetime.now().isoformat()
+    with get_db() as db:
+        db.execute(
+            "UPDATE rollouts SET canary_completed_at = ?, updated_at = ? WHERE id = ?",
+            (completed_at, now, rollout_id)
         )
 
 
