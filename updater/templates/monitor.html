@@ -2166,7 +2166,23 @@
         .table-filter-summary {
             font-size: 0.75rem;
             color: var(--text-dim);
+            white-space: nowrap;
+        }
+        /* Right-docked group: status chips + divider + device count, kept
+           together on the right edge of the toolbar. */
+        .toolbar-right {
             margin-left: auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        .toolbar-vsep {
+            width: 1px;
+            align-self: stretch;
+            min-height: 16px;
+            background: var(--border);
         }
 
         /* Per-column filter dropdowns */
@@ -2207,6 +2223,29 @@
         }
         .filter-chip a { color: var(--primary); text-decoration: none; font-size: 0.85rem; line-height: 1; cursor: pointer; }
         .filter-chip a:hover { color: var(--primary-text, #1d4ed8); }
+
+        /* Fleet update-status totals — tappable filters in the table toolbar.
+           Counts mirror the per-row Update icons; tapping toggles the Status
+           column filter and combines with the text query. */
+        .fleet-status-chips { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+        .fleet-chip {
+            display: inline-flex; align-items: center; gap: 5px;
+            padding: 3px 9px; border-radius: 7px; border: 1px solid transparent;
+            background: transparent; cursor: pointer; font-family: inherit;
+            font-size: 0.74rem; font-weight: 600; color: var(--text-muted); line-height: 1;
+            transition: background 0.12s, border-color 0.12s;
+        }
+        .fleet-chip .gl { font-size: 0.9rem; line-height: 1; }
+        .fleet-chip .n { font-weight: 800; color: var(--text-subtle); }
+        .fleet-chip.s-cur .gl { color: var(--success); }
+        .fleet-chip.s-beh .gl { color: var(--warning); }
+        .fleet-chip.s-off .gl { color: var(--danger-bright); }
+        .fleet-chip:hover:not(.disabled) { background: var(--border-light); }
+        .fleet-chip.active.s-cur { background: var(--success-bg); border-color: var(--success-light); color: var(--success-text); }
+        .fleet-chip.active.s-beh { background: var(--warning-bg); border-color: var(--warning-light); color: var(--warning-text); }
+        .fleet-chip.active.s-off { background: var(--danger-bg); border-color: var(--danger-bright); color: var(--danger-text); }
+        .fleet-chip.active .n { color: inherit; }
+        .fleet-chip.disabled { opacity: 0.4; cursor: default; }
 
         /* Selection action bar */
         .selection-action-bar {
@@ -2703,29 +2742,9 @@
             </div>
         </div>
 
-        <!-- Firmware Stats -->
-        <div class="stats-bar" id="statsBar">
-            <div class="stat">
-                <div class="dot primary"></div>
-                <span class="stat-value" id="apCount">0</span>
-                <span class="stat-label">APs</span>
-            </div>
-            <div class="stat">
-                <div class="dot success"></div>
-                <span class="stat-value" id="greenCount">0</span>
-                <span class="stat-label">Up to date</span>
-            </div>
-            <div class="stat">
-                <div class="dot warning"></div>
-                <span class="stat-value" id="yellowCount">0</span>
-                <span class="stat-label">Update available</span>
-            </div>
-            <div class="stat">
-                <div class="dot danger"></div>
-                <span class="stat-value" id="redCount">0</span>
-                <span class="stat-label">Offline / Error</span>
-            </div>
-        </div>
+        <!-- Firmware fleet totals now live in the device-table toolbar as
+             tappable status filters (see #fleetStatusChips). The old stats
+             bar was fed by CPE signal health, not firmware status. -->
 
         <!-- Config Stats -->
         <div class="stats-bar hidden" id="configStatsBar">
@@ -2759,7 +2778,11 @@
             <div class="table-toolbar">
                 <input type="text" id="deviceFilterQuery" name="deviceFilterQuery" placeholder="Filter by name, IP, or site (comma for multiple)" aria-label="Search devices">
                 <span id="activeFilterChips" class="filter-chips" style="display:none;"></span>
-                <span class="table-filter-summary" id="deviceFilterSummary"></span>
+                <span class="toolbar-right">
+                    <span id="fleetStatusChips" class="fleet-status-chips" style="display:none;" role="group" aria-label="Filter by update status"></span>
+                    <span id="fleetChipsSep" class="toolbar-vsep" style="display:none;"></span>
+                    <span class="table-filter-summary" id="deviceFilterSummary"></span>
+                </span>
             </div>
             <div id="selectionActionBar" class="selection-action-bar" style="display:none;">
                 <span id="selectionCount" style="font-weight:500;">0 selected</span>
@@ -4488,11 +4511,6 @@
         function updateUI() {
             if (!topology) return;
 
-            document.getElementById('apCount').textContent = topology.total_aps || 0;
-            document.getElementById('greenCount').textContent = topology.overall_health?.green || 0;
-            document.getElementById('yellowCount').textContent = topology.overall_health?.yellow || 0;
-            document.getElementById('redCount').textContent = topology.overall_health?.red || 0;
-
             updateTabBadges();
             renderTable();
             updateChart();
@@ -4500,9 +4518,9 @@
         }
 
         function updateTabBadges() {
-            // Updates badge: devices with available updates (yellow count)
+            // Updates badge: devices whose firmware is behind target.
             const fwBadge = document.getElementById('modeTabFwBadge');
-            const updatesCount = (topology?.overall_health?.yellow || 0) + (topology?.overall_health?.red || 0);
+            const updatesCount = computeFleetStatusCounts().behind;
             if (updatesCount > 0) {
                 fwBadge.textContent = updatesCount;
                 fwBadge.style.display = '';
@@ -4759,6 +4777,11 @@
             const chips = [];
             for (const [col, valSet] of Object.entries(columnFilters)) {
                 if (!valSet || valSet.size === 0) continue;
+                // The fleet-status toolbar chips already show (highlighted) any
+                // status filter made up of current/behind/offline — don't repeat
+                // it as a removable chip here. Other status values (unknown,
+                // updating) and other columns still get a chip.
+                if (col === 'status' && [...valSet].every(v => ['current', 'behind', 'offline'].includes(v))) continue;
                 const vals = [...valSet].map(v => valueLabelFor(col, v));
                 const label = `${colNames[col] || col}: ${vals.join(', ')}`;
                 chips.push(`<span class="filter-chip">${escapeHtml(label)}<a onclick="clearColumnFilter('${col}')" title="Remove filter">&times;</a></span>`);
@@ -5000,6 +5023,75 @@
                     return '';
                 default: return '';
             }
+        }
+
+        // Tally every device's update status (same logic as the per-row Update
+        // icon and the Status column filter) so the toolbar totals always match
+        // what's on screen. Traversal mirrors getColumnValues / walkSiteAPs.
+        function computeFleetStatusCounts() {
+            const counts = { current: 0, behind: 0, offline: 0, updating: 0, unknown: 0, total: 0 };
+            if (!topology?.sites) return counts;
+            for (const site of topology.sites) {
+                for (const ap of walkSiteAPs(site)) {
+                    counts[getDeviceStatusForFilter(ap, 'ap')]++;
+                    counts.total++;
+                    for (const cpe of (ap.cpes || [])) {
+                        counts[getDeviceStatusForFilter(cpe, 'cpe', ap)]++;
+                        counts.total++;
+                    }
+                }
+                for (const sw of (site.switches || [])) {
+                    counts[getDeviceStatusForFilter(sw, 'switch')]++;
+                    counts.total++;
+                }
+            }
+            return counts;
+        }
+
+        const FLEET_CHIP_DEFS = [
+            { key: 'current', cls: 's-cur', gl: '✓', label: 'Up to date' },
+            { key: 'behind',  cls: 's-beh', gl: '↑', label: 'Need update' },
+            { key: 'offline', cls: 's-off', gl: '⚠', label: 'Offline' },
+        ];
+
+        function renderFleetStatusChips() {
+            const el = document.getElementById('fleetStatusChips');
+            const sep = document.getElementById('fleetChipsSep');
+            if (!el) return;
+            const counts = computeFleetStatusCounts();
+            if (activeColumnMode !== 'firmware' || counts.total === 0) {
+                el.style.display = 'none';
+                el.innerHTML = '';
+                if (sep) sep.style.display = 'none';
+                return;
+            }
+            if (sep) sep.style.display = '';
+            const statusSet = columnFilters['status'];
+            el.innerHTML = FLEET_CHIP_DEFS.map(d => {
+                const n = counts[d.key] || 0;
+                const active = statusSet ? statusSet.has(d.key) : false;
+                const disabled = n === 0 && !active;
+                const cls = `fleet-chip ${d.cls}${active ? ' active' : ''}${disabled ? ' disabled' : ''}`;
+                const handler = disabled ? '' : ` onclick="toggleStatusChip('${d.key}')"`;
+                const title = disabled
+                    ? `No ${d.label.toLowerCase()} devices`
+                    : `${active ? 'Clear filter' : 'Show only'}: ${d.label.toLowerCase()}`;
+                return `<button type="button" class="${cls}"${handler} aria-pressed="${active}" title="${escapeHtml(title)}">` +
+                    `<span class="gl">${d.gl}</span><span class="n">${n}</span><span class="lbl">${d.label}</span></button>`;
+            }).join('');
+            el.style.display = 'inline-flex';
+        }
+
+        // Toggle a status value in/out of the Status column filter, then
+        // re-render. Combines with the text query and with the Update column's
+        // multi-select dropdown (they share columnFilters['status']).
+        function toggleStatusChip(value) {
+            const next = new Set(columnFilters['status'] || []);
+            if (next.has(value)) next.delete(value); else next.add(value);
+            if (next.size === 0) delete columnFilters['status'];
+            else columnFilters['status'] = next;
+            updateFilterChip();
+            renderTable();
         }
 
         // Worst-of CPE health. Returns 'green' / 'yellow' / 'red' / 'offline'
@@ -5548,6 +5640,7 @@
             updateCheckboxStates();
             updateSelectionBar();
             updateDeviceFilterSummary(visibleRows, totalRows);
+            renderFleetStatusChips();
         }
 
         function toggleExpand(key, event) {
@@ -8516,8 +8609,8 @@
             // Show only the active bar content
             document.getElementById('drawerHandleLeft').classList.toggle('active', mode === 'firmware');
             document.getElementById('drawerHandleRight').classList.toggle('active', mode === 'config');
-            // Switch stats bar
-            setHidden(document.getElementById('statsBar'), mode !== 'firmware');
+            // Switch stats bar (firmware totals now live in the table toolbar
+            // chips, which renderTable hides outside firmware mode)
             setHidden(document.getElementById('configStatsBar'), mode !== 'config');
             // Switch drawer content
             setHidden(document.getElementById('drawerContent-updates'), mode !== 'firmware');
@@ -9609,8 +9702,9 @@
                     });
                 }
 
-                // Re-render table with version status
-                if (topology) renderTable();
+                // Re-render table + refresh the Updates tab badge with the
+                // freshly-loaded version status.
+                if (topology) { renderTable(); updateTabBadges(); }
 
                 lastBehindCount = data.summary?.behind || 0;
                 lastFleetTotal = data.summary?.total || 0;
