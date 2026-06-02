@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from updater import database as db
+from updater import rollout_gate
 from updater.scheduler import AutoUpdateScheduler
 
 FW = "tna-30x-1.12.3-r55002.bin"  # target version 1.12.3.55002
@@ -185,3 +186,55 @@ async def test_held_phase_logs_event(mock_db, monkeypatch):
             "SELECT 1 FROM schedule_log WHERE event = 'phase_held'"
         ).fetchall()
     assert len(rows) >= 1
+
+
+# ── Canary soak: timestamp fallback for rollouts that predate canary_completed_at ──
+# These are pure-logic checks on the gate (no scheduler/DB needed).
+
+_NOW = datetime(2026, 6, 10, 3, 15)
+_SOAK = timedelta(days=6)
+
+
+def test_soak_falls_back_to_last_phase_completed_at():
+    """A rollout already at pct10 when this shipped has no canary_completed_at;
+    the soak must still apply, measured from last_phase_completed_at (the
+    canary -> pct10 advance), not be silently skipped."""
+    rollout = {
+        "status": "active",
+        "phase": "pct10",
+        "last_phase_window": None,
+        "canary_completed_at": None,
+        "last_phase_completed_at": (_NOW - timedelta(days=2)).isoformat(),  # within soak
+    }
+    may_run, reason = rollout_gate.phase_run_decision(rollout, "2026-06-10", _NOW, _SOAK)
+    assert may_run is False
+    assert reason == "canary_soak"
+
+
+def test_soak_fallback_clears_after_period():
+    """Once last_phase_completed_at + soak has elapsed, pct10 may run."""
+    rollout = {
+        "status": "active",
+        "phase": "pct10",
+        "last_phase_window": None,
+        "canary_completed_at": None,
+        "last_phase_completed_at": (_NOW - timedelta(days=7)).isoformat(),  # soak elapsed
+    }
+    may_run, reason = rollout_gate.phase_run_decision(rollout, "2026-06-10", _NOW, _SOAK)
+    assert may_run is True
+    assert reason is None
+
+
+def test_soak_holds_when_no_timestamp_exists():
+    """Fail-closed: with neither canary_completed_at nor last_phase_completed_at,
+    hold pct10 rather than skip the soak."""
+    rollout = {
+        "status": "active",
+        "phase": "pct10",
+        "last_phase_window": None,
+        "canary_completed_at": None,
+        "last_phase_completed_at": None,
+    }
+    may_run, reason = rollout_gate.phase_run_decision(rollout, "2026-06-10", _NOW, _SOAK)
+    assert may_run is False
+    assert reason == "canary_soak"

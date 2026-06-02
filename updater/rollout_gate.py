@@ -29,18 +29,26 @@ def canary_soak_cleared(
 ) -> tuple[bool, Optional[timedelta]]:
     """Return (cleared, remaining) for the canary soak.
 
-    Cleared when `now >= canary_completed_at + canary_soak`. If the rollout has
-    no recorded canary completion, there is nothing to soak, so it is cleared.
+    Cleared when `now >= reference + canary_soak`, where `reference` is when the
+    canary finished on this fleet. Prefer the explicit `canary_completed_at`;
+    fall back to `last_phase_completed_at`, which for a rollout sitting at pct10
+    is the canary -> pct10 advance time (i.e. when canary completed). The
+    fallback keeps a rollout that was already past canary when this code shipped
+    honest — its `canary_completed_at` is NULL, but the soak still applies from
+    the recorded phase-completion time.
+
+    Fail-closed: if no completion timestamp exists at all, hold rather than
+    silently skip the soak.
     """
     if not canary_soak or canary_soak.total_seconds() <= 0:
         return True, None
-    ran_at = rollout.get("canary_completed_at")
+    ran_at = rollout.get("canary_completed_at") or rollout.get("last_phase_completed_at")
     if not ran_at:
-        return True, None  # canary never recorded a completion — nothing to soak
+        return False, canary_soak  # cannot date the canary — hold (fail-closed)
     try:
         ran_dt = datetime.fromisoformat(ran_at)
     except (ValueError, TypeError):
-        return True, None
+        return False, canary_soak  # unparseable timestamp — hold (fail-closed)
     # Reconcile tz-awareness so naive (stored) and aware (live) clocks compare.
     if now.tzinfo is not None and ran_dt.tzinfo is None:
         ran_dt = ran_dt.replace(tzinfo=now.tzinfo)
