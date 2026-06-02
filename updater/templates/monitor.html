@@ -4151,6 +4151,8 @@
             status: 'all',
             model: 'all',
         };
+        // Fleet-status toolbar chip filter (single-select): null | 'current' | 'behind' | 'offline'.
+        let chipStatusFilter = null;
 
         // System update overlay state
         let systemUpdateStartTime = null;
@@ -4777,11 +4779,6 @@
             const chips = [];
             for (const [col, valSet] of Object.entries(columnFilters)) {
                 if (!valSet || valSet.size === 0) continue;
-                // The fleet-status toolbar chips already show (highlighted) any
-                // status filter made up of current/behind/offline — don't repeat
-                // it as a removable chip here. Other status values (unknown,
-                // updating) and other columns still get a chip.
-                if (col === 'status' && [...valSet].every(v => ['current', 'behind', 'offline'].includes(v))) continue;
                 const vals = [...valSet].map(v => valueLabelFor(col, v));
                 const label = `${colNames[col] || col}: ${vals.join(', ')}`;
                 chips.push(`<span class="filter-chip">${escapeHtml(label)}<a onclick="clearColumnFilter('${col}')" title="Remove filter">&times;</a></span>`);
@@ -4806,6 +4803,7 @@
             for (const key of Object.keys(columnFilters)) {
                 delete columnFilters[key];
             }
+            chipStatusFilter = null;
             closeColumnFilter();
             _openFilterColumn = null;
             updateFilterChip();
@@ -5025,25 +5023,41 @@
             }
         }
 
-        // Tally every device's update status (same logic as the per-row Update
-        // icon and the Status column filter) so the toolbar totals always match
-        // what's on screen. Traversal mirrors getColumnValues / walkSiteAPs.
+        // Reachability dimension — the leading status dot (statusCell). A device
+        // can be offline AND behind its firmware target; the two are independent.
+        function isDeviceOffline(device, kind, parentAp) {
+            if (device.last_error) return true;
+            if (kind === 'cpe' && parentAp && parentAp.last_error) return true;
+            if (kind === 'cpe' && device.auth_status && device.auth_status !== 'ok') return true;
+            return false;
+        }
+
+        // Toolbar totals. Firmware status (current/behind) is computed from
+        // versionStatus — the SAME source as the Update-column ✓/↑ icons, the
+        // /api/fleet-status summary, and the scheduler "pending" count — and kept
+        // SEPARATE from reachability (offline). The dimensions are orthogonal: an
+        // offline device that is behind still counts toward "Need update", so
+        // pending firmware work is never hidden when a device drops offline.
+        // Offline therefore overlaps current/behind rather than partitioning them.
         function computeFleetStatusCounts() {
-            const counts = { current: 0, behind: 0, offline: 0, updating: 0, unknown: 0, total: 0 };
+            const counts = { current: 0, behind: 0, offline: 0, total: 0 };
             if (!topology?.sites) return counts;
+            const tally = (device, kind, parentAp) => {
+                counts.total++;
+                const ip = device.ip;
+                // Mid-update devices show a spinner in both columns — skip them.
+                if (updatingDevices.has(ip) || (parentAp && updatingDevices.has(parentAp.ip))) return;
+                const vs = versionStatus(ip);            // 'current' | 'behind' | 'unknown'
+                if (vs === 'current') counts.current++;
+                else if (vs === 'behind') counts.behind++;
+                if (isDeviceOffline(device, kind, parentAp)) counts.offline++;   // overlaps current/behind
+            };
             for (const site of topology.sites) {
                 for (const ap of walkSiteAPs(site)) {
-                    counts[getDeviceStatusForFilter(ap, 'ap')]++;
-                    counts.total++;
-                    for (const cpe of (ap.cpes || [])) {
-                        counts[getDeviceStatusForFilter(cpe, 'cpe', ap)]++;
-                        counts.total++;
-                    }
+                    tally(ap, 'ap', null);
+                    for (const cpe of (ap.cpes || [])) tally(cpe, 'cpe', ap);
                 }
-                for (const sw of (site.switches || [])) {
-                    counts[getDeviceStatusForFilter(sw, 'switch')]++;
-                    counts.total++;
-                }
+                for (const sw of (site.switches || [])) tally(sw, 'switch', null);
             }
             return counts;
         }
@@ -5066,10 +5080,9 @@
                 return;
             }
             if (sep) sep.style.display = '';
-            const statusSet = columnFilters['status'];
             el.innerHTML = FLEET_CHIP_DEFS.map(d => {
                 const n = counts[d.key] || 0;
-                const active = statusSet ? statusSet.has(d.key) : false;
+                const active = chipStatusFilter === d.key;
                 const disabled = n === 0 && !active;
                 const cls = `fleet-chip ${d.cls}${active ? ' active' : ''}${disabled ? ' disabled' : ''}`;
                 const handler = disabled ? '' : ` onclick="toggleStatusChip('${d.key}')"`;
@@ -5082,15 +5095,12 @@
             el.style.display = 'inline-flex';
         }
 
-        // Toggle a status value in/out of the Status column filter, then
-        // re-render. Combines with the text query and with the Update column's
-        // multi-select dropdown (they share columnFilters['status']).
+        // Toolbar chip → single-select fleet-status filter. Firmware chips
+        // (current/behind) match versionStatus; the offline chip matches
+        // reachability — mirroring how the totals are counted. Combines with the
+        // text query and column filters (see matchesDeviceFilters).
         function toggleStatusChip(value) {
-            const next = new Set(columnFilters['status'] || []);
-            if (next.has(value)) next.delete(value); else next.add(value);
-            if (next.size === 0) delete columnFilters['status'];
-            else columnFilters['status'] = next;
-            updateFilterChip();
+            chipStatusFilter = (chipStatusFilter === value) ? null : value;
             renderTable();
         }
 
@@ -5135,6 +5145,15 @@
                 if (!val) continue;
                 if (!allowedSet.has(val)) return false;
             }
+            // Fleet-status toolbar chip — firmware version (current/behind) or
+            // reachability (offline), a separate dimension from the loop above.
+            if (chipStatusFilter) {
+                if (chipStatusFilter === 'offline') {
+                    if (!isDeviceOffline(device, kind, parentAp)) return false;
+                } else if (versionStatus(device.ip) !== chipStatusFilter) {
+                    return false;
+                }
+            }
             const query = deviceFilterState.query;
             if (!query) return true;
             const haystack = [
@@ -5158,7 +5177,7 @@
                 return;
             }
             const colFiltersActive = Object.values(columnFilters).some(s => s && s.size > 0);
-            const filtersActive = !!deviceFilterState.query || colFiltersActive;
+            const filtersActive = !!deviceFilterState.query || colFiltersActive || !!chipStatusFilter;
             if (!filtersActive) {
                 summaryEl.textContent = `${totalRows} device${totalRows === 1 ? '' : 's'}`;
                 return;
@@ -5471,7 +5490,7 @@
                 const siteName = site.name || '';
                 const colFiltersActive = Object.values(columnFilters).some(s => s && s.size > 0);
                 const queryTerms = deviceFilterState.query ? deviceFilterState.query.split(',').map(t => t.trim()).filter(Boolean) : [];
-                const queryOnlySiteFilter = queryTerms.length > 0 && !colFiltersActive &&
+                const queryOnlySiteFilter = queryTerms.length > 0 && !colFiltersActive && !chipStatusFilter &&
                     queryTerms.some(term => siteName.toLowerCase().includes(term));
 
                 const aps = [];
