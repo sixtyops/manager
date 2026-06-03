@@ -94,6 +94,13 @@ class _Harness:
             self.scheduler.on_job_completed(
                 self.scheduler._current_job_id, len(statuses), 0, device_statuses=statuses
             )
+        # on_job_completed stamps canary_completed_at with the real wall clock,
+        # but the soak gate compares it against this harness's simulated clock.
+        # Re-stamp from self.now so the soak is measured on one consistent clock;
+        # otherwise the test depends on the real date and breaks once wall-clock
+        # time reaches the hard-coded tick dates.
+        if rollout["phase"] == "canary":
+            db.set_canary_completed_at(rollout["id"], self.now.isoformat())
 
 
 @pytest.mark.asyncio
