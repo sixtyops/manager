@@ -1,6 +1,15 @@
 # API Reference
 
-All API endpoints require authentication unless noted. Authenticated requests must include a valid session cookie (`session_id`). Unauthenticated API requests return `401`; unauthenticated page requests redirect to `/login`.
+All API endpoints require authentication unless noted. Requests authenticate with either the `session_id` session cookie or an `Authorization: Bearer <api-token>` header (see [API Tokens](#api-tokens)). Unauthenticated API requests return `401`; unauthenticated page requests redirect to `/login`. The only routes reachable without a session are the health check (`GET /healthz`), the login and first-run setup pages, and the OIDC login/callback flow — all rate-limited or first-run-gated as noted below.
+
+Interactive API docs (Swagger UI and ReDoc) are served at `/docs` and `/redoc`, backed by the schema at `/openapi.json`. All three require a valid session — the API surface is not anonymously discoverable.
+
+## Health
+
+### `GET /healthz`
+Container/orchestrator health check. **No auth required.** Verifies database connectivity; returns up/down only (no internal detail).
+
+- **Response**: `{ "status": "ok", "db": "ok" }`, or `503` with `{ "status": "degraded", "db": "unavailable" }`
 
 ## Authentication
 
@@ -30,10 +39,10 @@ Set or change admin password.
 ### `GET /setup-wizard`
 Multi-step setup wizard for SSL and backup configuration. Auth required.
 
-### `POST /setup-wizard`
-Handle wizard steps (SSL certificate setup, SFTP backup, completion).
+### `POST /api/setup-wizard/complete`
+Mark the initial setup wizard as completed. Requires admin role.
 
-- **Body**: `step` (form), `action` (form), plus step-specific fields
+- **Response**: `{ "ok": true }`
 
 ### `GET /auth/oidc/login`
 Start the OIDC login flow. No auth required. Rate-limited to 60 requests per IP per 5 minutes.
@@ -66,6 +75,21 @@ Update built-in Radius server settings. Classified as a dangerous feature.
   - `secret` is required when enabling the server
   - If `secret` is omitted, the existing secret is preserved
 - **Effect**: Updates RADIUS server configuration and restarts the in-process server
+
+### `POST /api/auth/radius/test`
+Test built-in Radius server health. Requires admin role. Classified as a dangerous feature.
+
+- **Response**: `{ "success": <bool>, "message": "..." }`
+
+### `POST /api/auth/radius/restart`
+Restart the in-process built-in Radius server. Requires admin role. Classified as a dangerous feature.
+
+- **Response**: `{ "status": "ok" }`
+
+### `GET /api/auth/radius/status`
+Get built-in Radius running status and stats. Classified as a dangerous feature.
+
+- **Response**: `get_status()` summary, or `{ "running": false, "error": "Not initialized", "stats": {} }` when the service is uninitialized
 
 ### `GET /api/auth/radius/users`
 List built-in Radius users. Classified as a dangerous feature.
@@ -121,6 +145,12 @@ Get built-in Radius status, auth counters, and recent auth history. Classified a
 - **Response**: `enabled`, `configured`, `running`, `healthy`, `container_status`, `health_status`, `port`, `secret_set`, `last_error`, `secret_last_rotated_at`, `secret_age_days`, `rotation_recommended`, `rotation_status`, `rotation_recommend_after_days`, `admin_accounts`, `known_clients`, `active_devices_24h`, `auth_success_rate`, `logins_today`, `recent_logins`
 - **Notes**: Auth history is persisted directly in SQLite by the in-process RADIUS server
 
+### `GET /api/auth/radius/auth-log`
+Get recent built-in Radius authentication attempts. Classified as a dangerous feature.
+
+- **Query**: `limit` (default 50, capped at 200), `offset` (default 0)
+- **Response**: `{ "entries": [...], "total": ... }`
+
 ### `POST /api/auth/radius/secret-review`
 Start tracking a legacy Radius shared secret from today without changing the secret value. Classified as a dangerous feature.
 
@@ -129,6 +159,17 @@ Start tracking a legacy Radius shared secret from today without changing the sec
   - Only works when a shared secret exists
   - Only available for older installs where the secret predates rotation tracking
   - This does not rotate the secret or push changes to devices
+
+### `POST /api/auth/radius/test-ldap`
+Test LDAP/Active Directory connectivity with the current configuration. Requires admin role. Classified as a dangerous feature.
+
+- **Body** (JSON): `test_username` (optional, defaults to `testuser`)
+
+### `POST /api/auth/radius/push-to-devices`
+Push the built-in Radius server's config to managed devices. Requires admin or operator role. Classified as a dangerous feature.
+
+- **Behavior**: Runs as a background task
+- **Conflicts** (`409`): a Radius migration rollout is active, or a push is already running
 
 ### `GET /api/auth/radius/rollout`
 Get the current staged Radius device-migration rollout, if any. Classified as a dangerous feature.
@@ -336,10 +377,11 @@ Update settings. Only whitelisted keys are accepted:
   - `rollout_canary_switches` must contain enabled switch IPs in the effective rollout scope
 - **Response**: `{ "success": true }`
 
-### `PUT /api/auth/device-defaults`
-Update global default device credentials (used when communicating with APs/switches).
+### `POST /api/settings/save`
+Save settings, then re-select firmware and force a scheduler re-evaluation. Requires admin role. Use this (rather than `PUT /api/settings`) when a change should immediately re-evaluate firmware selection and the schedule.
 
-- **Body** (JSON): `enabled`, `username`, `password`
+- **Body** (JSON): Same whitelisted keys as `PUT /api/settings`
+- **Response**: `{ "success": true }`
 
 ### `POST /api/slack/test`
 Send a test notification to the configured Slack webhook.
@@ -434,6 +476,12 @@ Start a firmware update for a single device (AP, CPE, or switch).
 
 ### `GET /api/job/{job_id}`
 Get the status of an update job including per-device results.
+
+### `POST /api/job/{job_id}/cancel`
+Request cancellation of an active update job. Requires admin or operator role.
+
+- **Response**: `{ "job_id": "...", "cancelled": true, "message": "..." }`
+- **Errors**: `404` if the job is unknown, `400` if it already completed
 
 ## Backup & Restore
 
@@ -584,6 +632,40 @@ Get audit log entries. Requires admin role.
 - **Query**: `limit` (default 100), `offset` (default 0), `username` (optional), `action` (optional)
 - **Response**: `{ "entries": [...], "total": ... }`
 
+## User Management
+
+Local management-UI accounts (distinct from the built-in Radius users above).
+
+### `GET /api/users/me`
+Get the current authenticated user.
+
+- **Response**: `{ "username": "...", "role": "admin"|"operator"|"viewer" }`
+
+### `GET /api/users`
+List all users. Requires admin role.
+
+- **Response**: `{ "users": [...], "oidc_admin_group_configured": <bool> }`
+
+### `POST /api/users`
+Create a local user. Requires admin role.
+
+- **Body** (JSON): `username`, `password` (minimum 12 characters), `role`
+- **Validation**: `role` must be valid; `409` if the username already exists
+- **Response**: `{ "id": ..., "username": "...", "role": "..." }`
+
+### `PUT /api/users/{user_id}`
+Update a user's role, password, or enabled state. Requires admin role.
+
+- **Body** (JSON): Any subset of `role`, `password` (minimum 12 characters), `enabled`
+- **Guards**: Cannot remove or disable the last admin; cannot disable your own account
+- **Response**: `{ "ok": true }`
+
+### `DELETE /api/users/{user_id}`
+Delete a user. Requires admin role.
+
+- **Guards**: Cannot delete your own account or the last admin
+- **Response**: `{ "ok": true }`
+
 ## Config Management
 
 ### `GET /api/configs`
@@ -617,6 +699,31 @@ Trigger immediate config fetch for one device. Requires admin or operator role.
 
 ### `POST /api/configs/poll`
 Trigger immediate config fetch for all devices. Requires admin or operator role.
+
+## Config Recycle Bin
+
+Soft-deleted config snapshots (e.g. snapshots orphaned when a device is removed) are retained here for recovery. Classified as a dangerous feature.
+
+### `GET /api/configs/recycle-bin`
+List soft-deleted snapshot groups, one entry per former device IP. Requires admin or operator role.
+
+- **Response**: `{ "entries": [...] }`
+
+### `GET /api/configs/recycle-bin/{ip}`
+List soft-deleted snapshots for a specific former IP. Requires admin or operator role.
+
+- **Query**: `limit` (default 200)
+- **Response**: `{ "history": [...] }`
+
+### `POST /api/configs/recycle-bin/{ip}/restore`
+Restore soft-deleted snapshots back into live history for the given IP. Requires admin role.
+
+- **Response**: `{ "status": "restored", "ip": "...", "snapshots_restored": ... }` (`404` if none found)
+
+### `DELETE /api/configs/recycle-bin/{ip}`
+Permanently purge soft-deleted snapshots for the given IP. Requires admin role.
+
+- **Response**: `{ "status": "purged", "ip": "...", "snapshots_purged": ... }` (`404` if none found)
 
 ## Config Templates
 
