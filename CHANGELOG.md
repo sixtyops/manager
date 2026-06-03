@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added
+- A **Download** action on Config Snapshot Recycle Bin entries. When a CPE is
+  decommissioned (or pruned after going offline) its last config is retained
+  here, labeled with the customer name — you can now download it as a
+  device-restorable `.tar` and upload it onto the replacement through the
+  device's own web UI, without needing to reach the dead unit.
+
+### Fixed
+- Config-tar download (`/api/configs/{ip}/download/{config_id}`) again writes the
+  `CONTROL` file as the bare device platform string (e.g. `tn-110-prs`, or
+  `tam-110-prs` for the TNA-303L-65) with no trailing newline — the exact format
+  the device's own web-UI config upload accepts. #43 had wrapped it in a
+  `key=value` manifest for a manager re-import that never shipped, which silently
+  broke the download → device-restore round-trip. The platform string is now
+  resolved per model, and the download refuses (422) rather than emit a guessed
+  one that the device could reject or mis-apply.
+
 ### Changed
 - The rain-climate selector moved from the global top header into the
   signal-health chart's **Rain fade** toggle segment, which always shows

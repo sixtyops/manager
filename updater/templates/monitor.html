@@ -10057,12 +10057,30 @@
                             <div style="font-weight:500;font-size:var(--text-sm);">${label}</div>
                             <div class="u-text-xxs-dim">${ip} · ${e.snapshot_count} snapshot(s) · deleted ${escapeHtml(deletedAt)}</div>
                         </div>
+                        <button type="button" class="btn btn-sm btn-secondary" data-ip="${ip}" onclick="downloadRecycleBinLatest(this.dataset.ip)" title="Download the last saved config as a device-restorable .tar — upload it to a replacement via the device's web UI">Download</button>
                         <button type="button" class="btn btn-sm btn-secondary" data-ip="${ip}" onclick="restoreRecycleBinEntry(this.dataset.ip)">Restore</button>
                         <button type="button" class="btn btn-sm btn-warning" data-ip="${ip}" onclick="purgeRecycleBinEntry(this.dataset.ip)">Purge</button>
                     </div>`;
                 }).join('');
             } catch (e) {
                 list.innerHTML = `<span class="u-text-xxs-dim">Error: ${escapeHtml(e.message)}</span>`;
+            }
+        }
+
+        // RMA: a dead/decommissioned CPE's config lives here (labeled with the
+        // customer name). Download its last snapshot as a device-restorable .tar
+        // to upload onto the replacement. The summary is per-IP, so fetch this
+        // IP's history and take the newest snapshot.
+        async function downloadRecycleBinLatest(ip) {
+            try {
+                const resp = await fetch(`/api/configs/recycle-bin/${encodeURIComponent(ip)}`);
+                if (!resp.ok) { showToast(`Couldn't load snapshots for ${ip}`, 'error', 4000); return; }
+                const data = await resp.json();
+                const history = data.history || [];   // newest first (fetched_at DESC)
+                if (!history.length) { showToast(`No saved config for ${ip}`, 'error', 4000); return; }
+                downloadConfigTar(ip, history[0].id);
+            } catch (e) {
+                showToast(`Download error: ${e.message}`, 'error', 5000);
             }
         }
 

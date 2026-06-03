@@ -6441,32 +6441,28 @@ async def download_config_tar(ip: str, config_id: int, session: dict = Depends(r
         config_data = config_json_str
     pretty_json = json.dumps(config_data, indent=2)
 
-    hardware_id = config.get("hardware_id") or "tn-110-prs"
-    fetched_at = config.get("fetched_at") or ""
-    config_hash = config.get("config_hash") or ""
-    if not fetched_at or not config_hash:
-        # Defensive: device_configs columns are populated on every save, so a
-        # missing field here means a corrupt or partially-restored row. Log
-        # so an operator can spot it; still emit the manifest with empty
-        # fields rather than 500ing on an otherwise-valid download.
-        logger.warning(
-            "Config tar for %s id=%s missing integrity fields "
-            "(fetched_at=%r, config_hash=%r)",
-            ip, config_id, fetched_at, config_hash,
+    # CONTROL must be byte-for-byte what the device's own importer (the device
+    # web-UI "upload config / restore") expects: the bare hardware platform
+    # string, nothing else and no trailing newline. This lets an operator
+    # download a stored snapshot here — including for an offline or
+    # decommissioned CPE — and restore it onto a replacement through the device
+    # UI. (Issue #43 had wrapped this in a key=value manifest for a manager
+    # re-import that never shipped, which silently broke the device round-trip.)
+    hardware_id = config.get("hardware_id")
+    if not hardware_id:
+        # Older snapshots may predate hardware_id capture. Derive it from the
+        # model so 303L-65 (tam-110-prs) doesn't get a 30x string.
+        hardware_id = TachyonClient.MODEL_HARDWARE_IDS.get((config.get("model") or "").lower())
+    if not hardware_id:
+        # Refuse to emit a tar with a guessed/wrong CONTROL — a mismatched
+        # platform string can make the device reject (or mis-apply) the restore.
+        raise HTTPException(
+            422,
+            f"Cannot determine the device platform id for {ip} "
+            f"(model={config.get('model')!r}); refusing to emit a config tar "
+            f"the device would reject.",
         )
-
-    # CONTROL is a key=value manifest so a future importer can verify
-    # integrity before applying. Fields are newline-delimited (os-release
-    # style); this format is a deliberate break from the prior bare
-    # hardware_id text — there's no current importer to be backward-
-    # compatible with (per issue #43).
-    control_lines = [
-        f"hardware_id={hardware_id}",
-        f"fetched_at={fetched_at}",
-        f"config_hash={config_hash}",
-        f"manager_version={__version__}",
-    ]
-    control_text = "\n".join(control_lines) + "\n"
+    control_text = hardware_id
 
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
@@ -6484,7 +6480,8 @@ async def download_config_tar(ip: str, config_id: int, session: dict = Depends(r
 
     buf.seek(0)
     device_name = ip.replace(".", "-")
-    filename = f"config-{device_name}-{config['fetched_at'][:10]}.tar"
+    date_str = (config.get("fetched_at") or "")[:10] or "snapshot"
+    filename = f"config-{device_name}-{date_str}.tar"
 
     return StreamingResponse(
         buf,
