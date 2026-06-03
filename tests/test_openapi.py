@@ -84,3 +84,61 @@ class TestOpenAPISchema:
                         untagged.append(f"{method.upper()} {path}")
         # Allow a few untagged, but most should be tagged
         assert len(untagged) <= 5, f"Too many untagged API routes: {untagged}"
+
+    def test_api_doc_matches_routes(self):
+        """Guard `docs/api.md` against drifting from the real route table.
+
+        Every in-schema HTTP route (and the /ws WebSocket) must have a matching
+        ``### `METHOD /path` `` heading in docs/api.md, and every documented
+        heading must correspond to a real route. Catches both undocumented
+        endpoints and stale doc entries. The /docs, /redoc, /openapi.json meta
+        endpoints are include_in_schema=False and excluded; the /static mount
+        is not an APIRoute and is skipped.
+        """
+        import re
+        from pathlib import Path
+
+        from fastapi.routing import APIRoute
+        from starlette.routing import WebSocketRoute
+
+        from updater.app import app
+
+        HTTP_METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH"}
+
+        def normalize(path: str) -> str:
+            # Strip FastAPI path converters: {filename:path} -> {filename}
+            return re.sub(r"\{([^}:]+):[^}]+\}", r"{\1}", path)
+
+        # Documented endpoints from the Markdown reference.
+        doc_path = Path(__file__).resolve().parent.parent / "docs" / "api.md"
+        documented = set()
+        for m in re.finditer(
+            r"^###\s+`(GET|POST|PUT|DELETE|PATCH|WebSocket)\s+(\S+)`",
+            doc_path.read_text(),
+            re.MULTILINE,
+        ):
+            documented.add((m.group(1).upper(), normalize(m.group(2))))
+
+        # Actual routes from the live app.
+        actual = set()
+        for route in app.routes:
+            if isinstance(route, APIRoute):
+                if not route.include_in_schema:
+                    continue
+                for method in (route.methods or set()) & HTTP_METHODS:
+                    actual.add((method, normalize(route.path)))
+            elif isinstance(route, WebSocketRoute):
+                actual.add(("WEBSOCKET", normalize(route.path)))
+
+        undocumented = sorted(f"{mtd} {p}" for mtd, p in actual - documented)
+        stale = sorted(f"{mtd} {p}" for mtd, p in documented - actual)
+
+        assert not undocumented, (
+            "Routes missing from docs/api.md (document them, or set "
+            "include_in_schema=False if intentionally internal):\n  "
+            + "\n  ".join(undocumented)
+        )
+        assert not stale, (
+            "docs/api.md documents routes that don't exist (fix or remove):\n  "
+            + "\n  ".join(stale)
+        )
