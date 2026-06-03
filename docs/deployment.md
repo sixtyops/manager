@@ -35,7 +35,9 @@ cd manager
 ### Docker image (you manage updates)
 
 To run the prebuilt image directly — no git clone, no bundled nginx — pin a
-version and bring your own reverse proxy:
+version (find the current tag on the [install page](https://sixtyops.net/#download)
+or the [Releases](https://github.com/sixtyops/manager/releases) page) and bring
+your own reverse proxy:
 
 ```bash
 docker run -d --name sixtyops --restart unless-stopped \
@@ -43,7 +45,7 @@ docker run -d --name sixtyops --restart unless-stopped \
   -v sixtyops-data:/app/data \
   -v sixtyops-firmware:/app/firmware \
   -v sixtyops-backups:/app/backups \
-  ghcr.io/sixtyops/manager:v1.3.1-dev22
+  ghcr.io/sixtyops/manager:<version>
 ```
 
 Front it with your reverse proxy (TLS) pointing at `127.0.0.1:8000`. State lives
