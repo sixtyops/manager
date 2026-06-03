@@ -422,8 +422,13 @@ class TestApplyUpdateGuardrails:
         assert result["success"] is False
         assert result["manual"] is True
         cmds = result["commands"]
-        assert any(cmd == f"docker pull {GHCR_IMAGE}:v1.0.2" for cmd in cmds)
         assert not any("git checkout" in cmd for cmd in cmds)
+        # The only runnable (non-comment) command must be the image pull — the
+        # recreate step is commented guidance, since we can't know if this
+        # install is compose- or `docker run`-managed (and a bare compose/run
+        # command would fail or attach no volumes).
+        runnable = [c for c in cmds if not c.lstrip().startswith("#")]
+        assert runnable == [f"docker pull {GHCR_IMAGE}:v1.0.2"]
 
     @pytest.mark.asyncio
     async def test_manual_commands_source_install_uses_discovered_path(self):

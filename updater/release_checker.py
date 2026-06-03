@@ -383,17 +383,27 @@ def _manual_update_instructions(target_tag: str, repo_dir: Optional[Path]) -> di
     source tree to check out.
     """
     if repo_dir is None:
+        # Image-based deploy with no Docker socket: we can't inspect our own
+        # container to know whether it's compose- or `docker run`-managed, so
+        # the only command we can guarantee is the pull. The recreate step is
+        # install-specific — present it as commented guidance so pasting the
+        # block only ever runs the (always-safe) pull, never a command that
+        # fails (compose with no compose file) or attaches no volumes (a bare
+        # `docker run`). Full steps live in docs/deployment.md.
         image = f"{GHCR_IMAGE}:{target_tag}"
         return {
             "manual": True,
             "message": (
-                "Image-based install — pull the new image and recreate the "
-                "container (if you used a plain `docker run`, re-run it with the "
-                "new tag). See docs/deployment.md."
+                "Image-based install — pull the new image, then recreate the "
+                "container with it (the recreate step depends on how you run it; "
+                "full procedure in docs/deployment.md):"
             ),
             "commands": [
                 f"docker pull {image}",
-                "docker compose up -d",
+                "# then recreate the container with the new image:",
+                "#   compose-managed:    docker compose up -d",
+                "#   plain `docker run`: remove the old container, then re-run your",
+                f"#   original `docker run` with {image} (same -v / -p / -e flags)",
             ],
         }
     host_dir = _get_host_repo_path() or str(repo_dir)

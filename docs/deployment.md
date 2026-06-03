@@ -409,8 +409,8 @@ Enable or disable auto-update checking in the Settings UI (`autoupdate_enabled`)
 
 If you run the prebuilt image directly (the [Docker image](#docker-image-you-manage-updates)
 quick start), the in-app updater can't self-apply — it has no Docker socket or
-repo. The **Update** panel shows the exact commands instead. Update by pulling
-the new tag and recreating the container:
+repo. The **Update** panel shows the pull command plus recreate guidance
+instead. Update by pulling the new tag and recreating the container:
 
 ```bash
 docker pull ghcr.io/sixtyops/manager:<new-tag>
