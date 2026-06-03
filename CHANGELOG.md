@@ -57,6 +57,16 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Cookie-authenticated writes (e.g. the **Check Now** / update buttons,
+  saving settings, adding devices) no longer fail with `CSRF: origin
+  mismatch` on HTTPS deployments fronted by a reverse proxy or tunnel. The
+  CSRF check reconstructed the request scheme and only trusted
+  `X-Forwarded-Proto` from a docker-bridge peer, so behind any other proxy
+  it compared the browser's `https://` Origin against a reconstructed
+  `http://` origin and rejected it. It now compares the Origin/Referer
+  **host** against the `Host` header (scheme-independent); cross-site
+  requests are still blocked, and HSTS + the http→https redirect prevent
+  scheme-downgrade origins.
 - Phased firmware rollouts no longer push every device in a single
   maintenance window. The scheduler advanced canary → 10% → 50% → 100%
   back-to-back within one window because nothing gated the *timing*

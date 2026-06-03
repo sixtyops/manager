@@ -693,6 +693,23 @@ class TestCSRFMiddleware:
         )
         assert resp.status_code != 403
 
+    def test_https_origin_behind_tls_terminating_proxy_allowed(self, authed_client):
+        """Regression: behind a TLS-terminating proxy the app speaks http
+        internally (request.url.scheme == 'http'), but the browser's Origin is
+        https. The check compares host only, so a same-host https Origin is
+        allowed. Previously this 403'd as 'CSRF: origin mismatch' whenever the
+        proxy wasn't a trusted docker-bridge peer / didn't forward
+        X-Forwarded-Proto (the sixtyops-dev.infra.treehouse.mn failure)."""
+        resp = authed_client.post(
+            "/api/aps",
+            data={"ip": "10.0.0.55", "username": "root", "password": "x" * 8},
+            headers={"Origin": "https://testserver"},
+        )
+        assert resp.status_code != 403, (
+            f"https Origin behind a TLS-terminating proxy got CSRF-blocked: "
+            f"{resp.status_code} {resp.text}"
+        )
+
     def test_bearer_token_skips_csrf(self, client, mock_db):
         """API-token auth has no cookie credential, so CSRF doesn't apply.
         We just verify the middleware doesn't reject before auth runs."""
