@@ -610,6 +610,8 @@ Get the persistent instance ID. Requires admin role.
 
 ## API Tokens
 
+Pass a token as `Authorization: Bearer <token>`. **Scope is enforced:** a `read`-scoped token may call only safe methods (`GET`/`HEAD`/`OPTIONS`); any write (`POST`/`PUT`/`DELETE`/...) returns `403`, regardless of the owning user's role. Use a `read`-scoped token for reporting/monitoring integrations. Only admins can mint `read,write` tokens; admin/operator can mint `read` tokens.
+
 ### `GET /api/tokens`
 List API tokens for the current user (admins see all tokens).
 
@@ -618,7 +620,7 @@ List API tokens for the current user (admins see all tokens).
 ### `POST /api/tokens`
 Create a new API token. The token value is returned only once.
 
-- **Body** (JSON): `name`, `scopes` (optional, `"read"` or `"read,write"`), `expires_days` (optional)
+- **Body** (JSON): `name`, `scopes` (optional, `"read"` (default) or `"read,write"`), `expires_days` (optional, 1–365)
 - **Response**: `{ "id", "token", "prefix", "name" }`
 
 ### `DELETE /api/tokens/{token_id}`

@@ -307,3 +307,55 @@ class TestApiTokens:
 
         token = db.get_api_token_by_hash(hash_api_token("t3"))
         assert token["last_used_at"] is not None
+
+
+class TestTokenScopeEnforcement:
+    """A read-scoped token may read but never write, regardless of the owning
+    user's role. Scope is enforced in require_auth by HTTP method (safe methods
+    only when the write scope is absent).
+
+    Every token here is owned by user_id=1 (the seeded *admin*), so the only
+    thing that can block a write is the token scope — not the owner's role.
+    A read token blocked from POST /api/sites therefore proves scope enforcement
+    (an admin role would otherwise be allowed to create a site).
+    """
+
+    def _make_token(self, scopes):
+        from updater import database as db
+        from updater.auth import generate_api_token
+
+        token, token_hash, token_prefix = generate_api_token()
+        db.create_api_token(f"scope-{scopes}", token_hash, token_prefix,
+                            user_id=1, scopes=scopes)
+        return token
+
+    def test_read_token_allows_get(self, client, mock_db):
+        token = self._make_token("read")
+        resp = client.get("/api/aps", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200
+
+    def test_read_token_blocks_post(self, client, mock_db):
+        token = self._make_token("read")
+        resp = client.post("/api/sites", data={"name": "nope"},
+                           headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 403
+        assert "read-only" in resp.json()["detail"].lower()
+
+    def test_read_token_blocks_put(self, client, mock_db):
+        token = self._make_token("read")
+        resp = client.put("/api/settings", json={"timezone": "UTC"},
+                          headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 403
+
+    def test_read_token_blocks_delete(self, client, mock_db):
+        token = self._make_token("read")
+        resp = client.delete("/api/sites/1",
+                             headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 403
+
+    def test_write_token_allows_write(self, client, mock_db):
+        # An admin-owned write-scoped token performs writes normally.
+        token = self._make_token("read,write")
+        resp = client.post("/api/sites", data={"name": "scoped-site"},
+                           headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200

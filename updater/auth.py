@@ -350,6 +350,11 @@ def _authenticate_bearer(request: Request) -> Optional[dict]:
     }
 
 
+# API tokens without the "write" scope may only call these HTTP methods;
+# everything else (POST/PUT/DELETE/PATCH/...) is a write and is rejected.
+_READ_SCOPE_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
 async def require_auth(request: Request) -> dict:
     """Dependency that enforces authentication on every route.
 
@@ -367,6 +372,16 @@ async def require_auth(request: Request) -> dict:
     # 2. Bearer token
     token_session = _authenticate_bearer(request)
     if token_session:
+        # Enforce token scope: a read-only token may not perform writes.
+        # token_scopes is "read" or "read,write"; reject unsafe methods when
+        # the write scope is absent. Method-based and fail-closed, so every
+        # route that depends on require_auth is covered in one place.
+        scopes = {s.strip() for s in token_session.get("token_scopes", "read").split(",")}
+        if "write" not in scopes and request.method.upper() not in _READ_SCOPE_SAFE_METHODS:
+            raise HTTPException(
+                status_code=403,
+                detail="This API token is read-only (write scope required).",
+            )
         return token_session
 
     accept = request.headers.get("accept", "")
