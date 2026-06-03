@@ -1,13 +1,13 @@
 # API Reference
 
-All API endpoints require authentication unless noted. Requests authenticate with either the `session_id` session cookie or an `Authorization: Bearer <api-token>` header (see [API Tokens](#api-tokens)). Unauthenticated API requests return `401`; unauthenticated page requests redirect to `/login`.
+All API endpoints require authentication unless noted. Requests authenticate with either the `session_id` session cookie or an `Authorization: Bearer <api-token>` header (see [API Tokens](#api-tokens)). Unauthenticated API requests return `401`; unauthenticated page requests redirect to `/login`. The only routes reachable without a session are the health check (`GET /healthz`), the login and first-run setup pages, and the OIDC login/callback flow — all rate-limited or first-run-gated as noted below.
 
 Interactive API docs (Swagger UI and ReDoc) are served at `/docs` and `/redoc`, backed by the schema at `/openapi.json`. All three require a valid session — the API surface is not anonymously discoverable.
 
 ## Health
 
 ### `GET /healthz`
-Container health check. **No auth required** — the only unauthenticated endpoint. Verifies database connectivity.
+Container/orchestrator health check. **No auth required.** Verifies database connectivity; returns up/down only (no internal detail).
 
 - **Response**: `{ "status": "ok", "db": "ok" }`, or `503` with `{ "status": "degraded", "db": "unavailable" }`
 
