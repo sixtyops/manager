@@ -57,6 +57,14 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- The in-app updater's manual "run these commands on the host" fallback is now
+  deployment-aware. Image-based installs (the website `docker run` quickstart)
+  were shown `git fetch`/`git checkout` commands that can't run — there is no
+  source tree. They now get `docker pull <image>:<tag>` + recreate; git/source
+  installs use the discovered host repo path instead of a hard-coded
+  `/opt/sixtyops`. The website install snippet is pinned to a version (not the
+  floating `:dev` tag), and `docs/deployment.md` now documents the image-based
+  install and its update/rollback procedure.
 - Cookie-authenticated writes (e.g. the **Check Now** / update buttons,
   saving settings, adding devices) no longer fail with `CSRF: origin
   mismatch` on HTTPS deployments fronted by a reverse proxy or tunnel. The

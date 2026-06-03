@@ -408,30 +408,48 @@ class TestApplyUpdateGuardrails:
         assert "no update version" in result["message"].lower()
 
     @pytest.mark.asyncio
-    async def test_manual_commands_when_no_docker_socket(self):
-        from updater.release_checker import apply_update
+    async def test_manual_commands_image_install_uses_docker_pull(self):
+        """Image-based install (no git repo mounted): the manual update must be
+        a docker pull + recreate, NOT a git checkout (there's no tree to act on)."""
+        from updater.release_checker import apply_update, GHCR_IMAGE
         self._set_setting("autoupdate_available_version", "1.0.2")
 
         with patch("updater.release_checker.db.get_active_rollout", return_value=None), \
-             patch("updater.release_checker._docker_socket_available", return_value=False):
-            result = await apply_update()
-
-        assert result["success"] is False
-        assert result["manual"] is True
-        assert any("v1.0.2" in cmd for cmd in result["commands"])
-
-    @pytest.mark.asyncio
-    async def test_manual_commands_when_no_repo(self):
-        from updater.release_checker import apply_update
-        self._set_setting("autoupdate_available_version", "1.0.2")
-
-        with patch("updater.release_checker.db.get_active_rollout", return_value=None), \
-             patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._docker_socket_available", return_value=False), \
              patch("updater.release_checker._get_repo_dir", return_value=None):
             result = await apply_update()
 
         assert result["success"] is False
         assert result["manual"] is True
+        cmds = result["commands"]
+        assert not any("git checkout" in cmd for cmd in cmds)
+        # The only runnable (non-comment) command must be the image pull — the
+        # recreate step is commented guidance, since we can't know if this
+        # install is compose- or `docker run`-managed (and a bare compose/run
+        # command would fail or attach no volumes).
+        runnable = [c for c in cmds if not c.lstrip().startswith("#")]
+        assert runnable == [f"docker pull {GHCR_IMAGE}:v1.0.2"]
+
+    @pytest.mark.asyncio
+    async def test_manual_commands_source_install_uses_discovered_path(self):
+        """Git/source install with the socket unavailable: the manual update uses
+        git against the DISCOVERED host repo path, not a hard-coded /opt/sixtyops."""
+        from pathlib import Path
+        from updater.release_checker import apply_update
+        self._set_setting("autoupdate_available_version", "1.0.2")
+
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=False), \
+             patch("updater.release_checker._get_repo_dir", return_value=Path("/app/repo")), \
+             patch("updater.release_checker._get_host_repo_path", return_value="/srv/custom/sixtyops"):
+            result = await apply_update()
+
+        assert result["success"] is False
+        assert result["manual"] is True
+        cmds = result["commands"]
+        assert any("git checkout v1.0.2" in cmd for cmd in cmds)
+        assert any(cmd == "cd /srv/custom/sixtyops" for cmd in cmds)
+        assert not any("/opt/sixtyops" in cmd for cmd in cmds)
 
     @staticmethod
     def _git_run(calls=None):
