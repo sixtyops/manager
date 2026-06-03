@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
+- API tokens with the `read` scope are now enforced read-only: any write
+  (`POST`/`PUT`/`DELETE`/...) — and side-effecting `GET`s such as
+  `/api/config-compliance?refresh=true` — are rejected with `403`,
+  regardless of the owning user's role. Previously the scope was recorded
+  but never checked. `docs/api.md` documents the behaviour (#203).
 - The rain-climate selector moved from the global top header into the
   signal-health chart's **Rain fade** toggle segment, which always shows
   the active climate (it colours both views). The segment keeps a stable
