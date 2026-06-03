@@ -610,7 +610,7 @@ Get the persistent instance ID. Requires admin role.
 
 ## API Tokens
 
-Pass a token as `Authorization: Bearer <token>`. **Scope is enforced:** a `read`-scoped token may call only safe methods (`GET`/`HEAD`/`OPTIONS`); any write (`POST`/`PUT`/`DELETE`/...) returns `403`, regardless of the owning user's role. Use a `read`-scoped token for reporting/monitoring integrations. Only admins can mint `read,write` tokens; admin/operator can mint `read` tokens.
+Pass a token as `Authorization: Bearer <token>`. **Scope is enforced:** a `read`-scoped token may call only safe methods (`GET`/`HEAD`/`OPTIONS`); any write (`POST`/`PUT`/`DELETE`/...) returns `403`, regardless of the owning user's role. A few side-effecting `GET`s also require write scope — e.g. `GET /api/config-compliance?refresh=true`, which polls the fleet before returning. Use a `read`-scoped token for reporting/monitoring integrations. Only admins can mint `read,write` tokens; admin/operator can mint `read` tokens.
 
 ### `GET /api/tokens`
 List API tokens for the current user (admins see all tokens).

@@ -404,6 +404,28 @@ def require_role(*allowed_roles: str):
     return _check
 
 
+def require_write_scope(session: dict) -> None:
+    """Reject read-only API tokens for a state-changing action reached via an
+    otherwise-safe HTTP method.
+
+    require_auth already blocks read-only tokens from unsafe methods
+    (POST/PUT/DELETE/...), but a few GET endpoints mutate state — e.g.
+    ?refresh=true that polls the whole fleet. Call this inside the write branch
+    of such a handler so a read-only token can't trigger the side effect.
+
+    Cookie/session auth carries no `token_scopes` and passes through (normal
+    role checks still apply); only tokens lacking the write scope are rejected.
+    """
+    scopes = session.get("token_scopes")
+    if scopes is None:
+        return
+    if "write" not in {s.strip() for s in scopes.split(",")}:
+        raise HTTPException(
+            status_code=403,
+            detail="This API token is read-only (write scope required).",
+        )
+
+
 async def require_auth_ws(websocket: WebSocket) -> Optional[dict]:
     """Validate session for WebSocket before accept(). Returns session with role or None."""
     session_id = websocket.cookies.get(SESSION_COOKIE_NAME)
