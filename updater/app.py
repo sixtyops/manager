@@ -35,7 +35,7 @@ from .scheduler import init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTE
 from .firmware_fetcher import init_fetcher, get_fetcher
 from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
 from . import services
-from .auth import require_auth, require_auth_ws, require_role, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user, generate_api_token
+from .auth import require_auth, require_auth_ws, require_role, require_write_scope, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user, generate_api_token
 from .backup import build_csv_export, process_csv_import
 from . import telemetry
 from . import slack
@@ -6765,6 +6765,9 @@ async def get_config_compliance(
     """
     polled = 0
     if refresh:
+        # refresh=true polls the whole fleet and writes config state — a write
+        # action reached via GET, so read-only tokens must not trigger it.
+        require_write_scope(session)
         poller = get_poller()
         if poller:
             ap_ips = list(db.get_all_access_points_dict(enabled_only=True).keys())

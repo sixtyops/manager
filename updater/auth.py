@@ -350,6 +350,11 @@ def _authenticate_bearer(request: Request) -> Optional[dict]:
     }
 
 
+# API tokens without the "write" scope may only call these HTTP methods;
+# everything else (POST/PUT/DELETE/PATCH/...) is a write and is rejected.
+_READ_SCOPE_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
 async def require_auth(request: Request) -> dict:
     """Dependency that enforces authentication on every route.
 
@@ -367,6 +372,16 @@ async def require_auth(request: Request) -> dict:
     # 2. Bearer token
     token_session = _authenticate_bearer(request)
     if token_session:
+        # Enforce token scope: a read-only token may not perform writes.
+        # token_scopes is "read" or "read,write"; reject unsafe methods when
+        # the write scope is absent. Method-based and fail-closed, so every
+        # route that depends on require_auth is covered in one place.
+        scopes = {s.strip() for s in token_session.get("token_scopes", "read").split(",")}
+        if "write" not in scopes and request.method.upper() not in _READ_SCOPE_SAFE_METHODS:
+            raise HTTPException(
+                status_code=403,
+                detail="This API token is read-only (write scope required).",
+            )
         return token_session
 
     accept = request.headers.get("accept", "")
@@ -387,6 +402,28 @@ def require_role(*allowed_roles: str):
             raise HTTPException(status_code=403, detail="Insufficient permissions")
         return session
     return _check
+
+
+def require_write_scope(session: dict) -> None:
+    """Reject read-only API tokens for a state-changing action reached via an
+    otherwise-safe HTTP method.
+
+    require_auth already blocks read-only tokens from unsafe methods
+    (POST/PUT/DELETE/...), but a few GET endpoints mutate state — e.g.
+    ?refresh=true that polls the whole fleet. Call this inside the write branch
+    of such a handler so a read-only token can't trigger the side effect.
+
+    Cookie/session auth carries no `token_scopes` and passes through (normal
+    role checks still apply); only tokens lacking the write scope are rejected.
+    """
+    scopes = session.get("token_scopes")
+    if scopes is None:
+        return
+    if "write" not in {s.strip() for s in scopes.split(",")}:
+        raise HTTPException(
+            status_code=403,
+            detail="This API token is read-only (write scope required).",
+        )
 
 
 async def require_auth_ws(websocket: WebSocket) -> Optional[dict]:
