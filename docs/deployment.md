@@ -409,23 +409,52 @@ Enable or disable auto-update checking in the Settings UI (`autoupdate_enabled`)
 
 If you run the prebuilt image directly (the [Docker image](#docker-image-you-manage-updates)
 quick start), the in-app updater can't self-apply — it has no Docker socket or
-repo. The **Update** panel shows the pull command plus recreate guidance
-instead. Update by pulling the new tag and recreating the container:
+repo. The **Update** panel shows the pull command plus recreate guidance instead.
+
+**1. Back up the data volume first.** Snapshot the *whole* `sixtyops-data` volume
+— it holds both the SQLite DB **and** the `.encryption_key` that decrypts device
+credentials, so a DB-file-only copy can't be restored on its own. Confirm the
+archive is non-empty before you touch the running container:
+
+```bash
+docker run --rm -v sixtyops-data:/d -v "$PWD":/b alpine \
+  tar czf /b/sixtyops-data-$(date +%Y%m%d-%H%M%S).tgz -C /d .
+ls -lh sixtyops-data-*.tgz    # verify a non-empty archive before continuing
+```
+
+**2. Pull the new tag and recreate the container:**
 
 ```bash
 docker pull ghcr.io/sixtyops/manager:<new-tag>
 docker compose up -d        # if compose-managed
-# or re-run your `docker run ... ghcr.io/sixtyops/manager:<new-tag>`
+# or re-run your `docker run ... ghcr.io/sixtyops/manager:<new-tag>` (same -v / -p / -e flags)
 ```
 
 State is in the named volumes, so the recreate is non-destructive and the schema
-migrates forward on start. **Roll back** by re-pinning the previous tag and
-re-running the same command — the volumes are untouched either way.
+migrates forward on start.
+
+**3. Wait for health, then verify.** On a cold start the app needs a few seconds
+— poll `/healthz` until it's ready rather than checking immediately, or an empty /
+`connection refused` response will look like a failure when the deploy actually
+succeeded:
+
+```bash
+until curl -sf http://127.0.0.1:8000/healthz >/dev/null; do sleep 1; done
+curl -s http://127.0.0.1:8000/healthz                                   # {"status":"ok","db":"ok"}
+docker exec sixtyops python -c "import updater; print(updater.__version__)"
+```
+
+**Roll back** by re-pinning the previous tag and re-running step 2 — the volumes
+are untouched either way.
 
 For a clean, reproducible production setup, manage the container with a small
 pinned-image `docker-compose.yml` that declares the existing named volumes as
 `external: true`. Then updates are just `docker compose pull && docker compose up -d`,
 and the pinned tag is committed alongside the rest of your config.
+
+> These commands assume your shell can run `docker` (prefix with `sudo` if your
+> host requires it). When a step writes to a root-owned path, keep the writing
+> process under `sudo` (e.g. `... | sudo tee file`), not the shell redirect.
 
 ## Publishing a Release
 
