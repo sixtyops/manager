@@ -40,8 +40,9 @@ Before creating any PR, verify:
 ## Release Workflow
 
 ### Dev Release (pre-release for early testing)
-1. Bump `updater/__init__.py` version with a `-devN` suffix
-   (e.g., `"1.3.0"` → `"1.3.1-dev1"`)
+1. Bump the version with a `-devN` suffix (e.g., `"1.3.0"` → `"1.3.1-dev1"`) in
+   `updater/__init__.py` and `pyproject.toml`, and update the pinned image tag in
+   the website install snippet (`website/index.html`) to match.
 2. Commit the bump: `git commit -m "chore: bump version to X.Y.Z-devN"`
 3. Tag and push: `git tag vX.Y.Z-devN && git push origin main --tags`
 4. GitHub Actions auto-creates a pre-release with commit-based changelog

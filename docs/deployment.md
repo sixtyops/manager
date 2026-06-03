@@ -32,6 +32,34 @@ cd manager
 
 `deploy.sh` creates the required directories, builds the Docker images, and starts all services in standalone mode (app + built-in RADIUS + nginx + certbot).
 
+### Docker image (you manage updates)
+
+To run the prebuilt image directly — no git clone, no bundled nginx — pin a
+version and bring your own reverse proxy:
+
+```bash
+docker run -d --name sixtyops --restart unless-stopped \
+  -p 127.0.0.1:8000:8000 \
+  -v sixtyops-data:/app/data \
+  -v sixtyops-firmware:/app/firmware \
+  -v sixtyops-backups:/app/backups \
+  ghcr.io/sixtyops/manager:v1.3.1-dev22
+```
+
+Front it with your reverse proxy (TLS) pointing at `127.0.0.1:8000`. State lives
+in the three named volumes, so updates and rollbacks never touch your data. For
+OIDC/SSO, pass the `OIDC_*` env vars (see [Environment Variables](#environment-variables)).
+Update it yourself with [Updating an image-based install](#updating-an-image-based-install).
+
+### Which install should I use?
+
+- **`install.sh`** (git + compose + bundled nginx) if you want the in-app
+  **Update** button to apply updates for you — it needs the Docker socket and
+  the repo mounted, which this path sets up.
+- **Docker image** (above) if you'd rather manage updates yourself by pulling a
+  new tag. The in-app updater will show you the exact pull/recreate command but
+  won't self-apply (no socket/repo by design — the app never holds host-root).
+
 ## Initial Setup
 
 After starting the services, open `https://your-server-ip` in a browser. Accept the self-signed certificate warning — this certificate is suitable for private network deployments and can optionally be replaced with a Let's Encrypt certificate in step 3.
@@ -373,9 +401,31 @@ volumes:
 
 In standalone mode, the overlay also mounts `docker-compose.standalone.yml`. The auto-updater detects this file and includes it automatically when running `docker compose up`.
 
-If the Docker socket is not mounted, the API returns manual commands to run on the host instead.
+If the Docker socket is not mounted, the API returns manual commands to run on the host instead — tailored to your deployment style (see below).
 
 Enable or disable auto-update checking in the Settings UI (`autoupdate_enabled`).
+
+### Updating an image-based install
+
+If you run the prebuilt image directly (the [Docker image](#docker-image-you-manage-updates)
+quick start), the in-app updater can't self-apply — it has no Docker socket or
+repo. The **Update** panel shows the exact commands instead. Update by pulling
+the new tag and recreating the container:
+
+```bash
+docker pull ghcr.io/sixtyops/manager:<new-tag>
+docker compose up -d        # if compose-managed
+# or re-run your `docker run ... ghcr.io/sixtyops/manager:<new-tag>`
+```
+
+State is in the named volumes, so the recreate is non-destructive and the schema
+migrates forward on start. **Roll back** by re-pinning the previous tag and
+re-running the same command — the volumes are untouched either way.
+
+For a clean, reproducible production setup, manage the container with a small
+pinned-image `docker-compose.yml` that declares the existing named volumes as
+`external: true`. Then updates are just `docker compose pull && docker compose up -d`,
+and the pinned tag is committed alongside the rest of your config.
 
 ## Publishing a Release
 

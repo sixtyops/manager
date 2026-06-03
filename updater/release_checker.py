@@ -372,6 +372,43 @@ def _get_host_repo_path() -> Optional[str]:
         return None
 
 
+def _manual_update_instructions(target_tag: str, repo_dir: Optional[Path]) -> dict:
+    """Manual host commands for when in-app apply can't run, tailored to the
+    deployment style.
+
+    Image-based installs (no git repo mounted — e.g. the website `docker run`
+    quickstart) update by pulling the new image and recreating the container;
+    git/source installs update with git + a compose build. Handing an image
+    install the git commands (the previous behaviour) is useless — there is no
+    source tree to check out.
+    """
+    if repo_dir is None:
+        image = f"{GHCR_IMAGE}:{target_tag}"
+        return {
+            "manual": True,
+            "message": (
+                "Image-based install — pull the new image and recreate the "
+                "container (if you used a plain `docker run`, re-run it with the "
+                "new tag). See docs/deployment.md."
+            ),
+            "commands": [
+                f"docker pull {image}",
+                "docker compose up -d",
+            ],
+        }
+    host_dir = _get_host_repo_path() or str(repo_dir)
+    return {
+        "manual": True,
+        "message": "Git repo mounted but Docker socket unavailable — run on the host:",
+        "commands": [
+            f"cd {host_dir}",
+            f"git fetch origin tag {target_tag}",
+            f"git checkout {target_tag}",
+            "docker compose up -d --build",
+        ],
+    }
+
+
 def _build_watchdog_script(
     host_repo_dir: str,
     rollback_ref: str,
@@ -779,31 +816,12 @@ async def apply_update() -> dict:
 
     repo_dir = _get_repo_dir()
 
-    if not _docker_socket_available():
-        return {
-            "success": False,
-            "manual": True,
-            "message": "Docker socket not mounted. Run these commands on the host:",
-            "commands": [
-                "cd /opt/sixtyops",
-                f"git fetch origin tag {target_tag}",
-                f"git checkout {target_tag}",
-                "docker compose up -d --build",
-            ],
-        }
-
-    if not repo_dir:
-        return {
-            "success": False,
-            "manual": True,
-            "message": "Git repo not mounted. Run these commands on the host:",
-            "commands": [
-                "cd /opt/sixtyops",
-                f"git fetch origin tag {target_tag}",
-                f"git checkout {target_tag}",
-                "docker compose up -d --build",
-            ],
-        }
+    # In-app apply needs BOTH the Docker socket and a mounted git repo. If
+    # either is missing, fall back to manual instructions tailored to the
+    # deployment style — image-based installs (no repo) update by pulling the
+    # new image, not by git-checkout (which has no tree to act on).
+    if not _docker_socket_available() or not repo_dir:
+        return {"success": False, **_manual_update_instructions(target_tag, repo_dir)}
 
     compose_cmd = _get_compose_cmd(repo_dir)
     git_cmd = ["git", "-C", str(repo_dir)]
