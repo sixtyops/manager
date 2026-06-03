@@ -422,21 +422,34 @@ docker run --rm -v sixtyops-data:/d -v "$PWD":/b alpine \
 ls -lh sixtyops-data-*.tgz    # verify a non-empty archive before continuing
 ```
 
-**2. Pull the new tag and recreate the container:**
+**2. Pull the new tag and recreate the container.** Compose-managed installs are
+just `docker compose pull && docker compose up -d`. For a plain `docker run`,
+re-pass the *same* volumes, published port, and env you originally used — your
+original `docker run` / `.env` is the source of truth. To preserve env (including
+OIDC secrets) without hand-copying it, capture it from the running container, and
+keep the old container (rename, don't remove) so rollback is one command:
 
 ```bash
 docker pull ghcr.io/sixtyops/manager:<new-tag>
-docker compose up -d        # if compose-managed
-# or re-run your `docker run ... ghcr.io/sixtyops/manager:<new-tag>` (same -v / -p / -e flags)
+docker inspect sixtyops --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep '^OIDC_' | sudo tee oidc.env >/dev/null   # plus any other vars you set
+docker stop sixtyops && docker rename sixtyops sixtyops-rollback
+docker run -d --name sixtyops --restart unless-stopped \
+  -p 127.0.0.1:8000:8000 \
+  -v sixtyops-data:/app/data -v sixtyops-firmware:/app/firmware -v sixtyops-backups:/app/backups \
+  --env-file oidc.env ghcr.io/sixtyops/manager:<new-tag>
 ```
 
-State is in the named volumes, so the recreate is non-destructive and the schema
-migrates forward on start.
+Match `-p` to your existing binding — it may not be `8000` if the app sits behind a
+reverse proxy on another port. State is in the named volumes, so the recreate is
+non-destructive and the schema migrates forward on start.
 
 **3. Wait for health, then verify.** On a cold start the app needs a few seconds
 — poll `/healthz` until it's ready rather than checking immediately, or an empty /
 `connection refused` response will look like a failure when the deploy actually
-succeeded:
+succeeded. Hit the app's **own published port** (the `127.0.0.1:<port>` you bound),
+not the public hostname or a shared `localhost:443` — on a multi-service host those
+can land on a different reverse proxy and return a misleading 404:
 
 ```bash
 until curl -sf http://127.0.0.1:8000/healthz >/dev/null; do sleep 1; done
@@ -444,8 +457,11 @@ curl -s http://127.0.0.1:8000/healthz                                   # {"stat
 docker exec sixtyops python -c "import updater; print(updater.__version__)"
 ```
 
-**Roll back** by re-pinning the previous tag and re-running step 2 — the volumes
-are untouched either way.
+**Roll back** instantly with the container you kept: `docker rm -f sixtyops &&
+docker rename sixtyops-rollback sixtyops && docker start sixtyops`. (Compose: re-pin
+the previous tag and `docker compose up -d`.) The volumes are untouched either way.
+Once the new version is confirmed good, drop the rollback container and the temp
+env file: `docker rm sixtyops-rollback && rm oidc.env`.
 
 For a clean, reproducible production setup, manage the container with a small
 pinned-image `docker-compose.yml` that declares the existing named volumes as
