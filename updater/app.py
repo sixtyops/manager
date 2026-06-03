@@ -679,21 +679,32 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         if not request.cookies.get(SESSION_COOKIE_NAME):
             return await call_next(request)
 
-        # Reconstruct the expected origin from what the server actually saw,
-        # honoring X-Forwarded-Proto only from trusted proxies (same gate as
-        # _client_ip — see SIXTYOPS_TRUSTED_PROXIES).
-        peer = request.client.host if request.client else ""
-        if _is_trusted_proxy(peer):
-            scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
-        else:
-            scheme = request.url.scheme
+        # Compare the request's declared origin HOST against the Host header.
+        # Scheme is deliberately not compared: behind a TLS-terminating proxy
+        # the app speaks http internally, and reconstructing the external
+        # scheme is fragile — it relies on the proxy being in
+        # SIXTYOPS_TRUSTED_PROXIES *and* forwarding X-Forwarded-Proto, which
+        # broke cookie-auth writes (origin mismatch) on HTTPS deployments
+        # fronted by a proxy/tunnel that isn't a docker-bridge peer. Cross-
+        # *site* is the CSRF signal, and that is a host comparison; scheme-
+        # downgrade origins are already prevented by HSTS + the http->https
+        # redirect. The Host header reflects the browser's host (nginx forwards
+        # $http_host), so it matches the Origin/Referer host on same-site.
+        from urllib.parse import urlparse
         host = request.headers.get("host", "")
-        expected_origin = f"{scheme}://{host}"
 
         origin = request.headers.get("origin", "")
         if origin:
-            if origin == expected_origin:
-                return await call_next(request)
+            # urlparse raises ValueError on malformed values (e.g. an
+            # unterminated IPv6 literal "http://[::1"). This runs before auth
+            # and only needs *a* session_id cookie to be present, so an
+            # unwrapped parse would let any client turn the 403 into a 500.
+            # Treat a parse failure as a mismatch, same as the Referer path.
+            try:
+                if urlparse(origin).netloc == host:
+                    return await call_next(request)
+            except ValueError:
+                pass
             return _StarletteResponse(
                 content='{"detail":"CSRF: origin mismatch"}',
                 status_code=403,
@@ -702,10 +713,8 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
         referer = request.headers.get("referer", "")
         if referer:
-            from urllib.parse import urlparse
             try:
-                ref = urlparse(referer)
-                if f"{ref.scheme}://{ref.netloc}" == expected_origin:
+                if urlparse(referer).netloc == host:
                     return await call_next(request)
             except ValueError:
                 pass
