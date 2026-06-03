@@ -695,8 +695,16 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
         origin = request.headers.get("origin", "")
         if origin:
-            if urlparse(origin).netloc == host:
-                return await call_next(request)
+            # urlparse raises ValueError on malformed values (e.g. an
+            # unterminated IPv6 literal "http://[::1"). This runs before auth
+            # and only needs *a* session_id cookie to be present, so an
+            # unwrapped parse would let any client turn the 403 into a 500.
+            # Treat a parse failure as a mismatch, same as the Referer path.
+            try:
+                if urlparse(origin).netloc == host:
+                    return await call_next(request)
+            except ValueError:
+                pass
             return _StarletteResponse(
                 content='{"detail":"CSRF: origin mismatch"}',
                 status_code=403,

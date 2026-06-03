@@ -710,6 +710,20 @@ class TestCSRFMiddleware:
             f"{resp.status_code} {resp.text}"
         )
 
+    def test_malformed_origin_returns_403_not_500(self, client, mock_db):
+        """A malformed Origin (e.g. an unterminated IPv6 literal) must be
+        treated as a mismatch, not crash with a 500. The CSRF check runs before
+        auth and only needs *a* session_id cookie present (not a valid one), so
+        an unwrapped urlparse would let any client turn the 403 into a 500."""
+        client.cookies.set("session_id", "not-a-real-session")
+        resp = client.post(
+            "/api/aps",
+            data={"ip": "10.0.0.56", "username": "root", "password": "x" * 8},
+            headers={"Origin": "http://[::1"},
+        )
+        assert resp.status_code == 403
+        assert "csrf" in resp.text.lower()
+
     def test_bearer_token_skips_csrf(self, client, mock_db):
         """API-token auth has no cookie credential, so CSRF doesn't apply.
         We just verify the middleware doesn't reject before auth runs."""
