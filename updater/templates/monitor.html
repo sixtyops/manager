@@ -2542,7 +2542,7 @@
             max-width: 100%;
         }
         .sh-segmented .climate-menu-wrap {
-            display: inline-flex; flex: 0 1 250px; min-width: 0;
+            display: inline-flex; flex: 0 1 auto; min-width: 0;
         }
         .sh-segmented .sh-view-tab {
             appearance: none; border: 0; background: transparent;
@@ -2558,14 +2558,17 @@
         .sh-segmented .sh-view-tab.active { background: #111827; color: #fff; }
         .sh-segmented .sh-view-tab > svg { width: 14px; height: 14px; flex: 0 0 auto; }
         .sh-segmented .seg-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-        /* The climate selector is merged into the Rain fade segment, which uses
-           a stable preferred width but can shrink inside narrow cards. Climate
-           text truncates inside its slot, so the view labels never move. The
-           climate stays visible in both views (it colours both). */
+        /* The climate selector is merged into the Rain fade segment. The slot is
+           sized to its content (no fixed reserve, so no trailing whitespace) and
+           shrinks inside narrow cards, where the climate text truncates inside
+           its slot — the view labels never truncate (Distance is pinned below).
+           Climate stays visible in both views (it colours both). */
         .sh-segmented .sh-view-tab[data-view="rain"] {
             flex: 1 1 auto; width: 100%; justify-content: flex-start;
         }
-        .sh-segmented .sh-view-tab[data-view="distance"] { flex: 0 1 auto; }
+        /* Distance segment never shrinks, so "Distance / Signal" can't truncate;
+           the rain segment's climate text absorbs any squeeze (per the note above). */
+        .sh-segmented .sh-view-tab[data-view="distance"] { flex: 0 0 auto; }
         .seg-climate {
             display: inline-flex; align-items: center; gap: 4px; min-width: 0; flex: 1 1 auto;
             margin-left: 8px; padding-left: 8px;
