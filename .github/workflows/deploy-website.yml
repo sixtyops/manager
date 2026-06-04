@@ -6,6 +6,9 @@ on:
     paths:
       - 'website/**'
       - '.github/workflows/deploy-website.yml'
+      release:
+      types: [published]   # re-pin the snippet + redeploy on each release
+
   workflow_dispatch:
     inputs:
       environment:
@@ -25,12 +28,24 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need tags to resolve the latest release
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
+ - name: Pin install snippet to the latest release tag
+        run: |
+         TAG="${{ github.event.release.tag_name }}"
+        [ -n "$TAG" ] || TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+        if [ -z "$TAG" ]; then
+        echo "::error::Could not resolve a release tag; refusing to publish the placeholder"
+
+       fi
+          sed -i "s|__LATEST_TAG__|$TAG|g" website/index.html
+          grep -q "manager:$TAG" website/index.html || { echo "::error::substitution failed"; exit 1; }
 
       - name: Sync to S3
         run: |
