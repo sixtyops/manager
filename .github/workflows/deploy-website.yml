@@ -6,8 +6,9 @@ on:
     paths:
       - 'website/**'
       - '.github/workflows/deploy-website.yml'
-  release:
-    types: [published]   # re-pin the snippet + redeploy on each release
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]   # deploy AFTER Release finishes (image pushed), not when the GitHub Release is created
   workflow_dispatch:
     inputs:
       environment:
@@ -20,6 +21,8 @@ on:
 
 jobs:
   deploy:
+    # On a Release completion, only deploy if it succeeded (i.e. docker-push ran).
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 10
     permissions:
@@ -38,10 +41,16 @@ jobs:
 
       - name: Pin install snippet to the latest release tag
         run: |
-          TAG="${{ github.event.release.tag_name }}"
-          [ -n "$TAG" ] || TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+          TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+          [ -n "$TAG" ] || TAG="${{ github.event.workflow_run.head_branch }}"
           if [ -z "$TAG" ]; then
             echo "::error::Could not resolve a release tag; refusing to publish the placeholder"
+            exit 1
+          fi
+          # Never advertise a tag whose image isn't in GHCR yet (release.yml
+          # creates the GitHub Release before docker-push completes).
+          if ! docker manifest inspect "ghcr.io/sixtyops/manager:$TAG" >/dev/null 2>&1; then
+            echo "::error::Image ghcr.io/sixtyops/manager:$TAG not in GHCR yet; refusing to pin a missing image"
             exit 1
           fi
           sed -i "s|__LATEST_TAG__|$TAG|g" website/index.html
