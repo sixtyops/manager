@@ -9556,7 +9556,8 @@
 
         let drawerFwFiles = [];
         let drawerFwLoaded = false; // false until the FIRST successful /api/firmware-files fetch
-        let drawerFwSelected = {}; // { 'tna-30x': 'file.bin', 'tna-303l': 'file.bin' }
+        let drawerFwSelected = {}; // { 'tna-30x': 'file.bin', ... } — pinned versions only
+        let drawerFwActive = {};   // concrete target each family updates to (incl. "Latest")
         let drawerBetaEnabled = false;
         let vendorFwTypes = []; // Loaded from /api/vendors
 
@@ -9625,6 +9626,13 @@
                     'tna-30x': fwPinned('selected_firmware_30x') ? (settData.settings.selected_firmware_30x || '') : '',
                     'tna-303l': fwPinned('selected_firmware_303l') ? (settData.settings.selected_firmware_303l || '') : '',
                     'tns-100': fwPinned('selected_firmware_tns100') ? (settData.settings.selected_firmware_tns100 || '') : '',
+                };
+                // The concrete file each family currently updates to, regardless of
+                // pin — so deleting the active "Latest" target can warn (#232).
+                drawerFwActive = {
+                    'tna-30x': settData.settings.selected_firmware_30x || '',
+                    'tna-303l': settData.settings.selected_firmware_303l || '',
+                    'tns-100': settData.settings.selected_firmware_tns100 || '',
                 };
                 // Sync beta state from settings BEFORE the first render, so a
                 // beta-enabled / beta-only install doesn't briefly filter every file
@@ -9750,18 +9758,19 @@
             markDrawerDirty();
         }
 
-        // Remove a firmware file via the existing DELETE endpoint (#221). Guards
-        // the footgun: the version a family is pinned to can't be removed out from
-        // under it — switch to "Latest" or another version first.
+        // Remove a firmware file via the existing DELETE endpoint (#221). Compares
+        // against the concrete active target (not just a pin) so deleting the file a
+        // family is currently updating to is allowed but warned — the backend then
+        // re-derives the target to the next available version (#232).
         async function deleteDrawerFw(filename, type, ev) {
             if (ev) ev.stopPropagation();
-            if (drawerFwSelected[type] === filename) {
-                showToast('That version is currently selected — switch to “Latest” or another version before removing it.');
-                return;
-            }
             const label = fwVersionLabel(filename);
+            const isActiveTarget = drawerFwActive[type] === filename;
+            const msg = isActiveTarget
+                ? `Remove firmware ${label}?\n\nThis is the version this model currently updates to — removing it switches the model to the next available version. Devices already running it are unaffected.`
+                : `Remove firmware ${label}?\n\nThis deletes the file from the manager. Devices already running it are unaffected.`;
             if (!await showConfirmDialog(
-                `Remove firmware ${label}?\n\nThis deletes the file from the manager. Devices already running it are unaffected.`,
+                msg,
                 { title: 'Remove Firmware', confirmText: 'Remove', danger: true })) {
                 return;
             }

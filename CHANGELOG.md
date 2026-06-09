@@ -68,6 +68,10 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Changing firmware selection via the generic settings API (PUT), or deleting
+  the firmware a model currently updates to, no longer leaves the scheduler
+  pointed at a stale or missing file — the target is re-derived immediately
+  (#229/#232 follow-up).
 - Firmware version pills no longer wrap awkwardly (e.g. `1.15.0` / `r55142`
   split onto two lines next to the BETA badge). The picker row now wraps
   between pills, and each pill stays on one line (#224).
