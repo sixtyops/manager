@@ -57,6 +57,11 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- AP/CPE firmware updates no longer falsely report **"Device did not come back
+  online."** A major-version upgrade flashes the 60GHz modem *after* the OS
+  reboot, so recovery can exceed the old 300s wait; the AP/CPE reboot window is
+  now 600s (devices still come back the moment they respond). A device that
+  returns on a *different* IP via DHCP is a separate follow-up (#217).
 - The in-app updater's manual "run these commands on the host" fallback is now
   deployment-aware. Image-based installs (the website `docker run` quickstart)
   were shown `git fetch`/`git checkout` commands that can't run — there is no
