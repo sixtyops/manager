@@ -55,6 +55,12 @@ RE_DOWNLOAD_LINK = re.compile(
 
 CHECK_INTERVAL = 86400  # 24 hours
 
+# A freshly-downloaded firmware smaller than this fraction of the largest
+# same-platform image already on disk is treated as a truncated/corrupt
+# transfer and rejected. Tachyon images within a platform sit in a tight size
+# band (~18-23 MB), so a sub-50% file is implausible. See issue #214.
+MIN_PLAUSIBLE_SIZE_FRACTION = 0.5
+
 
 @dataclass
 class FirmwareRelease:
@@ -304,23 +310,80 @@ class FirmwareFetcher:
 
         return releases, warnings
 
+    def _suspect_truncated_size(self, filename: str, size_bytes: int) -> Optional[str]:
+        """Return a reason string if `size_bytes` is implausibly small versus
+        other on-disk firmware of the same platform, else None.
+
+        Catches truncated downloads the server didn't advertise (no/!chunked
+        Content-Length) — e.g. a 6.7 MB image when the platform's other
+        firmware is ~18 MB. Returns None when there's no same-platform sibling
+        to compare against (first download for a platform); Content-Length is
+        the only guard there.
+        """
+        platform = _detect_platform(filename)
+        sibling_max = 0
+        for p in self.firmware_dir.iterdir():
+            if not p.is_file() or p.name == filename:
+                continue
+            if _detect_platform(p.name) != platform:
+                continue
+            try:
+                sibling_max = max(sibling_max, p.stat().st_size)
+            except OSError:
+                continue
+        if sibling_max and size_bytes < sibling_max * MIN_PLAUSIBLE_SIZE_FRACTION:
+            return (
+                f"{filename} is {size_bytes / 1048576:.1f} MB, far smaller than the "
+                f"{platform} firmware already on disk ({sibling_max / 1048576:.1f} MB)"
+            )
+        return None
+
     async def _download_firmware(self, release: FirmwareRelease) -> bool:
-        """Download a firmware .bin file with streaming."""
+        """Download a firmware .bin file with streaming.
+
+        Verifies the download is complete before accepting it: a transfer that
+        is shorter than its advertised Content-Length, or far smaller than the
+        platform's other firmware, is rejected rather than renamed into place —
+        so a partial image can never become the auto-selected target and get
+        flashed to a device. See issue #214.
+        """
         filepath = self.firmware_dir / release.filename
         tmp_path = filepath.with_suffix(".downloading")
 
         logger.info(f"Downloading {release.filename} from {release.download_url}")
         try:
+            expected_len = None
+            bytes_written = 0
             async with httpx.AsyncClient(timeout=600, follow_redirects=True) as client:
                 async with client.stream("GET", release.download_url) as resp:
                     resp.raise_for_status()
+                    cl = resp.headers.get("content-length")
+                    if cl and cl.isdigit():
+                        expected_len = int(cl)
                     with open(tmp_path, "wb") as f:
                         async for chunk in resp.aiter_bytes(chunk_size=65536):
                             f.write(chunk)
+                            bytes_written += len(chunk)
+
+            # Reject a server-advertised size mismatch (truncated transfer).
+            if expected_len is not None and bytes_written != expected_len:
+                tmp_path.unlink(missing_ok=True)
+                logger.error(
+                    f"Download of {release.filename} truncated: got {bytes_written} bytes, "
+                    f"expected {expected_len} (Content-Length) — rejecting"
+                )
+                return False
+
+            # Reject a size outlier vs the platform's other firmware (catches
+            # truncations the server didn't advertise).
+            suspect = self._suspect_truncated_size(release.filename, bytes_written)
+            if suspect:
+                tmp_path.unlink(missing_ok=True)
+                logger.error(f"{suspect} — rejecting download")
+                return False
 
             tmp_path.rename(filepath)
-            size_mb = filepath.stat().st_size / (1024 * 1024)
-            logger.info(f"Downloaded {release.filename} ({size_mb:.1f} MB)")
+            logger.info(f"Downloaded {release.filename} ({bytes_written / 1048576:.1f} MB)")
             return True
 
         except Exception as e:
