@@ -1658,3 +1658,40 @@ class TestSystemNetworkAPI:
     def test_requires_auth(self, client):
         resp = client.post("/api/system/network", json={"mode": "dhcp"})
         assert resp.status_code in (401, 403, 302)
+
+
+class TestFirmwareHealthFlags:
+    """_annotate_firmware_health flags likely-truncated and duplicate firmware
+    so the UI can surface them on the firmware list (#222)."""
+
+    F_30X_TRUNC = "tna-30x-1.15.0-r55142-20260521-tn-110-prs-squashfs-sysupgrade.bin"
+    F_30X_FULL = "tna-30x-1.15.0-r55142.bin"           # same version, full size
+    F_30X_OLD = "tna-30x-1.12.3-r55002-20260219-tn-110-prs-squashfs-sysupgrade.bin"
+    F_303L = "tna-303l-1.15.0-r8503-20260521-sysupgrade.bin"
+
+    def test_flags_incomplete_and_duplicate(self):
+        from updater.app import _annotate_firmware_health
+        files = [
+            {"name": self.F_30X_OLD, "size": 18_600_000},
+            {"name": self.F_30X_TRUNC, "size": 6_700_000},   # truncated (the customer's case)
+            {"name": self.F_30X_FULL, "size": 18_800_000},
+            {"name": self.F_303L, "size": 23_200_000},
+        ]
+        _annotate_firmware_health(files)
+        by = {f["name"]: f for f in files}
+        # 6.7 MB < 50% of the 18.8 MB sibling → incomplete; full-size files aren't
+        assert by[self.F_30X_TRUNC]["incomplete"] is True
+        assert by[self.F_30X_OLD]["incomplete"] is False
+        assert by[self.F_303L]["incomplete"] is False
+        # the two 30x 1.15.0 r55142 files share platform+version → duplicate
+        assert by[self.F_30X_TRUNC]["duplicate"] is True
+        assert by[self.F_30X_FULL]["duplicate"] is True
+        # unique version → not a duplicate
+        assert by[self.F_303L]["duplicate"] is False
+
+    def test_lone_file_not_flagged(self):
+        from updater.app import _annotate_firmware_health
+        files = [{"name": self.F_30X_TRUNC, "size": 1000}]
+        _annotate_firmware_health(files)
+        assert files[0]["incomplete"] is False
+        assert files[0]["duplicate"] is False

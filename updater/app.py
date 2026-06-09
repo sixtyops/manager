@@ -4260,6 +4260,36 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
     }
 
 
+def _annotate_firmware_health(files: list) -> None:
+    """Tag each firmware-file dict (in place) with health flags so the UI can
+    flag problems instead of leaving an operator to guess from a cluttered list:
+
+    - ``incomplete``: the file is far smaller than the platform's other firmware
+      (< MIN_PLAUSIBLE_SIZE_FRACTION of the largest sibling) → a likely-truncated
+      download, the #214 failure mode.
+    - ``duplicate``: another on-disk file shares this one's platform + version.
+
+    See issue #222.
+    """
+    from collections import Counter
+    from updater.firmware_fetcher import _detect_platform, MIN_PLAUSIBLE_SIZE_FRACTION
+    from updater.vendors.tachyon.client import _extract_version_from_firmware
+
+    platform_max = {}
+    for fo in files:
+        p = _detect_platform(fo["name"])
+        platform_max[p] = max(platform_max.get(p, 0), fo.get("size", 0))
+    ver_counts = Counter(
+        (_detect_platform(fo["name"]), _extract_version_from_firmware(fo["name"])) for fo in files
+    )
+    for fo in files:
+        p = _detect_platform(fo["name"])
+        ver = _extract_version_from_firmware(fo["name"])
+        sib_max = platform_max.get(p, 0)
+        fo["incomplete"] = bool(sib_max and fo.get("size", 0) < sib_max * MIN_PLAUSIBLE_SIZE_FRACTION)
+        fo["duplicate"] = bool(ver and ver_counts[(p, ver)] > 1)
+
+
 @app.get("/api/firmware-files", tags=["firmware"])
 async def list_firmware_files(session: dict = Depends(require_auth)):
     """List available firmware files."""
@@ -4298,6 +4328,9 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
                 "hold_clears_at": info.get("clears_at"),
                 "hold_remaining_hours": round(info.get("remaining_days", 0) * 24, 1),
             })
+
+    _annotate_firmware_health(files)  # tag each file incomplete/duplicate (#222)
+
     return {
         "files": sorted(files, key=lambda x: x["modified"], reverse=True),
         "canary_hold_days": hold_days,
