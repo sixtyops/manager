@@ -931,6 +931,10 @@ class AutoUpdateScheduler:
         peer already on the target version. "Healthy" = enabled AP/switch, on the
         target version, no `last_error`, and seen within PROVEN_PEER_SEEN_WITHIN.
 
+        Both the proof and the pending set are built from the rollout's resolved
+        schedule_scope, so a scoped (site/AP) rollout's canary is never waived by a
+        device outside that scope — the in-scope devices must prove it themselves.
+
         Fail-closed: unreadable fleet, an unproven pending family, or no pending
         work at all -> not proven (hold / let the normal flow handle it). Scoped
         per family, so an unproven model never rides a proven model's clearance.
@@ -939,12 +943,21 @@ class AutoUpdateScheduler:
         allow_downgrade = settings.get("allow_downgrade", "true") == "true"
         cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
         try:
-            aps = list(db.get_all_access_points_dict(enabled_only=True).values())
-            switches = list(db.get_all_switches_dict(enabled_only=True).values())
+            # Restrict to the SAME devices the phase will actually update — both the
+            # proof and the pending set come from the resolved rollout scope, so a
+            # scoped (site/AP) rollout is never marked proven by an out-of-scope
+            # device while its own in-scope devices remain unproven.
+            scope_ips = set(self._resolve_scope(settings))
+            switch_scope = set(self._resolve_switch_scope(settings))
+            ap_dict = db.get_all_access_points_dict(enabled_only=True)
+            switch_dict = db.get_all_switches_dict(enabled_only=True)
             cpes_by_ap = db.get_all_cpes_grouped()
         except Exception as e:  # pragma: no cover - defensive
             logger.warning(f"Proven-soak check could not read fleet, holding: {e}")
             return False, None
+
+        aps = [ap_dict[ip] for ip in scope_ips if ip in ap_dict]
+        switches = [switch_dict[ip] for ip in switch_scope if ip in switch_dict]
 
         cutoff = datetime.now(timezone.utc) - PROVEN_PEER_SEEN_WITHIN
         proven: dict[str, list] = {}   # family -> [count, model_label, version]

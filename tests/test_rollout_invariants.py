@@ -337,6 +337,30 @@ async def test_proven_signal_requires_every_pending_family(mock_db, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_proven_signal_respects_rollout_scope(mock_db, monkeypatch):
+    """A proven device OUTSIDE the rollout's scope must not waive the soak for
+    in-scope devices — scoped maintenance keeps its own canary. The proof and
+    pending sets are both built from the resolved schedule_scope."""
+    _seed_aps(2)  # 10.0.0.10, 10.0.0.11 — in scope, on 1.0.0 (pending)
+    scheduler, _ = _make_scheduler()
+    settings = _settings(hold_days=6)
+    settings["schedule_scope"] = "aps"
+    settings["schedule_scope_data"] = "10.0.0.10,10.0.0.11"
+    target = scheduler._target_versions(settings, None)["tna-30x"]
+    _seed_proven_peer("10.0.0.200", target)  # proven, but OUTSIDE the scope
+    db.set_settings(settings)
+    rollout = {"firmware_file": FW}
+
+    proven, detail = scheduler._proven_soak_signal(settings, rollout)
+    assert proven is False and detail is None  # out-of-scope proof does not count
+
+    # Bring an IN-scope device onto the target -> now proven within scope.
+    _seed_proven_peer("10.0.0.10", target)
+    proven, detail = scheduler._proven_soak_signal(settings, rollout)
+    assert proven is True and detail
+
+
+@pytest.mark.asyncio
 async def test_held_phase_logs_event(mock_db, monkeypatch):
     """Holding the next phase emits an observable schedule_log event."""
     _seed_aps(5)
