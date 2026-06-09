@@ -626,11 +626,26 @@ class AutoUpdateScheduler:
         # stops all phases from cascading through a single maintenance window.
         window_key = now.strftime("%Y-%m-%d")
         canary_soak = timedelta(days=_as_int(settings.get("firmware_canary_hold_days", "6"), 6))
-        # Only the first widening past canary (pct10) is soak-gated, so only then
-        # is it worth scanning the fleet to see if the firmware is already proven.
-        soak_proven, waiver_detail = (False, None)
-        if rollout.get("phase") == "pct10":
-            soak_proven, waiver_detail = self._proven_soak_signal(settings, rollout)
+        # The canary phase and its soak both exist to prove a new firmware on real
+        # hardware before fleet exposure. When healthy same-model peers already run
+        # the target, that proof exists — so skip the canary phase outright (go
+        # straight to the 10% wave) and waive the pct10 soak. Compute once; it's
+        # only meaningful at canary/pct10.
+        soak_proven, proven_detail = (False, None)
+        if rollout.get("phase") in ("canary", "pct10"):
+            soak_proven, proven_detail = self._proven_soak_signal(settings, rollout)
+
+        canary_skipped_now = False
+        if rollout.get("phase") == "canary" and soak_proven:
+            # Skip canary -> pct10 with no canary job. complete_rollout_phase does
+            # NOT stamp last_phase_window, so pct10 still runs THIS window; the
+            # one-phase-per-window rule re-arms when the pct10 job starts.
+            db.set_canary_completed_at(rollout["id"], datetime.now(timezone.utc).isoformat())
+            db.complete_rollout_phase(rollout["id"])
+            rollout = db.get_rollout(rollout["id"])
+            canary_skipped_now = True
+            logger.info(f"Rollout {rollout['id']} canary skipped — firmware proven on fleet")
+
         may_run, gate_reason = rollout_gate.phase_run_decision(
             rollout, window_key, now, canary_soak, soak_proven=soak_proven
         )
@@ -654,17 +669,17 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
             return
 
-        # Past the gate. If the soak was waived because the firmware is already
-        # proven on the fleet, record it honestly (once) — never a silent skip.
+        # Past the gate. When the soak cleared early because the firmware is proven
+        # on the fleet, record it honestly (once) — distinguishing a full canary
+        # skip from a soak waiver — never a silent advance.
         if gate_reason == "canary_soak_waived":
-            reason_text = (
-                f"Canary soak waived — {waiver_detail}" if waiver_detail
-                else "Canary soak waived — firmware already proven on the fleet"
+            event, label = (
+                ("canary_skipped", "Canary skipped") if canary_skipped_now
+                else ("canary_soak_waived", "Canary soak waived")
             )
+            reason_text = f"{label} — {proven_detail or 'firmware already proven on the fleet'}"
             if self._soak_waiver_reason != reason_text:
-                db.log_schedule_event(
-                    "canary_soak_waived", f"Rollout {rollout['id']}: {reason_text}"
-                )
+                db.log_schedule_event(event, f"Rollout {rollout['id']}: {reason_text}")
             self._soak_waiver_reason = reason_text
         else:
             self._soak_waiver_reason = None

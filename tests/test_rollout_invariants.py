@@ -194,26 +194,29 @@ def _seed_proven_peer(ip: str, version: str, *, model: str = None,
 
 
 @pytest.mark.asyncio
-async def test_pct10_waived_when_firmware_proven_on_fleet(mock_db, monkeypatch):
-    """A healthy same-family peer already on the target version waives the soak:
-    pct10 runs the very next window instead of waiting out the 6-day hold, and the
-    waiver is logged (never a silent skip)."""
-    _seed_aps(5)                                   # all on 1.0.0 -> need the update
+async def test_pct10_soak_waived_when_proof_appears_after_canary(mock_db, monkeypatch):
+    """If the firmware becomes proven on the fleet AFTER this rollout's canary ran
+    (so the canary wasn't skipped), the pct10 soak is still waived: pct10 runs the
+    next window instead of waiting out the 6-day hold, logged as a waiver."""
+    _seed_aps(5)              # no proven peer yet -> canary runs normally
     scheduler, start_update = _make_scheduler()
     settings = _settings(hold_days=6)
-    target = scheduler._target_versions(settings, None)["tna-30x"]
-    _seed_proven_peer("10.0.0.200", target)        # already on target, healthy
     db.set_settings(settings)
     h = _Harness(scheduler, monkeypatch)
 
-    await h.tick(day=2)        # canary
+    await h.tick(day=2)       # canary runs (nothing proven yet)
+    assert db.get_active_rollout()["phase"] == "canary"
     h.complete_job()
     assert db.get_active_rollout()["phase"] == "pct10"
 
-    await h.tick(day=3)        # 1 day later — inside the soak, but proven -> RUN
+    # A peer is now on the target version -> firmware proven.
+    target = scheduler._target_versions(settings, None)["tna-30x"]
+    _seed_proven_peer("10.0.0.200", target)
+
+    await h.tick(day=3)       # inside the 6-day soak, but now proven -> RUN
     assert start_update.call_count == 2
     assert scheduler._state == "running"
-    assert scheduler._soak_waiver_reason and "waived" in scheduler._soak_waiver_reason
+    assert scheduler._soak_waiver_reason and "waived" in scheduler._soak_waiver_reason.lower()
     with db.get_db() as conn:
         rows = conn.execute(
             "SELECT 1 FROM schedule_log WHERE event = 'canary_soak_waived'"
@@ -257,6 +260,55 @@ async def test_pct10_holds_when_only_peer_is_stale(mock_db, monkeypatch):
     await h.tick(day=3)
     assert start_update.call_count == 1
     assert scheduler._state == "blocked_canary_hold"
+
+
+@pytest.mark.asyncio
+async def test_canary_skipped_entirely_when_proven(mock_db, monkeypatch):
+    """When the firmware is already proven on the fleet, the rollout skips the
+    canary phase outright and runs the 10% wave in the first window (no 1-device
+    canary first)."""
+    _seed_aps(20)  # plenty, so 10% is clearly more than one device
+    scheduler, start_update = _make_scheduler()
+    settings = _settings(hold_days=6)
+    target = scheduler._target_versions(settings, None)["tna-30x"]
+    _seed_proven_peer("10.0.0.200", target)
+    db.set_settings(settings)
+    h = _Harness(scheduler, monkeypatch)
+
+    await h.tick(day=2)
+    assert start_update.call_count == 1
+    rollout = db.get_active_rollout()
+    assert rollout["phase"] == "pct10"             # straight to 10%, canary skipped
+    assert len(db.get_rollout_devices(rollout["id"], phase="canary")) == 0
+    assert len(db.get_rollout_devices(rollout["id"], phase="pct10")) >= 2  # ~10% of 20
+    with db.get_db() as conn:
+        rows = conn.execute(
+            "SELECT 1 FROM schedule_log WHERE event = 'canary_skipped'"
+        ).fetchall()
+    assert len(rows) >= 1
+
+
+@pytest.mark.asyncio
+async def test_canary_not_skipped_when_unproven(mock_db, monkeypatch):
+    """With no qualifying proven peer, the canary phase runs normally (1 device)
+    — the skip is fail-closed."""
+    _seed_aps(5)
+    scheduler, start_update = _make_scheduler()
+    settings = _settings(hold_days=6)
+    target = scheduler._target_versions(settings, None)["tna-30x"]
+    _seed_proven_peer("10.0.0.200", target, healthy=False)  # errored -> not proof
+    db.set_settings(settings)
+    h = _Harness(scheduler, monkeypatch)
+
+    await h.tick(day=2)
+    rollout = db.get_active_rollout()
+    assert rollout["phase"] == "canary"            # canary ran, not skipped
+    assert len(db.get_rollout_devices(rollout["id"], phase="canary")) == 1
+    with db.get_db() as conn:
+        rows = conn.execute(
+            "SELECT 1 FROM schedule_log WHERE event = 'canary_skipped'"
+        ).fetchall()
+    assert len(rows) == 0
 
 
 @pytest.mark.asyncio

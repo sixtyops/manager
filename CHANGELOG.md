@@ -5,13 +5,13 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
-- Rollouts now **skip the canary soak when the firmware is already proven on
+- Rollouts now **skip the canary step when the firmware is already proven on
   your fleet.** If healthy same-model devices are already running the target
-  version, the multi-day canary hold is waived and the next wave (10%) proceeds
-  at the upcoming maintenance window — the soak's whole purpose (prove the
-  firmware on real hardware) is already met. Phases still advance one per window
-  (no cascade), it's scoped per device model, and the skip is recorded
-  honestly — a "soak waived" status and a schedule-log entry naming the proven
+  version, a new rollout goes **straight to the 10% wave** (and a rollout already
+  past canary skips the multi-day soak) — the canary's whole purpose, proving the
+  firmware on real hardware, is already met. Phases still advance one per
+  maintenance window (no cascade), it's scoped per device model, and the skip is
+  recorded honestly — a status note and a schedule-log entry naming the proven
   peers — never a silent jump.
 
 ### Changed
