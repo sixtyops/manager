@@ -24,6 +24,21 @@ FRESHDESK_PAGES = {
     "tns-100": "https://tachyon-networks.freshdesk.com/support/solutions/articles/67000719270-tns-100-firmware-releases",
 }
 
+# Per-platform "which firmware is the target" setting key. This value is the
+# concrete filename the scheduler/fleet-status flash, so it always stays a real
+# filename — auto-tracking vs. an operator pin is recorded by the companion
+# `<key>_pinned` flag (see pin_setting_key), not by repurposing this value.
+PLATFORM_SETTING_KEYS = {
+    "tna-30x": "selected_firmware_30x",
+    "tna-303l": "selected_firmware_303l",
+    "tns-100": "selected_firmware_tns100",
+}
+
+
+def pin_setting_key(setting_key: str) -> str:
+    """Companion flag key marking a `selected_firmware_*` value as operator-pinned."""
+    return f"{setting_key}_pinned"
+
 # Regex: extract "Latest stable" / "Latest beta" version from the summary table.
 # Handles inline <span> tags and &nbsp; in the version cell, and tolerates a
 # stray character between the leading "v" and the first digit (the tna-30x
@@ -331,15 +346,29 @@ class FirmwareFetcher:
 
     def _auto_select(self, platform: str, releases: list[FirmwareRelease],
                      beta_enabled: bool):
-        """Auto-select the best firmware for a platform."""
-        setting_keys = {
-            "tna-30x": "selected_firmware_30x",
-            "tna-303l": "selected_firmware_303l",
-            "tns-100": "selected_firmware_tns100",
-        }
-        setting_key = setting_keys.get(platform)
+        """Auto-select the best firmware for a platform.
+
+        Skips platforms the operator has pinned to a specific version, so a
+        manual choice (e.g. holding a known-good stable, or avoiding a beta) is
+        never overwritten by auto-tracking. The one exception is uptime safety:
+        if a pinned file has gone missing on disk we clear the pin and re-derive
+        a target rather than leave the scheduler pointing at a file that isn't
+        there.
+        """
+        setting_key = PLATFORM_SETTING_KEYS.get(platform)
         if not setting_key:
             return
+
+        pin_key = pin_setting_key(setting_key)
+        if db.get_setting(pin_key, "false") == "true":
+            pinned = (db.get_setting(setting_key, "") or "").strip()
+            if pinned and (self.firmware_dir / pinned).exists():
+                return
+            db.set_setting(pin_key, "false")
+            logger.warning(
+                f"Pinned firmware {pinned!r} for {setting_key} is missing; "
+                "reverting to auto-select"
+            )
 
         # Prefer beta if enabled, otherwise stable
         best = None

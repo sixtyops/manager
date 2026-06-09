@@ -57,6 +57,15 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Choosing a specific firmware version in **App Settings → Firmware** now
+  sticks. Previously, saving immediately re-ran auto-selection, which
+  overwrote the choice with the newest available build (the latest beta when
+  beta was enabled), so a deliberately pinned older/known-good version silently
+  reverted on the next refresh — and again on every firmware check. Each device
+  family now has an explicit **Latest** option (tracks the newest build, the
+  default) versus a pinned version that auto-selection leaves alone. A pinned
+  build that goes missing on disk falls back to Latest so the scheduler never
+  targets a file that isn't there.
 - The in-app updater's manual "run these commands on the host" fallback is now
   deployment-aware. Image-based installs (the website `docker run` quickstart)
   were shown `git fetch`/`git checkout` commands that can't run — there is no

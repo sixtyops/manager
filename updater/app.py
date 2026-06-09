@@ -32,7 +32,7 @@ from . import __version__
 from . import database as db
 from .poller import init_poller, get_poller, set_poller
 from .scheduler import init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTES
-from .firmware_fetcher import init_fetcher, get_fetcher
+from .firmware_fetcher import init_fetcher, get_fetcher, PLATFORM_SETTING_KEYS, pin_setting_key
 from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
 from . import services
 from .auth import require_auth, require_auth_ws, require_role, require_write_scope, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user, generate_api_token
@@ -2360,10 +2360,12 @@ def _validate_settings(filtered: dict):
         if not all(d in allowed_days for d in day_values):
             raise HTTPException(400, "schedule_days must be comma-separated day abbreviations (mon..sun)")
 
-    # Validate firmware filenames to prevent traversal via settings
-    for fw_key in ("selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100"):
-        if fw_key in filtered and filtered[fw_key]:
-            validate_firmware_filename(str(filtered[fw_key]))
+    # Validate firmware filenames to prevent traversal via settings. "auto" is a
+    # sentinel meaning "track the latest" (see _apply_firmware_selection), not a file.
+    for fw_key in PLATFORM_SETTING_KEYS.values():
+        value = filtered.get(fw_key)
+        if value and value != "auto":
+            validate_firmware_filename(str(value))
 
     # Dependency checks
     if filtered.get("snmp_traps_enabled") == "true" and not snmp.is_pysnmp_available():
@@ -2411,6 +2413,35 @@ def _validate_settings(filtered: dict):
             raise HTTPException(400, f"Invalid {label} canary selection ({'; '.join(parts)})")
 
 
+def _apply_firmware_selection(filtered: dict) -> list[str]:
+    """Apply per-family firmware-selection intent and strip the keys from `filtered`.
+
+    The UI sends each family's `selected_firmware_*` as either a concrete filename
+    ("pin this version") or "auto" ("track the latest"). Translate that into the
+    stored target filename plus a companion `<key>_pinned` flag that the
+    auto-selector honors (firmware_fetcher._auto_select), so an operator's pick is
+    no longer clobbered by auto-tracking. Removes the keys from `filtered` so the
+    generic settings write never persists the "auto" sentinel. Returns the
+    selection keys that were present, for audit logging. Assumes filenames were
+    already validated by _validate_settings.
+    """
+    touched = []
+    for key in PLATFORM_SETTING_KEYS.values():
+        if key not in filtered:
+            continue
+        touched.append(key)
+        value = str(filtered.pop(key) or "").strip()
+        pin_key = pin_setting_key(key)
+        if value in ("", "auto"):
+            # Track the latest: clear the pin; the reselect() that follows the
+            # save will refresh this family's target to the newest available.
+            db.set_setting(pin_key, "false")
+        else:
+            db.set_setting(key, value)
+            db.set_setting(pin_key, "true")
+    return touched
+
+
 @app.put("/api/settings", tags=["settings"])
 async def update_settings(request: Request, session: dict = Depends(require_role("admin"))):
     """Update settings. Only whitelisted keys are accepted."""
@@ -2432,9 +2463,15 @@ async def save_settings_and_reevaluate(request: Request, session: dict = Depends
         raise HTTPException(400, "No valid settings keys provided")
 
     _validate_settings(filtered)
+
+    # Translate firmware-selection intent (filename = pin, "auto" = track latest)
+    # into stored value + pin flag before the generic write, so reselect() below
+    # honors an operator's pinned version instead of overwriting it.
+    fw_keys = _apply_firmware_selection(filtered)
     db.set_settings(filtered)
+    audit_keys = sorted(set(filtered) | set(fw_keys))
     db.log_audit(session["username"], "settings.update", "settings", None,
-                 f"Updated keys: {', '.join(sorted(filtered.keys()))}", _client_ip(request))
+                 f"Updated keys: {', '.join(audit_keys)}", _client_ip(request))
 
     fetcher = get_fetcher()
     if fetcher:
