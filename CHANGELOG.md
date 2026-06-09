@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added
+- Rollouts now **skip the canary step when the firmware is already proven on
+  your fleet.** If healthy same-model devices are already running the target
+  version, a new rollout goes **straight to the 10% wave** (and a rollout already
+  past canary skips the multi-day soak) — the canary's whole purpose, proving the
+  firmware on real hardware, is already met. Phases still advance one per
+  maintenance window (no cascade), it's scoped per device model, and the skip is
+  recorded honestly — a status note and a schedule-log entry naming the proven
+  peers — never a silent jump.
+
 ### Changed
 - The firmware list now **flags problem files**: a build that looks
   **incomplete** (much smaller than the platform's other firmware — a likely
@@ -68,6 +78,17 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- The **canary soak** now lasts exactly the configured number of days. It was
+  being measured against the wrong clock (the canary-completion time is stored
+  in UTC, but it was compared as if it were the operator's local time), so the
+  hold ran longer than set — about 5 hours extra in US Central — which could
+  push the next rollout phase past the maintenance window it should have run in.
+- The rollout status no longer **mislabels a canary soak as actively updating.**
+  While the soak holds the next wave, the status bar now reads **"Soak test"**
+  with the hold countdown shown on the 10% step (previously it showed "Running"
+  with the step lit as if devices were flashing). The countdown reflects the
+  actual fleet soak, and when the soak is waived (firmware already proven on the
+  fleet) the bar says so instead of silently advancing.
 - Changing firmware selection via the generic settings API (PUT), or deleting
   the firmware a model currently updates to, no longer leaves the scheduler
   pointed at a stale or missing file — the target is re-derived immediately
