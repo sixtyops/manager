@@ -60,6 +60,10 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Firmware updates now **fail closed** for unrecognised device models: a model
+  with no firmware mapping (e.g. a TNA-305 before Platform 3 support) is refused
+  at flash-time validation instead of being allowed to flash another platform's
+  image. Mapped variants such as TNA-303L-65 are unaffected (#215).
 - The firmware auto-fetcher now **rejects truncated/corrupt downloads** instead
   of silently accepting a partial file. A transfer shorter than its advertised
   `Content-Length`, or far smaller than the platform's other on-disk firmware
