@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
+- The **Start Firmware Update** confirmation dialog now names the firmware
+  version(s) it will flash (e.g. "Target firmware: 1.15.0 r55142"), resolved
+  per device model, so operators can confirm the target before a reboot (#216).
 - API tokens with the `read` scope are now enforced read-only: any write
   (`POST`/`PUT`/`DELETE`/...) — and side-effecting `GET`s such as
   `/api/config-compliance?refresh=true` — are rejected with `403`,
@@ -62,6 +65,16 @@ All notable changes to this project are documented in this file.
   reboot, so recovery can exceed the old 300s wait; the AP/CPE reboot window is
   now 600s (devices still come back the moment they respond). A device that
   returns on a *different* IP via DHCP is a separate follow-up (#217).
+- Firmware updates now **fail closed** for unrecognised device models: a model
+  with no firmware mapping (e.g. a TNA-305 before Platform 3 support) is refused
+  at flash-time validation instead of being allowed to flash another platform's
+  image. Mapped variants such as TNA-303L-65 are unaffected (#215).
+- The firmware auto-fetcher now **rejects truncated/corrupt downloads** instead
+  of silently accepting a partial file. A transfer shorter than its advertised
+  `Content-Length`, or far smaller than the platform's other on-disk firmware
+  (e.g. a 6.7 MB file next to an ~18 MB sibling), is discarded rather than
+  renamed into place — so a partial image can never be auto-selected or
+  flashed to a device (#214).
 - The in-app updater's manual "run these commands on the host" fallback is now
   deployment-aware. Image-based installs (the website `docker run` quickstart)
   were shown `git fetch`/`git checkout` commands that can't run — there is no

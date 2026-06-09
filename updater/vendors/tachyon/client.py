@@ -376,24 +376,44 @@ class TachyonClient:
             return f"{base}.{rev}" if rev else base
         return version_str.strip()
 
+    @classmethod
+    def _patterns_for_model(cls, model: str) -> Optional[List[str]]:
+        """Firmware-filename patterns for a model, or None if the model is
+        unmapped (caller must fail closed). Uses the same exact/startswith
+        match as `select_firmware_for_model` so the two never disagree —
+        e.g. "tna-303l-65" resolves via the "tna-303l" prefix. A classmethod so
+        the driver's select/type helpers can reuse it without a live client.
+        """
+        model_key = (model or "").lower()
+        if not model_key:
+            return None
+        for key, patterns in cls.MODEL_FIRMWARE_PATTERNS.items():
+            if model_key == key or model_key.startswith(key):
+                return patterns
+        return None
+
     def validate_firmware_for_model(self, firmware_path: str, model: str) -> tuple[bool, str]:
-        """Validate that firmware file is compatible with the device model.
+        """Validate that a firmware file is compatible with the device model.
 
-        Args:
-            firmware_path: Path to firmware file.
-            model: Device model string (e.g., "TNA-303L-65").
+        Fails CLOSED: a model with no entry in MODEL_FIRMWARE_PATTERNS is
+        REFUSED, not allowed through, so an unrecognised model (e.g. a TNA-305
+        before Platform 3 support lands) can never be flashed with another
+        platform's image. This is the flash-time chokepoint — `update_firmware`
+        calls it before upload. See issue #215.
 
-        Returns:
-            Tuple of (is_valid, error_message). error_message is empty if valid.
+        Returns (is_valid, error_message); error_message is empty if valid.
         """
         import os
         filename = os.path.basename(firmware_path).lower()
-        model_key = model.lower()
 
-        patterns = self.MODEL_FIRMWARE_PATTERNS.get(model_key)
-        if not patterns:
-            logger.debug(f"No firmware pattern defined for model {model}, allowing any firmware")
-            return True, ""
+        patterns = self._patterns_for_model(model)
+        if patterns is None:
+            msg = (
+                f"Unsupported model '{model}': no firmware mapping defined — "
+                f"refusing to flash to avoid a wrong-platform image"
+            )
+            logger.warning(msg)
+            return False, msg
 
         for pattern in patterns:
             if pattern in filename:
