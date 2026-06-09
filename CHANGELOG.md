@@ -68,6 +68,11 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- The **canary soak** now lasts exactly the configured number of days. It was
+  being measured against the wrong clock (the canary-completion time is stored
+  in UTC, but it was compared as if it were the operator's local time), so the
+  hold ran longer than set — about 5 hours extra in US Central — which could
+  push the next rollout phase past the maintenance window it should have run in.
 - Changing firmware selection via the generic settings API (PUT), or deleting
   the firmware a model currently updates to, no longer leaves the scheduler
   pointed at a stale or missing file — the target is re-derived immediately

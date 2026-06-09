@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import math
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Optional, Set
 
 from . import database as db
@@ -1120,7 +1120,14 @@ class AutoUpdateScheduler:
                         # is measured from real fleet-bake time, not the firmware
                         # release date (see rollout_gate.canary_soak_cleared).
                         if rollout["phase"] == "canary":
-                            db.set_canary_completed_at(rollout["id"], datetime.now().isoformat())
+                            # Stamp in UTC (timezone-aware) so the canary soak is
+                            # measured as an absolute duration. The gate's `now`
+                            # arrives in the operator's display timezone; a bare
+                            # datetime.now() here is naive container-local (UTC),
+                            # which the gate used to relabel as local and over-soak.
+                            db.set_canary_completed_at(
+                                rollout["id"], datetime.now(timezone.utc).isoformat()
+                            )
                         db.complete_rollout_phase(rollout["id"])
 
                         refreshed = db.get_rollout(rollout["id"])

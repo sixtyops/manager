@@ -20,7 +20,7 @@ rollout state returns "do not run", so a future refactor that introduces a new
 phase or status holds instead of cascading.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 
@@ -49,11 +49,16 @@ def canary_soak_cleared(
         ran_dt = datetime.fromisoformat(ran_at)
     except (ValueError, TypeError):
         return False, canary_soak  # unparseable timestamp — hold (fail-closed)
-    # Reconcile tz-awareness so naive (stored) and aware (live) clocks compare.
-    if now.tzinfo is not None and ran_dt.tzinfo is None:
-        ran_dt = ran_dt.replace(tzinfo=now.tzinfo)
-    elif now.tzinfo is None and ran_dt.tzinfo is not None:
-        now = now.replace(tzinfo=ran_dt.tzinfo)
+    # Completion timestamps are UTC (newer rows are tz-aware; older rows are naive
+    # UTC, written by the container's UTC wall clock). Normalize BOTH sides to
+    # aware UTC so the soak is an absolute duration, independent of the display
+    # timezone `now` arrives in. (A prior version relabeled the naive UTC stamp
+    # with now's local tz, which made the soak run ~the local UTC offset too long
+    # — e.g. ~5h in US Central, enough to miss the window it should have cleared.)
+    if ran_dt.tzinfo is None:
+        ran_dt = ran_dt.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     clears_at = ran_dt + canary_soak
     if now >= clears_at:
         return True, None

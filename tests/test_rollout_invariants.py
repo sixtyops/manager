@@ -14,7 +14,7 @@ Invariants covered:
 """
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -245,3 +245,37 @@ def test_soak_holds_when_no_timestamp_exists():
     may_run, reason = rollout_gate.phase_run_decision(rollout, "2026-06-10", _NOW, _SOAK)
     assert may_run is False
     assert reason == "canary_soak"
+
+
+def test_soak_is_absolute_duration_not_local_offset():
+    """Regression: canary_completed_at is stored in UTC, but `now` arrives in the
+    operator's local timezone. The soak must clear exactly `canary_soak` after the
+    UTC completion instant — not `canary_soak + local_utc_offset`.
+
+    Pre-fix the naive UTC stamp was relabeled with now's local tz, so a 6-day soak
+    ran ~5h long in US Central and could miss the maintenance window it should have
+    cleared in (the production "1.2 days remaining" when ~1.0 was real)."""
+    central_cdt = timezone(timedelta(hours=-5))  # US Central, summer (CDT), UTC-5
+    rollout = {
+        "status": "active",
+        "phase": "pct10",
+        "last_phase_window": None,
+        # 2026-06-04 08:04:20 UTC (= 03:04 Central), stored naive-UTC as in prod.
+        "canary_completed_at": "2026-06-04T08:04:20",
+        "last_phase_completed_at": None,
+    }
+    soak = timedelta(days=6)  # clears at 2026-06-10 08:04:20 UTC
+
+    # 6 days + ~1 min later, seen in Central (03:05 CDT == 08:05 UTC) -> CLEARED.
+    just_after = datetime(2026, 6, 10, 3, 5, tzinfo=central_cdt)
+    cleared, remaining = rollout_gate.canary_soak_cleared(rollout, just_after, soak)
+    assert cleared is True  # pre-fix: held, ~5h short (UTC relabeled as Central)
+    assert remaining is None
+    may_run, reason = rollout_gate.phase_run_decision(rollout, "2026-06-10", just_after, soak)
+    assert may_run is True
+
+    # Still inside the soak (02:00 CDT == 07:00 UTC, ~1h before the UTC clear) -> HOLD.
+    just_before = datetime(2026, 6, 10, 2, 0, tzinfo=central_cdt)
+    cleared, remaining = rollout_gate.canary_soak_cleared(rollout, just_before, soak)
+    assert cleared is False
+    assert remaining is not None
