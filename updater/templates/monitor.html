@@ -8398,7 +8398,7 @@
                 blocked_weather:     { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_time:        { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_no_firmware: { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
-                blocked_canary_hold: { label: 'Running',   cls: 'running', icon: RUNNING_ICON },
+                blocked_canary_hold: { label: 'Soak test', cls: 'running', icon: SCHEDULED_ICON },
                 frozen:              { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_all_current: { label: 'Up to date', cls: 'current', icon: CURRENT_ICON },
             };
@@ -8441,9 +8441,15 @@
                 } else if (status.block_reason) {
                     subtitle = status.block_reason;
                 }
-            } else if ((view.label === 'Paused' || view.label === 'Running')
+            } else if ((view.label === 'Paused' || view.label === 'Running'
+                        || view.label === 'Soak test')
                        && status.block_reason) {
                 subtitle = status.block_reason;
+            }
+            // A waived canary soak (firmware already proven on the fleet) is shown
+            // honestly here rather than silently skipped.
+            if (status.soak_waiver) {
+                subtitle = status.soak_waiver;
             }
             reason.textContent = subtitle;
 
@@ -8619,10 +8625,14 @@
             const phaseIdx = PHASES.indexOf(rollout.phase);
             const indicator = document.getElementById('barPhaseIndicator');
             const pred = rollout.predictions;
-            // Canary-hold lock applies to the canary phase of the current rollout
-            // while it waits to advance past canary.
+            // The canary soak holds the CURRENT phase (the 10% wave) until the
+            // canary has baked — so the lock sits on that phase's dot, not on
+            // canary (which has already completed). Prefer the accurate fleet-soak
+            // countdown (soak_hold) over the release-date firmware hold.
             const isCanaryHold = lastSchedulerStatus && lastSchedulerStatus.state === 'blocked_canary_hold';
-            const lockLabel = isCanaryHold ? _formatLockLabel(lastSchedulerStatus.canary_hold) : '';
+            const lockLabel = isCanaryHold
+                ? _formatLockLabel(lastSchedulerStatus.soak_hold || lastSchedulerStatus.canary_hold)
+                : '';
             let phaseHtml = '';
             for (let i = 0; i < PHASES.length; i++) {
                 const phase = PHASES[i];
@@ -8633,7 +8643,7 @@
                     dotClass += ' completed';
                     lineClass += ' completed';
                 } else if (i === phaseIdx) {
-                    if (isCanaryHold && phase === 'canary') {
+                    if (isCanaryHold) {
                         dotClass += ' locked';
                     } else {
                         dotClass += rollout.status === 'paused' ? ' paused' : ' active';
@@ -8642,7 +8652,7 @@
 
                 const detail = _phaseDetail(pred, i);
                 const detailHtml = detail ? `<span class="bar-phase-detail">${detail}</span>` : '';
-                const lockHtml = (i === phaseIdx && isCanaryHold && phase === 'canary' && lockLabel)
+                const lockHtml = (i === phaseIdx && isCanaryHold && lockLabel)
                     ? `<span class="bar-phase-lock-info">${lockLabel}</span>` : '';
                 phaseHtml += `<div class="${dotClass}">${PHASE_LABELS[phase]}${detailHtml}${lockHtml}</div>`;
                 if (i < PHASES.length - 1) phaseHtml += `<div class="${lineClass}"></div>`;

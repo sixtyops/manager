@@ -83,6 +83,12 @@ All notable changes to this project are documented in this file.
   in UTC, but it was compared as if it were the operator's local time), so the
   hold ran longer than set — about 5 hours extra in US Central — which could
   push the next rollout phase past the maintenance window it should have run in.
+- The rollout status no longer **mislabels a canary soak as actively updating.**
+  While the soak holds the next wave, the status bar now reads **"Soak test"**
+  with the hold countdown shown on the 10% step (previously it showed "Running"
+  with the step lit as if devices were flashing). The countdown reflects the
+  actual fleet soak, and when the soak is waived (firmware already proven on the
+  fleet) the bar says so instead of silently advancing.
 - Changing firmware selection via the generic settings API (PUT), or deleting
   the firmware a model currently updates to, no longer leaves the scheduler
   pointed at a stale or missing file — the target is re-derived immediately

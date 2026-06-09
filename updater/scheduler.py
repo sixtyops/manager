@@ -640,7 +640,7 @@ class AutoUpdateScheduler:
                 _, remaining = rollout_gate.canary_soak_cleared(rollout, now, canary_soak)
                 days = remaining.total_seconds() / 86400 if remaining else 0
                 remaining_str = f"{days:.1f} days" if days >= 1 else f"{days * 24:.0f} hours"
-                new_reason = f"Holding new firmware in canary ({remaining_str} remaining)"
+                new_reason = f"Soak test — holding the 10% wave (~{remaining_str} left)"
                 if self._block_reason != new_reason:
                     db.log_schedule_event("blocked_canary_hold", new_reason)
                 self._state = "blocked_canary_hold"
@@ -1655,6 +1655,22 @@ class AutoUpdateScheduler:
                 canary_hold["firmware"] = fw_30x
                 canary_hold["hold_days"] = hold_days
 
+        # Accurate fleet canary-soak remaining for the CURRENT rollout — the hold
+        # that `blocked_canary_hold` actually waits on (canary_completed_at + soak,
+        # the same computation the gate uses). Distinct from `canary_hold` above,
+        # which is the release/download-date firmware hold; the pill/countdown for
+        # an in-flight rollout should reflect THIS one so the UI and the gate agree.
+        soak_hold = None
+        if rollout and rollout.get("phase") == "pct10" and hold_days > 0:
+            cleared, remaining = rollout_gate.canary_soak_cleared(
+                rollout, datetime.now(timezone.utc), timedelta(days=hold_days)
+            )
+            if not cleared and remaining is not None:
+                soak_hold = {
+                    "remaining_days": round(remaining.total_seconds() / 86400, 1),
+                    "clears_at": (datetime.now(timezone.utc) + remaining).isoformat(),
+                }
+
         next_windows = upcoming_window_starts(
             datetime.now(), schedule_days, start_hour, end_hour, count=1
         )
@@ -1674,6 +1690,7 @@ class AutoUpdateScheduler:
             "rollout": rollout_info,
             "predictions": pre_rollout_predictions,
             "canary_hold": canary_hold,
+            "soak_hold": soak_hold,
             "soak_waiver": self._soak_waiver_reason,
         }
 
