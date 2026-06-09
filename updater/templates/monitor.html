@@ -1794,6 +1794,21 @@
         .drawer-fw-chip:hover .drawer-fw-del { opacity: 0.6; }
         .drawer-fw-del:hover { opacity: 1; color: var(--danger, #dc2626); }
 
+        /* Per-file health flags (#222) */
+        .drawer-fw-warn {
+            font-size: 0.58rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            color: var(--danger, #dc2626);
+        }
+        .drawer-fw-dup {
+            font-size: 0.58rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            color: var(--text-muted);
+        }
+
         .drawer-fw-chip.active:hover {
             background: #bfdbfe;
         }
@@ -9710,6 +9725,11 @@
                         const h = f.hold_remaining_hours;
                         const qLabel = h > 24 ? `${(h / 24).toFixed(0)}d` : `${h.toFixed(0)}h`;
                         html += `<span class="drawer-fw-quarantine-label">${qLabel}</span>`;
+                    }
+                    if (f.incomplete) {
+                        html += `<span class="drawer-fw-warn" title="Looks incomplete — much smaller than the other firmware for this model, likely a truncated download. Re-download or remove it.">&#9888; incomplete</span>`;
+                    } else if (f.duplicate) {
+                        html += `<span class="drawer-fw-dup" title="Another file with the same version is already on disk.">dup</span>`;
                     }
                     html += `<span class="drawer-fw-del" title="Remove this firmware file" onclick="deleteDrawerFw('${escapedName}','${type}',event)">&times;</span>`;
                     html += `</span>`;

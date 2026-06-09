@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
+- The firmware list now **flags problem files**: a build that looks
+  **incomplete** (much smaller than the platform's other firmware — a likely
+  truncated download) and **duplicate** copies of the same version, so they're
+  easy to spot and remove with the Delete control (#222).
 - Firmware files can now be **removed from the UI**: each version pill in App
   Settings → Firmware has a hover **×** that deletes the file (with a confirm),
   so duplicate / superseded / corrupt files no longer need shell access. The
