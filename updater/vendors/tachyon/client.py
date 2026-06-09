@@ -376,16 +376,18 @@ class TachyonClient:
             return f"{base}.{rev}" if rev else base
         return version_str.strip()
 
-    def _patterns_for_model(self, model: str) -> Optional[List[str]]:
+    @classmethod
+    def _patterns_for_model(cls, model: str) -> Optional[List[str]]:
         """Firmware-filename patterns for a model, or None if the model is
         unmapped (caller must fail closed). Uses the same exact/startswith
         match as `select_firmware_for_model` so the two never disagree —
-        e.g. "tna-303l-65" resolves via the "tna-303l" prefix.
+        e.g. "tna-303l-65" resolves via the "tna-303l" prefix. A classmethod so
+        the driver's select/type helpers can reuse it without a live client.
         """
         model_key = (model or "").lower()
         if not model_key:
             return None
-        for key, patterns in self.MODEL_FIRMWARE_PATTERNS.items():
+        for key, patterns in cls.MODEL_FIRMWARE_PATTERNS.items():
             if model_key == key or model_key.startswith(key):
                 return patterns
         return None

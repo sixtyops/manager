@@ -77,3 +77,35 @@ class TestPatternsHelper:
         assert client._patterns_for_model("tna-305x") is None
         assert client._patterns_for_model("") is None
         assert client._patterns_for_model(None) is None
+
+
+class TestSelectFailClosed:
+    """select_firmware_for_model / get_firmware_type_for_model fail closed for
+    unmapped models, so fleet-status/planning don't mark an unsupported model as
+    eligible and queue a doomed job (#215 review)."""
+
+    FW = {"tna-30x": "/fw/tna-30x.bin", "tna-303l": "/fw/tna-303l.bin", "tns-100": "/fw/tns.bin"}
+
+    @pytest.fixture
+    def driver(self):
+        from updater.vendors.tachyon import TachyonDriver
+        return TachyonDriver("203.0.113.1", "user", "pass")
+
+    def test_known_model_selects_its_family(self, driver):
+        assert driver.select_firmware_for_model("TNA-301", self.FW) == "/fw/tna-30x.bin"
+        assert driver.select_firmware_for_model("TNA-303L-65", self.FW) == "/fw/tna-303l.bin"
+        assert driver.select_firmware_for_model("TNS-100", self.FW) == "/fw/tns.bin"
+
+    def test_known_model_type(self, driver):
+        assert driver.get_firmware_type_for_model("TNA-301") == "tna-30x"
+        assert driver.get_firmware_type_for_model("TNA-303L-65") == "tna-303l"
+
+    def test_unmapped_model_selects_nothing(self, driver):
+        # Was: defaulted to 30x firmware (a wrong-platform target). Now: None.
+        assert driver.select_firmware_for_model("TNA-305X", self.FW) is None
+        assert driver.select_firmware_for_model("bogus", self.FW) is None
+        assert driver.select_firmware_for_model("", self.FW) is None
+
+    def test_unmapped_model_has_no_type(self, driver):
+        assert driver.get_firmware_type_for_model("TNA-305X") is None
+        assert driver.get_firmware_type_for_model("") is None
