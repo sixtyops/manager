@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
+- The **Start Firmware Update** confirmation dialog now names the firmware
+  version(s) it will flash (e.g. "Target firmware: 1.15.0 r55142"), resolved
+  per device model, so operators can confirm the target before a reboot (#216).
 - API tokens with the `read` scope are now enforced read-only: any write
   (`POST`/`PUT`/`DELETE`/...) — and side-effecting `GET`s such as
   `/api/config-compliance?refresh=true` — are rejected with `403`,
