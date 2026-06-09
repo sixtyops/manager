@@ -57,6 +57,12 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- The firmware auto-fetcher now **rejects truncated/corrupt downloads** instead
+  of silently accepting a partial file. A transfer shorter than its advertised
+  `Content-Length`, or far smaller than the platform's other on-disk firmware
+  (e.g. a 6.7 MB file next to an ~18 MB sibling), is discarded rather than
+  renamed into place — so a partial image can never be auto-selected or
+  flashed to a device (#214).
 - The in-app updater's manual "run these commands on the host" fallback is now
   deployment-aware. Image-based installs (the website `docker run` quickstart)
   were shown `git fetch`/`git checkout` commands that can't run — there is no
