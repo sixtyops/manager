@@ -60,6 +60,15 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Choosing a specific firmware version in **App Settings → Firmware** now
+  sticks. Previously, saving immediately re-ran auto-selection, which
+  overwrote the choice with the newest available build (the latest beta when
+  beta was enabled), so a deliberately pinned older/known-good version silently
+  reverted on the next refresh — and again on every firmware check. Each device
+  family now has an explicit **Latest** option (tracks the newest build, the
+  default) versus a pinned version that auto-selection leaves alone. A pinned
+  build that goes missing on disk falls back to Latest so the scheduler never
+  targets a file that isn't there.
 - Devices being updated no longer **vanish from the table mid-flash**, and the
   row now shows **live progress** — the current stage (uploading / installing /
   rebooting / verifying) and an elapsed timer — driven by the server's

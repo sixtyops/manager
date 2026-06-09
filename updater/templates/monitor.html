@@ -9492,9 +9492,11 @@
                 pre_update_reboot: document.getElementById('drawerPreRebootToggle').classList.contains('active') ? 'true' : 'false',
             };
 
-            if (drawerFwSelected['tna-30x']) settings.selected_firmware_30x = drawerFwSelected['tna-30x'];
-            if (drawerFwSelected['tna-303l']) settings.selected_firmware_303l = drawerFwSelected['tna-303l'];
-            if (drawerFwSelected['tns-100']) settings.selected_firmware_tns100 = drawerFwSelected['tns-100'];
+            // Empty selection = "Latest" (auto-track). Send the 'auto' sentinel so
+            // the backend clears the pin rather than leaving the prior pinned version.
+            settings.selected_firmware_30x = drawerFwSelected['tna-30x'] || 'auto';
+            settings.selected_firmware_303l = drawerFwSelected['tna-303l'] || 'auto';
+            settings.selected_firmware_tns100 = drawerFwSelected['tns-100'] || 'auto';
 
             try {
                 const resp = await fetch('/api/settings/save', {
@@ -9584,10 +9586,13 @@
                 const fwData = await fwResp.json();
                 const settData = await settResp.json();
                 drawerFwFiles = fwData.files || [];
+                // A family shows a specific version only when the operator pinned it;
+                // otherwise it's tracking Latest, represented as an empty selection.
+                const fwPinned = (k) => settData.settings[k + '_pinned'] === 'true';
                 drawerFwSelected = {
-                    'tna-30x': settData.settings.selected_firmware_30x || '',
-                    'tna-303l': settData.settings.selected_firmware_303l || '',
-                    'tns-100': settData.settings.selected_firmware_tns100 || '',
+                    'tna-30x': fwPinned('selected_firmware_30x') ? (settData.settings.selected_firmware_30x || '') : '',
+                    'tna-303l': fwPinned('selected_firmware_303l') ? (settData.settings.selected_firmware_303l || '') : '',
+                    'tns-100': fwPinned('selected_firmware_tns100') ? (settData.settings.selected_firmware_tns100 || '') : '',
                 };
                 // Sync beta state from settings BEFORE the first render, so a
                 // beta-enabled / beta-only install doesn't briefly filter every file
@@ -9666,6 +9671,12 @@
                 if (!groups[type] || groups[type].length === 0) continue;
                 html += `<div class="drawer-fw-row">`;
                 html += `<span class="drawer-fw-type-label">${typeLabels[type]}</span>`;
+                // "Latest" tracks the newest available firmware (and follows the beta
+                // toggle). It's the default; picking a specific version below pins it.
+                if (type !== 'unknown') {
+                    const latestActive = !drawerFwSelected[type];
+                    html += `<span class="drawer-fw-chip${latestActive ? ' active' : ''}" onclick="selectDrawerFw('','${type}')" title="Always use the newest available firmware">Latest</span>`;
+                }
                 for (const f of groups[type]) {
                     const versionLabel = fwVersionLabel(f.name);
                     const isBeta = f.channel === 'beta';

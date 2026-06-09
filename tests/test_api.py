@@ -165,6 +165,73 @@ class TestSettingsAPI:
         assert s["selected_firmware_303l"] == "tachyon-303l-v1.12.3.bin"
         assert s["selected_firmware_tns100"] == "tachyon-tns100-v1.12.3.bin"
 
+    def test_save_pins_explicit_firmware_choice(self, authed_client):
+        """Picking a specific firmware file pins it so auto-select can't revert
+        it (regression: a chosen older version reverted to the latest beta)."""
+        with patch("updater.app.get_fetcher", return_value=None), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = authed_client.post("/api/settings/save", json={
+                "selected_firmware_30x": "tna-30x-1.12.3-r55002.bin",
+            })
+        assert resp.status_code == 200
+        s = authed_client.get("/api/settings").json()["settings"]
+        assert s["selected_firmware_30x"] == "tna-30x-1.12.3-r55002.bin"
+        assert s["selected_firmware_30x_pinned"] == "true"
+
+    def test_save_auto_clears_firmware_pin(self, authed_client):
+        """'auto' returns a family to latest-tracking by clearing its pin."""
+        with patch("updater.app.get_fetcher", return_value=None), \
+             patch("updater.app.get_scheduler", return_value=None):
+            authed_client.post("/api/settings/save", json={
+                "selected_firmware_30x": "tna-30x-1.12.3-r55002.bin",
+            })
+            resp = authed_client.post("/api/settings/save", json={
+                "selected_firmware_30x": "auto",
+            })
+        assert resp.status_code == 200
+        s = authed_client.get("/api/settings").json()["settings"]
+        assert s["selected_firmware_30x_pinned"] == "false"
+
+    def test_save_unrelated_settings_leaves_firmware_pin_untouched(self, authed_client):
+        """Saving non-firmware settings must not pin a family that wasn't sent."""
+        with patch("updater.app.get_fetcher", return_value=None), \
+             patch("updater.app.get_scheduler", return_value=None):
+            authed_client.post("/api/settings/save", json={
+                "selected_firmware_30x": "tna-30x-1.12.3-r55002.bin",
+            })
+            resp = authed_client.post("/api/settings/save", json={
+                "schedule_days": "mon,tue",
+            })
+        assert resp.status_code == 200
+        s = authed_client.get("/api/settings").json()["settings"]
+        assert s["selected_firmware_30x"] == "tna-30x-1.12.3-r55002.bin"
+        assert s["selected_firmware_30x_pinned"] == "true"
+
+    def test_put_settings_pins_explicit_firmware(self, authed_client):
+        """The legacy PUT /api/settings path must apply the same pin semantics as
+        POST /save, or auto-select could clobber a version set via PUT (#229)."""
+        resp = authed_client.put("/api/settings", json={
+            "selected_firmware_30x": "tna-30x-1.12.3-r55002.bin",
+        })
+        assert resp.status_code == 200
+        s = authed_client.get("/api/settings").json()["settings"]
+        assert s["selected_firmware_30x"] == "tna-30x-1.12.3-r55002.bin"
+        assert s["selected_firmware_30x_pinned"] == "true"
+
+    def test_put_settings_auto_clears_pin_and_is_not_stored_literally(self, authed_client):
+        """PUT with 'auto' clears the pin and must never persist 'auto' as the
+        target filename (#229)."""
+        authed_client.put("/api/settings", json={
+            "selected_firmware_30x": "tna-30x-1.12.3-r55002.bin",
+        })
+        resp = authed_client.put("/api/settings", json={
+            "selected_firmware_30x": "auto",
+        })
+        assert resp.status_code == 200
+        s = authed_client.get("/api/settings").json()["settings"]
+        assert s["selected_firmware_30x_pinned"] == "false"
+        assert s["selected_firmware_30x"] != "auto"
+
     def test_save_settings_mixed_valid_and_invalid_keys(self, authed_client):
         with patch("updater.app.get_fetcher", return_value=None), \
              patch("updater.app.get_scheduler", return_value=None):

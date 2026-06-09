@@ -1,11 +1,13 @@
 """Tests for the Freshdesk release-page parser used by the firmware fetcher."""
 
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from updater import database as db
 from updater.firmware_fetcher import (
     FirmwareFetcher,
     FirmwareRelease,
@@ -211,6 +213,49 @@ class TestScrapePage:
         assert warnings == []
 
 
+class TestAutoSelectPin:
+    """Auto-select must advance un-pinned families to the newest firmware but
+    leave an operator's pinned version alone — the core of the bug where a
+    manually chosen older firmware reverted to the latest beta on save."""
+
+    STABLE_30X = "tna-30x-1.12.3-r55002-20260219-tn-110-prs-squashfs-sysupgrade.bin"
+    BETA_30X = "tna-30x-1.15.0-r55142-20260521-tn-110-prs-squashfs-sysupgrade.bin"
+
+    @pytest.fixture
+    def fetcher(self, tmp_path):
+        # Both firmware files present on disk; channels registered below.
+        (tmp_path / self.STABLE_30X).write_bytes(b"x")
+        (tmp_path / self.BETA_30X).write_bytes(b"x")
+        return FirmwareFetcher(firmware_dir=tmp_path, broadcast_func=AsyncMock())
+
+    def _register_channels(self):
+        db.set_setting("firmware_channels", json.dumps({
+            self.STABLE_30X: "stable",
+            self.BETA_30X: "beta",
+        }))
+
+    def test_unpinned_family_advances_to_newest_beta(self, fetcher, mock_db):
+        self._register_channels()
+        fetcher.reselect(beta_enabled=True)
+        assert db.get_setting("selected_firmware_30x", "") == self.BETA_30X
+
+    def test_pinned_family_is_not_overwritten(self, fetcher, mock_db):
+        self._register_channels()
+        db.set_setting("selected_firmware_30x", self.STABLE_30X)
+        db.set_setting("selected_firmware_30x_pinned", "true")
+        fetcher.reselect(beta_enabled=True)
+        assert db.get_setting("selected_firmware_30x", "") == self.STABLE_30X
+        assert db.get_setting("selected_firmware_30x_pinned", "") == "true"
+
+    def test_missing_pinned_file_falls_back_to_auto(self, fetcher, mock_db):
+        # Uptime safety: a pin pointing at a file that's gone must not strand the
+        # scheduler on a missing target — clear the pin and re-derive.
+        self._register_channels()
+        db.set_setting("selected_firmware_30x", "tna-30x-9.9.9-rgone.bin")
+        db.set_setting("selected_firmware_30x_pinned", "true")
+        fetcher.reselect(beta_enabled=True)
+        assert db.get_setting("selected_firmware_30x_pinned", "") == "false"
+        assert db.get_setting("selected_firmware_30x", "") == self.BETA_30X
 class TestSuspectTruncatedSize:
     """Size-outlier guard (#214): a file far smaller than its same-platform
     siblings is treated as a truncated download. Catches the real case where a
