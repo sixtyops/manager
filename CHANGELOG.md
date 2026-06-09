@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
+- Firmware files can now be **removed from the UI**: each version pill in App
+  Settings → Firmware has a hover **×** that deletes the file (with a confirm),
+  so duplicate / superseded / corrupt files no longer need shell access. The
+  version a model is pinned to is guarded — switch the selection first (#221).
 - API tokens with the `read` scope are now enforced read-only: any write
   (`POST`/`PUT`/`DELETE`/...) — and side-effecting `GET`s such as
   `/api/config-compliance?refresh=true` — are rejected with `403`,
