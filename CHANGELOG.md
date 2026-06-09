@@ -68,6 +68,9 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Firmware version pills no longer wrap awkwardly (e.g. `1.15.0` / `r55142`
+  split onto two lines next to the BETA badge). The picker row now wraps
+  between pills, and each pill stays on one line (#224).
 - Choosing a specific firmware version in **App Settings → Firmware** now
   sticks. Previously, saving immediately re-ran auto-selection, which
   overwrote the choice with the newest available build (the latest beta when

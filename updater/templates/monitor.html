@@ -1748,6 +1748,7 @@
 
         .drawer-fw-row {
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
             gap: 6px;
         }
@@ -1764,6 +1765,8 @@
         .drawer-fw-chip {
             display: inline-flex;
             align-items: center;
+            flex-shrink: 0;
+            white-space: nowrap;
             gap: 4px;
             padding: 3px 8px;
             background: var(--border-light);
