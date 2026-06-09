@@ -57,6 +57,10 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Firmware updates now **fail closed** for unrecognised device models: a model
+  with no firmware mapping (e.g. a TNA-305 before Platform 3 support) is refused
+  at flash-time validation instead of being allowed to flash another platform's
+  image. Mapped variants such as TNA-303L-65 are unaffected (#215).
 - The in-app updater's manual "run these commands on the host" fallback is now
   deployment-aware. Image-based installs (the website `docker run` quickstart)
   were shown `git fetch`/`git checkout` commands that can't run — there is no
