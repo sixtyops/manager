@@ -57,6 +57,11 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Devices being updated no longer **vanish from the table mid-flash**, and the
+  row now shows **live progress** — the current stage (uploading / installing /
+  rebooting / verifying) and an elapsed timer — driven by the server's
+  per-device broadcasts. Previously the spinner was cleared on every topology
+  poll and a rebooting CPE could drop out of the inventory entirely (#219, #220).
 - The in-app updater's manual "run these commands on the host" fallback is now
   deployment-aware. Image-based installs (the website `docker run` quickstart)
   were shown `git fetch`/`git checkout` commands that can't run — there is no
