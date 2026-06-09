@@ -129,7 +129,14 @@ class TachyonDriver(VendorDriver):
     def get_reboot_timeout(self, role: str = "ap") -> int:
         if role == "switch":
             return 600  # TNS-100 switches take longer
-        return 300
+        # APs/CPEs: 600s, not 300s. A major-version upgrade flashes the 60GHz
+        # modem *after* the OS reboot ("additional time will be needed to flash
+        # the 60GHz modem", per Tachyon's 1.15.0 notes), so recovery routinely
+        # runs past 300s — a device seen back online at ~314s was being marked
+        # "did not come back online" at the old ceiling. wait_for_reboot
+        # early-exits the moment the web server answers, so healthy devices are
+        # unaffected; this only widens the worst-case wait. See issue #217.
+        return 600
 
     def get_update_timeout(self, role: str = "ap") -> int:
         if role == "switch":

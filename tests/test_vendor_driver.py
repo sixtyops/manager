@@ -29,3 +29,18 @@ class TestTachyonDriverRadioParams:
         # inner client's value, not None.
         assert driver.last_radio_params == radios
         assert getattr(driver, "last_radio_params", None) == radios
+
+
+class TestTachyonRebootTimeout:
+    """AP/CPE reboot wait must cover the post-reboot 60GHz modem flash, which
+    can push recovery past the old 300s ceiling (a device seen back online at
+    ~314s was being marked "did not come back online"). See issue #217."""
+
+    def test_ap_and_cpe_window_covers_60ghz_flash(self):
+        driver = TachyonDriver("10.0.0.1", "u", "p")
+        assert driver.get_reboot_timeout("ap") >= 600
+        assert driver.get_reboot_timeout("cpe") >= 600
+
+    def test_switch_window_unchanged(self):
+        driver = TachyonDriver("10.0.0.1", "u", "p")
+        assert driver.get_reboot_timeout("switch") == 600

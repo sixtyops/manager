@@ -60,6 +60,11 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- AP/CPE firmware updates no longer falsely report **"Device did not come back
+  online."** A major-version upgrade flashes the 60GHz modem *after* the OS
+  reboot, so recovery can exceed the old 300s wait; the AP/CPE reboot window is
+  now 600s (devices still come back the moment they respond). A device that
+  returns on a *different* IP via DHCP is a separate follow-up (#217).
 - Firmware updates now **fail closed** for unrecognised device models: a model
   with no firmware mapping (e.g. a TNA-305 before Platform 3 support) is refused
   at flash-time validation instead of being allowed to flash another platform's
