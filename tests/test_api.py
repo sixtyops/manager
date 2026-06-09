@@ -207,6 +207,31 @@ class TestSettingsAPI:
         assert s["selected_firmware_30x"] == "tna-30x-1.12.3-r55002.bin"
         assert s["selected_firmware_30x_pinned"] == "true"
 
+    def test_put_settings_pins_explicit_firmware(self, authed_client):
+        """The legacy PUT /api/settings path must apply the same pin semantics as
+        POST /save, or auto-select could clobber a version set via PUT (#229)."""
+        resp = authed_client.put("/api/settings", json={
+            "selected_firmware_30x": "tna-30x-1.12.3-r55002.bin",
+        })
+        assert resp.status_code == 200
+        s = authed_client.get("/api/settings").json()["settings"]
+        assert s["selected_firmware_30x"] == "tna-30x-1.12.3-r55002.bin"
+        assert s["selected_firmware_30x_pinned"] == "true"
+
+    def test_put_settings_auto_clears_pin_and_is_not_stored_literally(self, authed_client):
+        """PUT with 'auto' clears the pin and must never persist 'auto' as the
+        target filename (#229)."""
+        authed_client.put("/api/settings", json={
+            "selected_firmware_30x": "tna-30x-1.12.3-r55002.bin",
+        })
+        resp = authed_client.put("/api/settings", json={
+            "selected_firmware_30x": "auto",
+        })
+        assert resp.status_code == 200
+        s = authed_client.get("/api/settings").json()["settings"]
+        assert s["selected_firmware_30x_pinned"] == "false"
+        assert s["selected_firmware_30x"] != "auto"
+
     def test_save_settings_mixed_valid_and_invalid_keys(self, authed_client):
         with patch("updater.app.get_fetcher", return_value=None), \
              patch("updater.app.get_scheduler", return_value=None):

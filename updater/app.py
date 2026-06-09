@@ -2450,6 +2450,11 @@ async def update_settings(request: Request, session: dict = Depends(require_role
     if not filtered:
         raise HTTPException(400, "No valid settings keys provided")
     _validate_settings(filtered)
+    # Firmware-selection keys carry pin semantics + an "auto" sentinel; route them
+    # through the same helper as POST /api/settings/save so a PUT can't pin a
+    # version without its pin flag (which auto-select would then clobber) or store
+    # "auto" literally as the target filename. See issue #229.
+    _apply_firmware_selection(filtered)
     db.set_settings(filtered)
     return {"success": True}
 
