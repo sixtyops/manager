@@ -210,9 +210,11 @@ class TestSettingsAPI:
     def test_put_settings_pins_explicit_firmware(self, authed_client):
         """The legacy PUT /api/settings path must apply the same pin semantics as
         POST /save, or auto-select could clobber a version set via PUT (#229)."""
-        resp = authed_client.put("/api/settings", json={
-            "selected_firmware_30x": "tna-30x-1.12.3-r55002.bin",
-        })
+        with patch("updater.app.get_fetcher", return_value=None), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = authed_client.put("/api/settings", json={
+                "selected_firmware_30x": "tna-30x-1.12.3-r55002.bin",
+            })
         assert resp.status_code == 200
         s = authed_client.get("/api/settings").json()["settings"]
         assert s["selected_firmware_30x"] == "tna-30x-1.12.3-r55002.bin"
@@ -221,16 +223,57 @@ class TestSettingsAPI:
     def test_put_settings_auto_clears_pin_and_is_not_stored_literally(self, authed_client):
         """PUT with 'auto' clears the pin and must never persist 'auto' as the
         target filename (#229)."""
-        authed_client.put("/api/settings", json={
-            "selected_firmware_30x": "tna-30x-1.12.3-r55002.bin",
-        })
-        resp = authed_client.put("/api/settings", json={
-            "selected_firmware_30x": "auto",
-        })
+        with patch("updater.app.get_fetcher", return_value=None), \
+             patch("updater.app.get_scheduler", return_value=None):
+            authed_client.put("/api/settings", json={
+                "selected_firmware_30x": "tna-30x-1.12.3-r55002.bin",
+            })
+            resp = authed_client.put("/api/settings", json={
+                "selected_firmware_30x": "auto",
+            })
         assert resp.status_code == 200
         s = authed_client.get("/api/settings").json()["settings"]
         assert s["selected_firmware_30x_pinned"] == "false"
         assert s["selected_firmware_30x"] != "auto"
+
+    def test_put_firmware_change_triggers_reselect(self, authed_client):
+        """A firmware-selection change via PUT must re-derive targets immediately
+        (not wait for the next fetch), matching POST /save (#229 review)."""
+        fetcher = MagicMock()
+        with patch("updater.app.get_fetcher", return_value=fetcher), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = authed_client.put("/api/settings", json={"selected_firmware_30x": "auto"})
+        assert resp.status_code == 200
+        assert fetcher.reselect.called
+
+    def test_put_nonfirmware_change_skips_reselect(self, authed_client):
+        """A PUT touching no firmware key must not trigger a reselect."""
+        fetcher = MagicMock()
+        with patch("updater.app.get_fetcher", return_value=fetcher), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = authed_client.put("/api/settings", json={"schedule_days": "mon,tue"})
+        assert resp.status_code == 200
+        assert not fetcher.reselect.called
+
+    def test_delete_active_target_clears_and_reselects(self, authed_client, tmp_path):
+        """Deleting a family's active firmware target must clear the setting and
+        re-derive, so the scheduler isn't left pointing at a missing file (#232)."""
+        name = "tna-30x-1.15.0-r55142.bin"
+        (tmp_path / name).write_bytes(b"x" * 1000)
+        db.set_setting("selected_firmware_30x", name)
+        db.set_setting("selected_firmware_30x_pinned", "true")
+        db._invalidate_settings_cache()
+        fetcher = MagicMock()
+        with patch("updater.app.FIRMWARE_DIR", tmp_path), \
+             patch("updater.app.get_fetcher", return_value=fetcher), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = authed_client.delete(f"/api/firmware-files/{name}")
+        assert resp.status_code == 200
+        assert not (tmp_path / name).exists()
+        db._invalidate_settings_cache()
+        assert db.get_setting("selected_firmware_30x", "") == ""
+        assert db.get_setting("selected_firmware_30x_pinned", "") == "false"
+        assert fetcher.reselect.called
 
     def test_save_settings_mixed_valid_and_invalid_keys(self, authed_client):
         with patch("updater.app.get_fetcher", return_value=None), \

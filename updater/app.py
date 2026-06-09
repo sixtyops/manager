@@ -2413,6 +2413,19 @@ def _validate_settings(filtered: dict):
             raise HTTPException(400, f"Invalid {label} canary selection ({'; '.join(parts)})")
 
 
+async def _refresh_firmware_targets() -> None:
+    """Re-derive auto-tracked firmware targets and nudge the scheduler. Run after
+    any firmware-selection change (save / PUT / delete) so a "Latest" family — or a
+    pin just cleared because its file was removed — immediately points at a valid
+    on-disk file instead of a stale or missing one. See issues #229 and #232."""
+    fetcher = get_fetcher()
+    if fetcher:
+        fetcher.reselect(db.get_setting("firmware_beta_enabled", "false") == "true")
+    scheduler = get_scheduler()
+    if scheduler:
+        await scheduler.force_check()
+
+
 def _apply_firmware_selection(filtered: dict) -> list[str]:
     """Apply per-family firmware-selection intent and strip the keys from `filtered`.
 
@@ -2454,8 +2467,13 @@ async def update_settings(request: Request, session: dict = Depends(require_role
     # through the same helper as POST /api/settings/save so a PUT can't pin a
     # version without its pin flag (which auto-select would then clobber) or store
     # "auto" literally as the target filename. See issue #229.
-    _apply_firmware_selection(filtered)
+    fw_keys = _apply_firmware_selection(filtered)
     db.set_settings(filtered)
+    # Match POST /save: when a firmware target changed (including "auto" clearing a
+    # pin), re-derive immediately so the scheduler doesn't keep using the old file
+    # until the next fetch. See issue #229 review.
+    if fw_keys:
+        await _refresh_firmware_targets()
     return {"success": True}
 
 
@@ -2478,14 +2496,7 @@ async def save_settings_and_reevaluate(request: Request, session: dict = Depends
     db.log_audit(session["username"], "settings.update", "settings", None,
                  f"Updated keys: {', '.join(audit_keys)}", _client_ip(request))
 
-    fetcher = get_fetcher()
-    if fetcher:
-        beta_enabled = db.get_setting("firmware_beta_enabled", "false") == "true"
-        fetcher.reselect(beta_enabled)
-
-    scheduler = get_scheduler()
-    if scheduler:
-        await scheduler.force_check()
+    await _refresh_firmware_targets()
 
     # Reload syslog if syslog settings changed
     if any(k.startswith("syslog_forward") for k in filtered):
@@ -4347,8 +4358,17 @@ async def delete_firmware_file(filename: str, session: dict = Depends(require_ro
         raise HTTPException(404, "File not found")
     path.unlink()
     db.unregister_firmware(safe_filename)
+    # If this file was a family's active target (pinned OR the auto-selected
+    # "Latest"), don't leave the scheduler/manual paths pointed at a now-missing
+    # file — clear it (and any pin) and re-derive a valid target. See issue #232.
+    cleared = [k for k in PLATFORM_SETTING_KEYS.values() if db.get_setting(k, "") == safe_filename]
+    for k in cleared:
+        db.set_setting(k, "")
+        db.set_setting(pin_setting_key(k), "false")
     db.log_audit(session["username"], "firmware.delete", "firmware", safe_filename, None, None)
-    return {"success": True}
+    if cleared:
+        await _refresh_firmware_targets()
+    return {"success": True, "reselected": cleared}
 
 
 @app.post("/api/firmware-fetch", tags=["firmware"])
