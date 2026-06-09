@@ -1780,6 +1780,20 @@
             background: var(--border);
         }
 
+        /* Hover-revealed remove control on each firmware pill (#221). Visible
+           affordance — not a hidden right-click — matching the app's delete UX. */
+        .drawer-fw-del {
+            margin-left: 2px;
+            font-family: sans-serif;
+            font-weight: 700;
+            line-height: 1;
+            color: var(--text-muted);
+            opacity: 0;
+            transition: opacity 0.12s, color 0.12s;
+        }
+        .drawer-fw-chip:hover .drawer-fw-del { opacity: 0.6; }
+        .drawer-fw-del:hover { opacity: 1; color: var(--danger, #dc2626); }
+
         .drawer-fw-chip.active:hover {
             background: #bfdbfe;
         }
@@ -9697,6 +9711,7 @@
                         const qLabel = h > 24 ? `${(h / 24).toFixed(0)}d` : `${h.toFixed(0)}h`;
                         html += `<span class="drawer-fw-quarantine-label">${qLabel}</span>`;
                     }
+                    html += `<span class="drawer-fw-del" title="Remove this firmware file" onclick="deleteDrawerFw('${escapedName}','${type}',event)">&times;</span>`;
                     html += `</span>`;
                 }
                 html += `</div>`;
@@ -9710,6 +9725,35 @@
             drawerFwSelected[type] = filename;
             renderDrawerFirmware();
             markDrawerDirty();
+        }
+
+        // Remove a firmware file via the existing DELETE endpoint (#221). Guards
+        // the footgun: the version a family is pinned to can't be removed out from
+        // under it — switch to "Latest" or another version first.
+        async function deleteDrawerFw(filename, type, ev) {
+            if (ev) ev.stopPropagation();
+            if (drawerFwSelected[type] === filename) {
+                showToast('That version is currently selected — switch to “Latest” or another version before removing it.');
+                return;
+            }
+            const label = fwVersionLabel(filename);
+            if (!await showConfirmDialog(
+                `Remove firmware ${label}?\n\nThis deletes the file from the manager. Devices already running it are unaffected.`,
+                { title: 'Remove Firmware', confirmText: 'Remove', danger: true })) {
+                return;
+            }
+            try {
+                const resp = await fetch('/api/firmware-files/' + encodeURIComponent(filename), { method: 'DELETE' });
+                if (resp.ok) {
+                    showToast('Removed ' + label, 'success');
+                    loadDrawerFirmware();
+                } else {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast('Remove failed: ' + (extractDetail(err.detail) || resp.status));
+                }
+            } catch (e) {
+                showToast('Remove error: ' + e.message);
+            }
         }
 
         function renderFwMeta() {

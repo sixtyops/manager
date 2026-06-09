@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
+- Firmware files can now be **removed from the UI**: each version pill in App
+  Settings → Firmware has a hover **×** that deletes the file (with a confirm),
+  so duplicate / superseded / corrupt files no longer need shell access. The
+  version a model is pinned to is guarded — switch the selection first (#221).
 - The **Start Firmware Update** confirmation dialog now names the firmware
   version(s) it will flash (e.g. "Target firmware: 1.15.0 r55142"), resolved
   per device model, so operators can confirm the target before a reboot (#216).
