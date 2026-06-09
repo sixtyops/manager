@@ -60,6 +60,11 @@ All notable changes to this project are documented in this file.
   unchanged; just visibility (#166).
 
 ### Fixed
+- Devices being updated no longer **vanish from the table mid-flash**, and the
+  row now shows **live progress** — the current stage (uploading / installing /
+  rebooting / verifying) and an elapsed timer — driven by the server's
+  per-device broadcasts. Previously the spinner was cleared on every topology
+  poll and a rebooting CPE could drop out of the inventory entirely (#219, #220).
 - AP/CPE firmware updates no longer falsely report **"Device did not come back
   online."** A major-version upgrade flashes the 60GHz modem *after* the OS
   reboot, so recovery can exceed the old 300s wait; the AP/CPE reboot window is
