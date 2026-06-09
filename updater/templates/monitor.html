@@ -6501,18 +6501,6 @@
             }
         }
 
-        // Which selected firmware a device model will actually be flashed with —
-        // mirrors the backend model→platform mapping so the confirm dialog can
-        // name the real target. Returns '' for an unmapped model (e.g. TNA-305),
-        // which the backend refuses to flash (issue #215).
-        function targetFirmwareForModel(model, settings) {
-            const m = (model || '').toLowerCase();
-            if (m.includes('tns-100') || m.includes('tns100')) return settings.selected_firmware_tns100 || '';
-            if (m.includes('303l')) return settings.selected_firmware_303l || '';
-            if (m.includes('305')) return '';  // Platform 3 unsupported — no firmware
-            return settings.selected_firmware_30x || '';
-        }
-
         async function triggerUpdate(type, id, mode) {
 
             let settings;
@@ -6534,14 +6522,14 @@
             // Build confirmation message
             let targetName = id;
             let targetDetail = '';
-            const models = [];  // every model in scope, to resolve target versions
+            const ips = [];  // every device IP in scope, to resolve target versions
             if (type === 'ap') {
                 const r = findAP(id);
                 if (r) {
                     targetName = r.ap.system_name || id;
-                    models.push(r.ap.model);
+                    ips.push(id);
                     const okCpes = (r.ap.cpes || []).filter(c => c.auth_status === 'ok');
-                    okCpes.forEach(c => models.push(c.model));
+                    okCpes.forEach(c => ips.push(c.ip));
                     if (okCpes.length > 0) {
                         targetDetail = ` and ${okCpes.length} CPE${okCpes.length !== 1 ? 's' : ''}`;
                     }
@@ -6549,30 +6537,33 @@
             } else if (type === 'cpe') {
                 const r = findCPE(id);
                 targetName = r ? (r.cpe.system_name || id) : id;
-                if (r) models.push(r.cpe.model);
+                ips.push(id);
             } else if (type === 'switch') {
                 const r = findSwitch(id);
                 targetName = r ? (r.sw.system_name || id) : id;
-                if (r) models.push(r.sw.model);
+                ips.push(id);
             } else if (type === 'site') {
                 const site = findSite(id === 'null' ? null : parseInt(id));
                 if (site) {
                     let apCount = 0, cpeCount = 0;
                     for (const ap of walkSiteAPs(site)) {
                         apCount++;
-                        models.push(ap.model);
+                        ips.push(ap.ip);
                         const cpes = ap.cpes || [];
                         cpeCount += cpes.length;
-                        cpes.forEach(c => models.push(c.model));
+                        cpes.forEach(c => ips.push(c.ip));
                     }
                     targetName = site.name;
                     targetDetail = ` (${apCount} AP${apCount !== 1 ? 's' : ''}, ${cpeCount} CPE${cpeCount !== 1 ? 's' : ''})`;
                 }
             }
 
-            // Name the firmware version(s) actually being flashed (issue #216).
+            // Name the firmware version(s) actually being flashed (#216) — read the
+            // backend-computed target per device (fleetStatusMap), not a browser-side
+            // model guess, so the dialog can't diverge from what the backend will do
+            // (and unsupported models, which have no backend target, show nothing). #227
             const versions = [...new Set(
-                models.map(m => targetFirmwareForModel(m, settings)).filter(Boolean).map(fwVersionLabel)
+                ips.map(ip => fleetStatusMap.get(ip)?.target_version).filter(Boolean)
             )];
             const versionLine = versions.length ? `\n\nTarget firmware: ${versions.join(', ')}` : '';
 
