@@ -1182,6 +1182,18 @@
             to { transform: rotate(360deg); }
         }
 
+        .update-progress {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+        }
+        .update-stage {
+            font-size: 0.72rem;
+            color: var(--primary);
+            font-variant-numeric: tabular-nums;
+        }
+
         .spinner-inline {
             display: inline-block;
             width: 12px; height: 12px;
@@ -4141,6 +4153,21 @@
         let selectedNode = { type: 'all' };
         let fleetStatusMap = new Map(); // ip -> { target_version, status }
         let updatingDevices = new Set(); // IPs currently being updated
+        // Live per-device update state from the server's `device_update` broadcasts:
+        // ip -> { status (stage), message, since (ms) }. This is the authoritative
+        // source for the in-progress UI — it survives topology polls (so a device
+        // mid-flash never vanishes, #219) and carries the stage + elapsed (#220).
+        const liveUpdates = new Map();
+        const IN_PROGRESS_STAGES = new Set(
+            ['connecting', 'uploading', 'installing', 'rebooting', 'verifying', 'smoke_testing']);
+        const STAGE_LABELS = {
+            connecting: 'connecting', uploading: 'uploading', installing: 'installing',
+            rebooting: 'rebooting', verifying: 'verifying', smoke_testing: 'smoke-testing',
+        };
+        // Drop a stuck/never-finished update after this long so a missed terminal
+        // broadcast (e.g. across a websocket reconnect) can't strand a spinner.
+        const LIVE_UPDATE_STALE_MS = 35 * 60 * 1000;
+        let _progressTicker = null;
         // Flat lookup indices — rebuilt on topology update
         let _apIndex = new Map();    // ip -> { ap, site }
         let _cpeIndex = new Map();   // ip -> { cpe, ap, site }
@@ -4295,7 +4322,12 @@
                     }
 
                     rebuildTopologyIndex();
-                    updatingDevices.clear();
+                    // Don't blow away in-flight updates on every poll (that made a
+                    // device's spinner vanish mid-flash and dropped rebooting CPEs
+                    // from the table). Re-derive the set from the server's live
+                    // state; stale/never-confirmed entries fall off here.
+                    pruneLiveUpdates();
+                    updatingDevices = new Set(liveUpdates.keys());
                     scheduleUIUpdate();
                 } else if (message.type === 'scheduler_status') {
                     updateSchedulerUI(message);
@@ -4351,6 +4383,8 @@
                         }
                     }
                     refreshRadiusData();
+                } else if (message.type === 'device_update') {
+                    handleDeviceUpdate(message);
                 }
             };
         }
@@ -4518,6 +4552,56 @@
                     }
                 }
             }
+        }
+
+        function fmtElapsed(ms) {
+            const s = Math.max(0, Math.floor(ms / 1000));
+            return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+        }
+
+        function pruneLiveUpdates() {
+            const now = Date.now();
+            for (const [ip, u] of liveUpdates) {
+                if (now - u.since > LIVE_UPDATE_STALE_MS) liveUpdates.delete(ip);
+            }
+        }
+
+        // Refresh only the elapsed clocks in place (no full re-render) once a
+        // second while any update is in flight; self-stops when none remain.
+        function ensureProgressTicker() {
+            if (_progressTicker) return;
+            _progressTicker = setInterval(() => {
+                if (liveUpdates.size === 0) {
+                    clearInterval(_progressTicker);
+                    _progressTicker = null;
+                    return;
+                }
+                document.querySelectorAll('.update-stage[data-live-ip]').forEach(el => {
+                    const u = liveUpdates.get(el.getAttribute('data-live-ip'));
+                    if (u) el.textContent = `${STAGE_LABELS[u.status] || u.status} · ${fmtElapsed(Date.now() - u.since)}`;
+                });
+            }, 1000);
+        }
+
+        function handleDeviceUpdate(m) {
+            const ip = m.ip;
+            if (!ip) return;
+            if (IN_PROGRESS_STAGES.has(m.status)) {
+                const prev = liveUpdates.get(ip);
+                liveUpdates.set(ip, {
+                    status: m.status,
+                    message: m.message || '',
+                    since: prev ? prev.since : Date.now(),
+                });
+                updatingDevices.add(ip);
+                ensureProgressTicker();
+            } else {
+                // Terminal (success / failed / cancelled / skipped / deferred): let
+                // the next topology refresh show the result.
+                liveUpdates.delete(ip);
+                updatingDevices.delete(ip);
+            }
+            scheduleUIUpdate();
         }
 
         function scheduleUIUpdate() {
@@ -5278,6 +5362,15 @@
         }
 
         function updateCell(type, ip, parentApIp) {
+            const live = liveUpdates.get(ip);
+            if (live) {
+                const label = STAGE_LABELS[live.status] || live.status;
+                const elapsed = fmtElapsed(Date.now() - live.since);
+                return `<span class="update-progress" title="${escapeHtml(live.message)}">`
+                    + `<span class="update-spinner"></span>`
+                    + `<span class="update-stage" data-live-ip="${escapeHtml(ip)}">${label} · ${elapsed}</span>`
+                    + `</span>`;
+            }
             if (updatingDevices.has(ip) || (parentApIp && updatingDevices.has(parentApIp))) {
                 return '<span class="update-spinner" title="Updating..."></span>';
             }
@@ -6536,35 +6629,52 @@
             // Build confirmation message
             let targetName = id;
             let targetDetail = '';
+            const ips = [];  // every device IP in scope, to resolve target versions
             if (type === 'ap') {
                 const r = findAP(id);
                 if (r) {
                     targetName = r.ap.system_name || id;
-                    const cpeCount = (r.ap.cpes || []).filter(c => c.auth_status === 'ok').length;
-                    if (cpeCount > 0) {
-                        targetDetail = ` and ${cpeCount} CPE${cpeCount !== 1 ? 's' : ''}`;
+                    ips.push(id);
+                    const okCpes = (r.ap.cpes || []).filter(c => c.auth_status === 'ok');
+                    okCpes.forEach(c => ips.push(c.ip));
+                    if (okCpes.length > 0) {
+                        targetDetail = ` and ${okCpes.length} CPE${okCpes.length !== 1 ? 's' : ''}`;
                     }
                 }
             } else if (type === 'cpe') {
                 const r = findCPE(id);
                 targetName = r ? (r.cpe.system_name || id) : id;
+                ips.push(id);
             } else if (type === 'switch') {
                 const r = findSwitch(id);
                 targetName = r ? (r.sw.system_name || id) : id;
+                ips.push(id);
             } else if (type === 'site') {
                 const site = findSite(id === 'null' ? null : parseInt(id));
                 if (site) {
                     let apCount = 0, cpeCount = 0;
                     for (const ap of walkSiteAPs(site)) {
                         apCount++;
-                        cpeCount += (ap.cpes || []).length;
+                        ips.push(ap.ip);
+                        const cpes = ap.cpes || [];
+                        cpeCount += cpes.length;
+                        cpes.forEach(c => ips.push(c.ip));
                     }
                     targetName = site.name;
                     targetDetail = ` (${apCount} AP${apCount !== 1 ? 's' : ''}, ${cpeCount} CPE${cpeCount !== 1 ? 's' : ''})`;
                 }
             }
 
-            if (!await showConfirmDialog(`Update ${targetName}${targetDetail}?\n\nThis will immediately flash firmware and reboot the device(s).`, {
+            // Name the firmware version(s) actually being flashed (#216) — read the
+            // backend-computed target per device (fleetStatusMap), not a browser-side
+            // model guess, so the dialog can't diverge from what the backend will do
+            // (and unsupported models, which have no backend target, show nothing). #227
+            const versions = [...new Set(
+                ips.map(ip => fleetStatusMap.get(ip)?.target_version).filter(Boolean)
+            )];
+            const versionLine = versions.length ? `\n\nTarget firmware: ${versions.join(', ')}` : '';
+
+            if (!await showConfirmDialog(`Update ${targetName}${targetDetail}?${versionLine}\n\nThis will immediately flash firmware and reboot the device(s).`, {
                 title: 'Start Firmware Update',
                 confirmText: 'Start Update',
                 danger: true,

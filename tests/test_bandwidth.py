@@ -99,7 +99,9 @@ class TestUploadFirmwareBandwidth:
             # Setup mock info
             info = MagicMock()
             info.current_version = "1.0"
-            info.model = "T5c"
+            # A mapped model + matching firmware name so the fail-closed
+            # validation guard (issue #215) lets the flow reach upload.
+            info.model = "TNA-301"
             info.bank1_version = "1.0"
             info.bank2_version = "0.9"
             info.active_bank = 1
@@ -107,7 +109,7 @@ class TestUploadFirmwareBandwidth:
 
             info2 = MagicMock()
             info2.current_version = "2.0"
-            info2.model = "T5c"
+            info2.model = "TNA-301"
             info2.bank1_version = "2.0"
             info2.bank2_version = "1.0"
             info2.active_bank = 1
@@ -121,8 +123,8 @@ class TestUploadFirmwareBandwidth:
             client.get_device_info = get_info_side_effect
 
             result = await client.update_firmware(
-                "/tmp/fw.bin",
+                "/tmp/tna-30x-fw.bin",
                 bandwidth_limit_kbps=1000,
             )
 
-            mock_upload.assert_called_once_with("/tmp/fw.bin", bandwidth_limit_kbps=1000)
+            mock_upload.assert_called_once_with("/tmp/tna-30x-fw.bin", bandwidth_limit_kbps=1000)

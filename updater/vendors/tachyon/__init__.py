@@ -129,7 +129,14 @@ class TachyonDriver(VendorDriver):
     def get_reboot_timeout(self, role: str = "ap") -> int:
         if role == "switch":
             return 600  # TNS-100 switches take longer
-        return 300
+        # APs/CPEs: 600s, not 300s. A major-version upgrade flashes the 60GHz
+        # modem *after* the OS reboot ("additional time will be needed to flash
+        # the 60GHz modem", per Tachyon's 1.15.0 notes), so recovery routinely
+        # runs past 300s — a device seen back online at ~314s was being marked
+        # "did not come back online" at the old ceiling. wait_for_reboot
+        # early-exits the moment the web server answers, so healthy devices are
+        # unaffected; this only widens the worst-case wait. See issue #217.
+        return 600
 
     def get_update_timeout(self, role: str = "ap") -> int:
         if role == "switch":
@@ -140,31 +147,27 @@ class TachyonDriver(VendorDriver):
         return self._client.get_hardware_id(model)
 
     def select_firmware_for_model(self, model, firmware_files):
-        """Select correct firmware path for a Tachyon device model."""
+        """Select the firmware path for a Tachyon device model, or None if the
+        model is unmapped.
+
+        Fails CLOSED — no default to 30x for an unknown/empty model — so
+        fleet-status and update planning don't treat an unsupported model (e.g. a
+        TNA-305 before Platform 3 support) as eligible and queue a doomed job that
+        validate_firmware_for_model would only reject at flash time. Uses the same
+        matcher as validate so the two can't disagree. See issue #215.
+        """
         if not firmware_files:
             return None
-        if not model:
-            return firmware_files.get("tna-30x") or next(iter(firmware_files.values()), None)
-
-        model_lower = model.lower()
-        for model_key, patterns in TachyonClient.MODEL_FIRMWARE_PATTERNS.items():
-            if model_lower == model_key or model_lower.startswith(model_key):
-                for pattern in patterns:
-                    if pattern in firmware_files:
-                        return firmware_files[pattern]
-                return None  # Model known but no matching firmware provided
-        # Unknown model - use default
-        return firmware_files.get("tna-30x") or next(iter(firmware_files.values()), None)
+        for type_key in (TachyonClient._patterns_for_model(model) or []):
+            if type_key in firmware_files:
+                return firmware_files[type_key]
+        return None  # unmapped model, or no matching firmware for a mapped one
 
     def get_firmware_type_for_model(self, model):
-        """Get firmware type key for a Tachyon device model."""
-        if not model:
-            return "tna-30x"
-        model_lower = model.lower()
-        for model_key, patterns in TachyonClient.MODEL_FIRMWARE_PATTERNS.items():
-            if model_lower == model_key or model_lower.startswith(model_key):
-                return patterns[0] if patterns else None
-        return "tna-30x"
+        """Firmware type key for a Tachyon device model, or None if the model is
+        unmapped (fail closed — see select_firmware_for_model / issue #215)."""
+        patterns = TachyonClient._patterns_for_model(model)
+        return patterns[0] if patterns else None
 
 
 # Register on import
