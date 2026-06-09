@@ -11,7 +11,10 @@ rules that protect uptime:
   2. **Canary soak.** The first widening past canary (pct10) waits until the
      canary has baked on the fleet for the configured soak period — measured
      from when the canary phase actually completed *here*, not from the
-     firmware's release date.
+     firmware's release date. This soak is *waived* when the target firmware is
+     already proven on the fleet (healthy same-model peers already run it); the
+     caller passes that as `soak_proven`. The waiver clears the soak only — Rule
+     1 still holds, so phases never cascade through one window.
 
 Both rules live in this one function so they are defined and tested exactly once
 and cannot drift between the execution path and any future caller (e.g. the UI's
@@ -70,25 +73,37 @@ def phase_run_decision(
     window_key: str,
     now: datetime,
     canary_soak: timedelta,
+    *,
+    soak_proven: bool = False,
 ) -> tuple[bool, Optional[str]]:
     """Decide whether `rollout` may START its current phase's job right now.
 
     `window_key` identifies the current maintenance window (its date). Returns
-    (may_run, reason); `reason` is None when may_run is True, otherwise a short
-    machine-readable tag ("status_<x>", "already_ran_this_window",
-    "canary_soak"). Fail-closed.
+    (may_run, reason). When may_run is False, `reason` is a short machine-readable
+    tag ("status_<x>", "already_ran_this_window", "canary_soak"). When may_run is
+    True, `reason` is None for a normal run, or "canary_soak_waived" when the soak
+    was cleared early because the firmware is already proven on the fleet.
+
+    `soak_proven` (computed by the caller) clears Rule 2 only — it does NOT bypass
+    Rule 1, so phases still advance at most one per maintenance window and never
+    cascade. Fail-closed.
     """
     status = rollout.get("status")
     if status != "active":
         return False, f"status_{status}"
 
-    # Rule 1: one phase-job per maintenance window.
+    # Rule 1: one phase-job per maintenance window. Always enforced — the waiver
+    # below never lets a second phase run in the same window.
     last_window = rollout.get("last_phase_window")
     if last_window and last_window == window_key:
         return False, "already_ran_this_window"
 
-    # Rule 2: canary soak gates the first widening past canary.
+    # Rule 2: canary soak gates the first widening past canary — UNLESS the target
+    # firmware is already proven on healthy same-model peers (soak_proven), in
+    # which case the proof the soak waits for already exists.
     if rollout.get("phase") == "pct10":
+        if soak_proven:
+            return True, "canary_soak_waived"
         cleared, _remaining = canary_soak_cleared(rollout, now, canary_soak)
         if not cleared:
             return False, "canary_soak"

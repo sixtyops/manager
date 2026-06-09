@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 # Do not start new scheduled jobs when the window has this many minutes or less remaining.
 SCHEDULE_END_BUFFER_MINUTES = 15
 
+# A same-model peer only counts as "already proven on the fleet" (for waiving the
+# canary soak) if it was seen this recently. One generous poll-day — a stale
+# device that hasn't reported in proves nothing about the firmware's health.
+PROVEN_PEER_SEEN_WITHIN = timedelta(hours=24)
+
 _DAY_INDEX = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 _UNSET = object()
@@ -135,6 +140,22 @@ def _firmware_type_for_model(model: Optional[str]) -> str:
     return "tna-30x"
 
 
+def _seen_within(last_seen: Optional[str], cutoff: datetime) -> bool:
+    """True if `last_seen` (ISO) is at or after `cutoff` (an aware-UTC datetime).
+
+    Stored timestamps may be naive UTC (container clock) — treat them as UTC so
+    the comparison is absolute. Missing/unparseable -> False (fail-closed)."""
+    if not last_seen:
+        return False
+    try:
+        dt = datetime.fromisoformat(last_seen)
+    except (ValueError, TypeError):
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt >= cutoff
+
+
 def _device_needs_update(
     current_version: str,
     target_version: str,
@@ -215,6 +236,9 @@ class AutoUpdateScheduler:
         self._current_job_id: Optional[str] = None
         self._ran_today: Set[str] = set()
         self._manual_canary_job_ids: Set[str] = set()
+        # Human-readable note when the canary soak was waived because the target
+        # firmware is already proven on the fleet (None when not waiving).
+        self._soak_waiver_reason: Optional[str] = None
 
     @staticmethod
     def _firmware_changed(rollout: dict, fw_30x: str, fw_303l: str, fw_tns100: str) -> bool:
@@ -602,8 +626,16 @@ class AutoUpdateScheduler:
         # stops all phases from cascading through a single maintenance window.
         window_key = now.strftime("%Y-%m-%d")
         canary_soak = timedelta(days=_as_int(settings.get("firmware_canary_hold_days", "6"), 6))
-        may_run, gate_reason = rollout_gate.phase_run_decision(rollout, window_key, now, canary_soak)
+        # Only the first widening past canary (pct10) is soak-gated, so only then
+        # is it worth scanning the fleet to see if the firmware is already proven.
+        soak_proven, waiver_detail = (False, None)
+        if rollout.get("phase") == "pct10":
+            soak_proven, waiver_detail = self._proven_soak_signal(settings, rollout)
+        may_run, gate_reason = rollout_gate.phase_run_decision(
+            rollout, window_key, now, canary_soak, soak_proven=soak_proven
+        )
         if not may_run:
+            self._soak_waiver_reason = None
             if gate_reason == "canary_soak":
                 _, remaining = rollout_gate.canary_soak_cleared(rollout, now, canary_soak)
                 days = remaining.total_seconds() / 86400 if remaining else 0
@@ -621,6 +653,21 @@ class AutoUpdateScheduler:
                 self._block_reason = new_reason
             await self._broadcast_status()
             return
+
+        # Past the gate. If the soak was waived because the firmware is already
+        # proven on the fleet, record it honestly (once) — never a silent skip.
+        if gate_reason == "canary_soak_waived":
+            reason_text = (
+                f"Canary soak waived — {waiver_detail}" if waiver_detail
+                else "Canary soak waived — firmware already proven on the fleet"
+            )
+            if self._soak_waiver_reason != reason_text:
+                db.log_schedule_event(
+                    "canary_soak_waived", f"Rollout {rollout['id']}: {reason_text}"
+                )
+            self._soak_waiver_reason = reason_text
+        else:
+            self._soak_waiver_reason = None
 
         scope_ips = self._resolve_scope(settings)
         switch_scope = self._resolve_switch_scope(settings)
@@ -853,6 +900,81 @@ class AutoUpdateScheduler:
             if file_name and not targets[fw_type]:
                 targets[fw_type] = "__unknown__"
         return targets
+
+    def _proven_soak_signal(self, settings: dict, rollout: dict) -> tuple[bool, Optional[str]]:
+        """Decide whether the canary soak can be WAIVED because the target firmware
+        is already proven on this fleet.
+
+        The canary soak exists to prove a new firmware doesn't brick real hardware
+        before widening past canary. When healthy same-model peers are *already*
+        running the target version, that proof already exists — so the soak is
+        redundant. Returns (proven, detail); `detail` is a short human string for
+        the log/UI when proven.
+
+        Rule (operator-chosen): waive only when EVERY firmware family that still
+        has a device needing this rollout's update has >=1 healthy same-family
+        peer already on the target version. "Healthy" = enabled AP/switch, on the
+        target version, no `last_error`, and seen within PROVEN_PEER_SEEN_WITHIN.
+
+        Fail-closed: unreadable fleet, an unproven pending family, or no pending
+        work at all -> not proven (hold / let the normal flow handle it). Scoped
+        per family, so an unproven model never rides a proven model's clearance.
+        """
+        targets = self._target_versions(settings, rollout)
+        allow_downgrade = settings.get("allow_downgrade", "true") == "true"
+        cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
+        try:
+            aps = list(db.get_all_access_points_dict(enabled_only=True).values())
+            switches = list(db.get_all_switches_dict(enabled_only=True).values())
+            cpes_by_ap = db.get_all_cpes_grouped()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Proven-soak check could not read fleet, holding: {e}")
+            return False, None
+
+        cutoff = datetime.now(timezone.utc) - PROVEN_PEER_SEEN_WITHIN
+        proven: dict[str, list] = {}   # family -> [count, model_label, version]
+        pending: set[str] = set()      # families with >=1 device still needing the update
+
+        # "Proven on real hardware" is defined by managed devices (APs + switches),
+        # which carry clean health signals (last_error / last_seen).
+        for dev in aps + switches:
+            fam = _firmware_type_for_model(dev.get("model"))
+            target_v = targets.get(fam, "")
+            if not target_v or target_v == "__unknown__":
+                continue
+            if (dev.get("firmware_version") == target_v
+                    and not dev.get("last_error")
+                    and _seen_within(dev.get("last_seen"), cutoff)):
+                entry = proven.setdefault(fam, [0, dev.get("model") or fam, target_v])
+                entry[0] += 1
+
+        # Pending = any enabled in-fleet device (AP, attached CPE, or switch) that
+        # still needs this update, grouped by its firmware family.
+        def _mark_pending(dev: dict):
+            fam = _firmware_type_for_model(dev.get("model"))
+            if _device_needs_update(
+                dev.get("firmware_version", ""), targets.get(fam, ""), allow_downgrade,
+                last_update_iso=dev.get("last_firmware_update"), cooldown_days=cooldown_days,
+            ):
+                pending.add(fam)
+
+        for ap in aps:
+            _mark_pending(ap)
+            for cpe in cpes_by_ap.get(ap["ip"], []):
+                if cpe.get("auth_status") == "ok":
+                    _mark_pending(cpe)
+        for sw in switches:
+            _mark_pending(sw)
+
+        if not pending:
+            return False, None  # nothing to widen to — let the normal flow proceed
+        if not pending.issubset(set(proven.keys())):
+            return False, None  # a family with pending work has no proven peer — hold
+        detail = "; ".join(
+            f"{proven[f][0]} healthy {proven[f][1]} already on {proven[f][2]}"
+            for f in sorted(pending)
+        )
+        return True, detail
 
     def _ap_or_children_need_update(self, ap: dict, target_versions: dict[str, str], allow_downgrade: bool,
                                      cpes_by_ap: Optional[dict[str, list[dict]]] = None, cooldown_days: int = 0) -> bool:
@@ -1552,6 +1674,7 @@ class AutoUpdateScheduler:
             "rollout": rollout_info,
             "predictions": pre_rollout_predictions,
             "canary_hold": canary_hold,
+            "soak_waiver": self._soak_waiver_reason,
         }
 
     async def _broadcast_status(self):

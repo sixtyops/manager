@@ -176,6 +176,114 @@ async def test_canary_soak_measured_from_fleet_completion(mock_db, monkeypatch):
     assert scheduler._state == "running"
 
 
+# ── Canary soak waiver: skip the soak when the firmware is already proven ──
+
+def _seed_proven_peer(ip: str, version: str, *, model: str = None,
+                      healthy: bool = True, stale: bool = False):
+    """Seed an enabled AP already running `version`. `healthy=False` marks it
+    errored; `stale=True` makes its last poll too old to count as proof."""
+    db.upsert_access_point(ip, "root", "pass", enabled=True,
+                           firmware_version=version, model=model)
+    last_seen = datetime.now(timezone.utc) - (
+        timedelta(days=10) if stale else timedelta(minutes=5)
+    )
+    db.update_ap_status(
+        ip, last_seen=last_seen.isoformat(),
+        last_error=(None if healthy else "link down"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_pct10_waived_when_firmware_proven_on_fleet(mock_db, monkeypatch):
+    """A healthy same-family peer already on the target version waives the soak:
+    pct10 runs the very next window instead of waiting out the 6-day hold, and the
+    waiver is logged (never a silent skip)."""
+    _seed_aps(5)                                   # all on 1.0.0 -> need the update
+    scheduler, start_update = _make_scheduler()
+    settings = _settings(hold_days=6)
+    target = scheduler._target_versions(settings, None)["tna-30x"]
+    _seed_proven_peer("10.0.0.200", target)        # already on target, healthy
+    db.set_settings(settings)
+    h = _Harness(scheduler, monkeypatch)
+
+    await h.tick(day=2)        # canary
+    h.complete_job()
+    assert db.get_active_rollout()["phase"] == "pct10"
+
+    await h.tick(day=3)        # 1 day later — inside the soak, but proven -> RUN
+    assert start_update.call_count == 2
+    assert scheduler._state == "running"
+    assert scheduler._soak_waiver_reason and "waived" in scheduler._soak_waiver_reason
+    with db.get_db() as conn:
+        rows = conn.execute(
+            "SELECT 1 FROM schedule_log WHERE event = 'canary_soak_waived'"
+        ).fetchall()
+    assert len(rows) >= 1
+
+
+@pytest.mark.asyncio
+async def test_pct10_holds_when_only_peer_is_unhealthy(mock_db, monkeypatch):
+    """Fail-closed: a peer on the target version but reporting an error proves
+    nothing — the soak still holds."""
+    _seed_aps(5)
+    scheduler, start_update = _make_scheduler()
+    settings = _settings(hold_days=6)
+    target = scheduler._target_versions(settings, None)["tna-30x"]
+    _seed_proven_peer("10.0.0.200", target, healthy=False)
+    db.set_settings(settings)
+    h = _Harness(scheduler, monkeypatch)
+
+    await h.tick(day=2)
+    h.complete_job()
+    await h.tick(day=3)        # inside soak, peer unhealthy -> HOLD
+    assert start_update.call_count == 1
+    assert scheduler._state == "blocked_canary_hold"
+    assert scheduler._soak_waiver_reason is None
+
+
+@pytest.mark.asyncio
+async def test_pct10_holds_when_only_peer_is_stale(mock_db, monkeypatch):
+    """Fail-closed: a peer on the target version not seen recently is not proof."""
+    _seed_aps(5)
+    scheduler, start_update = _make_scheduler()
+    settings = _settings(hold_days=6)
+    target = scheduler._target_versions(settings, None)["tna-30x"]
+    _seed_proven_peer("10.0.0.200", target, stale=True)
+    db.set_settings(settings)
+    h = _Harness(scheduler, monkeypatch)
+
+    await h.tick(day=2)
+    h.complete_job()
+    await h.tick(day=3)
+    assert start_update.call_count == 1
+    assert scheduler._state == "blocked_canary_hold"
+
+
+@pytest.mark.asyncio
+async def test_proven_signal_requires_every_pending_family(mock_db, monkeypatch):
+    """Per-model, fail-closed: if one pending family is proven but another pending
+    family is not, the soak is NOT waived — an unproven model never rides a proven
+    model's clearance."""
+    _seed_aps(3)  # tna-30x devices on 1.0.0 (pending)
+    db.upsert_access_point("10.0.0.50", "root", "pass", enabled=True,
+                           firmware_version="1.0.0", model="TNA-303L")  # pending tna-303l
+    scheduler, _ = _make_scheduler()
+    settings = _settings(hold_days=6)
+    settings["selected_firmware_303l"] = "tna-303l-1.12.4-r7782.bin"
+    targets = scheduler._target_versions(settings, None)
+    _seed_proven_peer("10.0.0.200", targets["tna-30x"])  # proves tna-30x only
+    db.set_settings(settings)
+    rollout = {"firmware_file": FW, "firmware_file_303l": "tna-303l-1.12.4-r7782.bin"}
+
+    proven, detail = scheduler._proven_soak_signal(settings, rollout)
+    assert proven is False and detail is None     # tna-303l pending but unproven
+
+    # Prove tna-303l too -> every pending family covered -> waived.
+    _seed_proven_peer("10.0.0.201", targets["tna-303l"], model="TNA-303L")
+    proven, detail = scheduler._proven_soak_signal(settings, rollout)
+    assert proven is True and detail
+
+
 @pytest.mark.asyncio
 async def test_held_phase_logs_event(mock_db, monkeypatch):
     """Holding the next phase emits an observable schedule_log event."""
@@ -279,3 +387,54 @@ def test_soak_is_absolute_duration_not_local_offset():
     cleared, remaining = rollout_gate.canary_soak_cleared(rollout, just_before, soak)
     assert cleared is False
     assert remaining is not None
+
+
+# ── Gate: soak_proven clears Rule 2 only (pure-logic) ──
+
+def _pct10(within_soak: bool = True, window=None):
+    return {
+        "status": "active",
+        "phase": "pct10",
+        "last_phase_window": window,
+        "canary_completed_at": (_NOW - timedelta(days=1 if within_soak else 7)).isoformat(),
+        "last_phase_completed_at": None,
+    }
+
+
+def test_gate_waives_soak_when_proven():
+    """soak_proven clears the canary soak even inside the hold window."""
+    may_run, reason = rollout_gate.phase_run_decision(
+        _pct10(), "2026-06-10", _NOW, _SOAK, soak_proven=True
+    )
+    assert may_run is True
+    assert reason == "canary_soak_waived"
+
+
+def test_gate_holds_soak_when_not_proven():
+    """Default (soak_proven=False) holds inside the soak window (fail-closed)."""
+    may_run, reason = rollout_gate.phase_run_decision(_pct10(), "2026-06-10", _NOW, _SOAK)
+    assert may_run is False
+    assert reason == "canary_soak"
+
+
+def test_waiver_never_overrides_one_phase_per_window():
+    """Even when proven, a phase already run this window waits for the next one —
+    the waiver clears the soak, never the anti-cascade rule."""
+    rollout = _pct10(window="2026-06-10")
+    may_run, reason = rollout_gate.phase_run_decision(
+        rollout, "2026-06-10", _NOW, _SOAK, soak_proven=True
+    )
+    assert may_run is False
+    assert reason == "already_ran_this_window"
+
+
+def test_waiver_only_affects_pct10():
+    """soak_proven is ignored for non-pct10 phases (they aren't soak-gated)."""
+    for phase in ("canary", "pct50", "pct100"):
+        rollout = {"status": "active", "phase": phase, "last_phase_window": None,
+                   "canary_completed_at": None, "last_phase_completed_at": None}
+        may_run, reason = rollout_gate.phase_run_decision(
+            rollout, "2026-06-10", _NOW, _SOAK, soak_proven=True
+        )
+        assert may_run is True
+        assert reason is None  # a normal run, not a waiver
