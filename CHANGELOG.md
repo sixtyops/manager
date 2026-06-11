@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Security
+- **App updates are now signature-verified.** Every manager release from v1.4.0
+  onward is a signed release, and the manager **refuses to install an update that
+  isn't from us** — closing the path where a tampered release could push code to
+  the host. Existing releases stay installable, so rollback still works and no
+  deployment is left stranded. (See `docs/self-update-signing.md`.)
+
 ### Added
 - Rollouts now **skip the canary step when the firmware is already proven on
   your fleet.** If healthy same-model devices are already running the target
