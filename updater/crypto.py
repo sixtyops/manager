@@ -36,6 +36,26 @@ def get_fernet() -> Fernet:
     return _fernet
 
 
+def key_path() -> Path:
+    """Path to the credential encryption key file.
+
+    This key decrypts every stored device password / RADIUS secret. Losing it
+    makes those credentials unrecoverable, so backup/restore must keep it with
+    the database (see updater/sftp_backup.py).
+    """
+    return _KEY_PATH
+
+
+def reset_cache() -> None:
+    """Drop the cached Fernet so the next call reloads the key from disk.
+
+    Used after a restore swaps in the backup's key file, so the running process
+    decrypts with the restored key without needing a restart.
+    """
+    global _fernet
+    _fernet = None
+
+
 def encrypt_password(plaintext: str) -> str:
     """Encrypt a device password for storage."""
     return get_fernet().encrypt(plaintext.encode()).decode()

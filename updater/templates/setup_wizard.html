@@ -81,8 +81,10 @@
         <p class="subtitle">Step 2 of 3: Configure automatic backups</p>
 
         <div class="info-message">
-            Back up your database and device configs to an SFTP server. Backups run daily at 5 AM
-            and include the database, settings, device inventory, and device configurations.
+            Back up to an SFTP server you control. Backups run daily at 5 AM and
+            include everything needed to fully restore this manager — the
+            database, settings, device inventory, and the security key that
+            unlocks saved device passwords — so treat each backup as sensitive.
         </div>
 
         <div class="error-message {{ 'visible' if error else '' }}">
