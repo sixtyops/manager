@@ -870,6 +870,228 @@ class TestDirtyTreeHandling:
 
 
 # ---------------------------------------------------------------------------
+# Release-signing verification (self-update integrity)
+# ---------------------------------------------------------------------------
+
+class TestSigningCutover:
+    """`_signing_required` decides whether a target must be signature-checked.
+
+    Releases at/after the cutover require a signature; older tags predate
+    signing and stay installable so rollback/reinstall keeps working. An
+    unparseable version fails closed (treated as required)."""
+
+    def test_below_cutover_not_required(self):
+        from updater.release_checker import _signing_required
+        with patch("updater.release_checker.MIN_SIGNED_VERSION", "1.4.0"):
+            assert _signing_required("1.3.9") is False
+            assert _signing_required("1.3.1-dev23") is False
+
+    def test_at_or_above_cutover_required(self):
+        from updater.release_checker import _signing_required
+        with patch("updater.release_checker.MIN_SIGNED_VERSION", "1.4.0"):
+            assert _signing_required("1.4.0") is True
+            assert _signing_required("1.4.1") is True
+            assert _signing_required("2.0.0") is True
+
+    def test_unparseable_version_fails_closed(self):
+        from updater.release_checker import _signing_required
+        with patch("updater.release_checker.MIN_SIGNED_VERSION", "1.4.0"):
+            assert _signing_required("not-a-version") is True
+
+
+class TestVerifyTagSignature:
+    """`_verify_tag_signature` gates checkout on a trusted GPG tag signature."""
+
+    @staticmethod
+    def _trusted_fpr():
+        from updater.release_checker import TRUSTED_SIGNING_FINGERPRINTS
+        return next(iter(TRUSTED_SIGNING_FINGERPRINTS))
+
+    def _verify(self, run_side_effect, *, version="1.4.0", which="gpg"):
+        from updater.release_checker import _verify_tag_signature
+        with patch("updater.release_checker.MIN_SIGNED_VERSION", "1.4.0"), \
+             patch("updater.release_checker.shutil.which", return_value=which), \
+             patch("updater.release_checker.subprocess.run", side_effect=run_side_effect):
+            return _verify_tag_signature(Path("/tmp/repo"), f"v{version}", version)
+
+    def test_legacy_version_skips_verification(self):
+        """A sub-cutover tag must pass without ever invoking gpg/git."""
+        from updater.release_checker import _verify_tag_signature
+        with patch("updater.release_checker.MIN_SIGNED_VERSION", "1.4.0"), \
+             patch("updater.release_checker.subprocess.run") as mock_run, \
+             patch("updater.release_checker.shutil.which") as mock_which:
+            ok, reason = _verify_tag_signature(Path("/tmp/repo"), "v1.3.0", "1.3.0")
+        assert ok is True and reason is None
+        mock_run.assert_not_called()
+        mock_which.assert_not_called()
+
+    def test_valid_trusted_signature_passes(self):
+        good = (
+            "[GNUPG:] GOODSIG ABC user\n"
+            f"[GNUPG:] VALIDSIG {self._trusted_fpr()} 2026-01-01 0 0 4 0 22 8 00 "
+            f"{self._trusted_fpr()}\n"
+        )
+
+        def run(cmd, **kw):
+            r = MagicMock(); r.returncode = 0; r.stdout = ""; r.stderr = ""
+            if "verify-tag" in cmd:
+                r.stderr = good
+            return r
+
+        ok, reason = self._verify(run)
+        assert ok is True and reason is None
+
+    def test_missing_signature_blocks(self):
+        def run(cmd, **kw):
+            r = MagicMock(); r.stdout = ""; r.stderr = ""
+            r.returncode = 1 if "verify-tag" in cmd else 0
+            if "verify-tag" in cmd:
+                r.stderr = "[GNUPG:] NODATA 1\n"
+            return r
+
+        ok, reason = self._verify(run)
+        assert ok is False
+        assert "signature" in reason.lower()
+
+    def test_untrusted_signer_blocks(self):
+        """A good signature from a key NOT on the allowlist must be rejected."""
+        rogue = (
+            "[GNUPG:] GOODSIG ROGUE rogue\n"
+            "[GNUPG:] VALIDSIG DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF 2026 0 0 4 0 "
+            "22 8 00 DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF\n"
+        )
+
+        def run(cmd, **kw):
+            r = MagicMock(); r.returncode = 0; r.stdout = ""; r.stderr = ""
+            if "verify-tag" in cmd:
+                r.stderr = rogue
+            return r
+
+        ok, reason = self._verify(run)
+        assert ok is False
+        assert "trusted list" in reason.lower()
+
+    def test_missing_gpg_blocks_at_cutover(self):
+        def run(cmd, **kw):
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        ok, reason = self._verify(run, which=None)
+        assert ok is False
+        assert "verify" in reason.lower()
+
+    def test_no_trusted_keys_blocks(self, tmp_path):
+        """If no trusted key is bundled, a cutover update must be blocked."""
+        from updater.release_checker import _verify_tag_signature
+        empty = tmp_path / "trusted_keys"
+        empty.mkdir()
+        with patch("updater.release_checker.MIN_SIGNED_VERSION", "1.4.0"), \
+             patch("updater.release_checker.shutil.which", return_value="gpg"), \
+             patch("updater.release_checker._TRUSTED_KEYS_DIR", empty):
+            ok, reason = _verify_tag_signature(Path("/tmp/repo"), "v1.4.0", "1.4.0")
+        assert ok is False
+        assert "trusted release key" in reason.lower()
+
+    def test_real_key_is_bundled(self):
+        """The committed trusted key must exist and match the allowlist fpr —
+        otherwise every cutover update would fail closed in production."""
+        from updater.release_checker import _TRUSTED_KEYS_DIR, TRUSTED_SIGNING_FINGERPRINTS
+        keys = list(_TRUSTED_KEYS_DIR.glob("*.asc"))
+        assert keys, "no trusted release public key committed"
+        assert TRUSTED_SIGNING_FINGERPRINTS, "no trusted fingerprints configured"
+
+
+class TestApplyUpdateSignatureGate:
+    """apply_update must verify the tag signature before checkout (>= cutover)."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_db(self, mock_db):
+        self.db = mock_db
+
+    def _set_setting(self, key, value):
+        self.db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value)
+        )
+        self.db.commit()
+
+    @staticmethod
+    def _trusted_fpr():
+        from updater.release_checker import TRUSTED_SIGNING_FINGERPRINTS
+        return next(iter(TRUSTED_SIGNING_FINGERPRINTS))
+
+    def _dispatch(self, *, verify_ok):
+        fpr = self._trusted_fpr()
+        good = f"[GNUPG:] GOODSIG X u\n[GNUPG:] VALIDSIG {fpr} d 0 0 4 0 22 8 00 {fpr}\n"
+
+        def run(cmd, **kw):
+            r = MagicMock(); r.returncode = 0; r.stdout = ""; r.stderr = ""
+            if "rev-parse" in cmd:
+                r.stdout = "abc123"
+            elif "status" in cmd:
+                r.stdout = ""  # clean tree
+            elif "verify-tag" in cmd:
+                if verify_ok:
+                    r.stderr = good
+                else:
+                    r.returncode = 1
+                    r.stderr = "[GNUPG:] NODATA 1\n"
+            return r
+
+        return run
+
+    @pytest.mark.asyncio
+    async def test_unsigned_cutover_release_blocks_before_checkout(self):
+        from updater.release_checker import apply_update
+        self._set_setting("autoupdate_available_version", "1.4.0")
+        calls = []
+        base = self._dispatch(verify_ok=False)
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            return base(cmd, **kw)
+
+        with patch("updater.release_checker.MIN_SIGNED_VERSION", "1.4.0"), \
+             patch("updater.release_checker.shutil.which", return_value="gpg"), \
+             patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_repo_dir", return_value=Path("/tmp/repo")), \
+             patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
+             patch("updater.release_checker.subprocess.run", side_effect=run):
+            result = await apply_update()
+
+        assert result["success"] is False
+        assert result.get("signature_blocked") is True
+        # Critical: never checked out the unverified tag.
+        assert not any("checkout" in c for c in calls)
+
+    @pytest.mark.asyncio
+    async def test_signed_cutover_release_proceeds_to_checkout(self):
+        from updater.release_checker import apply_update
+        self._set_setting("autoupdate_available_version", "1.4.0")
+        calls = []
+        base = self._dispatch(verify_ok=True)
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            return base(cmd, **kw)
+
+        with patch("updater.release_checker.MIN_SIGNED_VERSION", "1.4.0"), \
+             patch("updater.release_checker.shutil.which", return_value="gpg"), \
+             patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_repo_dir", return_value=Path("/tmp/repo")), \
+             patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
+             patch("updater.release_checker._get_host_repo_path", return_value=None), \
+             patch("updater.release_checker.subprocess.run", side_effect=run), \
+             patch("updater.release_checker.subprocess.Popen"), \
+             patch.object(Path, "exists", return_value=True), \
+             patch.object(Path, "read_text", return_value='__version__ = "1.4.0"'):
+            result = await apply_update()
+
+        assert result["success"] is True
+        assert any("checkout" in c for c in calls)
+
+
+# ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
 

@@ -12,6 +12,7 @@ from typing import Optional, Tuple
 
 import asyncssh
 
+from . import crypto
 from . import database as db
 from .crypto import encrypt_password, decrypt_password, is_encrypted
 
@@ -206,42 +207,80 @@ async def restore_backup(archive_name: str) -> Tuple[bool, str]:
                     remote_file = f"{remote_path}/{archive_name}"
                     await sftp.get(remote_file, str(local_archive))
 
-            # Extract sixtyops.db from the archive. The remote SFTP server is
-            # in principle untrusted (it could be MITM'd or compromised), so
-            # guard against tar traversal / symlink overwrite: validate the
-            # member is a regular file at the expected path, and pass
-            # filter="data" so tarfile rejects unsafe attributes (absolute
-            # paths, ".." segments, device files, etc.) on extract.
-            with tarfile.open(local_archive, "r:gz") as tar:
-                try:
-                    member = tar.getmember("sixtyops.db")
-                except KeyError:
-                    return False, "sixtyops.db not found in backup archive"
-                if not member.isfile() or member.name != "sixtyops.db":
-                    return False, "Unsafe archive: unexpected sixtyops.db member type"
-                tar.extract(member, path=STAGING_DIR, filter="data")
-
-            extracted_db = STAGING_DIR / "sixtyops.db"
-            if not extracted_db.exists():
-                return False, "sixtyops.db not found in backup archive"
-
-            # Replace live database file
-            # Note: SQLite might have open connections; in a real deployment,
-            # this might need the app to stop or use .backup to a new file then swap.
-            # Here we do a simple file swap which is risky but common for simple restores.
-            import shutil
-            shutil.copy2(extracted_db, DB_FILE)
-
-            # Cleanup
-            local_archive.unlink(missing_ok=True)
-            extracted_db.unlink(missing_ok=True)
-
-            logger.info(f"Database restored from backup: {archive_name}")
-            return True, "Database restored successfully. System restart recommended."
+            return _restore_from_archive(local_archive)
 
         except Exception as e:
             logger.exception(f"Restore failed: {e}")
             return False, f"Restore failed: {e}"
+
+
+def _restore_from_archive(local_archive: Path) -> Tuple[bool, str]:
+    """Restore the database (and its encryption key) from a downloaded archive.
+
+    Split out from restore_backup so it can be tested without SFTP. Replaces the
+    live DB and — when present — the credential encryption key, keeping the two
+    consistent so a restore onto a fresh host can decrypt stored credentials.
+    """
+    import shutil
+
+    # Extract sixtyops.db from the archive. The remote SFTP server is in
+    # principle untrusted (it could be MITM'd or compromised), so guard against
+    # tar traversal / symlink overwrite: validate each member is a regular file
+    # at the expected path, and pass filter="data" so tarfile rejects unsafe
+    # attributes (absolute paths, ".." segments, device files, etc.) on extract.
+    extracted_key = None
+    with tarfile.open(local_archive, "r:gz") as tar:
+        try:
+            member = tar.getmember("sixtyops.db")
+        except KeyError:
+            return False, "sixtyops.db not found in backup archive"
+        if not member.isfile() or member.name != "sixtyops.db":
+            return False, "Unsafe archive: unexpected sixtyops.db member type"
+        tar.extract(member, path=STAGING_DIR, filter="data")
+
+        # Restore the credential encryption key alongside the DB so the restored
+        # Fernet ciphertexts (device/RADIUS passwords) decrypt. Older archives
+        # predate this and won't have it — restore the DB anyway (creds only
+        # decrypt if the local key already matches).
+        try:
+            key_member = tar.getmember(".encryption_key")
+            if key_member.isfile() and key_member.name == ".encryption_key":
+                tar.extract(key_member, path=STAGING_DIR, filter="data")
+                extracted_key = STAGING_DIR / ".encryption_key"
+        except KeyError:
+            logger.warning(
+                "Backup %s has no encryption key (older format); restored "
+                "credentials will only decrypt if the local key matches",
+                local_archive.name,
+            )
+
+    extracted_db = STAGING_DIR / "sixtyops.db"
+    if not extracted_db.exists():
+        return False, "sixtyops.db not found in backup archive"
+
+    # Replace live database file.
+    # Note: SQLite might have open connections; in a real deployment this might
+    # need the app to stop or use .backup to a new file then swap. Here we do a
+    # simple file swap which is risky but common for simple restores.
+    shutil.copy2(extracted_db, DB_FILE)
+
+    # Swap in the restored key (with the DB it matches) and drop the cached
+    # cipher so the running process decrypts with it immediately.
+    if extracted_key and extracted_key.exists():
+        key_dest = crypto.key_path()
+        key_dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(extracted_key, key_dest)
+        key_dest.chmod(0o600)
+        crypto.reset_cache()
+
+    # Cleanup
+    local_archive.unlink(missing_ok=True)
+    extracted_db.unlink(missing_ok=True)
+    if extracted_key:
+        extracted_key.unlink(missing_ok=True)
+
+    logger.info(f"Database restored from backup: {local_archive.name}")
+    return True, "Database restored successfully. System restart recommended."
 
 
 async def run_backup() -> Tuple[bool, str]:
@@ -269,16 +308,25 @@ async def _run_backup_locked() -> Tuple[bool, str]:
     logger.info(f"Starting backup: {archive_name}")
 
     try:
-        # Build archive in memory. We intentionally do NOT include the
-        # per-device config snapshots (_add_device_configs) here: those
-        # contain RADIUS PSKs, WPA passphrases, SNMP write-communities, and
-        # 802.1X credentials in cleartext, and the remote SFTP server is a
-        # weaker trust boundary than the local Fernet-protected DB. The
-        # operator-driven CSV backup (build_csv_export) still ships configs,
-        # but wrapped under a PBKDF2-derived passphrase.
+        # Build archive in memory.
+        #
+        # We include the DB *and* its credential encryption key
+        # (_add_encryption_key): the DB stores device/RADIUS passwords as Fernet
+        # ciphertext, so a restore onto a fresh host without the key leaves every
+        # credential unrecoverable — a silent data-loss trap where the operator
+        # believed they were backed up. Restorability wins (uptime), but it means
+        # the archive effectively contains decryptable credentials, so the SFTP
+        # destination MUST be access-controlled (documented in the UI).
+        #
+        # We still do NOT include the per-device config snapshots
+        # (_add_device_configs): those add WPA passphrases, SNMP write-
+        # communities, and 802.1X secrets that aren't needed to restore the
+        # manager's own ability to reach devices. The operator-driven CSV backup
+        # (build_csv_export) still ships configs under a PBKDF2-derived passphrase.
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
             _add_database(tar)
+            _add_encryption_key(tar)
             _add_settings(tar)
             _add_device_inventory(tar, timestamp)
 
@@ -337,6 +385,23 @@ def _add_database(tar: tarfile.TarFile):
         tar.add(str(staging_db), arcname="sixtyops.db")
     finally:
         staging_db.unlink(missing_ok=True)
+
+
+def _add_encryption_key(tar: tarfile.TarFile):
+    """Add the credential encryption key so a restore can decrypt the DB.
+
+    Without this, the Fernet-encrypted device/RADIUS passwords in the database
+    can't be decrypted after restoring onto a host with a different key.
+    """
+    key_file = crypto.key_path()
+    if not key_file.exists():
+        logger.warning("Encryption key not found, skipping (restored creds may not decrypt)")
+        return
+    data = key_file.read_bytes()
+    info = tarfile.TarInfo(name=".encryption_key")
+    info.size = len(data)
+    info.mode = 0o600
+    tar.addfile(info, io.BytesIO(data))
 
 
 def _add_settings(tar: tarfile.TarFile):
