@@ -10131,7 +10131,7 @@
                     const renewalClass = data.needs_renewal ? 'color:#ef4444;' : 'color:#22c55e;';
                     el.innerHTML = `<span style="font-weight:500;">Domain:</span> ${data.domain}<br>`
                         + `<span style="font-weight:500;">Certificate:</span> Let's Encrypt`
-                        + ` &mdash; <span style="${renewalClass}">expires in ${expiry}</span>`
+                        + ` &middot; <span style="${renewalClass}">expires in ${expiry}</span>`
                         + (data.needs_renewal ? ' (renewal recommended)' : '');
                     document.getElementById('sslDomain').value = data.domain;
                     document.getElementById('sslEmail').value = data.email || '';
