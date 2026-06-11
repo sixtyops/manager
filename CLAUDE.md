@@ -14,9 +14,12 @@ HTML/JS frontend, SQLite database, Docker deployment.
   `phase-1` for in-scope work; `launch-p0` for must-close-before-design-partners.
 - **Monetization:** per-AP + per-switch billing; SMs (CPEs) are free. Phase 2
   workstream (label `phase-2`, `gtm`).
-- **Repo state:** `sixtyops/manager` is PRIVATE. Branch protection on private
-  repos requires GitHub Team plan (currently Free) — merge gating is being
-  worked in issue #116.
+- **Repo state:** `sixtyops/manager` is PUBLIC (the GHCR image is public too).
+  `main` and `v*` release tags are protected by repository rulesets (force-push
+  and deletion blocked; PRs required on `main`; only admins may create/move
+  release tags — the self-update trust root). Admins can bypass for emergencies.
+  See `docs/repo-hardening.md`. (Public-repo rulesets are free; this supersedes
+  the old "Team plan needed" note in #116.)
 
 ## Branching Model
 
