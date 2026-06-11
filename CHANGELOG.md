@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Security
+- The development **sample-data seeder no longer plants a login or turns on
+  automatic updates.** Previously a leftover `SEED_DATA=1` (a dev-only flag)
+  could hand a real install a known admin password, skip first-run setup, and
+  enable auto-updates. Seeding now adds sample devices only, refuses to run
+  against an already-configured install, and warns that it is development-only.
+  Sign in via first-run setup as normal.
+
 ### Added
 - Rollouts now **skip the canary step when the firmware is already proven on
   your fleet.** If healthy same-model devices are already running the target

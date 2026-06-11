@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-"""Seed the database with sample data for local development/testing.
+"""Seed the database with SAMPLE DEVICE DATA for local development/testing.
 
-Run automatically on container start when SEED_DATA=1 is set.
-Only inserts data if the devices table is empty (idempotent).
+Run automatically on container start when SEED_DATA=1 is set. Inserts sample
+sites/devices/CPEs/templates/history only — it deliberately does NOT create an
+admin login, mark setup complete, or enable auto-update/scheduling. Those used
+to be planted here, which meant a stray SEED_DATA=1 in a production .env would
+hand a real host a known admin password and turn auto-update on. Login is the
+operator's job (first-run setup, or the ADMIN_PASSWORD env used by dev.sh).
+
+Refuses to run against a database that is already configured (setup done, an
+admin exists, or devices are present), so it can never overwrite a live install.
 """
 
 import json
@@ -11,9 +18,34 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import bcrypt
-
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "sixtyops.db"
+
+
+def _is_configured(db) -> bool:
+    """True if the DB shows any sign of a real/configured install.
+
+    Guards against seeding (and thus polluting) a host that is already set up.
+    Tolerates a partially-initialised schema on a brand-new DB.
+    """
+    def _setting(key):
+        try:
+            row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+            return row[0] if row else ""
+        except sqlite3.Error:
+            return ""
+
+    def _has_rows(sql):
+        try:
+            return db.execute(sql).fetchone()[0] > 0
+        except sqlite3.Error:
+            return False
+
+    return (
+        _setting("setup_completed") == "true"
+        or bool(_setting("admin_password_hash"))
+        or _has_rows("SELECT COUNT(*) FROM users")
+        or _has_rows("SELECT COUNT(*) FROM devices")
+    )
 
 
 def seed():
@@ -24,10 +56,11 @@ def seed():
     db = sqlite3.connect(str(DB_PATH), timeout=10)
     db.row_factory = sqlite3.Row
 
-    # Idempotent: skip if devices already exist
-    count = db.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
-    if count > 0:
-        print(f"seed: database already has {count} devices, skipping")
+    # Refuse to seed a configured install — never overwrite a real host's data
+    # or credentials (production safety, not just idempotency).
+    if _is_configured(db):
+        print("seed: database is already configured (setup done / admin / devices "
+              "present) — refusing to seed")
         db.close()
         return
 
@@ -142,33 +175,10 @@ def seed():
             )
     db.commit()
 
-    # ── Admin user + setup complete ──
-    admin_pw = "admin123"
-    pw_hash = bcrypt.hashpw(admin_pw.encode(), bcrypt.gensalt()).decode()
-    db.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-        ("admin_password_hash", pw_hash),
-    )
-    db.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-        ("setup_completed", "true"),
-    )
-    db.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-        ("schedule_enabled", "true"),
-    )
-    db.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-        ("autoupdate_enabled", "true"),
-    )
-    # Create admin user in users table
-    existing = db.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()
-    if not existing:
-        db.execute(
-            """INSERT INTO users (username, password_hash, role, auth_method, enabled, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            ("admin", pw_hash, "admin", "local", 1, now, now),
-        )
+    # NOTE: seeding intentionally does NOT create an admin, mark setup
+    # complete, or enable auto-update/scheduling. Sign in via first-run setup,
+    # or the ADMIN_PASSWORD env var (dev.sh / dev compose). This keeps a stray
+    # SEED_DATA=1 from planting a known password or turning auto-update on.
     db.commit()
 
     dev_count = db.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
@@ -177,7 +187,7 @@ def seed():
     tmpl_count = db.execute("SELECT COUNT(*) FROM config_templates").fetchone()[0]
     hist_count = db.execute("SELECT COUNT(*) FROM job_history").fetchone()[0]
     print(f"seed: inserted {site_count} sites, {dev_count} devices, {cpe_count} CPEs, {tmpl_count} templates, {hist_count} jobs")
-    print(f"seed: admin user created (username: admin, password: {admin_pw})")
+    print("seed: no admin created — sign in via first-run setup or the ADMIN_PASSWORD env var")
     db.close()
 
 
