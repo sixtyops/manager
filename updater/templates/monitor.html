@@ -103,6 +103,11 @@
             box-sizing: border-box;
         }
 
+        :focus-visible {
+            outline: 2px solid var(--focus-ring);
+            outline-offset: 1px;
+        }
+
         body {
             font-family: var(--font-sans);
             background: var(--bg);
@@ -333,8 +338,7 @@
             background: var(--border-light);
         }
         .backup-modal .backup-btn:active {
-            transform: scale(0.97);
-            opacity: 0.8;
+            transform: translateY(1px);
         }
         .backup-btn-sm {
             font-size: 0.72rem;
@@ -803,6 +807,15 @@
             background: var(--border-light);
             border-color: var(--toggle-off);
         }
+        .btn:active:not(:disabled),
+        .updates-banner-btn:active,
+        .drawer-save-btn:active:not(:disabled),
+        .drawer-day-btn:active,
+        .update-action:active,
+        .fleet-chip:active:not(.disabled) {
+            transform: translateY(1px);
+        }
+
         .btn:disabled {
             background: var(--border-light);
             color: var(--text-dim);
@@ -839,7 +852,7 @@
             color: var(--text-muted);
             border-color: var(--border);
         }
-        .btn-secondary:hover { background: var(--toggle-off); color: var(--text); }
+        .btn-secondary:hover { background: var(--border); color: var(--text); }
         .btn-ghost {
             background: transparent;
             color: var(--text-muted);
@@ -848,7 +861,7 @@
         .btn-ghost:hover { background: var(--border-light); color: var(--text); }
         .btn-warning {
             background: var(--warning);
-            color: #000;
+            color: #451a03; /* amber needs dark text for AA contrast */
             border-color: var(--warning);
         }
         .btn-warning:hover { background: var(--warning-hover); border-color: var(--warning-hover); }
@@ -2440,7 +2453,7 @@
         }
         select.u-input-compact { appearance: auto; }
         .u-input-compact:focus {
-            outline: 2px solid rgba(59, 130, 246, 0.2);
+            outline: 2px solid var(--focus-ring);
             outline-offset: 0;
             border-color: var(--primary);
         }
@@ -2623,7 +2636,7 @@
             min-width: 0; white-space: nowrap; overflow: hidden;
         }
         .sh-segmented .sh-view-tab:focus { outline: none; }
-        .sh-segmented .sh-view-tab:focus-visible { box-shadow: inset 0 0 0 2px rgba(59,130,246,.45); }
+        .sh-segmented .sh-view-tab:focus-visible { box-shadow: inset 0 0 0 2px var(--focus-ring); }
         .sh-segmented .sh-view-tab:hover { color: var(--text); }
         .sh-segmented .sh-view-tab.active { background: #111827; color: #fff; }
         .sh-segmented .sh-view-tab > svg { width: 14px; height: 14px; flex: 0 0 auto; }
