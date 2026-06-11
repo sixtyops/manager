@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
+- **The bottom status bar can now be grabbed and dragged.** Drag it up to open
+  the schedule panel to any height, or drag it down to close — anywhere on the
+  bar works, not just the thin divider. Clicking the bar still toggles it, and
+  the panel remembers its height.
 - **Refreshed dashboard look.** IBM Plex typeface (self-hosted, no CDN), a
   single teal accent matching the SixtyOps brand, clearer keyboard-focus
   outlines, and consistent status colors — blue now always means "scheduled

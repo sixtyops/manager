@@ -1429,6 +1429,7 @@
             overflow-x: auto;
             cursor: pointer;
             user-select: none;
+            touch-action: pan-x;
         }
         .drawer-handle-half {
             display: none;
@@ -1559,6 +1560,10 @@
 
         .bottom-drawer.open .drawer-panel.dragging {
             transition: none;
+        }
+
+        .drawer-handle.dragging {
+            cursor: ns-resize;
         }
 
         .drawer-resize-handle {
@@ -8884,21 +8889,32 @@
             setTimeout(syncDrawerPadding, 320);
         }
 
-        // ── Drawer resize (drag the top edge of the open panel) ──
+        // ── Drawer resize (drag the bar or the top edge of the open panel) ──
+        let drawerDragJustEnded = false;
         (function setupDrawerResize() {
             const STORAGE_KEY = 'drawerPanelHeightPx';
             const MIN_HEIGHT = 120;
             const TOP_GAP = 80;
+            const DRAG_THRESHOLD = 6;
+            const CLOSE_BELOW = 60;
             const drawer = document.getElementById('bottomDrawer');
             const handle = document.getElementById('drawerResizeHandle');
             const panel = document.getElementById('drawerPanel');
-            if (!drawer || !handle || !panel) return;
+            const bar = document.getElementById('drawerHandle');
+            if (!drawer || !handle || !panel || !bar) return;
 
-            function applyHeight(px) {
+            function applyHeight(px, min = MIN_HEIGHT) {
                 const max = Math.max(MIN_HEIGHT, window.innerHeight - TOP_GAP);
-                const clamped = Math.min(Math.max(px, MIN_HEIGHT), max);
+                const clamped = Math.min(Math.max(px, min), max);
                 drawer.style.setProperty('--drawer-panel-height', clamped + 'px');
                 return clamped;
+            }
+
+            function persistHeight() {
+                const cur = drawer.style.getPropertyValue('--drawer-panel-height').trim();
+                if (cur.endsWith('px')) {
+                    try { localStorage.setItem(STORAGE_KEY, String(parseInt(cur, 10))); } catch (err) {}
+                }
             }
 
             try {
@@ -8906,33 +8922,93 @@
                 if (!isNaN(saved) && saved > 0) applyHeight(saved);
             } catch (e) {}
 
-            handle.addEventListener('pointerdown', (e) => {
-                if (e.button !== undefined && e.button !== 0) return;
-                e.preventDefault();
-                e.stopPropagation();
-                try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+            // closable: drags started from the bar may also close the drawer
+            // (and track the pointer below MIN_HEIGHT); divider drags only resize.
+            function beginPanelDrag(handleEl, pointerId, startY, startHeight, closable) {
+                const prevVar = drawer.style.getPropertyValue('--drawer-panel-height');
+                let raw = startHeight;
+                try { handleEl.setPointerCapture(pointerId); } catch (err) {}
                 panel.classList.add('dragging');
-                handle.classList.add('dragging');
+                handleEl.classList.add('dragging');
+                applyHeight(raw, closable ? 0 : MIN_HEIGHT);
                 const onMove = (ev) => {
-                    applyHeight(window.innerHeight - ev.clientY - handle.offsetHeight / 2);
+                    raw = startHeight + (startY - ev.clientY);
+                    applyHeight(raw, closable ? 0 : MIN_HEIGHT);
                     syncDrawerPadding();
                 };
                 const onUp = (ev) => {
                     document.removeEventListener('pointermove', onMove);
                     document.removeEventListener('pointerup', onUp);
                     document.removeEventListener('pointercancel', onUp);
-                    try { handle.releasePointerCapture(ev.pointerId); } catch (err) {}
-                    panel.classList.remove('dragging');
-                    handle.classList.remove('dragging');
-                    const cur = drawer.style.getPropertyValue('--drawer-panel-height').trim();
-                    if (cur.endsWith('px')) {
-                        try { localStorage.setItem(STORAGE_KEY, String(parseInt(cur, 10))); } catch (err) {}
+                    try { handleEl.releasePointerCapture(ev.pointerId); } catch (err) {}
+                    if (closable && raw < CLOSE_BELOW) {
+                        // Remove 'open' first: the no-transition rule is scoped to
+                        // `.open .drawer-panel.dragging`, so this re-enables the
+                        // transition and the panel animates shut. Keep the saved
+                        // height (don't persist the tiny drag height) so reopening
+                        // restores the previous size.
+                        drawer.classList.remove('open');
+                        panel.classList.remove('dragging');
+                        handleEl.classList.remove('dragging');
+                        if (prevVar) drawer.style.setProperty('--drawer-panel-height', prevVar);
+                        else drawer.style.removeProperty('--drawer-panel-height');
+                        setTimeout(syncDrawerPadding, 320);
+                    } else {
+                        panel.classList.remove('dragging');
+                        handleEl.classList.remove('dragging');
+                        applyHeight(raw);
+                        persistHeight();
+                        syncDrawerPadding();
                     }
-                    syncDrawerPadding();
+                    if (closable && ev.type === 'pointerup') {
+                        // Swallow the synthetic click that follows the drag so it
+                        // doesn't immediately re-toggle the drawer.
+                        drawerDragJustEnded = true;
+                        setTimeout(() => { drawerDragJustEnded = false; }, 0);
+                    }
                 };
                 document.addEventListener('pointermove', onMove);
                 document.addEventListener('pointerup', onUp);
                 document.addEventListener('pointercancel', onUp);
+            }
+
+            handle.addEventListener('pointerdown', (e) => {
+                if (e.button !== undefined && e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                beginPanelDrag(handle, e.pointerId, e.clientY, panel.offsetHeight, false);
+            });
+
+            // Grab anywhere on the bar and drag up/down to open, resize, or close.
+            // Arm on pointerdown, engage only after a mostly-vertical move past the
+            // threshold — sub-threshold presses stay plain clicks (toggleDrawer).
+            bar.addEventListener('pointerdown', (e) => {
+                if (e.button !== undefined && e.button !== 0) return;
+                if (e.target.closest('.toggle, .btn, .status-bar-actions, input, select, a, label')) return;
+                const startX = e.clientX, startY = e.clientY, pid = e.pointerId;
+                const startHeight = drawer.classList.contains('open') ? panel.offsetHeight : 0;
+                const disarm = () => {
+                    document.removeEventListener('pointermove', onArmMove);
+                    document.removeEventListener('pointerup', disarm);
+                    document.removeEventListener('pointercancel', disarm);
+                };
+                const onArmMove = (ev) => {
+                    if (ev.pointerId !== pid) return;
+                    const dx = Math.abs(ev.clientX - startX), dy = Math.abs(ev.clientY - startY);
+                    if (dy >= DRAG_THRESHOLD && dy > dx) {
+                        disarm();
+                        if (!drawer.classList.contains('open')) {
+                            drawer.classList.add('open');
+                            if (activeColumnMode === 'firmware') loadDrawerSettings();
+                        }
+                        beginPanelDrag(bar, pid, startY, startHeight, true);
+                    } else if (dx >= DRAG_THRESHOLD) {
+                        disarm();
+                    }
+                };
+                document.addEventListener('pointermove', onArmMove);
+                document.addEventListener('pointerup', disarm);
+                document.addEventListener('pointercancel', disarm);
             });
 
             handle.addEventListener('dblclick', (e) => {
@@ -9272,6 +9348,7 @@
         // ── Drawer ──
 
         function toggleDrawer(event) {
+            if (drawerDragJustEnded) { drawerDragJustEnded = false; return; }
             // Don't toggle if clicking interactive controls
             if (event.target.closest('.toggle, .btn, .status-bar-actions, input')) return;
             const drawer = document.getElementById('bottomDrawer');
