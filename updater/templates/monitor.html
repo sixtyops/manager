@@ -52,9 +52,6 @@
             --info-bg: #dbeafe;
             --info-bg-subtle: #eff6ff;
             --info-border: #bfdbfe;
-            --indigo: #6366f1;
-            --indigo-text: #3730a3;
-            --indigo-bg: #e0e7ff;
             --toggle-off: #d1d5db;
             --bg-subtle: #f9fafb;
             --overlay: rgba(17, 24, 39, 0.5);
@@ -536,7 +533,7 @@
         .history-status-badge.failed { background: #fef2f2; color: #dc2626; }
         .history-status-badge.skipped { background: #f3f4f6; color: #6b7280; }
         .history-status-badge.cancelled { background: #fef3c7; color: #d97706; }
-        .history-status-badge.deferred { background: #ede9fe; color: #7c3aed; }
+        .history-status-badge.deferred { background: var(--info-bg); color: var(--info-text); }
 
         .history-stage-pill {
             display: inline-block;
@@ -629,10 +626,10 @@
         .updates-version { font-size:0.8rem; font-weight:700; color:var(--text,#111827); font-family:var(--font-mono); }
         .updates-select { font-size:0.72rem; padding:4px 8px; border:1px solid var(--border,#d1d5db); border-radius: var(--radius-md); background:#fff; min-width:160px; }
         .updates-row-actions { background:var(--bg-subtle,#f9fafb); }
-        .updates-banner { margin-top:12px; padding:12px 14px; background:#dbeafe; border-radius: var(--radius-lg); }
+        .updates-banner { margin-top:12px; padding:12px 14px; background:var(--info-bg); border-radius: var(--radius-lg); }
         .updates-banner-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
-        .updates-banner-title { font-weight:600; font-size:0.82rem; color:#1e40af; }
-        .updates-banner-link { font-size:0.7rem; color:#2563eb; text-decoration:none; }
+        .updates-banner-title { font-weight:600; font-size:0.82rem; color:var(--info-text); }
+        .updates-banner-link { font-size:0.7rem; color:var(--info-strong); text-decoration:none; }
         .updates-banner-link:hover { text-decoration:underline; }
         /* `appearance: none` is required: without it, WebKit keeps the
            native button chrome painted over `background: #16a34a`, so the
@@ -682,11 +679,11 @@
         .release-notes-content {
             margin-top: 8px;
             padding: 8px 10px;
-            background: #f0f4ff;
+            background: var(--info-bg-subtle);
             border-radius: var(--radius-md);
             max-height: 200px;
             overflow-y: auto;
-            border: 1px solid #bfdbfe;
+            border: 1px solid var(--info-border);
         }
 
         .release-notes-content ul {
@@ -1058,7 +1055,7 @@
             color: white;
         }
 
-        .device-icon.site { background: var(--indigo); }
+        .device-icon.site { background: var(--text-muted); }
         .device-icon.ap { background: var(--primary); }
         .device-icon.cpe {
             border-radius: 50%;
@@ -1160,7 +1157,7 @@
         .status-offline { color: var(--danger-bright); font-weight: 500; }
         .status-current { color: var(--success); font-weight: 500; }
         .status-behind { color: var(--warning); font-weight: 500; }
-        .status-scheduled { color: var(--primary); font-weight: 600; font-size: 0.9rem; }
+        .status-scheduled { color: var(--info); font-weight: 600; font-size: 0.9rem; }
         .update-clickable { cursor: pointer; text-decoration: none; }
         .update-clickable:hover { opacity: 0.7; }
         .status-label { font-size: 0.78rem; }
@@ -1180,14 +1177,14 @@
         .status-icon-cell.critical { background: var(--danger-bright); }
         .status-icon-cell.updating {
             background: transparent;
-            border: 2px solid var(--primary);
+            border: 2px solid var(--info);
             border-top-color: transparent;
             animation: spin 1s linear infinite;
         }
 
         /* Updating indicator */
         .updating-text {
-            color: var(--primary);
+            color: var(--info);
             font-size: 0.75rem;
             font-weight: 500;
         }
@@ -1205,7 +1202,7 @@
             width: 14px;
             height: 14px;
             border: 2px solid var(--border);
-            border-top-color: var(--primary);
+            border-top-color: var(--info);
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
         }
@@ -1222,7 +1219,7 @@
         }
         .update-stage {
             font-size: 0.72rem;
-            color: var(--primary);
+            color: var(--info);
             font-variant-numeric: tabular-nums;
         }
 
@@ -1307,8 +1304,8 @@
             color: var(--warning); transition: background var(--tr-fast); line-height: 1;
         }
         .update-action:hover { background: var(--warning-bg); }
-        .update-action.scheduled { color: var(--primary); }
-        .update-action.scheduled:hover { background: var(--primary-bg); }
+        .update-action.scheduled { color: var(--info); }
+        .update-action.scheduled:hover { background: var(--info-bg); }
 
         /* Connection status */
         .connection-status {
@@ -1371,7 +1368,7 @@
             width: 36px;
             height: 36px;
             border: 3px solid var(--border);
-            border-top-color: var(--primary);
+            border-top-color: var(--info);
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
             margin-bottom: 12px;
@@ -1636,7 +1633,7 @@
             color: var(--text-muted);
         }
         .config-section-status.saved { background: var(--primary-bg); color: var(--primary-text); }
-        .config-section-status.enforced { background: #dbeafe; color: #1d4ed8; }
+        .config-section-status.enforced { background: var(--info-bg); color: var(--info-text); }
         .config-section.enforced {
             border: 2px solid var(--primary) !important;
             border-radius: var(--radius-md);
@@ -2010,9 +2007,9 @@
             background: var(--border-light);
             color: var(--text-muted);
         }
-        .status-bar-badge.idle { background: var(--primary-bg); color: var(--primary-text); }
+        .status-bar-badge.idle { background: var(--border-light); color: var(--text-muted); }
         .status-bar-badge.waiting { background: var(--warning-bg); color: var(--warning-text); }
-        .status-bar-badge.running { background: var(--indigo-bg); color: var(--indigo-text); }
+        .status-bar-badge.running { background: var(--info-bg); color: var(--info-text); }
         .status-bar-badge.blocked { background: var(--danger-bg); color: var(--danger-text); }
         .status-bar-badge.current { background: var(--success-bg); color: var(--success-text); }
 
@@ -2104,25 +2101,25 @@
 
         .status-bar-phases .bar-phase-dot.clickable {
             cursor: pointer;
-            box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.22);
+            box-shadow: inset 0 0 0 1px var(--info-border);
         }
 
         .status-bar-phases .bar-phase-dot.clickable:hover {
-            background: #dbeafe;
-            color: #1d4ed8;
+            background: var(--info-bg);
+            color: var(--info-text);
         }
 
         /* The "next phase, ready to start" pill — louder than .clickable
            so it actually reads as a CTA on a mostly-muted phase bar. */
         .status-bar-phases .bar-phase-dot.next-up {
-            background: #dbeafe;
-            color: #1d4ed8;
-            box-shadow: inset 0 0 0 1.5px var(--primary);
+            background: var(--info-bg);
+            color: var(--info-text);
+            box-shadow: inset 0 0 0 1.5px var(--info);
             animation: pulse 2s infinite;
         }
 
         .status-bar-phases .bar-phase-dot.next-up:hover {
-            background: #bfdbfe;
+            background: var(--info-border);
         }
 
         .status-bar-phases .bar-phase-detail {
@@ -2132,7 +2129,7 @@
         }
 
         .status-bar-phases .bar-phase-dot.active {
-            background: var(--primary);
+            background: var(--info);
             color: white;
             animation: pulse 1.5s infinite;
         }
@@ -2349,9 +2346,9 @@
             margin-left: 8px;
             padding: 1px 8px;
             border-radius: var(--radius-full);
-            background: rgba(37, 99, 235, 0.10);
-            border: 1px solid rgba(37, 99, 235, 0.30);
-            color: #2563eb;
+            background: var(--border-light);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
             font-size: 10px;
             font-weight: 600;
             letter-spacing: 0.02em;
@@ -2385,7 +2382,7 @@
             animation: toastSlideIn 0.18s ease-out;
             word-wrap: break-word;
         }
-        .toast.info    { border-left-color: #2563eb; }
+        .toast.info    { border-left-color: var(--info-strong); }
         .toast.success { border-left-color: var(--success-hover); }
         .toast.warn    { border-left-color: #d97706; }
         .toast.error   { border-left-color: #dc2626; }
@@ -10232,7 +10229,7 @@
 
                 const statusEl = document.getElementById('backupRunStatus');
                 statusEl.innerHTML = '<span class="spinner-inline"></span> Restoring...';
-                statusEl.style.color = 'var(--primary)';
+                statusEl.style.color = 'var(--info)';
 
                 try {
                     const formData = new FormData();
