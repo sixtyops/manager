@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SixtyOps</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/static/vendor/fonts/ibm-plex-sans-latin-400.woff2">
+    <link rel="stylesheet" href="/static/fonts.css">
     <script src="/static/vendor/chart.umd.js"></script>
     <script src="/static/vendor/chartjs-plugin-annotation.min.js"></script>
     <style>
@@ -107,7 +109,7 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif;
+            font-family: var(--font-sans);
             background: var(--bg);
             color: var(--text);
             min-height: 100vh;
@@ -520,7 +522,7 @@
         .history-table td { padding:6px 8px; font-size:0.75rem; border-bottom:1px solid var(--border-light,#f3f4f6); vertical-align:middle; }
         .history-table tr:last-child td { border-bottom:none; }
         .history-table .cell-time { font-size:0.7rem; color:var(--text-dim); white-space:nowrap; }
-        .history-table .cell-mono { font-family:var(--font-mono,monospace); font-size:0.73rem; }
+        .history-table .cell-mono { font-family:var(--font-mono); font-size:0.73rem; }
         .history-table .cell-error { color:#dc2626; }
 
         /* History table styles */
@@ -556,7 +558,7 @@
 
         .u-history-row { cursor: pointer; }
         .u-history-row:hover td { background: var(--bg-subtle); }
-        .u-history-cell-mono { font-family: var(--font-mono, monospace); font-size: 0.8rem; }
+        .u-history-cell-mono { font-family: var(--font-mono); font-size: 0.8rem; }
         .u-history-cell-time { font-size: 0.75rem; color: var(--text-dim); white-space: nowrap; }
         .u-history-cell-failed.error { color: #dc2626; }
         .u-history-error { color: #dc2626; font-size: 0.8rem; margin-top: 4px; word-break: break-word; }
@@ -626,7 +628,7 @@
         .updates-row:last-child { border-bottom:none; }
         .updates-row label { cursor:pointer; }
         .updates-label { font-size:0.78rem; font-weight:600; color:var(--text,#111827); }
-        .updates-version { font-size:0.8rem; font-weight:700; color:var(--text,#111827); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+        .updates-version { font-size:0.8rem; font-weight:700; color:var(--text,#111827); font-family:var(--font-mono); }
         .updates-select { font-size:0.72rem; padding:4px 8px; border:1px solid var(--border,#d1d5db); border-radius: var(--radius-md); background:#fff; min-width:160px; }
         .updates-row-actions { background:var(--bg-subtle,#f9fafb); }
         .updates-banner { margin-top:12px; padding:12px 14px; background:#dbeafe; border-radius: var(--radius-lg); }
@@ -662,12 +664,12 @@
         .about-chip { display:inline-flex; align-items:center; font-size:0.78rem; font-weight:700; padding:4px 10px; border-radius: var(--radius-sm); color:#fff; background:#0D9488; line-height:1; }
         .about-version { font-size:0.82rem; font-weight:600; color:var(--text,#111827); letter-spacing:0.01em; }
         .about-meta { font-size:0.72rem; color:var(--text-muted,#6b7280); margin-bottom:10px; }
-        .about-meta code { font-size:0.7rem; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+        .about-meta code { font-size:0.7rem; font-family:var(--font-mono); }
         .about-blurb { font-size:0.75rem; color:var(--text-muted,#6b7280); margin:0 0 16px 0; line-height:1.5; }
         .about-whats-new { margin:0 0 14px 0; padding:12px 14px; border:1px solid var(--border-light,#f3f4f6); border-radius: var(--radius-lg); background:#fff; }
         .about-whats-new-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
         .about-whats-new-title { font-size:0.82rem; font-weight:700; color:var(--text,#111827); }
-        .about-whats-new-version { font-size:0.72rem; font-weight:700; color:var(--text-muted,#6b7280); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; white-space:nowrap; }
+        .about-whats-new-version { font-size:0.72rem; font-weight:700; color:var(--text-muted,#6b7280); font-family:var(--font-mono); white-space:nowrap; }
         .about-whats-new-body { font-size:0.74rem; color:var(--text-muted,#6b7280); line-height:1.45; }
         .about-whats-new-body .release-notes-content { margin-top:0; max-height:160px; }
         .about-support { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 14px; border:1px solid #FCD34D; border-radius: var(--radius-lg); background:linear-gradient(135deg,#FFF7CC 0%,#FFFDF4 100%); flex-wrap:wrap; }
@@ -776,7 +778,7 @@
 
         .discovery-form textarea {
             min-height: 80px;
-            font-family: monospace;
+            font-family: var(--font-mono);
             resize: vertical;
         }
 
@@ -1152,7 +1154,7 @@
         .version-banks {
             font-size: 0.7rem;
             color: var(--text-dim);
-            font-family: monospace;
+            font-family: var(--font-mono);
         }
 
         /* Status column */
@@ -1570,7 +1572,7 @@
         .diff-line-del { background: #fee2e2; color: #991b1b; }
         .diff-line-hunk { color: #6b7280; font-style: italic; }
         .diff-line-meta { color: #6b7280; font-weight: 600; }
-        .diff-pre { font-size: 0.68rem; margin: 0; padding: 12px; background: var(--bg-subtle); border-radius: var(--radius-md); overflow: auto; max-height: 60vh; white-space: pre; font-family: monospace; }
+        .diff-pre { font-size: 0.68rem; margin: 0; padding: 12px; background: var(--bg-subtle); border-radius: var(--radius-md); overflow: auto; max-height: 60vh; white-space: pre; font-family: var(--font-mono); }
         .diff-select-cb { width: 14px; height: 14px; cursor: pointer; accent-color: var(--brand); }
 
         .config-section {
@@ -1805,7 +1807,7 @@
             border: 1px solid transparent;
             border-radius: var(--radius-sm);
             color: var(--text-subtle);
-            font-family: monospace;
+            font-family: var(--font-mono);
             font-size: 0.72rem;
             cursor: pointer;
             transition: all var(--tr-fast);
@@ -1819,7 +1821,7 @@
            affordance — not a hidden right-click — matching the app's delete UX. */
         .drawer-fw-del {
             margin-left: 2px;
-            font-family: sans-serif;
+            font-family: var(--font-sans);
             font-weight: 700;
             line-height: 1;
             color: var(--text-muted);
@@ -2356,7 +2358,7 @@
             font-weight: 600;
             letter-spacing: 0.02em;
             white-space: nowrap;
-            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-family: var(--font-mono);
         }
 
         /* Toast notifications */
@@ -3208,7 +3210,7 @@
                         <div class="config-section" id="cfgSection-custom">
                             <div class="config-section-header"><button class="toggle-sm not-saved" title="Save this section first" id="cfgToggle-custom" type="button" data-category="custom" onclick="toggleConfigEnabled(this);event.stopPropagation();"></button><span>Custom JSON</span><span class="config-section-status" id="cfgStatus-custom"></span><button class="cfg-save-btn" data-min-role="operator" id="cfgSave-custom" onclick="saveConfigSection('custom');event.stopPropagation();">Save</button></div>
                             <div class="config-section-body">
-                                <textarea id="cfgCustomJson" name="cfgCustomJson" aria-label="Custom JSON config" rows="5" placeholder='{"services": {"ssh": {"enabled": true}}}' style="width:100%;font-family:monospace;font-size:var(--text-sm);"></textarea>
+                                <textarea id="cfgCustomJson" name="cfgCustomJson" aria-label="Custom JSON config" rows="5" placeholder='{"services": {"ssh": {"enabled": true}}}' style="width:100%;font-family:var(--font-mono);font-size:var(--text-sm);"></textarea>
                             </div>
                         </div>
                     </div>

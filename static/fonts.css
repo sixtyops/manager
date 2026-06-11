@@ -1,0 +1,39 @@
+/* IBM Plex Sans / Mono — vendored (SIL OFL 1.1, see vendor/fonts/OFL.txt).
+   Self-hosted so the UI never depends on a font CDN. font-display: swap
+   keeps text visible on the system stack while these load. */
+
+@font-face {
+    font-family: 'IBM Plex Sans';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/static/vendor/fonts/ibm-plex-sans-latin-400.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'IBM Plex Sans';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('/static/vendor/fonts/ibm-plex-sans-latin-500.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'IBM Plex Sans';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('/static/vendor/fonts/ibm-plex-sans-latin-600.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'IBM Plex Mono';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/static/vendor/fonts/ibm-plex-mono-latin-400.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'IBM Plex Mono';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('/static/vendor/fonts/ibm-plex-mono-latin-500.woff2') format('woff2');
+}
