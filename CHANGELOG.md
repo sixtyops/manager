@@ -11,6 +11,16 @@ All notable changes to this project are documented in this file.
   the host. Existing releases stay installable, so rollback still works and no
   deployment is left stranded. (See `docs/self-update-signing.md`.)
 
+### Fixed
+- **Backups can now actually be restored onto a new machine.** The automatic
+  backup now includes the security key that unlocks saved device passwords, so
+  restoring onto a fresh host brings back a manager that can reach your devices —
+  previously the key was left behind and every saved password came back
+  unreadable, with no warning. Because backups now contain that key, the setup
+  screens say plainly to treat each backup as sensitive and send it only to an
+  SFTP location you control. (Older backups without the key still restore the
+  database.)
+
 ### Added
 - Rollouts now **skip the canary step when the firmware is already proven on
   your fleet.** If healthy same-model devices are already running the target

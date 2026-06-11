@@ -41,9 +41,12 @@
         {% endif %}
 
         <div class="info-message">
-            Backups include the database, settings, device inventory, and device configurations.
-            Archives are uploaded as timestamped .tar.gz files to your SFTP server.
-            Firmware files are not included due to size.
+            Backups include everything needed to fully restore this manager: the
+            database, your settings, the device inventory, and the security key
+            that unlocks saved device passwords. Because they contain that key,
+            treat each backup as sensitive and send it only to an SFTP location
+            you control. Archives are timestamped .tar.gz files; firmware files
+            are not included due to size.
         </div>
 
         <div class="error-message {{ 'visible' if error else '' }}">
