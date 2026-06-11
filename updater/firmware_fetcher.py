@@ -207,19 +207,33 @@ class FirmwareFetcher:
                     # Track as auto-fetched even if already present
                     if release.filename not in auto_fetched:
                         auto_fetched.append(release.filename)
-                    # Ensure registered (idempotent). Backfill the SHA256 once
-                    # for firmware fetched before hashing existed so it too gets
-                    # the pre-flash integrity re-check; never re-hash a file that
-                    # already has one. (COALESCE in register_firmware keeps the
-                    # no-hash re-register from erasing a stored hash either way.)
-                    if db.get_firmware_sha256(release.filename) is None:
-                        db.register_firmware(
-                            release.filename, source="auto",
-                            sha256=await self._hash_file(filepath),
-                        )
-                    else:
+                    if db.get_firmware_sha256(release.filename) is not None:
+                        # Already fingerprinted on a prior cycle; re-register is
+                        # a no-op for the hash (COALESCE preserves it).
                         db.register_firmware(release.filename, source="auto")
-                    continue
+                        continue
+                    # No stored hash yet — fingerprint the on-disk file so it
+                    # too gets the pre-flash integrity re-check. But an existing
+                    # file can't be trusted on faith: a partial/corrupt download
+                    # left by an older build (or fetched while the page listed no
+                    # MD5) must be verified against the vendor checksum before we
+                    # store its hash, or the pre-flash check would just compare
+                    # the bad file to its own bad hash and pass. On mismatch,
+                    # discard it and fall through to re-download + verify.
+                    file_md5, file_sha256 = await self._hash_existing_file(filepath)
+                    if release.md5 and file_md5 and file_md5.lower() != release.md5.lower():
+                        logger.error(
+                            f"On-disk {release.filename} fails the vendor MD5 "
+                            f"(expected {release.md5}, got {file_md5}) — discarding "
+                            "and re-downloading"
+                        )
+                        filepath.unlink(missing_ok=True)
+                        # fall through to the download path below (no continue)
+                    else:
+                        db.register_firmware(
+                            release.filename, source="auto", sha256=file_sha256,
+                        )
+                        continue
 
                 success, sha256 = await self._download_firmware(release)
                 if success:
@@ -481,25 +495,30 @@ class FirmwareFetcher:
                 tmp_path.unlink()
             return False, None
 
-    async def _hash_file(self, filepath: Path) -> Optional[str]:
-        """SHA256 a file already on disk, off the event loop.
+    async def _hash_existing_file(
+        self, filepath: Path
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Return (md5, sha256) for a file already on disk, off the event loop.
 
         Mirrors the pre-flash integrity hash in app.py (1 MB blocks in an
-        executor). Used to backfill a hash for firmware fetched before hashing
-        existed. Returns None if the file vanished mid-check (e.g. operator
-        cleanup) so the caller registers without a hash rather than crashing
-        the check loop.
+        executor), computing both digests in a single read pass: the MD5 lets
+        the caller re-verify an existing file against the vendor checksum before
+        trusting it, and the SHA256 is what the pre-flash check stores. Returns
+        (None, None) if the file vanished mid-read (e.g. operator cleanup) so
+        the caller proceeds without crashing the check loop.
         """
-        def _hash() -> str:
-            h = hashlib.sha256()
+        def _hash() -> tuple[str, str]:
+            md5 = hashlib.md5()
+            sha256 = hashlib.sha256()
             with open(filepath, "rb") as fh:
                 for block in iter(lambda: fh.read(1024 * 1024), b""):
-                    h.update(block)
-            return h.hexdigest()
+                    md5.update(block)
+                    sha256.update(block)
+            return md5.hexdigest(), sha256.hexdigest()
         try:
             return await asyncio.get_event_loop().run_in_executor(None, _hash)
         except FileNotFoundError:
-            return None
+            return None, None
 
     def _auto_select(self, platform: str, releases: list[FirmwareRelease],
                      beta_enabled: bool):

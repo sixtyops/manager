@@ -485,7 +485,8 @@ class TestDownloadIntegrity:
 class TestCheckAndDownloadHashing:
     """check_and_download stores a SHA256 for auto-fetched firmware so the
     pre-flash integrity check (skipped when no hash is stored) also covers
-    auto files — both on fresh download and by backfilling existing files."""
+    auto files — on fresh download, and for an existing file only after it
+    passes the vendor MD5 (or when no MD5 is published)."""
 
     BETA = "tna-30x-1.15.0-r55151-20260609-tn-110-prs-squashfs-sysupgrade.bin"
 
@@ -493,12 +494,11 @@ class TestCheckAndDownloadHashing:
     def fetcher(self, tmp_path):
         return FirmwareFetcher(firmware_dir=tmp_path, broadcast_func=AsyncMock())
 
-    def _release(self):
+    def _release(self, md5="ea3e1c6f657ec8dc5624feabd1ce40ff"):
         return FirmwareRelease(
             platform="tna-30x", version="1.15.0",
             download_url=f"https://tachyon-networks.com/fw/{self.BETA}",
-            channel="beta", filename=self.BETA,
-            md5="ea3e1c6f657ec8dc5624feabd1ce40ff",
+            channel="beta", filename=self.BETA, md5=md5,
         )
 
     def _scrape_only_30x(self, release):
@@ -522,18 +522,60 @@ class TestCheckAndDownloadHashing:
 
         assert db.get_firmware_sha256(self.BETA) == sha
 
-    def test_backfills_sha256_for_existing_unhashed_file(self, fetcher, tmp_path, mock_db):
+    def test_backfills_sha256_when_no_vendor_md5(self, fetcher, tmp_path, mock_db):
+        # No published MD5 (fail-open): an existing file is backfilled from its
+        # local bytes so it still gets the pre-flash re-check.
         body = b"already-on-disk-firmware"
         (tmp_path / self.BETA).write_bytes(body)
         db.register_firmware(self.BETA, source="auto")  # pre-feature: no hash
         assert db.get_firmware_sha256(self.BETA) is None
 
-        rel = self._release()
+        rel = self._release(md5=None)
         with patch.object(fetcher, "_scrape_page",
                           AsyncMock(side_effect=self._scrape_only_30x(rel))):
             asyncio.run(fetcher.check_and_download())
 
         assert db.get_firmware_sha256(self.BETA) == hashlib.sha256(body).hexdigest()
+
+    def test_existing_file_matching_vendor_md5_is_trusted(self, fetcher, tmp_path, mock_db):
+        # Existing file whose bytes match the vendor MD5 → trusted, SHA256
+        # stored, never re-downloaded.
+        body = b"the-real-firmware-bytes"
+        (tmp_path / self.BETA).write_bytes(body)
+        db.register_firmware(self.BETA, source="auto")  # no hash yet
+        rel = self._release(md5=hashlib.md5(body).hexdigest())
+
+        with patch.object(fetcher, "_scrape_page",
+                          AsyncMock(side_effect=self._scrape_only_30x(rel))), \
+             patch.object(fetcher, "_download_firmware", AsyncMock()) as dl:
+            asyncio.run(fetcher.check_and_download())
+
+        dl.assert_not_awaited()
+        assert db.get_firmware_sha256(self.BETA) == hashlib.sha256(body).hexdigest()
+
+    def test_existing_file_failing_vendor_md5_is_discarded_and_redownloaded(
+        self, fetcher, tmp_path, mock_db
+    ):
+        # A pre-existing partial/corrupt file (no stored hash) must NOT be
+        # trusted on faith: it fails the vendor MD5, so it's discarded and
+        # re-downloaded + verified, and the GOOD file's hash is what is stored.
+        (tmp_path / self.BETA).write_bytes(b"corrupt-partial-bytes")
+        db.register_firmware(self.BETA, source="auto")  # no hash yet
+        rel = self._release()  # md5=ea3e..., does NOT match the corrupt bytes
+        good_sha = "c" * 64
+
+        async def fake_dl(release):
+            (tmp_path / release.filename).write_bytes(b"good-firmware")
+            return True, good_sha
+
+        with patch.object(fetcher, "_scrape_page",
+                          AsyncMock(side_effect=self._scrape_only_30x(rel))), \
+             patch.object(fetcher, "_download_firmware", AsyncMock(side_effect=fake_dl)) as dl:
+            asyncio.run(fetcher.check_and_download())
+
+        dl.assert_awaited_once()  # re-fetched instead of trusting the bad file
+        assert (tmp_path / self.BETA).read_bytes() == b"good-firmware"
+        assert db.get_firmware_sha256(self.BETA) == good_sha
 
     def test_existing_hash_survives_recheck(self, fetcher, tmp_path, mock_db):
         # The 24h re-register of an already-present file must not erase its hash
