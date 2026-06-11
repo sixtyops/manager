@@ -2827,7 +2827,7 @@
                 <div class="sh-toggle-wrap">
                     <div class="sh-segmented" role="tablist">
                         <span class="climate-menu-wrap">
-                            <button class="sh-view-tab active" data-view="rain" role="tab" aria-haspopup="true" title="Rain Fade view — click again to choose the climate zone">
+                            <button class="sh-view-tab active" data-view="rain" role="tab" aria-haspopup="true" title="Rain Fade view. Click again to choose the climate zone">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 13v8M12 15v6M8 13v8M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"/></svg>
                                 <span class="seg-label">Rain fade</span>
                                 <span class="seg-climate"><span id="climateLabel"></span><svg class="caret" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4.5 L6 7.5 L9 4.5"/></svg></span>
@@ -2958,7 +2958,7 @@
                     <span class="status-badge" id="configEnforceStatusBadge" style="display:none;"></span>
                     <span id="configEnforceAtLabel" class="u-text-xxs-dim" style="display:none;">daily at</span>
                     <select id="configEnforceHour" name="configEnforceHour" class="u-w-64" style="display:none;font-size:var(--text-xs);"
-                            title="Daily enforce time — checks compliance and pushes corrections to non-compliant devices" aria-label="Daily enforce hour"
+                            title="Daily enforce time: checks compliance and pushes corrections to non-compliant devices" aria-label="Daily enforce hour"
                             onchange="updateEnforceHour(this.value)" onclick="event.stopPropagation();"
                             data-min-role-disable="operator"></select>
                 </div>
@@ -3781,7 +3781,7 @@
                                 <option value="open">Accept any device with correct secret</option>
                                 <option value="restricted">Restrict to inventory + manual overrides</option>
                             </select>
-                            <span class="u-text-xxs-muted">IPs are spoofable — the shared secret is the real gate.</span>
+                            <span class="u-text-xxs-muted">IPs are spoofable. The shared secret is the real gate.</span>
                         </div>
                     </div>
 
@@ -3808,7 +3808,7 @@
                         <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:4px;">
                             <h5 class="settings-section-title" style="margin:0;">Manual Client Overrides</h5>
                         </div>
-                        <p class="u-note-inline" style="margin:0 0 8px 0;">Allow RADIUS requests from devices not tracked in inventory (e.g. a whole subnet). By default, any device presenting the correct shared secret is accepted — overrides are only needed when <em>Client Policy</em> is set to restricted.</p>
+                        <p class="u-note-inline" style="margin:0 0 8px 0;">Allow RADIUS requests from devices not tracked in inventory (e.g. a whole subnet). By default, any device presenting the correct shared secret is accepted. Overrides are only needed when <em>Client Policy</em> is set to restricted.</p>
                         <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 80px auto;gap:8px;align-items:end;">
                             <div>
                                 <label class="u-label-compact" for="radiusClientSpec">IP or CIDR</label>
@@ -3852,7 +3852,7 @@
                 </div>
                 <p class="about-blurb">
                     Source-available firmware management for Tachyon wireless networks. All features are unlocked.
-                    Features marked <span class="danger-badge">DANGEROUS</span> involve untested or high-impact operations — use with care.
+                    Features marked <span class="danger-badge">DANGEROUS</span> involve untested or high-impact operations. Use with care.
                 </p>
                 <div class="about-whats-new">
                     <div class="about-whats-new-head">
@@ -3994,7 +3994,7 @@
         }
 
         async function readSaveError(resp, fallback) {
-            if (resp.status === 403) return 'Read-only access — ask an admin';
+            if (resp.status === 403) return 'Read-only access: ask an admin';
             try {
                 const err = await resp.json();
                 return err.detail || fallback || 'Save failed';
@@ -5415,7 +5415,7 @@
                 return loadingDotsHtml;
             }
             if (parentApOffline) {
-                return '<span class="status-icon-cell offline" title="Stale — parent AP unreachable"></span>';
+                return '<span class="status-icon-cell offline" title="Stale: parent AP unreachable"></span>';
             }
             if (isOffline) {
                 return '<span class="status-icon-cell offline" title="Offline"></span>';
@@ -5459,10 +5459,10 @@
                 if (autoUpdateEnabled) {
                     const next = nextAttemptTooltip(ip);
                     title = next
-                        ? `${next} \u2014 click to update now`
-                        : 'Auto-update scheduled \u2013 click to update now';
+                        ? `${next} \u00b7 click to update now`
+                        : 'Auto-update scheduled \u00b7 click to update now';
                 } else {
-                    title = 'Update available \u2013 click to update now';
+                    title = 'Update available \u00b7 click to update now';
                 }
                 const cls = autoUpdateEnabled ? 'scheduled' : 'behind';
                 return `<button class="update-action ${cls}" title="${escapeHtml(title)}" onclick="triggerUpdate('${type}','${ip}');event.stopPropagation();">&#8593;</button>`;
@@ -5582,7 +5582,7 @@
                 const allCurrent = aps.length > 0 && aps.every(ap => versionStatus(ap.ip) === 'current');
                 return allCurrent ? '<span class="status-current" title="All current">&#10003;</span>' : '';
             }
-            const title = autoUpdateEnabled ? 'Auto-update scheduled \u2013 click to update now' : 'Update available \u2013 click to update now';
+            const title = autoUpdateEnabled ? 'Auto-update scheduled \u00b7 click to update now' : 'Update available \u00b7 click to update now';
             const cls = autoUpdateEnabled ? 'scheduled' : 'behind';
             return `<button class="update-action ${cls}" title="${title}" onclick="triggerUpdate('site','${siteId}');event.stopPropagation();">&#8593;</button>`;
         }
@@ -6254,13 +6254,13 @@
                 mark99: {
                     type: 'line', yMin: z.r999, yMax: z.r999,
                     borderColor: 'rgba(239,68,68,0.55)', borderWidth: 1.5, borderDash: [3,3],
-                    label: { display: true, content: '99.9% \u2014 ' + z.r999 + ' mm/hr', color: '#991b1b',
+                    label: { display: true, content: '99.9%: ' + z.r999 + ' mm/hr', color: '#991b1b',
                              position: 'end', backgroundColor: 'rgba(255,255,255,.92)', font: { size: 10 }, padding: 4, yAdjust: -8 },
                 },
                 mark9999: {
                     type: 'line', yMin: z.r9999, yMax: z.r9999,
                     borderColor: 'rgba(16,185,129,0.7)', borderWidth: 1.5, borderDash: [3,3],
-                    label: { display: true, content: '99.99% storm \u2014 ' + z.r9999 + ' mm/hr', color: '#047857',
+                    label: { display: true, content: '99.99% storm: ' + z.r9999 + ' mm/hr', color: '#047857',
                              position: 'end', backgroundColor: 'rgba(255,255,255,.92)', font: { size: 10 }, padding: 4, yAdjust: 8 },
                 },
             };
@@ -6488,7 +6488,7 @@
                 if (orphan) orphan.destroy();
                 shHoveredCpe = null; _shLastTooltipCpe = null; shHideCpop();
                 const { titleSuffix } = shCollectCpes();
-                tEl.textContent = shView === 'rain' ? 'Rain Fade Tolerance' : ('Signal vs Distance \u2014 ' + titleSuffix);
+                tEl.textContent = shView === 'rain' ? 'Rain Fade Tolerance' : ('Signal vs Distance \u00b7 ' + titleSuffix);
                 const cfg = shView === 'rain' ? shBuildRainChart() : shBuildDistanceChart();
                 chart = new Chart(document.getElementById('signalChart').getContext('2d'), cfg);
                 if (shView === 'distance') {
@@ -7792,7 +7792,7 @@
 
         function prefillBuiltinRadiusConfig() {
             if (!builtinRadiusSummary || !builtinRadiusSummary.enabled) {
-                showToast('Built-in RADIUS is not enabled — opening settings\u2026');
+                showToast('Built-in RADIUS is not enabled. Opening settings\u2026');
                 openAppSettingsModal('radius', 'server');
                 return;
             }
@@ -8245,7 +8245,7 @@
                     const d = new Date(result.last_check.endsWith('Z') ? result.last_check : result.last_check + 'Z');
                     const stamp = d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                     if (result.last_check_error) {
-                        statusEl.textContent = 'Last check ' + stamp + ' — failed: ' + result.last_check_error;
+                        statusEl.textContent = 'Last check ' + stamp + ' failed: ' + result.last_check_error;
                         statusEl.style.color = '#b91c1c';
                     } else {
                         statusEl.textContent = 'Last check: ' + stamp;
@@ -9769,7 +9769,7 @@
             let html = '';
             const hasBeta = drawerFwFiles.some(f => f.channel === 'beta');
             if (drawerBetaEnabled && !hasBeta) {
-                html += `<div style="margin-bottom:8px;font-size:11px;color:var(--text-muted);font-style:italic;">No current beta firmware available — using latest stable.</div>`;
+                html += `<div style="margin-bottom:8px;font-size:11px;color:var(--text-muted);font-style:italic;">No current beta firmware available. Using latest stable.</div>`;
             }
             for (const type of typeOrder) {
                 if (!groups[type] || groups[type].length === 0) continue;
@@ -9802,7 +9802,7 @@
                         html += `<span class="drawer-fw-quarantine-label">${qLabel}</span>`;
                     }
                     if (f.incomplete) {
-                        html += `<span class="drawer-fw-warn" title="Looks incomplete — much smaller than the other firmware for this model, likely a truncated download. Re-download or remove it.">&#9888; incomplete</span>`;
+                        html += `<span class="drawer-fw-warn" title="Looks incomplete: much smaller than the other firmware for this model, likely a truncated download. Re-download or remove it.">&#9888; incomplete</span>`;
                     } else if (f.duplicate) {
                         html += `<span class="drawer-fw-dup" title="Another file with the same version is already on disk.">dup</span>`;
                     }
@@ -9831,7 +9831,7 @@
             const label = fwVersionLabel(filename);
             const isActiveTarget = drawerFwActive[type] === filename;
             const msg = isActiveTarget
-                ? `Remove firmware ${label}?\n\nThis is the version this model currently updates to — removing it switches the model to the next available version. Devices already running it are unaffected.`
+                ? `Remove firmware ${label}?\n\nThis is the version this model currently updates to. Removing it switches the model to the next available version. Devices already running it are unaffected.`
                 : `Remove firmware ${label}?\n\nThis deletes the file from the manager. Devices already running it are unaffected.`;
             if (!await showConfirmDialog(
                 msg,
@@ -10726,7 +10726,7 @@
                     const allowed = Array.isArray(s.allowed_device_types)
                         ? s.allowed_device_types.join(', ')
                         : (s.allowed_device_types || 'unspecified');
-                    return `<li><strong>${escapeHtml(s.template_name)}</strong> — restricted to <code>${escapeHtml(allowed)}</code></li>`;
+                    return `<li><strong>${escapeHtml(s.template_name)}</strong>: restricted to <code>${escapeHtml(allowed)}</code></li>`;
                 }).join('');
                 skippedHtml = `
                     <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.4);padding:8px 12px;border-radius:6px;margin-bottom:8px;">
@@ -10745,7 +10745,7 @@
                     else diffHtml += `<div>${escaped}</div>`;
                 }
             } else {
-                diffHtml = '<div style="color:var(--text-dim);padding:8px;">No diff — every template was filtered out for this device type.</div>';
+                diffHtml = '<div style="color:var(--text-dim);padding:8px;">No diff: every template was filtered out for this device type.</div>';
             }
             const overlay = document.createElement('div');
             overlay.className = 'backup-overlay open';
@@ -10781,7 +10781,7 @@
                 let { resp, body } = await doRollback(false);
                 if (resp.status === 409 && body.detail && body.detail.code === 'safety_snapshot_failed') {
                     const proceed = await showConfirmDialog(
-                        body.detail.message + '\n\nProceeding will roll back without a safety net — you will not be able to undo this rollback automatically.',
+                        body.detail.message + '\n\nProceeding will roll back without a safety net. You will not be able to undo this rollback automatically.',
                         { title: 'Safety Snapshot Failed', confirmText: 'Force Rollback', danger: true }
                     );
                     if (!proceed) return;
@@ -10815,7 +10815,7 @@
                 const data = await resp.json();
                 const skippedCount = Array.isArray(data.skipped_templates) ? data.skipped_templates.length : 0;
                 if (!data.changed && skippedCount === 0) {
-                    showToast('No changes — device config already matches all enabled policies.');
+                    showToast('No changes: device config already matches all enabled policies.');
                     return;
                 }
                 showDiffModal(ip + ' (merge preview)', data);
@@ -10846,7 +10846,7 @@
                 const bad = total - ok;
                 const polled = data.polled || 0;
                 if (total === 0) {
-                    showToast(`Polled ${polled} device(s) but no configs were returned — check device reachability and credentials.`, 'warn', 5000);
+                    showToast(`Polled ${polled} device(s) but no configs were returned. Check device reachability and credentials.`, 'warn', 5000);
                 } else {
                     const kind = bad === 0 ? 'success' : 'warn';
                     showToast(`Compliance: ${ok} compliant, ${bad} non-compliant (${total} devices)`, kind, 4000);
@@ -11138,7 +11138,7 @@
             // hash. Brand-new rows fall back to the original "password"
             // placeholder.
             const hasStored = !!(userData && userData.has_stored_password);
-            const passPlaceholder = hasStored ? '(unchanged — leave blank)' : 'password';
+            const passPlaceholder = hasStored ? '(unchanged, leave blank)' : 'password';
             row.innerHTML = `
                 <div>
                     <label>Username
@@ -11588,7 +11588,7 @@
                 const data = await resp.json();
                 const skippedCount = Array.isArray(data.skipped_templates) ? data.skipped_templates.length : 0;
                 if (!data.changed && skippedCount === 0) {
-                    showToast('No changes for ' + previewIp + ' — config already matches.');
+                    showToast('No changes for ' + previewIp + '. Config already matches.');
                     return;
                 }
                 showDiffModal(previewIp + ' (preview)', data);
@@ -12124,7 +12124,7 @@
                 panel.innerHTML = entries.map(e => {
                     const time = e.enforced_at ? new Date(e.enforced_at).toLocaleString() : '';
                     const dotCls = e.status === 'success' ? 'success' : 'failed';
-                    const errorText = e.error ? ` — ${escapeHtml(e.error).substring(0, 60)}` : '';
+                    const errorText = e.error ? `: ${escapeHtml(e.error).substring(0, 60)}` : '';
                     const fullError = e.error ? escapeHtml(e.error) : '';
                     return `<div class="enforce-log-entry">
                         <span class="enforce-log-dot ${dotCls}"></span>
