@@ -16,8 +16,18 @@ trust model: [self-update-signing.md](self-update-signing.md).
 
 - Import the release signing key (fingerprint
   `E2C19E86B24A87283068AEFAF2D6F70883960DCE`) into your gpg keyring.
-- Add `export GPG_TTY=$(tty)` to your shell rc — without it the passphrase
-  prompt fails with "Inappropriate ioctl for device".
+- Give gpg a passphrase prompt that works where you cut releases:
+  - **Interactive terminal:** add `export GPG_TTY=$(tty)` to your shell rc —
+    without it the prompt fails with "Inappropriate ioctl for device".
+  - **macOS, including non-interactive shells** (agent sessions and scripts
+    have no tty, so terminal pinentry can't prompt and signing just fails):
+    ```bash
+    brew install pinentry-mac
+    echo "pinentry-program $(brew --prefix)/bin/pinentry-mac" >> ~/.gnupg/gpg-agent.conf
+    gpgconf --kill gpg-agent
+    ```
+    The passphrase dialog pops on the desktop — someone must be at the
+    machine to enter it.
 
 ## Dev release (`vX.Y.Z-devN`)
 
