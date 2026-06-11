@@ -23,7 +23,7 @@
 }
 
 .progress-dot.active {
-    background: #3b82f6;
+    background: var(--primary);
 }
 
 .progress-dot.completed {
@@ -135,11 +135,11 @@
     display: block;
     text-align: center;
     margin-top: 16px;
-    color: #2563eb;
+    color: var(--primary);
     font-size: 0.85rem;
     text-decoration: none;
 }
 
 .back-link:hover {
-    color: #1d4ed8;
+    color: var(--primary-hover);
 }

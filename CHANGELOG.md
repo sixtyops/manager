@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Changed
+- **Refreshed dashboard look.** IBM Plex typeface (self-hosted, no CDN), a
+  single teal accent matching the SixtyOps brand, clearer keyboard-focus
+  outlines, and consistent status colors — blue now always means "scheduled
+  or in progress", never a button. Numbers in tables no longer shift as
+  they update.
+
 ### Security
 - **App updates are now signature-verified.** Every manager release from v1.4.0
   onward is a signed release, and the manager **refuses to install an update that

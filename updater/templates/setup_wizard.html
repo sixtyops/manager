@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Setup Wizard - SixtyOps</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="stylesheet" href="/static/fonts.css">
     <link rel="stylesheet" href="/static/common.css">
     <link rel="stylesheet" href="/static/setup_pages.css">
 </head>
@@ -48,8 +49,8 @@
             <div id="letsencrypt-fields" class="conditional-field">
                 <div style="margin-bottom: 12px; font-size: 0.8rem; color: #64748b;">
                     This uses HTTP-01 validation, which requires port 80 to be reachable from the internet.
-                    For private networks, consider using certbot with DNS-01 validation instead &mdash;
-                    it works without any inbound internet access.
+                    For private networks, consider using certbot with DNS-01 validation instead.
+                    It works without any inbound internet access.
                 </div>
                 <div class="form-group">
                     <label for="ssl_domain">Domain Name</label>
@@ -82,9 +83,9 @@
 
         <div class="info-message">
             Back up to an SFTP server you control. Backups run daily at 5 AM and
-            include everything needed to fully restore this manager — the
+            include everything needed to fully restore this manager: the
             database, settings, device inventory, and the security key that
-            unlocks saved device passwords — so treat each backup as sensitive.
+            unlocks saved device passwords. Treat each backup as sensitive.
         </div>
 
         <div class="error-message {{ 'visible' if error else '' }}">
