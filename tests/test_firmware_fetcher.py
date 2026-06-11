@@ -1,6 +1,7 @@
 """Tests for the Freshdesk release-page parser used by the firmware fetcher."""
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,8 +12,10 @@ from updater import database as db
 from updater.firmware_fetcher import (
     FirmwareFetcher,
     FirmwareRelease,
+    RE_TABLE_MD5,
     RE_VERSION_TABLE,
     _normalize_version,
+    _parse_table_md5s,
 )
 
 
@@ -63,34 +66,89 @@ class TestVersionTableRegex:
         assert RE_VERSION_TABLE.findall(html) == [("Latest stable", "1.12.3")]
 
 
-# Captured shape of the tna-30x Freshdesk page (2026-05-29): the beta
-# version cell contains a stray leading dot which broke the parser.
+class TestTableMd5:
+    """Vendor-MD5 parsing reads the summary-table cells only — never the
+    inline 'MD5: <hash>' notes in the release-notes body — and never binds a
+    hash to another row's version."""
+
+    def test_extracts_pairs_from_summary_table(self):
+        md5s = _parse_table_md5s(TNA_30X_HTML)
+        assert md5s["1.12.3"] == "883fa6b688eb017b3ac56f1300f0cad0"
+        assert md5s["1.15.0"] == "ea3e1c6f657ec8dc5624feabd1ce40ff"
+
+    def test_ignores_inline_body_md5_notes(self):
+        # The body carries a beta-1 MD5 (fa3f...) only as an <em>MD5: ...</em>
+        # note outside any <table>; table-scoping must drop it.
+        md5s = _parse_table_md5s(TNA_30X_HTML)
+        assert "fa3f7eb2d0e622e3ae4e9a829051ef33" not in md5s.values()
+
+    def test_lowercases_hash(self):
+        html = "<table><tr><td>v2.0.0</td><td>ABCDEF0123456789ABCDEF0123456789</td></tr></table>"
+        assert _parse_table_md5s(html) == {"2.0.0": "abcdef0123456789abcdef0123456789"}
+
+    def test_does_not_cross_row_boundary(self):
+        # Version in row 1, 32-hex in row 2 → must NOT pair (tempered </tr>).
+        html = (
+            "<table>"
+            "<tr><td>v1.0.0</td></tr>"
+            "<tr><td>deadbeefdeadbeefdeadbeefdeadbeef</td></tr>"
+            "</table>"
+        )
+        assert _parse_table_md5s(html) == {}
+
+    def test_no_table_returns_empty(self):
+        assert _parse_table_md5s("<p>no tables here, just v1.2.3 prose</p>") == {}
+
+    def test_first_table_match_wins(self):
+        html = (
+            "<table><tr><td>v1.0.0</td><td>" + "a" * 32 + "</td></tr></table>"
+            "<table><tr><td>v1.0.0</td><td>" + "b" * 32 + "</td></tr></table>"
+        )
+        assert _parse_table_md5s(html)["1.0.0"] == "a" * 32
+
+
+# Captured shape of the tna-30x Freshdesk page (2026-06-10): the summary table
+# gained an MD5 column (Type | File | Release date | MD5), with the version in
+# the File cell's <a> text. The beta File cell still renders the version with a
+# stray leading dot ("v.1.15.0"). The page ALSO repeats each MD5 as an inline
+# "MD5: <hash>" note in the release-notes body — _parse_table_md5s must read the
+# table cells, not those notes (the beta-1 hash below only appears as a note).
 TNA_30X_HTML = """
-<table>
+<table style="width: 93%;"><tbody>
+  <tr>
+    <td><strong>Type</strong></td><td><strong>File</strong></td>
+    <td><strong>Release date</strong></td><td><strong>MD5</strong></td>
+  </tr>
   <tr>
     <td><strong>Latest stable</strong></td>
-    <td>v1.12.3 - notes</td>
+    <td>&nbsp;<a href="https://tachyon-networks.com/fw/tna-30x/1.12.3/tna-30x-1.12.3-r55002-20260219-tn-110-prs-squashfs-sysupgrade.bin">v1.12.3</a></td>
+    <td>Feb 23, 2026</td>
+    <td>883fa6b688eb017b3ac56f1300f0cad0</td>
   </tr>
   <tr>
     <td><strong>Latest beta</strong></td>
-    <td>v.1.15.0 beta-1 - notes</td>
+    <td>&nbsp;<a href="https://tachyon-networks.com/fw/tna-30x/1.15.0/tna-30x-1.15.0-r55151-20260609-tn-110-prs-squashfs-sysupgrade.bin" rel="noopener noreferrer" target="_blank">v.1.15.0</a> <strong>(beta-2)</strong></td>
+    <td>June 9, 2026</td>
+    <td>ea3e1c6f657ec8dc5624feabd1ce40ff</td>
   </tr>
-</table>
+</tbody></table>
 <p>
-  <a href="https://tachyon-networks.com/fw/tna-30x-1.15.0-r55142-20260521-tn-110-prs-squashfs-sysupgrade.bin">
-    Version 1.15.0&nbsp;beta-1
+  <a href="https://tachyon-networks.com/fw/tna-30x/1.15.0/tna-30x-1.15.0-r55151-20260609-tn-110-prs-squashfs-sysupgrade.bin">
+    Version 1.15.0&nbsp;beta-2
   </a>
 </p>
+<p dir="ltr"><br><em>MD5: ea3e1c6f657ec8dc5624feabd1ce40ff (beta-2)</em></p>
 <p>
-  <a href="https://tachyon-networks.com/fw/tna-30x-1.12.3-r55002-20260219-tn-110-prs-squashfs-sysupgrade.bin">
+  <a href="https://tachyon-networks.com/fw/tna-30x/1.12.3/tna-30x-1.12.3-r55002-20260219-tn-110-prs-squashfs-sysupgrade.bin">
     Version 1.12.3
   </a>
 </p>
 <p>
-  <a href="https://tachyon-networks.com/fw/tna-30x-1.12.2-r54944-20250828-squashfs-sysupgrade.bin">
+  <a href="https://tachyon-networks.com/fw/tna-30x/1.12.2/tna-30x-1.12.2-r54944-20250828-squashfs-sysupgrade.bin">
     Version 1.12.2
   </a>
 </p>
+<p dir="ltr"><br><em>MD5: fa3f7eb2d0e622e3ae4e9a829051ef33 (beta-1)</em></p>
 """
 
 
@@ -132,7 +190,32 @@ class TestScrapePage:
         assert channels["beta"].version == "1.15.0"
         assert "1.15.0" in channels["beta"].filename
         assert "1.12.3" in channels["stable"].filename
+        # Vendor MD5s attached from the summary-table cells (not the body notes)
+        assert channels["stable"].md5 == "883fa6b688eb017b3ac56f1300f0cad0"
+        assert channels["beta"].md5 == "ea3e1c6f657ec8dc5624feabd1ce40ff"
         # Healthy parse → no warnings
+        assert warnings == []
+
+    def test_scrape_without_md5_column_yields_none(self, fetcher):
+        """A summary table predating the MD5 column → md5 is None on every
+        release and fetching still works (size guards carry the integrity)."""
+        html = """
+        <table>
+          <tr><td><strong>Latest stable</strong></td><td>v1.12.3 - notes</td></tr>
+          <tr><td><strong>Latest beta</strong></td><td>v1.15.0 beta-1 - notes</td></tr>
+        </table>
+        <p><a href="https://tachyon-networks.com/fw/tna-30x-1.12.3-r55002-20260219-tn-110-prs-squashfs-sysupgrade.bin">Version 1.12.3</a></p>
+        <p><a href="https://tachyon-networks.com/fw/tna-30x-1.15.0-r55142-20260521-tn-110-prs-squashfs-sysupgrade.bin">Version 1.15.0</a></p>
+        """
+        with patch(
+            "updater.firmware_fetcher.httpx.AsyncClient",
+            return_value=self._make_mock_client(html),
+        ):
+            releases, warnings = asyncio.run(
+                fetcher._scrape_page("tna-30x", "https://example/tna-30x")
+            )
+        assert {r.channel for r in releases} == {"stable", "beta"}
+        assert all(r.md5 is None for r in releases)
         assert warnings == []
 
     def test_warns_when_summary_promises_release_but_no_link_matches(self, fetcher):
@@ -210,6 +293,7 @@ class TestScrapePage:
         assert len(releases) == 1
         assert releases[0].channel == "stable"
         assert releases[0].version == "1.12.8"
+        assert releases[0].md5 is None  # no summary table → no MD5 to parse
         assert warnings == []
 
 
@@ -297,12 +381,12 @@ class TestDownloadIntegrity:
     def fetcher(self, tmp_path):
         return FirmwareFetcher(firmware_dir=tmp_path, broadcast_func=AsyncMock())
 
-    def _release(self):
+    def _release(self, md5=None):
         name = "tna-30x-1.15.0-r55142-20260521-tn-110-prs-squashfs-sysupgrade.bin"
         return FirmwareRelease(
             platform="tna-30x", version="1.15.0",
             download_url=f"https://tachyon-networks.com/fw/{name}",
-            channel="beta", filename=name,
+            channel="beta", filename=name, md5=md5,
         )
 
     def _patch_stream(self, body: bytes, content_length):
@@ -324,17 +408,21 @@ class TestDownloadIntegrity:
         return patch("updater.firmware_fetcher.httpx.AsyncClient", return_value=client)
 
     def test_good_download_accepted(self, fetcher, tmp_path):
+        body = b"x" * 1000
         rel = self._release()
-        with self._patch_stream(b"x" * 1000, content_length=1000):
-            ok = asyncio.run(fetcher._download_firmware(rel))
+        with self._patch_stream(body, content_length=1000):
+            ok, sha = asyncio.run(fetcher._download_firmware(rel))
         assert ok is True
         assert (tmp_path / rel.filename).stat().st_size == 1000
+        # SHA256 is computed in the same pass and handed back for storage.
+        assert sha == hashlib.sha256(body).hexdigest()
 
     def test_content_length_mismatch_rejected(self, fetcher, tmp_path):
         rel = self._release()
         with self._patch_stream(b"x" * 600, content_length=1000):  # truncated
-            ok = asyncio.run(fetcher._download_firmware(rel))
+            ok, sha = asyncio.run(fetcher._download_firmware(rel))
         assert ok is False
+        assert sha is None
         assert not (tmp_path / rel.filename).exists()
         assert list(tmp_path.glob("*.downloading")) == []
 
@@ -344,6 +432,118 @@ class TestDownloadIntegrity:
         (tmp_path / sib).write_bytes(b"x" * 1000)
         rel = self._release()
         with self._patch_stream(b"x" * 100, content_length=None):
-            ok = asyncio.run(fetcher._download_firmware(rel))
+            ok, sha = asyncio.run(fetcher._download_firmware(rel))
         assert ok is False
+        assert sha is None
         assert not (tmp_path / rel.filename).exists()
+
+    def test_md5_match_accepted(self, fetcher, tmp_path):
+        body = b"firmware-payload" * 64
+        rel = self._release(md5=hashlib.md5(body).hexdigest())
+        with self._patch_stream(body, content_length=len(body)):
+            ok, sha = asyncio.run(fetcher._download_firmware(rel))
+        assert ok is True
+        assert (tmp_path / rel.filename).exists()
+        assert sha == hashlib.sha256(body).hexdigest()
+
+    def test_md5_match_is_case_insensitive(self, fetcher, tmp_path):
+        body = b"firmware-payload" * 64
+        rel = self._release(md5=hashlib.md5(body).hexdigest().upper())
+        with self._patch_stream(body, content_length=len(body)):
+            ok, _ = asyncio.run(fetcher._download_firmware(rel))
+        assert ok is True
+
+    def test_md5_mismatch_rejected(self, fetcher, tmp_path):
+        # Valid-shaped but wrong hash → corrupt/wrong image, never accepted.
+        rel = self._release(md5="0" * 32)
+        with self._patch_stream(b"x" * 1000, content_length=1000):
+            ok, sha = asyncio.run(fetcher._download_firmware(rel))
+        assert ok is False
+        assert sha is None
+        assert not (tmp_path / rel.filename).exists()
+        assert list(tmp_path.glob("*.downloading")) == []
+
+    def test_md5_absent_good_download_accepted(self, fetcher, tmp_path):
+        body = b"x" * 1000
+        rel = self._release(md5=None)
+        with self._patch_stream(body, content_length=1000):
+            ok, sha = asyncio.run(fetcher._download_firmware(rel))
+        assert ok is True
+        assert sha == hashlib.sha256(body).hexdigest()
+
+    def test_md5_absent_does_not_bypass_size_guard(self, fetcher, tmp_path):
+        # A missing published MD5 must not weaken the existing truncation guard.
+        sib = "tna-30x-1.12.3-r55002-20260219-tn-110-prs-squashfs-sysupgrade.bin"
+        (tmp_path / sib).write_bytes(b"x" * 1000)
+        rel = self._release(md5=None)
+        with self._patch_stream(b"x" * 100, content_length=None):
+            ok, sha = asyncio.run(fetcher._download_firmware(rel))
+        assert ok is False
+        assert sha is None
+
+
+class TestCheckAndDownloadHashing:
+    """check_and_download stores a SHA256 for auto-fetched firmware so the
+    pre-flash integrity check (skipped when no hash is stored) also covers
+    auto files — both on fresh download and by backfilling existing files."""
+
+    BETA = "tna-30x-1.15.0-r55151-20260609-tn-110-prs-squashfs-sysupgrade.bin"
+
+    @pytest.fixture
+    def fetcher(self, tmp_path):
+        return FirmwareFetcher(firmware_dir=tmp_path, broadcast_func=AsyncMock())
+
+    def _release(self):
+        return FirmwareRelease(
+            platform="tna-30x", version="1.15.0",
+            download_url=f"https://tachyon-networks.com/fw/{self.BETA}",
+            channel="beta", filename=self.BETA,
+            md5="ea3e1c6f657ec8dc5624feabd1ce40ff",
+        )
+
+    def _scrape_only_30x(self, release):
+        """AsyncMock side-effect: yield `release` for tna-30x, nothing else."""
+        async def fake_scrape(platform, url):
+            return ([release], []) if platform == "tna-30x" else ([], [])
+        return fake_scrape
+
+    def test_fresh_download_registers_sha256(self, fetcher, tmp_path, mock_db):
+        rel = self._release()
+        sha = "d" * 64
+
+        async def fake_dl(release):
+            (tmp_path / release.filename).write_bytes(b"fw")  # simulate landing
+            return True, sha
+
+        with patch.object(fetcher, "_scrape_page",
+                          AsyncMock(side_effect=self._scrape_only_30x(rel))), \
+             patch.object(fetcher, "_download_firmware", AsyncMock(side_effect=fake_dl)):
+            asyncio.run(fetcher.check_and_download())
+
+        assert db.get_firmware_sha256(self.BETA) == sha
+
+    def test_backfills_sha256_for_existing_unhashed_file(self, fetcher, tmp_path, mock_db):
+        body = b"already-on-disk-firmware"
+        (tmp_path / self.BETA).write_bytes(body)
+        db.register_firmware(self.BETA, source="auto")  # pre-feature: no hash
+        assert db.get_firmware_sha256(self.BETA) is None
+
+        rel = self._release()
+        with patch.object(fetcher, "_scrape_page",
+                          AsyncMock(side_effect=self._scrape_only_30x(rel))):
+            asyncio.run(fetcher.check_and_download())
+
+        assert db.get_firmware_sha256(self.BETA) == hashlib.sha256(body).hexdigest()
+
+    def test_existing_hash_survives_recheck(self, fetcher, tmp_path, mock_db):
+        # The 24h re-register of an already-present file must not erase its hash
+        # (regression for the ON CONFLICT NULL-overwrite; needs the COALESCE fix).
+        (tmp_path / self.BETA).write_bytes(b"already-on-disk-firmware")
+        db.register_firmware(self.BETA, source="auto", sha256="preserve-me")
+
+        rel = self._release()
+        with patch.object(fetcher, "_scrape_page",
+                          AsyncMock(side_effect=self._scrape_only_30x(rel))):
+            asyncio.run(fetcher.check_and_download())
+
+        assert db.get_firmware_sha256(self.BETA) == "preserve-me"

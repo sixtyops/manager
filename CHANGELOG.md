@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- Auto-downloaded firmware is now **verified against the vendor's published
+  checksum** before it can ever be flashed. When Tachyon lists an MD5 for a
+  release, a download whose contents don't match is rejected outright (it never
+  becomes the update target); when no checksum is listed, the existing size
+  checks still apply. Each accepted file is also fingerprinted and **re-checked
+  at flash time** — the same integrity guard manual uploads already get — so a
+  file that gets corrupted on disk during the days-long canary soak is caught
+  before reboot.
 - Rollouts now **skip the canary step when the firmware is already proven on
   your fleet.** If healthy same-model devices are already running the target
   version, a new rollout goes **straight to the 10% wave** (and a rollout already
