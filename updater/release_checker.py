@@ -5,7 +5,9 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
@@ -40,6 +42,131 @@ SIXTYOPS_GH_TOKEN = os.environ.get("SIXTYOPS_GH_TOKEN", "").strip()
 
 # Appliance platform version file (written during OVA build)
 APPLIANCE_VERSION_FILE = Path("/etc/sixtyops/appliance-version")
+
+# ── Release-signing trust (self-update integrity) ───────────────────────────
+# The self-update path checks out a release tag and rebuilds from it, so the
+# tag *is* the code we run. We verify the tag carries a valid GPG signature
+# from a trusted release key before checking it out — defending even against a
+# compromised GitHub serving a malicious tag.
+#
+# Backward compatibility (uptime first): enforcement is gated on a version
+# cutover. Releases at or after MIN_SIGNED_VERSION must be signed; older tags
+# predate signing and stay installable so rollback/reinstall of existing
+# releases keeps working. Updates only ever move forward to newer releases, so
+# in practice every real update past the cutover requires a valid signature,
+# while no fielded instance is ever stranded. See docs/self-update-signing.md.
+MIN_SIGNED_VERSION = os.environ.get("SIXTYOPS_MIN_SIGNED_VERSION", "1.4.0")
+_TRUSTED_KEYS_DIR = Path(__file__).parent / "trusted_keys"
+# Allowed signing-key fingerprints (uppercase, no spaces). Rotate by dropping
+# the new public key into trusted_keys/ AND adding its fingerprint here; keep
+# the old fingerprint until every fielded release has moved past it.
+TRUSTED_SIGNING_FINGERPRINTS = {
+    "E2C19E86B24A87283068AEFAF2D6F70883960DCE",
+}
+
+
+def _signing_required(target_version: str) -> bool:
+    """Return True if this target must pass signature verification.
+
+    Versions at/after the cutover require a signature. Unparseable versions
+    fail closed (treated as required) — we never relax enforcement just
+    because a version string couldn't be read.
+    """
+    try:
+        return version.parse(target_version) >= version.parse(MIN_SIGNED_VERSION)
+    except Exception:
+        logger.warning(
+            "Could not parse target version %r against cutover %s — requiring "
+            "a signature (fail-closed)", target_version, MIN_SIGNED_VERSION,
+        )
+        return True
+
+
+def _verify_tag_signature(
+    repo_dir: Path, target_tag: str, target_version: str
+) -> tuple[bool, Optional[str]]:
+    """Verify target_tag is GPG-signed by a trusted release key.
+
+    Returns (ok, reason). ok=True means the tag is safe to check out. Tags
+    below the signing cutover skip verification (legacy/rollback) and return
+    (True, None). At/after the cutover, a missing tool, missing/invalid
+    signature, or untrusted signer all return (False, <user-facing reason>) —
+    fail-closed, so unverified code is never checked out.
+
+    The tag object must already be fetched. We import only the bundled trusted
+    public key(s) into a throwaway keyring and run `git verify-tag`, so a
+    GOODSIG can only come from a trusted key; the fingerprint allowlist is
+    belt-and-suspenders and drives key rotation.
+    """
+    if not _signing_required(target_version):
+        logger.info(
+            "Tag %s (v%s) predates the signing cutover (v%s) — skipping "
+            "signature enforcement (legacy/rollback path)",
+            target_tag, target_version, MIN_SIGNED_VERSION,
+        )
+        return True, None
+
+    gpg = shutil.which("gpg")
+    if not gpg:
+        return False, (
+            "Update blocked: this build can't verify the release signature "
+            "(signing tool unavailable). The update was not applied."
+        )
+
+    key_files = sorted(_TRUSTED_KEYS_DIR.glob("*.asc")) if _TRUSTED_KEYS_DIR.is_dir() else []
+    if not key_files:
+        return False, (
+            "Update blocked: no trusted release key is bundled with this build, "
+            "so the update's authenticity can't be confirmed."
+        )
+
+    tmp_home = tempfile.mkdtemp(prefix="sixtyops-verify-")
+    try:
+        os.chmod(tmp_home, 0o700)
+        env = {**os.environ, "GNUPGHOME": tmp_home}
+        for kf in key_files:
+            imp = subprocess.run(
+                [gpg, "--batch", "--quiet", "--import", str(kf)],
+                capture_output=True, text=True, timeout=15, env=env,
+            )
+            if imp.returncode != 0:
+                logger.warning(
+                    "Failed to import trusted key %s: %s", kf.name, imp.stderr.strip()
+                )
+
+        # Force OpenPGP so a host/CI git configured for SSH signing can't
+        # divert verification; point git at the gpg we found.
+        result = subprocess.run(
+            ["git", "-C", str(repo_dir), "-c", "gpg.format=openpgp",
+             "-c", f"gpg.program={gpg}", "verify-tag", "--raw", target_tag],
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+        status = result.stderr or ""  # gpg status protocol prints to stderr
+        if result.returncode != 0 or "GOODSIG" not in status or "VALIDSIG" not in status:
+            logger.warning(
+                "Signature verification failed for %s (rc=%s): %s",
+                target_tag, result.returncode, status.strip()[:400],
+            )
+            return False, (
+                f"Update blocked: the release signature for {target_tag} is "
+                "missing or invalid. The update was not applied."
+            )
+
+        upper = status.upper()
+        if not any(fpr in upper for fpr in TRUSTED_SIGNING_FINGERPRINTS):
+            logger.warning(
+                "Tag %s carries a good signature but from an untrusted key: %s",
+                target_tag, status.strip()[:400],
+            )
+            return False, (
+                "Update blocked: the release was signed by a key that is not on "
+                "this build's trusted list."
+            )
+
+        logger.info("Verified trusted release signature on %s", target_tag)
+        return True, None
+    finally:
+        shutil.rmtree(tmp_home, ignore_errors=True)
 
 
 def get_appliance_version() -> Optional[str]:
@@ -732,6 +859,11 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
     image_ref = f"{GHCR_IMAGE}:{target_tag}"
 
     try:
+        # NOTE: appliance/image-pull integrity is a documented follow-up. The
+        # git-checkout path (which builds arbitrary local code — the higher
+        # risk) is signature-gated via _verify_tag_signature. Pinning/verifying
+        # the GHCR image digest against a signed source belongs here next; see
+        # docs/self-update-signing.md ("Appliance / image-pull").
         # Pull new image
         logger.info(f"Pulling image {image_ref}...")
         pull_result = subprocess.run(
@@ -917,6 +1049,19 @@ async def apply_update() -> dict:
             return {
                 "success": False,
                 "message": f"Git fetch failed: {fetch_result.stderr}",
+            }
+
+        # Verify the release tag's signature BEFORE checkout. The tag is the
+        # code we're about to build and run, so an unverified tag is arbitrary
+        # code execution on the host (Docker socket). Fail-closed for releases
+        # at/after the signing cutover; legacy tags pass through (see
+        # _verify_tag_signature / docs/self-update-signing.md).
+        sig_ok, sig_reason = _verify_tag_signature(repo_dir, target_tag, target_version)
+        if not sig_ok:
+            return {
+                "success": False,
+                "signature_blocked": True,
+                "message": sig_reason,
             }
 
         # Checkout the exact tag — no unreviewed code from main
