@@ -22,11 +22,15 @@
             --primary-hover: #2563eb;
             --primary-text: #1e40af;
             --primary-bg: #dbeafe;
+            --primary-bg-hover: #99F6E4;
+            --primary-bg-subtle: #F0FDFA;
+            --focus-ring: rgba(13, 148, 136, 0.4);
             --brand: #0D9488;
             --brand-hover: #0F766E;
             --brand-text: #115E59;
             --brand-bg: #CCFBF1;
             --success: #10b981;
+            --success-hover: #059669;
             --success-light: #34d399;
             --success-text: #065f46;
             --success-bg: #d1fae5;
@@ -40,10 +44,21 @@
             --danger-text: #991b1b;
             --danger-bg: #fee2e2;
             --danger-bright: #ef4444;
+            /* Info: semantic "scheduled / running / informational" status.
+               State color only, never for interactive controls. */
+            --info: #3b82f6;
+            --info-strong: #2563eb;
+            --info-text: #1d4ed8;
+            --info-bg: #dbeafe;
+            --info-bg-subtle: #eff6ff;
+            --info-border: #bfdbfe;
             --indigo: #6366f1;
             --indigo-text: #3730a3;
             --indigo-bg: #e0e7ff;
             --toggle-off: #d1d5db;
+            --bg-subtle: #f9fafb;
+            --overlay: rgba(17, 24, 39, 0.5);
+            --shadow-pop: 0 8px 24px rgba(0,0,0,.10);
             /* Spacing scale */
             --space-1: 2px;
             --space-2: 4px;
@@ -61,6 +76,23 @@
             --text-md: 0.875rem;
             --text-lg: 1rem;
             --text-xl: 1.125rem;
+            /* Radius scale */
+            --radius-sm: 4px;
+            --radius-md: 6px;
+            --radius-lg: 8px;
+            --radius-xl: 12px;
+            --radius-full: 999px;
+            /* Motion */
+            --tr-fast: 0.15s;
+            --tr-base: 0.2s;
+            --tr-slow: 0.3s;
+            /* Type families (Plex is vendored; system stack is the fallback) */
+            --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            /* Modal width tiers */
+            --modal-sm: 440px;
+            --modal-md: 640px;
+            --modal-lg: 960px;
             /* Tree indentation */
             --tree-indent-0: 4px;
             --tree-indent-1: 28px;
@@ -518,12 +550,12 @@
 
         .history-detail-row td {
             padding: 8px 12px;
-            background: var(--bg-secondary);
+            background: var(--bg-subtle);
             border-top: none;
         }
 
         .u-history-row { cursor: pointer; }
-        .u-history-row:hover td { background: var(--bg-secondary); }
+        .u-history-row:hover td { background: var(--bg-subtle); }
         .u-history-cell-mono { font-family: var(--font-mono, monospace); font-size: 0.8rem; }
         .u-history-cell-time { font-size: 0.75rem; color: var(--text-dim); white-space: nowrap; }
         .u-history-cell-failed.error { color: #dc2626; }
@@ -804,7 +836,7 @@
             color: white;
             border-color: var(--success);
         }
-        .btn-success:hover { background: #059669; border-color: #059669; }
+        .btn-success:hover { background: var(--success-hover); border-color: var(--success-hover); }
         .btn-secondary {
             background: var(--border-light);
             color: var(--text-muted);
@@ -1538,7 +1570,7 @@
         .diff-line-del { background: #fee2e2; color: #991b1b; }
         .diff-line-hunk { color: #6b7280; font-style: italic; }
         .diff-line-meta { color: #6b7280; font-weight: 600; }
-        .diff-pre { font-size: 0.68rem; margin: 0; padding: 12px; background: var(--bg-secondary); border-radius: 6px; overflow: auto; max-height: 60vh; white-space: pre; font-family: monospace; }
+        .diff-pre { font-size: 0.68rem; margin: 0; padding: 12px; background: var(--bg-subtle); border-radius: 6px; overflow: auto; max-height: 60vh; white-space: pre; font-family: monospace; }
         .diff-select-cb { width: 14px; height: 14px; cursor: pointer; accent-color: var(--brand); }
 
         .config-section {
@@ -2354,7 +2386,7 @@
             word-wrap: break-word;
         }
         .toast.info    { border-left-color: #2563eb; }
-        .toast.success { border-left-color: #059669; }
+        .toast.success { border-left-color: var(--success-hover); }
         .toast.warn    { border-left-color: #d97706; }
         .toast.error   { border-left-color: #dc2626; }
         @keyframes toastSlideIn {
@@ -2501,9 +2533,6 @@
          * Port of .context/mockups/signal-health.html — chart card with
          * Rain Fade / Distance toggle, climate dropdown, hover popover.
          * =========================================================== */
-        :root {
-            --shadow-pop: 0 8px 24px rgba(0,0,0,.10);
-        }
 
         /* Climate region dropdown (anchored to the Rain fade toggle segment) */
         .climate-menu-wrap { position: relative; }
@@ -9024,7 +9053,7 @@
                 for (const entry of data.history) {
                     const row = document.createElement('tr');
                     row.style.cursor = 'pointer';
-                    row.onmouseenter = function() { this.style.background = 'var(--bg-secondary,#f9fafb)'; };
+                    row.onmouseenter = function() { this.style.background = 'var(--bg-subtle)'; };
                     row.onmouseleave = function() { this.style.background = ''; };
                     row.onclick = function() { toggleHistoryDetail(this, entry); };
 
