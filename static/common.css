@@ -13,8 +13,8 @@
     --muted: #6b7280;
     --border: #e5e7eb;
     --input-bg: #ffffff;
-    --primary: #3b82f6;
-    --primary-hover: #2563eb;
+    --primary: #0D9488;
+    --primary-hover: #0F766E;
     --secondary-bg: #f3f4f6;
     --secondary-hover: #e5e7eb;
     --secondary-text: #374151;
@@ -32,7 +32,7 @@
 
 body {
     font-family: var(--font-sans);
-    background: radial-gradient(circle at top right, #e0e7ff 0, rgba(224, 231, 255, 0) 44%), var(--page-bg);
+    background: radial-gradient(circle at top right, #CCFBF1 0, rgba(204, 251, 241, 0) 44%), var(--page-bg);
     color: var(--text);
     min-height: 100vh;
     display: flex;
@@ -89,7 +89,7 @@ body {
 
 .form-group input:focus,
 textarea:focus {
-    outline: 2px solid rgba(59, 130, 246, 0.2);
+    outline: 2px solid rgba(13, 148, 136, 0.25);
     outline-offset: 0;
     border-color: var(--primary);
 }

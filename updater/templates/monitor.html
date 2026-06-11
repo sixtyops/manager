@@ -20,17 +20,15 @@
             --border: #e5e7eb;
             --border-light: #f3f4f6;
             --input-bg: #f9fafb;
-            --primary: #3b82f6;
-            --primary-hover: #2563eb;
-            --primary-text: #1e40af;
-            --primary-bg: #dbeafe;
+            /* The one accent (SixtyOps teal). Interactive controls only;
+               state colors live in the info/success/warning/danger families. */
+            --primary: #0D9488;
+            --primary-hover: #0F766E;
+            --primary-text: #115E59;
+            --primary-bg: #CCFBF1;
             --primary-bg-hover: #99F6E4;
             --primary-bg-subtle: #F0FDFA;
             --focus-ring: rgba(13, 148, 136, 0.4);
-            --brand: #0D9488;
-            --brand-hover: #0F766E;
-            --brand-text: #115E59;
-            --brand-bg: #CCFBF1;
             --success: #10b981;
             --success-hover: #059669;
             --success-light: #34d399;
@@ -182,7 +180,7 @@
             background: var(--border);
             color: var(--text-muted);
         }
-        .role-badge[data-role="admin"] { background: #dbeafe; color: #1d4ed8; }
+        .role-badge[data-role="admin"] { background: var(--primary-bg); color: var(--primary-text); }
         .role-badge[data-role="operator"] { background: #d1fae5; color: #047857; }
         .role-badge[data-role="viewer"] { background: var(--border); color: var(--text-muted); }
 
@@ -444,8 +442,8 @@
         }
 
         .settings-tab.active {
-            color: #3b82f6;
-            border-bottom-color: #3b82f6;
+            color: var(--primary);
+            border-bottom-color: var(--primary);
         }
 
         .settings-subtabs {
@@ -465,7 +463,7 @@
             border-bottom: 2px solid transparent;
         }
         .settings-subtab:hover { color: #374151; }
-        .settings-subtab.active { color: #3b82f6; border-bottom-color: #3b82f6; }
+        .settings-subtab.active { color: var(--primary); border-bottom-color: var(--primary); }
         .system-subpanel, .notif-subpanel, .access-subpanel, .radius-subpanel { display: none; }
         .system-subpanel.active, .notif-subpanel.active, .access-subpanel.active, .radius-subpanel.active {
             display: block;
@@ -511,7 +509,7 @@
             border-bottom:2px solid transparent;
         }
         .history-view-tab:hover { color:#374151; }
-        .history-view-tab.active { color:#3b82f6; border-bottom-color:#3b82f6; }
+        .history-view-tab.active { color:var(--primary); border-bottom-color:var(--primary); }
         .history-table-wrap { flex:1; overflow-y:auto; min-height:0; }
         .history-table { width:100%; border-collapse:collapse; }
         .history-table th {
@@ -661,7 +659,7 @@
 
         /* About panel */
         .about-header { display:flex; align-items:baseline; gap:10px; margin-bottom:6px; }
-        .about-chip { display:inline-flex; align-items:center; font-size:0.78rem; font-weight:700; padding:4px 10px; border-radius: var(--radius-sm); color:#fff; background:#0D9488; line-height:1; }
+        .about-chip { display:inline-flex; align-items:center; font-size:0.78rem; font-weight:700; padding:4px 10px; border-radius: var(--radius-sm); color:#fff; background:var(--primary); line-height:1; }
         .about-version { font-size:0.82rem; font-weight:600; color:var(--text,#111827); letter-spacing:0.01em; }
         .about-meta { font-size:0.72rem; color:var(--text-muted,#6b7280); margin-bottom:10px; }
         .about-meta code { font-size:0.7rem; font-family:var(--font-mono); }
@@ -678,7 +676,7 @@
         .about-support-body { font-size:0.72rem; color:#78350F; line-height:1.45; }
         .about-support-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:8px 14px; border-radius: var(--radius-lg); background:#FFDD00; color:#111827; font-size:0.78rem; font-weight:700; text-decoration:none; white-space:nowrap; box-shadow:inset 0 -1px 0 rgba(0,0,0,0.08); }
         .about-footer { display:flex; flex-wrap:wrap; gap:14px; margin-top:16px; font-size:0.75rem; }
-        .about-footer a { color:#0D9488; text-decoration:none; }
+        .about-footer a { color:var(--primary); text-decoration:none; }
         .about-footer a:hover { text-decoration:underline; }
 
         .release-notes-content {
@@ -1015,7 +1013,7 @@
         }
 
         .tree-table .row-selected td {
-            background: #eff6ff;
+            background: var(--primary-bg-subtle);
         }
 
         /* Name cell content */
@@ -1232,7 +1230,7 @@
             display: inline-block;
             width: 12px; height: 12px;
             border: 2px solid #d1d5db;
-            border-top-color: #0D9488;
+            border-top-color: var(--primary);
             border-radius: 50%;
             animation: spin 0.6s linear infinite;
             vertical-align: middle;
@@ -1573,7 +1571,7 @@
         .diff-line-hunk { color: #6b7280; font-style: italic; }
         .diff-line-meta { color: #6b7280; font-weight: 600; }
         .diff-pre { font-size: 0.68rem; margin: 0; padding: 12px; background: var(--bg-subtle); border-radius: var(--radius-md); overflow: auto; max-height: 60vh; white-space: pre; font-family: var(--font-mono); }
-        .diff-select-cb { width: 14px; height: 14px; cursor: pointer; accent-color: var(--brand); }
+        .diff-select-cb { width: 14px; height: 14px; cursor: pointer; accent-color: var(--primary); }
 
         .config-section {
             border: 1px solid var(--border);
@@ -1637,7 +1635,7 @@
             background: var(--border-light);
             color: var(--text-muted);
         }
-        .config-section-status.saved { background: var(--brand-bg); color: var(--brand-text); }
+        .config-section-status.saved { background: var(--primary-bg); color: var(--primary-text); }
         .config-section-status.enforced { background: #dbeafe; color: #1d4ed8; }
         .config-section.enforced {
             border: 2px solid var(--primary) !important;
@@ -1725,9 +1723,9 @@
         }
 
         .drawer-day-btn.active {
-            background: var(--brand-bg);
-            color: var(--brand-text);
-            border-color: var(--brand);
+            background: var(--primary-bg);
+            color: var(--primary-text);
+            border-color: var(--primary);
         }
 
         .toggle-sm-row {
@@ -1847,7 +1845,7 @@
         }
 
         .drawer-fw-chip.active:hover {
-            background: #bfdbfe;
+            background: var(--primary-bg-hover);
         }
 
         .drawer-fw-chip.active {
@@ -1933,12 +1931,12 @@
         .drawer-upload:hover {
             border-color: var(--primary);
             color: var(--primary);
-            background: #f8faff;
+            background: var(--primary-bg-subtle);
         }
 
         .drawer-upload.dragover {
             border-color: var(--primary);
-            background: #eff6ff;
+            background: var(--primary-bg);
         }
 
         .drawer-upload-status {
@@ -1956,7 +1954,7 @@
         }
         .drawer-save-btn {
             padding: 6px 20px;
-            background: var(--brand);
+            background: var(--primary);
             color: white;
             border: none;
             border-radius: var(--radius-md);
@@ -1965,7 +1963,7 @@
             cursor: pointer;
             transition: background var(--tr-base), opacity var(--tr-base);
         }
-        .drawer-save-btn:hover { background: var(--brand-hover); }
+        .drawer-save-btn:hover { background: var(--primary-hover); }
         .drawer-save-btn:disabled { background: var(--toggle-off); cursor: not-allowed; opacity: 0.7; }
         .drawer-save-btn.saving { opacity: 0.7; cursor: wait; }
         .drawer-unsaved-dot {
@@ -2300,7 +2298,7 @@
             white-space: nowrap;
         }
         .filter-chip a { color: var(--primary); text-decoration: none; font-size: 0.85rem; line-height: 1; cursor: pointer; }
-        .filter-chip a:hover { color: var(--primary-text, #1d4ed8); }
+        .filter-chip a:hover { color: var(--primary-text); }
 
         /* Fleet update-status totals — tappable filters in the table toolbar.
            Counts mirror the per-row Update icons; tapping toggles the Status
@@ -2570,10 +2568,10 @@
         .opt-badge {
             display: inline-flex; align-items: center; gap: 4px;
             font-size: 9px; font-weight: 700; color: #fff;
-            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            background: linear-gradient(135deg, var(--primary), var(--primary-hover));
             padding: 2px 7px 2px 5px; border-radius: var(--radius-full);
             letter-spacing: .06em; white-space: nowrap;
-            box-shadow: 0 1px 2px rgba(37,99,235,.35); line-height: 1.3;
+            box-shadow: 0 1px 2px rgba(13,148,136,.35); line-height: 1.3;
         }
         .opt-badge svg { width: 9px; height: 9px; flex: 0 0 auto; }
 
@@ -2755,7 +2753,7 @@
     </div>
 
     <div class="header">
-        <h1><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:#0D9488;border-radius:4px;margin-right:6px;vertical-align:baseline;position:relative;top:-1px;"><svg width="14" height="14" viewBox="0 0 28 28" fill="none"><rect x="3" y="8" width="2.5" height="12" rx="1" fill="white" opacity="0.9"/><rect x="7.5" y="6" width="2.5" height="16" rx="1" fill="white"/><rect x="12" y="4" width="2.5" height="20" rx="1" fill="white"/><path d="M17 10 L25 6" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><path d="M17 14 L26 14" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/><path d="M17 18 L25 22" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg></span>Sixty<span style="color:#0D9488;">Ops</span></h1>
+        <h1><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:var(--primary);border-radius:4px;margin-right:6px;vertical-align:baseline;position:relative;top:-1px;"><svg width="14" height="14" viewBox="0 0 28 28" fill="none"><rect x="3" y="8" width="2.5" height="12" rx="1" fill="white" opacity="0.9"/><rect x="7.5" y="6" width="2.5" height="16" rx="1" fill="white"/><rect x="12" y="4" width="2.5" height="20" rx="1" fill="white"/><path d="M17 10 L25 6" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><path d="M17 14 L26 14" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/><path d="M17 18 L25 22" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg></span>Sixty<span style="color:var(--primary);">Ops</span></h1>
         <div class="header-right">
             <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:var(--text-dim);"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:var(--text-muted);"></span></span>
             <button class="header-icon-btn" onclick="openHistoryModal()" title="Job History">
@@ -3317,7 +3315,7 @@
                         </div>
                     </div>
                     <div style="display:flex;gap:6px;align-items:center;">
-                        <button class="backup-btn" style="background:var(--primary,#3b82f6);color:#fff;font-weight:500;" onclick="configureSsl()">Configure HTTPS</button>
+                        <button class="backup-btn" style="background:var(--primary);color:#fff;font-weight:500;" onclick="configureSsl()">Configure HTTPS</button>
                         <span id="sslStatus" class="u-text-xs-muted"></span>
                     </div>
                     <p class="u-note-inline" style="margin-top:10px;">
@@ -3771,7 +3769,7 @@
                     </div>
 
                     <div style="display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap;">
-                        <button class="backup-btn" style="background:var(--primary,#3b82f6);color:#fff;font-weight:500;" onclick="saveRadiusConfig()">Save</button>
+                        <button class="backup-btn" style="background:var(--primary);color:#fff;font-weight:500;" onclick="saveRadiusConfig()">Save</button>
                         <button class="backup-btn u-bg-muted-cta" onclick="testRadiusConfig()">Test</button>
                         <button class="backup-btn u-bg-muted-cta" onclick="pushRadiusToDevices()">Push to Devices</button>
                         <span style="flex:1;"></span>
@@ -7789,7 +7787,7 @@
             const statusEl = document.getElementById('cfgStatus-radius');
             if (statusEl) {
                 statusEl.textContent = 'Server and port filled from this appliance. Enter the shared secret.';
-                statusEl.style.color = '#0D9488';
+                statusEl.style.color = 'var(--primary)';
             }
         }
 
@@ -10234,7 +10232,7 @@
 
                 const statusEl = document.getElementById('backupRunStatus');
                 statusEl.innerHTML = '<span class="spinner-inline"></span> Restoring...';
-                statusEl.style.color = '#3b82f6';
+                statusEl.style.color = 'var(--primary)';
 
                 try {
                     const formData = new FormData();
