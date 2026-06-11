@@ -81,12 +81,19 @@ jobs:
           TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           VER="${TAG#v}"
           CUTOVER="1.4.0"  # keep in sync with release_checker.py MIN_SIGNED_VERSION
-          pip install --quiet packaging
-          REQUIRED=$(python3 -c "from packaging import version as v; print('1' if v.parse('$VER') >= v.parse('$CUTOVER') else '0')")
-          if [ "$REQUIRED" != "1" ]; then
+          # Version compare without pip (the runner's Python is externally
+          # managed, PEP 668): VER >= CUTOVER iff the lowest of the two under
+          # version sort is CUTOVER. sort -V differs from PEP 440 only for
+          # pre-releases of 1.4.0 itself, where it over-enforces — the safe
+          # direction (we never cut 1.4.0-dev tags).
+          if [ "$(printf '%s\n%s\n' "$CUTOVER" "$VER" | sort -V | head -1)" != "$CUTOVER" ]; then
             echo "Tag $TAG predates the signing cutover $CUTOVER — skipping signature gate (legacy)."
             exit 0
           fi
+          # actions/checkout rewrites refs/tags/<tag> to point at the bare
+          # commit, which breaks verify-tag ("cannot verify a non-tag object").
+          # Re-fetch the real annotated tag object from origin first.
+          git fetch origin --force "refs/tags/${TAG}:refs/tags/${TAG}"
           export GNUPGHOME="$(mktemp -d)"; chmod 700 "$GNUPGHOME"
           gpg --batch --quiet --import updater/trusted_keys/*.asc
           if git -c gpg.format=openpgp verify-tag "$TAG"; then
