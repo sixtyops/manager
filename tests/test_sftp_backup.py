@@ -108,6 +108,39 @@ def test_restore_round_trip_decrypts_on_fresh_host(tmp_path):
     crypto.reset_cache()
 
 
+def test_restore_works_without_tarfile_filter_support(tmp_path):
+    """Python < 3.12 (e.g. the CI runner's 3.11) raises TypeError on
+    tar.extract(filter=...). _safe_extract must fall back and the restore must
+    still succeed — this broke the v1.4.1-dev1 release test lane."""
+    p_mod, p_key, data, staging = _patched(tmp_path)
+    db_file = data / "sixtyops.db"
+    with p_mod, p_key:
+        crypto.reset_cache()
+        _make_db(db_file, "tok")
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            sftp_backup._add_database(tar)
+            sftp_backup._add_encryption_key(tar)
+        archive = staging / "sixtyops-backup-old-python.tar.gz"
+        archive.write_bytes(buf.getvalue())
+        db_file.unlink()
+
+        real_extract = tarfile.TarFile.extract
+
+        def py311_extract(self, member, path=".", *args, **kwargs):
+            if "filter" in kwargs:
+                raise TypeError(
+                    "TarFile.extract() got an unexpected keyword argument 'filter'"
+                )
+            return real_extract(self, member, path, *args, **kwargs)
+
+        with patch.object(tarfile.TarFile, "extract", py311_extract):
+            ok, msg = sftp_backup._restore_from_archive(archive)
+        assert ok is True
+        assert db_file.exists()
+    crypto.reset_cache()
+
+
 def test_legacy_archive_without_key_restores_db_and_keeps_local_key(tmp_path):
     """An older archive (no key member) must still restore the DB and must not
     clobber the host's existing key."""

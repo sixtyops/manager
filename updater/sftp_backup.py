@@ -214,6 +214,22 @@ async def restore_backup(archive_name: str) -> Tuple[bool, str]:
             return False, f"Restore failed: {e}"
 
 
+def _safe_extract(tar: tarfile.TarFile, member: tarfile.TarInfo, dest: Path):
+    """Extract one member, using tarfile's 'data' filter where the runtime
+    supports it (Python 3.12+, and the 3.9.17+/3.10.12+/3.11.4+ backports).
+
+    Older runtimes don't accept the keyword and raise TypeError; fall back
+    without it. The production image runs 3.12 (filter applies); the CI test
+    lane may run an older 3.11 (fallback). Either way the caller has already
+    pinned member.name to an exact expected value, so there is no
+    attacker-controlled path to traverse on the fallback path.
+    """
+    try:
+        tar.extract(member, path=dest, filter="data")
+    except TypeError:
+        tar.extract(member, path=dest)
+
+
 def _restore_from_archive(local_archive: Path) -> Tuple[bool, str]:
     """Restore the database (and its encryption key) from a downloaded archive.
 
@@ -226,8 +242,9 @@ def _restore_from_archive(local_archive: Path) -> Tuple[bool, str]:
     # Extract sixtyops.db from the archive. The remote SFTP server is in
     # principle untrusted (it could be MITM'd or compromised), so guard against
     # tar traversal / symlink overwrite: validate each member is a regular file
-    # at the expected path, and pass filter="data" so tarfile rejects unsafe
-    # attributes (absolute paths, ".." segments, device files, etc.) on extract.
+    # at the expected path, and use the tarfile data filter (where supported)
+    # so unsafe attributes (absolute paths, ".." segments, device files, etc.)
+    # are rejected on extract. See _safe_extract.
     extracted_key = None
     with tarfile.open(local_archive, "r:gz") as tar:
         try:
@@ -236,7 +253,7 @@ def _restore_from_archive(local_archive: Path) -> Tuple[bool, str]:
             return False, "sixtyops.db not found in backup archive"
         if not member.isfile() or member.name != "sixtyops.db":
             return False, "Unsafe archive: unexpected sixtyops.db member type"
-        tar.extract(member, path=STAGING_DIR, filter="data")
+        _safe_extract(tar, member, STAGING_DIR)
 
         # Restore the credential encryption key alongside the DB so the restored
         # Fernet ciphertexts (device/RADIUS passwords) decrypt. Older archives
@@ -245,7 +262,7 @@ def _restore_from_archive(local_archive: Path) -> Tuple[bool, str]:
         try:
             key_member = tar.getmember(".encryption_key")
             if key_member.isfile() and key_member.name == ".encryption_key":
-                tar.extract(key_member, path=STAGING_DIR, filter="data")
+                _safe_extract(tar, key_member, STAGING_DIR)
                 extracted_key = STAGING_DIR / ".encryption_key"
         except KeyError:
             logger.warning(
