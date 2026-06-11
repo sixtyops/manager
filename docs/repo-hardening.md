@@ -39,34 +39,25 @@ gh api -X POST repos/sixtyops/manager/rulesets --input ruleset.json   # create
 The admin bypass actor is the built-in Admin repository role (`actor_id: 5`,
 `actor_type: RepositoryRole`, `bypass_mode: always`).
 
-## CI signature gate (apply once to release.yml)
+## CI signature gate
 
-Defense-in-depth that mirrors the client check: the `release` job verifies the
-tag is signed by a trusted key and **fails the release** otherwise, so an
-unsigned release at/after the cutover is never published. Add this step to the
-`release` job in `.github/workflows/release.yml`, right after the
-`actions/checkout@v4` step (which already uses `fetch-depth: 0`):
+Defense-in-depth that mirrors the client check: the `release` job in
+`.github/workflows/release.yml` (the source of truth — no copy here) verifies
+the tag is signed by a trusted key and **fails the release** otherwise, so an
+unsigned release at/after the cutover is never published. Keep its `CUTOVER`
+in sync with `MIN_SIGNED_VERSION` in `updater/release_checker.py`.
 
-```yaml
-      - name: Verify release tag is signed by a trusted key
-        run: |
-          set -euo pipefail
-          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          VER="${TAG#v}"
-          CUTOVER="1.4.0"  # keep in sync with release_checker.py MIN_SIGNED_VERSION
-          pip install --quiet packaging
-          REQUIRED=$(python3 -c "from packaging import version as v; print('1' if v.parse('$VER') >= v.parse('$CUTOVER') else '0')")
-          if [ "$REQUIRED" != "1" ]; then
-            echo "Tag $TAG predates the signing cutover $CUTOVER — skipping (legacy)."; exit 0
-          fi
-          export GNUPGHOME="$(mktemp -d)"; chmod 700 "$GNUPGHOME"
-          gpg --batch --quiet --import updater/trusted_keys/*.asc
-          if git -c gpg.format=openpgp verify-tag "$TAG"; then
-            echo "Tag $TAG carries a trusted release signature."
-          else
-            echo "::error::Release tag $TAG is not signed by a trusted release key. Refusing to publish (see docs/self-update-signing.md)."; exit 1
-          fi
-```
+Two self-hosted-runner constraints shaped the step — don't "simplify" them away:
+
+- **No `pip install`.** The runner's Python is externally managed (PEP 668),
+  so the cutover comparison uses `sort -V` instead of the `packaging` module.
+  `sort -V` deviates from PEP 440 only for pre-releases of the cutover version
+  itself (e.g. `1.4.0-devN`), where it over-enforces — the safe direction.
+- **Re-fetch the tag before `git verify-tag`.** `actions/checkout` rewrites
+  `refs/tags/<tag>` to point at the bare commit, which makes `verify-tag` fail
+  with "cannot verify a non-tag object". The step runs
+  `git fetch origin --force "refs/tags/$TAG:refs/tags/$TAG"` first to restore
+  the annotated tag object.
 
 ## Visibility
 
