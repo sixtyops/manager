@@ -69,6 +69,33 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
           fetch-depth: 0
 
+      # Defense-in-depth gate (mirrors the client-side check in
+      # updater/release_checker.py): a release at/after the signing cutover MUST
+      # carry a valid GPG signature from a trusted key, or it is never published
+      # — no GitHub Release, no GHCR image. Older tags predate signing and pass
+      # through. Keep CUTOVER in sync with MIN_SIGNED_VERSION.
+      # See docs/self-update-signing.md.
+      - name: Verify release tag is signed by a trusted key
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          VER="${TAG#v}"
+          CUTOVER="1.4.0"  # keep in sync with release_checker.py MIN_SIGNED_VERSION
+          pip install --quiet packaging
+          REQUIRED=$(python3 -c "from packaging import version as v; print('1' if v.parse('$VER') >= v.parse('$CUTOVER') else '0')")
+          if [ "$REQUIRED" != "1" ]; then
+            echo "Tag $TAG predates the signing cutover $CUTOVER — skipping signature gate (legacy)."
+            exit 0
+          fi
+          export GNUPGHOME="$(mktemp -d)"; chmod 700 "$GNUPGHOME"
+          gpg --batch --quiet --import updater/trusted_keys/*.asc
+          if git -c gpg.format=openpgp verify-tag "$TAG"; then
+            echo "Tag $TAG carries a trusted release signature."
+          else
+            echo "::error::Release tag $TAG is not signed by a trusted release key. Refusing to publish. Sign it with 'git tag -s' using the release key (see docs/self-update-signing.md)."
+            exit 1
+          fi
+
       - name: Determine release type
         id: meta
         run: |
