@@ -280,7 +280,7 @@
             display: none;
             position: fixed;
             inset: 0;
-            background: rgba(0,0,0,0.35);
+            background: var(--overlay);
             z-index: 200;
             align-items: center;
             justify-content: center;
@@ -294,7 +294,7 @@
             background: var(--bg-card);
             border-radius: var(--radius-xl);
             box-shadow: 0 8px 30px rgba(0,0,0,0.18);
-            width: 440px;
+            width: var(--modal-sm);
             max-width: 92vw;
             padding: 24px;
         }
@@ -401,7 +401,7 @@
 
         /* Settings tabs */
         .app-settings-modal {
-            width: 640px;
+            width: var(--modal-md);
             max-width: 95vw;
             height: 85vh;
             max-height: 700px;
@@ -494,7 +494,7 @@
 
 
         /* History modal */
-        .history-modal { width:960px; max-width:95vw; max-height:80vh; display:flex; flex-direction:column; overflow:hidden; }
+        .history-modal { width:var(--modal-lg); max-width:95vw; max-height:80vh; display:flex; flex-direction:column; overflow:hidden; }
         .history-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-shrink:0; }
         .history-header h3 { margin:0; font-size:0.9rem; font-weight:600; }
         .history-filters { display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; margin-bottom:10px; flex-shrink:0; }
@@ -514,7 +514,7 @@
         .history-table-wrap { flex:1; overflow-y:auto; min-height:0; }
         .history-table { width:100%; border-collapse:collapse; }
         .history-table th {
-            text-align:left; font-size:0.65rem; font-weight:600; color:var(--text-dim,#9ca3af);
+            text-align:left; font-size:var(--text-xs); font-weight:600; color:var(--text-dim,#9ca3af);
             text-transform:uppercase; letter-spacing:0.03em; padding:6px 8px;
             border-bottom:1px solid var(--border,#e5e7eb); position:sticky; top:0; background:var(--bg-card,#fff);
         }
@@ -605,7 +605,7 @@
         }
 
         .users-table { width:100%; border-collapse:collapse; font-size:0.78rem; }
-        .users-table th { text-align:left; font-weight:600; font-size:0.7rem; color:var(--text-dim,#9ca3af); text-transform:uppercase; letter-spacing:0.03em; padding:6px 8px; border-bottom:1px solid var(--border,#e5e7eb); }
+        .users-table th { text-align:left; font-weight:600; font-size:var(--text-xs); color:var(--text-dim,#9ca3af); text-transform:uppercase; letter-spacing:0.03em; padding:6px 8px; border-bottom:1px solid var(--border,#e5e7eb); }
         .users-table td { padding:8px; border-bottom:1px solid var(--border-light,#f3f4f6); vertical-align:middle; }
         .users-table tr:last-child td { border-bottom:none; }
         .users-table .user-actions { display:flex; gap:6px; justify-content:flex-end; align-items:center; }
@@ -636,14 +636,14 @@
         .updates-banner-link { font-size:0.7rem; color:var(--info-strong); text-decoration:none; }
         .updates-banner-link:hover { text-decoration:underline; }
         /* `appearance: none` is required: without it, WebKit keeps the
-           native button chrome painted over `background: #16a34a`, so the
+           native button chrome painted over the green background, so the
            white label reads as faint white on light grey until :hover
            re-resolves the cascade. `border: none` alone is not enough — a
            visible border or appearance:none is what drops native rendering. */
         .updates-banner-btn {
             margin-top: 10px;
             padding: 8px 16px;
-            background: #16a34a;
+            background: var(--success);
             color: #fff;
             border: none;
             border-radius: var(--radius-md);
@@ -654,8 +654,8 @@
             -webkit-appearance: none;
             appearance: none;
         }
-        .updates-banner-btn:hover { background: #15803d; }
-        .updates-banner-btn:active { background: #166534; }
+        .updates-banner-btn:hover { background: var(--success-hover); }
+        .updates-banner-btn:active { background: #047857; }
         .updates-banner-btn:disabled { background: #9ca3af; color: #f3f4f6; cursor: not-allowed; }
 
         /* About panel */
@@ -1344,7 +1344,7 @@
             display: none;
             position: fixed;
             inset: 0;
-            background: rgba(0, 0, 0, 0.6);
+            background: var(--overlay);
             z-index: 300;
             align-items: center;
             justify-content: center;
@@ -1361,7 +1361,7 @@
             padding: 32px 40px;
             text-align: center;
             box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
-            max-width: 400px;
+            max-width: var(--modal-sm);
         }
 
         .system-update-overlay .update-card h3 {
@@ -2477,7 +2477,7 @@
         .cfg-user-name, .cfg-user-pass, .cfg-user-level { padding: 6px 10px; font-size: 0.8rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--input-bg); color: var(--text); font-family: inherit; box-sizing: border-box; }
 
         /* Confirm dialog */
-        .confirm-modal { max-width: 400px; }
+        .confirm-modal { max-width: var(--modal-sm); }
         .confirm-modal h3 { margin: 0 0 10px 0; }
         .confirm-message { font-size: var(--text-base); color: var(--text-muted); line-height: 1.5; white-space: pre-line; }
         .confirm-actions { display: flex; justify-content: flex-end; gap: var(--space-4); margin-top: var(--space-6); }

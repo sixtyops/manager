@@ -8,27 +8,10 @@
     <link rel="stylesheet" href="/static/fonts.css">
     <link rel="stylesheet" href="/static/common.css">
     <style>
-        .info-message {
-            background: #1e3a5f;
-            color: #93c5fd;
-            padding: 12px 14px;
-            border-radius: 8px;
-            font-size: 0.85rem;
-            margin-bottom: 20px;
-            line-height: 1.5;
-        }
-
-        .success-message {
-            background: #065f46;
-            color: #6ee7b7;
-            padding: 12px 14px;
-            border-radius: 8px;
-            font-size: 0.85rem;
-            margin-bottom: 20px;
-        }
-
+        /* info-message / success-message come from common.css */
         .cert-status {
-            background: #0f172a;
+            background: #f9fafb;
+            border: 1px solid var(--border);
             border-radius: 8px;
             padding: 16px;
             margin-bottom: 20px;
@@ -38,7 +21,7 @@
             display: flex;
             justify-content: space-between;
             padding: 8px 0;
-            border-bottom: 1px solid #1e293b;
+            border-bottom: 1px solid var(--border);
         }
 
         .cert-status-row:last-child {
@@ -46,30 +29,30 @@
         }
 
         .status-label {
-            color: #94a3b8;
+            color: var(--muted);
             font-size: 0.85rem;
         }
 
         .status-value {
-            color: #e2e8f0;
+            color: var(--text);
             font-size: 0.85rem;
         }
 
-        .status-good { color: #34d399; }
-        .status-warning { color: #fbbf24; }
-        .status-error { color: #f87171; }
+        .status-good { color: #059669; }
+        .status-warning { color: #b45309; }
+        .status-error { color: #dc2626; }
 
         .back-link {
             display: block;
             text-align: center;
             margin-top: 16px;
-            color: #64748b;
+            color: var(--primary);
             font-size: 0.85rem;
             text-decoration: none;
         }
 
         .back-link:hover {
-            color: #94a3b8;
+            color: var(--primary-hover);
         }
     </style>
 </head>
