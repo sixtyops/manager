@@ -42,24 +42,28 @@ Before creating any PR, verify:
 
 ## Release Workflow
 
-### Dev Release (pre-release for early testing)
-1. Bump the version with a `-devN` suffix (e.g., `"1.3.0"` → `"1.3.1-dev1"`) in
-   `updater/__init__.py` and `pyproject.toml`, and update the pinned image tag in
-   the website install snippet (`website/index.html`) to match.
-2. Commit the bump: `git commit -m "chore: bump version to X.Y.Z-devN"`
-3. Tag and push: `git tag vX.Y.Z-devN && git push origin main --tags`
-4. GitHub Actions auto-creates a pre-release with commit-based changelog
-   and pushes the Docker image to `ghcr.io/sixtyops/manager:vX.Y.Z-devN`
+Full step-by-step SOP (signing commands, verification, failure recovery):
+**[docs/release-sop.md](docs/release-sop.md)**. Release tags must be
+**GPG-signed by the release key** — CI and every fielded instance refuse
+unsigned tags (see `docs/self-update-signing.md`).
 
-Users on the dev update channel will receive pre-releases automatically.
+Short form:
+
+### Dev Release (pre-release for early testing)
+1. On a branch, bump the version with a `-devN` suffix in
+   `updater/__init__.py` and `pyproject.toml`, and update the pinned image tag
+   in the website install snippet (`website/index.html`). PR → **merge first**.
+2. Sign the tag at `origin/main`, verify, push by name (exact commands in the
+   SOP — do not use plain `git tag` or `git push --tags`).
+3. GitHub Actions verifies the signature, creates the pre-release, and pushes
+   `ghcr.io/sixtyops/manager:vX.Y.Z-devN` (+ `:dev`). Dev-channel installs
+   receive it automatically.
 
 ### Stable Release (manual approval required)
-1. Update `updater/__init__.py` to stable version (e.g., `"1.3.0"`)
-2. Update CHANGELOG.md: move Unreleased items under a version header
-3. Commit: `git commit -m "chore: release vX.Y.Z"`
-4. Tag and push: `git tag vX.Y.Z && git push origin main --tags`
-5. Go to **GitHub Actions > Release > Run workflow**
-6. Enter the tag name and type `RELEASE` to confirm
+1. Bump to the stable version; move CHANGELOG Unreleased items under a version
+   header. PR → merge.
+2. Sign + verify + push the tag per the SOP.
+3. **GitHub Actions > Release > Run workflow**, enter the tag, type `RELEASE`.
 
 ### Version Conventions
 - **App version (Dev)**: `X.Y.Z-devN` in code, `vX.Y.Z-devN` in tags

@@ -61,4 +61,5 @@ it. To pull a release, delete its GitHub Release/tag so the checker stops
 offering it. Operators can roll a single host back via the in-app rollback
 (the prior ref is saved before every update).
 
-Related: [release-system.md](release-system.md), [deployment.md](deployment.md).
+Related: [release-sop.md](release-sop.md) (how to cut a release),
+[release-system.md](release-system.md), [deployment.md](deployment.md).

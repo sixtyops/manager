@@ -76,11 +76,15 @@ the app updater.
 Pipeline:
 1. Validation step (manual release only).
 2. Test step (`pytest -v`).
-3. GitHub Release creation:
+3. **Signature gate:** the tag must carry a valid GPG signature from the
+   trusted release key or the run fails and nothing publishes (see
+   [self-update-signing.md](self-update-signing.md) and the runner notes in
+   [repo-hardening.md](repo-hardening.md)).
+4. GitHub Release creation:
    - prerelease for dev tags
    - full release for manual stable flow
-4. GHCR image push:
-   - always pushes `ghcr.io/sixtyops/manager:<tag>`
+5. GHCR image push:
+   - always pushes `ghcr.io/sixtyops/manager:<tag>` (dev pushes also move `:dev`)
    - stable flow also pushes `:latest`
 
 ### 4) Build Appliance (`.github/workflows/build-appliance.yml`)
@@ -152,21 +156,9 @@ docker compose -f docker-compose.yml -f docker-compose.standalone.yml up -d --bu
 
 **Caveat — shared resource:** the dev host is a singleton. Other PRs' `dev_blocking` CI runs hit the same host while a feature branch is deployed there, so their results reflect the deployed branch, not their own. Coordinate with anyone whose PR is mid-CI before deploying, and revert to the latest dev tag when finished.
 
-## Recommended Release Procedure
+## Release Procedure
 
-### Dev Release
-1. Bump `updater/__init__.py` to `X.Y.Z-devN`.
-2. Commit, tag `vX.Y.Z-devN`, push with tags.
-3. CI auto-creates a pre-release and pushes the Docker image.
-
-### Stable Release
-1. Bump `updater/__init__.py` to `X.Y.Z`.
-2. Update CHANGELOG.md with a version header.
-3. Commit, tag `vX.Y.Z`, push with tags.
-4. Run Release workflow manually with `tag=vX.Y.Z` and `confirm=RELEASE`.
-5. Verify:
-   - GitHub Release exists and is not prerelease
-   - GHCR has `vX.Y.Z` and `latest`
-6. Smoke-check updater endpoints/UI in a running instance:
-   - `POST /api/updates/check`
-   - `GET /api/updates`
+Step-by-step (including tag signing, verification, and failure recovery) lives
+in **[release-sop.md](release-sop.md)** — the single source of truth for
+cutting a release. Tags must be GPG-signed; the short form there is: merge the
+version-bump PR, sign the tag at `origin/main`, push the tag by name.
