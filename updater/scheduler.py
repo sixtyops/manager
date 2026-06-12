@@ -627,19 +627,20 @@ class AutoUpdateScheduler:
         # (pct10) of newly-released firmware until the Firmware Hold clears — the
         # release-date soak, or earlier once a device of that model family is
         # confirmed working on it (the operator's manual canary). The hold is
-        # evaluated per family and used both here and to filter held-family
-        # devices out of the wave below.
+        # evaluated per family but enforced all-or-nothing at the wave: while ANY
+        # in-scope family with pending work is still held, the first wave waits.
+        # Once it runs, nothing is held, so the whole fleet (all families, incl.
+        # attached CPEs) rolls together 10% -> 50% -> 100% with no held firmware
+        # slipping out — and the rollout never advances/completes with held work
+        # still outstanding.
         window_key = now.strftime("%Y-%m-%d")
         held_families, family_holds = self._held_families(settings, rollout)
         first_wave_held = False
         if rollout.get("phase") == "pct10" and held_families:
-            has_cleared, has_held = self._pending_split_by_hold(
+            _, has_held = self._pending_split_by_hold(
                 settings, rollout, allow_downgrade, held_families
             )
-            # Fully held only when every pending device is in a held family. If a
-            # cleared family still has work, the wave runs for it and the held
-            # families are filtered out of the batch (per-family independence).
-            first_wave_held = has_held and not has_cleared
+            first_wave_held = has_held
 
         may_run, gate_reason = rollout_gate.phase_run_decision(
             rollout, window_key, first_wave_held=first_wave_held
@@ -679,8 +680,8 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
             return
 
-        batch_ips = self._get_devices_for_phase(rollout, scope_ips, allow_downgrade, settings, held_families=held_families)
-        batch_switches = self._get_switches_for_phase(rollout, switch_scope, allow_downgrade, settings, held_families=held_families)
+        batch_ips = self._get_devices_for_phase(rollout, scope_ips, allow_downgrade, settings)
+        batch_switches = self._get_switches_for_phase(rollout, switch_scope, allow_downgrade, settings)
 
         if not batch_ips and not batch_switches:
             current_phase = rollout["phase"]
@@ -689,9 +690,10 @@ class AutoUpdateScheduler:
             # the next wave with work. The firmware hold and one-wave-per-window
             # rules are enforced by the gate above (rollout_gate), so this path is
             # pure "skip an empty wave" bookkeeping — it touches no devices and
-            # therefore does not consume the window. Held-family devices are
-            # filtered out of the batch, so an all-held first wave never lands
-            # here (the gate blocks it as firmware_hold instead).
+            # therefore does not consume the window. Because the hold is enforced
+            # all-or-nothing at the gate (the first wave doesn't run while any
+            # family is held), an empty wave here means the work is genuinely done,
+            # not held — so completing is correct.
             db.complete_rollout_phase(rollout["id"])
             refreshed = db.get_rollout(rollout["id"])
 
@@ -704,8 +706,8 @@ class AutoUpdateScheduler:
                 return
 
             logger.info(f"Phase {current_phase} has no candidates, advanced to {refreshed['phase']}")
-            batch_ips = self._get_devices_for_phase(refreshed, scope_ips, allow_downgrade, settings, held_families=held_families)
-            batch_switches = self._get_switches_for_phase(refreshed, switch_scope, allow_downgrade, settings, held_families=held_families)
+            batch_ips = self._get_devices_for_phase(refreshed, scope_ips, allow_downgrade, settings)
+            batch_switches = self._get_switches_for_phase(refreshed, switch_scope, allow_downgrade, settings)
             rollout = refreshed
 
             if not batch_ips and not batch_switches:
@@ -1025,11 +1027,10 @@ class AutoUpdateScheduler:
         scope_ips: list[str],
         allow_downgrade: bool = False,
         settings: Optional[dict] = None,
-        held_families: Optional[set] = None,
     ) -> list[str]:
-        """Determine which APs to update in the current wave. APs whose model
-        family's Firmware Hold has not cleared are excluded (`held_families`) — they
-        wait, shown "on hold", and ride a later wave once their hold clears."""
+        """Determine which APs to update in the current wave. The Firmware Hold is
+        enforced all-or-nothing at the gate (the first wave doesn't run while any
+        family is held), so no per-family filtering is needed here."""
         phase = rollout["phase"]
         rollout_id = rollout["id"]
         actual_settings = settings or db.get_all_settings()
@@ -1048,8 +1049,6 @@ class AutoUpdateScheduler:
             ap = ap_dict.get(ip)
             if not ap:
                 continue
-            if held_families and _firmware_type_for_model(ap.get("model")) in held_families:
-                continue
             if self._ap_or_children_need_update(
                 ap, target_versions, allow_downgrade,
                 cpes_by_ap=cpes_by_ap, cooldown_days=cooldown_days
@@ -1064,10 +1063,10 @@ class AutoUpdateScheduler:
         scope_ips: list[str],
         allow_downgrade: bool = False,
         settings: Optional[dict] = None,
-        held_families: Optional[set] = None,
     ) -> list[str]:
-        """Determine which switches to update in the current wave. Switches whose
-        model family's Firmware Hold has not cleared are excluded (`held_families`)."""
+        """Determine which switches to update in the current wave. The Firmware
+        Hold is enforced all-or-nothing at the gate, so no per-family filtering is
+        needed here."""
         phase = rollout["phase"]
         rollout_id = rollout["id"]
         actual_settings = settings or db.get_all_settings()
@@ -1084,8 +1083,6 @@ class AutoUpdateScheduler:
                 continue
             switch = switch_dict.get(ip)
             if not switch:
-                continue
-            if held_families and _firmware_type_for_model(switch.get("model")) in held_families:
                 continue
             target_version = target_versions.get(_firmware_type_for_model(switch.get("model")), "")
             if _device_needs_update(

@@ -102,26 +102,18 @@ class TestSchedulerBankModeFiltering:
 
 
 class TestSchedulerCanaries:
-    def test_held_family_devices_excluded_from_wave(self, mock_db):
-        """Devices whose model family's Firmware Hold has not cleared are filtered
-        out of the wave (the per-family hold)."""
+    def test_wave_batch_takes_ten_percent_at_pct10(self, mock_db):
+        """The first wave selects ~10% of candidates (the Firmware Hold is enforced
+        at the gate, not by filtering the batch)."""
         _seed_rollout_devices()
         rollout_id = db.create_rollout("firmware.bin")
         rollout = db.get_rollout(rollout_id)
 
         scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
-
-        # No held families -> both candidates selected (pct10 takes ceil(10%)).
-        ap_all = scheduler._get_devices_for_phase(
+        ap_batch = scheduler._get_devices_for_phase(
             rollout, ["10.0.0.10", "10.0.0.11"], False, {}
         )
-        assert ap_all  # at least one device selected
-
-        # With tna-30x held, the tna-30x APs are excluded entirely.
-        ap_held = scheduler._get_devices_for_phase(
-            rollout, ["10.0.0.10", "10.0.0.11"], False, {}, held_families={"tna-30x"}
-        )
-        assert ap_held == []
+        assert len(ap_batch) == 1  # ceil(10% of 2)
 
     def test_ap_candidate_includes_current_ap_with_behind_cpe(self, mock_db):
         db.upsert_access_point("10.0.0.10", "root", "pass", enabled=True, model="TNA-301", firmware_version="1.2.3.123")

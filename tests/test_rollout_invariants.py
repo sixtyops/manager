@@ -283,8 +283,10 @@ async def test_hold_does_not_clear_for_unconfirmed_or_unhealthy_device(mock_db, 
 
 @pytest.mark.asyncio
 async def test_confirmed_clear_is_per_family(mock_db, monkeypatch):
-    """A confirmed tna-30x device never clears a held tna-303l family: the wave
-    runs only for the cleared family while the other stays held."""
+    """A confirmed tna-30x device never clears a held tna-303l family (the
+    per-family clearing invariant). Because the hold is enforced all-or-nothing,
+    a still-held 303l family holds the whole first wave even though tna-30x is
+    cleared — so no held firmware (incl. attached CPEs) ever slips out."""
     _seed_aps(10)  # tna-30x devices on 1.0.0
     db.upsert_access_point("10.0.0.50", "root", "pass", enabled=True,
                            firmware_version="1.0.0", model="TNA-303L")
@@ -301,12 +303,15 @@ async def test_confirmed_clear_is_per_family(mock_db, monkeypatch):
 
     h = _Harness(scheduler, monkeypatch)
     await h.tick(day=2)
-    # The wave runs (tna-30x cleared) but only updates tna-30x devices; the held
-    # 303l device is filtered out.
+    # All-or-nothing: the held 303l family holds the whole first wave.
+    assert start_update.call_count == 0
+    assert scheduler._state == "blocked_firmware_hold"
+
+    # Confirm a 303l device too -> both families cleared -> the wave runs.
+    _seed_confirmed("10.0.0.51", targets["tna-303l"], model="TNA-303L")
+    await h.tick(day=3)
     assert start_update.call_count == 1
-    rollout = db.get_active_rollout()
-    assigned = {d["ip"] for d in db.get_rollout_devices(rollout["id"])}
-    assert "10.0.0.50" not in assigned  # held 303l device excluded from the wave
+    assert scheduler._state == "running"
 
 
 # ── Halt-on-first-failure ──

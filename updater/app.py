@@ -5588,6 +5588,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         # Post-update smoke tests
         strict_mode = db.get_setting("smoke_test_strict", "false") == "true"
         smoke_failed = False
+        smoke_clean_pass = False  # smoke ran AND passed cleanly (no warnings, no error)
         if client:
             try:
                 progress_callback(ip, "Smoke testing...")
@@ -5611,6 +5612,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                         device_status.progress_message = f"{prefix}Updated to {result.new_version} (warnings: {warning_summary})"
                         logger.warning(f"Smoke test warnings for {ip}: {smoke_result.warnings}")
                 else:
+                    smoke_clean_pass = True
                     device_status.progress_message = f"{prefix}Updated to {result.new_version} (smoke tests passed)"
             except Exception as e:
                 logger.warning(f"Smoke test error for {ip} (non-fatal): {e}")
@@ -5619,13 +5621,15 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             if not smoke_failed:
                 device_status.status = "success"
 
-        # A device that updated and passed its smoke tests is "confirmed working"
-        # on the new firmware. One confirmed device of a model family clears that
-        # family's Firmware Hold for the auto-rollout (the operator's manual
-        # canary). On a strict smoke failure, halt the whole job
-        # (halt-on-first-failure) so a bad firmware can't spread past the first
-        # device(s) that exhibit it.
-        if device_status.status == "success" and result.new_version:
+        # A device that updated and *cleanly* passed its smoke tests is "confirmed
+        # working" on the new firmware. One confirmed device of a model family
+        # clears that family's Firmware Hold for the auto-rollout (the operator's
+        # manual canary). We require a clean smoke pass — NOT just a "success"
+        # status, which non-strict warnings and smoke-test exceptions also leave —
+        # so a device that didn't actually pass smoke can't release the fleet. On a
+        # strict smoke failure, halt the whole job (halt-on-first-failure) so a bad
+        # firmware can't spread past the first device(s) that exhibit it.
+        if smoke_clean_pass and result.new_version:
             try:
                 db.mark_device_firmware_confirmed(
                     ip, result.new_version, datetime.now(timezone.utc).isoformat()

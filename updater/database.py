@@ -257,6 +257,15 @@ def _migrate(db):
             "UPDATE rollouts SET phase = 'pct10' "
             "WHERE phase = 'canary' AND status IN ('active', 'paused')"
         ).rowcount
+        # Also remap the devices assigned to those rollouts' canary phase. Without
+        # this, a pending row with phase_assigned='canary' stays in the scheduler's
+        # already_done set forever (so it's never re-selected) while completion only
+        # checks pct10 — the device would be skipped through rollout completion.
+        db.execute(
+            "UPDATE rollout_devices SET phase_assigned = 'pct10' "
+            "WHERE phase_assigned = 'canary' AND rollout_id IN "
+            "(SELECT id FROM rollouts WHERE status IN ('active', 'paused'))"
+        )
         if remapped:
             logger.info(f"Migrated {remapped} in-flight rollout(s) from canary→pct10")
     except Exception as e:
