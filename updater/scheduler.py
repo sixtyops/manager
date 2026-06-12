@@ -226,6 +226,7 @@ class AutoUpdateScheduler:
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
+        self._weather_task: Optional[asyncio.Task] = None
         self._state = "disabled"
         self._block_reason: Optional[str] = None
         self._weather_info: Optional[dict] = None
@@ -260,8 +261,11 @@ class AutoUpdateScheduler:
         self._running = True
         self._task = asyncio.create_task(self._check_loop())
         logger.info(f"Auto-update scheduler started (interval: {self.check_interval}s)")
-        # Fetch weather eagerly so the header shows temperature immediately
-        asyncio.create_task(self._fetch_weather_initial())
+        # Fetch weather eagerly so the header shows temperature immediately. Keep
+        # the handle so stop() can cancel it — otherwise the fire-and-forget task
+        # can outlive the scheduler (e.g. in tests, leaving "Task was destroyed but
+        # it is pending" warnings at loop teardown).
+        self._weather_task = asyncio.create_task(self._fetch_weather_initial())
 
     def _recover_ran_today(self):
         """Recover the per-day run guard so a restart doesn't trigger a second job.
@@ -383,12 +387,14 @@ class AutoUpdateScheduler:
     async def stop(self):
         """Stop the scheduler."""
         self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+        for task in (self._task, self._weather_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._weather_task = None
         logger.info("Auto-update scheduler stopped")
 
     async def force_check(self):
