@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 # Do not start new scheduled jobs when the window has this many minutes or less remaining.
 SCHEDULE_END_BUFFER_MINUTES = 15
 
-# A same-model peer only counts as "already proven on the fleet" (for waiving the
-# canary soak) if it was seen this recently. One generous poll-day — a stale
-# device that hasn't reported in proves nothing about the firmware's health.
-PROVEN_PEER_SEEN_WITHIN = timedelta(hours=24)
+# A confirmed-working device only counts toward clearing its family's Firmware
+# Hold if it was seen this recently. One generous poll-day — a stale device that
+# hasn't reported in proves nothing about the firmware's current health.
+CONFIRMED_SEEN_WITHIN = timedelta(hours=24)
 
 _DAY_INDEX = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -55,7 +55,7 @@ def upcoming_window_starts(
     them by day-of-start, so we match.
 
     `earliest_after` lets callers push the answer past a hold/freeze clear
-    date (e.g. new-firmware canary hold).
+    date (e.g. the new-firmware Firmware Hold).
     """
     active_days = _parse_schedule_days(schedule_days)
     if not active_days:
@@ -216,7 +216,7 @@ class AutoUpdateScheduler:
         "blocked_time",
         "blocked_no_firmware",
         "blocked_all_current",
-        "blocked_canary_hold",
+        "blocked_firmware_hold",
     )
 
     def __init__(self, broadcast_func: Callable, start_update_func: Callable, check_interval: int = 60):
@@ -235,10 +235,10 @@ class AutoUpdateScheduler:
         self._last_run_time: Optional[str] = None
         self._current_job_id: Optional[str] = None
         self._ran_today: Set[str] = set()
-        self._manual_canary_job_ids: Set[str] = set()
-        # Human-readable note when the canary soak was waived because the target
-        # firmware is already proven on the fleet (None when not waiving).
-        self._soak_waiver_reason: Optional[str] = None
+        # Human-readable note when a family's Firmware Hold was cleared early
+        # because a device is confirmed working on the new firmware (None when no
+        # early clear is in effect).
+        self._hold_clear_reason: Optional[str] = None
 
     @staticmethod
     def _firmware_changed(rollout: dict, fw_30x: str, fw_303l: str, fw_tns100: str) -> bool:
@@ -621,47 +621,39 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
             return
 
-        # ── Phase gate: one phase per maintenance window + canary soak ──
-        # Single source of truth in rollout_gate (fail-closed). This is what
-        # stops all phases from cascading through a single maintenance window.
+        # ── Wave gate: one wave per maintenance window + firmware hold ──
+        # Single source of truth in rollout_gate (fail-closed). Rule 1 stops all
+        # waves cascading through one window. Rule 2 holds the first fleet wave
+        # (pct10) of newly-released firmware until the Firmware Hold clears — the
+        # release-date soak, or earlier once a device of that model family is
+        # confirmed working on it (the operator's manual canary). The hold is
+        # evaluated per family and used both here and to filter held-family
+        # devices out of the wave below.
         window_key = now.strftime("%Y-%m-%d")
-        canary_soak = timedelta(days=_as_int(settings.get("firmware_canary_hold_days", "6"), 6))
-        # The canary phase and its soak both exist to prove a new firmware on real
-        # hardware before fleet exposure. When healthy same-model peers already run
-        # the target, that proof exists — so skip the canary phase outright (go
-        # straight to the 10% wave) and waive the pct10 soak. Compute once; it's
-        # only meaningful at canary/pct10.
-        soak_proven, proven_detail = (False, None)
-        if rollout.get("phase") in ("canary", "pct10"):
-            soak_proven, proven_detail = self._proven_soak_signal(settings, rollout)
-
-        canary_skipped_now = False
-        if rollout.get("phase") == "canary" and soak_proven:
-            # Skip canary -> pct10 with no canary job. complete_rollout_phase does
-            # NOT stamp last_phase_window, so pct10 still runs THIS window; the
-            # one-phase-per-window rule re-arms when the pct10 job starts.
-            db.set_canary_completed_at(rollout["id"], datetime.now(timezone.utc).isoformat())
-            db.complete_rollout_phase(rollout["id"])
-            rollout = db.get_rollout(rollout["id"])
-            canary_skipped_now = True
-            logger.info(f"Rollout {rollout['id']} canary skipped — firmware proven on fleet")
+        held_families, family_holds = self._held_families(settings, rollout)
+        first_wave_held = False
+        if rollout.get("phase") == "pct10" and held_families:
+            has_cleared, has_held = self._pending_split_by_hold(
+                settings, rollout, allow_downgrade, held_families
+            )
+            # Fully held only when every pending device is in a held family. If a
+            # cleared family still has work, the wave runs for it and the held
+            # families are filtered out of the batch (per-family independence).
+            first_wave_held = has_held and not has_cleared
 
         may_run, gate_reason = rollout_gate.phase_run_decision(
-            rollout, window_key, now, canary_soak, soak_proven=soak_proven
+            rollout, window_key, first_wave_held=first_wave_held
         )
         if not may_run:
-            self._soak_waiver_reason = None
-            if gate_reason == "canary_soak":
-                _, remaining = rollout_gate.canary_soak_cleared(rollout, now, canary_soak)
-                days = remaining.total_seconds() / 86400 if remaining else 0
-                remaining_str = f"{days:.1f} days" if days >= 1 else f"{days * 24:.0f} hours"
-                new_reason = f"Soak test — holding the 10% wave (~{remaining_str} left)"
+            self._hold_clear_reason = None
+            if gate_reason == "firmware_hold":
+                new_reason = self._firmware_hold_block_reason(held_families, family_holds)
                 if self._block_reason != new_reason:
-                    db.log_schedule_event("blocked_canary_hold", new_reason)
-                self._state = "blocked_canary_hold"
+                    db.log_schedule_event("blocked_firmware_hold", new_reason)
+                self._state = "blocked_firmware_hold"
                 self._block_reason = new_reason
             else:
-                new_reason = "One phase per maintenance window — next phase next window"
+                new_reason = "One wave per maintenance window — next wave next window"
                 if self._block_reason != new_reason:
                     db.log_schedule_event("phase_held", f"Rollout {rollout['id']}: {gate_reason}")
                 self._state = "waiting"
@@ -669,20 +661,13 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
             return
 
-        # Past the gate. When the soak cleared early because the firmware is proven
-        # on the fleet, record it honestly (once) — distinguishing a full canary
-        # skip from a soak waiver — never a silent advance.
-        if gate_reason == "canary_soak_waived":
-            event, label = (
-                ("canary_skipped", "Canary skipped") if canary_skipped_now
-                else ("canary_soak_waived", "Canary soak waived")
-            )
-            reason_text = f"{label} — {proven_detail or 'firmware already proven on the fleet'}"
-            if self._soak_waiver_reason != reason_text:
-                db.log_schedule_event(event, f"Rollout {rollout['id']}: {reason_text}")
-            self._soak_waiver_reason = reason_text
-        else:
-            self._soak_waiver_reason = None
+        # Past the gate. If a family's hold was cleared early by a confirmed
+        # device (rather than the days elapsing), surface it honestly (logged
+        # once) — never a silent advance.
+        clear_note = self._early_clear_note(rollout, family_holds)
+        if clear_note and clear_note != self._hold_clear_reason:
+            db.log_schedule_event("firmware_hold_cleared", f"Rollout {rollout['id']}: {clear_note}")
+        self._hold_clear_reason = clear_note
 
         scope_ips = self._resolve_scope(settings)
         switch_scope = self._resolve_switch_scope(settings)
@@ -694,17 +679,19 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
             return
 
-        batch_ips = self._get_devices_for_phase(rollout, scope_ips, allow_downgrade, settings)
-        batch_switches = self._get_switches_for_phase(rollout, switch_scope, allow_downgrade, settings)
+        batch_ips = self._get_devices_for_phase(rollout, scope_ips, allow_downgrade, settings, held_families=held_families)
+        batch_switches = self._get_switches_for_phase(rollout, switch_scope, allow_downgrade, settings, held_families=held_families)
 
         if not batch_ips and not batch_switches:
             current_phase = rollout["phase"]
 
-            # The current phase has no devices left to update. Advance to find
-            # the next phase with work. The canary soak and one-phase-per-window
-            # rules are enforced by the phase gate above (rollout_gate), so this
-            # path is pure "skip an empty phase" bookkeeping — it touches no
-            # devices and therefore does not consume the window.
+            # The current wave has no devices left to update. Advance to find
+            # the next wave with work. The firmware hold and one-wave-per-window
+            # rules are enforced by the gate above (rollout_gate), so this path is
+            # pure "skip an empty wave" bookkeeping — it touches no devices and
+            # therefore does not consume the window. Held-family devices are
+            # filtered out of the batch, so an all-held first wave never lands
+            # here (the gate blocks it as firmware_hold instead).
             db.complete_rollout_phase(rollout["id"])
             refreshed = db.get_rollout(rollout["id"])
 
@@ -717,8 +704,8 @@ class AutoUpdateScheduler:
                 return
 
             logger.info(f"Phase {current_phase} has no candidates, advanced to {refreshed['phase']}")
-            batch_ips = self._get_devices_for_phase(refreshed, scope_ips, allow_downgrade, settings)
-            batch_switches = self._get_switches_for_phase(refreshed, switch_scope, allow_downgrade, settings)
+            batch_ips = self._get_devices_for_phase(refreshed, scope_ips, allow_downgrade, settings, held_families=held_families)
+            batch_switches = self._get_switches_for_phase(refreshed, switch_scope, allow_downgrade, settings, held_families=held_families)
             rollout = refreshed
 
             if not batch_ips and not batch_switches:
@@ -776,128 +763,6 @@ class AutoUpdateScheduler:
             logger.error(f"Scheduler failed to start update: {e}")
             await self._broadcast_status()
 
-    async def trigger_canary_now(self):
-        """Start the canary phase immediately, outside the maintenance window."""
-        settings = db.get_all_settings()
-        if settings.get("schedule_enabled") != "true":
-            raise RuntimeError("Automatic firmware rollout is disabled")
-        if self._current_job_id is not None:
-            raise RuntimeError("A rollout job is already running")
-
-        tz_str = settings.get("timezone", "auto")
-        if tz_str == "auto":
-            tz_str = await services.get_timezone()
-
-        time_ok, time_result = await services.validate_time_sources(tz_str)
-        if not time_ok:
-            raise RuntimeError(str(time_result))
-        now = time_result
-
-        if settings.get("weather_check_enabled") == "true":
-            today_key = now.strftime("%Y-%m-%d")
-            if self._weather_checked_today != today_key:
-                zip_code = settings.get("zip_code", "")
-                min_temp_c = _as_float(settings.get("min_temperature_c", "-10"), -10.0)
-                weather_ok, weather_data = await services.check_weather_ok(
-                    zip_code if zip_code else None, min_temp_c
-                )
-                self._weather_info = weather_data
-                self._weather_ok = weather_ok
-                self._weather_checked_today = today_key
-            else:
-                weather_ok = self._weather_ok
-            if not weather_ok:
-                temp_c = self._weather_info.get("temperature_c") if self._weather_info else None
-                min_temp_c = _as_float(settings.get("min_temperature_c", "-10"), -10.0)
-                temp_unit = await services.resolve_temperature_unit(settings.get("temperature_unit", "auto"))
-                temp_str = format_temperature(temp_c, temp_unit) if temp_c is not None else "?"
-                min_temp_str = format_temperature(min_temp_c, temp_unit)
-                raise RuntimeError(f"Temperature {temp_str} is below minimum {min_temp_str}")
-
-        fw_30x = settings.get("selected_firmware_30x", "")
-        if not fw_30x:
-            raise RuntimeError("No firmware selected")
-        fw_303l = settings.get("selected_firmware_303l", "")
-        fw_tns100 = settings.get("selected_firmware_tns100", "")
-        allow_downgrade = settings.get("allow_downgrade", "false") == "true"
-
-        rollout = db.get_active_rollout()
-        if rollout and self._firmware_changed(rollout, fw_30x, fw_303l, fw_tns100):
-            db.cancel_rollout(rollout["id"])
-            db.log_schedule_event("rollout_cancelled", "Firmware selection changed")
-            rollout = None
-        if rollout and rollout["status"] == "paused":
-            raise RuntimeError("Current rollout is paused. Resume or reset it first")
-        if rollout and rollout["phase"] != "canary":
-            raise RuntimeError("Current rollout is already past canary")
-
-        scope_ips = self._resolve_scope(settings)
-        switch_scope = self._resolve_switch_scope(settings)
-
-
-        if rollout is None:
-            last = db.get_last_rollout_for_firmware_set(fw_30x, fw_303l, fw_tns100)
-            if last and last["status"] == "completed":
-                target_versions = self._target_versions(settings, None)
-                cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
-                needs_update = self._filter_devices_needing_update(
-                    scope_ips, target_versions, allow_downgrade, cooldown_days=cooldown_days
-                )
-                needs_switch_update = self._filter_switches_needing_update(
-                    switch_scope, target_versions, allow_downgrade, cooldown_days=cooldown_days
-                )
-                if not needs_update and not needs_switch_update:
-                    raise RuntimeError("All devices are already current")
-            rollout_id = db.create_rollout(fw_30x, fw_303l if fw_303l else None, fw_tns100 if fw_tns100 else None)
-            rollout = db.get_rollout(rollout_id)
-            db.log_schedule_event("rollout_created", f"Manual canary rollout {rollout_id} for {fw_30x}")
-
-        batch_ips = self._get_devices_for_phase(rollout, scope_ips, allow_downgrade, settings)
-        batch_switches = self._get_switches_for_phase(rollout, switch_scope, allow_downgrade, settings)
-        if rollout["phase"] != "canary":
-            raise RuntimeError("Canary is no longer pending for this rollout")
-        if not batch_ips and not batch_switches:
-            raise RuntimeError("No pending canary devices need updates")
-
-        for ip in batch_ips:
-            db.assign_device_to_rollout(rollout["id"], ip, "ap", rollout["phase"])
-        for ip in batch_switches:
-            db.assign_device_to_rollout(rollout["id"], ip, "switch", rollout["phase"])
-
-        self._state = "running"
-        self._block_reason = None
-        await self._broadcast_status()
-
-        bank_mode = settings.get("bank_mode", "both")
-        concurrency = _as_int(settings.get("parallel_updates", "2"), 2)
-        end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
-        try:
-            job_id = await self.start_update_func(
-                ap_ips=batch_ips,
-                switch_ips=batch_switches,
-                firmware_file=fw_30x,
-                firmware_file_303l=fw_303l,
-                firmware_file_tns100=fw_tns100,
-                bank_mode=bank_mode,
-                concurrency=concurrency,
-                end_hour=end_hour,
-                schedule_timezone=tz_str,
-                enforce_window_cutoff=False,
-            )
-            self._current_job_id = job_id
-            self._manual_canary_job_ids.add(job_id)
-            db.set_rollout_job_id(rollout["id"], job_id)
-            # Stamp the window so the next phase still waits for a maintenance
-            # window even when canary was triggered manually inside one.
-            db.set_rollout_phase_window(rollout["id"], now.strftime("%Y-%m-%d"))
-            db.log_schedule_event("job_started", f"Manual canary job {job_id} for rollout {rollout['id']}", job_id=job_id)
-            await self._broadcast_status()
-        except Exception:
-            self._state = "idle"
-            self._block_reason = "Failed to start canary"
-            await self._broadcast_status()
-            raise
-
     def _target_versions(self, settings: dict, rollout: Optional[dict]) -> dict[str, str]:
         """Build target versions for each firmware family."""
         rollout = rollout or {}
@@ -916,93 +781,181 @@ class AutoUpdateScheduler:
                 targets[fw_type] = "__unknown__"
         return targets
 
-    def _proven_soak_signal(self, settings: dict, rollout: dict) -> tuple[bool, Optional[str]]:
-        """Decide whether the canary soak can be WAIVED because the target firmware
-        is already proven on this fleet.
+    def _confirmed_family_devices(
+        self, settings: dict, rollout: dict, targets: dict[str, str]
+    ) -> dict[str, str]:
+        """For each firmware family, return the IP of an in-scope managed device
+        (AP/switch) CONFIRMED WORKING on the target version, or omit the family.
 
-        The canary soak exists to prove a new firmware doesn't brick real hardware
-        before widening past canary. When healthy same-model peers are *already*
-        running the target version, that proof already exists — so the soak is
-        redundant. Returns (proven, detail); `detail` is a short human string for
-        the log/UI when proven.
-
-        Rule (operator-chosen): waive only when EVERY firmware family that still
-        has a device needing this rollout's update has >=1 healthy same-family
-        peer already on the target version. "Healthy" = enabled AP/switch, on the
-        target version, no `last_error`, and seen within PROVEN_PEER_SEEN_WITHIN.
-
-        Both the proof and the pending set are built from the rollout's resolved
-        schedule_scope, so a scoped (site/AP) rollout's canary is never waived by a
-        device outside that scope — the in-scope devices must prove it themselves.
-
-        Fail-closed: unreadable fleet, an unproven pending family, or no pending
-        work at all -> not proven (hold / let the normal flow handle it). Scoped
-        per family, so an unproven model never rides a proven model's clearance.
+        Confirmed = a recorded confirmation event (updated to the version + passed
+        post-update smoke tests) AND currently healthy on it (on-version, no
+        `last_error`, seen within CONFIRMED_SEEN_WITHIN). This is the operator's
+        manual canary: one confirmed device clears its family's Firmware Hold.
+        Per-family — a confirmed tna-30x never clears tna-303l. Proof is restricted
+        to the rollout's resolved scope. Fail-closed: an unreadable fleet yields no
+        confirmations, so families stay held.
         """
-        targets = self._target_versions(settings, rollout)
-        allow_downgrade = settings.get("allow_downgrade", "true") == "true"
-        cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
         try:
-            # Restrict to the SAME devices the phase will actually update — both the
-            # proof and the pending set come from the resolved rollout scope, so a
-            # scoped (site/AP) rollout is never marked proven by an out-of-scope
-            # device while its own in-scope devices remain unproven.
             scope_ips = set(self._resolve_scope(settings))
             switch_scope = set(self._resolve_switch_scope(settings))
             ap_dict = db.get_all_access_points_dict(enabled_only=True)
             switch_dict = db.get_all_switches_dict(enabled_only=True)
-            cpes_by_ap = db.get_all_cpes_grouped()
         except Exception as e:  # pragma: no cover - defensive
-            logger.warning(f"Proven-soak check could not read fleet, holding: {e}")
-            return False, None
+            logger.warning(f"Confirmed-family check could not read fleet, holding: {e}")
+            return {}
 
-        aps = [ap_dict[ip] for ip in scope_ips if ip in ap_dict]
-        switches = [switch_dict[ip] for ip in switch_scope if ip in switch_dict]
-
-        cutoff = datetime.now(timezone.utc) - PROVEN_PEER_SEEN_WITHIN
-        proven: dict[str, list] = {}   # family -> [count, model_label, version]
-        pending: set[str] = set()      # families with >=1 device still needing the update
-
-        # "Proven on real hardware" is defined by managed devices (APs + switches),
-        # which carry clean health signals (last_error / last_seen).
-        for dev in aps + switches:
+        devices = (
+            [ap_dict[ip] for ip in scope_ips if ip in ap_dict]
+            + [switch_dict[ip] for ip in switch_scope if ip in switch_dict]
+        )
+        cutoff = datetime.now(timezone.utc) - CONFIRMED_SEEN_WITHIN
+        confirmed_ips_cache: dict[str, set] = {}
+        result: dict[str, str] = {}
+        for dev in devices:
             fam = _firmware_type_for_model(dev.get("model"))
+            if fam in result:
+                continue
             target_v = targets.get(fam, "")
             if not target_v or target_v == "__unknown__":
                 continue
-            if (dev.get("firmware_version") == target_v
-                    and not dev.get("last_error")
-                    and _seen_within(dev.get("last_seen"), cutoff)):
-                entry = proven.setdefault(fam, [0, dev.get("model") or fam, target_v])
-                entry[0] += 1
+            if dev.get("firmware_version") != target_v or dev.get("last_error"):
+                continue
+            if not _seen_within(dev.get("last_seen"), cutoff):
+                continue
+            if target_v not in confirmed_ips_cache:
+                confirmed_ips_cache[target_v] = db.get_confirmed_ips_for_version(target_v)
+            if dev["ip"] in confirmed_ips_cache[target_v]:
+                result[fam] = dev["ip"]
+        return result
 
-        # Pending = any enabled in-fleet device (AP, attached CPE, or switch) that
-        # still needs this update, grouped by its firmware family.
-        def _mark_pending(dev: dict):
+    def _held_families(self, settings: dict, rollout: Optional[dict]) -> tuple[set, dict]:
+        """Per-family Firmware Hold state for the firmware this rollout is rolling.
+
+        A family is HELD when its target firmware's release-date hold has not
+        elapsed AND no in-scope healthy device of that family is confirmed working
+        on it. Returns (held_families, family_holds); family_holds maps each family
+        with a selected firmware to {held, clears_at, confirmed_by, version,
+        cleared_by_device}. `cleared_by_device` is True when the release-date hold
+        has NOT elapsed but a confirmed device cleared the family early (for the
+        honest UI/log note). Fail-closed via _confirmed_family_devices.
+        """
+        rollout = rollout or {}
+        targets = self._target_versions(settings, rollout)
+        files = {
+            "tna-30x": rollout.get("firmware_file") or settings.get("selected_firmware_30x", ""),
+            "tna-303l": rollout.get("firmware_file_303l") or settings.get("selected_firmware_303l", ""),
+            "tns-100": rollout.get("firmware_file_tns100") or settings.get("selected_firmware_tns100", ""),
+        }
+        hold_days = _as_int(settings.get("firmware_canary_hold_days", "6"), 6)
+        confirmed_by = (
+            self._confirmed_family_devices(settings, rollout, targets) if hold_days > 0 else {}
+        )
+
+        held_families: set = set()
+        family_holds: dict = {}
+        for fam, fname in files.items():
+            if not fname:
+                continue
+            target_v = targets.get(fam, "")
+            if not target_v or target_v == "__unknown__":
+                continue
+            if hold_days <= 0:
+                family_holds[fam] = {"held": False, "clears_at": None, "confirmed_by": None,
+                                     "version": target_v, "cleared_by_device": False}
+                continue
+            info = db.get_firmware_hold_info(fname, hold_days)
+            cleared_by_time = bool(info.get("cleared", True))
+            prover = confirmed_by.get(fam)
+            is_held = (not cleared_by_time) and (prover is None)
+            family_holds[fam] = {
+                "held": is_held,
+                "clears_at": info.get("clears_at"),
+                "confirmed_by": prover,
+                "version": target_v,
+                "cleared_by_device": (not cleared_by_time) and (prover is not None),
+            }
+            if is_held:
+                held_families.add(fam)
+        return held_families, family_holds
+
+    def _pending_split_by_hold(
+        self, settings: dict, rollout: dict, allow_downgrade: bool, held_families: set
+    ) -> tuple[bool, bool]:
+        """Scan in-scope APs/switches/CPEs that still need this update and split by
+        whether the device's firmware family hold is cleared. Returns
+        (has_cleared_pending, has_held_pending) — used to decide whether the first
+        wave is FULLY held (held pending exists, nothing cleared to roll).
+        Fail-closed: an unreadable fleet reports held."""
+        target_versions = self._target_versions(settings, rollout)
+        cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
+        try:
+            scope_ips = self._resolve_scope(settings)
+            switch_scope = self._resolve_switch_scope(settings)
+            ap_dict = db.get_all_access_points_dict(enabled_only=True)
+            switch_dict = db.get_all_switches_dict(enabled_only=True)
+            cpes_by_ap = db.get_all_cpes_grouped()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Pending-split check could not read fleet, holding: {e}")
+            return False, True
+
+        flags = {"cleared": False, "held": False}
+
+        def _account(dev: dict):
             fam = _firmware_type_for_model(dev.get("model"))
             if _device_needs_update(
-                dev.get("firmware_version", ""), targets.get(fam, ""), allow_downgrade,
+                dev.get("firmware_version", ""), target_versions.get(fam, ""), allow_downgrade,
                 last_update_iso=dev.get("last_firmware_update"), cooldown_days=cooldown_days,
             ):
-                pending.add(fam)
+                flags["held" if fam in held_families else "cleared"] = True
 
-        for ap in aps:
-            _mark_pending(ap)
-            for cpe in cpes_by_ap.get(ap["ip"], []):
+        for ip in scope_ips:
+            ap = ap_dict.get(ip)
+            if not ap:
+                continue
+            _account(ap)
+            for cpe in cpes_by_ap.get(ip, []):
                 if cpe.get("auth_status") == "ok":
-                    _mark_pending(cpe)
-        for sw in switches:
-            _mark_pending(sw)
+                    _account(cpe)
+        for ip in switch_scope:
+            sw = switch_dict.get(ip)
+            if sw:
+                _account(sw)
+        return flags["cleared"], flags["held"]
 
-        if not pending:
-            return False, None  # nothing to widen to — let the normal flow proceed
-        if not pending.issubset(set(proven.keys())):
-            return False, None  # a family with pending work has no proven peer — hold
-        detail = "; ".join(
-            f"{proven[f][0]} healthy {proven[f][1]} already on {proven[f][2]}"
-            for f in sorted(pending)
-        )
-        return True, detail
+    @staticmethod
+    def _firmware_hold_block_reason(held_families: set, family_holds: dict) -> str:
+        """Human reason for a blocked_firmware_hold state."""
+        soonest = None
+        for fam in held_families:
+            ca = (family_holds.get(fam) or {}).get("clears_at")
+            if ca and (soonest is None or ca < soonest):
+                soonest = ca
+        models = ", ".join(sorted(held_families)) or "new firmware"
+        if soonest:
+            try:
+                day = datetime.fromisoformat(soonest).date().isoformat()
+                return (
+                    f"Firmware hold — soaking {models} until {day} "
+                    f"(or until a device is confirmed working on it)"
+                )
+            except (TypeError, ValueError):
+                pass
+        return f"Firmware hold — soaking {models} before the first fleet wave"
+
+    @staticmethod
+    def _early_clear_note(rollout: Optional[dict], family_holds: dict) -> Optional[str]:
+        """If a family's hold was cleared early by a confirmed device, return a
+        short honest note naming it (only meaningful at the first wave)."""
+        if not rollout or rollout.get("phase") != "pct10":
+            return None
+        notes = [
+            f"{fam} confirmed working on {d['confirmed_by']}"
+            for fam, d in sorted(family_holds.items())
+            if d.get("cleared_by_device") and d.get("confirmed_by")
+        ]
+        if not notes:
+            return None
+        return "Firmware hold cleared early — " + "; ".join(notes)
 
     def _ap_or_children_need_update(self, ap: dict, target_versions: dict[str, str], allow_downgrade: bool,
                                      cpes_by_ap: Optional[dict[str, list[dict]]] = None, cooldown_days: int = 0) -> bool:
@@ -1072,8 +1025,11 @@ class AutoUpdateScheduler:
         scope_ips: list[str],
         allow_downgrade: bool = False,
         settings: Optional[dict] = None,
+        held_families: Optional[set] = None,
     ) -> list[str]:
-        """Determine which APs to update in the current phase."""
+        """Determine which APs to update in the current wave. APs whose model
+        family's Firmware Hold has not cleared are excluded (`held_families`) — they
+        wait, shown "on hold", and ride a later wave once their hold clears."""
         phase = rollout["phase"]
         rollout_id = rollout["id"]
         actual_settings = settings or db.get_all_settings()
@@ -1092,14 +1048,15 @@ class AutoUpdateScheduler:
             ap = ap_dict.get(ip)
             if not ap:
                 continue
+            if held_families and _firmware_type_for_model(ap.get("model")) in held_families:
+                continue
             if self._ap_or_children_need_update(
                 ap, target_versions, allow_downgrade,
                 cpes_by_ap=cpes_by_ap, cooldown_days=cooldown_days
             ):
                 candidates.append(ip)
 
-        preferred_canaries = self._preferred_canary_devices(actual_settings, "rollout_canary_aps")
-        return self._select_phase_batch(phase, candidates, preferred_canaries)
+        return self._select_phase_batch(phase, candidates)
 
     def _get_switches_for_phase(
         self,
@@ -1107,8 +1064,10 @@ class AutoUpdateScheduler:
         scope_ips: list[str],
         allow_downgrade: bool = False,
         settings: Optional[dict] = None,
+        held_families: Optional[set] = None,
     ) -> list[str]:
-        """Determine which switches to update in the current phase."""
+        """Determine which switches to update in the current wave. Switches whose
+        model family's Firmware Hold has not cleared are excluded (`held_families`)."""
         phase = rollout["phase"]
         rollout_id = rollout["id"]
         actual_settings = settings or db.get_all_settings()
@@ -1126,6 +1085,8 @@ class AutoUpdateScheduler:
             switch = switch_dict.get(ip)
             if not switch:
                 continue
+            if held_families and _firmware_type_for_model(switch.get("model")) in held_families:
+                continue
             target_version = target_versions.get(_firmware_type_for_model(switch.get("model")), "")
             if _device_needs_update(
                 switch.get("firmware_version", ""),
@@ -1136,19 +1097,12 @@ class AutoUpdateScheduler:
             ):
                 candidates.append(ip)
 
-        preferred_canaries = self._preferred_canary_devices(actual_settings, "rollout_canary_switches")
-        return self._select_phase_batch(phase, candidates, preferred_canaries)
+        return self._select_phase_batch(phase, candidates)
 
-    def _select_phase_batch(self, phase: str, candidates: list[str], preferred_canaries: Optional[list[str]] = None) -> list[str]:
-        """Select the devices for a rollout phase, preferring configured canaries."""
+    def _select_phase_batch(self, phase: str, candidates: list[str]) -> list[str]:
+        """Select the devices for a rollout wave (pct10 -> pct50 -> pct100)."""
         if not candidates:
             return []
-
-        if phase == "canary":
-            preferred = [ip for ip in (preferred_canaries or []) if ip in candidates]
-            if preferred:
-                return preferred
-            return candidates[:1]
         if phase == "pct10":
             batch_size = max(1, math.ceil(len(candidates) * 0.1))
         elif phase == "pct50":
@@ -1156,20 +1110,6 @@ class AutoUpdateScheduler:
         else:
             batch_size = len(candidates)
         return candidates[:batch_size]
-
-    def _preferred_canary_devices(self, settings: Optional[dict], key: str) -> list[str]:
-        """Return unique, ordered canary IPs from settings."""
-        if not settings:
-            return []
-        result = []
-        seen = set()
-        for raw in settings.get(key, "").split(","):
-            ip = raw.strip()
-            if not ip or ip in seen:
-                continue
-            seen.add(ip)
-            result.append(ip)
-        return result
 
     def on_job_completed(
         self,
@@ -1201,9 +1141,6 @@ class AutoUpdateScheduler:
             self._current_job_id = None
 
         self._last_run_time = datetime.now().isoformat()
-        manual_canary = job_id in self._manual_canary_job_ids
-        if manual_canary:
-            self._manual_canary_job_ids.discard(job_id)
 
         rollout = db.get_active_rollout()
         if rollout and rollout.get("last_job_id") == job_id:
@@ -1219,7 +1156,7 @@ class AutoUpdateScheduler:
                 return
 
             if failed_count > 0:
-                reason = f"{failed_count} device(s) failed during {rollout['phase']} phase"
+                reason = f"{failed_count} device(s) failed during the {rollout['phase']} wave"
                 db.pause_rollout(rollout["id"], reason)
                 if device_statuses:
                     for ip, status in device_statuses.items():
@@ -1243,57 +1180,37 @@ class AutoUpdateScheduler:
                 else:
                     db.mark_rollout_phase_devices(rollout["id"], rollout["phase"], "updated")
 
-                # Canary safety: if canary phase completed with 0 actual updates, pause
-                if rollout["phase"] == "canary" and success_count == 0:
-                    reason = "Canary phase had no eligible devices — verify canary device availability"
-                    db.pause_rollout(rollout["id"], reason)
-                    self._last_run_result = f"Rollout paused: {reason}"
-                    db.log_schedule_event("rollout_paused", reason, job_id=job_id)
-                    logger.warning(f"Rollout {rollout['id']} paused: {reason}")
+                # Check if any devices were deferred (window cutoff) — don't advance wave
+                phase_devices = db.get_rollout_devices(rollout["id"], phase=rollout["phase"])
+                deferred_count = sum(1 for d in phase_devices if d["status"] == "deferred")
+                if deferred_count > 0:
+                    self._last_run_result = (
+                        f"Wave {rollout['phase']}: {success_count} updated, "
+                        f"{deferred_count} deferred (will retry next window)"
+                    )
+                    db.log_schedule_event(
+                        "phase_deferred",
+                        f"Wave {rollout['phase']}: {deferred_count} device(s) deferred",
+                        job_id=job_id,
+                    )
+                    logger.info(f"Rollout {rollout['id']} wave {rollout['phase']} has {deferred_count} deferred device(s)")
                 else:
-                    # Check if any devices were deferred (window cutoff) — don't advance phase
-                    phase_devices = db.get_rollout_devices(rollout["id"], phase=rollout["phase"])
-                    deferred_count = sum(1 for d in phase_devices if d["status"] == "deferred")
-                    if deferred_count > 0:
+                    db.complete_rollout_phase(rollout["id"])
+
+                    refreshed = db.get_rollout(rollout["id"])
+                    if refreshed and refreshed["status"] == "completed":
+                        self._last_run_result = f"Rollout completed ({success_count} devices this wave)"
+                        db.log_schedule_event("rollout_completed", f"Rollout {rollout['id']} completed", job_id=job_id)
+                    else:
                         self._last_run_result = (
-                            f"Phase {rollout['phase']}: {success_count} updated, "
-                            f"{deferred_count} deferred (will retry next window)"
+                            f"Wave {rollout['phase']} done ({success_count} devices), "
+                            f"next: {refreshed['phase'] if refreshed else '?'}"
                         )
                         db.log_schedule_event(
-                            "phase_deferred",
-                            f"Phase {rollout['phase']}: {deferred_count} device(s) deferred",
+                            "phase_completed",
+                            f"Wave {rollout['phase']} -> {refreshed['phase'] if refreshed else '?'}",
                             job_id=job_id,
                         )
-                        logger.info(f"Rollout {rollout['id']} phase {rollout['phase']} has {deferred_count} deferred device(s)")
-                    else:
-                        # Record when canary finished on this fleet so the soak
-                        # is measured from real fleet-bake time, not the firmware
-                        # release date (see rollout_gate.canary_soak_cleared).
-                        if rollout["phase"] == "canary":
-                            # Stamp in UTC (timezone-aware) so the canary soak is
-                            # measured as an absolute duration. The gate's `now`
-                            # arrives in the operator's display timezone; a bare
-                            # datetime.now() here is naive container-local (UTC),
-                            # which the gate used to relabel as local and over-soak.
-                            db.set_canary_completed_at(
-                                rollout["id"], datetime.now(timezone.utc).isoformat()
-                            )
-                        db.complete_rollout_phase(rollout["id"])
-
-                        refreshed = db.get_rollout(rollout["id"])
-                        if refreshed and refreshed["status"] == "completed":
-                            self._last_run_result = f"Rollout completed ({success_count} devices this phase)"
-                            db.log_schedule_event("rollout_completed", f"Rollout {rollout['id']} completed", job_id=job_id)
-                        else:
-                            self._last_run_result = (
-                                f"Phase {rollout['phase']} done ({success_count} devices), "
-                                f"next: {refreshed['phase'] if refreshed else '?'}"
-                            )
-                            db.log_schedule_event(
-                                "phase_completed",
-                                f"Phase {rollout['phase']} -> {refreshed['phase'] if refreshed else '?'}",
-                                job_id=job_id,
-                            )
         else:
             if failed_count > 0:
                 self._last_run_result = f"Completed with {failed_count} failure(s)"
@@ -1306,19 +1223,12 @@ class AutoUpdateScheduler:
                 self._last_run_result = f"Success ({success_count} devices)"
                 db.log_schedule_event("job_completed", f"success={success_count}", job_id=job_id)
 
-        if manual_canary and failed_count == 0:
-            if rollout and rollout.get("status") == "paused":
-                self._state = "waiting"
-                self._block_reason = rollout.get("pause_reason")
-            elif rollout and rollout.get("status") == "active":
-                self._state = "idle"
-                self._block_reason = "Canary complete; next phase waits for the maintenance window"
-            else:
-                self._state = "idle"
-                self._block_reason = "Canary complete"
-        else:
-            self._state = "waiting"
-            self._block_reason = rollout.get("pause_reason") if rollout and rollout.get("status") == "paused" else "Already ran today"
+        self._state = "waiting"
+        self._block_reason = (
+            rollout.get("pause_reason")
+            if rollout and rollout.get("status") == "paused"
+            else "Already ran today"
+        )
         logger.info(f"Scheduler job {job_id} completed: {self._last_run_result}")
 
         task = asyncio.create_task(self._broadcast_status())
@@ -1392,8 +1302,6 @@ class AutoUpdateScheduler:
 
         scope_ips = self._resolve_scope(settings)
         switch_scope = self._resolve_switch_scope(settings)
-        preferred_ap_canaries = self._preferred_canary_devices(settings, "rollout_canary_aps")
-        preferred_switch_canaries = self._preferred_canary_devices(settings, "rollout_canary_switches")
 
         total_cpes = 0
         for ip in scope_ips:
@@ -1452,8 +1360,8 @@ class AutoUpdateScheduler:
         current_phase = rollout["phase"]
         phase_idx = db.PHASE_ORDER.index(current_phase) if current_phase in db.PHASE_ORDER else 0
 
-        current_ap_batch = self._select_phase_batch(current_phase, ap_candidates, preferred_ap_canaries)
-        current_switch_batch = self._select_phase_batch(current_phase, switch_candidates, preferred_switch_canaries)
+        current_ap_batch = self._select_phase_batch(current_phase, ap_candidates)
+        current_switch_batch = self._select_phase_batch(current_phase, switch_candidates)
         current_ap_count = len(current_ap_batch)
         current_switch_count = len(current_switch_batch)
         current_primary_count = current_ap_count + current_switch_count
@@ -1494,8 +1402,8 @@ class AutoUpdateScheduler:
                 })
                 continue
 
-            ap_batch = self._select_phase_batch(phase, remaining_ap_candidates, preferred_ap_canaries)
-            switch_batch = self._select_phase_batch(phase, remaining_switch_candidates, preferred_switch_canaries)
+            ap_batch = self._select_phase_batch(phase, remaining_ap_candidates)
+            switch_batch = self._select_phase_batch(phase, remaining_switch_candidates)
             phase_count = len(ap_batch) + len(switch_batch)
             phase_dur = _estimate_phase_duration(len(ap_batch), len(switch_batch))
             remaining_phases.append({
@@ -1535,6 +1443,7 @@ class AutoUpdateScheduler:
         rollout_devices_by_ip: Optional[dict] = None,
         scope_ips: Optional[set] = None,
         switch_scope: Optional[set] = None,
+        hold_clears_at_iso: Optional[str] = None,
     ) -> dict:
         """Return when this device is expected to receive its next auto-update.
 
@@ -1543,13 +1452,15 @@ class AutoUpdateScheduler:
             this device up given current scope/settings
           - next_attempt_iso: ISO datetime string or None
           - reason: short user-facing string when eligible is False or the
-            attempt is blocked (e.g. waiting on canary hold to clear)
+            attempt is blocked (e.g. waiting on the firmware hold to clear)
 
-        Callers iterating over many devices (e.g. /api/fleet-status) should
-        pre-resolve `settings`, `scope_ips`, `switch_scope`, `rollout`, and
-        `rollout_devices_by_ip` and pass them in to avoid N×DB queries.
-        Pass `rollout=None` explicitly to say "no active rollout"; omit the
-        argument to let this method look it up.
+        `hold_clears_at_iso` is the device's Firmware Hold clear time (ISO), or
+        None when its model family's hold is already clear. The hold delays the
+        first fleet wave, so when set it pushes the next attempt past that date.
+        Callers iterating over many devices (e.g. /api/fleet-status) pre-resolve
+        `settings`, `scope_ips`, `switch_scope`, `rollout`, `rollout_devices_by_ip`,
+        and the per-family hold to avoid N×DB queries. Pass `rollout=None`
+        explicitly to say "no active rollout"; omit it to let this method look up.
         """
         settings = settings or db.get_all_settings()
 
@@ -1586,20 +1497,16 @@ class AutoUpdateScheduler:
             return {"auto_update_eligible": True, "next_attempt_iso": None,
                     "reason": "Waiting for firmware to be selected"}
 
-        # New-firmware hold only delays advancement past canary; the canary
-        # device itself is attempted on the next maintenance window.
+        # The Firmware Hold (computed per family by the caller) delays the first
+        # fleet wave for newly-released firmware until it clears.
         hold_clears_at: Optional[datetime] = None
-        hold_days = _as_int(settings.get("firmware_canary_hold_days", "6"), 6)
-        if hold_days > 0:
-            hold_info = db.get_firmware_hold_info(fw_30x, hold_days)
-            clears_at = hold_info.get("clears_at")
-            if not hold_info.get("cleared") and clears_at:
-                try:
-                    hold_clears_at = datetime.fromisoformat(clears_at)
-                except (TypeError, ValueError):
-                    hold_clears_at = None
+        if hold_clears_at_iso:
+            try:
+                hold_clears_at = datetime.fromisoformat(hold_clears_at_iso)
+            except (TypeError, ValueError):
+                hold_clears_at = None
 
-        # If the device is already in an active rollout, use its assigned phase
+        # If the device is already in an active rollout, use its assigned wave
         # to figure out how many windows away it lands.
         if rollout is _UNSET:
             rollout = db.get_active_rollout()
@@ -1608,7 +1515,7 @@ class AutoUpdateScheduler:
             if rollout_devices_by_ip is None:
                 rollout_devices_by_ip = {d["ip"]: d for d in db.get_rollout_devices(rollout["id"])}
             device = rollout_devices_by_ip.get(parent_ap_ip if role == "cpe" else ip)
-            current_phase = rollout.get("phase", "canary")
+            current_phase = rollout.get("phase", "pct10")
             current_idx = db.PHASE_ORDER.index(current_phase) if current_phase in db.PHASE_ORDER else 0
             if device:
                 if device["status"] == "updated":
@@ -1618,11 +1525,12 @@ class AutoUpdateScheduler:
                 assigned_idx = db.PHASE_ORDER.index(assigned) if assigned in db.PHASE_ORDER else current_idx
                 phase_idx = max(0, assigned_idx - current_idx)
             else:
-                # Unassigned but rollout active — it will land in a later phase.
+                # Unassigned but rollout active — it will land in a later wave.
                 phase_idx = 1 if current_idx < len(db.PHASE_ORDER) - 1 else 0
 
-        # Canary devices ignore the hold; later phases must wait for it to clear.
-        earliest = hold_clears_at if phase_idx > 0 else None
+        # The hold gates the first fleet wave, so it applies to this device until
+        # its family clears.
+        earliest = hold_clears_at
 
         windows = upcoming_window_starts(
             datetime.now(), schedule_days, start_hour, end_hour,
@@ -1634,7 +1542,7 @@ class AutoUpdateScheduler:
         target = windows[phase_idx]
         reason = None
         if earliest and target.date() == earliest.date():
-            reason = "Waiting for new-firmware hold to clear"
+            reason = "Waiting for the firmware hold to clear"
         return {"auto_update_eligible": True,
                 "next_attempt_iso": target.isoformat(),
                 "reason": reason}
@@ -1669,35 +1577,27 @@ class AutoUpdateScheduler:
             }
         else:
             try:
-                synthetic_rollout = {"id": 0, "phase": "canary", "target_version": None}
+                synthetic_rollout = {"id": 0, "phase": "pct10", "target_version": None}
                 pre_rollout_predictions = self._calculate_predictions(synthetic_rollout, settings)
             except Exception as e:
                 logger.debug(f"Pre-rollout prediction failed: {e}")
 
+        # Per-family Firmware Hold state for the selected firmware (or the active
+        # rollout's): the release-date soak, clearable early by a confirmed device.
         hold_days = _as_int(settings.get("firmware_canary_hold_days", "6"), 6)
-        canary_hold = None
-        if hold_days > 0:
-            fw_30x = settings.get("selected_firmware_30x", "")
-            if fw_30x:
-                canary_hold = db.get_firmware_hold_info(fw_30x, hold_days)
-                canary_hold["firmware"] = fw_30x
-                canary_hold["hold_days"] = hold_days
-
-        # Accurate fleet canary-soak remaining for the CURRENT rollout — the hold
-        # that `blocked_canary_hold` actually waits on (canary_completed_at + soak,
-        # the same computation the gate uses). Distinct from `canary_hold` above,
-        # which is the release/download-date firmware hold; the pill/countdown for
-        # an in-flight rollout should reflect THIS one so the UI and the gate agree.
-        soak_hold = None
-        if rollout and rollout.get("phase") == "pct10" and hold_days > 0:
-            cleared, remaining = rollout_gate.canary_soak_cleared(
-                rollout, datetime.now(timezone.utc), timedelta(days=hold_days)
+        firmware_hold = None
+        try:
+            held_families, family_holds = self._held_families(
+                settings, rollout if rollout and rollout.get("status") in ("active", "paused") else None
             )
-            if not cleared and remaining is not None:
-                soak_hold = {
-                    "remaining_days": round(remaining.total_seconds() / 86400, 1),
-                    "clears_at": (datetime.now(timezone.utc) + remaining).isoformat(),
+            if family_holds:
+                firmware_hold = {
+                    "hold_days": hold_days,
+                    "any_held": bool(held_families),
+                    "families": family_holds,
                 }
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Firmware-hold status computation failed: {e}")
 
         next_windows = upcoming_window_starts(
             datetime.now(), schedule_days, start_hour, end_hour, count=1
@@ -1717,9 +1617,8 @@ class AutoUpdateScheduler:
             "schedule_end_hour": end_hour,
             "rollout": rollout_info,
             "predictions": pre_rollout_predictions,
-            "canary_hold": canary_hold,
-            "soak_hold": soak_hold,
-            "soak_waiver": self._soak_waiver_reason,
+            "firmware_hold": firmware_hold,
+            "hold_clear_reason": self._hold_clear_reason,
         }
 
     async def _broadcast_status(self):

@@ -369,12 +369,11 @@ Get all configuration settings as key-value pairs. Sensitive values (password ha
 ### `PUT /api/settings`
 Update settings. Only whitelisted keys are accepted:
 
-`schedule_enabled`, `schedule_days`, `schedule_start_hour`, `schedule_end_hour`, `parallel_updates`, `bank_mode`, `allow_downgrade`, `timezone`, `zip_code`, `weather_check_enabled`, `min_temperature_c`, `temperature_unit`, `schedule_scope`, `schedule_scope_data`, `rollout_canary_aps`, `rollout_canary_switches`, `firmware_beta_enabled`, `firmware_canary_hold_days`, `firmware_update_cooldown_days`, `slack_webhook_url`, `autoupdate_enabled`
+`schedule_enabled`, `schedule_days`, `schedule_start_hour`, `schedule_end_hour`, `parallel_updates`, `bank_mode`, `allow_downgrade`, `timezone`, `zip_code`, `weather_check_enabled`, `min_temperature_c`, `temperature_unit`, `schedule_scope`, `schedule_scope_data`, `firmware_beta_enabled`, `firmware_canary_hold_days`, `firmware_update_cooldown_days`, `slack_webhook_url`, `autoupdate_enabled`
 
 - **Body** (JSON): Object of key-value pairs to set
 - **Notes**:
-  - `rollout_canary_aps` must contain enabled AP IPs in the effective rollout scope
-  - `rollout_canary_switches` must contain enabled switch IPs in the effective rollout scope
+  - `firmware_canary_hold_days` (the Firmware Hold) must be between 6 and 365
 - **Response**: `{ "success": true }`
 
 ### `POST /api/settings/save`
@@ -409,15 +408,6 @@ Get the active or paused rollout with device progress counts.
 
 ### `POST /api/rollout/{rollout_id}/resume`
 Resume a paused rollout. Only works if status is `paused`.
-
-### `POST /api/rollout/canary/trigger`
-Start only the canary phase immediately, even outside the configured maintenance window.
-
-- Uses the saved canary AP and switch settings when present
-- Still enforces time validation, weather checks, and firmware hold/quarantine rules
-- Still enforces rollout scope and canary validation
-- Does not consume the nightly rollout window for later phases
-- Does not apply the normal scheduled-job end-of-window cutoff
 
 ### `POST /api/rollout/{rollout_id}/cancel`
 Cancel an active or paused rollout.

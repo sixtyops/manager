@@ -346,63 +346,12 @@ class TestSettingsAPI:
         resp = authed_client.get("/api/settings")
         assert resp.json()["settings"]["pre_update_reboot"] == "true"
 
-    def test_save_canary_settings(self, authed_client):
-        db.upsert_access_point("10.0.0.10", "root", "pass", enabled=True)
-        db.upsert_access_point("10.0.0.11", "root", "pass", enabled=True)
-        db.upsert_switch("10.0.1.5", "admin", "pass", enabled=True)
-        with patch("updater.app.get_fetcher", return_value=None), \
-             patch("updater.app.get_scheduler", return_value=None):
-            resp = authed_client.post("/api/settings/save", json={
-                "rollout_canary_aps": "10.0.0.10,10.0.0.11",
-                "rollout_canary_switches": "10.0.1.5",
-            })
-        assert resp.status_code == 200
-        resp = authed_client.get("/api/settings")
-        s = resp.json()["settings"]
-        assert s["rollout_canary_aps"] == "10.0.0.10,10.0.0.11"
-        assert s["rollout_canary_switches"] == "10.0.1.5"
-
-    def test_save_canary_settings_rejects_unknown_or_out_of_scope_devices(self, authed_client):
-        site_a = db.create_tower_site("Site A")
-        site_b = db.create_tower_site("Site B")
-        db.upsert_access_point("10.0.0.10", "root", "pass", tower_site_id=site_a, enabled=True)
-        db.upsert_switch("10.0.1.5", "admin", "pass", tower_site_id=site_b, enabled=True)
-
-        with patch("updater.app.get_fetcher", return_value=None), \
-             patch("updater.app.get_scheduler", return_value=None):
-            resp = authed_client.post("/api/settings/save", json={
-                "schedule_scope": "sites",
-                "schedule_scope_data": str(site_a),
-                "rollout_canary_aps": "10.0.0.99",
-                "rollout_canary_switches": "10.0.1.5",
-            })
-
-        assert resp.status_code == 400
-        assert "unknown APs" in resp.json()["detail"] or "out of rollout scope" in resp.json()["detail"]
-
 
 class TestRolloutAPI:
-    def test_trigger_canary_rollout_endpoint(self, authed_client):
-        mock_scheduler = MagicMock()
-        mock_scheduler.trigger_canary_now = AsyncMock()
-        mock_scheduler.get_status.return_value = {"state": "running"}
-
-        with patch("updater.app.get_scheduler", return_value=mock_scheduler):
-            resp = authed_client.post("/api/rollout/canary/trigger")
-
-        assert resp.status_code == 200
-        assert resp.json()["success"] is True
-        mock_scheduler.trigger_canary_now.assert_awaited_once()
-
-    def test_trigger_canary_rollout_endpoint_surfaces_runtime_errors(self, authed_client):
-        mock_scheduler = MagicMock()
-        mock_scheduler.trigger_canary_now = AsyncMock(side_effect=RuntimeError("No firmware selected"))
-
-        with patch("updater.app.get_scheduler", return_value=mock_scheduler):
-            resp = authed_client.post("/api/rollout/canary/trigger")
-
-        assert resp.status_code == 400
-        assert resp.json()["detail"] == "No firmware selected"
+    def test_manual_canary_trigger_endpoint_is_gone(self, authed_client):
+        """The manual-canary trigger endpoint was removed with the canary phase."""
+        resp = authed_client.post("/api/rollout/canary/trigger")
+        assert resp.status_code == 404
 
 
 class TestTopologyAPI:

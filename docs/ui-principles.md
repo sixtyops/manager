@@ -40,7 +40,7 @@ Three fixed layers, always in this order:
 
 Both firmware and config-push rollouts follow four phases: **Canary (1 device) → 10% → 50% → 100%**. Display a horizontal phase stepper (dot + label + per-phase count) in the expanded status-bar panel. Advancement differs by type:
 
-- **Firmware rollouts** — the scheduler auto-advances phases after each phase completes (`scheduler.py`, `database.complete_rollout_phase`). Operator controls: canary trigger, resume after failure, cancel. The stepper is informational only — no manual-advance action.
+- **Firmware rollouts** — the scheduler auto-advances waves (10% → 50% → 100%) after each wave completes (`scheduler.py`, `database.complete_rollout_phase`). Operator controls: resume after failure, cancel. The stepper is informational only — no manual-advance action.
 - **Config-push rollouts** — advancement is always manual. Operators confirm each phase via `POST /api/config-push/rollout/{id}/advance`. The active-phase panel includes **Skip & advance to N% →** as the gate action.
 
 In both: completed phases fill green; active phase reflects current state (yellow if paused/failed, blue if running); locked phases are grey outlines. Show device rows only for current and completed phases; queued phases show a count only.
@@ -50,7 +50,7 @@ In both: completed phases fill green; active phase reflects current state (yello
 - **"There are no power users."** Zero-config bias. Climate auto-detects from IP geolocation. Antenna kit reads from the AP.
 - **Allow override, never require it.** Climate override dropdown marks the auto-detected zone ("YOUR AREA" with a location pin).
 - **Sensible defaults log once, never nag.** Missing antenna kit → assume AK-150, log it, move on.
-- **We own the safety defaults.** Operators configure two things: maintenance window (default Tue–Thu 03:00–04:00 local) and parallelism. Everything else — canary hold, Weather Guard (backend default: −4 °C / 25 °F, stored in `min_temperature_c`), pre-reboot, auto-pause on failure, single-bank updates — is always on. Expose as an expandable "Safety defaults" section; operators may override but are never prompted to configure them on first use. Show server local time next to the maintenance window so the operator can confirm timezone without asking.
+- **We own the safety defaults.** Operators configure two things: maintenance window (default Tue–Thu 03:00–04:00 local) and parallelism. Everything else — Firmware Hold, Weather Guard (backend default: −4 °C / 25 °F, stored in `min_temperature_c`), pre-reboot, auto-pause on failure, single-bank updates — is always on. Expose as an expandable "Safety defaults" section; operators may override but are never prompted to configure them on first use. Show server local time next to the maintenance window so the operator can confirm timezone without asking.
 
 ---
 

@@ -1720,10 +1720,6 @@
             border-color: var(--primary);
         }
 
-        .tree-table .row-canary > td:first-child {
-            border-left: 3px solid #f59e0b;
-        }
-
         .drawer-days {
             display: flex;
             gap: 3px;
@@ -2877,9 +2873,6 @@
         </div>
 
         <!-- Device Table (unified — columns change based on active mode) -->
-        <div id="canarySummary" style="font-size:0.72rem;color:#6b7280;padding:4px 12px;display:none;">
-            <span style="color:#f59e0b;">&#9679;</span> <span id="canarySummaryText"></span>
-        </div>
         <div class="table-card">
             <div class="table-toolbar">
                 <input type="text" id="deviceFilterQuery" name="deviceFilterQuery" placeholder="Filter by name, IP, or site (comma for multiple)" aria-label="Search devices">
@@ -2892,8 +2885,7 @@
             </div>
             <div id="selectionActionBar" class="selection-action-bar" style="display:none;">
                 <span id="selectionCount" style="font-weight:500;">0 selected</span>
-                <button class="btn btn-sm btn-warning" id="btnSetCanary" onclick="setCanaryForSelected()" title="Canary devices receive new firmware first and soak-test it before the rest of the fleet upgrades" data-min-role="operator">Set Canary</button>
-                <button class="btn btn-sm btn-primary" id="btnUpdateFirmware" onclick="updateFirmwareForSelected()" data-min-role="operator">Update Firmware</button>
+                <button class="btn btn-sm btn-primary" id="btnUpdateFirmware" onclick="updateFirmwareForSelected()" title="Updates the selected devices now, skipping the firmware hold. Use this to test new firmware on a device you pick before releasing it to the fleet." data-min-role="operator">Update Firmware</button>
                 <button class="btn btn-sm btn-primary hidden" id="btnPushConfig" onclick="pushConfigForSelected()" data-min-role="operator">Push Active Policies</button>
                 <button class="btn btn-sm btn-secondary hidden" id="btnCheckCompliance" onclick="checkComplianceForSelected()" data-min-role="operator">Check Compliance</button>
                 <button class="btn btn-sm btn-ghost" onclick="clearChecked()">Clear</button>
@@ -3059,7 +3051,7 @@
                             <input type="text" id="drawerZipCode" name="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56" data-min-role-disable="operator">
                         </div>
                         <div class="toggle-sm-row">
-                            <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerCanaryHoldDays" title="Canary devices soak-test new firmware for at least this many days before the rest of the fleet upgrades">Canary Hold</label>
+                            <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerCanaryHoldDays" title="Newly released firmware waits this many days before the fleet auto-updates to it. The hold clears early once a device is confirmed working on it (update one yourself to test). Manual updates always skip the hold.">Firmware Hold</label>
                             <input type="number" id="drawerCanaryHoldDays" name="drawerCanaryHoldDays" value="6" min="6" max="90" class="u-w-48" data-min-role-disable="operator">
                             <span class="u-text-xxs-dim">days</span>
                         </div>
@@ -4741,6 +4733,15 @@
             return info.status || 'unknown';
         }
 
+        // True when a device needs the new firmware but it's currently held (the
+        // Firmware Hold hasn't cleared for its model family). Returns the hold
+        // detail ({clears_at, confirmed_by}) or null.
+        function holdInfo(ip) {
+            const info = fleetStatusMap.get(ip);
+            if (info && info.update_state === 'on_hold') return info.hold || {};
+            return null;
+        }
+
         function formatWhen(iso) {
             if (!iso) return '';
             const dt = new Date(iso);
@@ -5136,24 +5137,9 @@
             bar.style.display = 'flex';
             countEl.textContent = `${count} selected`;
             // Show/hide mode-specific buttons
-            setHidden(document.getElementById('btnSetCanary'), activeColumnMode !== 'firmware');
             setHidden(document.getElementById('btnUpdateFirmware'), activeColumnMode !== 'firmware');
             setHidden(document.getElementById('btnPushConfig'), activeColumnMode !== 'config');
             setHidden(document.getElementById('btnCheckCompliance'), activeColumnMode !== 'config');
-        }
-
-        function setCanaryForSelected() {
-            let changed = false;
-            for (const ip of checkedDevices) {
-                if (_apIndex.has(ip) && !canaryAps.has(ip)) {
-                    toggleCanary('ap', ip, true);
-                    changed = true;
-                } else if (_switchIndex.has(ip) && !canarySwitches.has(ip)) {
-                    toggleCanary('switch', ip, true);
-                    changed = true;
-                }
-            }
-            if (!changed) showToast('No APs or switches in selection to set as canary');
         }
 
         function updateFirmwareForSelected() {
@@ -5456,6 +5442,18 @@
                 return '<span class="status-current" title="Current">&#10003;</span>';
             }
             if (vs === 'behind') {
+                const hold = holdInfo(ip);
+                if (hold) {
+                    // On hold: needs the new firmware, but it's still soaking. Show a
+                    // distinct clock glyph; manual update still works (skips the hold).
+                    let when = hold.clears_at ? formatWhen(hold.clears_at) : '';
+                    let holdMsg = when ? `On hold \u2014 firmware releases ${when}` : 'On hold \u2014 firmware still soaking';
+                    if (currentUserRole === 'viewer') {
+                        return `<span class="status-icon-cell" title="${escapeHtml(holdMsg)}" style="color:var(--text-muted);">&#9201;</span>`;
+                    }
+                    const holdTitle = `${holdMsg} \u00b7 click to update now (skips the hold)`;
+                    return `<button class="update-action scheduled" title="${escapeHtml(holdTitle)}" onclick="triggerUpdate('${type}','${ip}');event.stopPropagation();">&#9201;</button>`;
+                }
                 if (currentUserRole === 'viewer') {
                     const label = autoUpdateEnabled ? 'Auto-update scheduled' : 'Update available';
                     return `<span class="status-icon-cell" title="${label}" style="color:var(--text-muted);">&#8593;</span>`;
@@ -5487,7 +5485,6 @@
             const apName = ap.system_name || ap.ip;
             const noLocation = !ap.location && siteName === 'Unassigned';
             const isApSelected = selectedNode?.type === 'ap' && selectedNode?.data?.ip === ap.ip;
-            const isApCanary = canaryAps.has(ap.ip);
             const nameCellClass = `name-cell tree-indent-${indent}`;
             const portBadge = underSwitch && ap.switch_port
                 ? `<span class="port-badge" title="Connected to switch port ${escapeHtml(ap.switch_port)}">${escapeHtml(ap.switch_port)}</span>`
@@ -5498,7 +5495,7 @@
                 ? `<span class="row-status-dot ${apHealth}" title="${HEALTH_LABEL[apHealth] || apHealth}"></span>`
                 : '';
 
-            let out = `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isApSelected ? 'row-selected' : ''} ${isApCanary ? 'row-canary' : ''}" onclick="selectAP('${ap.ip}')">
+            let out = `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isApSelected ? 'row-selected' : ''}" onclick="selectAP('${ap.ip}')">
                 <td>
                     <div class="${nameCellClass}">
                         <input type="checkbox" data-check-ap="${ap.ip}" ${checkedDevices.has(ap.ip) ? 'checked' : ''} onclick="toggleCheckAP('${ap.ip}',event);event.stopPropagation();">
@@ -5791,13 +5788,12 @@
                     visibleRows += nestedAps.length;
                     for (const nap of nestedAps) visibleRows += (nap.cpes || []).length;
 
-                    const isSwCanary = canarySwitches.has(sw.ip);
                     const hasChildren = nestedAps.length > 0;
                     const swHealth = aggregateSwitchHealth(sw, aps);
                     const swHealthDot = swHealth
                         ? `<span class="row-status-dot ${swHealth}" title="${HEALTH_LABEL[swHealth] || swHealth}"></span>`
                         : '';
-                    html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isSwSelected ? 'row-selected' : ''} ${isSwCanary ? 'row-canary' : ''}" onclick="selectSwitch('${sw.ip}')">
+                    html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isSwSelected ? 'row-selected' : ''}" onclick="selectSwitch('${sw.ip}')">
                         <td>
                             <div class="name-cell tree-indent-1">
                                 <input type="checkbox" ${checkedDevices.has(sw.ip) ? 'checked' : ''} onclick="toggleCheck('${sw.ip}',event);event.stopPropagation();">
@@ -8413,8 +8409,8 @@
 
         // ── Status Bar ──
 
-        const PHASES = ['canary', 'pct10', 'pct50', 'pct100'];
-        const PHASE_LABELS = { canary: 'Canary', pct10: '10%', pct50: '50%', pct100: '100%' };
+        const PHASES = ['pct10', 'pct50', 'pct100'];
+        const PHASE_LABELS = { pct10: '10%', pct50: '50%', pct100: '100%' };
 
         function updateSchedulerUI(status) {
             lastSchedulerStatus = status;
@@ -8457,7 +8453,7 @@
                 blocked_weather:     { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_time:        { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_no_firmware: { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
-                blocked_canary_hold: { label: 'Soak test', cls: 'running', icon: SCHEDULED_ICON },
+                blocked_firmware_hold: { label: 'Firmware hold', cls: 'running', icon: SCHEDULED_ICON },
                 frozen:              { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_all_current: { label: 'Up to date', cls: 'current', icon: CURRENT_ICON },
             };
@@ -8501,14 +8497,14 @@
                     subtitle = status.block_reason;
                 }
             } else if ((view.label === 'Paused' || view.label === 'Running'
-                        || view.label === 'Soak test')
+                        || view.label === 'Firmware hold')
                        && status.block_reason) {
                 subtitle = status.block_reason;
             }
-            // A waived canary soak (firmware already proven on the fleet) is shown
+            // A Firmware Hold cleared early by a confirmed-working device is shown
             // honestly here rather than silently skipped.
-            if (status.soak_waiver) {
-                subtitle = status.soak_waiver;
+            if (status.hold_clear_reason) {
+                subtitle = status.hold_clear_reason;
             }
             reason.textContent = subtitle;
 
@@ -8556,7 +8552,7 @@
             // Build a map of phase -> { count, date_idx }
             const allPhases = [];
             const cp = pred.current_phase;
-            if (cp) allPhases.push({ phase: 'canary', count: cp.device_count, minutes: cp.estimated_duration_minutes });
+            if (cp) allPhases.push({ phase: PHASES[0], count: cp.device_count, minutes: cp.estimated_duration_minutes });
             for (const rp of (pred.remaining_phases || [])) {
                 allPhases.push({ phase: rp.phase, count: rp.estimated_devices, minutes: rp.estimated_duration_minutes });
             }
@@ -8613,24 +8609,27 @@
                    ', ' + clearsAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
         }
 
+        // Soonest clears-at among the held families in the scheduler's firmware_hold.
+        function _firmwareHoldClearsAt(status) {
+            const fh = status && status.firmware_hold;
+            if (!fh || !fh.families) return null;
+            let soonest = null;
+            for (const fam of Object.values(fh.families)) {
+                if (fam.held && fam.clears_at && (!soonest || fam.clears_at < soonest)) {
+                    soonest = fam.clears_at;
+                }
+            }
+            return soonest;
+        }
+
         function renderIdlePhases() {
             const indicator = document.getElementById('barPhaseIndicator');
             const pred = lastPreRolloutPredictions;
-            // Idle view never shows a canary hold lock — the hold only applies
-            // once a rollout has finished canary and is waiting to advance.
             let html = '';
             for (let i = 0; i < PHASES.length; i++) {
-                const isCanaryTrigger = i === 0 && canTriggerManualCanary(pred);
                 const detail = _phaseDetail(pred, i);
                 const detailHtml = detail ? `<span class="bar-phase-detail">${detail}</span>` : '';
-                let dotClass, onclick = '';
-                if (isCanaryTrigger) {
-                    dotClass = 'bar-phase-dot clickable';
-                    onclick = ' onclick="triggerCanaryNow(event)" title="Run canary now"';
-                } else {
-                    dotClass = 'bar-phase-dot';
-                }
-                html += `<div class="${dotClass}"${onclick}>${PHASE_LABELS[PHASES[i]]}${detailHtml}</div>`;
+                html += `<div class="bar-phase-dot">${PHASE_LABELS[PHASES[i]]}${detailHtml}</div>`;
                 if (i < PHASES.length - 1) html += `<div class="bar-phase-line"></div>`;
             }
             indicator.innerHTML = html;
@@ -8641,14 +8640,6 @@
             if (predEl) predEl.textContent = '';
             setHidden('barResumeBtn', true);
             setHidden('barCancelBtn', true);
-        }
-
-        function canTriggerManualCanary(pred) {
-            if (!pred) return false;
-            if (currentRolloutId) return false;
-            if (lastAutoState === 'disabled' || lastAutoState === 'running') return false;
-            if (lastBehindCount <= 0) return false;
-            return (pred.current_phase?.device_count || 0) > 0;
         }
 
         function updateRolloutUI(data) {
@@ -8684,13 +8675,12 @@
             const phaseIdx = PHASES.indexOf(rollout.phase);
             const indicator = document.getElementById('barPhaseIndicator');
             const pred = rollout.predictions;
-            // The canary soak holds the CURRENT phase (the 10% wave) until the
-            // canary has baked — so the lock sits on that phase's dot, not on
-            // canary (which has already completed). Prefer the accurate fleet-soak
-            // countdown (soak_hold) over the release-date firmware hold.
-            const isCanaryHold = lastSchedulerStatus && lastSchedulerStatus.state === 'blocked_canary_hold';
-            const lockLabel = isCanaryHold
-                ? _formatLockLabel(lastSchedulerStatus.soak_hold || lastSchedulerStatus.canary_hold)
+            // The Firmware Hold holds the first fleet wave (pct10) of new firmware
+            // until it clears (release-date soak, or earlier once a device is
+            // confirmed working). The lock sits on the current wave's dot.
+            const isFirmwareHold = lastSchedulerStatus && lastSchedulerStatus.state === 'blocked_firmware_hold';
+            const lockLabel = isFirmwareHold
+                ? _formatLockLabel({ clears_at: _firmwareHoldClearsAt(lastSchedulerStatus) })
                 : '';
             let phaseHtml = '';
             for (let i = 0; i < PHASES.length; i++) {
@@ -8702,7 +8692,7 @@
                     dotClass += ' completed';
                     lineClass += ' completed';
                 } else if (i === phaseIdx) {
-                    if (isCanaryHold) {
+                    if (isFirmwareHold) {
                         dotClass += ' locked';
                     } else {
                         dotClass += rollout.status === 'paused' ? ' paused' : ' active';
@@ -8711,7 +8701,7 @@
 
                 const detail = _phaseDetail(pred, i);
                 const detailHtml = detail ? `<span class="bar-phase-detail">${detail}</span>` : '';
-                const lockHtml = (i === phaseIdx && isCanaryHold && lockLabel)
+                const lockHtml = (i === phaseIdx && isFirmwareHold && lockLabel)
                     ? `<span class="bar-phase-lock-info">${lockLabel}</span>` : '';
                 phaseHtml += `<div class="${dotClass}">${PHASE_LABELS[phase]}${detailHtml}${lockHtml}</div>`;
                 if (i < PHASES.length - 1) phaseHtml += `<div class="${lineClass}"></div>`;
@@ -8797,23 +8787,6 @@
             try { await fetch(`/api/rollout/${currentRolloutId}/cancel`, { method: 'POST' }); } catch (e) {}
         }
 
-        async function triggerCanaryNow(event) {
-            if (event) event.stopPropagation();
-            if (!canTriggerManualCanary(lastPreRolloutPredictions)) return;
-            if (!confirm('Run canary now? This will start firmware updates on canary devices outside the scheduled maintenance window.')) return;
-            const predEl = document.getElementById('barRolloutPrediction');
-            if (predEl) predEl.textContent = 'Starting canary...';
-            try {
-                const resp = await fetch('/api/rollout/canary/trigger', { method: 'POST' });
-                const data = await resp.json();
-                if (!resp.ok) throw new Error(data.detail || 'Failed to start canary');
-                await Promise.all([loadFleetStatus(), loadAutoSettings()]);
-            } catch (e) {
-                if (predEl) predEl.textContent = '';
-                alert(e.message || 'Failed to start canary');
-            }
-        }
-
         async function toggleAutoSchedule(event) {
             if (event) event.stopPropagation();
             const toggle = document.getElementById('barAutoToggle');
@@ -8848,11 +8821,6 @@
             // Switch drawer content
             setHidden(document.getElementById('drawerContent-updates'), mode !== 'firmware');
             setHidden(document.getElementById('drawerContent-config'), mode !== 'config');
-            // Show/hide canary summary
-            if (mode !== 'firmware') {
-                const cs = document.getElementById('canarySummary');
-                if (cs) cs.style.display = 'none';
-            }
             // Reset sort if current column doesn't exist in new mode
             const fwOnlyCols = ['firmware', 'signal', 'distance', 'status', 'update', 'lastseen'];
             if (mode === 'config' && fwOnlyCols.includes(sortColumn)) {
@@ -9376,100 +9344,6 @@
         });
 
         let drawerSettingsLoaded = false;
-        let canaryAps = new Set();
-        let canarySwitches = new Set();
-        let canaryLoaded = false;
-        let canarySaving = false;
-
-        function parseIpSetting(value) {
-            return (value || '')
-                .split(',')
-                .map(v => v.trim())
-                .filter(Boolean);
-        }
-
-        async function loadCanarySettings() {
-            try {
-                const resp = await fetch('/api/settings');
-                if (!resp.ok) return;
-                const data = await resp.json();
-                const s = data.settings;
-                canaryAps = new Set(parseIpSetting(s.rollout_canary_aps));
-                canarySwitches = new Set(parseIpSetting(s.rollout_canary_switches));
-            } catch (e) {}
-            canaryLoaded = true;
-            renderTable();
-            updateCanarySummary();
-        }
-
-        function updateCanarySummary() {
-            const el = document.getElementById('canarySummary');
-            const text = document.getElementById('canarySummaryText');
-            if (!el || !text) return;
-            const apCount = canaryAps.size;
-            const swCount = canarySwitches.size;
-            if (apCount === 0 && swCount === 0) {
-                el.style.display = 'none';
-                return;
-            }
-            const parts = [];
-            if (apCount) parts.push(`${apCount} AP canary${apCount > 1 ? 's' : ''}`);
-            if (swCount) parts.push(`${swCount} switch canary${swCount > 1 ? 's' : ''}`);
-            text.textContent = parts.join(', ');
-            el.style.display = 'block';
-        }
-
-        let canarySaveQueue = null;
-        async function toggleCanary(role, ip, checked) {
-            const target = role === 'switch' ? canarySwitches : canaryAps;
-            if (checked) target.add(ip);
-            else target.delete(ip);
-            renderTable();
-            updateCanarySummary();
-
-            const key = role === 'switch' ? 'rollout_canary_switches' : 'rollout_canary_aps';
-            const value = [...target].sort().join(',');
-
-            if (canarySaving) {
-                canarySaveQueue = { key, value, role, ip, checked };
-                return;
-            }
-            await saveCanarySetting(key, value, role, ip, checked);
-        }
-
-        async function saveCanarySetting(key, value, role, ip, checked) {
-            canarySaving = true;
-            try {
-                const resp = await fetch('/api/settings', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ [key]: value }),
-                });
-                if (!resp.ok) {
-                    const err = await resp.json().catch(() => ({}));
-                    const target = role === 'switch' ? canarySwitches : canaryAps;
-                    if (checked) target.delete(ip);
-                    else target.add(ip);
-                    renderTable();
-                    updateCanarySummary();
-                    alert(err.detail || 'Failed to save canary setting');
-                } else {
-                    showSavedIndicator();
-                }
-            } catch (e) {
-                const target = role === 'switch' ? canarySwitches : canaryAps;
-                if (checked) target.delete(ip);
-                else target.add(ip);
-                renderTable();
-                updateCanarySummary();
-            }
-            canarySaving = false;
-            if (canarySaveQueue) {
-                const queued = canarySaveQueue;
-                canarySaveQueue = null;
-                await saveCanarySetting(queued.key, queued.value, queued.role, queued.ip, queued.checked);
-            }
-        }
 
         async function ensureDrawerTopologyLoaded() {
             if (topology) return;
@@ -10056,6 +9930,8 @@
                     fleetStatusMap.set(d.ip, {
                         target_version: d.target_version,
                         status: d.status,
+                        update_state: d.update_state,
+                        hold: d.hold,
                         auto_update_eligible: d.auto_update_eligible,
                         next_attempt_iso: d.next_attempt_iso,
                         next_attempt_reason: d.next_attempt_reason,
@@ -10185,7 +10061,6 @@
         switchColumnMode(activeColumnMode);
         loadTime(); tickClock(); setInterval(tickClock, 1000);
         loadAutoSettings();
-        loadCanarySettings();
         loadFleetStatus();
         loadDrawerFirmware();   // prefetch firmware list so it's ready before the drawer opens
         renderIdlePhases();

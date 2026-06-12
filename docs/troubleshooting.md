@@ -108,8 +108,8 @@ no obvious reason.
    `pending / running / completed / failed / cancelled`
    (`updater/app.py:3855`). "Hung" means `running` with no log progress.
    Open the job's row to see the per-device step log; if the last entry
-   is "Device not reachable" or "Waiting for reboot", the canary device
-   has dropped offline.
+   is "Device not reachable" or "Waiting for reboot", a device has dropped
+   offline after its update (which halts the job — halt-on-first-failure).
 2. **Rollout state**. Gradual rollouts move through
    `active / paused / completed / cancelled`
    ([docs/gradual-rollout.md](gradual-rollout.md)). The scheduler
@@ -133,9 +133,11 @@ no obvious reason.
   exposes these as buttons; the underlying endpoints are
   `/api/rollout/{id}/resume`, `/api/rollout/{id}/cancel`,
   `/api/rollout/{id}/reset`.
-- **Force a canary outside the window**: trigger
-  `POST /api/rollout/canary/trigger` (`updater/app.py:3639`) — use
-  sparingly; it's intended for "I know what I'm doing" recovery.
+- **Test new firmware before the fleet rolls**: the firmware is held until its
+  Firmware Hold elapses or a device is confirmed working on it. To clear the hold
+  sooner, manually update one device (the **Update Firmware** button skips the
+  hold); once it reboots healthy and passes smoke tests, that model's fleet wave
+  proceeds at the next window.
 
 ---
 

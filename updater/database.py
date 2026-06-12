@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -247,6 +247,20 @@ def _migrate(db):
             db.execute("DELETE FROM settings WHERE key = 'firmware_quarantine_days'")
     except Exception as e:
         logger.warning(f"Setting rename quarantine→canary_hold skipped: {e}")
+
+    # Canary phase removed: the first fleet wave is now pct10. Remap any in-flight
+    # (active/paused) rollout still sitting at the old 'canary' phase to 'pct10' so
+    # the fail-closed gate doesn't treat it as an unknown phase and stall it
+    # forever. Completed/cancelled rollouts keep their historical phase value.
+    try:
+        remapped = db.execute(
+            "UPDATE rollouts SET phase = 'pct10' "
+            "WHERE phase = 'canary' AND status IN ('active', 'paused')"
+        ).rowcount
+        if remapped:
+            logger.info(f"Migrated {remapped} in-flight rollout(s) from canary→pct10")
+    except Exception as e:
+        logger.warning(f"Rollout canary→pct10 remap skipped: {e}")
 
     # Migrate data from access_points/switches into unified devices table
     _migrate_to_devices_table(db)
@@ -771,6 +785,20 @@ def init_db():
                 sha256 TEXT DEFAULT NULL
             );
 
+            -- A device is "confirmed working" on a firmware version when it was
+            -- updated to that version and passed its post-update smoke tests.
+            -- This is the operator's manual canary: confirming one device of a
+            -- model family clears that family's Firmware Hold early (see the
+            -- scheduler's _confirmed_family_signal). Live health (on-version, no
+            -- last_error, seen recently) is re-checked at read time, so a stale
+            -- row for an old version is simply ignored.
+            CREATE TABLE IF NOT EXISTS firmware_confirmations (
+                ip TEXT NOT NULL,
+                version TEXT NOT NULL,
+                confirmed_at TEXT NOT NULL,
+                PRIMARY KEY (ip, version)
+            );
+
             CREATE TABLE IF NOT EXISTS device_update_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 job_id TEXT,
@@ -1164,8 +1192,6 @@ def init_db():
             "builtin_radius_secret_updated_at": "",
             "builtin_radius_secret_review_acknowledged_at": "",
             "builtin_radius_mgmt_password": "",
-            "rollout_canary_aps": "",
-            "rollout_canary_switches": "",
             # Global default device credentials
             "device_default_auth_enabled": "false",
             "device_default_username": "",
@@ -1198,9 +1224,8 @@ def init_db():
             # Pre-update reboot
             "pre_update_reboot": "true",
             # Smoke test strict mode: fail updates when smoke tests detect issues
+            # (a strict failure halts the whole rollout job — halt-on-first-failure)
             "smoke_test_strict": "false",
-            # Auto-cancel rollout on canary failure
-            "canary_auto_cancel": "false",
             # Config polling
             "config_poll_enabled": "true",
             "config_poll_interval_hours": "24",
@@ -2105,6 +2130,35 @@ def get_firmware_added_at(filename: str) -> Optional[str]:
         return row["added_at"] if row else None
 
 
+def mark_device_firmware_confirmed(ip: str, version: str, confirmed_at: str = None):
+    """Record that a device was confirmed working on a firmware version (updated
+    to it + passed post-update smoke tests). Idempotent per (ip, version) — the
+    latest confirmation wins. This is what lets one confirmed device clear its
+    model family's Firmware Hold early (see scheduler._confirmed_family_signal)."""
+    if not ip or not version:
+        return
+    confirmed_at = confirmed_at or datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO firmware_confirmations (ip, version, confirmed_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(ip, version) DO UPDATE SET confirmed_at = excluded.confirmed_at",
+            (ip, version, confirmed_at),
+        )
+
+
+def get_confirmed_ips_for_version(version: str) -> set[str]:
+    """Return the set of device IPs confirmed working on a given firmware version.
+    Live health (still on this version, no last_error, seen recently) is re-checked
+    by the caller — this only reports that a confirmation event was recorded."""
+    if not version:
+        return set()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT ip FROM firmware_confirmations WHERE version = ?", (version,)
+        ).fetchall()
+        return {row["ip"] for row in rows}
+
+
 def unregister_firmware(filename: str):
     """Remove a firmware file from the registry."""
     with get_db() as conn:
@@ -2437,8 +2491,12 @@ def create_rollout(firmware_file: str, firmware_file_303l: str = None, firmware_
                 f"for {firmware_file!r}"
             )
             return existing["id"]
+        # Start at pct10 (the first fleet wave). Don't rely on the table default
+        # — existing DBs created before the canary removal still default to
+        # 'canary', which the fail-closed gate would treat as an unknown phase.
         cursor = db.execute(
-            "INSERT INTO rollouts (firmware_file, firmware_file_303l, firmware_file_tns100) VALUES (?, ?, ?)",
+            "INSERT INTO rollouts (firmware_file, firmware_file_303l, firmware_file_tns100, phase) "
+            "VALUES (?, ?, ?, 'pct10')",
             (firmware_file, firmware_file_303l, firmware_file_tns100)
         )
         return cursor.lastrowid
@@ -2472,7 +2530,11 @@ def get_last_rollout_for_firmware_set(
         return dict(row) if row else None
 
 
-PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
+# Fleet rollout waves. The canary phase was removed: the first wave (pct10) is
+# the de-facto canary, gated by the release-date Firmware Hold (see rollout_gate)
+# and protected by halt-on-first-failure. One wave per maintenance window still
+# holds (rollout_gate Rule 1) — never let these cascade through a single window.
+PHASE_ORDER = ["pct10", "pct50", "pct100"]
 
 
 def advance_rollout_phase(rollout_id: int):
