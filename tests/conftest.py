@@ -165,6 +165,12 @@ def memory_db():
             source TEXT DEFAULT 'manual',
             sha256 TEXT DEFAULT NULL
         );
+        CREATE TABLE firmware_confirmations (
+            ip TEXT NOT NULL,
+            version TEXT NOT NULL,
+            confirmed_at TEXT NOT NULL,
+            PRIMARY KEY (ip, version)
+        );
         CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
             username TEXT NOT NULL,

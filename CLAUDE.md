@@ -246,11 +246,15 @@ full workflow and GitHub Actions contract.
 - All PRs target `main`
 - One feature per branch/PR — don't bundle unrelated changes
 - Keep commits focused and atomic with conventional commit messages
-- **Phased rollouts must advance one phase per maintenance window** and soak
-  the canary from fleet-canary completion (not firmware release date). This is
-  enforced by the fail-closed gate in `updater/rollout_gate.py` and guarded by
-  `tests/test_rollout_invariants.py`. Don't reintroduce per-phase auto-advance
-  without routing through the gate. See [docs/gradual-rollout.md](docs/gradual-rollout.md).
-  Config-conformity and RADIUS rollouts are slated to share this gate (see
-  [docs/gradual-rollout.md](docs/gradual-rollout.md)); keep new rollout logic in
-  one place rather than copying the phase loop.
+- **Fleet rollouts must advance one wave per maintenance window** (10% → 50% →
+  100%, no canary phase) and **halt the whole job if a device doesn't come back
+  online**. New firmware is held before the first wave by the **Firmware Hold**
+  (release date + `firmware_canary_hold_days`), which clears early, per model
+  family, once a device is confirmed working on it. This is enforced by the
+  fail-closed gate in `updater/rollout_gate.py` and guarded by
+  `tests/test_rollout_invariants.py`. Don't reintroduce a canary phase or
+  per-wave auto-advance without routing through the gate, and don't let the
+  hold-clear path bypass the one-wave-per-window rule. Manual per-device updates
+  intentionally bypass the hold. See [docs/gradual-rollout.md](docs/gradual-rollout.md).
+  Config-conformity and RADIUS rollouts are slated to share this gate; keep new
+  rollout logic in one place rather than copying the wave loop.

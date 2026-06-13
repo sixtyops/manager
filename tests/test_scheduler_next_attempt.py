@@ -131,8 +131,8 @@ class TestComputeNextAttempt:
         assert result["next_attempt_iso"] == datetime(2026, 5, 19, 3, 0).isoformat()
         assert result["reason"] is None
 
-    def test_device_assigned_to_pct50_gets_third_window(self, mock_db):
-        # Seed an active rollout currently in canary, with a device pre-assigned to pct50.
+    def test_device_assigned_to_pct50_gets_second_window(self, mock_db):
+        # Seed an active rollout at the first wave (pct10), device pre-assigned to pct50.
         db.upsert_access_point("10.0.0.10", "root", "pass", enabled=True, firmware_version="1.0.0")
         mock_db.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('selected_firmware_30x', 'fw-1.0.bin')"
@@ -160,8 +160,8 @@ class TestComputeNextAttempt:
                 }},
             )
 
-        # canary→pct10→pct50 means 3rd upcoming window from Monday = Thursday.
-        assert result["next_attempt_iso"] == datetime(2026, 5, 21, 3, 0).isoformat()
+        # pct10→pct50 means the 2nd upcoming window from Monday noon = Wednesday.
+        assert result["next_attempt_iso"] == datetime(2026, 5, 20, 3, 0).isoformat()
 
     def test_cpe_inherits_parent_ap_eligibility(self, mock_db):
         # Parent AP not in scope → CPE not in scope either.

@@ -102,80 +102,18 @@ class TestSchedulerBankModeFiltering:
 
 
 class TestSchedulerCanaries:
-    def test_phase_selection_prefers_configured_canaries(self, mock_db):
+    def test_wave_batch_takes_ten_percent_at_pct10(self, mock_db):
+        """The first wave selects ~10% of candidates (the Firmware Hold is enforced
+        at the gate, not by filtering the batch)."""
         _seed_rollout_devices()
         rollout_id = db.create_rollout("firmware.bin")
         rollout = db.get_rollout(rollout_id)
-        settings = {
-            "rollout_canary_aps": "10.0.0.11",
-            "rollout_canary_switches": "10.0.1.6",
-        }
 
         scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
-
         ap_batch = scheduler._get_devices_for_phase(
-            rollout,
-            ["10.0.0.10", "10.0.0.11"],
-            False,
-            settings,
+            rollout, ["10.0.0.10", "10.0.0.11"], False, {}
         )
-        switch_batch = scheduler._get_switches_for_phase(
-            rollout,
-            ["10.0.1.5", "10.0.1.6"],
-            False,
-            settings,
-        )
-
-        assert ap_batch == ["10.0.0.11"]
-        assert switch_batch == ["10.0.1.6"]
-
-    @pytest.mark.asyncio
-    async def test_manual_canary_trigger_uses_preferred_devices_without_marking_ran_today(self, mock_db, monkeypatch):
-        _seed_rollout_devices()
-        db.set_settings({
-            "schedule_enabled": "true",
-            "timezone": "America/Chicago",
-            "selected_firmware_30x": "firmware.bin",
-            "selected_firmware_tns100": "switch.bin",
-            "rollout_canary_aps": "10.0.0.11",
-            "rollout_canary_switches": "10.0.1.6",
-            "weather_check_enabled": "false",
-        })
-
-        start_update = AsyncMock(return_value="job-1234")
-        scheduler = AutoUpdateScheduler(AsyncMock(), start_update)
-
-        monkeypatch.setattr("updater.scheduler.services.validate_time_sources", AsyncMock(return_value=(True, datetime(2026, 3, 5, 13, 0, 0))))
-
-        await scheduler.trigger_canary_now()
-
-        start_update.assert_awaited_once()
-        kwargs = start_update.await_args.kwargs
-        assert kwargs["ap_ips"] == ["10.0.0.11"]
-        assert kwargs["switch_ips"] == ["10.0.1.6"]
-        assert scheduler._ran_today == set()
-
-        rollout = db.get_active_rollout()
-        devices = db.get_rollout_devices(rollout["id"])
-        assigned = {(row["ip"], row["device_type"]) for row in devices}
-        assert assigned == {("10.0.0.11", "ap"), ("10.0.1.6", "switch")}
-
-    @pytest.mark.asyncio
-    async def test_manual_canary_completion_waits_for_maintenance_window(self, mock_db):
-        _seed_rollout_devices()
-        rollout_id = db.create_rollout("firmware.bin")
-        db.assign_device_to_rollout(rollout_id, "10.0.0.10", "ap", "canary")
-        db.assign_device_to_rollout(rollout_id, "10.0.1.5", "switch", "canary")
-        db.set_rollout_job_id(rollout_id, "job-1234")
-
-        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
-        scheduler._current_job_id = "job-1234"
-        scheduler._manual_canary_job_ids.add("job-1234")
-
-        scheduler.on_job_completed("job-1234", 2, 0, learned_versions={"tna-30x": "1.2.3"})
-
-        assert scheduler._state == "idle"
-        assert scheduler._block_reason == "Canary complete; next phase waits for the maintenance window"
+        assert len(ap_batch) == 1  # ceil(10% of 2)
 
     def test_ap_candidate_includes_current_ap_with_behind_cpe(self, mock_db):
         db.upsert_access_point("10.0.0.10", "root", "pass", enabled=True, model="TNA-301", firmware_version="1.2.3.123")
@@ -314,42 +252,6 @@ class TestSchedulerCanaries:
             rollout, "tna-30x-1.0.0-r100.bin", "tna-303l-2.0.0-r200.bin", ""
         )
 
-    @pytest.mark.asyncio
-    async def test_canary_cancels_rollout_on_303l_change(self, mock_db, monkeypatch):
-        """Changing 303L firmware should cancel active rollout during canary trigger."""
-        _seed_rollout_devices()
-        # Create a rollout with old 303L firmware
-        rollout_id = db.create_rollout(
-            "tna-30x-1.0.0-r100.bin", "tna-303l-1.0.0-r100.bin", None
-        )
-
-        db.set_settings({
-            "schedule_enabled": "true",
-            "timezone": "America/Chicago",
-            "selected_firmware_30x": "tna-30x-1.0.0-r100.bin",
-            "selected_firmware_303l": "tna-303l-2.0.0-r200.bin",  # Changed!
-            "weather_check_enabled": "false",
-        })
-
-        start_update = AsyncMock(return_value="job-cancel-test")
-        scheduler = AutoUpdateScheduler(AsyncMock(), start_update)
-
-        monkeypatch.setattr(
-            "updater.scheduler.services.validate_time_sources",
-            AsyncMock(return_value=(True, datetime(2026, 3, 5, 13, 0, 0))),
-        )
-
-        await scheduler.trigger_canary_now()
-
-        # Old rollout should be cancelled
-        old_rollout = db.get_rollout(rollout_id)
-        assert old_rollout["status"] == "cancelled"
-
-        # New rollout should be created with updated 303L firmware
-        new_rollout = db.get_active_rollout()
-        assert new_rollout is not None
-        assert new_rollout["firmware_file_303l"] == "tna-303l-2.0.0-r200.bin"
-
     def test_get_last_rollout_for_firmware_set_matches_all_columns(self, mock_db):
         """get_last_rollout_for_firmware_set should match on all three firmware files."""
         db.create_rollout("30x-v1.bin", "303l-v1.bin", "tns-v1.bin")
@@ -473,10 +375,10 @@ class TestSchedulerStartupRecovery:
         assert recovered_key == expected_key
 
 
-class TestTriggerCanarySettingsSafety:
+class TestSchedulerSettingsSafety:
     @pytest.mark.asyncio
-    async def test_malformed_settings_do_not_crash_canary(self, mock_db, monkeypatch):
-        """Manual canary must not raise on malformed numeric settings."""
+    async def test_malformed_settings_do_not_crash_check_and_run(self, mock_db, monkeypatch):
+        """The scheduler tick must not raise on malformed numeric settings."""
         _seed_rollout_devices()
         db.set_settings({
             "schedule_enabled": "true",
@@ -487,19 +389,20 @@ class TestTriggerCanarySettingsSafety:
             "min_temperature_c": "",
             "firmware_canary_hold_days": "",
             "schedule_end_hour": "not-a-number",
-            "rollout_canary_aps": "10.0.0.11",
         })
 
-        start_update = AsyncMock(return_value="job-canary-safe")
+        start_update = AsyncMock(return_value="job-safe")
         scheduler = AutoUpdateScheduler(AsyncMock(), start_update)
 
         monkeypatch.setattr(
             "updater.scheduler.services.validate_time_sources",
-            AsyncMock(return_value=(True, datetime(2026, 3, 5, 13, 0, 0))),
+            AsyncMock(return_value=(True, datetime(2026, 3, 5, 3, 15, 0))),
         )
+        monkeypatch.setattr("updater.scheduler.services.is_in_schedule_window", lambda *a, **k: True)
+        monkeypatch.setattr("updater.scheduler.services.minutes_until_window_end", lambda *a, **k: 45)
 
-        await scheduler.trigger_canary_now()
-        start_update.assert_awaited_once()
+        # Must complete without raising.
+        await scheduler._check_and_run()
 
 
 class TestOnJobCompletedReconciliation:

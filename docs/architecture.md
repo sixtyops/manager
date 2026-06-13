@@ -79,9 +79,9 @@ Background task that checks every 60 seconds whether to start an update. Enforce
 - System clock validated against NTP sources
 - Weather conditions acceptable (optional temperature check)
 - Firmware files selected
-- The rollout has not already run a phase in this maintenance window
+- The rollout has not already run a wave in this maintenance window
 
-Manages gradual rollout progression across consecutive schedule windows. A fail-closed phase gate (`rollout_gate.py`) is the single source of truth that enforces **one phase per maintenance window** (DB-backed, survives restarts) and the **canary soak** (measured from when canary completed on the fleet, not the firmware release date), so phases cannot cascade through a single window. `tests/test_rollout_invariants.py` guards both rules.
+Manages gradual rollout progression across consecutive schedule windows. A fail-closed gate (`rollout_gate.py`) is the single source of truth that enforces **one wave per maintenance window** (DB-backed, survives restarts) and the **Firmware Hold** on the first wave (new firmware soaks for `firmware_canary_hold_days` from its release date, clearing early once a device is confirmed working on it), so waves cannot cascade through a single window. `tests/test_rollout_invariants.py` guards both rules.
 
 ### `poller.py` - Network Discovery
 
@@ -177,7 +177,7 @@ The remaining 9 features (firmware updates, Slack, SNMP, webhooks, device portal
 
 **Phase-based updates** - Devices are grouped into phases (CPEs first, then APs, then second bank pass) to maintain network connectivity during updates.
 
-**Gradual rollout** - Scheduled updates use a canary pattern. The first night updates 1 AP to learn the target firmware version. Subsequent nights scale to 10%, 50%, and 100%. Any failure pauses the rollout.
+**Gradual rollout** - Scheduled updates roll out in waves — 10%, then 50%, then 100% — one wave per maintenance window. New firmware is held before the first wave (the Firmware Hold) until it soaks or a device is confirmed working on it. Any device that fails to come back online halts the job and pauses the rollout.
 
 **curl for device communication** - Tachyon devices require specific TLS handling that is simplest to achieve with curl's `-k` flag for self-signed certs.
 
