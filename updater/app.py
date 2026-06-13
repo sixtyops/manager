@@ -14,7 +14,7 @@ import subprocess
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional, Set
 
@@ -2190,7 +2190,6 @@ _SETTINGS_WRITABLE = {
     "bank_mode", "allow_downgrade", "timezone", "zip_code",
     "weather_check_enabled", "min_temperature_c", "temperature_unit",
     "schedule_scope", "schedule_scope_data",
-    "rollout_canary_aps", "rollout_canary_switches",
     "firmware_beta_enabled", "firmware_canary_hold_days",
     "slack_webhook_url",
     "snmp_traps_enabled", "snmp_trap_host", "snmp_trap_port",
@@ -2199,7 +2198,7 @@ _SETTINGS_WRITABLE = {
     "telemetry_enabled", "telemetry_prompt_seen",
     "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
     "pre_update_reboot",
-    "smoke_test_strict", "canary_auto_cancel",
+    "smoke_test_strict",
     # Webhook settings
     "webhook_enabled", "webhook_url", "webhook_method",
     "webhook_headers", "webhook_secret", "webhook_events",
@@ -2233,45 +2232,6 @@ def _parse_float_field(value, field: str) -> float:
         return float(str(value))
     except (TypeError, ValueError):
         raise HTTPException(400, f"Invalid number for {field}")
-
-
-def _parse_ip_csv(value: str) -> list[str]:
-    return [ip.strip() for ip in (value or "").split(",") if ip.strip()]
-
-
-def _resolve_rollout_scopes_for_validation(settings: dict) -> tuple[set[str], set[str]]:
-    scope = settings.get("schedule_scope", "all")
-    scope_data = settings.get("schedule_scope_data", "")
-
-    if scope == "all":
-        return (
-            {ap["ip"] for ap in db.get_access_points(enabled_only=True)},
-            {sw["ip"] for sw in db.get_switches(enabled_only=True)},
-        )
-
-    if scope == "sites":
-        site_ids = [int(s.strip()) for s in scope_data.split(",") if s.strip().isdigit()]
-        ap_ips = set()
-        sw_ips = set()
-        for site_id in site_ids:
-            ap_ips.update(ap["ip"] for ap in db.get_access_points(tower_site_id=site_id, enabled_only=True))
-            sw_ips.update(sw["ip"] for sw in db.get_switches(tower_site_id=site_id, enabled_only=True))
-        return ap_ips, sw_ips
-
-    if scope == "aps":
-        ap_ips = {ip for ip in _parse_ip_csv(scope_data) if (db.get_access_point(ip) or {}).get("enabled", 0)}
-        site_ids = {
-            ap.get("tower_site_id")
-            for ip in ap_ips
-            for ap in [db.get_access_point(ip)]
-            if ap and ap.get("tower_site_id") is not None
-        }
-        sw_ips = set()
-        for site_id in site_ids:
-            sw_ips.update(sw["ip"] for sw in db.get_switches(tower_site_id=site_id, enabled_only=True))
-        return ap_ips, sw_ips
-
-    return set(), set()
 
 
 def _validate_settings(filtered: dict):
@@ -2370,47 +2330,6 @@ def _validate_settings(filtered: dict):
     # Dependency checks
     if filtered.get("snmp_traps_enabled") == "true" and not snmp.is_pysnmp_available():
         raise HTTPException(400, "Cannot enable SNMP traps: pysnmp-lextudio is not installed")
-
-    effective_settings = db.get_all_settings()
-    effective_settings.update(filtered)
-    ap_scope, switch_scope = _resolve_rollout_scopes_for_validation(effective_settings)
-    canary_specs = (
-        ("rollout_canary_aps", db.get_access_point, ap_scope, "AP"),
-        ("rollout_canary_switches", db.get_switch, switch_scope, "switch"),
-    )
-    for key, getter, scope, label in canary_specs:
-        if key not in filtered:
-            continue
-        invalid = []
-        missing = []
-        disabled = []
-        out_of_scope = []
-        for ip in _parse_ip_csv(filtered.get(key, "")):
-            try:
-                _validate_ip(ip)
-            except HTTPException:
-                invalid.append(ip)
-                continue
-            device = getter(ip)
-            if not device:
-                missing.append(ip)
-                continue
-            if not device.get("enabled", 1):
-                disabled.append(ip)
-                continue
-            if scope and ip not in scope:
-                out_of_scope.append(ip)
-        if invalid or missing or disabled or out_of_scope:
-            parts = []
-            if invalid:
-                parts.append(f"invalid IPs: {', '.join(invalid)}")
-            if missing:
-                parts.append(f"unknown {label}s: {', '.join(missing)}")
-            if disabled:
-                parts.append(f"disabled {label}s: {', '.join(disabled)}")
-            if out_of_scope:
-                parts.append(f"out of rollout scope: {', '.join(out_of_scope)}")
-            raise HTTPException(400, f"Invalid {label} canary selection ({'; '.join(parts)})")
 
 
 async def _refresh_firmware_targets() -> None:
@@ -3910,21 +3829,6 @@ async def reset_rollout(rollout_id: int, session: dict = Depends(require_role("a
     return {"success": True}
 
 
-@app.post("/api/rollout/canary/trigger", tags=["system"])
-async def trigger_canary_rollout(session: dict = Depends(require_role("admin", "operator"))):
-    """Trigger the canary phase immediately, outside the maintenance window."""
-    scheduler = get_scheduler()
-    if not scheduler:
-        raise HTTPException(503, "Scheduler not initialized")
-
-    try:
-        await scheduler.trigger_canary_now()
-    except RuntimeError as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-    return {"success": True, "status": scheduler.get_status()}
-
-
 # ---------------------------------------------------------------------------
 # Freeze windows API
 # ---------------------------------------------------------------------------
@@ -4344,7 +4248,7 @@ async def list_firmware_files(session: dict = Depends(require_auth)):
 
     return {
         "files": sorted(files, key=lambda x: x["modified"], reverse=True),
-        "canary_hold_days": hold_days,
+        "firmware_hold_days": hold_days,
     }
 
 
@@ -4448,16 +4352,38 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
     )
     scope_ips = set(scheduler._resolve_scope(settings)) if scheduler else set()
     switch_scope = set(scheduler._resolve_switch_scope(settings)) if scheduler else set()
+    # Per-family Firmware Hold state (release-date soak, cleared early by a
+    # confirmed-working device). A device that needs held firmware shows "on hold".
+    held_families, family_holds = (
+        scheduler._held_families(settings, active_rollout) if scheduler else (set(), {})
+    )
 
-    def _next_attempt(ip: str, role: str, parent_ap_ip: Optional[str] = None) -> dict:
+    def _next_attempt(ip: str, role: str, parent_ap_ip: Optional[str] = None,
+                      fw_type: Optional[str] = None) -> dict:
         if not scheduler:
             return {"auto_update_eligible": False, "next_attempt_iso": None,
                     "reason": "Auto-update is off"}
+        hold_iso = (family_holds.get(fw_type) or {}).get("clears_at") if fw_type in held_families else None
         return scheduler.compute_next_attempt(
             ip, role, parent_ap_ip=parent_ap_ip, settings=settings,
             rollout=active_rollout, rollout_devices_by_ip=rollout_devices_by_ip,
             scope_ips=scope_ips, switch_scope=switch_scope,
+            hold_clears_at_iso=hold_iso,
         )
+
+    def _update_state(status: str, fw_type: Optional[str], next_info: dict) -> tuple[str, Optional[dict]]:
+        """Map version status to a per-device update state for the UI. A device
+        that is behind on held firmware (and would otherwise auto-update) is
+        'on_hold'; otherwise up_to_date / needs_update / unknown."""
+        if (status == "behind" and next_info.get("auto_update_eligible")
+                and fw_type in held_families):
+            d = family_holds.get(fw_type) or {}
+            return "on_hold", {"clears_at": d.get("clears_at"), "confirmed_by": d.get("confirmed_by")}
+        if status == "current":
+            return "up_to_date", None
+        if status == "behind":
+            return "needs_update", None
+        return "unknown", None
 
     # Collect all devices
     devices = []
@@ -4467,7 +4393,7 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
     for cpe in all_cpes:
         cpes_by_ap.setdefault(cpe["ap_ip"], []).append(cpe)
 
-    summary = {"total": 0, "current": 0, "behind": 0, "unknown": 0}
+    summary = {"total": 0, "current": 0, "behind": 0, "unknown": 0, "on_hold": 0}
 
     for ap in aps:
         fw_type = _get_firmware_type_for_model(ap.get("model"))
@@ -4477,7 +4403,10 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
         summary["total"] += 1
         summary[status] += 1
 
-        next_info = _next_attempt(ap["ip"], "ap")
+        next_info = _next_attempt(ap["ip"], "ap", fw_type=fw_type)
+        update_state, hold = _update_state(status, fw_type, next_info)
+        if update_state == "on_hold":
+            summary["on_hold"] += 1
         devices.append({
             "ip": ap["ip"],
             "system_name": ap.get("system_name"),
@@ -4492,6 +4421,8 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             "target_version": target_version,
             "firmware_type": fw_type,
             "status": status,
+            "update_state": update_state,
+            "hold": hold,
             "auth_status": None,
             "enabled": bool(ap.get("enabled", 1)),
             "auto_update_eligible": next_info["auto_update_eligible"],
@@ -4507,7 +4438,10 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             summary["total"] += 1
             summary[cpe_status] += 1
 
-            cpe_next = _next_attempt(cpe["ip"], "cpe", parent_ap_ip=ap["ip"])
+            cpe_next = _next_attempt(cpe["ip"], "cpe", parent_ap_ip=ap["ip"], fw_type=cpe_fw_type)
+            cpe_update_state, cpe_hold = _update_state(cpe_status, cpe_fw_type, cpe_next)
+            if cpe_update_state == "on_hold":
+                summary["on_hold"] += 1
             devices.append({
                 "ip": cpe["ip"],
                 "system_name": cpe.get("system_name"),
@@ -4522,6 +4456,8 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
                 "target_version": cpe_target_version,
                 "firmware_type": cpe_fw_type,
                 "status": cpe_status,
+                "update_state": cpe_update_state,
+                "hold": cpe_hold,
                 "auth_status": cpe.get("auth_status"),
                 "enabled": bool(ap.get("enabled", 1)),
                 "auto_update_eligible": cpe_next["auto_update_eligible"],
@@ -4539,7 +4475,10 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
         summary["total"] += 1
         summary[status] += 1
 
-        sw_next = _next_attempt(sw["ip"], "switch")
+        sw_next = _next_attempt(sw["ip"], "switch", fw_type=fw_type)
+        sw_update_state, sw_hold = _update_state(status, fw_type, sw_next)
+        if sw_update_state == "on_hold":
+            summary["on_hold"] += 1
         devices.append({
             "ip": sw["ip"],
             "system_name": sw.get("system_name"),
@@ -4554,6 +4493,8 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             "target_version": target_version,
             "firmware_type": fw_type,
             "status": status,
+            "update_state": sw_update_state,
+            "hold": sw_hold,
             "auth_status": None,
             "enabled": bool(sw.get("enabled", 1)),
             "auto_update_eligible": sw_next["auto_update_eligible"],
@@ -5647,6 +5588,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         # Post-update smoke tests
         strict_mode = db.get_setting("smoke_test_strict", "false") == "true"
         smoke_failed = False
+        smoke_clean_pass = False  # smoke ran AND passed cleanly (no warnings, no error)
         if client:
             try:
                 progress_callback(ip, "Smoke testing...")
@@ -5670,6 +5612,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                         device_status.progress_message = f"{prefix}Updated to {result.new_version} (warnings: {warning_summary})"
                         logger.warning(f"Smoke test warnings for {ip}: {smoke_result.warnings}")
                 else:
+                    smoke_clean_pass = True
                     device_status.progress_message = f"{prefix}Updated to {result.new_version} (smoke tests passed)"
             except Exception as e:
                 logger.warning(f"Smoke test error for {ip} (non-fatal): {e}")
@@ -5678,14 +5621,23 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             if not smoke_failed:
                 device_status.status = "success"
 
-        # Canary auto-cancel: if this device was in the canary phase and failed,
-        # auto-cancel the rollout to prevent the issue from spreading
-        if smoke_failed and db.get_setting("canary_auto_cancel", "false") == "true":
-            rollout = db.get_current_rollout()
-            if rollout and rollout["phase"] == "canary" and rollout["status"] == "active":
-                logger.warning(f"Auto-cancelling rollout {rollout['id']}: canary device {ip} failed smoke tests")
-                db.pause_rollout(rollout["id"], f"Auto-cancelled: canary device {ip} failed smoke tests")
-                _request_job_cancel(job, f"Canary auto-cancel: {ip} failed smoke tests")
+        # A device that updated and *cleanly* passed its smoke tests is "confirmed
+        # working" on the new firmware. One confirmed device of a model family
+        # clears that family's Firmware Hold for the auto-rollout (the operator's
+        # manual canary). We require a clean smoke pass — NOT just a "success"
+        # status, which non-strict warnings and smoke-test exceptions also leave —
+        # so a device that didn't actually pass smoke can't release the fleet. On a
+        # strict smoke failure, halt the whole job (halt-on-first-failure) so a bad
+        # firmware can't spread past the first device(s) that exhibit it.
+        if smoke_clean_pass and result.new_version:
+            try:
+                db.mark_device_firmware_confirmed(
+                    ip, result.new_version, datetime.now(timezone.utc).isoformat()
+                )
+            except Exception as e:
+                logger.warning(f"Failed to record firmware confirmation for {ip}: {e}")
+        elif smoke_failed:
+            _request_job_cancel(job, f"Cancelled: {ip} failed smoke tests")
     else:
         device_status.status = "failed"
         device_status.error = result.error

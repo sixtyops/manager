@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
+- **Simpler, safer auto-updates: the canary phase is gone.** Auto-update now rolls
+  new firmware to the fleet in 10% → 50% → 100% waves (one per maintenance window)
+  and **stops the whole job the instant a device doesn't come back online** — the
+  first 10% wave is the canary. The old "Canary Hold" is now the **Firmware Hold**:
+  newly released firmware waits a configurable number of days before the fleet
+  auto-updates to it, and the hold **clears early once a device is confirmed working
+  on it** (update one device yourself to test it, then the fleet follows). Holds are
+  per model, so confirming one model never releases another. Devices waiting on a
+  hold now show an **"On hold"** status. **Clicking Update Firmware always skips the
+  hold** — that's how you test new firmware on a device you pick. This removes the
+  dedicated-canary picker and the manual "run canary now" control.
 - **The bottom status bar can now be grabbed and dragged.** Drag it up to open
   the schedule panel to any height, or drag it down to close — anywhere on the
   bar works, not just the thin divider. Clicking the bar still toggles it, and
