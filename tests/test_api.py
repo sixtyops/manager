@@ -614,8 +614,9 @@ class TestStartUpdateAPI:
         }, follow_redirects=False)
         assert resp.status_code in (401, 303)
 
-    def test_start_update_single_bank_skips_active_target(self, authed_client, mock_db, tmp_path):
-        """Single-bank mode should skip devices whose active bank already matches target."""
+    def test_start_update_single_bank_on_exact_build_is_noop(self, authed_client, mock_db, tmp_path):
+        """Single-bank: a device already on the exact target build is not flashed.
+        It's a neutral no-op (200 already_current), not a scary 400 failure."""
         mock_db.execute(
             "INSERT INTO access_points (ip, username, password, model, firmware_version, bank1_version, bank2_version, active_bank)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -626,16 +627,18 @@ class TestStartUpdateAPI:
         fw_file = tmp_path / "tna-30x-1.12.2-r54970.bin"
         fw_file.write_bytes(b"fake firmware")
 
-        with patch("updater.app.FIRMWARE_DIR", tmp_path):
+        with patch("updater.app.FIRMWARE_DIR", tmp_path), \
+             patch("updater.app._spawn_update_job") as mock_spawn:
             resp = authed_client.post("/api/start-update", data={
                 "firmware_file": "tna-30x-1.12.2-r54970.bin",
                 "device_type": "mixed",
                 "ip_list": "10.0.0.1",
                 "bank_mode": "one",
             })
+            mock_spawn.assert_not_called()
 
-        assert resp.status_code == 400
-        assert "No devices require update" in resp.text
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "already_current"}
 
     def test_start_update_dual_bank_includes_inactive_mismatch(self, authed_client, mock_db, tmp_path):
         """Dual-bank mode should include devices with active target but inactive mismatch."""

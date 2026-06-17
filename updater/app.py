@@ -4706,6 +4706,29 @@ def _device_needs_update_for_bank_mode(
     return True
 
 
+def _device_on_exact_build(device: dict, target_version: str, bank_mode: str) -> bool:
+    """True only when the device is already on the exact target build.
+
+    This is the gate for *explicit manual* updates. An operator who picks a
+    firmware file and clicks "update" on a specific device should always have it
+    pushed — the only reason to skip is that the device is provably already on
+    that exact build (so we don't force a needless reboot). Unlike
+    `_device_needs_update_for_bank_mode`, this never decides "no update needed"
+    just because the device's version *parses* as newer/older than the target;
+    only an exact build-string match counts.
+    """
+    target = _normalize_version(target_version)
+    if not target:
+        return False  # unknown target -> not provably on it -> push
+
+    active_version, inactive_version = _get_active_inactive_bank_versions(device)
+    if active_version != target:
+        return False
+    if bank_mode == "both" and inactive_version != target:
+        # A dual-bank rewrite still has work to do on the inactive bank.
+        return False
+    return True
+
 
 def _get_firmware_type_for_model(model: Optional[str], vendor: str = "tachyon") -> Optional[str]:
     """Get the firmware type key for a device model."""
@@ -5010,22 +5033,25 @@ async def start_update(
             missing_aps.append(ip)
             continue
 
-        ap_fw = _select_firmware_for_model(ap.get("model"), firmware_files) or str(firmware_path)
+        # Explicit manual target: the operator picked this AP. Fail clearly when
+        # no firmware matches its model (don't silently flash the wrong family),
+        # and push the chosen build unless the AP is provably already on it.
+        ap_fw = _select_firmware_for_model(ap.get("model"), firmware_files)
+        if ap_fw is None:
+            raise HTTPException(
+                400,
+                f"No firmware selected for model {ap.get('model') or 'unknown'} "
+                f"({ip}). Select a matching firmware file in Settings, then retry.",
+            )
         ap_target_version = _extract_version_from_filename(Path(ap_fw).name)
-        include_ap = _device_needs_update_for_bank_mode(
-            ap,
-            ap_target_version,
-            bank_mode=bank_mode,
-            allow_downgrade=allow_downgrade,
-        )
-        if include_ap:
+        if _device_on_exact_build(ap, ap_target_version, bank_mode):
+            logger.info(
+                f"Skipping AP {ip}: already on exact build {ap_target_version or 'unknown'}"
+            )
+        else:
             credentials[ip] = (ap["username"], ap["password"])
             device_roles[ip] = "ap"
             device_firmware_map[ip] = ap_fw
-        else:
-            logger.info(
-                f"Skipping AP {ip}: bank_mode={bank_mode}, target={ap_target_version or 'unknown'} already satisfied"
-            )
 
         # Always process CPEs regardless of AP status
         cpes = db.get_cpes_for_ap(ip)
@@ -5097,10 +5123,10 @@ async def start_update(
             device_firmware_map[sw_ip] = sw_fw
 
     if not device_roles:
-        raise HTTPException(
-            400,
-            f"No devices require update for bank_mode='{bank_mode}' and selected target firmware.",
-        )
+        # Everything the operator selected (and any enabled switches) is already
+        # on the chosen build — nothing to flash. Report it as a neutral state,
+        # not a failure, so the UI doesn't show a scary error for a no-op.
+        return {"status": "already_current"}
 
     pre_update_reboot = db.get_setting("pre_update_reboot", "true") == "true"
 
@@ -5189,7 +5215,6 @@ async def update_single_device_endpoint(
         firmware_names["tns-100"] = safe_tns100
 
     # Look up device - check APs first, then switches, then CPEs
-    allow_downgrade = db.get_setting("allow_downgrade", "false") == "true"
     ap = db.get_access_point(ip)
     credentials = {}
     device_roles = {}
@@ -5199,11 +5224,20 @@ async def update_single_device_endpoint(
     device_record = None  # track which device dict we found
 
     if ap:
-        # It's an AP - update just this AP (no CPEs)
+        # It's an AP - update just this AP (no CPEs). Fail clearly when no
+        # firmware matches its model instead of silently flashing the wrong
+        # family (which the device would reject at flash time).
         device_record = ap
+        ap_fw = _select_firmware_for_model(ap.get("model"), firmware_files)
+        if ap_fw is None:
+            raise HTTPException(
+                400,
+                f"No firmware selected for model {ap.get('model') or 'unknown'} "
+                f"({ip}). Select a matching firmware file in Settings, then retry.",
+            )
         credentials[ip] = (ap["username"], ap["password"])
         device_roles[ip] = "ap"
-        device_firmware_map[ip] = _select_firmware_for_model(ap.get("model"), firmware_files) or str(firmware_path)
+        device_firmware_map[ip] = ap_fw
         ap_cpe_map[ip] = []
     else:
         # Check if it's a switch
@@ -5245,12 +5279,14 @@ async def update_single_device_endpoint(
             # Create a dummy AP entry in ap_cpe_map so the job structure works
             ap_cpe_map[cpe["ap_ip"]] = [ip]
 
-    # Check if device actually needs updating (bank-mode aware)
+    # Explicit single-device update: push the chosen firmware unless the device
+    # is provably already on that exact build (so we don't force a needless
+    # reboot). Report the no-op as a neutral state, not a failure.
     fw_path = device_firmware_map.get(ip, "")
     if fw_path and not fw_path.startswith("__missing"):
         target_version = _extract_version_from_filename(Path(fw_path).name)
-        if not _device_needs_update(device_record, target_version, bank_mode, allow_downgrade):
-            raise HTTPException(400, f"Device already at target version {target_version}")
+        if _device_on_exact_build(device_record, target_version, bank_mode):
+            return {"status": "already_current", "version": target_version}
 
     pre_update_reboot = db.get_setting("pre_update_reboot", "true") == "true"
 

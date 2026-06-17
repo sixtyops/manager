@@ -6681,6 +6681,24 @@
             }
         }
 
+        // Interpret a firmware-update API response. Returns true only when a
+        // job actually started (so the device should stay marked "updating").
+        // An `already_current` body means the device is on the chosen build —
+        // a neutral no-op, not a failure.
+        async function handleUpdateResponse(resp) {
+            if (resp.ok) {
+                const data = await resp.json().catch(() => ({}));
+                if (data && data.status === 'already_current') {
+                    showToast('Already on this firmware — nothing to update.');
+                    return false;
+                }
+                return true;
+            }
+            const err = await resp.json().catch(() => ({}));
+            showToast('Update failed: ' + extractDetail(err && err.detail));
+            return false;
+        }
+
         async function triggerUpdate(type, id, mode) {
 
             let settings;
@@ -6779,10 +6797,7 @@
                     formData.append('firmware_file_tns100', firmwareTns100);
                     formData.append('bank_mode', bankMode);
                     const resp = await fetch('/api/update-device', { method: 'POST', body: formData });
-                    if (resp.ok) { success = true; } else {
-                        const err = await resp.json();
-                        showToast('Update failed: ' + extractDetail(err.detail));
-                    }
+                    success = await handleUpdateResponse(resp);
                 } catch (e) { showToast('Update error: ' + e.message); }
             } else if (type === 'ap') {
                 try {
@@ -6795,10 +6810,7 @@
                     formData.append('concurrency', '2');
                     formData.append('bank_mode', bankMode);
                     const resp = await fetch('/api/start-update', { method: 'POST', body: formData });
-                    if (resp.ok) { success = true; } else {
-                        const err = await resp.json();
-                        showToast('Update failed: ' + extractDetail(err.detail));
-                    }
+                    success = await handleUpdateResponse(resp);
                 } catch (e) { showToast('Update error: ' + e.message); }
             } else if (type === 'switch') {
                 try {
@@ -6809,10 +6821,7 @@
                     formData.append('firmware_file_tns100', firmwareTns100);
                     formData.append('bank_mode', bankMode);
                     const resp = await fetch('/api/update-device', { method: 'POST', body: formData });
-                    if (resp.ok) { success = true; } else {
-                        const err = await resp.json();
-                        showToast('Update failed: ' + extractDetail(err.detail));
-                    }
+                    success = await handleUpdateResponse(resp);
                 } catch (e) { showToast('Update error: ' + e.message); }
             } else if (type === 'site') {
                 const site = findSite(id === 'null' ? null : parseInt(id));
@@ -6829,10 +6838,7 @@
                     formData.append('concurrency', '2');
                     formData.append('bank_mode', bankMode);
                     const resp = await fetch('/api/start-update', { method: 'POST', body: formData });
-                    if (resp.ok) { success = true; } else {
-                        const err = await resp.json();
-                        showToast('Update failed: ' + extractDetail(err.detail));
-                    }
+                    success = await handleUpdateResponse(resp);
                 } catch (e) { showToast('Update error: ' + e.message); }
             }
 
