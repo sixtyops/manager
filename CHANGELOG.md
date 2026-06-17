@@ -40,6 +40,15 @@ All notable changes to this project are documented in this file.
   Sign in via first-run setup as normal.
 
 ### Fixed
+- **Clicking "Update" on a device now always flashes the firmware you picked.**
+  Before, a manual update could quietly do nothing — the button second-guessed
+  your choice and skipped the device if it looked like it might already be up to
+  date (which misfired between closely-numbered builds, e.g. one beta to the
+  next), showing only a brief error that read as "nothing happened." Now an
+  explicit update on a device pushes the selected firmware unless that device is
+  already on the exact same build, in which case it says so plainly instead of
+  failing. If no firmware matching the device's model is selected, you get a
+  clear message naming the model instead of a silent no-op.
 - **Backups can now actually be restored onto a new machine.** The automatic
   backup now includes the security key that unlocks saved device passwords, so
   restoring onto a fresh host brings back a manager that can reach your devices —
