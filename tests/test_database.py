@@ -781,3 +781,24 @@ class TestCheckpointDB:
         # After TRUNCATE checkpoint, WAL should be empty
         if wal_file.exists():
             assert wal_file.stat().st_size == 0
+
+
+class TestFirmwareRegistry:
+    """register_firmware stores integrity hashes for the pre-flash check."""
+
+    def test_stores_and_reads_sha256(self, mock_db):
+        db.register_firmware("fw.bin", source="manual", sha256="abc123")
+        assert db.get_firmware_sha256("fw.bin") == "abc123"
+
+    def test_reupload_updates_hash(self, mock_db):
+        db.register_firmware("fw.bin", source="manual", sha256="old")
+        db.register_firmware("fw.bin", source="manual", sha256="new")
+        assert db.get_firmware_sha256("fw.bin") == "new"
+
+    def test_re_register_without_hash_preserves_stored_hash(self, mock_db):
+        # The fetcher re-registers auto firmware (no hash) on every 24h cycle.
+        # COALESCE must keep that None from erasing the stored hash, or the
+        # pre-flash SHA256 check would silently disarm for auto files.
+        db.register_firmware("fw.bin", source="auto", sha256="keepme")
+        db.register_firmware("fw.bin", source="auto")  # idempotent, no hash
+        assert db.get_firmware_sha256("fw.bin") == "keepme"

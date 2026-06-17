@@ -1,6 +1,7 @@
 """Auto-fetch firmware from Tachyon Networks Freshdesk release pages."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -68,6 +69,22 @@ RE_DOWNLOAD_LINK = re.compile(
     re.IGNORECASE,
 )
 
+# Regex: pair a release version to its vendor-published MD5 within one
+# summary-table row. The Freshdesk summary table gained an MD5 column in
+# 2026-06 (columns: Type | File | Release date | MD5); the version lives in
+# the File cell's <a> text (e.g. "v1.12.3", "v.1.15.0") and the MD5 is a bare
+# 32-hex token a couple of cells later. The tempered dot `(?!</tr>)` keeps the
+# match inside a single <tr> so one row's hash can't bind to another row's
+# version. Always run this over <table> regions only (see _parse_table_md5s):
+# the release-notes body also contains inline "MD5: <hash>" lines that would
+# otherwise pair a hash to the wrong version.
+RE_TABLE_MD5 = re.compile(
+    r"v[^\d<]*(\d+(?:\.\d+)*)"      # version in the File cell
+    r"(?:(?!</tr>).)*?"            # ... same row only ...
+    r"\b([0-9a-fA-F]{32})\b",      # the MD5 cell
+    re.IGNORECASE | re.DOTALL,
+)
+
 CHECK_INTERVAL = 86400  # 24 hours
 
 # A freshly-downloaded firmware smaller than this fraction of the largest
@@ -77,6 +94,22 @@ CHECK_INTERVAL = 86400  # 24 hours
 MIN_PLAUSIBLE_SIZE_FRACTION = 0.5
 
 
+def _parse_table_md5s(html: str) -> dict[str, str]:
+    """Map firmware version -> vendor-published MD5 from the summary table(s).
+
+    Scoped to <table> regions so the inline "MD5: <hash>" notes in the
+    release-notes body can't bind a hash to the wrong version. Fail-open: a
+    version with no parsed MD5 simply isn't in the map, and the download falls
+    back to the size guards rather than being blocked. The first match for a
+    version wins (the summary table is the first table on the page).
+    """
+    md5s: dict[str, str] = {}
+    for table in re.findall(r"<table.*?</table>", html, re.DOTALL):
+        for version, md5 in RE_TABLE_MD5.findall(table):
+            md5s.setdefault(_normalize_version(version), md5.lower())
+    return md5s
+
+
 @dataclass
 class FirmwareRelease:
     platform: str       # "tna-30x" or "tna-303l"
@@ -84,6 +117,7 @@ class FirmwareRelease:
     download_url: str
     channel: str        # "stable" or "beta"
     filename: str       # basename of the URL
+    md5: Optional[str] = None  # vendor-published MD5 (lowercase), or None if not listed
 
 
 class FirmwareFetcher:
@@ -173,15 +207,39 @@ class FirmwareFetcher:
                     # Track as auto-fetched even if already present
                     if release.filename not in auto_fetched:
                         auto_fetched.append(release.filename)
-                    # Ensure registered (idempotent)
-                    db.register_firmware(release.filename, source="auto")
-                    continue
+                    if db.get_firmware_sha256(release.filename) is not None:
+                        # Already fingerprinted on a prior cycle; re-register is
+                        # a no-op for the hash (COALESCE preserves it).
+                        db.register_firmware(release.filename, source="auto")
+                        continue
+                    # No stored hash yet — fingerprint the on-disk file so it
+                    # too gets the pre-flash integrity re-check. But an existing
+                    # file can't be trusted on faith: a partial/corrupt download
+                    # left by an older build (or fetched while the page listed no
+                    # MD5) must be verified against the vendor checksum before we
+                    # store its hash, or the pre-flash check would just compare
+                    # the bad file to its own bad hash and pass. On mismatch,
+                    # discard it and fall through to re-download + verify.
+                    file_md5, file_sha256 = await self._hash_existing_file(filepath)
+                    if release.md5 and file_md5 and file_md5.lower() != release.md5.lower():
+                        logger.error(
+                            f"On-disk {release.filename} fails the vendor MD5 "
+                            f"(expected {release.md5}, got {file_md5}) — discarding "
+                            "and re-downloading"
+                        )
+                        filepath.unlink(missing_ok=True)
+                        # fall through to the download path below (no continue)
+                    else:
+                        db.register_firmware(
+                            release.filename, source="auto", sha256=file_sha256,
+                        )
+                        continue
 
-                success = await self._download_firmware(release)
+                success, sha256 = await self._download_firmware(release)
                 if success:
                     downloaded.append(release.filename)
                     auto_fetched.append(release.filename)
-                    db.register_firmware(release.filename, source="auto")
+                    db.register_firmware(release.filename, source="auto", sha256=sha256)
 
                     # Replace older auto-fetched firmware of same platform/channel
                     old_files = self._find_old_firmware(
@@ -271,6 +329,9 @@ class FirmwareFetcher:
         # Parse download links
         link_matches = RE_DOWNLOAD_LINK.findall(html)
 
+        # Parse the vendor-published MD5 per version (summary table only)
+        md5_by_version = _parse_table_md5s(html)
+
         releases = []
         has_version_table = stable_version is not None or beta_version is not None
 
@@ -299,6 +360,7 @@ class FirmwareFetcher:
                 download_url=download_url,
                 channel=channel,
                 filename=filename,
+                md5=md5_by_version.get(version),
             ))
 
         # Parse-sanity guard: if the summary table promised a release we
@@ -353,14 +415,21 @@ class FirmwareFetcher:
             )
         return None
 
-    async def _download_firmware(self, release: FirmwareRelease) -> bool:
+    async def _download_firmware(self, release: FirmwareRelease) -> tuple[bool, Optional[str]]:
         """Download a firmware .bin file with streaming.
 
-        Verifies the download is complete before accepting it: a transfer that
-        is shorter than its advertised Content-Length, or far smaller than the
-        platform's other firmware, is rejected rather than renamed into place —
-        so a partial image can never become the auto-selected target and get
-        flashed to a device. See issue #214.
+        Verifies the download before accepting it: a transfer whose MD5 doesn't
+        match the vendor-published hash, that is shorter than its advertised
+        Content-Length, or that is far smaller than the platform's other
+        firmware is rejected rather than renamed into place — so a corrupt or
+        partial image can never become the auto-selected target and get flashed
+        to a device. The MD5 check is fail-open: when the release page lists no
+        MD5 (`release.md5` is None) the size guards still apply. See issue #214.
+
+        Returns (True, sha256_hex) on success — the SHA256 is computed in the
+        same streaming pass so the caller can store it, bringing auto-fetched
+        firmware under the same pre-flash integrity re-check as manual uploads.
+        Returns (False, None) on any rejection or error.
         """
         filepath = self.firmware_dir / release.filename
         tmp_path = filepath.with_suffix(".downloading")
@@ -369,6 +438,8 @@ class FirmwareFetcher:
         try:
             expected_len = None
             bytes_written = 0
+            md5_hash = hashlib.md5()
+            sha256_hash = hashlib.sha256()
             async with httpx.AsyncClient(timeout=600, follow_redirects=True) as client:
                 async with client.stream("GET", release.download_url) as resp:
                     resp.raise_for_status()
@@ -379,6 +450,23 @@ class FirmwareFetcher:
                         async for chunk in resp.aiter_bytes(chunk_size=65536):
                             f.write(chunk)
                             bytes_written += len(chunk)
+                            md5_hash.update(chunk)
+                            sha256_hash.update(chunk)
+
+            # Reject a vendor-MD5 mismatch (corrupt or wrong image). Checked
+            # first — an authoritative hash is a stronger signal than the size
+            # heuristics below. Skipped when no MD5 was published for the
+            # release (fail-open: never block obtaining firmware on a missing
+            # hash, but never accept a mismatch).
+            if release.md5:
+                actual_md5 = md5_hash.hexdigest()
+                if actual_md5.lower() != release.md5.lower():
+                    tmp_path.unlink(missing_ok=True)
+                    logger.error(
+                        f"MD5 mismatch for {release.filename}: expected {release.md5}, "
+                        f"got {actual_md5} — rejecting download"
+                    )
+                    return False, None
 
             # Reject a server-advertised size mismatch (truncated transfer).
             if expected_len is not None and bytes_written != expected_len:
@@ -387,7 +475,7 @@ class FirmwareFetcher:
                     f"Download of {release.filename} truncated: got {bytes_written} bytes, "
                     f"expected {expected_len} (Content-Length) — rejecting"
                 )
-                return False
+                return False, None
 
             # Reject a size outlier vs the platform's other firmware (catches
             # truncations the server didn't advertise).
@@ -395,17 +483,42 @@ class FirmwareFetcher:
             if suspect:
                 tmp_path.unlink(missing_ok=True)
                 logger.error(f"{suspect} — rejecting download")
-                return False
+                return False, None
 
             tmp_path.rename(filepath)
             logger.info(f"Downloaded {release.filename} ({bytes_written / 1048576:.1f} MB)")
-            return True
+            return True, sha256_hash.hexdigest()
 
         except Exception as e:
             logger.error(f"Failed to download {release.filename}: {e}")
             if tmp_path.exists():
                 tmp_path.unlink()
-            return False
+            return False, None
+
+    async def _hash_existing_file(
+        self, filepath: Path
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Return (md5, sha256) for a file already on disk, off the event loop.
+
+        Mirrors the pre-flash integrity hash in app.py (1 MB blocks in an
+        executor), computing both digests in a single read pass: the MD5 lets
+        the caller re-verify an existing file against the vendor checksum before
+        trusting it, and the SHA256 is what the pre-flash check stores. Returns
+        (None, None) if the file vanished mid-read (e.g. operator cleanup) so
+        the caller proceeds without crashing the check loop.
+        """
+        def _hash() -> tuple[str, str]:
+            md5 = hashlib.md5()
+            sha256 = hashlib.sha256()
+            with open(filepath, "rb") as fh:
+                for block in iter(lambda: fh.read(1024 * 1024), b""):
+                    md5.update(block)
+                    sha256.update(block)
+            return md5.hexdigest(), sha256.hexdigest()
+        try:
+            return await asyncio.get_event_loop().run_in_executor(None, _hash)
+        except FileNotFoundError:
+            return None, None
 
     def _auto_select(self, platform: str, releases: list[FirmwareRelease],
                      beta_enabled: bool):

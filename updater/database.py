@@ -2101,11 +2101,19 @@ def set_settings(settings: dict):
 
 # Firmware registry operations
 def register_firmware(filename: str, source: str = "manual", sha256: str = None):
-    """Register a firmware file with its addition timestamp. Updates sha256 if re-uploaded."""
+    """Register a firmware file with its addition timestamp.
+
+    Updates the SHA256 when one is supplied (e.g. a manual re-upload). A call
+    that omits the hash (an idempotent auto re-register) preserves the stored
+    hash via COALESCE rather than nulling it — that's what keeps the pre-flash
+    integrity check armed across the fetcher's 24h re-registration cycles.
+    """
     with get_db() as conn:
         conn.execute(
             "INSERT INTO firmware_registry (filename, added_at, source, sha256) VALUES (?, ?, ?, ?)"
-            " ON CONFLICT(filename) DO UPDATE SET sha256 = excluded.sha256, added_at = excluded.added_at",
+            " ON CONFLICT(filename) DO UPDATE SET"
+            " sha256 = COALESCE(excluded.sha256, firmware_registry.sha256),"
+            " added_at = excluded.added_at",
             (filename, datetime.now().isoformat(), source, sha256)
         )
 
