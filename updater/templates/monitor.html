@@ -637,6 +637,24 @@
         .updates-banner-title { font-weight:600; font-size:var(--text-md); color:var(--info-text); }
         .updates-banner-link { font-size:var(--text-sm); color:var(--info-strong); text-decoration:none; }
         .updates-banner-link:hover { text-decoration:underline; }
+        .updates-banner-meta { margin-top: 8px; font-size: var(--text-xs); color: var(--info-strong); }
+        .updates-banner-feedback { margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid transparent; background: rgba(255,255,255,0.72); }
+        .updates-banner-feedback.info { border-color: rgba(14,116,144,0.16); color: #0f172a; }
+        .updates-banner-feedback.success { border-color: rgba(5,150,105,0.2); color: #065f46; }
+        .updates-banner-feedback.error { border-color: rgba(185,28,28,0.18); color: #991b1b; background: rgba(255,255,255,0.88); }
+        .updates-banner-feedback-message { font-size: var(--text-sm); line-height: 1.5; }
+        .updates-banner-code {
+            margin: 10px 0 0 0;
+            padding: 10px 12px;
+            background: rgba(15,23,42,0.92);
+            color: #f8fafc;
+            border-radius: var(--radius-md);
+            font-size: var(--text-xs);
+            font-family: var(--font-mono);
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-x: auto;
+        }
         /* `appearance: none` is required: without it, WebKit keeps the
            native button chrome painted over the green background, so the
            white label reads as faint white on light grey until :hover
@@ -3296,18 +3314,20 @@
                             </select>
                         </div>
                         <div class="updates-row updates-row-actions">
-                            <button class="backup-btn" onclick="checkAppUpdate()">Check Now</button>
+                            <button class="backup-btn" type="button" onclick="checkAppUpdate()">Check Now</button>
                             <span id="appUpdateStatus" class="u-text-xs-muted"></span>
                         </div>
                     </div>
 
-                    <div id="appUpdateBannerInline" class="hidden updates-banner">
-                        <div class="updates-banner-head">
-                            <div class="updates-banner-title">Update Available: <span id="appUpdateVersion"></span></div>
-                            <a id="appUpdateReleaseLink" href="#" target="_blank" class="updates-banner-link">View on GitHub</a>
-                        </div>
+                        <div id="appUpdateBannerInline" class="hidden updates-banner">
+                            <div class="updates-banner-head">
+                                <div class="updates-banner-title">Update Available: <span id="appUpdateVersion"></span></div>
+                                <a id="appUpdateReleaseLink" href="#" target="_blank" class="updates-banner-link">View on GitHub</a>
+                            </div>
                         <div id="appUpdateNotesContainer" class="release-notes-content hidden"></div>
-                        <button class="updates-banner-btn" onclick="applyAppUpdate()">Update Now</button>
+                        <div id="appUpdatePathMessage" class="updates-banner-meta"></div>
+                        <div id="appUpdateFeedback" class="hidden" aria-live="polite"></div>
+                        <button class="updates-banner-btn" id="appUpdateActionBtn" type="button" onclick="applyAppUpdate()">Update Now</button>
                     </div>
                 </div>
 
@@ -8233,6 +8253,59 @@
             }
         }
 
+        let appUpdatePath = 'one_click';
+        let appUpdateRequestInFlight = false;
+
+        function setAppUpdateStatusMessage(message, tone = 'default') {
+            const statusEl = document.getElementById('appUpdateStatus');
+            if (!statusEl) return;
+            statusEl.textContent = message || '';
+            if (tone === 'error') {
+                statusEl.style.color = '#b91c1c';
+            } else if (tone === 'success') {
+                statusEl.style.color = '#047857';
+            } else {
+                statusEl.style.color = '';
+            }
+        }
+
+        function setAppUpdateButtonState(inFlight, labelOverride = '') {
+            const btn = document.getElementById('appUpdateActionBtn');
+            if (!btn) return;
+            const baseLabel = appUpdatePath === 'manual' ? 'Show Update Steps' : 'Update Now';
+            btn.disabled = !!inFlight;
+            btn.textContent = labelOverride || baseLabel;
+        }
+
+        function clearAppUpdateFeedback() {
+            const feedbackEl = document.getElementById('appUpdateFeedback');
+            if (!feedbackEl) return;
+            feedbackEl.innerHTML = '';
+            setHidden(feedbackEl, true);
+        }
+
+        function renderAppUpdateFeedback(message, options = {}) {
+            const feedbackEl = document.getElementById('appUpdateFeedback');
+            if (!feedbackEl) return;
+            const tone = options.tone || 'info';
+            const commands = Array.isArray(options.commands) ? options.commands.filter(Boolean) : [];
+            let html = '<div class="updates-banner-feedback ' + tone + '">'
+                + '<div class="updates-banner-feedback-message">' + escapeHtml(message || '') + '</div>';
+            if (commands.length) {
+                html += '<pre class="updates-banner-code">' + commands.map(cmd => escapeHtml(cmd)).join('\n') + '</pre>';
+            }
+            html += '</div>';
+            feedbackEl.innerHTML = html;
+            setHidden(feedbackEl, false);
+        }
+
+        function syncAppUpdateBanner(result) {
+            appUpdatePath = result.update_path || 'one_click';
+            const pathEl = document.getElementById('appUpdatePathMessage');
+            if (pathEl) pathEl.textContent = result.update_path_message || '';
+            setAppUpdateButtonState(appUpdateRequestInFlight);
+        }
+
         async function loadAppUpdateStatus() {
             try {
                 const response = await fetch('/api/updates');
@@ -8252,11 +8325,9 @@
                     const d = new Date(result.last_check.endsWith('Z') ? result.last_check : result.last_check + 'Z');
                     const stamp = d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                     if (result.last_check_error) {
-                        statusEl.textContent = 'Last check ' + stamp + ' failed: ' + result.last_check_error;
-                        statusEl.style.color = '#b91c1c';
+                        setAppUpdateStatusMessage('Last check ' + stamp + ' failed: ' + result.last_check_error, 'error');
                     } else {
-                        statusEl.textContent = 'Last check: ' + stamp;
-                        statusEl.style.color = '';
+                        setAppUpdateStatusMessage('Last check: ' + stamp);
                     }
                 }
 
@@ -8273,9 +8344,11 @@
                     } else if (notesContainer) {
                         setHidden(notesContainer, true);
                     }
+                    syncAppUpdateBanner(result);
                     setHidden(banner, false);
                     setDisplayClass(dot, 'visible', true);
                 } else {
+                    clearAppUpdateFeedback();
                     setHidden(banner, true);
                     setDisplayClass(dot, 'visible', false);
                 }
@@ -8319,58 +8392,97 @@
         }
 
         async function checkAppUpdate() {
-            const statusEl = document.getElementById('appUpdateStatus');
-            statusEl.textContent = 'Checking...';
+            setAppUpdateStatusMessage('Checking...');
             try {
                 const response = await fetch('/api/updates/check', { method: 'POST' });
                 const result = await response.json();
                 if (!response.ok) {
-                    statusEl.textContent = 'Error: ' + (result.detail || result.message || response.statusText);
+                    setAppUpdateStatusMessage('Error: ' + (result.detail || result.message || response.statusText), 'error');
                     return;
                 }
                 if (result.error) {
-                    statusEl.textContent = 'Error: ' + result.error;
+                    setAppUpdateStatusMessage('Error: ' + result.error, 'error');
                 } else if (result.update_available) {
-                    statusEl.textContent = 'Update available!';
+                    setAppUpdateStatusMessage('Update available!', 'success');
                     loadAppUpdateStatus();
                 } else {
-                    statusEl.textContent = 'Up to date (v' + result.current_version + ')';
+                    setAppUpdateStatusMessage('Up to date (v' + result.current_version + ')');
                 }
             } catch (error) {
-                statusEl.textContent = 'Check failed';
+                setAppUpdateStatusMessage('Check failed', 'error');
                 console.error('Failed to check for updates:', error);
             }
         }
 
         async function applyAppUpdate() {
-            if (!await showConfirmDialog('This will download and apply the latest update, then restart the app. Continue?', {
-                title: 'Apply App Update',
-                confirmText: 'Apply',
-                danger: true,
-            })) return;
-            const statusEl = document.getElementById('appUpdateStatus');
-            statusEl.textContent = 'Applying update...';
+            if (appUpdateRequestInFlight) return;
+            if (appUpdatePath === 'one_click') {
+                if (!await showConfirmDialog('This will download and apply the latest update, then restart the app. Continue?', {
+                    title: 'Apply App Update',
+                    confirmText: 'Apply',
+                    danger: true,
+                })) return;
+            }
+
+            appUpdateRequestInFlight = true;
+            const loadingLabel = appUpdatePath === 'manual' ? 'Loading Steps...' : 'Applying...';
+            setAppUpdateButtonState(true, loadingLabel);
+            setAppUpdateStatusMessage(appUpdatePath === 'manual' ? 'Loading update steps...' : 'Applying update...');
+            renderAppUpdateFeedback(
+                appUpdatePath === 'manual'
+                    ? 'Checking how this install should be updated...'
+                    : 'Preparing the app update and restart...',
+                { tone: 'info' }
+            );
             try {
                 const response = await fetch('/api/updates/apply', { method: 'POST' });
                 const result = await response.json();
+                syncAppUpdateBanner(result);
+                const commands = Array.isArray(result.commands)
+                    ? result.commands
+                    : (result.suggested_command ? [result.suggested_command] : []);
                 if (!response.ok) {
-                    statusEl.textContent = 'Update failed: ' + (result.detail || result.message || response.statusText);
+                    const message = result.detail || result.message || response.statusText;
+                    setAppUpdateStatusMessage('Update failed: ' + message, 'error');
+                    renderAppUpdateFeedback(message, { tone: 'error', commands });
+                    showToast('App update failed: ' + message, 'error', 5000);
                     return;
                 }
-                if (result.success) {
+                if (result.action === 'started' && result.success) {
+                    setAppUpdateStatusMessage(result.message || 'Update starting...', 'success');
+                    renderAppUpdateFeedback(result.message || 'Update starting...', { tone: 'success' });
                     localStorage.setItem('systemUpdateInProgress', String(Date.now()));
                     const dot = document.getElementById('settingsNotifDot');
                     setDisplayClass(dot, 'visible', false);
                     showSystemUpdateOverlay('Applying update and restarting...');
-                } else if (result.manual && result.commands) {
-                    statusEl.innerHTML = result.message + '<br><code class="u-code-block">' +
-                        result.commands.join('\n') + '</code>';
+                } else if (result.action === 'instructions') {
+                    setAppUpdateStatusMessage('Manual update steps ready');
+                    renderAppUpdateFeedback(result.message || 'Run these steps on the host to update the app.', {
+                        tone: 'info',
+                        commands,
+                    });
+                    showToast('This install uses manual app update steps.', 'info', 4500);
+                } else if (result.action === 'blocked') {
+                    const message = result.message || result.blocked_reason || 'Update blocked';
+                    setAppUpdateStatusMessage(message, 'error');
+                    renderAppUpdateFeedback(message, { tone: 'error', commands });
+                    showToast(message, 'error', 5000);
                 } else {
-                    statusEl.textContent = 'Update failed: ' + (result.message || result.error || 'Unknown error');
+                    const message = result.message || result.error || 'Unknown error';
+                    setAppUpdateStatusMessage('Update failed: ' + message, 'error');
+                    renderAppUpdateFeedback(message, { tone: 'error', commands });
+                    showToast('App update failed: ' + message, 'error', 5000);
                 }
             } catch (error) {
-                statusEl.textContent = 'Update failed';
+                setAppUpdateStatusMessage('Update failed', 'error');
+                renderAppUpdateFeedback('Could not reach the update service. Check the browser console or server logs and retry.', {
+                    tone: 'error',
+                });
+                showToast('App update failed: network or server error.', 'error', 5000);
                 console.error('Failed to apply update:', error);
+            } finally {
+                appUpdateRequestInFlight = false;
+                setAppUpdateButtonState(false);
             }
         }
 

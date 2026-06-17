@@ -2,7 +2,9 @@
 
 ## Prerequisites
 
-Tested on **Debian 12**. Other Linux distributions with Docker should work but are untested.
+Tested on **Debian 12**. Other Linux distributions with Docker may work, but
+Debian 12 is the recommended easy path and the only one we actively promote
+for one-click app updates from the UI.
 
 Required:
 - Docker Engine 20.10+
@@ -11,7 +13,7 @@ Required:
 
 ## Quick Start
 
-### Automated install (fresh server)
+### Recommended easy path: automated install (fresh server)
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh \
@@ -21,6 +23,9 @@ curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/instal
 This installs Docker if needed, clones the repo to `/opt/sixtyops`, builds
 and starts all services in standalone mode, and creates a systemd service
 for auto-start on boot.
+
+It also creates the install shape the in-app **Update** button expects:
+mounted repo, Docker Compose stack, and host access to rebuild/restart cleanly.
 
 ### Manual install
 
@@ -32,7 +37,7 @@ cd manager
 
 `deploy.sh` creates the required directories, builds the Docker images, and starts all services in standalone mode (app + built-in RADIUS + nginx + certbot).
 
-### Docker image (you manage updates)
+### Docker image (you manage updates manually)
 
 To run the prebuilt image directly — no git clone, no bundled nginx — pin a
 version and bring your own reverse proxy:
@@ -54,11 +59,14 @@ Update it yourself with [Updating an image-based install](#updating-an-image-bas
 ### Which install should I use?
 
 - **`install.sh`** (git + compose + bundled nginx) if you want the in-app
-  **Update** button to apply updates for you — it needs the Docker socket and
-  the repo mounted, which this path sets up.
+  **Update** button to apply updates for you. This is the recommended path.
 - **Docker image** (above) if you'd rather manage updates yourself by pulling a
   new tag. The in-app updater will show you the exact pull/recreate command but
   won't self-apply (no socket/repo by design — the app never holds host-root).
+- **Other Linux distributions** if you have an existing standard to follow.
+  Supported behavior depends on install shape, not distro name: if you mirror
+  the managed repo + Compose install, one-click app updates can work; if not,
+  the UI will show manual update steps instead.
 
 ## Initial Setup
 

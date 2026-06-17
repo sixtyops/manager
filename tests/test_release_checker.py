@@ -451,6 +451,34 @@ class TestApplyUpdateGuardrails:
         assert any(cmd == "cd /srv/custom/sixtyops" for cmd in cmds)
         assert not any("/opt/sixtyops" in cmd for cmd in cmds)
 
+    @pytest.mark.asyncio
+    async def test_manual_commands_source_install_never_emits_container_repo_path(self):
+        """If the host repo path cannot be discovered, the UI must not tell the
+        operator to `cd /app/repo` on the host."""
+        from pathlib import Path
+        from updater.release_checker import apply_update
+        self._set_setting("autoupdate_available_version", "1.0.2")
+
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=False), \
+             patch("updater.release_checker._get_repo_dir", return_value=Path("/app/repo")), \
+             patch("updater.release_checker._get_host_repo_path", return_value=None):
+            result = await apply_update()
+
+        assert result["success"] is False
+        assert result["manual"] is True
+        assert all(cmd.lstrip().startswith("#") for cmd in result["commands"])
+        assert not any("/app/repo" in cmd for cmd in result["commands"])
+        assert any("git fetch origin tag v1.0.2" in cmd for cmd in result["commands"])
+
+    def test_manual_source_host_dir_falls_back_to_opt_sixtyops(self):
+        """The default managed install path is valid on the host even when
+        docker inspect is unavailable."""
+        from updater.release_checker import _get_manual_source_host_dir
+        with patch("updater.release_checker._get_host_repo_path", return_value=None):
+            host_dir = _get_manual_source_host_dir(Path("/opt/sixtyops"))
+        assert host_dir == "/opt/sixtyops"
+
     @staticmethod
     def _git_run(calls=None):
         """Mock subprocess.run that returns clean status / SHA / no-op per subcommand."""
@@ -1310,6 +1338,33 @@ class TestApplianceMode:
         with patch("updater.release_checker.db.get_active_rollout", return_value=None):
             status = checker.get_update_status()
         assert "appliance_mode" in status
+        assert "update_path" in status
+        assert "update_path_message" in status
+
+    def test_managed_install_update_path_is_one_click(self):
+        from updater.release_checker import _classify_update_path
+        with patch("updater.release_checker.APPLIANCE_MODE", False), \
+             patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_repo_dir", return_value=Path("/app/repo")):
+            update_path, message = _classify_update_path()
+        assert update_path == "one_click"
+        assert "one-click" in message
+
+    def test_appliance_update_path_is_one_click(self):
+        from updater.release_checker import _classify_update_path
+        with patch("updater.release_checker.APPLIANCE_MODE", True):
+            update_path, message = _classify_update_path()
+        assert update_path == "one_click"
+        assert "one-click" in message
+
+    def test_manual_install_update_path_is_manual(self):
+        from updater.release_checker import _classify_update_path
+        with patch("updater.release_checker.APPLIANCE_MODE", False), \
+             patch("updater.release_checker._docker_socket_available", return_value=False), \
+             patch("updater.release_checker._get_repo_dir", return_value=None):
+            update_path, message = _classify_update_path()
+        assert update_path == "manual"
+        assert "manual" in message.lower()
 
     @pytest.mark.asyncio
     async def test_appliance_update_pulls_image(self):
@@ -1421,6 +1476,7 @@ class TestApplianceMode:
 
         # Git path returns manual commands when no docker socket
         assert result["success"] is False
+        assert result["action"] == "instructions"
         assert result.get("manual") is True
 
 

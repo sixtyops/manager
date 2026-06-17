@@ -822,30 +822,29 @@
       <div class="text-center mb-10">
         <p class="font-mono text-xs text-slate-400 tracking-wide mb-3">// install</p>
         <h2 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight mb-3">Install SixtyOps</h2>
-        <p class="text-slate-500">One Docker container on a Linux VM. Open the URL it prints, set an admin password, add your first AP &mdash; you're running in under 15 minutes.</p>
+        <p class="text-slate-500">Recommended easy path: Debian 12 with the managed installer. Open the URL it prints, set an admin password, add your first AP, and the in-app app updater works out of the box.</p>
       </div>
 
       <div class="bg-slate-900 rounded-lg p-5 sm:p-6 mb-6 overflow-x-auto">
         <div class="flex items-center gap-2 mb-3 text-xs font-mono text-slate-400">
           <span class="inline-block w-2 h-2 rounded-full bg-green-400"></span>
-          Latest alpha
+          Recommended easy path
         </div>
-<pre class="font-mono text-sm leading-relaxed text-slate-100 whitespace-pre"><span class="text-slate-500"># Pull the image and start SixtyOps</span>
-docker run -d \
-  --name sixtyops \
-  --restart unless-stopped \
-  -p 8000:8000 \
-  -v sixtyops-data:/app/data \
-  -v sixtyops-firmware:/app/firmware \
-  -v sixtyops-backups:/app/backups \
-  ghcr.io/sixtyops/manager:v1.4.1-dev3
+<pre class="font-mono text-sm leading-relaxed text-slate-100 whitespace-pre"><span class="text-slate-500"># Debian 12 recommended: installs Docker if needed, clones the repo,
+# starts the full stack, and enables one-click app updates in Settings</span>
+curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/install.sh \
+  | sudo bash
 
-<span class="text-slate-500"># Then open http://&lt;your-server&gt;:8000 and create your admin password
-# Production: put it behind a reverse proxy (TLS), bind 127.0.0.1:8000, keep the
-# pinned tag. See the deployment docs for the update + rollback procedure.</span></pre>
+<span class="text-slate-500"># Then open https://&lt;your-server&gt; and create your admin password.
+# Need another distro or a pinned-image/manual setup? Use the deployment docs below.</span></pre>
       </div>
 
       <p class="text-sm text-slate-500 text-center">
+        Need Ubuntu or another Linux distro, or prefer image-based/manual updates?
+        <a href="https://github.com/sixtyops/manager/blob/main/docs/deployment.md" class="text-brand-600 hover:text-brand-700 font-medium">See deployment options</a>.
+      </p>
+
+      <p class="text-sm text-slate-500 text-center mt-3">
         Want help getting set up, or have a network bigger than a couple of sites?
         <a href="mailto:hello@sixtyops.net?subject=SixtyOps%20Alpha%20Help" class="text-brand-600 hover:text-brand-700 font-medium">Email us</a>
         &mdash; alpha includes hands-on onboarding support.
