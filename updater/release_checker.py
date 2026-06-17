@@ -32,6 +32,8 @@ CHECK_INTERVAL = int(os.environ.get("AUTOUPDATE_CHECK_INTERVAL", 604800))  # 7 d
 # Appliance mode: use docker pull from GHCR instead of git-based updates
 APPLIANCE_MODE = os.environ.get("SIXTYOPS_APPLIANCE", "") == "1"
 GHCR_IMAGE = os.environ.get("SIXTYOPS_IMAGE", "ghcr.io/sixtyops/manager")
+UPDATE_PATH_ONE_CLICK = "one_click"
+UPDATE_PATH_MANUAL = "manual"
 
 # Optional GitHub PAT. The repo is public, so the releases API works
 # without auth — the token only raises the per-IP rate limit from 60
@@ -355,6 +357,7 @@ class ReleaseChecker:
     def get_update_status(self) -> dict:
         """Get current update status from database."""
         is_safe, blocked_reason = _is_safe_to_update()
+        update_path, update_path_message = _classify_update_path()
         status = {
             "current_version": __version__,
             "release_channel": db.get_setting("release_channel", "stable"),
@@ -370,6 +373,8 @@ class ReleaseChecker:
             "blocked_reason": blocked_reason,
             "appliance_mode": APPLIANCE_MODE,
             "appliance_version": get_appliance_version(),
+            "update_path": update_path,
+            "update_path_message": update_path_message,
         }
 
         # Check if available update requires a newer appliance
@@ -398,6 +403,43 @@ def _docker_socket_available() -> bool:
     """Check if Docker socket is mounted and accessible."""
     socket_path = Path("/var/run/docker.sock")
     return socket_path.exists()
+
+
+def _classify_update_path() -> tuple[str, str]:
+    """Classify whether this runtime can self-apply app updates."""
+    if APPLIANCE_MODE:
+        return (
+            UPDATE_PATH_ONE_CLICK,
+            "This install supports one-click app updates from the Settings page.",
+        )
+
+    if _docker_socket_available() and _get_repo_dir():
+        return (
+            UPDATE_PATH_ONE_CLICK,
+            "This install supports one-click app updates from the Settings page.",
+        )
+
+    return (
+        UPDATE_PATH_MANUAL,
+        "This install uses manual app updates. Open the update steps and run them on the host.",
+    )
+
+
+def _normalize_apply_result(result: dict) -> dict:
+    """Add stable action + update-path metadata to apply responses."""
+    update_path, update_path_message = _classify_update_path()
+    normalized = dict(result)
+    normalized.setdefault("update_path", update_path)
+    normalized.setdefault("update_path_message", update_path_message)
+    if normalized.get("success"):
+        normalized.setdefault("action", "started")
+    elif normalized.get("manual"):
+        normalized.setdefault("action", "instructions")
+    elif normalized.get("blocked_reason") or normalized.get("appliance_upgrade_required"):
+        normalized.setdefault("action", "blocked")
+    else:
+        normalized.setdefault("action", "error")
+    return normalized
 
 
 def _get_compose_dir() -> Optional[Path]:
@@ -850,11 +892,11 @@ def _launch_appliance_watchdog(
 async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
     """Apply update in appliance mode: pull image from GHCR, swap containers."""
     if not _docker_socket_available():
-        return {"success": False, "message": "Docker socket not available"}
+        return _normalize_apply_result({"success": False, "message": "Docker socket not available"})
 
     compose_dir = _get_compose_dir()
     if not compose_dir:
-        return {"success": False, "message": "Cannot find compose directory"}
+        return _normalize_apply_result({"success": False, "message": "Cannot find compose directory"})
 
     image_ref = f"{GHCR_IMAGE}:{target_tag}"
 
@@ -871,10 +913,10 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
             capture_output=True, text=True, timeout=300,
         )
         if pull_result.returncode != 0:
-            return {
+            return _normalize_apply_result({
                 "success": False,
                 "message": f"Docker pull failed: {pull_result.stderr.strip()}",
-            }
+            })
 
         # Store pending update info (persists through restart)
         db.set_settings({
@@ -896,16 +938,16 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
                 stderr=subprocess.DEVNULL,
             )
 
-        return {
+        return _normalize_apply_result({
             "success": True,
             "message": f"Updating to {target_tag}. The application will restart shortly.",
-        }
+        })
 
     except subprocess.TimeoutExpired:
-        return {"success": False, "message": "Docker pull timed out"}
+        return _normalize_apply_result({"success": False, "message": "Docker pull timed out"})
     except Exception as e:
         logger.exception(f"Appliance update failed: {e}")
-        return {"success": False, "message": str(e)}
+        return _normalize_apply_result({"success": False, "message": str(e)})
 
 
 async def apply_update() -> dict:
@@ -919,19 +961,19 @@ async def apply_update() -> dict:
     # Check if safe to update (not during maintenance or active rollout)
     is_safe, reason = _is_safe_to_update()
     if not is_safe:
-        return {
+        return _normalize_apply_result({
             "success": False,
             "message": f"Cannot update now: {reason}. Please try again later.",
             "blocked_reason": reason,
-        }
+        })
 
     # Determine which version we're updating to
     target_version = db.get_setting("autoupdate_available_version", "")
     if not target_version:
-        return {
+        return _normalize_apply_result({
             "success": False,
             "message": "No update version available. Run a check first.",
-        }
+        })
 
     target_tag = f"v{target_version}"
 
@@ -943,7 +985,7 @@ async def apply_update() -> dict:
         if min_ver and current_appliance:
             try:
                 if version.parse(min_ver) > version.parse(current_appliance):
-                    return {
+                    return _normalize_apply_result({
                         "success": False,
                         "message": (
                             f"This update requires appliance platform v{min_ver} "
@@ -951,7 +993,7 @@ async def apply_update() -> dict:
                             "Download the latest appliance OVA to upgrade."
                         ),
                         "appliance_upgrade_required": True,
-                    }
+                    })
             except Exception:
                 pass
         return await _apply_update_appliance(target_version, target_tag)
@@ -963,7 +1005,7 @@ async def apply_update() -> dict:
     # deployment style — image-based installs (no repo) update by pulling the
     # new image, not by git-checkout (which has no tree to act on).
     if not _docker_socket_available() or not repo_dir:
-        return {"success": False, **_manual_update_instructions(target_tag, repo_dir)}
+        return _normalize_apply_result({"success": False, **_manual_update_instructions(target_tag, repo_dir)})
 
     compose_cmd = _get_compose_cmd(repo_dir)
     git_cmd = ["git", "-C", str(repo_dir)]
@@ -982,10 +1024,10 @@ async def apply_update() -> dict:
         )
         rollback_ref = save_result.stdout.strip() if save_result.returncode == 0 else None
         if not rollback_ref:
-            return {
+            return _normalize_apply_result({
                 "success": False,
                 "message": "Could not determine current version for rollback",
-            }
+            })
 
         # Detect uncommitted changes to tracked files BEFORE attempting checkout.
         # `git checkout <tag>` aborts with "Your local changes would be overwritten"
@@ -1022,7 +1064,7 @@ async def apply_update() -> dict:
                     path = path.split(" -> ", 1)[1]
                 dirty_files.append(path)
             if dirty_files:
-                return {
+                return _normalize_apply_result({
                     "success": False,
                     "dirty_tree": True,
                     "dirty_files": dirty_files,
@@ -1037,7 +1079,7 @@ async def apply_update() -> dict:
                         "-m 'pre-update auto-stash' -- "
                         + " ".join(shlex.quote(p) for p in dirty_files)
                     ),
-                }
+                })
 
         # Fetch the specific release tag (not all of main)
         logger.info(f"Fetching tag {target_tag} in {repo_dir}...")
@@ -1046,10 +1088,10 @@ async def apply_update() -> dict:
             capture_output=True, text=True, timeout=60,
         )
         if fetch_result.returncode != 0:
-            return {
+            return _normalize_apply_result({
                 "success": False,
                 "message": f"Git fetch failed: {fetch_result.stderr}",
-            }
+            })
 
         # Verify the release tag's signature BEFORE checkout. The tag is the
         # code we're about to build and run, so an unverified tag is arbitrary
@@ -1058,11 +1100,11 @@ async def apply_update() -> dict:
         # _verify_tag_signature / docs/self-update-signing.md).
         sig_ok, sig_reason = _verify_tag_signature(repo_dir, target_tag, target_version)
         if not sig_ok:
-            return {
+            return _normalize_apply_result({
                 "success": False,
                 "signature_blocked": True,
                 "message": sig_reason,
-            }
+            })
 
         # Checkout the exact tag — no unreviewed code from main
         logger.info(f"Checking out {target_tag}...")
@@ -1071,10 +1113,10 @@ async def apply_update() -> dict:
             capture_output=True, text=True, timeout=30,
         )
         if checkout_result.returncode != 0:
-            return {
+            return _normalize_apply_result({
                 "success": False,
                 "message": f"Git checkout failed: {checkout_result.stderr}",
-            }
+            })
 
         # Verify the checked-out version matches what we expect
         version_file = repo_dir / "updater" / "__init__.py"
@@ -1084,10 +1126,10 @@ async def apply_update() -> dict:
                 # Revert checkout
                 subprocess.run(git_cmd + ["checkout", rollback_ref],
                                capture_output=True, timeout=30)
-                return {
+                return _normalize_apply_result({
                     "success": False,
                     "message": f"Version mismatch: tag {target_tag} does not contain version {target_version}",
-                }
+                })
 
         # Store pending update info (persists in DB through restart)
         db.set_settings({
@@ -1121,22 +1163,22 @@ async def apply_update() -> dict:
                 stderr=subprocess.DEVNULL,
             )
 
-        return {
+        return _normalize_apply_result({
             "success": True,
             "message": f"Updating to {target_tag}. The application will restart shortly.",
-        }
+        })
 
     except subprocess.TimeoutExpired:
-        return {
+        return _normalize_apply_result({
             "success": False,
             "message": "Docker command timed out",
-        }
+        })
     except Exception as e:
         logger.exception(f"Update failed: {e}")
-        return {
+        return _normalize_apply_result({
             "success": False,
             "message": str(e),
-        }
+        })
 
 
 async def verify_update_on_startup(broadcast_func: Optional[Callable] = None):

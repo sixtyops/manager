@@ -1310,6 +1310,33 @@ class TestApplianceMode:
         with patch("updater.release_checker.db.get_active_rollout", return_value=None):
             status = checker.get_update_status()
         assert "appliance_mode" in status
+        assert "update_path" in status
+        assert "update_path_message" in status
+
+    def test_managed_install_update_path_is_one_click(self):
+        from updater.release_checker import _classify_update_path
+        with patch("updater.release_checker.APPLIANCE_MODE", False), \
+             patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_repo_dir", return_value=Path("/app/repo")):
+            update_path, message = _classify_update_path()
+        assert update_path == "one_click"
+        assert "one-click" in message
+
+    def test_appliance_update_path_is_one_click(self):
+        from updater.release_checker import _classify_update_path
+        with patch("updater.release_checker.APPLIANCE_MODE", True):
+            update_path, message = _classify_update_path()
+        assert update_path == "one_click"
+        assert "one-click" in message
+
+    def test_manual_install_update_path_is_manual(self):
+        from updater.release_checker import _classify_update_path
+        with patch("updater.release_checker.APPLIANCE_MODE", False), \
+             patch("updater.release_checker._docker_socket_available", return_value=False), \
+             patch("updater.release_checker._get_repo_dir", return_value=None):
+            update_path, message = _classify_update_path()
+        assert update_path == "manual"
+        assert "manual" in message.lower()
 
     @pytest.mark.asyncio
     async def test_appliance_update_pulls_image(self):
@@ -1421,6 +1448,7 @@ class TestApplianceMode:
 
         # Git path returns manual commands when no docker socket
         assert result["success"] is False
+        assert result["action"] == "instructions"
         assert result.get("manual") is True
 
 

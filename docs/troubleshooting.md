@@ -220,7 +220,29 @@ remote SFTP server.
 
 ---
 
-## 6. App won't start after self-update (database error)
+## 6. Update button shows steps instead of updating
+
+### Symptom
+In **Settings → Updates**, the app shows update steps instead of restarting
+itself, or the update banner says this install uses manual app updates.
+
+### What it means
+This is expected when the manager is not running in the managed install shape.
+One-click app updates require the same ingredients `scripts/install.sh`
+creates: a mounted repo, Docker Compose on the host, and Docker socket access.
+The behavior is based on install shape, not whether the host is Debian or
+Ubuntu.
+
+### What to do
+- If you want one-click app updates, move to the managed install path from
+  [docs/deployment.md](deployment.md): Debian 12 + `install.sh`.
+- If you prefer an image-based or custom install, use the manual commands
+  shown in the update banner. That path is supported; it just does not
+  self-apply from the UI.
+
+---
+
+## 7. App won't start after self-update (database error)
 
 ### Symptom
 The `sixtyops-mgmt` container restarts on a loop after applying an in-app

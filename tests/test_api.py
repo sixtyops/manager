@@ -396,6 +396,8 @@ class TestAutoUpdateAPI:
             "docker_socket_available": False,
             "can_update": True,
             "blocked_reason": "",
+            "update_path": "manual",
+            "update_path_message": "This install uses manual app updates.",
         }
         with patch("updater.app.get_checker", return_value=mock_checker):
             resp = authed_client.get("/api/updates")
@@ -403,6 +405,8 @@ class TestAutoUpdateAPI:
         data = resp.json()
         assert data["current_version"] == "1.0.0"
         assert data["update_available"] is False
+        assert data["update_path"] == "manual"
+        assert "manual" in data["update_path_message"].lower()
 
     def test_get_update_status_with_available_update(self, authed_client):
         mock_checker = MagicMock()
@@ -417,6 +421,8 @@ class TestAutoUpdateAPI:
             "docker_socket_available": True,
             "can_update": True,
             "blocked_reason": "",
+            "update_path": "one_click",
+            "update_path_message": "This install supports one-click app updates.",
         }
         with patch("updater.app.get_checker", return_value=mock_checker):
             resp = authed_client.get("/api/updates")
@@ -424,6 +430,7 @@ class TestAutoUpdateAPI:
         data = resp.json()
         assert data["update_available"] is True
         assert data["available_version"] == "0.2.0"
+        assert data["update_path"] == "one_click"
 
     def test_check_for_updates(self, authed_client):
         mock_checker = MagicMock()
@@ -473,15 +480,19 @@ class TestAutoUpdateAPI:
     def test_apply_update_success(self, authed_client):
         with patch("updater.app.apply_update", new_callable=AsyncMock, return_value={
             "success": True,
+            "action": "started",
             "message": "Update started. The application will restart shortly.",
         }):
             resp = authed_client.post("/api/updates/apply")
         assert resp.status_code == 200
-        assert resp.json()["success"] is True
+        data = resp.json()
+        assert data["success"] is True
+        assert data["action"] == "started"
 
     def test_apply_update_blocked_by_rollout(self, authed_client):
         with patch("updater.app.apply_update", new_callable=AsyncMock, return_value={
             "success": False,
+            "action": "blocked",
             "message": "Cannot update now: A firmware rollout is currently active. Please try again later.",
             "blocked_reason": "A firmware rollout is currently active",
         }):
@@ -489,11 +500,13 @@ class TestAutoUpdateAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert data["success"] is False
+        assert data["action"] == "blocked"
         assert "rollout" in data["blocked_reason"]
 
     def test_apply_update_no_docker_socket(self, authed_client):
         with patch("updater.app.apply_update", new_callable=AsyncMock, return_value={
             "success": False,
+            "action": "instructions",
             "manual": True,
             "message": "Docker socket not mounted. Run these commands manually:",
             "commands": [
@@ -506,6 +519,7 @@ class TestAutoUpdateAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert data["success"] is False
+        assert data["action"] == "instructions"
         assert data["manual"] is True
         assert len(data["commands"]) == 3
 

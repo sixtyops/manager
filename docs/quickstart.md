@@ -14,9 +14,13 @@ window the same evening.
 
 ## Prerequisites
 
-- A fresh **Debian 12** VM with `sudo` access. Other Linux distributions
-  with Docker should work but are untested — see
-  [docs/deployment.md#prerequisites](deployment.md#prerequisites).
+- A fresh **Debian 12** VM with `sudo` access. This is the recommended easy
+  path and the one that enables one-click app updates in **Settings →
+  Updates** after install.
+- Other Linux distributions with Docker may still work, but they are not the
+  promoted path. If you use Ubuntu or another distro, follow
+  [docs/deployment.md](deployment.md) and expect app updates to be manual
+  unless you replicate the managed repo + Compose install shape.
 - HTTPS reachability from the VM to each AP's management IP. The Manager
   polls devices from inside its container; if a `curl -k https://<ap-ip>/`
   from the VM hangs, the install won't help.
@@ -38,6 +42,10 @@ to `/opt/sixtyops`, builds the images, starts the standalone stack
 (application + bundled nginx with self-signed HTTPS + certbot), and creates
 a `sixtyops.service` systemd unit so the stack comes back after reboot. See
 [docs/deployment.md](deployment.md) for what each piece does in detail.
+
+This install path is also what the in-app **Apply App Update** button expects:
+the repo is mounted, Docker Compose is present, and the host can rebuild and
+restart cleanly from the Settings page.
 
 When it finishes you'll see roughly:
 
