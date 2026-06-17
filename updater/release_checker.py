@@ -595,13 +595,13 @@ def _manual_update_instructions(target_tag: str, repo_dir: Optional[Path]) -> di
             "message": (
                 "Git repo mounted but the host deployment path could not be "
                 "detected. On the host, open your Manager deployment directory "
-                "(the folder with `.git` and `docker-compose.yml`), then run:"
+                "(the folder with `.git` and `docker-compose.yml`), then run "
+                "these commands from there:"
             ),
             "commands": [
-                "cd <manager-deployment-directory>",
-                f"git fetch origin tag {target_tag}",
-                f"git checkout {target_tag}",
-                "docker compose up -d --build",
+                f"# git fetch origin tag {target_tag}",
+                f"# git checkout {target_tag}",
+                "# docker compose up -d --build",
             ],
         }
     return {

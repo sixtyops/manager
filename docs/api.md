@@ -526,8 +526,8 @@ Get current app update status.
   }
   ```
 - `can_update` is `false` during active firmware rollouts or maintenance windows
-- `docker_socket_available` indicates whether automatic updates can be applied
-- `update_path` is `one_click` when this install can self-apply updates, otherwise `manual`
+- `docker_socket_available` reports only whether the Docker socket is visible to the app
+- `update_path` is the authoritative self-apply/manual signal: `one_click` when this install can self-apply updates, otherwise `manual`
 
 ### `POST /api/updates/check`
 Manually trigger a check for new releases on GitHub.

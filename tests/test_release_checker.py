@@ -467,8 +467,9 @@ class TestApplyUpdateGuardrails:
 
         assert result["success"] is False
         assert result["manual"] is True
-        assert result["commands"][0] == "cd <manager-deployment-directory>"
+        assert all(cmd.lstrip().startswith("#") for cmd in result["commands"])
         assert not any("/app/repo" in cmd for cmd in result["commands"])
+        assert any("git fetch origin tag v1.0.2" in cmd for cmd in result["commands"])
 
     def test_manual_source_host_dir_falls_back_to_opt_sixtyops(self):
         """The default managed install path is valid on the host even when
