@@ -520,11 +520,14 @@ Get current app update status.
     "update_available": true,
     "docker_socket_available": true,
     "can_update": true,
-    "blocked_reason": ""
+    "blocked_reason": "",
+    "update_path": "one_click",
+    "update_path_message": "This install supports one-click app updates from the Settings page."
   }
   ```
 - `can_update` is `false` during active firmware rollouts or maintenance windows
 - `docker_socket_available` indicates whether automatic updates can be applied
+- `update_path` is `one_click` when this install can self-apply updates, otherwise `manual`
 
 ### `POST /api/updates/check`
 Manually trigger a check for new releases on GitHub.
@@ -542,21 +545,45 @@ Manually trigger a check for new releases on GitHub.
   ```
 
 ### `POST /api/updates/apply`
-Pull the latest Docker image and restart the container.
+Apply the available app update using the install's supported path.
 
-- Requires Docker socket to be mounted (`/var/run/docker.sock`)
+- One-click applies use the managed install/appliance path
+- Manual installs return host commands instead of restarting in place
 - Blocked during active firmware rollouts or maintenance windows
 - **Response (success)**:
   ```json
-  { "success": true, "message": "Update started. The application will restart shortly." }
+  {
+    "success": true,
+    "action": "started",
+    "message": "Update started. The application will restart shortly.",
+    "update_path": "one_click",
+    "update_path_message": "This install supports one-click app updates from the Settings page."
+  }
   ```
 - **Response (blocked)**:
   ```json
-  { "success": false, "message": "Cannot update now: ...", "blocked_reason": "..." }
+  {
+    "success": false,
+    "action": "blocked",
+    "message": "Cannot update now: ...",
+    "blocked_reason": "...",
+    "update_path": "one_click",
+    "update_path_message": "This install supports one-click app updates from the Settings page."
+  }
   ```
-- **Response (no Docker socket)**:
+- **Response (manual steps)**:
   ```json
-  { "success": false, "manual": true, "message": "...", "commands": ["docker compose pull tachyon-mgmt", "docker compose up -d tachyon-mgmt"] }
+  {
+    "success": false,
+    "action": "instructions",
+    "manual": true,
+    "message": "...",
+    "commands": [
+      "docker pull ghcr.io/sixtyops/manager:v0.2.0"
+    ],
+    "update_path": "manual",
+    "update_path_message": "This install uses manual app updates. Open the update steps and run them on the host."
+  }
   ```
 
 ## SSL

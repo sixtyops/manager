@@ -32,6 +32,7 @@ CHECK_INTERVAL = int(os.environ.get("AUTOUPDATE_CHECK_INTERVAL", 604800))  # 7 d
 # Appliance mode: use docker pull from GHCR instead of git-based updates
 APPLIANCE_MODE = os.environ.get("SIXTYOPS_APPLIANCE", "") == "1"
 GHCR_IMAGE = os.environ.get("SIXTYOPS_IMAGE", "ghcr.io/sixtyops/manager")
+HOST_REPO_PATH_OVERRIDE = os.environ.get("SIXTYOPS_HOST_REPO_PATH", "").strip()
 UPDATE_PATH_ONE_CLICK = "one_click"
 UPDATE_PATH_MANUAL = "manual"
 
@@ -528,6 +529,8 @@ def _get_repo_dir() -> Optional[Path]:
 
 def _get_host_repo_path() -> Optional[str]:
     """Discover the host-side path of the /app/repo bind mount."""
+    if HOST_REPO_PATH_OVERRIDE:
+        return HOST_REPO_PATH_OVERRIDE
     try:
         result = subprocess.run(
             ["docker", "inspect", "sixtyops-management",
@@ -539,6 +542,16 @@ def _get_host_repo_path() -> Optional[str]:
         return path if path else None
     except Exception:
         return None
+
+
+def _get_manual_source_host_dir(repo_dir: Optional[Path]) -> Optional[str]:
+    """Return a host-valid source-install directory for manual update steps."""
+    host_dir = _get_host_repo_path()
+    if host_dir:
+        return host_dir
+    if repo_dir and str(repo_dir) == "/opt/sixtyops":
+        return str(repo_dir)
+    return None
 
 
 def _manual_update_instructions(target_tag: str, repo_dir: Optional[Path]) -> dict:
@@ -575,7 +588,22 @@ def _manual_update_instructions(target_tag: str, repo_dir: Optional[Path]) -> di
                 f"#   original `docker run` with {image} (same -v / -p / -e flags)",
             ],
         }
-    host_dir = _get_host_repo_path() or str(repo_dir)
+    host_dir = _get_manual_source_host_dir(repo_dir)
+    if not host_dir:
+        return {
+            "manual": True,
+            "message": (
+                "Git repo mounted but the host deployment path could not be "
+                "detected. On the host, open your Manager deployment directory "
+                "(the folder with `.git` and `docker-compose.yml`), then run:"
+            ),
+            "commands": [
+                "cd <manager-deployment-directory>",
+                f"git fetch origin tag {target_tag}",
+                f"git checkout {target_tag}",
+                "docker compose up -d --build",
+            ],
+        }
     return {
         "manual": True,
         "message": "Git repo mounted but Docker socket unavailable — run on the host:",

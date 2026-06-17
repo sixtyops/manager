@@ -451,6 +451,33 @@ class TestApplyUpdateGuardrails:
         assert any(cmd == "cd /srv/custom/sixtyops" for cmd in cmds)
         assert not any("/opt/sixtyops" in cmd for cmd in cmds)
 
+    @pytest.mark.asyncio
+    async def test_manual_commands_source_install_never_emits_container_repo_path(self):
+        """If the host repo path cannot be discovered, the UI must not tell the
+        operator to `cd /app/repo` on the host."""
+        from pathlib import Path
+        from updater.release_checker import apply_update
+        self._set_setting("autoupdate_available_version", "1.0.2")
+
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=False), \
+             patch("updater.release_checker._get_repo_dir", return_value=Path("/app/repo")), \
+             patch("updater.release_checker._get_host_repo_path", return_value=None):
+            result = await apply_update()
+
+        assert result["success"] is False
+        assert result["manual"] is True
+        assert result["commands"][0] == "cd <manager-deployment-directory>"
+        assert not any("/app/repo" in cmd for cmd in result["commands"])
+
+    def test_manual_source_host_dir_falls_back_to_opt_sixtyops(self):
+        """The default managed install path is valid on the host even when
+        docker inspect is unavailable."""
+        from updater.release_checker import _get_manual_source_host_dir
+        with patch("updater.release_checker._get_host_repo_path", return_value=None):
+            host_dir = _get_manual_source_host_dir(Path("/opt/sixtyops"))
+        assert host_dir == "/opt/sixtyops"
+
     @staticmethod
     def _git_run(calls=None):
         """Mock subprocess.run that returns clean status / SHA / no-op per subcommand."""
