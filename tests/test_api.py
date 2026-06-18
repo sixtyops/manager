@@ -859,8 +859,8 @@ class TestConfigsAPI:
 
     SAMPLE_CONFIG = {"network": {"hostname": "ap-test"}, "services": {"snmp": {"enabled": True}}}
 
-    def _seed_config(self, mock_db, ip="10.0.0.1", config=None, model="TNA-301"):
-        """Insert a config snapshot."""
+    def _seed_config(self, mock_db, ip="10.0.0.1", config=None, model="TNA-301", hardware_id="tn-110-prs"):
+        """Insert a config snapshot. hardware_id=None exercises the model fallback."""
         cfg = config or self.SAMPLE_CONFIG
         config_json = json.dumps(cfg, sort_keys=True)
         import hashlib
@@ -868,7 +868,7 @@ class TestConfigsAPI:
         mock_db.execute(
             "INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id, fetched_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (ip, config_json, config_hash, model, "tn-110-prs", "2026-02-19T12:00:00"),
+            (ip, config_json, config_hash, model, hardware_id, "2026-02-19T12:00:00"),
         )
         mock_db.commit()
 
@@ -923,13 +923,11 @@ class TestConfigsAPI:
         assert resp.status_code == 404
 
     def test_download_config_tar(self, authed_client, mock_db):
-        from updater import __version__
         self._seed_config(mock_db, "10.0.0.1")
         row = mock_db.execute(
-            "SELECT id, config_hash FROM device_configs WHERE ip = '10.0.0.1'"
+            "SELECT id FROM device_configs WHERE ip = '10.0.0.1'"
         ).fetchone()
         config_id = row[0]
-        expected_hash = row[1]
         resp = authed_client.get(f"/api/configs/10.0.0.1/download/{config_id}")
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "application/x-tar"
@@ -945,15 +943,27 @@ class TestConfigsAPI:
             config_file = tar.extractfile("config.json")
             config_data = json.loads(config_file.read())
             assert config_data["network"]["hostname"] == "ap-test"
-            # Verify CONTROL contents — key=value manifest with integrity fields
-            control_text = tar.extractfile("CONTROL").read().decode()
-            fields = dict(
-                line.split("=", 1) for line in control_text.strip().splitlines()
-            )
-            assert fields["hardware_id"] == "tn-110-prs"
-            assert fields["fetched_at"] == "2026-02-19T12:00:00"
-            assert fields["config_hash"] == expected_hash
-            assert fields["manager_version"] == __version__
+            # CONTROL must be the bare device platform string — no manifest, no
+            # trailing newline — so the device web-UI "upload config" accepts it.
+            assert tar.extractfile("CONTROL").read() == b"tn-110-prs"
+
+    def test_download_config_tar_control_per_model(self, authed_client, mock_db):
+        # A 303L-65 with no stored hardware_id must fall back to the model map
+        # (tam-110-prs), NOT a hardcoded tn-110-prs default that would brick it.
+        self._seed_config(mock_db, "10.0.0.2", model="TNA-303L-65", hardware_id=None)
+        row = mock_db.execute("SELECT id FROM device_configs WHERE ip = '10.0.0.2'").fetchone()
+        resp = authed_client.get(f"/api/configs/10.0.0.2/download/{row[0]}")
+        assert resp.status_code == 200
+        with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r") as tar:
+            assert tar.extractfile("CONTROL").read() == b"tam-110-prs"
+
+    def test_download_config_tar_unresolvable_model(self, authed_client, mock_db):
+        # No stored hardware_id and an unknown model → refuse rather than emit a
+        # guessed CONTROL the device might reject or mis-apply.
+        self._seed_config(mock_db, "10.0.0.3", model="WIDGET-9000", hardware_id=None)
+        row = mock_db.execute("SELECT id FROM device_configs WHERE ip = '10.0.0.3'").fetchone()
+        resp = authed_client.get(f"/api/configs/10.0.0.3/download/{row[0]}")
+        assert resp.status_code == 422
 
     def test_download_config_tar_not_found(self, authed_client):
         resp = authed_client.get("/api/configs/10.0.0.1/download/9999")
