@@ -10,16 +10,14 @@ All notable changes to this project are documented in this file.
   here, labeled with the customer name — you can now download it as a
   device-restorable `.tar` and upload it onto the replacement through the
   device's own web UI, without needing to reach the dead unit.
-
-### Fixed
-- Config-tar download (`/api/configs/{ip}/download/{config_id}`) again writes the
-  `CONTROL` file as the bare device platform string (e.g. `tn-110-prs`, or
-  `tam-110-prs` for the TNA-303L-65) with no trailing newline — the exact format
-  the device's own web-UI config upload accepts. #43 had wrapped it in a
-  `key=value` manifest for a manager re-import that never shipped, which silently
-  broke the download → device-restore round-trip. The platform string is now
-  resolved per model, and the download refuses (422) rather than emit a guessed
-  one that the device could reject or mis-apply.
+- Auto-downloaded firmware is now **verified against the vendor's published
+  checksum** before it can ever be flashed. When Tachyon lists an MD5 for a
+  release, a download whose contents don't match is rejected outright (it never
+  becomes the update target); when no checksum is listed, the existing size
+  checks still apply. Each accepted file is also fingerprinted and **re-checked
+  at flash time** — the same integrity guard manual uploads already get — so a
+  file that gets corrupted on disk during the days-long canary soak is caught
+  before reboot.
 
 ### Changed
 - **Simpler, safer auto-updates: the canary phase is gone.** Auto-update now rolls
@@ -43,20 +41,15 @@ All notable changes to this project are documented in this file.
   or in progress", never a button. Numbers in tables no longer shift as
   they update.
 
-### Security
-- **App updates are now signature-verified.** Every manager release from v1.4.0
-  onward is a signed release, and the manager **refuses to install an update that
-  isn't from us** — closing the path where a tampered release could push code to
-  the host. Existing releases stay installable, so rollback still works and no
-  deployment is left stranded. (See `docs/self-update-signing.md`.)
-- The development **sample-data seeder no longer plants a login or turns on
-  automatic updates.** Previously a leftover `SEED_DATA=1` (a dev-only flag)
-  could hand a real install a known admin password, skip first-run setup, and
-  enable auto-updates. Seeding now adds sample devices only, refuses to run
-  against an already-configured install, and warns that it is development-only.
-  Sign in via first-run setup as normal.
-
 ### Fixed
+- Config-tar download (`/api/configs/{ip}/download/{config_id}`) again writes the
+  `CONTROL` file as the bare device platform string (e.g. `tn-110-prs`, or
+  `tam-110-prs` for the TNA-303L-65) with no trailing newline — the exact format
+  the device's own web-UI config upload accepts. #43 had wrapped it in a
+  `key=value` manifest for a manager re-import that never shipped, which silently
+  broke the download → device-restore round-trip. The platform string is now
+  resolved per model, and the download refuses (422) rather than emit a guessed
+  one that the device could reject or mis-apply.
 - **Clicking "Update" on a device now always flashes the firmware you picked.**
   Before, a manual update could quietly do nothing — the button second-guessed
   your choice and skipped the device if it looked like it might already be up to
@@ -66,24 +59,24 @@ All notable changes to this project are documented in this file.
   already on the exact same build, in which case it says so plainly instead of
   failing. If no firmware matching the device's model is selected, you get a
   clear message naming the model instead of a silent no-op.
-- **Backups can now actually be restored onto a new machine.** The automatic
-  backup now includes the security key that unlocks saved device passwords, so
-  restoring onto a fresh host brings back a manager that can reach your devices —
-  previously the key was left behind and every saved password came back
-  unreadable, with no warning. Because backups now contain that key, the setup
-  screens say plainly to treat each backup as sensitive and send it only to an
-  SFTP location you control. (Older backups without the key still restore the
-  database.)
+- The in-app updater's **"run these commands on the host" fallback now
+  matches how the manager was installed.** Image-based (`docker run`)
+  installs are given `docker pull` + recreate steps instead of `git`
+  commands that can't run without a source tree, the host repo path is
+  discovered rather than assumed, and the copy-paste block is hardened so
+  the steps paste safely even when the install path is unknown (#256).
+
+### Security
+- The development **sample-data seeder no longer plants a login or turns on
+  automatic updates.** Previously a leftover `SEED_DATA=1` (a dev-only flag)
+  could hand a real install a known admin password, skip first-run setup, and
+  enable auto-updates. Seeding now adds sample devices only, refuses to run
+  against an already-configured install, and warns that it is development-only.
+  Sign in via first-run setup as normal.
+
+## 1.4.0 - 2026-06-10
 
 ### Added
-- Auto-downloaded firmware is now **verified against the vendor's published
-  checksum** before it can ever be flashed. When Tachyon lists an MD5 for a
-  release, a download whose contents don't match is rejected outright (it never
-  becomes the update target); when no checksum is listed, the existing size
-  checks still apply. Each accepted file is also fingerprinted and **re-checked
-  at flash time** — the same integrity guard manual uploads already get — so a
-  file that gets corrupted on disk during the days-long canary soak is caught
-  before reboot.
 - Rollouts now **skip the canary step when the firmware is already proven on
   your fleet.** If healthy same-model devices are already running the target
   version, a new rollout goes **straight to the 10% wave** (and a rollout already
@@ -92,6 +85,22 @@ All notable changes to this project are documented in this file.
   maintenance window (no cascade), it's scoped per device model, and the skip is
   recorded honestly — a status note and a schedule-log entry naming the proven
   peers — never a silent jump.
+- Post-deploy operator checklist at `docs/post-deploy-checklist.md`: ten-item, five-minute smoke test the operator runs after install (admin login, site, AP, poll, config compliance, notification test, audit log via API, backups decision, HTTPS, update channel). Audit-log step uses `curl` against `GET /api/audit-log` and links forward to #136 for the in-UI panel. Linked from the README's Quick Start pointer and Documentation section (#122)
+- Operator quickstart at `docs/quickstart.md`: ~10-minute install-to-first-device walkthrough (install → first login → setup wizard → first tower site → first AP → first poll). Screenshot placeholders only this pass; real captures land in a follow-up. Linked from the README's Quick Start and Documentation sections (#123)
+- Troubleshooting one-pager at `docs/troubleshooting.md` covering the top five operator failure modes (device unreachable, RADIUS auth, hung update jobs, SSL renewal, SFTP backup) with symptom → diagnose → recover for each. Linked from README's Documentation section and the in-app About panel footer (#124)
+- Switch → AP topology cascade: APs are now nested under their upstream switch in the device tree, with a port badge showing the switch port they're connected to (ordered by port number)
+- OIDC admin group mapping: configure an "Admin Group" in SSO settings to auto-promote members to admin role on login
+- Role badge in the header shows the current user's role; write-operation UI (Add Devices, delete, bulk actions) is hidden from viewer accounts
+- Viewer UI is now consistently read-only across the Updates/Config drawers and the Settings modal: toggles, schedule inputs, firmware selectors, config policies, notifications, RADIUS, backup/restore, and HTTPS controls are visibly locked rather than appearing editable. Action buttons (Save, Upload, Push, Resume/Cancel, Check Compliance) are hidden. When a write does land on the server (e.g. via a stale tab), the inline status now reads "Read-only access — ask an admin" instead of the generic "Save failed"
+- Initial config priming: devices without a cached config are polled on the next poll cycle instead of waiting until the 4 AM daily run, so compliance works from day one
+- Check Compliance now triggers a fresh config poll (`?refresh=true`) with visible "Polling devices…" feedback instead of reading stale cache
+- NTP server defaults (132.163.97.1 and 129.6.15.28) in the config template editor; toggle stays off by default
+- Toast notification CSS (fixed top-right, typed color borders, slide-in) — previously toasts rendered as unstyled plaintext in the page body
+- Last-admin / self-delete guards on the Local Users table (disabled button + tooltip)
+- Config snapshot recycle bin: deleting a device now soft-deletes its config history rather than orphaning rows. Deleting an AP also cascades to its CPEs' snapshots. A new "Config Snapshot Recycle Bin" panel in the Config drawer lets admins restore or permanently purge entries
+- MAC-based config-history auto-rebind: when a managed device's IP changes (DHCP renumber, replacement at the same MAC), its prior config history is automatically re-linked to the new IP. The UI surfaces a toast and refreshes when this happens
+- Manager backup export now includes device config snapshots and the recycle bin (Fernet-encrypted with the same passphrase). Re-import is idempotent on `(ip, fetched_at)` so DR no longer resets config history
+- `device_configs.config_json` is now Fernet-encrypted at rest with the same key (`data/.encryption_key`) used for device passwords (#35). Configs typically contain RADIUS shared secrets, WPA PSKs, SNMP communities and 802.1X creds; previously these sat in plaintext in SQLite, so anyone with read access to the DB file could lift them. Existing rows are migrated in-place on next startup (idempotent — checks for the Fernet `gAAAAA` prefix). The `config_hash` column stays plaintext so change-detection queries (`get_latest_config_hash`) remain cheap. Backup tar export still re-wraps with the export passphrase so DR works across managers with different storage keys
 
 ### Changed
 - The firmware list now **flags problem files**: a build that looks
@@ -155,8 +164,44 @@ All notable changes to this project are documented in this file.
   absent (`poller.py:801`), but a missing row made the value invisible
   in the settings table to anyone inspecting the DB directly. Behaviour
   unchanged; just visibility (#166).
+- "Firmware quarantine" is now "Canary hold," and the hold no longer blocks
+  the whole rollout — it only gates the canary→pct10 advance. The canary
+  phase itself now runs immediately, so a newly-uploaded firmware gets
+  soaked on the configured canary AP instead of sitting unused for a week.
+  Setting key renamed from `firmware_quarantine_days` (default 7, min 0)
+  to `firmware_canary_hold_days` (default 6, min 6); operator-set values
+  are migrated automatically on startup and clamped to the new minimum.
+  WebSocket scheduler status field renamed from `quarantine` to
+  `canary_hold`; firmware-files API renamed `quarantine_*` fields to
+  `hold_*`. UI state label is "Running" with a per-rollout countdown
+  ("Holding 3d 12h more") instead of a top-level "Scheduled" badge.
+- Updates tab clarifies "when next" for both the fleet and individual devices. The Auto-Update status badge collapses to four user-facing labels — **Off**, **Scheduled**, **Updating**, **Paused**, **Up to date** — replacing the eight internal terms (Idle, Waiting, Blocked, On Hold, No firmware, All current, …) the badge used to surface. Each Scheduled/Paused state shows a concrete subtitle ("Next: tomorrow at 3:00 AM" or the block reason) instead of the abbreviated `3:00-4:00 on tue,wed,thu` window string. Hovering the orange ↑ on a device row now shows that device's next expected attempt ("Next attempt tomorrow at 3:00 AM — click to update now"), computed from its rollout phase, the maintenance window, and any firmware-quarantine hold. Internal scheduler state names are unchanged, so logs and `schedule_log` history are unaffected
+- Config auto-enforce can now auto-rollback the last enforce phase when the post-enforce re-poll shows mass failure. New setting `config_enforce_auto_rollback_threshold_pct` (default `0` = off, range `0-100`). When non-zero, after the post-enforce re-poll the percent of last-phase devices still non-compliant is compared against the threshold; if exceeded, each affected device's pre-enforce snapshot is pushed back and the action is logged with `phase=rollback`. A `config_enforce_status` event with `status="rolled_back"` is broadcast so operators see what happened. The pre-enforce snapshot already existed for manual `/api/config-push/rollback/{ip}` — this just closes the loop automatically (#50)
+- Config auto-enforce now classifies canary failures and retries transient ones (login failed, fetch-config failed) up to `config_enforce_canary_retry_count` times (default 1, range 0-3) before declaring the canary failed. Policy failures (dry-run rejected, apply failed) still stop the run immediately — they're the signal canary is meant to catch. The `config_enforce_log.error` column now prefixes the message with `"transient: "` or `"policy: "`, and exhausted retries append a `(N/N retries)` suffix so the audit trail makes sense (#49)
+- Config auto-enforce now defers when an immediate `/api/config-push` job is in flight, in addition to the existing rollout check. Closes the race where a 4 AM enforce run could overwrite an operator's manual change by acting on cached compliance data. The skip is broadcast as a `config_enforce_status` event with `status="skipped"` so it shows up in the audit trail (#48)
+- API documentation routes (`/docs`, `/redoc`, `/openapi.json`) are now auth-gated and serve locally-vendored Swagger UI / ReDoc assets instead of `cdn.jsdelivr.net`. Two issues addressed in one change: (1) browser content blockers were silently dropping the default FastAPI HTML's CDN script tags, leaving the doc pages blank — same root cause as the Chart.js vendoring fix. (2) Anonymously-accessible docs were leaking the full API surface (every route, request/response schema, validator constraints) to anyone who could reach the manager. New `static/vendor/swagger-ui.css` (155 KB), `static/vendor/swagger-ui-bundle.js` (1.4 MB, swagger-ui-dist 5.21.0), `static/vendor/redoc.standalone.js` (911 KB, redoc 2.5.0). The schema content itself is unchanged
+- Config push rollouts now put the "advance" affordance on the **next** phase pill instead of the just-completed one. After canary finishes, the 10% pill lights up with a pulsing blue background and explicit "Tap to push" copy — instead of the previous design where the canary pill became clickable with only a 1-pixel inset shadow and a hover-tooltip nudge. Operators were missing the affordance entirely and assuming the next phase would auto-run. For 1-device rollouts (no later phase has any devices), the current pill remains clickable with "Tap to finish" copy and walks straight through the empty phases via PR #88's empty-phase logic
+- Signal health classification tightened to match the network's actual operating envelope: Strong (≥ −60 dBm), Low (−61 to −65 dBm), Marginal (< −65 dBm). Was Strong (> −65), Low (−65 to −75), Critical (< −75) — much more lenient than the network actually performs at. The Signal vs Distance chart's reference dotted lines now sit at −60 (Strong/Low boundary) and −65 (Low/Marginal boundary) instead of −65 and −75. The "Critical" tier was renamed to "Marginal" everywhere it surfaces (chart legend, per-row signal coloring, CPE status tooltip — internal CSS class `signal-critical` kept for diff size). `SignalHealth.GREEN/YELLOW/RED` API values are unchanged so external consumers keep working
+- Auto-update default `allow_downgrade` is now `true` (was `false`) and default `min_temperature_c` is now `-4` (was `-10`, i.e. ≈14°F → 25°F). New installs will pre-fill the System > Updates drawer with the safer "Weather Guard < 25°F" cutoff and downgrades enabled by default. Existing installs are not affected — these defaults only seed on a fresh DB via `INSERT OR IGNORE`
+- Config tab "Last Backup" column renamed to "Last Checked" and now reads from `devices.last_config_poll_at` / `cpe_cache.last_config_poll_at` (the per-device poll-outcome timestamp added in PR #67) instead of `device_configs.fetched_at`. The old column was misleading: `fetched_at` only advances when a *new snapshot row is inserted*, which the poller skips when the config hash is unchanged — so a successfully-polled fleet whose configs hadn't drifted showed dates weeks behind the present. The cell tooltip still surfaces the last config-change date, and a `⚠` glyph appears when the most recent poll outcome was non-`ok`. `/api/configs` gains `last_polled_at`, `last_poll_status`, `last_poll_error` fields per device
+- `GET /api/config-compliance` per-device `checked_at` now reflects the last successful config poll (`devices.last_config_poll_at` / `cpe_cache.last_config_poll_at`) instead of the snapshot's `fetched_at`. Same root cause as the "Last Checked" column rename above — `fetched_at` only advances when the config drifts, so the compliance summary's "last checked" date on a successfully-polled fleet stayed frozen at whenever each device's config last changed. Falls back to `fetched_at` for legacy rows that pre-date per-device poll-outcome tracking
+- Chart.js (Signal vs Distance dashboard chart) is now vendored at `static/vendor/chart.umd.js` (pinned to v4.5.1) instead of loaded from `cdn.jsdelivr.net`. Some browser content blockers were silently blocking the CDN request, leaving the chart blank with `ReferenceError: Chart is not defined` in the console. Vendoring eliminates the dashboard's only third-party runtime asset dependency
+- `docker-compose.yml` now publishes ports through env-overridable defaults: `${BIND_IP:-0.0.0.0}:${HOST_PORT:-8000}:8000` and `${BIND_IP:-0.0.0.0}:${RADIUS_HOST_PORT:-1812}:1812/udp`. Default behavior is unchanged (binds `0.0.0.0:8000` and `0.0.0.0:1812/udp`). Operators on multi-tenant hosts can now set `BIND_IP=<host-ip>` / `HOST_PORT=<port>` / `RADIUS_HOST_PORT=<port>` in their environment instead of hand-deleting the upstream `ports:` block — which would leave the working tree dirty and break the in-app self-update path on every release
+- Manual config push (`/api/config-push` and `/api/config-push/preview`, including phased rollouts) now honors each template's `device_types` filter — an AP-only template targeted at a switch is reported as "skipped" in preview and silently bypassed at apply, instead of being merged into a config it doesn't belong in. The push job and rollout state expose a new `skipped` counter alongside `success`/`failed`.
+- Config tar download (`/api/configs/{ip}/download/{config_id}`) now writes the CONTROL file as a `key=value` manifest (`hardware_id`, `fetched_at`, `config_hash`, `manager_version`) instead of just the bare hardware id, so a future re-import path can verify the snapshot's origin and integrity
+- Bridge/FDB table polled from Tachyon switches on each poll cycle to maintain AP-to-port mapping
+- Chassis connector replaced with inline `eth[n]` port badge on nested AP rows (cleaner, no orphaned line art)
+- System > Updates panel normalized into a label/control grid; RADIUS Server stat cards removed; RADIUS Clients & Logs rewritten for clarity; About panel redesigned with inline version chip
 
 ### Fixed
+- **Backups can now actually be restored onto a new machine.** The automatic
+  backup now includes the security key that unlocks saved device passwords, so
+  restoring onto a fresh host brings back a manager that can reach your devices —
+  previously the key was left behind and every saved password came back
+  unreadable, with no warning. Because backups now contain that key, the setup
+  screens say plainly to treat each backup as sensitive and send it only to an
+  SFTP location you control. (Older backups without the key still restore the
+  database.)
 - The **canary soak** now lasts exactly the configured number of days. It was
   being measured against the wrong clock (the canary-completion time is stored
   in UTC, but it was compared as if it were the operator's local time), so the
@@ -383,62 +428,6 @@ All notable changes to this project are documented in this file.
   for one firmware filename, created in clustered 3-minute bursts during
   Tue/Wed/Thu maintenance windows whenever CPE versions drifted relative
   to the AP.
-
-### Changed
-- "Firmware quarantine" is now "Canary hold," and the hold no longer blocks
-  the whole rollout — it only gates the canary→pct10 advance. The canary
-  phase itself now runs immediately, so a newly-uploaded firmware gets
-  soaked on the configured canary AP instead of sitting unused for a week.
-  Setting key renamed from `firmware_quarantine_days` (default 7, min 0)
-  to `firmware_canary_hold_days` (default 6, min 6); operator-set values
-  are migrated automatically on startup and clamped to the new minimum.
-  WebSocket scheduler status field renamed from `quarantine` to
-  `canary_hold`; firmware-files API renamed `quarantine_*` fields to
-  `hold_*`. UI state label is "Running" with a per-rollout countdown
-  ("Holding 3d 12h more") instead of a top-level "Scheduled" badge.
-
-### Added
-- Post-deploy operator checklist at `docs/post-deploy-checklist.md`: ten-item, five-minute smoke test the operator runs after install (admin login, site, AP, poll, config compliance, notification test, audit log via API, backups decision, HTTPS, update channel). Audit-log step uses `curl` against `GET /api/audit-log` and links forward to #136 for the in-UI panel. Linked from the README's Quick Start pointer and Documentation section (#122)
-- Operator quickstart at `docs/quickstart.md`: ~10-minute install-to-first-device walkthrough (install → first login → setup wizard → first tower site → first AP → first poll). Screenshot placeholders only this pass; real captures land in a follow-up. Linked from the README's Quick Start and Documentation sections (#123)
-- Troubleshooting one-pager at `docs/troubleshooting.md` covering the top five operator failure modes (device unreachable, RADIUS auth, hung update jobs, SSL renewal, SFTP backup) with symptom → diagnose → recover for each. Linked from README's Documentation section and the in-app About panel footer (#124)
-- Switch → AP topology cascade: APs are now nested under their upstream switch in the device tree, with a port badge showing the switch port they're connected to (ordered by port number)
-- OIDC admin group mapping: configure an "Admin Group" in SSO settings to auto-promote members to admin role on login
-- Role badge in the header shows the current user's role; write-operation UI (Add Devices, delete, bulk actions) is hidden from viewer accounts
-- Viewer UI is now consistently read-only across the Updates/Config drawers and the Settings modal: toggles, schedule inputs, firmware selectors, config policies, notifications, RADIUS, backup/restore, and HTTPS controls are visibly locked rather than appearing editable. Action buttons (Save, Upload, Push, Resume/Cancel, Check Compliance) are hidden. When a write does land on the server (e.g. via a stale tab), the inline status now reads "Read-only access — ask an admin" instead of the generic "Save failed"
-- Initial config priming: devices without a cached config are polled on the next poll cycle instead of waiting until the 4 AM daily run, so compliance works from day one
-- Check Compliance now triggers a fresh config poll (`?refresh=true`) with visible "Polling devices…" feedback instead of reading stale cache
-- NTP server defaults (132.163.97.1 and 129.6.15.28) in the config template editor; toggle stays off by default
-- Toast notification CSS (fixed top-right, typed color borders, slide-in) — previously toasts rendered as unstyled plaintext in the page body
-- Last-admin / self-delete guards on the Local Users table (disabled button + tooltip)
-- Config snapshot recycle bin: deleting a device now soft-deletes its config history rather than orphaning rows. Deleting an AP also cascades to its CPEs' snapshots. A new "Config Snapshot Recycle Bin" panel in the Config drawer lets admins restore or permanently purge entries
-- MAC-based config-history auto-rebind: when a managed device's IP changes (DHCP renumber, replacement at the same MAC), its prior config history is automatically re-linked to the new IP. The UI surfaces a toast and refreshes when this happens
-- Manager backup export now includes device config snapshots and the recycle bin (Fernet-encrypted with the same passphrase). Re-import is idempotent on `(ip, fetched_at)` so DR no longer resets config history
-- `device_configs.config_json` is now Fernet-encrypted at rest with the same key (`data/.encryption_key`) used for device passwords (#35). Configs typically contain RADIUS shared secrets, WPA PSKs, SNMP communities and 802.1X creds; previously these sat in plaintext in SQLite, so anyone with read access to the DB file could lift them. Existing rows are migrated in-place on next startup (idempotent — checks for the Fernet `gAAAAA` prefix). The `config_hash` column stays plaintext so change-detection queries (`get_latest_config_hash`) remain cheap. Backup tar export still re-wraps with the export passphrase so DR works across managers with different storage keys
-
-### Changed
-- Updates tab clarifies "when next" for both the fleet and individual devices. The Auto-Update status badge collapses to four user-facing labels — **Off**, **Scheduled**, **Updating**, **Paused**, **Up to date** — replacing the eight internal terms (Idle, Waiting, Blocked, On Hold, No firmware, All current, …) the badge used to surface. Each Scheduled/Paused state shows a concrete subtitle ("Next: tomorrow at 3:00 AM" or the block reason) instead of the abbreviated `3:00-4:00 on tue,wed,thu` window string. Hovering the orange ↑ on a device row now shows that device's next expected attempt ("Next attempt tomorrow at 3:00 AM — click to update now"), computed from its rollout phase, the maintenance window, and any firmware-quarantine hold. Internal scheduler state names are unchanged, so logs and `schedule_log` history are unaffected
-- Config auto-enforce can now auto-rollback the last enforce phase when the post-enforce re-poll shows mass failure. New setting `config_enforce_auto_rollback_threshold_pct` (default `0` = off, range `0-100`). When non-zero, after the post-enforce re-poll the percent of last-phase devices still non-compliant is compared against the threshold; if exceeded, each affected device's pre-enforce snapshot is pushed back and the action is logged with `phase=rollback`. A `config_enforce_status` event with `status="rolled_back"` is broadcast so operators see what happened. The pre-enforce snapshot already existed for manual `/api/config-push/rollback/{ip}` — this just closes the loop automatically (#50)
-- Config auto-enforce now classifies canary failures and retries transient ones (login failed, fetch-config failed) up to `config_enforce_canary_retry_count` times (default 1, range 0-3) before declaring the canary failed. Policy failures (dry-run rejected, apply failed) still stop the run immediately — they're the signal canary is meant to catch. The `config_enforce_log.error` column now prefixes the message with `"transient: "` or `"policy: "`, and exhausted retries append a `(N/N retries)` suffix so the audit trail makes sense (#49)
-- Config auto-enforce now defers when an immediate `/api/config-push` job is in flight, in addition to the existing rollout check. Closes the race where a 4 AM enforce run could overwrite an operator's manual change by acting on cached compliance data. The skip is broadcast as a `config_enforce_status` event with `status="skipped"` so it shows up in the audit trail (#48)
-- API documentation routes (`/docs`, `/redoc`, `/openapi.json`) are now auth-gated and serve locally-vendored Swagger UI / ReDoc assets instead of `cdn.jsdelivr.net`. Two issues addressed in one change: (1) browser content blockers were silently dropping the default FastAPI HTML's CDN script tags, leaving the doc pages blank — same root cause as the Chart.js vendoring fix. (2) Anonymously-accessible docs were leaking the full API surface (every route, request/response schema, validator constraints) to anyone who could reach the manager. New `static/vendor/swagger-ui.css` (155 KB), `static/vendor/swagger-ui-bundle.js` (1.4 MB, swagger-ui-dist 5.21.0), `static/vendor/redoc.standalone.js` (911 KB, redoc 2.5.0). The schema content itself is unchanged
-- Config push rollouts now put the "advance" affordance on the **next** phase pill instead of the just-completed one. After canary finishes, the 10% pill lights up with a pulsing blue background and explicit "Tap to push" copy — instead of the previous design where the canary pill became clickable with only a 1-pixel inset shadow and a hover-tooltip nudge. Operators were missing the affordance entirely and assuming the next phase would auto-run. For 1-device rollouts (no later phase has any devices), the current pill remains clickable with "Tap to finish" copy and walks straight through the empty phases via PR #88's empty-phase logic
-- Signal health classification tightened to match the network's actual operating envelope: Strong (≥ −60 dBm), Low (−61 to −65 dBm), Marginal (< −65 dBm). Was Strong (> −65), Low (−65 to −75), Critical (< −75) — much more lenient than the network actually performs at. The Signal vs Distance chart's reference dotted lines now sit at −60 (Strong/Low boundary) and −65 (Low/Marginal boundary) instead of −65 and −75. The "Critical" tier was renamed to "Marginal" everywhere it surfaces (chart legend, per-row signal coloring, CPE status tooltip — internal CSS class `signal-critical` kept for diff size). `SignalHealth.GREEN/YELLOW/RED` API values are unchanged so external consumers keep working
-- Auto-update default `allow_downgrade` is now `true` (was `false`) and default `min_temperature_c` is now `-4` (was `-10`, i.e. ≈14°F → 25°F). New installs will pre-fill the System > Updates drawer with the safer "Weather Guard < 25°F" cutoff and downgrades enabled by default. Existing installs are not affected — these defaults only seed on a fresh DB via `INSERT OR IGNORE`
-- Config tab "Last Backup" column renamed to "Last Checked" and now reads from `devices.last_config_poll_at` / `cpe_cache.last_config_poll_at` (the per-device poll-outcome timestamp added in PR #67) instead of `device_configs.fetched_at`. The old column was misleading: `fetched_at` only advances when a *new snapshot row is inserted*, which the poller skips when the config hash is unchanged — so a successfully-polled fleet whose configs hadn't drifted showed dates weeks behind the present. The cell tooltip still surfaces the last config-change date, and a `⚠` glyph appears when the most recent poll outcome was non-`ok`. `/api/configs` gains `last_polled_at`, `last_poll_status`, `last_poll_error` fields per device
-- `GET /api/config-compliance` per-device `checked_at` now reflects the last successful config poll (`devices.last_config_poll_at` / `cpe_cache.last_config_poll_at`) instead of the snapshot's `fetched_at`. Same root cause as the "Last Checked" column rename above — `fetched_at` only advances when the config drifts, so the compliance summary's "last checked" date on a successfully-polled fleet stayed frozen at whenever each device's config last changed. Falls back to `fetched_at` for legacy rows that pre-date per-device poll-outcome tracking
-- Chart.js (Signal vs Distance dashboard chart) is now vendored at `static/vendor/chart.umd.js` (pinned to v4.5.1) instead of loaded from `cdn.jsdelivr.net`. Some browser content blockers were silently blocking the CDN request, leaving the chart blank with `ReferenceError: Chart is not defined` in the console. Vendoring eliminates the dashboard's only third-party runtime asset dependency
-- `docker-compose.yml` now publishes ports through env-overridable defaults: `${BIND_IP:-0.0.0.0}:${HOST_PORT:-8000}:8000` and `${BIND_IP:-0.0.0.0}:${RADIUS_HOST_PORT:-1812}:1812/udp`. Default behavior is unchanged (binds `0.0.0.0:8000` and `0.0.0.0:1812/udp`). Operators on multi-tenant hosts can now set `BIND_IP=<host-ip>` / `HOST_PORT=<port>` / `RADIUS_HOST_PORT=<port>` in their environment instead of hand-deleting the upstream `ports:` block — which would leave the working tree dirty and break the in-app self-update path on every release
-- Manual config push (`/api/config-push` and `/api/config-push/preview`, including phased rollouts) now honors each template's `device_types` filter — an AP-only template targeted at a switch is reported as "skipped" in preview and silently bypassed at apply, instead of being merged into a config it doesn't belong in. The push job and rollout state expose a new `skipped` counter alongside `success`/`failed`.
-- Config tar download (`/api/configs/{ip}/download/{config_id}`) now writes the CONTROL file as a `key=value` manifest (`hardware_id`, `fetched_at`, `config_hash`, `manager_version`) instead of just the bare hardware id, so a future re-import path can verify the snapshot's origin and integrity
-- Bridge/FDB table polled from Tachyon switches on each poll cycle to maintain AP-to-port mapping
-- Chassis connector replaced with inline `eth[n]` port badge on nested AP rows (cleaner, no orphaned line art)
-- System > Updates panel normalized into a label/control grid; RADIUS Server stat cards removed; RADIUS Clients & Logs rewritten for clarity; About panel redesigned with inline version chip
-
-### Removed
-- Settings > Backup & Restore "Remote Backups (SFTP)" list-and-restore panel hidden until the feature is finished. The placeholder "DANGEROUS" badge and "Loading backups…" spinner were the only thing visible to operators on instances without an SFTP server configured. The Run Now / Open SFTP Setup buttons remain so configuration still works; the JS (`loadRemoteBackups`, `restoreRemoteBackup`) is left in place so reviving the panel is a one-line markup change
-- Appliance build infrastructure (OVA/QCOW2 image generation, Packer configs, build-appliance workflow)
-
-### Fixed
 - Users-template compliance check incorrectly flagged every fleet as non-compliant immediately after a successful push. Each push generates a fresh random salt for `$1$<salt>$<hash>` MD5-crypt values, so the template-side hash and the device-side hash encoded the same plaintext but never compared equal as strings — `fragment_matches`'s naïve string-equal returned False forever. Now the `system.users` path is special-cased: per-user comparison is keyed on `username` (not list index, since devices return users in factory order), and the `password` field tolerates differing hashes when both sides are valid 34-char `$1$<salt>$<hash>` strings. Plaintext or empty `password` on either side still falls back to exact-match — that's how factory-default credentials and post-reset states surface as drift, which is the actual goal of the Users compliance check
 - Config-push rollouts no longer require a final "Advance" click after the pct100 phase finishes with no failures. `_run_config_push_phase` checks for any remaining `pending` devices across all phases at the end of each phase; if none are left and no failures occurred, the rollout transitions straight to `completed`. The post-pct100 `(Tap to finish)` step on the phase pill bar is gone for the happy path. Failures still pause for manual `Resume` as before
 - Dashboard `failure_count` chip kept showing yesterday's resolved failure indefinitely. `get_enforce_failures` now suppresses any failed row that has a subsequent successful enforce row for the same IP — operators already saw the resolution in the log; pinning the failure to the chip just adds noise. Tie-breaks on `(enforced_at, id)` so rapid successive rows with identical 1-second-resolution timestamps are still ordered correctly. Failed rows stay in `config_enforce_log` for diagnostics; we just stop counting them as live drift once a success lands
@@ -479,6 +468,17 @@ All notable changes to this project are documented in this file.
 - Daily config-poll window catch-up: the last successful poll time is now persisted to `settings.last_config_poll_at`, and on the next poll tick the manager checks whether that timestamp is older than 25h. If so it runs a catch-up poll instead of silently skipping the day. Previously the in-memory `_last_config_poll` was lost on restart, so a manager that was down during the configured poll hour would miss an entire day of compliance data with no signal to the operator
 - Per-device config-poll outcome is now persisted to `devices.last_config_poll_at/_status/_error` (status one of `ok`, `timeout`, `http_status`, `json_decode`, `auth`, `unknown`). Previously a failed `get_config()` returned `None`, the device disappeared from `device_configs`, and the operator had no signal that polling was broken on a specific device. Tachyon driver now exposes `fetch_config()` that returns `(config, status, error)` for granular classification
 - Signal vs Distance chart rendered fully blank (no axes, grid, or threshold lines) when every CPE in scope had a null `link_distance` — Chart.js v4's auto-scale collapsed the x-axis to a degenerate `[0, 0]` range, throwing in the user-supplied tick callback before the render could complete. The x-axis now anchors at `min: 0` with `suggestedMax: 100` and the tick callback guards non-numeric values; `initChart` is wrapped in try/catch so future Chart.js construction failures surface in the console instead of silently blanking the canvas
+
+### Security
+- **App updates are now signature-verified.** Every manager release from v1.4.0
+  onward is a signed release, and the manager **refuses to install an update that
+  isn't from us** — closing the path where a tampered release could push code to
+  the host. Existing releases stay installable, so rollback still works and no
+  deployment is left stranded. (See `docs/self-update-signing.md`.)
+
+### Removed
+- Settings > Backup & Restore "Remote Backups (SFTP)" list-and-restore panel hidden until the feature is finished. The placeholder "DANGEROUS" badge and "Loading backups…" spinner were the only thing visible to operators on instances without an SFTP server configured. The Run Now / Open SFTP Setup buttons remain so configuration still works; the JS (`loadRemoteBackups`, `restoreRemoteBackup`) is left in place so reviving the panel is a one-line markup change
+- Appliance build infrastructure (OVA/QCOW2 image generation, Packer configs, build-appliance workflow)
 
 ## 1.3.0 - 2026-04-08
 
