@@ -8,7 +8,7 @@ badge vs. the offline dot.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock, AsyncMock, call
 
 from updater import radius_config
 from updater.poller import NetworkPoller
@@ -70,6 +70,9 @@ class TestCheckCpeAuth:
             status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
         assert status == "unreachable"
         assert client.connect.await_count == 2
+        # Second attempt must use the global-default credentials.
+        assert factory.call_args_list[1] == call("10.0.0.11", "other",
+                                                 "default-pass", timeout=10)
 
     @pytest.mark.asyncio
     async def test_fallback_retries_when_only_password_differs(self, mock_db):
@@ -90,3 +93,6 @@ class TestCheckCpeAuth:
             status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
         assert status == "ok"
         assert client.connect.await_count == 2
+        # Second attempt must reuse the username but swap in the default password.
+        assert factory.call_args_list[1] == call("10.0.0.11", "root",
+                                                 "cpe-pass", timeout=10)
