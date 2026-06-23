@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Fixed
+- **A scheduled wave can no longer be silently skipped when its job fails to
+  start.** If starting a wave failed (for example, a missing-family firmware
+  refusal), the wave's devices could be left marked "pending" and then excluded
+  from the next attempt, letting the rollout advance or complete without ever
+  flashing them. Devices are now enrolled only after the job actually starts, so
+  a failed start retries cleanly next window.
+- **Existing firmware files stay selectable after an upgrade.** On upgraded
+  installs, firmware already on disk could be treated as "unverified" and dropped
+  from auto-selection and the fleet's target version. These files are now
+  fingerprinted during migration, so they remain deployable and gain the same
+  flash-time integrity check as freshly downloaded firmware.
+
 ### Added
 - A **Download** action on Config Snapshot Recycle Bin entries. When a CPE is
   decommissioned (or pruned after going offline) its last config is retained

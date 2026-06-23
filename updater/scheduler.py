@@ -699,11 +699,6 @@ class AutoUpdateScheduler:
                 await self._broadcast_status()
                 return
 
-        for ip in batch_ips:
-            db.assign_device_to_rollout(rollout["id"], ip, "ap", rollout["phase"])
-        for ip in batch_switches:
-            db.assign_device_to_rollout(rollout["id"], ip, "switch", rollout["phase"])
-
         self._state = "running"
         self._block_reason = None
         await self._broadcast_status()
@@ -733,6 +728,15 @@ class AutoUpdateScheduler:
                 schedule_days=schedule_days,
                 schedule_timezone=tz_str,
             )
+            # Assign devices to the wave ONLY after the job is created. If
+            # start_update_func raised (e.g. a missing-family firmware refusal),
+            # leaving these rows as 'pending' would make _get_devices_for_phase
+            # skip them on the next tick (pending is in its already_done filter)
+            # and silently advance/complete the wave with nothing flashed.
+            for ip in batch_ips:
+                db.assign_device_to_rollout(rollout["id"], ip, "ap", rollout["phase"])
+            for ip in batch_switches:
+                db.assign_device_to_rollout(rollout["id"], ip, "switch", rollout["phase"])
             self._current_job_id = job_id
             self._ran_today.add(today_key)
             db.set_rollout_job_id(rollout["id"], job_id)
