@@ -5447,10 +5447,22 @@
             }, DELETE_CONFIRM_MS + 150);
         }
 
+        // Canonical device-version display: "1.12.3 r55002" (matches the device's
+        // system description and our firmware-file labels). Accepts every shape the
+        // API stores — CPE raw "1.12.3.r55002", AP/switch normalized "1.12.3.54970",
+        // or "1.12.3 rev 55002" / "1.12.3-r55002" — and renders one consistent form.
+        function fwDisplay(raw) {
+            if (!raw) return '';
+            const s = String(raw).trim();
+            const m = s.match(/^(\d+\.\d+\.\d+)(?:[.\s-]+r?(?:ev\s+)?(\d+))?/i);
+            if (!m) return s;
+            return m[2] ? `${m[1]} r${m[2]}` : m[1];
+        }
+
         function versionCell(device) {
-            const b1 = device.bank1_version || '';
-            const b2 = device.bank2_version || '';
-            if (!b1 && !b2) return `<span class="fw-cell">${escapeHtml(device.firmware_version || '')}</span>`;
+            const b1 = fwDisplay(device.bank1_version);
+            const b2 = fwDisplay(device.bank2_version);
+            if (!b1 && !b2) return `<span class="fw-cell">${escapeHtml(fwDisplay(device.firmware_version))}</span>`;
             // Show active bank first, inactive (standby) second — standby is
             // hidden until the cell is hovered to avoid visually duplicating
             // the active version when the two banks match.
@@ -5610,7 +5622,7 @@
                     <td>${cpe.model || ''}</td>
                     ${activeColumnMode === 'firmware' ? `
                     <td>${versionCell(cpe)}</td>
-                    <td class="${signalClass} cpe-sig-cell" data-cpe-ip="${cpe.ip}">${signalVal != null ? signalVal.toFixed(1) + ' dBm' : ''}${signalMarginHtml}</td>
+                    <td class="${signalClass} cpe-sig-cell" data-cpe-ip="${cpe.ip}">${signalVal != null ? signalVal.toFixed(0) + ' dBm' : ''}${signalMarginHtml}</td>
                     <td>${formatDistance(cpe.link_distance)}</td>
                     <td>${updateCell('cpe', cpe.ip, ap.ip)}</td>
                     <td></td>

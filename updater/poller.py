@@ -1617,7 +1617,10 @@ class NetworkPoller:
                     "link_uptime": cpe["link_uptime"],
                     "signal_health": cpe["signal_health"],
                     "auth_status": cpe["auth_status"],
-                    "primary_signal": cpe["combined_signal"] or cpe["rx_power"] or cpe["last_local_rssi"],
+                    # rx_power first — matches the value the Tachyon device's own
+                    # Alignment/Reporting pages show (combinedSignal reads low on
+                    # some links). Mirrors CPEInfo.primary_signal.
+                    "primary_signal": cpe["rx_power"] or cpe["combined_signal"] or cpe["last_local_rssi"],
                     # Link-budget telemetry (UI tooltip / rain-fade chart)
                     "target_rssi_dbm": cpe.get("target_rssi_dbm"),
                     "snr_db": cpe.get("snr_db"),

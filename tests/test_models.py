@@ -44,8 +44,15 @@ class TestCPEInfo:
         cpe = CPEInfo(ip="1.2.3.4")
         assert cpe.signal_health == SignalHealth.RED
 
-    def test_primary_signal_combined(self):
-        cpe = CPEInfo(ip="1.2.3.4", combined_signal=-60.0, rx_power=-65.0)
+    def test_primary_signal_prefers_rx_power(self):
+        # When both are reported, rx_power wins — it matches the value the
+        # Tachyon device's own pages headline. Real HAR case: JamesDrug
+        # reports rxPower=-54 alongside combinedSignal=-60; the device shows -54.
+        cpe = CPEInfo(ip="1.2.3.4", combined_signal=-60.0, rx_power=-54.0)
+        assert cpe.primary_signal == -54.0
+
+    def test_primary_signal_combined_fallback(self):
+        cpe = CPEInfo(ip="1.2.3.4", combined_signal=-60.0)
         assert cpe.primary_signal == -60.0
 
     def test_primary_signal_rx_power(self):
