@@ -411,7 +411,9 @@ class NetworkPoller:
                 # Derive how much rain this link can tolerate before signal
                 # drops below the MCS1 floor. Skipped (None) when any input
                 # is missing — frontend falls back to legacy dBm bucketing.
-                rssi_for_budget = cpe.combined_signal or cpe.rx_power
+                # Use the same value we display (primary_signal, rxPower-first)
+                # so the rain/reliability health agrees with the shown signal.
+                rssi_for_budget = cpe.primary_signal
                 cpe.max_rain_mm_hr = link_budget.max_survivable_rain_mm_hr(
                     rssi_dbm=rssi_for_budget,
                     distance_m=cpe.link_distance,

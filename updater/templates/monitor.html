@@ -5208,7 +5208,9 @@
         function getDeviceColumnValue(device, kind, column, parentAp) {
             switch (column) {
                 case 'model': return device.model || '';
-                case 'firmware': return device.firmware_version || '';
+                // Normalize so the filter chips match the table text and the
+                // same build doesn't split into "1.12.3.55002" vs "1.12.3.r55002".
+                case 'firmware': return fwDisplay(device.firmware_version);
                 case 'status': return getDeviceStatusForFilter(device, kind, parentAp);
                 case 'signal':
                     // Only CPEs carry a signal value. APs and switches show

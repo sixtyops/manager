@@ -40,6 +40,12 @@ class TestCPEInfo:
         cpe = CPEInfo(ip="1.2.3.4", rx_power=-63.0)
         assert cpe.signal_health == SignalHealth.YELLOW
 
+    def test_signal_health_prefers_rx_power(self):
+        # Legacy (no max_rain) bucket must follow the displayed value: a strong
+        # rxPower wins over a low combinedSignal so health agrees with signal.
+        cpe = CPEInfo(ip="1.2.3.4", rx_power=-54.0, combined_signal=-66.0)
+        assert cpe.signal_health == SignalHealth.GREEN
+
     def test_signal_health_none(self):
         cpe = CPEInfo(ip="1.2.3.4")
         assert cpe.signal_health == SignalHealth.RED
