@@ -5315,7 +5315,7 @@
         }
 
         // Map a health bucket to a human label for filter chips + tooltips.
-        const HEALTH_LABEL = { green: 'Survives local storms', yellow: 'Survives heavy rain', red: 'Drops in ordinary rain', offline: 'Offline' };
+        const HEALTH_LABEL = { green: 'Survives local storms', yellow: 'Survives heavy rain', red: 'May drop in heavy rain', offline: 'Offline' };
 
         function matchesDeviceFilters(device, siteName, kind, parentAp) {
             if (!device) return false;
@@ -6147,7 +6147,10 @@
             // here so swapping from an offline AP to a live CPE drops the
             // hidden-gauge layout.
             pop.className = 'cpop show h-' + h;
-            document.getElementById('cpopBadge').textContent = SH_STATUS_LABEL[h] || 'Unknown';
+            // Rain wording only when the tier is rain-derived; otherwise the
+            // color came from raw signal strength, so say so honestly.
+            document.getElementById('cpopBadge').textContent =
+                hRain ? (SH_STATUS_LABEL[hRain] || 'Unknown') : 'Signal only — no rain estimate';
             document.getElementById('cpopName').textContent = cpe.system_name || cpe.ip;
             const dist = cpe.link_distance != null ? Math.round(cpe.link_distance) + ' m away' : 'distance unknown';
             document.getElementById('cpopMeta').textContent = ((cpe.model || '') + ' \u00b7 ' + dist).trim();
@@ -6173,13 +6176,18 @@
                 ? (sig.toFixed(0) + ' dBm ' + deltaHtml)
                 : '\u2014';
 
-            const rainPct = maxR != null ? shClamp01(Math.min(maxR, SH_RAIN_MAX) / SH_RAIN_MAX) * 100 : 0;
+            const z = shActiveClimate();
+            // Scale the popover bar to the climate so the 99.99% tick and the
+            // point never pin to the bar's end (tropical r9999 can exceed 100),
+            // which would make the exact value + margin delta impossible to
+            // reconcile against the bar.
+            const rainScale = Math.max(SH_RAIN_MAX, z.r9999, maxR || 0);
+            const rainPct = maxR != null ? shClamp01(maxR / rainScale) * 100 : 0;
             const rainFill = document.getElementById('cpopRainFill');
             rainFill.style.width = rainPct + '%';
             rainFill.className = 'cpop-bar-fill ' + h;
-            const z = shActiveClimate();
-            document.getElementById('cpopRain999').style.left  = (Math.min(z.r999,  SH_RAIN_MAX) / SH_RAIN_MAX * 100) + '%';
-            document.getElementById('cpopRain9999').style.left = (Math.min(z.r9999, SH_RAIN_MAX) / SH_RAIN_MAX * 100) + '%';
+            document.getElementById('cpopRain999').style.left  = (z.r999  / rainScale * 100) + '%';
+            document.getElementById('cpopRain9999').style.left = (z.r9999 / rainScale * 100) + '%';
             // Margin vs the 99.99% storm line (cpopSignalVal does the same vs target).
             const rm = maxR != null ? Math.round(maxR - z.r9999) : null;
             const rainDelta = rm == null
@@ -6187,9 +6195,9 @@
                 : rm > 0 ? ' <span class="delta up">\u25b2 ' + rm + '</span>'
                 : rm < 0 ? ' <span class="delta down">\u25bc ' + (-rm) + '</span>'
                 : ' <span class="delta flat">\u25ac 0</span>';
+            // Exact rounded value (uncapped) so it reconciles with the delta.
             document.getElementById('cpopRainVal').innerHTML =
-                maxR == null ? '\u2014'
-                : (maxR >= SH_RAIN_MAX ? (SH_RAIN_MAX + '+ mm/hr') : (Math.round(maxR) + ' mm/hr')) + rainDelta;
+                maxR == null ? '\u2014' : (Math.round(maxR) + ' mm/hr') + rainDelta;
         }
         function shPositionCpop(x, y) {
             const pop = document.getElementById('cpop');
