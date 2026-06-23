@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- Clients (CPEs) the manager **can't sign into** — because they use different
+  login credentials than their access point — now show a clear amber
+  **"Can't sign in"** badge on their row, distinct from being offline. The
+  detection already existed but was invisible, lumped in with offline devices;
+  now you can tell at a glance which clients we simply can't manage.
 - A **Download** action on Config Snapshot Recycle Bin entries. When a CPE is
   decommissioned (or pruned after going offline) its last config is retained
   here, labeled with the customer name — you can now download it as a

@@ -746,7 +746,7 @@ class TestRadiusRollout:
             ("10.0.0.20", "admin", "sw-pass", "tower-sw-1"),
         )
         db.upsert_cpe("10.0.0.10", {"ip": "10.0.0.11", "system_name": "sm-ok", "auth_status": "ok"})
-        db.upsert_cpe("10.0.0.10", {"ip": "10.0.0.12", "system_name": "sm-fail", "auth_status": "failed"})
+        db.upsert_cpe("10.0.0.10", {"ip": "10.0.0.12", "system_name": "sm-fail", "auth_status": "auth_failed"})
         mock_db.commit()
 
         targets = app_module._radius_rollout_targets()
