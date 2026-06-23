@@ -70,6 +70,41 @@ class TestStartUpdate:
         assert resp.json().get("job_id")
         spawn.assert_called_once()
 
+    def test_ahead_cpe_still_enrolled_on_manual_update(self, authed_client, mock_db, fw_dir):
+        """A manual AP/site update must push the selected firmware to the attached
+        CPEs the operator included — even ones whose build parses as *newer* than
+        the target (allow_downgrade off). The fleet 'needs update?' heuristic would
+        silently skip them; manual enrollment uses the exact-build gate like the AP."""
+        # AP already on the exact target, so only the CPE can drive the job.
+        _seed_303l_ap("1.5.0.54980")
+        db.upsert_cpe(AP_IP, {
+            "ip": "10.0.0.60",
+            "model": MODEL_303L,
+            "firmware_version": "1.5.0.55000",  # parses ahead of target 1.5.0.54980
+            "auth_status": "ok",
+        })
+        with patch("updater.app._spawn_update_job") as spawn:
+            resp = _start_update(authed_client, bank_mode="one")
+        assert resp.status_code == 200, resp.text
+        assert resp.json().get("job_id")
+        spawn.assert_called_once()
+
+    def test_exact_build_cpe_is_skipped_on_manual_update(self, authed_client, mock_db, fw_dir):
+        """The flip side: a CPE already on the exact target build is not re-flashed,
+        so an all-current AP+CPE set is a neutral no-op, not a needless reboot."""
+        _seed_303l_ap("1.5.0.54980")
+        db.upsert_cpe(AP_IP, {
+            "ip": "10.0.0.60",
+            "model": MODEL_303L,
+            "firmware_version": "1.5.0.54980",  # exact target
+            "auth_status": "ok",
+        })
+        with patch("updater.app._spawn_update_job") as spawn:
+            resp = _start_update(authed_client, bank_mode="one")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"status": "already_current"}
+        spawn.assert_not_called()
+
     def test_exact_build_is_neutral_noop(self, authed_client, mock_db, fw_dir):
         """Already on the exact build: no job, no reboot, no scary error."""
         _seed_303l_ap("1.5.0.54980")

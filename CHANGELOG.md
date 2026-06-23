@@ -60,6 +60,12 @@ All notable changes to this project are documented in this file.
   from the next attempt, letting the rollout advance or complete without ever
   flashing them. Devices are now enrolled only after the job actually starts, so
   a failed start retries cleanly next window.
+- **AP/site updates now flash the attached CPEs you included, every time.** When
+  a manual update covered an AP and its CPEs, a CPE whose build merely *parsed* as
+  newer than the selected firmware (with downgrades off) was silently skipped —
+  so an explicit "update this AP and its CPEs" could quietly do nothing or run
+  only part of the set. CPEs now follow the same rule as the AP: push the picked
+  firmware unless the CPE is already on that exact build.
 - **Existing firmware files stay selectable after an upgrade.** On upgraded
   installs, firmware already on disk could be treated as "unverified" and dropped
   from auto-selection and the fleet's target version. These files are now

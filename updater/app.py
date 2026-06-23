@@ -4575,14 +4575,6 @@ def _select_firmware_for_model(model: Optional[str], firmware_files: Dict[str, s
         return next(iter(firmware_files.values()), None) if firmware_files else None
 
 
-def _is_303l_model(model: Optional[str]) -> bool:
-    """Check if a model is a TNA-303L variant."""
-    if not model:
-        return False
-    model_lower = model.lower()
-    return model_lower.startswith("tna-303l")
-
-
 def _is_tns100_model(model: Optional[str]) -> bool:
     """Check if a model is a TNS-100 variant."""
     if not model:
@@ -5029,7 +5021,6 @@ async def start_update(
 
     # Look up stored credentials for each AP and discover CPEs
     # Skip devices already at the target version (bank-mode aware)
-    allow_downgrade = db.get_setting("allow_downgrade", "false") == "true"
     credentials = {}
     missing_aps = []
     ap_cpe_map = {}
@@ -5084,9 +5075,13 @@ async def start_update(
                     logger.info(f"Skipping CPE {cpe_ip}: unsupported model {cpe_model or 'unknown'}")
                 continue
 
-            # Skip CPEs already at target (but always enroll if firmware type is missing)
+            # Explicit manual target: the operator picked this AP and its CPEs
+            # (the UI counts them in "and N CPEs"). Push the chosen firmware
+            # unless the CPE is provably already on that exact build — mirror the
+            # AP gate above, not the fleet heuristic (which would silently skip a
+            # CPE that merely parses as newer than the target).
             cpe_target = _extract_version_from_filename(Path(cpe_fw).name)
-            if not _device_needs_update(cpe, cpe_target, bank_mode, allow_downgrade):
+            if _device_on_exact_build(cpe, cpe_target, bank_mode):
                 continue
 
             cpe_ips.append(cpe_ip)
