@@ -33,6 +33,13 @@ from . import database as db
 from .poller import init_poller, get_poller, set_poller
 from .scheduler import init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTES
 from .firmware_fetcher import init_fetcher, get_fetcher, PLATFORM_SETTING_KEYS, pin_setting_key
+from .firmware_policy import (
+    annotate_firmware_health,
+    classify_device_version,
+    compare_versions as policy_compare_versions,
+    extract_version_from_filename as policy_extract_version_from_filename,
+    firmware_file_health,
+)
 from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
 from . import services
 from .auth import require_auth, require_auth_ws, require_role, require_write_scope, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user, generate_api_token
@@ -4186,23 +4193,7 @@ def _annotate_firmware_health(files: list) -> None:
 
     See issue #222.
     """
-    from collections import Counter
-    from updater.firmware_fetcher import _detect_platform, MIN_PLAUSIBLE_SIZE_FRACTION
-    from updater.vendors.tachyon.client import _extract_version_from_firmware
-
-    platform_max = {}
-    for fo in files:
-        p = _detect_platform(fo["name"])
-        platform_max[p] = max(platform_max.get(p, 0), fo.get("size", 0))
-    ver_counts = Counter(
-        (_detect_platform(fo["name"]), _extract_version_from_firmware(fo["name"])) for fo in files
-    )
-    for fo in files:
-        p = _detect_platform(fo["name"])
-        ver = _extract_version_from_firmware(fo["name"])
-        sib_max = platform_max.get(p, 0)
-        fo["incomplete"] = bool(sib_max and fo.get("size", 0) < sib_max * MIN_PLAUSIBLE_SIZE_FRACTION)
-        fo["duplicate"] = bool(ver and ver_counts[(p, ver)] > 1)
+    annotate_firmware_health(files, FIRMWARE_DIR)
 
 
 @app.get("/api/firmware-files", tags=["firmware"])
@@ -4336,8 +4327,14 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
     ]:
         filename = settings.get(setting_key, "")
         if filename:
-            version = _extract_version_from_filename(filename)
-            targets[fw_type] = {"file": filename, "version": version}
+            health = firmware_file_health(FIRMWARE_DIR, filename)
+            version = _extract_version_from_filename(filename) if health.deployable else ""
+            targets[fw_type] = {
+                "file": filename,
+                "version": version,
+                "deployable": health.deployable,
+                "reason": health.reason,
+            }
 
     # Build site name lookup
     sites = db.get_tower_sites()
@@ -4383,6 +4380,8 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             return "up_to_date", None
         if status == "behind":
             return "needs_update", None
+        if status == "ahead":
+            return "downgrade_available" if allow_downgrade else "up_to_date", None
         return "unknown", None
 
     # Collect all devices
@@ -4393,13 +4392,14 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
     for cpe in all_cpes:
         cpes_by_ap.setdefault(cpe["ap_ip"], []).append(cpe)
 
-    summary = {"total": 0, "current": 0, "behind": 0, "unknown": 0, "on_hold": 0}
+    summary = {"total": 0, "current": 0, "behind": 0, "ahead": 0, "unknown": 0, "on_hold": 0}
 
     for ap in aps:
         fw_type = _get_firmware_type_for_model(ap.get("model"))
         target = targets.get(fw_type)
         target_version = target["version"] if target else ""
-        status = _device_version_status(ap.get("firmware_version"), target_version, allow_downgrade)
+        classification = classify_device_version(ap.get("firmware_version"), target_version, allow_downgrade)
+        status = classification.status
         summary["total"] += 1
         summary[status] += 1
 
@@ -4422,6 +4422,9 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             "firmware_type": fw_type,
             "status": status,
             "update_state": update_state,
+            "update_action": classification.action,
+            "status_label": classification.label,
+            "status_reason": classification.reason,
             "hold": hold,
             "auth_status": None,
             "enabled": bool(ap.get("enabled", 1)),
@@ -4434,7 +4437,8 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             cpe_fw_type = _get_firmware_type_for_model(cpe.get("model"))
             cpe_target = targets.get(cpe_fw_type)
             cpe_target_version = cpe_target["version"] if cpe_target else ""
-            cpe_status = _device_version_status(cpe.get("firmware_version"), cpe_target_version, allow_downgrade)
+            cpe_classification = classify_device_version(cpe.get("firmware_version"), cpe_target_version, allow_downgrade)
+            cpe_status = cpe_classification.status
             summary["total"] += 1
             summary[cpe_status] += 1
 
@@ -4457,6 +4461,9 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
                 "firmware_type": cpe_fw_type,
                 "status": cpe_status,
                 "update_state": cpe_update_state,
+                "update_action": cpe_classification.action,
+                "status_label": cpe_classification.label,
+                "status_reason": cpe_classification.reason,
                 "hold": cpe_hold,
                 "auth_status": cpe.get("auth_status"),
                 "enabled": bool(ap.get("enabled", 1)),
@@ -4471,7 +4478,8 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
         fw_type = _get_firmware_type_for_model(sw.get("model"))
         target = targets.get(fw_type)
         target_version = target["version"] if target else ""
-        status = _device_version_status(sw.get("firmware_version"), target_version, allow_downgrade)
+        classification = classify_device_version(sw.get("firmware_version"), target_version, allow_downgrade)
+        status = classification.status
         summary["total"] += 1
         summary[status] += 1
 
@@ -4494,6 +4502,9 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             "firmware_type": fw_type,
             "status": status,
             "update_state": sw_update_state,
+            "update_action": classification.action,
+            "status_label": classification.label,
+            "status_reason": classification.reason,
             "hold": sw_hold,
             "auth_status": None,
             "enabled": bool(sw.get("enabled", 1)),
@@ -4506,22 +4517,14 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
 
 
 def _device_version_status(current: Optional[str], target: str, allow_downgrade: bool = False) -> str:
-    """Determine version status: 'current', 'behind', or 'unknown'.
+    """Determine version status: 'current', 'behind', 'ahead', or 'unknown'.
 
     Args:
         current: Current firmware version on device
         target: Target firmware version
-        allow_downgrade: If True, devices with newer firmware than target are 'behind'
+        allow_downgrade: If True, devices with newer firmware than target are actionable downgrades
     """
-    if not current or not target:
-        return "unknown"
-    cmp = _compare_versions(current, target)
-    if cmp == 0:
-        return "current"
-    if cmp > 0:
-        # Device is newer than target
-        return "behind" if allow_downgrade else "current"
-    return "behind"
+    return classify_device_version(current, target, allow_downgrade).status
 
 
 def _device_needs_update(device: dict, target_version: str, bank_mode: str, allow_downgrade: bool) -> bool:
@@ -4538,8 +4541,8 @@ def _device_needs_update(device: dict, target_version: str, bank_mode: str, allo
     if not current:
         return True
 
-    active_status = _device_version_status(current, target_version, allow_downgrade)
-    if active_status == "behind":
+    active_state = classify_device_version(current, target_version, allow_downgrade)
+    if active_state.needs_update:
         return True
 
     if bank_mode == "both":
@@ -4548,8 +4551,8 @@ def _device_needs_update(device: dict, target_version: str, bank_mode: str, allo
         active_bank = device.get("active_bank", 1)
         inactive = b2 if active_bank == 1 else b1
         if inactive:
-            inactive_status = _device_version_status(inactive, target_version, allow_downgrade)
-            if inactive_status == "behind":
+            inactive_state = classify_device_version(inactive, target_version, allow_downgrade)
+            if inactive_state.needs_update:
                 return True
         elif b1 or b2:
             return True
@@ -4603,22 +4606,7 @@ def _extract_version_from_filename(filename: str) -> str:
     revision, and `_compare_versions` then sees the device as "ahead" of
     target (bug surfaced once `allow_downgrade` is on — PR #92).
     """
-    match = re.search(
-        r"(?:tna-30x|tna30x|tna-303l|tna303l|tns-100|tns100|tns)-(\d+\.\d+\.\d+)-r(\d+)",
-        filename,
-        re.IGNORECASE,
-    )
-    if match:
-        return f"{match.group(1)}.{match.group(2)}"
-    # Fallback: capture the revision too when present, so a future
-    # filename convention we don't yet recognize doesn't silently lose
-    # the build number.
-    match2 = re.search(r"(\d+\.\d+\.\d+)(?:-r(\d+))?", filename)
-    if match2:
-        if match2.group(2):
-            return f"{match2.group(1)}.{match2.group(2)}"
-        return match2.group(1)
-    return ""
+    return policy_extract_version_from_filename(filename)
 
 
 def _parse_version(version: str) -> tuple:
@@ -4740,30 +4728,40 @@ def _get_firmware_type_for_model(model: Optional[str], vendor: str = "tachyon") 
         return None
 
 
+def _missing_firmware_message(missing: list[tuple[Optional[str], str]]) -> str:
+    """One operator-facing reason a batch was refused for missing firmware.
+
+    Grouped by firmware family so the operator sees exactly which file(s) to
+    select. We refuse the whole batch rather than flash a wrong-platform image to
+    a device whose family firmware wasn't provided — compatibility can't be
+    guaranteed without it.
+    """
+    from collections import defaultdict
+
+    groups: dict[str, list[str]] = defaultdict(list)
+    order: list[str] = []
+    for model, ip in missing:
+        family = _get_firmware_type_for_model(model)
+        label = family.upper() if family else (model or "unknown model")
+        if label not in groups:
+            order.append(label)
+        groups[label].append(ip)
+
+    parts = []
+    for label in order:
+        ips = groups[label]
+        shown = ", ".join(ips[:3]) + ("..." if len(ips) > 3 else "")
+        parts.append(f"{label} ({len(ips)} device{'s' if len(ips) != 1 else ''}: {shown})")
+    return (
+        "Cannot start update: no matching firmware selected for "
+        + "; ".join(parts)
+        + ". Select a firmware file for each in Settings, then retry."
+    )
+
+
 def _compare_versions(a: str, b: str) -> int:
     """Compare two version strings. Returns <0 if a<b, 0 if equal, >0 if a>b."""
-    def parts(v):
-        if not v:
-            return [0]
-        # Normalize: "1.12.2-r54885" -> "1.12.2.54885"
-        v = v.replace("-", ".").lower()
-        result = []
-        for seg in v.split("."):
-            seg = seg.lstrip("r")  # strip revision prefix
-            try:
-                result.append(int(seg))
-            except ValueError:
-                continue  # skip non-numeric segments
-        return result or [0]
-    pa, pb = parts(a), parts(b)
-    while len(pa) < len(pb):
-        pa.append(0)
-    while len(pb) < len(pa):
-        pb.append(0)
-    for x, y in zip(pa, pb):
-        if x != y:
-            return x - y
-    return 0
+    return policy_compare_versions(a, b)
 
 
 async def _start_scheduled_update(
@@ -4798,16 +4796,18 @@ async def _start_scheduled_update(
     if firmware_file_303l:
         safe_303l = validate_firmware_filename(firmware_file_303l)
         path_303l = FIRMWARE_DIR / safe_303l
-        if path_303l.exists():
-            firmware_files["tna-303l"] = str(path_303l)
-            firmware_names["tna-303l"] = safe_303l
+        if not path_303l.exists():
+            raise RuntimeError(f"303L firmware file not found: {safe_303l}")
+        firmware_files["tna-303l"] = str(path_303l)
+        firmware_names["tna-303l"] = safe_303l
 
     if firmware_file_tns100:
         safe_tns100 = validate_firmware_filename(firmware_file_tns100)
         path_tns100 = FIRMWARE_DIR / safe_tns100
-        if path_tns100.exists():
-            firmware_files["tns-100"] = str(path_tns100)
-            firmware_names["tns-100"] = safe_tns100
+        if not path_tns100.exists():
+            raise RuntimeError(f"TNS100 firmware file not found: {safe_tns100}")
+        firmware_files["tns-100"] = str(path_tns100)
+        firmware_names["tns-100"] = safe_tns100
 
     credentials = {}
     ap_cpe_map = {}
@@ -4815,22 +4815,29 @@ async def _start_scheduled_update(
     device_parent = {}
     device_firmware_map = {}
 
+    # Devices whose firmware family has no matching file selected. Collected
+    # across APs/CPEs/switches so the operator gets one complete reason; any
+    # entry refuses the whole batch (we can't guarantee cross-family compat).
+    missing_firmware: list[tuple[Optional[str], str]] = []
+
     valid_aps = []
     for ip in ap_ips:
         ap = db.get_access_point(ip)
         if not ap:
             continue
 
-        ap_fw = _select_firmware_for_model(ap.get("model"), firmware_files) or str(firmware_path)
-        ap_target = _extract_version_from_filename(Path(ap_fw).name)
-
-        if _device_needs_update(ap, ap_target, bank_mode, allow_downgrade):
-            valid_aps.append(ip)
-            credentials[ip] = (ap["username"], ap["password"])
-            device_roles[ip] = "ap"
-            device_firmware_map[ip] = ap_fw
+        ap_fw = _select_firmware_for_model(ap.get("model"), firmware_files)
+        if ap_fw is None:
+            missing_firmware.append((ap.get("model"), ip))
         else:
-            logger.info(f"Skipping AP {ip}: already at target version {ap_target}")
+            ap_target = _extract_version_from_filename(Path(ap_fw).name)
+            if _device_needs_update(ap, ap_target, bank_mode, allow_downgrade):
+                valid_aps.append(ip)
+                credentials[ip] = (ap["username"], ap["password"])
+                device_roles[ip] = "ap"
+                device_firmware_map[ip] = ap_fw
+            else:
+                logger.info(f"Skipping AP {ip}: already at target version {ap_target}")
 
         # Always process CPEs regardless of AP status
         cpes = db.get_cpes_for_ap(ip)
@@ -4841,31 +4848,31 @@ async def _start_scheduled_update(
                 continue
             cpe_model = cpe.get("model")
             cpe_fw = _select_firmware_for_model(cpe_model, firmware_files)
+            if cpe_fw is None:
+                if _get_firmware_type_for_model(cpe_model):
+                    missing_firmware.append((cpe_model, cpe_ip))
+                else:
+                    logger.info(f"Skipping CPE {cpe_ip}: unsupported model {cpe_model or 'unknown'}")
+                continue
 
             # Skip CPEs already satisfied by bank_mode/target policy
-            if cpe_fw:
-                target_version = _extract_version_from_filename(Path(cpe_fw).name)
-                if target_version and not _device_needs_update_for_bank_mode(
-                    cpe,
-                    target_version,
-                    bank_mode=bank_mode,
-                    allow_downgrade=allow_downgrade,
-                ):
-                    logger.info(
-                        f"Skipping CPE {cpe_ip}: bank_mode={bank_mode}, target={target_version} already satisfied"
-                    )
-                    continue
+            target_version = _extract_version_from_filename(Path(cpe_fw).name)
+            if target_version and not _device_needs_update_for_bank_mode(
+                cpe,
+                target_version,
+                bank_mode=bank_mode,
+                allow_downgrade=allow_downgrade,
+            ):
+                logger.info(
+                    f"Skipping CPE {cpe_ip}: bank_mode={bank_mode}, target={target_version} already satisfied"
+                )
+                continue
 
             cpe_ips.append(cpe_ip)
             device_roles[cpe_ip] = "cpe"
             device_parent[cpe_ip] = ip
             credentials[cpe_ip] = (ap["username"], ap["password"])
-            if cpe_fw is None and _is_303l_model(cpe_model):
-                device_firmware_map[cpe_ip] = "__missing_303l__"
-            elif cpe_fw is None:
-                device_firmware_map[cpe_ip] = str(firmware_path)
-            else:
-                device_firmware_map[cpe_ip] = cpe_fw
+            device_firmware_map[cpe_ip] = cpe_fw
         ap_cpe_map[ip] = cpe_ips
 
     # Enroll the requested switches (or all enabled switches for legacy callers)
@@ -4881,30 +4888,33 @@ async def _start_scheduled_update(
     for sw in switches:
         sw_ip = sw["ip"]
         sw_fw = _select_firmware_for_model(sw.get("model"), firmware_files)
+        if sw_fw is None:
+            if _get_firmware_type_for_model(sw.get("model")):
+                missing_firmware.append((sw.get("model"), sw_ip))
+            else:
+                logger.info(f"Skipping switch {sw_ip}: unsupported model {sw.get('model') or 'unknown'}")
+            continue
 
         # Skip switches already satisfied by bank_mode/target policy
-        if sw_fw:
-            target_version = _extract_version_from_filename(Path(sw_fw).name)
-            if target_version and not _device_needs_update_for_bank_mode(
-                sw,
-                target_version,
-                bank_mode=bank_mode,
-                allow_downgrade=allow_downgrade,
-            ):
-                logger.info(
-                    f"Skipping switch {sw_ip}: bank_mode={bank_mode}, target={target_version} already satisfied"
-                )
-                continue
+        target_version = _extract_version_from_filename(Path(sw_fw).name)
+        if target_version and not _device_needs_update_for_bank_mode(
+            sw,
+            target_version,
+            bank_mode=bank_mode,
+            allow_downgrade=allow_downgrade,
+        ):
+            logger.info(
+                f"Skipping switch {sw_ip}: bank_mode={bank_mode}, target={target_version} already satisfied"
+            )
+            continue
 
         valid_switches.append(sw_ip)
         credentials[sw_ip] = (sw["username"], sw["password"])
         device_roles[sw_ip] = "switch"
-        if sw_fw is None and _is_tns100_model(sw.get("model")):
-            device_firmware_map[sw_ip] = "__missing_tns100__"
-        elif sw_fw is None:
-            device_firmware_map[sw_ip] = str(firmware_path)
-        else:
-            device_firmware_map[sw_ip] = sw_fw
+        device_firmware_map[sw_ip] = sw_fw
+
+    if missing_firmware:
+        raise RuntimeError(_missing_firmware_message(missing_firmware))
 
     if not valid_aps and not valid_switches and not any(r == "cpe" for r in device_roles.values()):
         raise RuntimeError("No devices need updating — all are at the target firmware version")
@@ -5026,6 +5036,10 @@ async def start_update(
     device_roles = {}
     device_parent = {}
     device_firmware_map = {}
+    # Devices whose firmware family has no matching file selected. Collected
+    # across APs/CPEs/switches so the operator gets one complete message; any
+    # entry refuses the whole batch (we can't guarantee cross-family compat).
+    missing_firmware: list[tuple[Optional[str], str]] = []
 
     for ip in ap_ips:
         ap = db.get_access_point(ip)
@@ -5038,20 +5052,17 @@ async def start_update(
         # and push the chosen build unless the AP is provably already on it.
         ap_fw = _select_firmware_for_model(ap.get("model"), firmware_files)
         if ap_fw is None:
-            raise HTTPException(
-                400,
-                f"No firmware selected for model {ap.get('model') or 'unknown'} "
-                f"({ip}). Select a matching firmware file in Settings, then retry.",
-            )
-        ap_target_version = _extract_version_from_filename(Path(ap_fw).name)
-        if _device_on_exact_build(ap, ap_target_version, bank_mode):
-            logger.info(
-                f"Skipping AP {ip}: already on exact build {ap_target_version or 'unknown'}"
-            )
+            missing_firmware.append((ap.get("model"), ip))
         else:
-            credentials[ip] = (ap["username"], ap["password"])
-            device_roles[ip] = "ap"
-            device_firmware_map[ip] = ap_fw
+            ap_target_version = _extract_version_from_filename(Path(ap_fw).name)
+            if _device_on_exact_build(ap, ap_target_version, bank_mode):
+                logger.info(
+                    f"Skipping AP {ip}: already on exact build {ap_target_version or 'unknown'}"
+                )
+            else:
+                credentials[ip] = (ap["username"], ap["password"])
+                device_roles[ip] = "ap"
+                device_firmware_map[ip] = ap_fw
 
         # Always process CPEs regardless of AP status
         cpes = db.get_cpes_for_ap(ip)
@@ -5065,18 +5076,18 @@ async def start_update(
 
             cpe_model = cpe.get("model")
             cpe_fw = _select_firmware_for_model(cpe_model, firmware_files)
+            cpe_fw_type = _get_firmware_type_for_model(cpe_model)
+            if cpe_fw is None:
+                if cpe_fw_type:
+                    missing_firmware.append((cpe_model, cpe_ip))
+                else:
+                    logger.info(f"Skipping CPE {cpe_ip}: unsupported model {cpe_model or 'unknown'}")
+                continue
 
             # Skip CPEs already at target (but always enroll if firmware type is missing)
-            missing_fw_type = (cpe_fw is None and _is_303l_model(cpe_model)) or (cpe_fw is None and _is_tns100_model(cpe_model))
-            if not missing_fw_type and cpe_fw is not None:
-                cpe_target = _extract_version_from_filename(Path(cpe_fw).name)
-                if not _device_needs_update(cpe, cpe_target, bank_mode, allow_downgrade):
-                    continue
-            elif not missing_fw_type:
-                # Default firmware (30x)
-                cpe_target = _extract_version_from_filename(Path(str(firmware_path)).name)
-                if not _device_needs_update(cpe, cpe_target, bank_mode, allow_downgrade):
-                    continue
+            cpe_target = _extract_version_from_filename(Path(cpe_fw).name)
+            if not _device_needs_update(cpe, cpe_target, bank_mode, allow_downgrade):
+                continue
 
             cpe_ips.append(cpe_ip)
             device_roles[cpe_ip] = "cpe"
@@ -5084,12 +5095,7 @@ async def start_update(
             credentials[cpe_ip] = (ap["username"], ap["password"])
 
 
-            if cpe_fw is None and _is_303l_model(cpe_model):
-                device_firmware_map[cpe_ip] = "__missing_303l__"
-            elif cpe_fw is None:
-                device_firmware_map[cpe_ip] = str(firmware_path)
-            else:
-                device_firmware_map[cpe_ip] = cpe_fw
+            device_firmware_map[cpe_ip] = cpe_fw
 
         ap_cpe_map[ip] = cpe_ips
 
@@ -5101,6 +5107,13 @@ async def start_update(
     for sw in switches:
         sw_ip = sw["ip"]
         sw_fw = _select_firmware_for_model(sw.get("model"), firmware_files)
+        if sw_fw is None:
+            sw_fw_type = _get_firmware_type_for_model(sw.get("model"))
+            if sw_fw_type:
+                missing_firmware.append((sw.get("model"), sw_ip))
+            else:
+                logger.info(f"Skipping switch {sw_ip}: unsupported model {sw.get('model') or 'unknown'}")
+            continue
         sw_target_version = _extract_version_from_filename(Path(sw_fw).name) if sw_fw else ""
         if sw_target_version and not _device_needs_update_for_bank_mode(
             sw,
@@ -5115,12 +5128,10 @@ async def start_update(
 
         credentials[sw_ip] = (sw["username"], sw["password"])
         device_roles[sw_ip] = "switch"
-        if sw_fw is None and _is_tns100_model(sw.get("model")):
-            device_firmware_map[sw_ip] = "__missing_tns100__"
-        elif sw_fw is None:
-            device_firmware_map[sw_ip] = str(firmware_path)
-        else:
-            device_firmware_map[sw_ip] = sw_fw
+        device_firmware_map[sw_ip] = sw_fw
+
+    if missing_firmware:
+        raise HTTPException(400, _missing_firmware_message(missing_firmware))
 
     if not device_roles:
         # Everything the operator selected (and any enabled switches) is already
@@ -5247,12 +5258,13 @@ async def update_single_device_endpoint(
             credentials[ip] = (sw["username"], sw["password"])
             device_roles[ip] = "switch"
             sw_fw = _select_firmware_for_model(sw.get("model"), firmware_files)
-            if sw_fw is None and _is_tns100_model(sw.get("model")):
-                device_firmware_map[ip] = "__missing_tns100__"
-            elif sw_fw is None:
-                device_firmware_map[ip] = str(firmware_path)
-            else:
-                device_firmware_map[ip] = sw_fw
+            if sw_fw is None:
+                raise HTTPException(
+                    400,
+                    f"No firmware selected for model {sw.get('model') or 'unknown'} "
+                    f"({ip}). Select a matching firmware file in Settings, then retry.",
+                )
+            device_firmware_map[ip] = sw_fw
         else:
             # Check if it's a CPE
             all_cpes = db.get_all_cpes()
@@ -5270,12 +5282,13 @@ async def update_single_device_endpoint(
             device_roles[ip] = "cpe"
             device_parent[ip] = cpe["ap_ip"]
             cpe_fw = _select_firmware_for_model(cpe.get("model"), firmware_files)
-            if cpe_fw is None and _is_303l_model(cpe.get("model")):
-                device_firmware_map[ip] = "__missing_303l__"
-            elif cpe_fw is None:
-                device_firmware_map[ip] = str(firmware_path)
-            else:
-                device_firmware_map[ip] = cpe_fw
+            if cpe_fw is None:
+                raise HTTPException(
+                    400,
+                    f"No firmware selected for model {cpe.get('model') or 'unknown'} "
+                    f"({ip}). Select a matching firmware file in Settings, then retry.",
+                )
+            device_firmware_map[ip] = cpe_fw
             # Create a dummy AP entry in ap_cpe_map so the job structure works
             ap_cpe_map[cpe["ap_ip"]] = [ip]
 
@@ -5283,7 +5296,7 @@ async def update_single_device_endpoint(
     # is provably already on that exact build (so we don't force a needless
     # reboot). Report the no-op as a neutral state, not a failure.
     fw_path = device_firmware_map.get(ip, "")
-    if fw_path and not fw_path.startswith("__missing"):
+    if fw_path:
         target_version = _extract_version_from_filename(Path(fw_path).name)
         if _device_on_exact_build(device_record, target_version, bank_mode):
             return {"status": "already_current", "version": target_version}
@@ -5458,41 +5471,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         "parent_ap": device_status.parent_ap,
     })
 
-    # Check for missing firmware
     fw_path = job.device_firmware_map.get(ip, "")
-    missing_fw_error = None
-    if fw_path == "__missing_303l__":
-        missing_fw_error = "TNA-303L device requires 303L firmware, but none was provided"
-    elif fw_path == "__missing_tns100__":
-        missing_fw_error = "TNS-100 device requires TNS100 firmware, but none was provided"
-
-    if missing_fw_error:
-        device_status.status = "failed"
-        device_status.error = missing_fw_error
-        device_status.progress_message = missing_fw_error
-        await broadcast({
-            "type": "device_update",
-            "job_id": job.job_id,
-            "ip": ip,
-            "status": device_status.status,
-            "message": device_status.progress_message,
-            "error": device_status.error,
-            "role": device_status.role,
-            "parent_ap": device_status.parent_ap,
-        })
-        now_iso = datetime.now().isoformat()
-        try:
-            db.save_device_update_history(
-                job_id=job.job_id, ip=ip, role=device_status.role,
-                pass_number=pass_number, status="failed",
-                old_version=None, new_version=None, model=device_status.model,
-                error=missing_fw_error, failed_stage="connecting",
-                stages=[], duration_seconds=0,
-                started_at=device_start_time.isoformat(), completed_at=now_iso,
-            )
-        except Exception as e:
-            logger.warning(f"Failed to save device history for {ip}: {e}")
-        return
 
     def progress_callback(device_ip: str, message: str):
         status_map = {

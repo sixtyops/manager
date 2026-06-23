@@ -283,9 +283,10 @@ class TestSchedulerCanaries:
     async def test_manual_canary_job_disables_window_cutoff(self, mock_db, tmp_path):
         firmware_dir = tmp_path / "firmware"
         firmware_dir.mkdir()
-        (firmware_dir / "firmware.bin").write_bytes(b"test")
+        fw_name = "tna-30x-1.2.3-r123.bin"
+        (firmware_dir / fw_name).write_bytes(b"test")
 
-        db.upsert_access_point("10.0.0.10", "root", "pass", enabled=True, firmware_version="1.0.0")
+        db.upsert_access_point("10.0.0.10", "root", "pass", enabled=True, model="TNA-301", firmware_version="1.0.0")
 
         mock_task = MagicMock()
         mock_task.add_done_callback = MagicMock()
@@ -299,7 +300,7 @@ class TestSchedulerCanaries:
              patch.object(app_module.asyncio, "create_task", _discard_task):
             job_id = await app_module._start_scheduled_update(
                 ap_ips=["10.0.0.10"],
-                firmware_file="firmware.bin",
+                firmware_file=fw_name,
                 schedule_timezone="America/Chicago",
                 enforce_window_cutoff=False,
             )

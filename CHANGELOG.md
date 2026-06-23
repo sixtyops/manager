@@ -20,6 +20,18 @@ All notable changes to this project are documented in this file.
   before reboot.
 
 ### Changed
+- **Updates refuse to run if any device's firmware family is missing.** If a
+  selected batch (or a scheduled wave) includes a device whose platform —
+  TNA-303L or TNS-100 — has no matching firmware file chosen, the update now
+  stops before anything is flashed and tells you exactly which family and devices
+  need a file. Previously such a device could be skipped or, in some paths, sent
+  the wrong platform's image. Nothing partial runs: pick the missing file in
+  Settings and retry.
+- **Devices on newer-than-target firmware are now shown as "On newer firmware"**
+  instead of being lumped in with "Current." When downgrades are allowed, these
+  devices get a clear downgrade action. Fleet status also no longer counts a
+  device as up to date against a target whose firmware file is missing,
+  incomplete, or unverified.
 - **Simpler, safer auto-updates: the canary phase is gone.** Auto-update now rolls
   new firmware to the fleet in 10% → 50% → 100% waves (one per maintenance window)
   and **stops the whole job the instant a device doesn't come back online** — the

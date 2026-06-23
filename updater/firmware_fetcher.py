@@ -13,6 +13,13 @@ from typing import Callable, Optional
 import httpx
 
 from . import database as db
+from .firmware_policy import (
+    MIN_PLAUSIBLE_SIZE_FRACTION,
+    PLATFORM_SETTING_KEYS,
+    auto_select_platform_target,
+    detect_platform,
+    pin_setting_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,21 +31,6 @@ FRESHDESK_PAGES = {
     "tna-303l": "https://tachyon-networks.freshdesk.com/support/solutions/articles/67000745898-tna-303l-firmware-releases",
     "tns-100": "https://tachyon-networks.freshdesk.com/support/solutions/articles/67000719270-tns-100-firmware-releases",
 }
-
-# Per-platform "which firmware is the target" setting key. This value is the
-# concrete filename the scheduler/fleet-status flash, so it always stays a real
-# filename — auto-tracking vs. an operator pin is recorded by the companion
-# `<key>_pinned` flag (see pin_setting_key), not by repurposing this value.
-PLATFORM_SETTING_KEYS = {
-    "tna-30x": "selected_firmware_30x",
-    "tna-303l": "selected_firmware_303l",
-    "tns-100": "selected_firmware_tns100",
-}
-
-
-def pin_setting_key(setting_key: str) -> str:
-    """Companion flag key marking a `selected_firmware_*` value as operator-pinned."""
-    return f"{setting_key}_pinned"
 
 # Regex: extract "Latest stable" / "Latest beta" version from the summary table.
 # Handles inline <span> tags and &nbsp; in the version cell, and tolerates a
@@ -86,12 +78,6 @@ RE_TABLE_MD5 = re.compile(
 )
 
 CHECK_INTERVAL = 86400  # 24 hours
-
-# A freshly-downloaded firmware smaller than this fraction of the largest
-# same-platform image already on disk is treated as a truncated/corrupt
-# transfer and rejected. Tachyon images within a platform sit in a tight size
-# band (~18-23 MB), so a sub-50% file is implausible. See issue #214.
-MIN_PLAUSIBLE_SIZE_FRACTION = 0.5
 
 
 def _parse_table_md5s(html: str) -> dict[str, str]:
@@ -531,40 +517,12 @@ class FirmwareFetcher:
         a target rather than leave the scheduler pointing at a file that isn't
         there.
         """
-        setting_key = PLATFORM_SETTING_KEYS.get(platform)
-        if not setting_key:
-            return
-
-        pin_key = pin_setting_key(setting_key)
-        if db.get_setting(pin_key, "false") == "true":
-            pinned = (db.get_setting(setting_key, "") or "").strip()
-            if pinned and (self.firmware_dir / pinned).exists():
-                return
-            db.set_setting(pin_key, "false")
-            logger.warning(
-                f"Pinned firmware {pinned!r} for {setting_key} is missing; "
-                "reverting to auto-select"
-            )
-
-        # Prefer beta if enabled, otherwise stable
-        best = None
-        for r in releases:
-            if r.channel == "beta" and beta_enabled:
-                filepath = self.firmware_dir / r.filename
-                if filepath.exists():
-                    best = r.filename
-                    break
-            elif r.channel == "stable":
-                filepath = self.firmware_dir / r.filename
-                if filepath.exists():
-                    if not best:
-                        best = r.filename
-
-        if best:
-            current = db.get_setting(setting_key, "")
-            if current != best:
-                db.set_setting(setting_key, best)
-                logger.info(f"Auto-selected {setting_key} = {best}")
+        auto_select_platform_target(
+            platform,
+            self.firmware_dir,
+            beta_enabled,
+            releases=releases,
+        )
 
     def _get_auto_fetched_list(self) -> list[str]:
         raw = db.get_setting("firmware_auto_fetched_files", "")
@@ -632,14 +590,7 @@ class FirmwareFetcher:
 
 def _detect_platform(filename: str) -> str:
     """Detect firmware platform from filename."""
-    lower = filename.lower()
-    if "tna-303l" in lower or "tna303l" in lower:
-        return "tna-303l"
-    if "tna-30x" in lower or "tna30x" in lower:
-        return "tna-30x"
-    if "tns-100" in lower or "tns100" in lower:
-        return "tns-100"
-    return "unknown"
+    return detect_platform(filename)
 
 
 def get_fetcher() -> Optional[FirmwareFetcher]:

@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from updater import database as db
+from updater import app as app_module
 
 # Clean vendor filenames (no "beta" token — the channel is decided elsewhere).
 FW_30X = "tna-30x-1.15.0-r55142-20260521-tn-110-prs-squashfs-sysupgrade.bin"
@@ -79,13 +80,74 @@ class TestStartUpdate:
         spawn.assert_not_called()
 
     def test_no_matching_firmware_fails_clearly(self, authed_client, mock_db, fw_dir):
-        """303L AP with no 303L firmware selected -> clear 400 naming the model,
-        not a silent fall back to the 30x file."""
+        """303L AP with no 303L firmware selected -> clear 400 naming the missing
+        family and the affected device, not a silent fall back to the 30x file."""
         _seed_303l_ap("1.5.0.54970")
         with patch("updater.app._spawn_update_job") as spawn:
             resp = _start_update(authed_client, firmware_file_303l="")
         assert resp.status_code == 400
-        assert MODEL_303L in resp.json()["detail"]
+        detail = resp.json()["detail"]
+        assert "TNA-303L" in detail   # names the missing firmware family
+        assert AP_IP in detail        # and the affected device
+        spawn.assert_not_called()
+
+    def test_missing_family_aborts_whole_batch(self, authed_client, mock_db, fw_dir):
+        """One device whose family firmware is missing refuses the *entire* batch
+        (compatibility can't be guaranteed) in one message listing every affected
+        device — nothing is flashed, not even the families that were available."""
+        ap_ip2 = "10.0.0.51"
+        _seed_303l_ap("1.5.0.54970")
+        db.upsert_access_point(
+            ap_ip2, "root", "pass", model=MODEL_303L, firmware_version="1.5.0.54970",
+        )
+        with patch("updater.app._spawn_update_job") as spawn:
+            resp = _start_update(
+                authed_client, ip_list=f"{AP_IP}\n{ap_ip2}", firmware_file_303l="",
+            )
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "TNA-303L" in detail
+        assert "2 devices" in detail
+        assert AP_IP in detail and ap_ip2 in detail
+        spawn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_scheduled_update_missing_family_file_fails_before_job(self, mock_db, tmp_path):
+        """Scheduler path must fail closed instead of silently dropping the
+        303L target or falling back to the 30x image."""
+        (tmp_path / FW_30X).write_bytes(b"x")
+        _seed_303l_ap("1.5.0.54970")
+
+        with patch("updater.app.FIRMWARE_DIR", tmp_path), \
+             patch("updater.app._spawn_update_job") as spawn:
+            with pytest.raises(RuntimeError, match="303L firmware file not found"):
+                await app_module._start_scheduled_update(
+                    ap_ips=[AP_IP],
+                    firmware_file=FW_30X,
+                    firmware_file_303l=FW_303L_BETA2,
+                    bank_mode="one",
+                )
+
+        spawn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_scheduled_update_no_family_selected_names_family(self, mock_db, tmp_path):
+        """When a 303L device is in scope but no 303L file is selected at all, the
+        scheduler refuses with the same family-named reason the operator sees via
+        the scheduler block reason — not a bare/first-device error."""
+        (tmp_path / FW_30X).write_bytes(b"x")
+        _seed_303l_ap("1.5.0.54970")
+
+        with patch("updater.app.FIRMWARE_DIR", tmp_path), \
+             patch("updater.app._spawn_update_job") as spawn:
+            with pytest.raises(RuntimeError, match="TNA-303L"):
+                await app_module._start_scheduled_update(
+                    ap_ips=[AP_IP],
+                    firmware_file=FW_30X,
+                    firmware_file_303l="",
+                    bank_mode="one",
+                )
+
         spawn.assert_not_called()
 
 
