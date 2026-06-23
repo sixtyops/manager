@@ -4696,6 +4696,13 @@ def _device_on_exact_build(device: dict, target_version: str, bank_mode: str) ->
     `_device_needs_update_for_bank_mode`, this never decides "no update needed"
     just because the device's version *parses* as newer/older than the target;
     only an exact build-string match counts.
+
+    Dual-bank note: with ``bank_mode="both"`` the device only counts as "on the
+    exact build" when BOTH banks are known to be on target. If the inactive
+    bank's version is unknown (no bank data reported), we cannot prove the
+    dual-bank write is complete, so this returns ``False`` and the device is
+    reflashed — "already on this build" is not a guaranteed no-op in dual-bank
+    mode. With ``bank_mode="one"`` only the active bank must match.
     """
     target = _normalize_version(target_version)
     if not target:

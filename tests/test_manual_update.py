@@ -186,6 +186,37 @@ class TestStartUpdate:
         spawn.assert_not_called()
 
 
+class TestExactBuildGate:
+    """Document the manual exact-build gate, including its dual-bank semantics."""
+
+    TARGET = "1.5.0.54980"
+
+    def test_one_bank_active_match_is_on_exact_build(self):
+        device = {"firmware_version": self.TARGET}
+        assert app_module._device_on_exact_build(device, self.TARGET, "one") is True
+
+    def test_one_bank_active_mismatch_is_not_on_exact_build(self):
+        device = {"firmware_version": "1.5.0.55000"}  # parses newer, still not exact
+        assert app_module._device_on_exact_build(device, self.TARGET, "one") is False
+
+    def test_both_banks_on_target_is_on_exact_build(self):
+        device = {
+            "firmware_version": self.TARGET,
+            "active_bank": 1,
+            "bank1_version": self.TARGET,
+            "bank2_version": self.TARGET,
+        }
+        assert app_module._device_on_exact_build(device, self.TARGET, "both") is True
+
+    def test_both_mode_unknown_inactive_bank_is_reflashed(self):
+        """Dual-bank: with no inactive-bank data we can't prove the write is
+        complete, so an exact active version is NOT a no-op — it reflashes."""
+        device = {"firmware_version": self.TARGET}  # active matches, inactive unknown
+        assert app_module._device_on_exact_build(device, self.TARGET, "both") is False
+        # Same device in single-bank mode IS on the exact build.
+        assert app_module._device_on_exact_build(device, self.TARGET, "one") is True
+
+
 class TestUpdateDevice:
     def _update_device(self, authed_client, **extra):
         data = {
