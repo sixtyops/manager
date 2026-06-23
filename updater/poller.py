@@ -62,6 +62,20 @@ def _port_sort_key(ap: dict) -> tuple:
     return (num, port)
 
 
+def _classify_cpe_connect(result) -> str:
+    """Map a VendorDriver.connect() result to a CPE auth_status.
+
+    True -> "ok"; a "not reachable" message -> "unreachable"; anything else
+    (a rejected login) -> "auth_failed". Shared by every connect attempt so a
+    network failure is never misreported as a credential failure.
+    """
+    if result is True:
+        return "ok"
+    if isinstance(result, str) and "not reachable" in result.lower():
+        return "unreachable"
+    return "auth_failed"
+
+
 class NetworkPoller:
     """Background service that polls APs for CPE data."""
 
@@ -510,30 +524,28 @@ class NetworkPoller:
         1. Parent AP's credentials
         2. Global default device credentials (if enabled)
 
-        Returns "ok", "failed", or "unreachable".
+        Returns "ok", "auth_failed", or "unreachable".
         """
         # Get effective credentials (device-specific or global defaults)
         effective_user, effective_pass = radius_config.get_device_credentials(username, password)
 
         try:
             client = get_driver("tachyon")(cpe_ip, effective_user, effective_pass, timeout=10)
-            result = await client.connect()
-            if result is True:
-                return "ok"
-            if isinstance(result, str) and "not reachable" in result.lower():
-                return "unreachable"
+            status = _classify_cpe_connect(await client.connect())
+            if status != "auth_failed":
+                return status
 
-            # If AP credentials failed, try global defaults as fallback
+            # AP credentials were rejected — try global defaults as fallback.
+            # Classify the fallback result the same way, so a network failure on
+            # the second attempt reports "unreachable" rather than "auth_failed".
             if effective_user == username and radius_config.is_device_auth_enabled():
                 default_config = radius_config.get_device_auth_config()
                 if default_config.username != username:  # Don't retry same creds
                     logger.debug(f"Trying global default credentials for CPE {cpe_ip}")
                     client = get_driver("tachyon")(cpe_ip, default_config.username, default_config.password, timeout=10)
-                    result = await client.connect()
-                    if result is True:
-                        return "ok"
+                    return _classify_cpe_connect(await client.connect())
 
-            return "failed"
+            return "auth_failed"
         except Exception as e:
             logger.debug(f"CPE auth probe failed for {cpe_ip}: {e}")
             return "unreachable"

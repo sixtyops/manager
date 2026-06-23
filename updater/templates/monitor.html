@@ -1140,6 +1140,16 @@
         .sh-sig-margin.flat { color: var(--text-dim); }
         .row-cpe { cursor: pointer; }
         .cpe-sig-cell { cursor: help; }
+        /* Amber "Can't sign in" pill — a client we reach but can't log into
+           (different credentials than its AP). Distinct from the red offline
+           dot and the signal-health dot so the three states read apart. */
+        .cpe-auth-badge {
+            display: inline-block; margin-left: var(--space-3);
+            font-size: var(--text-2xs); font-weight: 600; line-height: 1;
+            padding: 2px 6px; border-radius: 999px; cursor: help;
+            color: var(--warning-text); background: var(--warning-bg);
+            border: 1px solid var(--warning-light);
+        }
         /* Aggregate health dot on AP and switch name cells — picks up the
          * worst-CPE health beneath the device so the dropped STATUS column
          * doesn't leave parents un-flagged. */
@@ -5207,8 +5217,11 @@
             }
         }
 
-        // Reachability dimension — the leading status dot (statusCell). A device
-        // can be offline AND behind its firmware target; the two are independent.
+        // Reachability dimension — drives the toolbar offline count and the
+        // status filter. A device can be offline AND behind its firmware target;
+        // the two are independent. A CPE we can't sign into (auth_status) counts
+        // here as "needs attention" but is shown distinctly on its row via the
+        // "Can't sign in" badge, not the red offline dot.
         function isDeviceOffline(device, kind, parentAp) {
             if (device.last_error) return true;
             if (kind === 'cpe' && parentAp && parentAp.last_error) return true;
@@ -5415,35 +5428,6 @@
             return `<span class="fw-cell" title="${title}">${escapeHtml(active)}<span class="fw-secondary">/ ${escapeHtml(inactive)}</span></span>`;
         }
 
-        const loadingDotsHtml = '<span class="loading-dots"><span></span><span></span><span></span></span>';
-
-        function statusCell(ip, isOffline, signalHealth, authStatus, parentApIp, parentApOffline) {
-            if (updatingDevices.has(ip)) {
-                return '<span class="status-icon-cell updating" title="Updating"></span>';
-            }
-            // Show loading dots if parent AP is updating
-            if (parentApIp && updatingDevices.has(parentApIp)) {
-                return loadingDotsHtml;
-            }
-            if (parentApOffline) {
-                return '<span class="status-icon-cell offline" title="Stale: parent AP unreachable"></span>';
-            }
-            if (isOffline) {
-                return '<span class="status-icon-cell offline" title="Offline"></span>';
-            }
-            // Show auth failure for CPEs
-            if (authStatus && authStatus !== 'ok') {
-                const authLabel = authStatus === 'unreachable' ? 'Unreachable' : 'Auth Failed';
-                return `<span class="status-icon-cell offline" title="${authLabel}"></span>`;
-            }
-            if (signalHealth) {
-                const healthTitle = signalHealth === 'green' ? 'Strong' : signalHealth === 'yellow' ? 'Low' : 'Marginal';
-                const healthClass = signalHealth === 'green' ? 'online' : signalHealth === 'yellow' ? 'warning' : 'critical';
-                return `<span class="status-icon-cell ${healthClass}" title="${healthTitle}"></span>`;
-            }
-            return '<span class="status-icon-cell online" title="Online"></span>';
-        }
-
         function updateCell(type, ip, parentApIp) {
             const live = liveUpdates.get(ip);
             if (live) {
@@ -5574,6 +5558,7 @@
                             <span class="expand-toggle hidden">&#9654;</span>
                             <span class="device-icon cpe ${health}"></span>
                             ${deviceNameHtml(cpeIp, cpeName)}
+                            ${(cpe.auth_status && cpe.auth_status !== 'ok' && cpe.auth_status !== 'unreachable') ? `<span class="cpe-auth-badge" title="Can't sign in — this client uses different credentials than its AP.">Can't sign in</span>` : ''}
                         </div>
                     </td>
                     <td>${cpe.model || ''}</td>
