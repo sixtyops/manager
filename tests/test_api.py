@@ -558,13 +558,16 @@ class TestStartUpdateAPI:
     def test_start_update_creates_job(self, authed_client, mock_db, tmp_path):
         """POST with valid AP IP creates a job that includes AP + CPEs."""
         self._seed_ap_and_cpes(mock_db)
-        fw_file = tmp_path / "tachyon-v1.12.3.bin"
-        fw_file.write_bytes(b"fake firmware")
+        fw_30x = "tna-30x-1.12.3-r55002.bin"
+        fw_303l = "tna-303l-1.12.3-r7782.bin"
+        (tmp_path / fw_30x).write_bytes(b"fake firmware")
+        (tmp_path / fw_303l).write_bytes(b"fake firmware")
 
         with patch("updater.app.FIRMWARE_DIR", tmp_path), \
              patch("updater.app._spawn_update_job") as mock_spawn:
             resp = authed_client.post("/api/start-update", data={
-                "firmware_file": "tachyon-v1.12.3.bin",
+                "firmware_file": fw_30x,
+                "firmware_file_303l": fw_303l,
                 "device_type": "mixed",
                 "ip_list": "10.0.0.1",
                 "concurrency": "2",

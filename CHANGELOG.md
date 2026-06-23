@@ -20,6 +20,18 @@ All notable changes to this project are documented in this file.
   before reboot.
 
 ### Changed
+- **Updates refuse to run if any device's firmware family is missing.** If a
+  selected batch (or a scheduled wave) includes a device whose platform —
+  TNA-303L or TNS-100 — has no matching firmware file chosen, the update now
+  stops before anything is flashed and tells you exactly which family and devices
+  need a file. Previously such a device could be skipped or, in some paths, sent
+  the wrong platform's image. Nothing partial runs: pick the missing file in
+  Settings and retry.
+- **Devices on newer-than-target firmware are now shown as "On newer firmware"**
+  instead of being lumped in with "Current." When downgrades are allowed, these
+  devices get a clear downgrade action. Fleet status also no longer counts a
+  device as up to date against a target whose firmware file is missing,
+  incomplete, or unverified.
 - **Simpler, safer auto-updates: the canary phase is gone.** Auto-update now rolls
   new firmware to the fleet in 10% → 50% → 100% waves (one per maintenance window)
   and **stops the whole job the instant a device doesn't come back online** — the
@@ -42,6 +54,23 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- **A scheduled wave can no longer be silently skipped when its job fails to
+  start.** If starting a wave failed (for example, a missing-family firmware
+  refusal), the wave's devices could be left marked "pending" and then excluded
+  from the next attempt, letting the rollout advance or complete without ever
+  flashing them. Devices are now enrolled only after the job actually starts, so
+  a failed start retries cleanly next window.
+- **AP/site updates now flash the attached CPEs you included, every time.** When
+  a manual update covered an AP and its CPEs, a CPE whose build merely *parsed* as
+  newer than the selected firmware (with downgrades off) was silently skipped —
+  so an explicit "update this AP and its CPEs" could quietly do nothing or run
+  only part of the set. CPEs now follow the same rule as the AP: push the picked
+  firmware unless the CPE is already on that exact build.
+- **Existing firmware files stay selectable after an upgrade.** On upgraded
+  installs, firmware already on disk could be treated as "unverified" and dropped
+  from auto-selection and the fleet's target version. These files are now
+  fingerprinted during migration, so they remain deployable and gain the same
+  flash-time integrity check as freshly downloaded firmware.
 - Config-tar download (`/api/configs/{ip}/download/{config_id}`) again writes the
   `CONTROL` file as the bare device platform string (e.g. `tn-110-prs`, or
   `tam-110-prs` for the TNA-303L-65) with no trailing newline — the exact format

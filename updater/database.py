@@ -1,5 +1,6 @@
 """SQLite database for persistent storage."""
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -56,6 +57,37 @@ def _is_secret_setting(key: str) -> bool:
     if key in SECRET_SETTINGS_KEYS:
         return True
     return any(key.startswith(p) for p in SECRET_SETTINGS_PREFIXES)
+
+
+def _backfill_firmware_sha256(db, firmware_dir: Path) -> None:
+    """Compute and store SHA256 for registered firmware files that have none.
+
+    Targets on-disk files whose registry row predates the integrity path (NULL
+    hash) so they stop being treated as unverified. Mirrors the fetcher's on-disk
+    hashing (1 MB blocks). Files no longer on disk are skipped. Idempotent: once a
+    file is hashed it no longer matches ``sha256 IS NULL``.
+    """
+    if not firmware_dir.exists():
+        return
+    rows = db.execute(
+        "SELECT filename FROM firmware_registry WHERE sha256 IS NULL"
+    ).fetchall()
+    for row in rows:
+        filename = row[0]
+        fpath = firmware_dir / filename
+        if not fpath.is_file():
+            continue
+        try:
+            h = hashlib.sha256()
+            with open(fpath, "rb") as fh:
+                for block in iter(lambda: fh.read(1024 * 1024), b""):
+                    h.update(block)
+        except OSError:
+            continue
+        db.execute(
+            "UPDATE firmware_registry SET sha256 = ? WHERE filename = ? AND sha256 IS NULL",
+            (h.hexdigest(), filename),
+        )
 
 
 def _migrate(db):
@@ -211,6 +243,18 @@ def _migrate(db):
             db.execute("ALTER TABLE firmware_registry ADD COLUMN sha256 TEXT DEFAULT NULL")
     except Exception:
         pass  # Table may not exist yet
+
+    # Fingerprint on-disk firmware that predates the integrity path. The legacy
+    # backfill above registers files with a NULL hash; without a hash
+    # firmware_policy.firmware_file_health treats them as unverified, dropping
+    # them from auto-select and blanking their fleet-status target version — even
+    # though flash-time happily flashes a no-hash file. Compute the SHA256 once so
+    # legacy/manual files stay deployable and gain real flash-time tamper
+    # detection. Best-effort.
+    try:
+        _backfill_firmware_sha256(db, Path(__file__).parent.parent / "firmware")
+    except Exception:
+        pass
 
     # Remove stale license settings (billing removed in open-source conversion)
     _license_keys = (

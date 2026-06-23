@@ -4784,6 +4784,7 @@
                 const when = formatWhen(info.next_attempt_iso);
                 return when ? `Next attempt ${when}` : '';
             }
+            if (info.next_attempt_reason === 'Updated') return '';
             if (info.next_attempt_reason) return info.next_attempt_reason;
             return '';
         }
@@ -4848,7 +4849,7 @@
             dropdown.className = 'col-filter-dropdown';
             dropdown.onclick = e => e.stopPropagation();
 
-            const statusLabels = { behind: 'Needs update', current: 'Current', offline: 'Offline', unknown: 'Unknown', updating: 'Updating' };
+            const statusLabels = { behind: 'Needs update', ahead: 'On newer firmware', current: 'Current', offline: 'Offline', unknown: 'Unknown', updating: 'Updating' };
             // Order Signal options by severity (green → red), everything else
             // alphabetically.
             const sorted = column === 'signal'
@@ -4968,7 +4969,7 @@
         function updateFilterChip() {
             const container = document.getElementById('activeFilterChips');
             if (!container) return;
-            const statusLabels = { behind: 'Needs update', current: 'Current', offline: 'Offline', unknown: 'Unknown', updating: 'Updating' };
+            const statusLabels = { behind: 'Needs update', ahead: 'On newer firmware', current: 'Current', offline: 'Offline', unknown: 'Unknown', updating: 'Updating' };
             const colNames = { model: 'Model', firmware: 'Version', status: 'Status', signal: 'Signal' };
             const valueLabelFor = (col, v) => {
                 if (col === 'status') return statusLabels[v] || v;
@@ -5165,15 +5166,18 @@
         function updateFirmwareForSelected() {
             const ips = [];
             for (const ip of checkedDevices) {
-                if (versionStatus(ip) === 'behind') ips.push(ip);
+                const info = fleetStatusMap.get(ip);
+                if (info && (info.status === 'behind' || info.update_action === 'downgrade')) {
+                    ips.push({ ip, type: info.role });
+                }
             }
             if (ips.length === 0) {
                 showToast('No selected devices need updating');
                 return;
             }
             if (!confirm(`Update firmware on ${ips.length} device(s)?`)) return;
-            for (const ip of ips) {
-                triggerUpdate(ip);
+            for (const item of ips) {
+                triggerUpdate(item.type, item.ip);
             }
         }
 
@@ -5186,7 +5190,7 @@
             if (kind === 'cpe' && device.auth_status && device.auth_status !== 'ok') return 'offline';
             const vs = versionStatus(device.ip);
             if (vs === 'behind') return 'behind';
-            if (vs === 'current') return 'current';
+            if (vs === 'current' || vs === 'ahead') return 'current';
             return 'unknown';
         }
 
@@ -5232,8 +5236,9 @@
                 // Mid-update devices show a spinner in both columns — skip them.
                 if (updatingDevices.has(ip) || (parentAp && updatingDevices.has(parentAp.ip))) return;
                 const vs = versionStatus(ip);            // 'current' | 'behind' | 'unknown'
-                if (vs === 'current') counts.current++;
-                else if (vs === 'behind') counts.behind++;
+                const info = fleetStatusMap.get(ip);
+                if (vs === 'current' || (vs === 'ahead' && info?.update_state === 'up_to_date')) counts.current++;
+                else if (vs === 'behind' || info?.update_action === 'downgrade') counts.behind++;
                 if (isDeviceOffline(device, kind, parentAp)) counts.offline++;   // overlaps current/behind
             };
             for (const site of topology.sites) {
@@ -5461,6 +5466,18 @@
             if (vs === 'current') {
                 return '<span class="status-current" title="Current">&#10003;</span>';
             }
+            if (vs === 'ahead') {
+                const info = fleetStatusMap.get(ip);
+                if (info?.update_action === 'downgrade') {
+                    if (currentUserRole === 'viewer') {
+                        return '<span class="status-icon-cell" title="On newer firmware" style="color:var(--text-muted);">&#8595;</span>';
+                    }
+                    const target = info.target_version ? ` to ${info.target_version}` : '';
+                    const title = `On newer firmware \u00b7 click to downgrade${target}`;
+                    return `<button class="update-action behind" title="${escapeHtml(title)}" onclick="triggerUpdate('${type}','${ip}');event.stopPropagation();">&#8595;</button>`;
+                }
+                return '<span class="status-current" title="On newer firmware">&#10003;</span>';
+            }
             if (vs === 'behind') {
                 const hold = holdInfo(ip);
                 if (hold) {
@@ -5599,9 +5616,22 @@
             if (anyUpdating) {
                 return '<span class="update-spinner" title="Updating..."></span>';
             }
-            const anyBehind = aps.some(ap => versionStatus(ap.ip) === 'behind');
+            const devices = [];
+            for (const ap of aps) {
+                devices.push(ap);
+                for (const cpe of (ap.cpes || [])) devices.push(cpe);
+            }
+            const actionable = (d) => {
+                const info = fleetStatusMap.get(d.ip);
+                return versionStatus(d.ip) === 'behind' || info?.update_action === 'downgrade';
+            };
+            const anyBehind = devices.some(actionable);
             if (!anyBehind) {
-                const allCurrent = aps.length > 0 && aps.every(ap => versionStatus(ap.ip) === 'current');
+                const allCurrent = devices.length > 0 && devices.every(d => {
+                    const vs = versionStatus(d.ip);
+                    const info = fleetStatusMap.get(d.ip);
+                    return vs === 'current' || (vs === 'ahead' && info?.update_state === 'up_to_date');
+                });
                 return allCurrent ? '<span class="status-current" title="All current">&#10003;</span>' : '';
             }
             const title = autoUpdateEnabled ? 'Auto-update scheduled \u00b7 click to update now' : 'Update available \u00b7 click to update now';
@@ -10049,6 +10079,10 @@
                         target_version: d.target_version,
                         status: d.status,
                         update_state: d.update_state,
+                        update_action: d.update_action,
+                        role: d.role,
+                        status_label: d.status_label,
+                        status_reason: d.status_reason,
                         hold: d.hold,
                         auto_update_eligible: d.auto_update_eligible,
                         next_attempt_iso: d.next_attempt_iso,
@@ -10060,7 +10094,7 @@
                 // freshly-loaded version status.
                 if (topology) { renderTable(); updateTabBadges(); }
 
-                lastBehindCount = data.summary?.behind || 0;
+                lastBehindCount = (data.devices || []).filter(d => d.status === 'behind' || d.update_action === 'downgrade').length;
                 lastFleetTotal = data.summary?.total || 0;
                 // Re-drive the scheduler UI so the "Up to date" badge override
                 // picks up the freshly-loaded counts even when the fleet

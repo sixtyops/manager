@@ -7,6 +7,11 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Optional, Set
 
 from . import database as db
+from .firmware_policy import (
+    classify_device_version,
+    extract_version_from_filename as policy_extract_version_from_filename,
+    parse_version as policy_parse_version,
+)
 from . import rollout_gate
 from . import services
 from .services import format_temperature
@@ -91,16 +96,7 @@ def _parse_version(version: str) -> tuple:
     Handles formats like '1.12.3.54970' or '1.12.3.r54970'.
     Returns tuple of integers for comparison.
     """
-    if not version:
-        return (0,)
-    normalized = version.replace(".r", ".")
-    parts = []
-    for part in normalized.split("."):
-        try:
-            parts.append(int(part))
-        except ValueError:
-            parts.append(0)
-    return tuple(parts) if parts else (0,)
+    return policy_parse_version(version)
 
 
 def _extract_version_from_filename(filename: str) -> str:
@@ -109,23 +105,7 @@ def _extract_version_from_filename(filename: str) -> str:
     Mirrors `app._extract_version_from_filename`; keep the two in sync.
     See that copy for why the regex must match the bare `tns-` prefix.
     """
-    import re
-
-    if not filename:
-        return ""
-    match = re.search(
-        r"(?:tna-30x|tna30x|tna-303l|tna303l|tns-100|tns100|tns)-(\d+\.\d+\.\d+)-r(\d+)",
-        filename,
-        re.IGNORECASE,
-    )
-    if match:
-        return f"{match.group(1)}.{match.group(2)}"
-    match = re.search(r"(\d+\.\d+\.\d+)(?:-r(\d+))?", filename)
-    if match:
-        if match.group(2):
-            return f"{match.group(1)}.{match.group(2)}"
-        return match.group(1)
-    return ""
+    return policy_extract_version_from_filename(filename)
 
 
 def _firmware_type_for_model(model: Optional[str]) -> str:
@@ -178,11 +158,7 @@ def _device_needs_update(
         except (ValueError, TypeError):
             pass
 
-    if current_version == target_version:
-        return False
-    if not allow_downgrade and _parse_version(current_version) > _parse_version(target_version):
-        return False
-    return True
+    return classify_device_version(current_version, target_version, allow_downgrade).needs_update
 
 
 def _as_int(value, default: int) -> int:
@@ -723,11 +699,6 @@ class AutoUpdateScheduler:
                 await self._broadcast_status()
                 return
 
-        for ip in batch_ips:
-            db.assign_device_to_rollout(rollout["id"], ip, "ap", rollout["phase"])
-        for ip in batch_switches:
-            db.assign_device_to_rollout(rollout["id"], ip, "switch", rollout["phase"])
-
         self._state = "running"
         self._block_reason = None
         await self._broadcast_status()
@@ -757,6 +728,15 @@ class AutoUpdateScheduler:
                 schedule_days=schedule_days,
                 schedule_timezone=tz_str,
             )
+            # Assign devices to the wave ONLY after the job is created. If
+            # start_update_func raised (e.g. a missing-family firmware refusal),
+            # leaving these rows as 'pending' would make _get_devices_for_phase
+            # skip them on the next tick (pending is in its already_done filter)
+            # and silently advance/complete the wave with nothing flashed.
+            for ip in batch_ips:
+                db.assign_device_to_rollout(rollout["id"], ip, "ap", rollout["phase"])
+            for ip in batch_switches:
+                db.assign_device_to_rollout(rollout["id"], ip, "switch", rollout["phase"])
             self._current_job_id = job_id
             self._ran_today.add(today_key)
             db.set_rollout_job_id(rollout["id"], job_id)

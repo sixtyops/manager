@@ -283,9 +283,10 @@ class TestSchedulerCanaries:
     async def test_manual_canary_job_disables_window_cutoff(self, mock_db, tmp_path):
         firmware_dir = tmp_path / "firmware"
         firmware_dir.mkdir()
-        (firmware_dir / "firmware.bin").write_bytes(b"test")
+        fw_name = "tna-30x-1.2.3-r123.bin"
+        (firmware_dir / fw_name).write_bytes(b"test")
 
-        db.upsert_access_point("10.0.0.10", "root", "pass", enabled=True, firmware_version="1.0.0")
+        db.upsert_access_point("10.0.0.10", "root", "pass", enabled=True, model="TNA-301", firmware_version="1.0.0")
 
         mock_task = MagicMock()
         mock_task.add_done_callback = MagicMock()
@@ -299,13 +300,99 @@ class TestSchedulerCanaries:
              patch.object(app_module.asyncio, "create_task", _discard_task):
             job_id = await app_module._start_scheduled_update(
                 ap_ips=["10.0.0.10"],
-                firmware_file="firmware.bin",
+                firmware_file=fw_name,
                 schedule_timezone="America/Chicago",
                 enforce_window_cutoff=False,
             )
 
         assert app_module.update_jobs[job_id].enforce_window_cutoff is False
         app_module.update_jobs.pop(job_id, None)
+
+
+class TestSchedulerStartFailure:
+    @pytest.mark.asyncio
+    async def test_failed_job_start_does_not_strand_pending_devices(self, mock_db):
+        """If start_update_func raises (e.g. a missing-family firmware refusal),
+        the wave's devices must NOT be left 'pending'. A stranded pending row is
+        excluded by _get_devices_for_phase next tick, so the wave would silently
+        advance/complete with nothing flashed. They must stay selectable."""
+        from datetime import datetime as dt
+        from zoneinfo import ZoneInfo
+        from updater import services
+
+        fw = "tna-30x-1.2.3-r123.bin"
+        db.set_settings({
+            "schedule_enabled": "true",
+            "selected_firmware_30x": fw,
+            "timezone": "America/Chicago",
+            "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
+            "schedule_start_hour": "0",
+            "schedule_end_hour": "23",
+        })
+        rollout_id = db.create_rollout(fw)
+        rollout = db.get_rollout(rollout_id)
+
+        now = dt(2026, 6, 23, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
+        start = AsyncMock(side_effect=RuntimeError(
+            "Cannot start update: no matching firmware selected for TNA-303L"
+        ))
+        scheduler = AutoUpdateScheduler(AsyncMock(), start)
+
+        with patch("updater.services.validate_time_sources", AsyncMock(return_value=(True, now))), \
+             patch("updater.scheduler.rollout_gate.phase_run_decision", return_value=(True, "ok")), \
+             patch.object(scheduler, "_firmware_changed", return_value=False), \
+             patch.object(scheduler, "_held_families", return_value=(set(), {})), \
+             patch.object(scheduler, "_early_clear_note", return_value=None), \
+             patch.object(scheduler, "_resolve_scope", return_value=["10.0.0.10"]), \
+             patch.object(scheduler, "_resolve_switch_scope", return_value=[]), \
+             patch.object(scheduler, "_get_devices_for_phase", return_value=["10.0.0.10"]), \
+             patch.object(scheduler, "_get_switches_for_phase", return_value=[]):
+            await scheduler._check_and_run()
+
+        start.assert_awaited_once()
+        statuses = [d["status"] for d in db.get_rollout_devices(rollout_id)]
+        assert "pending" not in statuses
+        assert statuses == []  # nothing assigned because the job never started
+        assert scheduler._current_job_id is None
+        assert scheduler._state == "idle"
+
+    @pytest.mark.asyncio
+    async def test_successful_job_start_assigns_pending_devices(self, mock_db):
+        """The happy path still assigns the wave's devices so the completion
+        handler can transition them out of pending."""
+        from datetime import datetime as dt
+        from zoneinfo import ZoneInfo
+
+        fw = "tna-30x-1.2.3-r123.bin"
+        db.set_settings({
+            "schedule_enabled": "true",
+            "selected_firmware_30x": fw,
+            "timezone": "America/Chicago",
+            "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
+            "schedule_start_hour": "0",
+            "schedule_end_hour": "23",
+        })
+        rollout_id = db.create_rollout(fw)
+
+        now = dt(2026, 6, 23, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
+        start = AsyncMock(return_value="job-123")
+        scheduler = AutoUpdateScheduler(AsyncMock(), start)
+
+        with patch("updater.services.validate_time_sources", AsyncMock(return_value=(True, now))), \
+             patch("updater.scheduler.rollout_gate.phase_run_decision", return_value=(True, "ok")), \
+             patch.object(scheduler, "_firmware_changed", return_value=False), \
+             patch.object(scheduler, "_held_families", return_value=(set(), {})), \
+             patch.object(scheduler, "_early_clear_note", return_value=None), \
+             patch.object(scheduler, "_resolve_scope", return_value=["10.0.0.10"]), \
+             patch.object(scheduler, "_resolve_switch_scope", return_value=[]), \
+             patch.object(scheduler, "_get_devices_for_phase", return_value=["10.0.0.10"]), \
+             patch.object(scheduler, "_get_switches_for_phase", return_value=[]):
+            await scheduler._check_and_run()
+
+        start.assert_awaited_once()
+        statuses = {d["ip"]: d["status"] for d in db.get_rollout_devices(rollout_id)}
+        assert statuses == {"10.0.0.10": "pending"}
+        assert scheduler._current_job_id == "job-123"
 
 
 class TestSchedulerStartupRecovery:
