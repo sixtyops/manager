@@ -5315,7 +5315,7 @@
         }
 
         // Map a health bucket to a human label for filter chips + tooltips.
-        const HEALTH_LABEL = { green: 'Reliable', yellow: 'Mostly reliable', red: 'Unstable in rain', offline: 'Offline' };
+        const HEALTH_LABEL = { green: 'Survives local storms', yellow: 'Survives heavy rain', red: 'Drops in ordinary rain', offline: 'Offline' };
 
         function matchesDeviceFilters(device, siteName, kind, parentAp) {
             if (!device) return false;
@@ -6031,7 +6031,8 @@
         let _shLastTooltipCpe = null;
         const SH_Y_MAX_RAIN = 250;
         const SH_MCS1_FLOOR = -70;
-        const SH_STATUS_LABEL = { green: 'Reliable', yellow: 'Mostly reliable', red: 'Unstable in rain' };
+        // Same wording as the topology list — single source of truth in HEALTH_LABEL.
+        const SH_STATUS_LABEL = { green: HEALTH_LABEL.green, yellow: HEALTH_LABEL.yellow, red: HEALTH_LABEL.red };
         const SH_SIG_MIN = -75, SH_SIG_MAX = -35, SH_RAIN_MAX = 100;
         // Fixed y-axis box width so the rain and distance charts share the same
         // plot-area left edge — the graph doesn't shift when toggling views.
@@ -6179,9 +6180,16 @@
             const z = shActiveClimate();
             document.getElementById('cpopRain999').style.left  = (Math.min(z.r999,  SH_RAIN_MAX) / SH_RAIN_MAX * 100) + '%';
             document.getElementById('cpopRain9999').style.left = (Math.min(z.r9999, SH_RAIN_MAX) / SH_RAIN_MAX * 100) + '%';
-            document.getElementById('cpopRainVal').textContent =
+            // Margin vs the 99.99% storm line (cpopSignalVal does the same vs target).
+            const rm = maxR != null ? Math.round(maxR - z.r9999) : null;
+            const rainDelta = rm == null
+                ? ''
+                : rm > 0 ? ' <span class="delta up">\u25b2 ' + rm + '</span>'
+                : rm < 0 ? ' <span class="delta down">\u25bc ' + (-rm) + '</span>'
+                : ' <span class="delta flat">\u25ac 0</span>';
+            document.getElementById('cpopRainVal').innerHTML =
                 maxR == null ? '\u2014'
-                : (maxR >= SH_RAIN_MAX ? (SH_RAIN_MAX + '+ mm/hr') : (Math.round(maxR) + ' mm/hr'));
+                : (maxR >= SH_RAIN_MAX ? (SH_RAIN_MAX + '+ mm/hr') : (Math.round(maxR) + ' mm/hr')) + rainDelta;
         }
         function shPositionCpop(x, y) {
             const pop = document.getElementById('cpop');
@@ -6429,9 +6437,9 @@
             const stat = (color, n, label) =>
                 '<span class="item"><span class="dot" style="background:' + color + '"></span><strong>' + n + '</strong> ' + label + '</span>';
             el.innerHTML =
-                stat('var(--success)', cnt.green, 'Reliable')
-              + stat('var(--warning)', cnt.yellow, 'Mostly reliable')
-              + stat('var(--danger-bright)', cnt.red, 'Unstable')
+                stat('var(--success)', cnt.green, HEALTH_LABEL.green)
+              + stat('var(--warning)', cnt.yellow, HEALTH_LABEL.yellow)
+              + stat('var(--danger-bright)', cnt.red, HEALTH_LABEL.red)
               + '<span class="item"><span class="dot" style="background:#ef4444;border:2px solid #991b1b;transform:rotate(45deg);border-radius:0"></span>Offline AP</span>';
         }
 

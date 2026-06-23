@@ -31,7 +31,7 @@ Three fixed layers, always in this order:
 
 ## Status, color, and copy
 
-- **Three buckets, three colors, three labels** — `green/yellow/red` → **Reliable / Mostly reliable / Unstable in rain**. Tokens: `--success`, `--warning`, `--danger-bright` with `*-bg` and `*-text` variants.
+- **Three buckets, three colors, three labels** — `green/yellow/red` → **Survives local storms / Survives heavy rain / Drops in ordinary rain**. Labels are climate-relative: green = survives the worst storm the auto-detected region sees (the 99.99% rain rate), yellow = survives heavy rain (99.9%) but not that storm, red = neither. Tokens: `--success`, `--warning`, `--danger-bright` with `*-bg` and `*-text` variants.
 - **Info-blue (`--info*`) is the fourth semantic color, reserved for "scheduled or in progress"** — never for interactive controls. The accent for controls is teal (`--primary*`); see `UI_STYLE_GUIDE.md`.
 - **Color is never the sole signal.** Pair with glyph (`▲`/`▼`), label, or shape.
 - **Humans first, numbers as evidence.** Status pills carry English; numbers live in popovers.
