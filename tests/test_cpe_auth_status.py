@@ -70,3 +70,23 @@ class TestCheckCpeAuth:
             status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
         assert status == "unreachable"
         assert client.connect.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_fallback_retries_when_only_password_differs(self, mock_db):
+        # AP uses root/ap-pass; the client shares the username but uses a
+        # different password that matches the global default. The retry must
+        # still fire (full-tuple compare), so the client reports "ok".
+        poller = NetworkPoller()
+        client = MagicMock()
+        client.connect = AsyncMock(side_effect=["Invalid credentials", True])
+        factory = MagicMock(return_value=client)
+        cfg = radius_config.DeviceAuthConfig(enabled=True, username="root",
+                                             password="cpe-pass")
+        with patch("updater.poller.get_driver", return_value=factory), \
+             patch("updater.poller.radius_config.is_device_auth_enabled",
+                   return_value=True), \
+             patch("updater.poller.radius_config.get_device_auth_config",
+                   return_value=cfg):
+            status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
+        assert status == "ok"
+        assert client.connect.await_count == 2

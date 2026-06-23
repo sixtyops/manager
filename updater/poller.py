@@ -540,7 +540,10 @@ class NetworkPoller:
             # the second attempt reports "unreachable" rather than "auth_failed".
             if effective_user == username and radius_config.is_device_auth_enabled():
                 default_config = radius_config.get_device_auth_config()
-                if default_config.username != username:  # Don't retry same creds
+                # Retry with the global defaults unless they're identical to the
+                # credentials we just tried — compare the full tuple, since a
+                # client may share the AP's username but use a different password.
+                if (default_config.username, default_config.password) != (effective_user, effective_pass):
                     logger.debug(f"Trying global default credentials for CPE {cpe_ip}")
                     client = get_driver("tachyon")(cpe_ip, default_config.username, default_config.password, timeout=10)
                     return _classify_cpe_connect(await client.connect())
