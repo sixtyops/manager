@@ -1168,6 +1168,7 @@
         .col-filter-dropdown label .opt-dot.green   { background: var(--success); }
         .col-filter-dropdown label .opt-dot.yellow  { background: var(--warning); }
         .col-filter-dropdown label .opt-dot.red     { background: var(--danger-bright); }
+        .col-filter-dropdown label .opt-dot.signal  { background: var(--text-dim); }
         .col-filter-dropdown label .opt-count {
             margin-left: auto; color: var(--text-dim);
             font-variant-numeric: tabular-nums; font-size: var(--text-sm);
@@ -4853,7 +4854,7 @@
             // alphabetically.
             const sorted = column === 'signal'
                 ? Array.from(values).sort((a, b) => {
-                    const order = { green: 0, yellow: 1, red: 2, offline: 3 };
+                    const order = { green: 0, yellow: 1, red: 2, signal: 3, offline: 4 };
                     return (order[a] ?? 99) - (order[b] ?? 99);
                   })
                 : Array.from(values).sort();
@@ -5201,7 +5202,13 @@
                     // health, but they pass through the Signal filter
                     // unchanged so a "show only Unstable" filter doesn't
                     // orphan otherwise-healthy parent rows.
-                    if (kind === 'cpe') return device.signal_health || '';
+                    if (kind === 'cpe') {
+                        if (!device.signal_health) return '';
+                        // No rain estimate (missing distance/channel) → the bucket
+                        // is raw signal, not rain, so it must not filter under a
+                        // rain label.
+                        return device.max_rain_mm_hr == null ? 'signal' : device.signal_health;
+                    }
                     return '';
                 default: return '';
             }
@@ -5291,31 +5298,52 @@
         // Worst-of CPE health. Returns 'green' / 'yellow' / 'red' / 'offline'
         // or '' when the AP has no CPEs (e.g. brand new). Used for the leading
         // status dot on AP rows and for the Signal column filter.
-        function aggregateApHealth(ap) {
-            if (!ap) return '';
-            if (ap.last_error) return 'offline';
+        // Worst-of CPE health for an AP. `.bucket` drives the dot colour;
+        // `.signalOnly` drives the label — a signal-only worst link (no rain
+        // estimate) must not claim rain resilience. Among ties at the worst
+        // severity we prefer a rain-derived link so the more informative rain
+        // label wins when a real assessment exists.
+        function aggregateApHealthInfo(ap) {
+            if (!ap) return { bucket: '', signalOnly: false };
+            if (ap.last_error) return { bucket: 'offline', signalOnly: false };
             const cpes = ap.cpes || [];
-            if (!cpes.length) return '';
-            const healths = cpes.map(c => c.signal_health || 'red');
-            if (healths.includes('red'))    return 'red';
-            if (healths.includes('yellow')) return 'yellow';
-            return 'green';
+            if (!cpes.length) return { bucket: '', signalOnly: false };
+            const rank = { green: 1, yellow: 2, red: 3 };
+            let bucket = '', worstRank = 0, signalOnly = false;
+            for (const c of cpes) {
+                const b = c.signal_health || 'red';
+                const r = rank[b] || 0;
+                const so = c.max_rain_mm_hr == null;
+                if (r > worstRank || (r === worstRank && signalOnly && !so)) {
+                    bucket = b; worstRank = r; signalOnly = so;
+                }
+            }
+            return { bucket, signalOnly };
         }
 
-        function aggregateSwitchHealth(sw, allAps) {
-            if (!sw) return '';
-            if (sw.last_error) return 'offline';
+        function aggregateSwitchHealthInfo(sw, allAps) {
+            if (!sw) return { bucket: '', signalOnly: false };
+            if (sw.last_error) return { bucket: 'offline', signalOnly: false };
             const childAps = (allAps || []).filter(a => a.switch_ip === sw.ip);
-            if (!childAps.length) return '';
-            const rolled = childAps.map(aggregateApHealth).filter(Boolean);
-            if (rolled.includes('offline')) return 'offline';
-            if (rolled.includes('red'))     return 'red';
-            if (rolled.includes('yellow'))  return 'yellow';
-            return 'green';
+            if (!childAps.length) return { bucket: '', signalOnly: false };
+            const rank = { green: 1, yellow: 2, red: 3, offline: 4 };
+            let bucket = '', worstRank = 0, signalOnly = false;
+            for (const a of childAps) {
+                const info = aggregateApHealthInfo(a);
+                if (!info.bucket) continue;
+                const r = rank[info.bucket] || 0;
+                if (r > worstRank || (r === worstRank && signalOnly && !info.signalOnly)) {
+                    bucket = info.bucket; worstRank = r; signalOnly = info.signalOnly;
+                }
+            }
+            return { bucket, signalOnly };
         }
 
         // Map a health bucket to a human label for filter chips + tooltips.
-        const HEALTH_LABEL = { green: 'Survives local storms', yellow: 'Survives heavy rain', red: 'May drop in heavy rain', offline: 'Offline' };
+        const HEALTH_LABEL = { green: 'Survives local storms', yellow: 'Survives heavy rain', red: 'May drop in heavy rain', signal: 'Signal only — no rain estimate', offline: 'Offline' };
+        // The dot title for an aggregate row: a signal-only worst link can't
+        // claim rain resilience, so it gets the neutral signal-only label.
+        const aggDotTitle = info => info.signalOnly ? HEALTH_LABEL.signal : (HEALTH_LABEL[info.bucket] || info.bucket);
 
         function matchesDeviceFilters(device, siteName, kind, parentAp) {
             if (!device) return false;
@@ -5510,9 +5538,10 @@
                 ? `<span class="port-badge" title="Connected to switch port ${escapeHtml(ap.switch_port)}">${escapeHtml(ap.switch_port)}</span>`
                 : '';
 
-            const apHealth = aggregateApHealth(ap);
+            const apInfo = aggregateApHealthInfo(ap);
+            const apHealth = apInfo.bucket;
             const apHealthDot = apHealth
-                ? `<span class="row-status-dot ${apHealth}" title="${HEALTH_LABEL[apHealth] || apHealth}"></span>`
+                ? `<span class="row-status-dot ${apHealth}" title="${aggDotTitle(apInfo)}"></span>`
                 : '';
 
             let out = `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isApSelected ? 'row-selected' : ''}" onclick="selectAP('${ap.ip}')">
@@ -5809,9 +5838,10 @@
                     for (const nap of nestedAps) visibleRows += (nap.cpes || []).length;
 
                     const hasChildren = nestedAps.length > 0;
-                    const swHealth = aggregateSwitchHealth(sw, aps);
+                    const swInfo = aggregateSwitchHealthInfo(sw, aps);
+                    const swHealth = swInfo.bucket;
                     const swHealthDot = swHealth
-                        ? `<span class="row-status-dot ${swHealth}" title="${HEALTH_LABEL[swHealth] || swHealth}"></span>`
+                        ? `<span class="row-status-dot ${swHealth}" title="${aggDotTitle(swInfo)}"></span>`
                         : '';
                     html += `<tr class="row-ap ${isOffline ? 'row-offline' : ''} ${isSwSelected ? 'row-selected' : ''}" onclick="selectSwitch('${sw.ip}')">
                         <td>
@@ -6427,19 +6457,20 @@
             const el = document.getElementById('chartLegend');
             if (!el) return;
             // Identical in both views so the shared health key never moves when
-            // toggling. Counts are folded in (no separate summary row) and are
-            // tallied by the colour each dot uses in the current view. The
+            // toggling. Counts match the dots plotted in the current view. Links
+            // with no rain estimate are tallied separately ("Signal only") rather
+            // than folded into a rain tier — and only appear when present. The
             // distance-only MCS1-floor line is labelled on the chart itself, so
             // it isn't repeated here.
             const { cpes } = shCollectCpes();
-            const cnt = { green: 0, yellow: 0, red: 0 };
+            const cnt = { green: 0, yellow: 0, red: 0, signal: 0 };
             for (const c of cpes) {
-                let h = null;
-                if (shView === 'rain') {
-                    if (c.max_rain_mm_hr != null && c.link_distance != null) h = shHealthFromRain(c.max_rain_mm_hr);
-                } else if (c.primary_signal != null && c.link_distance != null) {
-                    h = shHealthFromRain(c.max_rain_mm_hr) || (c.signal_health || 'red');
-                }
+                const plotted = shView === 'rain'
+                    ? (c.max_rain_mm_hr != null && c.link_distance != null)
+                    : (c.primary_signal != null && c.link_distance != null);
+                if (!plotted) continue;
+                if (c.max_rain_mm_hr == null) { cnt.signal++; continue; }
+                const h = shHealthFromRain(c.max_rain_mm_hr);
                 if (h && cnt[h] != null) cnt[h]++;
             }
             const stat = (color, n, label) =>
@@ -6448,6 +6479,7 @@
                 stat('var(--success)', cnt.green, HEALTH_LABEL.green)
               + stat('var(--warning)', cnt.yellow, HEALTH_LABEL.yellow)
               + stat('var(--danger-bright)', cnt.red, HEALTH_LABEL.red)
+              + (cnt.signal ? stat('var(--text-dim)', cnt.signal, HEALTH_LABEL.signal) : '')
               + '<span class="item"><span class="dot" style="background:#ef4444;border:2px solid #991b1b;transform:rotate(45deg);border-radius:0"></span>Offline AP</span>';
         }
 
