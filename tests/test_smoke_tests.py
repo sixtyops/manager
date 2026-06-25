@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from dataclasses import dataclass
 
 from updater.tachyon import TachyonClient, SmokeTestResult, DeviceInfo
+from updater.models import CPEInfo
 
 
 # ── Unit tests for TachyonClient.run_smoke_tests() ──
@@ -22,8 +23,7 @@ async def test_smoke_tests_all_pass_ap():
 
     mock_cpe = MagicMock()
     mock_cpe.ip = "10.0.0.100"
-    mock_cpe.combined_signal = -65
-    mock_cpe.last_local_rssi = -65
+    mock_cpe.primary_signal = -65
     client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
@@ -89,8 +89,7 @@ async def test_smoke_tests_cpe_count_decreased():
 
     mock_cpe = MagicMock()
     mock_cpe.ip = "10.0.0.100"
-    mock_cpe.combined_signal = -65
-    mock_cpe.last_local_rssi = -65
+    mock_cpe.primary_signal = -65
     client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=3)
@@ -108,8 +107,7 @@ async def test_smoke_tests_low_signal():
 
     mock_cpe = MagicMock()
     mock_cpe.ip = "10.0.0.100"
-    mock_cpe.combined_signal = -85
-    mock_cpe.last_local_rssi = -85
+    mock_cpe.primary_signal = -85
     client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
@@ -216,8 +214,7 @@ async def test_smoke_tests_signal_none_values():
 
     mock_cpe = MagicMock()
     mock_cpe.ip = "10.0.0.100"
-    mock_cpe.combined_signal = None
-    mock_cpe.last_local_rssi = None
+    mock_cpe.primary_signal = None
     client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
@@ -238,8 +235,7 @@ async def test_smoke_tests_signal_string_values():
 
     mock_cpe = MagicMock()
     mock_cpe.ip = "10.0.0.100"
-    mock_cpe.combined_signal = "-72"  # String, not float
-    mock_cpe.last_local_rssi = "-72"
+    mock_cpe.primary_signal = "-72"  # String, not float
     client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
@@ -256,13 +252,11 @@ async def test_smoke_tests_mixed_signal_levels():
 
     good_cpe = MagicMock()
     good_cpe.ip = "10.0.0.100"
-    good_cpe.combined_signal = -60
-    good_cpe.last_local_rssi = -60
+    good_cpe.primary_signal = -60
 
     bad_cpe = MagicMock()
     bad_cpe.ip = "10.0.0.101"
-    bad_cpe.combined_signal = -85
-    bad_cpe.last_local_rssi = -85
+    bad_cpe.primary_signal = -85
 
     client.get_connected_cpes = AsyncMock(return_value=[good_cpe, bad_cpe])
 
@@ -306,8 +300,7 @@ async def test_smoke_tests_signal_at_boundary():
 
     mock_cpe = MagicMock()
     mock_cpe.ip = "10.0.0.100"
-    mock_cpe.combined_signal = -80  # Exactly at threshold
-    mock_cpe.last_local_rssi = -80
+    mock_cpe.primary_signal = -80  # Exactly at threshold
     client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
@@ -328,8 +321,7 @@ async def test_smoke_tests_cpe_count_increased():
     for i in range(5):
         cpe = MagicMock()
         cpe.ip = f"10.0.0.{100 + i}"
-        cpe.combined_signal = -65
-        cpe.last_local_rssi = -65
+        cpe.primary_signal = -65
         cpes.append(cpe)
     client.get_connected_cpes = AsyncMock(return_value=cpes)
 
@@ -364,8 +356,7 @@ async def test_smoke_tests_signal_unparseable_string():
 
     mock_cpe = MagicMock()
     mock_cpe.ip = "10.0.0.100"
-    mock_cpe.combined_signal = "N/A"
-    mock_cpe.last_local_rssi = "unknown"
+    mock_cpe.primary_signal = "N/A"
     client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
@@ -383,8 +374,7 @@ async def test_smoke_tests_signal_zero_treated_as_no_data():
 
     mock_cpe = MagicMock()
     mock_cpe.ip = "10.0.0.100"
-    mock_cpe.combined_signal = 0  # Some devices report 0 for "no reading"
-    mock_cpe.last_local_rssi = 0
+    mock_cpe.primary_signal = 0  # Some devices report 0 for "no reading"
     client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
@@ -415,8 +405,7 @@ async def test_smoke_tests_all_checks_run_despite_early_failures():
 
     mock_cpe = MagicMock()
     mock_cpe.ip = "10.0.0.100"
-    mock_cpe.combined_signal = -65
-    mock_cpe.last_local_rssi = -65
+    mock_cpe.primary_signal = -65
     client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
@@ -428,36 +417,33 @@ async def test_smoke_tests_all_checks_run_despite_early_failures():
 
 
 @pytest.mark.asyncio
-async def test_smoke_tests_combined_signal_preferred_over_rssi():
-    """combined_signal is used when available, last_local_rssi as fallback."""
+async def test_smoke_tests_use_rx_power_first():
+    """The smoke signal check reads CPEInfo.primary_signal (rxPower-first), so a
+    link the UI shows as healthy isn't flagged because combinedSignal reads low.
+    Real-world case: rxPower=-54 (good) alongside combinedSignal=-85 (low)."""
     client = TachyonClient("10.0.0.1", "admin", "pass")
     client._token = "fake"
     client.get_device_info = AsyncMock(return_value=DeviceInfo(ip="10.0.0.1", current_version="2.5.1"))
     client.get_config = AsyncMock(return_value={})
 
-    mock_cpe = MagicMock()
-    mock_cpe.ip = "10.0.0.100"
-    mock_cpe.combined_signal = -65   # Good signal
-    mock_cpe.last_local_rssi = -90   # Bad signal (should be ignored)
-    client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
+    cpe = CPEInfo(ip="10.0.0.100", rx_power=-54.0, combined_signal=-85.0, last_local_rssi=-85.0)
+    client.get_connected_cpes = AsyncMock(return_value=[cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
-    assert result.passed is True  # Uses combined_signal (-65), not last_local_rssi (-90)
+    assert result.passed is True  # rxPower (-54) wins, not combinedSignal (-85)
 
 
 @pytest.mark.asyncio
-async def test_smoke_tests_rssi_fallback_when_combined_is_zero():
-    """Falls back to last_local_rssi when combined_signal is 0 (no reading)."""
+async def test_smoke_tests_signal_falls_back_when_rx_power_missing():
+    """With no rxPower, primary_signal falls back down the chain to
+    last_local_rssi, so a genuinely low link is still flagged."""
     client = TachyonClient("10.0.0.1", "admin", "pass")
     client._token = "fake"
     client.get_device_info = AsyncMock(return_value=DeviceInfo(ip="10.0.0.1", current_version="2.5.1"))
     client.get_config = AsyncMock(return_value={})
 
-    mock_cpe = MagicMock()
-    mock_cpe.ip = "10.0.0.100"
-    mock_cpe.combined_signal = 0     # No reading
-    mock_cpe.last_local_rssi = -85   # Bad signal via fallback
-    client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
+    cpe = CPEInfo(ip="10.0.0.100", rx_power=None, combined_signal=None, last_local_rssi=-85.0)
+    client.get_connected_cpes = AsyncMock(return_value=[cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
     assert result.passed is False

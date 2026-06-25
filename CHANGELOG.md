@@ -81,8 +81,10 @@ All notable changes to this project are documented in this file.
   (e.g. −60 dBm here vs −54 dBm on the device) because we headlined the
   `combinedSignal` field; the device headlines `rxPower`, which reads lower only
   on the subset of links where the two disagree. The manager now prefers
-  `rxPower` everywhere — the signal, the ▲/▼ margin, and the rain/reliability
-  health all agree with what an installer sees on the device.
+  `rxPower` everywhere — the signal, the ▲/▼ margin, the rain/reliability
+  health, and the post-update smoke check all agree with what an installer sees
+  on the device, so a healthy link is no longer flagged low (which could fail or
+  cancel a rollout and hold back the firmware).
 - Signal values and firmware versions now render consistently: signal is shown
   with no decimal (`−54 dBm`) in every place, and firmware reads `1.12.3 r55002`
   across APs, switches, and CPEs (including the Version filter) regardless of the
