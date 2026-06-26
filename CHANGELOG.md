@@ -42,6 +42,35 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- **A device on the newest firmware no longer reads as needing an update.** The
+  "latest" firmware target is now chosen by version number, not by which file
+  was downloaded most recently. Before, if the newest build's file briefly went
+  missing (e.g. an interrupted auto-download), the manager silently fell back to
+  an older build as the target — and with downgrades allowed, every device on the
+  newer firmware then showed an "update available" arrow. The target also never
+  moves backward in version: it waits for the newer file to be re-fetched rather
+  than pointing the fleet at an older build (the flash path already refuses a
+  missing file, so nothing is ever auto-downgraded by accident). A device that is
+  intentionally *ahead* of the selected target is now shown as a distinct
+  **downgrade** (down-arrow), never as "update available".
+- **No more contradictory "Updated · click to update now".** The internal
+  rollout-progress signal no longer leaks into a device's update tooltip; the
+  version check alone drives whether a device shows as needing an update.
+- **A 303L access point can no longer be flashed with 30x firmware.** When a
+  scheduled fleet update ran without a 303L (or TNS) image available, it used to
+  silently substitute the 30x firmware for those models. It now fails that device
+  closed with a clear "firmware not provided" error instead of pushing the wrong
+  image — matching how CPEs and switches already behaved.
+- **"Update selected" now actually updates.** The bulk firmware-update button was
+  a no-op (an argument-order bug); it now flashes every selected out-of-date
+  device, skipping CPEs whose access point is also selected so nothing updates
+  twice.
+- **A tower site no longer shows "all current" while a CPE underneath needs
+  firmware** — the site status now counts CPEs, not just access points.
+- **The firmware picker tells you when a chosen build isn't downloaded yet.** If
+  the selected firmware's file isn't on the manager (e.g. an interrupted
+  auto-download), the picker now says so plainly instead of looking ready while
+  devices silently can't update to it.
 - Config-tar download (`/api/configs/{ip}/download/{config_id}`) again writes the
   `CONTROL` file as the bare device platform string (e.g. `tn-110-prs`, or
   `tam-110-prs` for the TNA-303L-65) with no trailing newline — the exact format

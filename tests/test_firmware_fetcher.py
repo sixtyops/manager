@@ -340,6 +340,72 @@ class TestAutoSelectPin:
         fetcher.reselect(beta_enabled=True)
         assert db.get_setting("selected_firmware_30x_pinned", "") == "false"
         assert db.get_setting("selected_firmware_30x", "") == self.BETA_30X
+
+
+class TestAutoSelectVersionBased:
+    """Auto-select must choose the target by firmware *version*, never by file
+    mtime or channel-map insertion order, and must never move the target
+    backward in version when the newest build's file is temporarily missing.
+    Regression for the live bug where a missing TNA-303L beta silently demoted
+    the target to an older stable, which (with allow_downgrade on) made
+    up-to-date devices read as needing a downgrade."""
+
+    STABLE = "tna-303l-1.12.4-r7782-20251209-sysupgrade.bin"          # 1.12.4.7782
+    BETA_OLD = "tna-303l-1.15.0-r8503-20260521-sysupgrade.bin"        # 1.15.0.8503
+    BETA_NEW = "tna-303l-1.15.0-r8515-20260609-sysupgrade.bin"        # 1.15.0.8515
+    KEY = "selected_firmware_303l"
+
+    @pytest.fixture
+    def fetcher(self, tmp_path):
+        return FirmwareFetcher(firmware_dir=tmp_path, broadcast_func=AsyncMock())
+
+    def _channels(self, *names):
+        # Insertion order deliberately newest-first so a naive "first match"
+        # would pick the newest — the failure mode we guard is the *opposite*
+        # order, so each test sets the order it needs.
+        db.set_setting("firmware_channels", json.dumps({
+            n: ("beta" if "r85" in n else "stable") for n in names
+        }))
+
+    def test_picks_highest_version_not_insertion_order(self, fetcher, tmp_path, mock_db):
+        # Channel map lists the OLDER beta first; both files present. Old code
+        # picked the first present beta (8503); version-based picks 8515.
+        for n in (self.STABLE, self.BETA_OLD, self.BETA_NEW):
+            (tmp_path / n).write_bytes(b"x")
+        self._channels(self.BETA_OLD, self.BETA_NEW, self.STABLE)
+        fetcher.reselect(beta_enabled=True)
+        assert db.get_setting(self.KEY, "") == self.BETA_NEW
+
+    def test_missing_newest_does_not_pivot_backward(self, fetcher, tmp_path, mock_db):
+        # Newest beta is selected, then its file vanishes leaving only the older
+        # stable on disk. Must KEEP the newer selection (await re-fetch), not
+        # silently downgrade the target to stable.
+        (tmp_path / self.STABLE).write_bytes(b"x")  # only stable present
+        self._channels(self.STABLE, self.BETA_NEW)
+        db.set_setting(self.KEY, self.BETA_NEW)
+        fetcher.reselect(beta_enabled=True)
+        assert db.get_setting(self.KEY, "") == self.BETA_NEW
+
+    def test_advances_once_newer_file_is_restored(self, fetcher, tmp_path, mock_db):
+        # Currently on stable; the newer beta file appears -> advance to it.
+        for n in (self.STABLE, self.BETA_NEW):
+            (tmp_path / n).write_bytes(b"x")
+        self._channels(self.STABLE, self.BETA_NEW)
+        db.set_setting(self.KEY, self.STABLE)
+        fetcher.reselect(beta_enabled=True)
+        assert db.get_setting(self.KEY, "") == self.BETA_NEW
+
+    def test_beta_disabled_picks_newest_stable(self, fetcher, tmp_path, mock_db):
+        older_stable = "tna-303l-1.12.3-r7000-20251101-sysupgrade.bin"
+        for n in (older_stable, self.STABLE, self.BETA_NEW):
+            (tmp_path / n).write_bytes(b"x")
+        db.set_setting("firmware_channels", json.dumps({
+            older_stable: "stable", self.STABLE: "stable", self.BETA_NEW: "beta",
+        }))
+        fetcher.reselect(beta_enabled=False)
+        assert db.get_setting(self.KEY, "") == self.STABLE
+
+
 class TestSuspectTruncatedSize:
     """Size-outlier guard (#214): a file far smaller than its same-platform
     siblings is treated as a truncated download. Catches the real case where a

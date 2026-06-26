@@ -10,6 +10,8 @@ from . import database as db
 from . import rollout_gate
 from . import services
 from .services import format_temperature
+from .version_utils import parse_version, extract_version_from_filename, needs_rollout_update
+from . import firmware_target
 
 logger = logging.getLogger(__name__)
 
@@ -85,47 +87,10 @@ def upcoming_window_starts(
     return results
 
 
-def _parse_version(version: str) -> tuple:
-    """Parse version string into tuple for comparison.
-
-    Handles formats like '1.12.3.54970' or '1.12.3.r54970'.
-    Returns tuple of integers for comparison.
-    """
-    if not version:
-        return (0,)
-    normalized = version.replace(".r", ".")
-    parts = []
-    for part in normalized.split("."):
-        try:
-            parts.append(int(part))
-        except ValueError:
-            parts.append(0)
-    return tuple(parts) if parts else (0,)
-
-
-def _extract_version_from_filename(filename: str) -> str:
-    """Extract normalized version from a firmware filename.
-
-    Mirrors `app._extract_version_from_filename`; keep the two in sync.
-    See that copy for why the regex must match the bare `tns-` prefix.
-    """
-    import re
-
-    if not filename:
-        return ""
-    match = re.search(
-        r"(?:tna-30x|tna30x|tna-303l|tna303l|tns-100|tns100|tns)-(\d+\.\d+\.\d+)-r(\d+)",
-        filename,
-        re.IGNORECASE,
-    )
-    if match:
-        return f"{match.group(1)}.{match.group(2)}"
-    match = re.search(r"(\d+\.\d+\.\d+)(?:-r(\d+))?", filename)
-    if match:
-        if match.group(2):
-            return f"{match.group(1)}.{match.group(2)}"
-        return match.group(1)
-    return ""
+# Version parsing/extraction now lives in version_utils (single source of
+# truth). Keep the historic private names as aliases for the call sites below.
+_parse_version = parse_version
+_extract_version_from_filename = extract_version_from_filename
 
 
 def _firmware_type_for_model(model: Optional[str]) -> str:
@@ -156,33 +121,10 @@ def _seen_within(last_seen: Optional[str], cutoff: datetime) -> bool:
     return dt >= cutoff
 
 
-def _device_needs_update(
-    current_version: str,
-    target_version: str,
-    allow_downgrade: bool,
-    last_update_iso: Optional[str] = None,
-    cooldown_days: int = 0,
-) -> bool:
-    """Return True when a device should be included in a rollout."""
-    if not target_version:
-        return False
-    if target_version == "__unknown__":
-        return True
-
-    # Cooldown check: skip if recently updated
-    if cooldown_days > 0 and last_update_iso:
-        try:
-            last_upd = datetime.fromisoformat(last_update_iso)
-            if datetime.now() - last_upd < timedelta(days=cooldown_days):
-                return False
-        except (ValueError, TypeError):
-            pass
-
-    if current_version == target_version:
-        return False
-    if not allow_downgrade and _parse_version(current_version) > _parse_version(target_version):
-        return False
-    return True
+# Rollout-enrollment decision now lives in version_utils (single source of
+# truth). Keep the historic name as an alias; behavior is pinned by
+# tests/test_status_core.py and tests/test_scheduler.py.
+_device_needs_update = needs_rollout_update
 
 
 def _as_int(value, default: int) -> int:
@@ -772,22 +714,14 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
 
     def _target_versions(self, settings: dict, rollout: Optional[dict]) -> dict[str, str]:
-        """Build target versions for each firmware family."""
-        rollout = rollout or {}
-        file_names = {
-            "tna-30x": rollout.get("firmware_file") or settings.get("selected_firmware_30x", ""),
-            "tna-303l": rollout.get("firmware_file_303l") or settings.get("selected_firmware_303l", ""),
-            "tns-100": rollout.get("firmware_file_tns100") or settings.get("selected_firmware_tns100", ""),
-        }
-        targets = {
-            "tna-30x": _extract_version_from_filename(file_names["tna-30x"]) or rollout.get("target_version") or "",
-            "tna-303l": _extract_version_from_filename(file_names["tna-303l"]) or rollout.get("target_version_303l") or "",
-            "tns-100": _extract_version_from_filename(file_names["tns-100"]) or rollout.get("target_version_tns100") or "",
-        }
-        for fw_type, file_name in file_names.items():
-            if file_name and not targets[fw_type]:
-                targets[fw_type] = "__unknown__"
-        return targets
+        """Build target versions for each firmware family.
+
+        Delegates to the single resolver so target precedence (rollout-pinned
+        firmware over the selected setting) and the `__unknown__` marker live in
+        one place. Version-only by design — the Firmware Hold / rollout
+        invariants depend on this exact shape.
+        """
+        return firmware_target.target_versions(settings, rollout)
 
     def _confirmed_family_devices(
         self, settings: dict, rollout: dict, targets: dict[str, str]

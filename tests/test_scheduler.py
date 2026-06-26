@@ -307,6 +307,39 @@ class TestSchedulerCanaries:
         assert app_module.update_jobs[job_id].enforce_window_cutoff is False
         app_module.update_jobs.pop(job_id, None)
 
+    @pytest.mark.asyncio
+    async def test_303l_ap_without_303l_firmware_fails_closed_not_30x(self, mock_db, tmp_path):
+        """A scheduled update for a 303L AP with no 303L firmware must enroll it
+        with the missing-firmware sentinel (clean per-device failure), NEVER the
+        30x file. Regression for the `or str(firmware_path)` 30x fallback."""
+        firmware_dir = tmp_path / "firmware"
+        firmware_dir.mkdir()
+        (firmware_dir / "firmware.bin").write_bytes(b"test")  # the 30x file only
+
+        db.upsert_access_point("10.0.0.20", "root", "pass", enabled=True,
+                               firmware_version="1.0.0", model="TNA-303L-65")
+
+        mock_task = MagicMock()
+        mock_task.add_done_callback = MagicMock()
+
+        def _discard_task(coro):
+            coro.close()
+            return mock_task
+
+        with patch.object(app_module, "FIRMWARE_DIR", firmware_dir), \
+             patch.object(app_module, "broadcast", AsyncMock()), \
+             patch.object(app_module.asyncio, "create_task", _discard_task):
+            job_id = await app_module._start_scheduled_update(
+                ap_ips=["10.0.0.20"],
+                firmware_file="firmware.bin",  # 30x only; no 303L provided
+                enforce_window_cutoff=False,
+            )
+
+        fw_map = app_module.update_jobs[job_id].device_firmware_map
+        assert fw_map["10.0.0.20"] == "__missing_303l__"
+        assert fw_map["10.0.0.20"] != str(firmware_dir / "firmware.bin")
+        app_module.update_jobs.pop(job_id, None)
+
 
 class TestSchedulerStartupRecovery:
     def test_orphaned_active_rollout_devices_marked_deferred(self, mock_db):

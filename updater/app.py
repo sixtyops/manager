@@ -30,9 +30,22 @@ from .tachyon import TachyonClient, UpdateResult
 from .vendors import init_vendors, get_driver, list_vendors
 from . import __version__
 from . import database as db
+from .version_utils import (
+    extract_version_from_filename,
+    parse_version,
+    compare_versions,
+    normalize_version,
+    version_state,
+    version_direction,
+    active_inactive_versions,
+    needs_scheduled_update,
+    needs_manual_bulk_update,
+    is_provably_on_build,
+)
 from .poller import init_poller, get_poller, set_poller
 from .scheduler import init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTES
 from .firmware_fetcher import init_fetcher, get_fetcher, PLATFORM_SETTING_KEYS, pin_setting_key
+from . import firmware_target
 from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
 from . import services
 from .auth import require_auth, require_auth_ws, require_role, require_write_scope, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user, generate_api_token
@@ -71,6 +84,7 @@ DEV_MODE = os.environ.get("SIXTYOPS_DEV_MODE") == "1"
 # Paths
 BASE_DIR = Path(__file__).parent
 FIRMWARE_DIR = BASE_DIR.parent / "firmware"
+firmware_target.set_firmware_dir(FIRMWARE_DIR)
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR.parent / "static"
 DATA_DIR = BASE_DIR.parent / "data"
@@ -4327,17 +4341,23 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
     settings = db.get_all_settings()
     allow_downgrade = settings.get("allow_downgrade", "false") == "true"
 
-    # Build target versions from selected firmware filenames
+    # Resolve each family's target (filename + version + deployability) through
+    # the single resolver. Settings-only (no rollout) preserves today's
+    # fleet-status semantics: device status is measured against the selected
+    # firmware. A selected-but-missing file is now surfaced as not deployable so
+    # the UI can say "selected firmware not available" instead of a phantom
+    # target. The "__unknown__" marker maps back to an empty display version so
+    # status stays "unknown" exactly as before.
+    fleet_targets = firmware_target.resolve_fleet(settings=settings)
     targets = {}
-    for setting_key, fw_type in [
-        ("selected_firmware_30x", "tna-30x"),
-        ("selected_firmware_303l", "tna-303l"),
-        ("selected_firmware_tns100", "tns-100"),
-    ]:
-        filename = settings.get(setting_key, "")
-        if filename:
-            version = _extract_version_from_filename(filename)
-            targets[fw_type] = {"file": filename, "version": version}
+    for fw_type, ti in fleet_targets.items():
+        if ti.filename:
+            targets[fw_type] = {
+                "file": ti.filename,
+                "version": "" if ti.version == "__unknown__" else ti.version,
+                "deployable": ti.deployable,
+                "health_reason": ti.health_reason,
+            }
 
     # Build site name lookup
     sites = db.get_tower_sites()
@@ -4421,6 +4441,9 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             "target_version": target_version,
             "firmware_type": fw_type,
             "status": status,
+            "behind_direction": _behind_direction(ap.get("firmware_version"), target_version) if status == "behind" else None,
+            "target_deployable": (target.get("deployable") if target else None),
+            "target_health_reason": (target.get("health_reason") if target else "no_selection"),
             "update_state": update_state,
             "hold": hold,
             "auth_status": None,
@@ -4456,6 +4479,9 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
                 "target_version": cpe_target_version,
                 "firmware_type": cpe_fw_type,
                 "status": cpe_status,
+                "behind_direction": _behind_direction(cpe.get("firmware_version"), cpe_target_version) if cpe_status == "behind" else None,
+                "target_deployable": (cpe_target.get("deployable") if cpe_target else None),
+                "target_health_reason": (cpe_target.get("health_reason") if cpe_target else "no_selection"),
                 "update_state": cpe_update_state,
                 "hold": cpe_hold,
                 "auth_status": cpe.get("auth_status"),
@@ -4493,6 +4519,9 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             "target_version": target_version,
             "firmware_type": fw_type,
             "status": status,
+            "behind_direction": _behind_direction(sw.get("firmware_version"), target_version) if status == "behind" else None,
+            "target_deployable": (target.get("deployable") if target else None),
+            "target_health_reason": (target.get("health_reason") if target else "no_selection"),
             "update_state": sw_update_state,
             "hold": sw_hold,
             "auth_status": None,
@@ -4505,56 +4534,12 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
     return {"devices": devices, "summary": summary, "targets": targets}
 
 
-def _device_version_status(current: Optional[str], target: str, allow_downgrade: bool = False) -> str:
-    """Determine version status: 'current', 'behind', or 'unknown'.
-
-    Args:
-        current: Current firmware version on device
-        target: Target firmware version
-        allow_downgrade: If True, devices with newer firmware than target are 'behind'
-    """
-    if not current or not target:
-        return "unknown"
-    cmp = _compare_versions(current, target)
-    if cmp == 0:
-        return "current"
-    if cmp > 0:
-        # Device is newer than target
-        return "behind" if allow_downgrade else "current"
-    return "behind"
-
-
-def _device_needs_update(device: dict, target_version: str, bank_mode: str, allow_downgrade: bool) -> bool:
-    """Check if a device needs updating, considering bank mode.
-
-    Single bank: needs update if active bank differs from target.
-    Dual bank ("both"): needs update if EITHER bank differs from target.
-    Unknown versions always trigger update (cautious default).
-    """
-    if not target_version:
-        return True  # can't determine target version from filename → update to be safe
-
-    current = (device.get("firmware_version") or "").replace(".r", ".")
-    if not current:
-        return True
-
-    active_status = _device_version_status(current, target_version, allow_downgrade)
-    if active_status == "behind":
-        return True
-
-    if bank_mode == "both":
-        b1 = (device.get("bank1_version") or "").replace(".r", ".")
-        b2 = (device.get("bank2_version") or "").replace(".r", ".")
-        active_bank = device.get("active_bank", 1)
-        inactive = b2 if active_bank == 1 else b1
-        if inactive:
-            inactive_status = _device_version_status(inactive, target_version, allow_downgrade)
-            if inactive_status == "behind":
-                return True
-        elif b1 or b2:
-            return True
-
-    return False
+# Device-vs-target status now lives in version_utils (single source of truth).
+# Keep the historic private names as thin aliases so the call sites and existing
+# test imports don't churn. Behavior is pinned by tests/test_status_core.py.
+_device_version_status = version_state
+_behind_direction = version_direction
+_device_needs_update = needs_scheduled_update
 
 
 def _select_firmware_for_model(model: Optional[str], firmware_files: Dict[str, str], vendor: str = "tachyon") -> Optional[str]:
@@ -4591,143 +4576,18 @@ TNS100_REBOOT_TIMEOUT = 900  # 15 minutes for switches
 AP_REBOOT_TIMEOUT = 480      # 8 minutes for APs (increased from 5 min due to slower reboots)
 
 
-def _extract_version_from_filename(filename: str) -> str:
-    """Extract normalized version from firmware filename.
-
-    'tna-30x-2.5.1-r54970.bin' -> '2.5.1.54970'
-    'tns-1.12.8-r54729-...-tns-100-...bin' -> '1.12.8.54729'
-
-    Tachyon switch firmware uses a bare `tns-` prefix (no model number)
-    where APs use `tna-30x-` or `tna-303l-`. Without the `tns` alternate,
-    the primary regex misses the switch convention, the fallback drops the
-    revision, and `_compare_versions` then sees the device as "ahead" of
-    target (bug surfaced once `allow_downgrade` is on — PR #92).
-    """
-    match = re.search(
-        r"(?:tna-30x|tna30x|tna-303l|tna303l|tns-100|tns100|tns)-(\d+\.\d+\.\d+)-r(\d+)",
-        filename,
-        re.IGNORECASE,
-    )
-    if match:
-        return f"{match.group(1)}.{match.group(2)}"
-    # Fallback: capture the revision too when present, so a future
-    # filename convention we don't yet recognize doesn't silently lose
-    # the build number.
-    match2 = re.search(r"(\d+\.\d+\.\d+)(?:-r(\d+))?", filename)
-    if match2:
-        if match2.group(2):
-            return f"{match2.group(1)}.{match2.group(2)}"
-        return match2.group(1)
-    return ""
+# Firmware-version parsing/comparison lives in version_utils (single source of
+# truth — see that module's docstring). Keep the historic private names as thin
+# aliases so the many call sites below don't churn.
+_extract_version_from_filename = extract_version_from_filename
+_parse_version = parse_version
+_normalize_version = normalize_version
 
 
-def _parse_version(version: str) -> tuple:
-    """Parse version string into tuple for comparison.
-
-    Handles formats like '1.12.3.54970' or '1.12.3.r54970'.
-    Returns tuple of integers for comparison.
-    """
-    if not version:
-        return (0,)
-    # Normalize .r to .
-    normalized = version.replace(".r", ".")
-    parts = []
-    for part in normalized.split("."):
-        try:
-            parts.append(int(part))
-        except ValueError:
-            parts.append(0)
-    return tuple(parts) if parts else (0,)
-
-
-def _normalize_version(value: Optional[str]) -> str:
-    """Normalize firmware version strings for comparisons."""
-    if not value:
-        return ""
-    return str(value).strip().replace(".r", ".")
-
-
-def _get_active_inactive_bank_versions(device: dict) -> tuple[str, str]:
-    """Return (active_version, inactive_version) for a device record."""
-    bank1 = _normalize_version(device.get("bank1_version"))
-    bank2 = _normalize_version(device.get("bank2_version"))
-    firmware = _normalize_version(device.get("firmware_version"))
-
-    try:
-        active_bank = int(device.get("active_bank")) if device.get("active_bank") is not None else None
-    except (TypeError, ValueError):
-        active_bank = None
-
-    if active_bank == 1:
-        return (bank1 or firmware, bank2)
-    if active_bank == 2:
-        return (bank2 or firmware, bank1)
-    return (firmware, "")
-
-
-def _device_needs_update_for_bank_mode(
-    device: dict,
-    target_version: str,
-    bank_mode: str,
-    allow_downgrade: bool = False,
-) -> bool:
-    """Evaluate whether a device should be enrolled for update.
-
-    Rules:
-    - `bank_mode=one`: skip if active bank is already on target.
-    - `bank_mode=both`: include when active bank is on target but inactive bank differs.
-    """
-    target = _normalize_version(target_version)
-    if not target:
-        return True
-
-    active_version, inactive_version = _get_active_inactive_bank_versions(device)
-    if not active_version:
-        return True
-
-    target_parsed = _parse_version(target)
-    active_parsed = _parse_version(active_version)
-
-    if active_version == target:
-        if bank_mode == "both":
-            # Unknown inactive bank state -> don't force a dual-bank rewrite.
-            if not inactive_version:
-                return False
-            if inactive_version == target:
-                return False
-            if not allow_downgrade and _parse_version(inactive_version) > target_parsed:
-                return False
-            return True
-        return False
-
-    if not allow_downgrade and active_parsed > target_parsed:
-        return False
-
-    return True
-
-
-def _device_on_exact_build(device: dict, target_version: str, bank_mode: str) -> bool:
-    """True only when the device is already on the exact target build.
-
-    This is the gate for *explicit manual* updates. An operator who picks a
-    firmware file and clicks "update" on a specific device should always have it
-    pushed — the only reason to skip is that the device is provably already on
-    that exact build (so we don't force a needless reboot). Unlike
-    `_device_needs_update_for_bank_mode`, this never decides "no update needed"
-    just because the device's version *parses* as newer/older than the target;
-    only an exact build-string match counts.
-    """
-    target = _normalize_version(target_version)
-    if not target:
-        return False  # unknown target -> not provably on it -> push
-
-    active_version, inactive_version = _get_active_inactive_bank_versions(device)
-    if active_version != target:
-        return False
-    if bank_mode == "both" and inactive_version != target:
-        # A dual-bank rewrite still has work to do on the inactive bank.
-        return False
-    return True
+# Bank-derivation + the manual skip/no-op gates also live in version_utils now.
+_get_active_inactive_bank_versions = active_inactive_versions
+_device_needs_update_for_bank_mode = needs_manual_bulk_update
+_device_on_exact_build = is_provably_on_build
 
 
 def _get_firmware_type_for_model(model: Optional[str], vendor: str = "tachyon") -> Optional[str]:
@@ -4740,30 +4600,7 @@ def _get_firmware_type_for_model(model: Optional[str], vendor: str = "tachyon") 
         return None
 
 
-def _compare_versions(a: str, b: str) -> int:
-    """Compare two version strings. Returns <0 if a<b, 0 if equal, >0 if a>b."""
-    def parts(v):
-        if not v:
-            return [0]
-        # Normalize: "1.12.2-r54885" -> "1.12.2.54885"
-        v = v.replace("-", ".").lower()
-        result = []
-        for seg in v.split("."):
-            seg = seg.lstrip("r")  # strip revision prefix
-            try:
-                result.append(int(seg))
-            except ValueError:
-                continue  # skip non-numeric segments
-        return result or [0]
-    pa, pb = parts(a), parts(b)
-    while len(pa) < len(pb):
-        pa.append(0)
-    while len(pb) < len(pa):
-        pb.append(0)
-    for x, y in zip(pa, pb):
-        if x != y:
-            return x - y
-    return 0
+_compare_versions = compare_versions
 
 
 async def _start_scheduled_update(
@@ -4821,16 +4658,36 @@ async def _start_scheduled_update(
         if not ap:
             continue
 
-        ap_fw = _select_firmware_for_model(ap.get("model"), firmware_files) or str(firmware_path)
-        ap_target = _extract_version_from_filename(Path(ap_fw).name)
+        ap_fw = _select_firmware_for_model(ap.get("model"), firmware_files)
+        if ap_fw is None:
+            # Fail closed per family, mirroring the CPE/switch paths below: an AP
+            # whose model IS a 303L/TNS gets a missing-firmware sentinel (the
+            # flash worker turns it into a clean per-device failure) — never the
+            # 30x file. The old `or str(firmware_path)` flashed 30x onto a 303L.
+            # A 30x/unknown model still defaults to the 30x firmware, as before.
+            if _is_303l_model(ap.get("model")):
+                ap_fw = "__missing_303l__"
+            elif _is_tns100_model(ap.get("model")):
+                ap_fw = "__missing_tns100__"
+            else:
+                ap_fw = str(firmware_path)
 
-        if _device_needs_update(ap, ap_target, bank_mode, allow_downgrade):
+        if ap_fw.startswith("__missing_"):
+            # 303L/TNS AP whose family firmware wasn't provided — enroll-to-fail
+            # so the gap is visible (matches CPE/switch behavior).
             valid_aps.append(ip)
             credentials[ip] = (ap["username"], ap["password"])
             device_roles[ip] = "ap"
             device_firmware_map[ip] = ap_fw
         else:
-            logger.info(f"Skipping AP {ip}: already at target version {ap_target}")
+            ap_target = _extract_version_from_filename(Path(ap_fw).name)
+            if _device_needs_update(ap, ap_target, bank_mode, allow_downgrade):
+                valid_aps.append(ip)
+                credentials[ip] = (ap["username"], ap["password"])
+                device_roles[ip] = "ap"
+                device_firmware_map[ip] = ap_fw
+            else:
+                logger.info(f"Skipping AP {ip}: already at target version {ap_target}")
 
         # Always process CPEs regardless of AP status
         cpes = db.get_cpes_for_ap(ip)

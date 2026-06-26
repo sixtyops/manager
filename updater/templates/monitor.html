@@ -1343,6 +1343,9 @@
         .update-action:hover { background: var(--warning-bg); }
         .update-action.scheduled { color: var(--info); }
         .update-action.scheduled:hover { background: var(--info-bg); }
+        /* Downgrade: device is ahead of target — muted, not a warning colour. */
+        .update-action.downgrade { color: var(--text-muted); }
+        .update-action.downgrade:hover { background: var(--bg-muted, var(--info-bg)); }
 
         /* Connection status */
         .connection-status {
@@ -4784,7 +4787,15 @@
                 const when = formatWhen(info.next_attempt_iso);
                 return when ? `Next attempt ${when}` : '';
             }
-            if (info.next_attempt_reason) return info.next_attempt_reason;
+            // "Updated" is an internal scheduler signal — the device (or, for a
+            // CPE, its parent AP) finished the active rollout's wave. It is NOT
+            // a statement that this device is on the selected target, so never
+            // splice it into "… · click to update now" (the contradictory
+            // "Updated · click to update now"). The version check drives the
+            // arrow; fall back to the generic scheduled text.
+            if (info.next_attempt_reason && info.next_attempt_reason !== 'Updated') {
+                return info.next_attempt_reason;
+            }
             return '';
         }
 
@@ -5162,18 +5173,36 @@
             setHidden(document.getElementById('btnCheckCompliance'), activeColumnMode !== 'config');
         }
 
-        function updateFirmwareForSelected() {
-            const ips = [];
+        async function updateFirmwareForSelected() {
+            const behind = [];
             for (const ip of checkedDevices) {
-                if (versionStatus(ip) === 'behind') ips.push(ip);
+                if (versionStatus(ip) === 'behind') behind.push(ip);
             }
-            if (ips.length === 0) {
+            // Resolve each checked device to its role. An AP update already
+            // covers its CPEs, so drop checked CPEs whose parent AP is also
+            // selected to avoid double-flashing. (Previously this called
+            // triggerUpdate(ip) with the IP as the `type` arg — a silent no-op.)
+            const apIps = new Set(behind.filter(ip => deviceTypeForIp(ip) === 'ap'));
+            const targets = [];
+            for (const ip of behind) {
+                const t = deviceTypeForIp(ip);
+                if (!t) continue;
+                if (t === 'cpe') {
+                    const parent = findCPE(ip)?.ap?.ip;
+                    if (parent && apIps.has(parent)) continue;
+                }
+                targets.push({ type: t, ip });
+            }
+            if (targets.length === 0) {
                 showToast('No selected devices need updating');
                 return;
             }
-            if (!confirm(`Update firmware on ${ips.length} device(s)?`)) return;
-            for (const ip of ips) {
-                triggerUpdate(ip);
+            if (!await showConfirmDialog(
+                `Update firmware on ${targets.length} device(s)? This will flash firmware and reboot them.`,
+                { title: 'Start Firmware Update', confirmText: 'Start Update', danger: true }
+            )) return;
+            for (const { type, ip } of targets) {
+                await triggerUpdate(type, ip, 'bulk');
             }
         }
 
@@ -5462,6 +5491,7 @@
                 return '<span class="status-current" title="Current">&#10003;</span>';
             }
             if (vs === 'behind') {
+                const info = fleetStatusMap.get(ip);
                 const hold = holdInfo(ip);
                 if (hold) {
                     // On hold: needs the new firmware, but it's still soaking. Show a
@@ -5474,9 +5504,21 @@
                     const holdTitle = `${holdMsg} \u00b7 click to update now (skips the hold)`;
                     return `<button class="update-action scheduled" title="${escapeHtml(holdTitle)}" onclick="triggerUpdate('${type}','${ip}');event.stopPropagation();">&#9201;</button>`;
                 }
+                // Device is on *newer* firmware than the selected target (only
+                // reachable with downgrades allowed). Never show this as "update
+                // available" \u2014 label it a downgrade with a down-arrow glyph.
+                const isDowngrade = info && info.behind_direction === 'downgrade';
                 if (currentUserRole === 'viewer') {
-                    const label = autoUpdateEnabled ? 'Auto-update scheduled' : 'Update available';
-                    return `<span class="status-icon-cell" title="${label}" style="color:var(--text-muted);">&#8593;</span>`;
+                    const label = isDowngrade
+                        ? 'On newer firmware than the selected target'
+                        : (autoUpdateEnabled ? 'Auto-update scheduled' : 'Update available');
+                    const glyph = isDowngrade ? '&#8595;' : '&#8593;';
+                    return `<span class="status-icon-cell" title="${escapeHtml(label)}" style="color:var(--text-muted);">${glyph}</span>`;
+                }
+                if (isDowngrade) {
+                    const tv = info.target_version || 'the selected build';
+                    const dtitle = `On newer firmware than target \u00b7 click to downgrade to ${tv}`;
+                    return `<button class="update-action downgrade" title="${escapeHtml(dtitle)}" onclick="triggerUpdate('${type}','${ip}');event.stopPropagation();">&#8595;</button>`;
                 }
                 let title;
                 if (autoUpdateEnabled) {
@@ -5595,13 +5637,21 @@
         }
 
         function siteUpdateCell(siteId, aps) {
-            const anyUpdating = aps.some(ap => updatingDevices.has(ap.ip));
+            // Aggregate over APs AND their child CPEs — a site isn't "all
+            // current" if a CPE underneath still needs firmware, and it should
+            // show the spinner while a CPE is updating.
+            const ips = [];
+            for (const ap of aps) {
+                ips.push(ap.ip);
+                for (const c of (ap.cpes || [])) ips.push(c.ip);
+            }
+            const anyUpdating = ips.some(ip => updatingDevices.has(ip));
             if (anyUpdating) {
                 return '<span class="update-spinner" title="Updating..."></span>';
             }
-            const anyBehind = aps.some(ap => versionStatus(ap.ip) === 'behind');
+            const anyBehind = ips.some(ip => versionStatus(ip) === 'behind');
             if (!anyBehind) {
-                const allCurrent = aps.length > 0 && aps.every(ap => versionStatus(ap.ip) === 'current');
+                const allCurrent = ips.length > 0 && ips.every(ip => versionStatus(ip) === 'current');
                 return allCurrent ? '<span class="status-current" title="All current">&#10003;</span>' : '';
             }
             const title = autoUpdateEnabled ? 'Auto-update scheduled \u00b7 click to update now' : 'Update available \u00b7 click to update now';
@@ -5990,6 +6040,14 @@
 
         function findSwitch(ip) {
             return _switchIndex.get(ip) || null;
+        }
+
+        // Resolve an IP to its device role for update routing.
+        function deviceTypeForIp(ip) {
+            if (_apIndex.has(ip)) return 'ap';
+            if (_switchIndex.has(ip)) return 'switch';
+            if (_cpeIndex.has(ip)) return 'cpe';
+            return null;
         }
 
         async function deleteSwitch(ip) {
@@ -6785,7 +6843,9 @@
             )];
             const versionLine = versions.length ? `\n\nTarget firmware: ${versions.join(', ')}` : '';
 
-            if (!await showConfirmDialog(`Update ${targetName}${targetDetail}?${versionLine}\n\nThis will immediately flash firmware and reboot the device(s).`, {
+            // Bulk callers confirm once for the whole batch (see
+            // updateFirmwareForSelected), so skip the per-device dialog.
+            if (mode !== 'bulk' && !await showConfirmDialog(`Update ${targetName}${targetDetail}?${versionLine}\n\nThis will immediately flash firmware and reboot the device(s).`, {
                 title: 'Start Firmware Update',
                 confirmText: 'Start Update',
                 danger: true,
@@ -9878,6 +9938,13 @@
                     html += `<span class="drawer-fw-del" title="Remove this firmware file" onclick="deleteDrawerFw('${escapedName}','${type}',event)">&times;</span>`;
                     html += `</span>`;
                 }
+                // The family's chosen target isn't on the manager yet (e.g. an
+                // interrupted auto-download). Say so plainly — otherwise the
+                // picker looks fine while devices silently can't update to it.
+                const activeFile = drawerFwActive[type];
+                if (activeFile && !drawerFwFiles.some(f => f.name === activeFile)) {
+                    html += `<div style="width:100%;font-size:11px;color:var(--warning);margin-top:4px;" title="The chosen firmware isn't on the manager yet. It downloads automatically; devices won't update to it until it arrives.">&#9888; Selected firmware not available yet — downloading</div>`;
+                }
                 html += `</div>`;
             }
             container.innerHTML = html;
@@ -10048,6 +10115,7 @@
                     fleetStatusMap.set(d.ip, {
                         target_version: d.target_version,
                         status: d.status,
+                        behind_direction: d.behind_direction,
                         update_state: d.update_state,
                         hold: d.hold,
                         auto_update_eligible: d.auto_update_eligible,

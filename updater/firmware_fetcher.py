@@ -13,6 +13,7 @@ from typing import Callable, Optional
 import httpx
 
 from . import database as db
+from .version_utils import extract_version_from_filename, parse_version
 
 logger = logging.getLogger(__name__)
 
@@ -546,25 +547,52 @@ class FirmwareFetcher:
                 "reverting to auto-select"
             )
 
-        # Prefer beta if enabled, otherwise stable
-        best = None
-        for r in releases:
-            if r.channel == "beta" and beta_enabled:
-                filepath = self.firmware_dir / r.filename
-                if filepath.exists():
-                    best = r.filename
-                    break
-            elif r.channel == "stable":
-                filepath = self.firmware_dir / r.filename
-                if filepath.exists():
-                    if not best:
-                        best = r.filename
+        # Candidate builds: present on disk, in an allowed channel (betas only
+        # when beta-tracking is on; stable always). A file that isn't on disk
+        # can't be the target — but we pick among the present ones by *version*,
+        # never by file mtime or channel-map insertion order (the old bug:
+        # "latest" was whichever present file came first, so a missing newest
+        # beta silently demoted the target to an older stable build).
+        present = [
+            r.filename
+            for r in releases
+            if (r.channel == "stable" or (r.channel == "beta" and beta_enabled))
+            and (self.firmware_dir / r.filename).exists()
+        ]
+        if not present:
+            return
+        best = max(present, key=lambda f: parse_version(extract_version_from_filename(f)))
 
-        if best:
-            current = db.get_setting(setting_key, "")
-            if current != best:
-                db.set_setting(setting_key, best)
-                logger.info(f"Auto-selected {setting_key} = {best}")
+        current = (db.get_setting(setting_key, "") or "").strip()
+        if current == best:
+            return
+
+        # Never move the target *backward* in version. If the newest on-disk
+        # build is older than what's already selected — e.g. the selected newer
+        # build's file went temporarily missing and only an older one remains —
+        # keep the current selection and wait for the newer file to be
+        # re-fetched (the check loop re-downloads known-but-missing files). The
+        # flash path is fail-closed on a missing file, so a stale selection can
+        # never silently downgrade the fleet; pivoting to the older build would.
+        #
+        # Only a *known release* (something the fetcher tracks and will re-fetch)
+        # may anchor this guard. A stale/bogus selection — e.g. a pin we just
+        # cleared because its file never existed — must not strand the target,
+        # so we fall through and pick the newest present build.
+        known_releases = {r.filename for r in releases}
+        if current in known_releases:
+            best_v = parse_version(extract_version_from_filename(best))
+            current_v = parse_version(extract_version_from_filename(current))
+            if best_v < current_v:
+                logger.warning(
+                    f"Auto-select for {setting_key}: newest on-disk build {best!r} "
+                    f"(v{best_v}) is older than current selection {current!r} "
+                    f"(v{current_v}); keeping current and awaiting re-fetch."
+                )
+                return
+
+        db.set_setting(setting_key, best)
+        logger.info(f"Auto-selected {setting_key} = {best}")
 
     def _get_auto_fetched_list(self) -> list[str]:
         raw = db.get_setting("firmware_auto_fetched_files", "")
