@@ -443,9 +443,12 @@ container (rename, don't remove) so rollback is one command:
 
 ```bash
 docker pull ghcr.io/sixtyops/manager:<new-tag>
-# Snapshot every runtime var; grep -v drops base-image vars the new image sets.
+# Snapshot every runtime var to a private file — it holds secrets (OIDC client
+# secret, admin password, tokens). umask 077 makes app-env 0600 at creation;
+# grep -v drops the base-image vars the new image re-supplies.
+umask 077
 docker inspect sixtyops --format '{{range .Config.Env}}{{println .}}{{end}}' \
-  | grep -vE '^(PATH|HOME|HOSTNAME|TERM|LANG|GPG_KEY|PYTHON_)' | sudo tee app-env >/dev/null
+  | grep -vE '^(PATH|HOME|HOSTNAME|TERM|LANG|GPG_KEY|PYTHON_)' > app-env
 cut -d= -f1 app-env   # sanity-check, names only (no secrets printed): must list everything you set (OIDC_*, ADMIN_*, PORT, …)
 docker stop sixtyops && docker rename sixtyops sixtyops-rollback
 docker run -d --name sixtyops --restart unless-stopped \
@@ -488,8 +491,11 @@ pinned-image `docker-compose.yml` that declares the existing named volumes as
 and the pinned tag is committed alongside the rest of your config.
 
 > These commands assume your shell can run `docker` (prefix with `sudo` if your
-> host requires it). When a step writes to a root-owned path, keep the writing
-> process under `sudo` (e.g. `... | sudo tee file`), not the shell redirect.
+> host requires it). `app-env` is a private (0600) scratch file in your working
+> directory, so a plain `>` redirect is right — it stays owned by your user and
+> readable by the recreate and cleanup steps. When a step instead writes to a
+> root-owned path, keep the writing process under `sudo` (e.g. `... | sudo tee
+> file`), not the shell redirect.
 
 ## Publishing a Release
 
