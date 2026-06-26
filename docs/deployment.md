@@ -446,7 +446,7 @@ docker pull ghcr.io/sixtyops/manager:<new-tag>
 # Snapshot every runtime var; grep -v drops base-image vars the new image sets.
 docker inspect sixtyops --format '{{range .Config.Env}}{{println .}}{{end}}' \
   | grep -vE '^(PATH|HOME|HOSTNAME|TERM|LANG|GPG_KEY|PYTHON_)' | sudo tee app-env >/dev/null
-cat app-env   # sanity-check: it must list everything you set (OIDC_*, ADMIN_*, PORT, …)
+cut -d= -f1 app-env   # sanity-check, names only (no secrets printed): must list everything you set (OIDC_*, ADMIN_*, PORT, …)
 docker stop sixtyops && docker rename sixtyops sixtyops-rollback
 docker run -d --name sixtyops --restart unless-stopped \
   -p 127.0.0.1:8000:8000 \
