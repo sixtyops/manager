@@ -434,20 +434,24 @@ ls -lh sixtyops-data-*.tgz    # verify a non-empty archive before continuing
 
 **2. Pull the new tag and recreate the container.** Compose-managed installs are
 just `docker compose pull && docker compose up -d`. For a plain `docker run`,
-re-pass the *same* volumes, published port, and env you originally used — your
-original `docker run` command is the source of truth. To preserve env (including
-OIDC secrets) without hand-copying it, capture it from the running container, and
-keep the old container (rename, don't remove) so rollback is one command:
+re-pass the *same* volumes, published port, and **all** the env you originally set
+(`OIDC_*`, plus any `ADMIN_*`, `PORT`, `GITHUB_REPO`, `AUTOUPDATE_*`, `SIXTYOPS_*`,
+`TZ`, …) — your original `docker run` command is the source of truth. To carry the
+env forward without hand-copying secrets, snapshot it from the running container
+(dropping the base-image vars the new image re-supplies), and keep the old
+container (rename, don't remove) so rollback is one command:
 
 ```bash
 docker pull ghcr.io/sixtyops/manager:<new-tag>
+# Snapshot every runtime var; grep -v drops base-image vars the new image sets.
 docker inspect sixtyops --format '{{range .Config.Env}}{{println .}}{{end}}' \
-  | grep '^OIDC_' | sudo tee oidc-env >/dev/null   # plus any other vars you set
+  | grep -vE '^(PATH|HOME|HOSTNAME|TERM|LANG|GPG_KEY|PYTHON_)' | sudo tee app-env >/dev/null
+cat app-env   # sanity-check: it must list everything you set (OIDC_*, ADMIN_*, PORT, …)
 docker stop sixtyops && docker rename sixtyops sixtyops-rollback
 docker run -d --name sixtyops --restart unless-stopped \
   -p 127.0.0.1:8000:8000 \
   -v sixtyops-data:/app/data -v sixtyops-firmware:/app/firmware -v sixtyops-backups:/app/backups \
-  --env-file oidc-env ghcr.io/sixtyops/manager:<new-tag>
+  --env-file app-env ghcr.io/sixtyops/manager:<new-tag>
 ```
 
 Match `-p` to your existing binding — it may not be `8000` if the app sits behind a
@@ -471,7 +475,7 @@ docker exec sixtyops python -c "import updater; print(updater.__version__)"
 docker rename sixtyops-rollback sixtyops && docker start sixtyops`. (Compose: re-pin
 the previous tag and `docker compose up -d`.) The volumes are untouched either way.
 Once the new version is confirmed good, drop the rollback container and the temp
-env file: `docker rm sixtyops-rollback && rm oidc-env`.
+env file: `docker rm sixtyops-rollback && rm app-env`.
 
 For a clean, reproducible production setup, manage the container with a small
 pinned-image `docker-compose.yml` that declares the existing named volumes as
