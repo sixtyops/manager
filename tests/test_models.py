@@ -40,12 +40,25 @@ class TestCPEInfo:
         cpe = CPEInfo(ip="1.2.3.4", rx_power=-63.0)
         assert cpe.signal_health == SignalHealth.YELLOW
 
+    def test_signal_health_prefers_rx_power(self):
+        # Legacy (no max_rain) bucket must follow the displayed value: a strong
+        # rxPower wins over a low combinedSignal so health agrees with signal.
+        cpe = CPEInfo(ip="1.2.3.4", rx_power=-54.0, combined_signal=-66.0)
+        assert cpe.signal_health == SignalHealth.GREEN
+
     def test_signal_health_none(self):
         cpe = CPEInfo(ip="1.2.3.4")
         assert cpe.signal_health == SignalHealth.RED
 
-    def test_primary_signal_combined(self):
-        cpe = CPEInfo(ip="1.2.3.4", combined_signal=-60.0, rx_power=-65.0)
+    def test_primary_signal_prefers_rx_power(self):
+        # When both are reported, rx_power wins — it matches the value the
+        # Tachyon device's own pages headline. Real HAR case: JamesDrug
+        # reports rxPower=-54 alongside combinedSignal=-60; the device shows -54.
+        cpe = CPEInfo(ip="1.2.3.4", combined_signal=-60.0, rx_power=-54.0)
+        assert cpe.primary_signal == -54.0
+
+    def test_primary_signal_combined_fallback(self):
+        cpe = CPEInfo(ip="1.2.3.4", combined_signal=-60.0)
         assert cpe.primary_signal == -60.0
 
     def test_primary_signal_rx_power(self):

@@ -411,7 +411,9 @@ class NetworkPoller:
                 # Derive how much rain this link can tolerate before signal
                 # drops below the MCS1 floor. Skipped (None) when any input
                 # is missing — frontend falls back to legacy dBm bucketing.
-                rssi_for_budget = cpe.combined_signal or cpe.rx_power
+                # Use the same value we display (primary_signal, rxPower-first)
+                # so the rain/reliability health agrees with the shown signal.
+                rssi_for_budget = cpe.primary_signal
                 cpe.max_rain_mm_hr = link_budget.max_survivable_rain_mm_hr(
                     rssi_dbm=rssi_for_budget,
                     distance_m=cpe.link_distance,
@@ -1617,7 +1619,10 @@ class NetworkPoller:
                     "link_uptime": cpe["link_uptime"],
                     "signal_health": cpe["signal_health"],
                     "auth_status": cpe["auth_status"],
-                    "primary_signal": cpe["combined_signal"] or cpe["rx_power"] or cpe["last_local_rssi"],
+                    # rx_power first — matches the value the Tachyon device's own
+                    # Alignment/Reporting pages show (combinedSignal reads low on
+                    # some links). Mirrors CPEInfo.primary_signal.
+                    "primary_signal": cpe["rx_power"] or cpe["combined_signal"] or cpe["last_local_rssi"],
                     # Link-budget telemetry (UI tooltip / rain-fade chart)
                     "target_rssi_dbm": cpe.get("target_rssi_dbm"),
                     "snr_db": cpe.get("snr_db"),

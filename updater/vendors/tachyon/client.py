@@ -1048,9 +1048,11 @@ class TachyonClient:
                 # Check 4: Signal levels on connected CPEs
                 low_signal_cpes = []
                 for cpe in cpes:
-                    signal = getattr(cpe, "combined_signal", None)
-                    if signal is None or signal == 0:
-                        signal = getattr(cpe, "last_local_rssi", None)
+                    # Use the same rxPower-first value we display
+                    # (CPEInfo.primary_signal, which falls back to
+                    # combinedSignal then lastLocalRssi) so a link that reads
+                    # healthy in the UI isn't flagged low here.
+                    signal = getattr(cpe, "primary_signal", None)
                     if signal is not None and signal != 0:
                         try:
                             signal_val = float(signal)

@@ -94,13 +94,20 @@ class CPEInfo(BaseModel):
             if r999 is not None and self.max_rain_mm_hr >= r999:
                 return SignalHealth.YELLOW
             return SignalHealth.RED
-        signal = self.combined_signal or self.rx_power
+        signal = self.rx_power or self.combined_signal
         return SignalHealth.from_signal(signal)
 
     @property
     def primary_signal(self) -> Optional[float]:
-        """Get the primary signal value for display."""
-        return self.combined_signal or self.rx_power or self.last_local_rssi
+        """Get the primary signal value for display.
+
+        Prefer `rx_power` (Tachyon `rxPower`): it is the value the device's own
+        Alignment and AP Reporting pages headline, so matching it keeps our
+        numbers consistent with what the operator sees on the device.
+        `combinedSignal` can read several dB low on some links, so it is only a
+        fallback.
+        """
+        return self.rx_power or self.combined_signal or self.last_local_rssi
 
     def to_dict(self) -> dict:
         """Convert to dictionary with computed properties."""
