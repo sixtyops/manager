@@ -40,7 +40,9 @@ cd manager
 ### Docker image (you manage updates manually)
 
 To run the prebuilt image directly — no git clone, no bundled nginx — pin a
-version and bring your own reverse proxy:
+version (find the current tag on the [install page](https://sixtyops.net/#download)
+or the [Releases](https://github.com/sixtyops/manager/releases) page) and bring
+your own reverse proxy:
 
 ```bash
 docker run -d --name sixtyops --restart unless-stopped \
@@ -48,7 +50,7 @@ docker run -d --name sixtyops --restart unless-stopped \
   -v sixtyops-data:/app/data \
   -v sixtyops-firmware:/app/firmware \
   -v sixtyops-backups:/app/backups \
-  ghcr.io/sixtyops/manager:v1.3.1-dev22
+  ghcr.io/sixtyops/manager:<version>
 ```
 
 Front it with your reverse proxy (TLS) pointing at `127.0.0.1:8000`. State lives
@@ -415,25 +417,70 @@ Enable or disable auto-update checking in the Settings UI (`autoupdate_enabled`)
 
 ### Updating an image-based install
 
-If you run the prebuilt image directly (the [Docker image](#docker-image-you-manage-updates)
+If you run the prebuilt image directly (the [Docker image](#docker-image-you-manage-updates-manually)
 quick start), the in-app updater can't self-apply — it has no Docker socket or
-repo. The **Update** panel shows the pull command plus recreate guidance
-instead. Update by pulling the new tag and recreating the container:
+repo. The **Update** panel shows the pull command plus recreate guidance instead.
+
+**1. Back up the data volume first.** Snapshot the *whole* `sixtyops-data` volume
+— it holds both the SQLite DB **and** the `.encryption_key` that decrypts device
+credentials, so a DB-file-only copy can't be restored on its own. Confirm the
+archive is non-empty before you touch the running container:
+
+```bash
+docker run --rm -v sixtyops-data:/d -v "$PWD":/b alpine \
+  tar czf /b/sixtyops-data-$(date +%Y%m%d-%H%M%S).tgz -C /d .
+ls -lh sixtyops-data-*.tgz    # verify a non-empty archive before continuing
+```
+
+**2. Pull the new tag and recreate the container.** Compose-managed installs are
+just `docker compose pull && docker compose up -d`. For a plain `docker run`,
+re-pass the *same* volumes, published port, and env you originally used — your
+original `docker run` command is the source of truth. To preserve env (including
+OIDC secrets) without hand-copying it, capture it from the running container, and
+keep the old container (rename, don't remove) so rollback is one command:
 
 ```bash
 docker pull ghcr.io/sixtyops/manager:<new-tag>
-docker compose up -d        # if compose-managed
-# or re-run your `docker run ... ghcr.io/sixtyops/manager:<new-tag>`
+docker inspect sixtyops --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep '^OIDC_' | sudo tee oidc-env >/dev/null   # plus any other vars you set
+docker stop sixtyops && docker rename sixtyops sixtyops-rollback
+docker run -d --name sixtyops --restart unless-stopped \
+  -p 127.0.0.1:8000:8000 \
+  -v sixtyops-data:/app/data -v sixtyops-firmware:/app/firmware -v sixtyops-backups:/app/backups \
+  --env-file oidc-env ghcr.io/sixtyops/manager:<new-tag>
 ```
 
-State is in the named volumes, so the recreate is non-destructive and the schema
-migrates forward on start. **Roll back** by re-pinning the previous tag and
-re-running the same command — the volumes are untouched either way.
+Match `-p` to your existing binding — it may not be `8000` if the app sits behind a
+reverse proxy on another port. State is in the named volumes, so the recreate is
+non-destructive and the schema migrates forward on start.
+
+**3. Wait for health, then verify.** On a cold start the app needs a few seconds —
+poll `/healthz` until it's ready rather than checking immediately, or an empty /
+`connection refused` response will look like a failure when the deploy actually
+succeeded. Hit the app's **own published port** (the `127.0.0.1:<port>` you bound),
+not the public hostname or a shared `localhost:443` — on a multi-service host those
+can land on a different reverse proxy and return a misleading 404:
+
+```bash
+until curl -sf http://127.0.0.1:8000/healthz >/dev/null; do sleep 1; done
+curl -s http://127.0.0.1:8000/healthz                                   # {"status":"ok","db":"ok"}
+docker exec sixtyops python -c "import updater; print(updater.__version__)"
+```
+
+**Roll back** instantly with the container you kept: `docker rm -f sixtyops &&
+docker rename sixtyops-rollback sixtyops && docker start sixtyops`. (Compose: re-pin
+the previous tag and `docker compose up -d`.) The volumes are untouched either way.
+Once the new version is confirmed good, drop the rollback container and the temp
+env file: `docker rm sixtyops-rollback && rm oidc-env`.
 
 For a clean, reproducible production setup, manage the container with a small
 pinned-image `docker-compose.yml` that declares the existing named volumes as
 `external: true`. Then updates are just `docker compose pull && docker compose up -d`,
 and the pinned tag is committed alongside the rest of your config.
+
+> These commands assume your shell can run `docker` (prefix with `sudo` if your
+> host requires it). When a step writes to a root-owned path, keep the writing
+> process under `sudo` (e.g. `... | sudo tee file`), not the shell redirect.
 
 ## Publishing a Release
 
