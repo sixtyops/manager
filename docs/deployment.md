@@ -454,9 +454,12 @@ docker run -d --name sixtyops --restart unless-stopped \
   --env-file app-env ghcr.io/sixtyops/manager:<new-tag>
 ```
 
-Match `-p` to your existing binding — it may not be `8000` if the app sits behind a
-reverse proxy on another port. State is in the named volumes, so the recreate is
-non-destructive and the schema migrates forward on start.
+Keep your original `-p` mapping exactly — **both sides**. The host side is whatever
+your reverse proxy points at; the container side must equal your `PORT` (default
+`8000`), so if you set `PORT`, use `-p <host-port>:$PORT` (the `8000:8000` above is
+only the default). Mismatch the container side and the app comes up on a port nothing
+is published to — silently unreachable. State is in the named volumes, so the recreate
+is non-destructive and the schema migrates forward on start.
 
 **3. Wait for health, then verify.** On a cold start the app needs a few seconds —
 poll `/healthz` until it's ready rather than checking immediately, or an empty /
@@ -471,9 +474,11 @@ curl -s http://127.0.0.1:8000/healthz                                   # {"stat
 docker exec sixtyops python -c "import updater; print(updater.__version__)"
 ```
 
-**Roll back** instantly with the container you kept: `docker rm -f sixtyops &&
-docker rename sixtyops-rollback sixtyops && docker start sixtyops`. (Compose: re-pin
-the previous tag and `docker compose up -d`.) The volumes are untouched either way.
+**Roll back** instantly with the container you kept — this works even if the new
+container failed to start (the `|| true` skips removing a container that was never
+created): `docker rm -f sixtyops 2>/dev/null || true; docker rename sixtyops-rollback sixtyops && docker start sixtyops`.
+(Compose: re-pin the previous tag and `docker compose up -d`.) The volumes are
+untouched either way.
 Once the new version is confirmed good, drop the rollback container and the temp
 env file: `docker rm sixtyops-rollback && rm app-env`.
 
