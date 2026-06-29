@@ -1,0 +1,155 @@
+name: Dev Host Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Deploy a branch or restore the latest dev tag"
+        required: true
+        default: "branch"
+        type: choice
+        options:
+          - branch
+          - latest-dev-tag
+      ref:
+        description: "Branch name when mode=branch"
+        required: false
+        type: string
+
+concurrency:
+  group: dev-hardware-shared-lab
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 15
+    env:
+      DEV_HOST: ${{ vars.SIXTYOPS_DEV_HOST || secrets.SIXTYOPS_DEV_HOST }}
+      DEV_USER: ${{ vars.SIXTYOPS_DEV_USER || secrets.SIXTYOPS_DEV_USER }}
+      DEV_SSH_KEY: ${{ secrets.SIXTYOPS_DEV_SSH_KEY }}
+      DEV_DEPLOY_DIR: ${{ vars.SIXTYOPS_DEV_DEPLOY_DIR || '/opt/sixtyops' }}
+      DEPLOY_MODE: ${{ inputs.mode }}
+      DEPLOY_REF: ${{ inputs.ref }}
+    steps:
+      - name: Validate inputs
+        run: |
+          missing=()
+          for name in \
+            DEV_HOST \
+            DEV_USER \
+            DEV_SSH_KEY \
+            DEV_DEPLOY_DIR
+          do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "$DEPLOY_MODE" = "branch" ] && [ -z "$DEPLOY_REF" ]; then
+            missing+=("ref")
+          fi
+
+          if [ "${#missing[@]}" -ne 0 ]; then
+            missing_csv="$(IFS=,; echo "${missing[*]}")"
+            echo "::error::Dev-host deploy cannot run because required inputs are missing: $missing_csv"
+            {
+              echo "### Dev-host deploy blocked"
+              echo
+              echo "Missing inputs: \`$missing_csv\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          if [ "$DEPLOY_MODE" = "branch" ]; then
+            case "$DEPLOY_REF" in
+              *..*|*~*|*^*|*:*|*\\*|*"'"*|*[\ ]*)
+                echo "::error::Ref contains characters that are unsafe for this workflow: $DEPLOY_REF"
+                exit 1
+                ;;
+            esac
+          fi
+
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEV_SSH_KEY" > ~/.ssh/sixtyops-dev
+          chmod 600 ~/.ssh/sixtyops-dev
+          {
+            echo "Host sixtyops-dev-host"
+            echo "  HostName $DEV_HOST"
+            echo "  User $DEV_USER"
+            echo "  IdentityFile ~/.ssh/sixtyops-dev"
+            echo "  IdentitiesOnly yes"
+            echo "  StrictHostKeyChecking accept-new"
+          } > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      - name: Deploy on dev host
+        run: |
+          ssh sixtyops-dev-host \
+            "DEPLOY_DIR='$DEV_DEPLOY_DIR' DEPLOY_MODE='$DEPLOY_MODE' DEPLOY_REF='$DEPLOY_REF' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          cd "$DEPLOY_DIR"
+
+          before_sha="$(git rev-parse HEAD)"
+          before_ref="$(git describe --tags --always --dirty 2>/dev/null || git rev-parse --short HEAD)"
+
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags --prune
+
+          if [ "$DEPLOY_MODE" = "latest-dev-tag" ]; then
+            target="$(git tag --sort=-v:refname | grep -m1 '^v.*-dev' || true)"
+            if [ -z "$target" ]; then
+              echo "No dev tag found in repo"
+              exit 1
+            fi
+            git checkout "$target"
+          else
+            if ! git rev-parse --verify --quiet "origin/$DEPLOY_REF" >/dev/null; then
+              echo "Branch not found on origin: $DEPLOY_REF"
+              exit 1
+            fi
+            git checkout -B "$DEPLOY_REF" "origin/$DEPLOY_REF"
+            target="$DEPLOY_REF"
+          fi
+
+          after_sha="$(git rev-parse HEAD)"
+          after_ref="$(git describe --tags --always --dirty 2>/dev/null || git rev-parse --short HEAD)"
+
+          compose_args=(-f docker-compose.yml)
+          if [ -f docker-compose.standalone.yml ]; then
+            compose_args+=(-f docker-compose.standalone.yml)
+          fi
+
+          docker compose "${compose_args[@]}" up -d --build sixtyops-mgmt
+
+          echo "before_sha=$before_sha" > /tmp/sixtyops-dev-deploy-result
+          echo "before_ref=$before_ref" >> /tmp/sixtyops-dev-deploy-result
+          echo "after_sha=$after_sha" >> /tmp/sixtyops-dev-deploy-result
+          echo "after_ref=$after_ref" >> /tmp/sixtyops-dev-deploy-result
+          echo "target=$target" >> /tmp/sixtyops-dev-deploy-result
+          REMOTE
+
+      - name: Collect deploy result
+        run: |
+          scp sixtyops-dev-host:/tmp/sixtyops-dev-deploy-result /tmp/sixtyops-dev-deploy-result
+          cat /tmp/sixtyops-dev-deploy-result
+          {
+            echo "### Dev-host deploy complete"
+            echo
+            while IFS='=' read -r key value; do
+              case "$key" in
+                before_sha) echo "- Before SHA: \`$value\`" ;;
+                before_ref) echo "- Before ref: \`$value\`" ;;
+                after_sha) echo "- After SHA: \`$value\`" ;;
+                after_ref) echo "- After ref: \`$value\`" ;;
+                target) echo "- Requested target: \`$value\`" ;;
+              esac
+            done < /tmp/sixtyops-dev-deploy-result
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f ~/.ssh/sixtyops-dev /tmp/sixtyops-dev-deploy-result

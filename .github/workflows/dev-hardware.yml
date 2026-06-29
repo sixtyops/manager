@@ -8,8 +8,8 @@ on:
     - cron: "17 6 * * *"
 
 concurrency:
-  group: dev-hardware-${{ github.ref }}
-  cancel-in-progress: true
+  group: dev-hardware-shared-lab
+  cancel-in-progress: false
 
 jobs:
   dev-blocking:
@@ -56,17 +56,17 @@ jobs:
           echo "ready=false" >> "$GITHUB_OUTPUT"
           echo "missing=$missing_csv" >> "$GITHUB_OUTPUT"
 
-          echo "::warning::Skipping live-dev validation because required inputs are not configured: $missing_csv"
+          echo "::error::Live-dev validation cannot run because required inputs are not configured: $missing_csv"
           {
-            echo "### Dev Hardware Validation skipped"
+            echo "### Dev Hardware Validation blocked"
             echo
             echo "Required live-dev inputs are not configured for this repository or environment."
             echo
             echo "Missing inputs: \`$missing_csv\`"
             echo
-            echo "Live-dev validation is soft-skipped until the live-dev secrets or variables are wired (tracked in issue #117). Re-run after secrets are populated."
+            echo "Live-dev validation is a launch gate. Configure the missing secrets or variables, then re-run this workflow."
           } >> "$GITHUB_STEP_SUMMARY"
-          exit 0
+          exit 1
 
       - name: Install test dependencies
         if: steps.validate_inputs.outputs.ready == 'true'
