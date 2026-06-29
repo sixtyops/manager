@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "firmware-updater"
-version = "1.4.1.dev4"
+version = "1.4.1.dev5"
 description = "Web-based firmware update tool for Tachyon devices"
 readme = "README.md"
 # Matches the Dockerfile (python:3.12-slim) and uses features only available
