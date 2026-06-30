@@ -25,6 +25,15 @@ All notable changes to this project are documented in this file.
   before reboot.
 
 ### Changed
+- **The poller no longer re-logs into every client (CPE) on each poll cycle.**
+  The "Can't sign in" check used to perform a fresh login to each connected CPE
+  every minute, which flooded each device's audit log with a steady stream of
+  "Successful management authentication" events (drowning out real security
+  events) and added needless load. The poller now reuses the authenticated
+  session across cycles — verifying it with a single lightweight call — and only
+  re-logs in when the session expires (~10 min), the token stops working, or a
+  device first comes online. Access points were already cached this way; clients
+  now are too.
 - **Updates refuse to run if any device's firmware family is missing.** If a
   selected batch (or a scheduled wave) includes a device whose platform —
   TNA-303L or TNS-100 — has no matching firmware file chosen, the update now

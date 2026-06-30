@@ -313,6 +313,27 @@ class TachyonClient:
                 except OSError as e:
                     logger.warning(f"Failed to clean up cookie file {cookie_path}: {e}")
 
+    async def session_valid(self) -> str:
+        """Check the cached token still authenticates, without re-logging in.
+
+        Makes a single lightweight authenticated GET (no /login POST, so it
+        does *not* generate a "management authentication" audit event on the
+        device). Returns "ok" if the token works, "expired" if it doesn't
+        (no token, or the device no longer accepts it), or "unreachable" on a
+        network/curl failure.
+        """
+        if not self._token:
+            return "expired"
+        try:
+            status, body = await self._curl("GET", "/cgi.lua/status?type=system")
+        except Exception:
+            return "unreachable"
+        if status == 200 and '"system"' in body:
+            return "ok"
+        if status == 0:
+            return "unreachable"
+        return "expired"
+
     async def get_device_info(self) -> DeviceInfo:
         """Get device information."""
         info = DeviceInfo(ip=self.ip)

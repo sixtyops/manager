@@ -85,6 +85,12 @@ class NetworkPoller:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._clients: dict[str, tuple[VendorDriver, float]] = {}  # IP -> (client, last_used)
+        # CPEs aren't in the `devices` table, so they get their own client cache
+        # (keyed by CPE IP) that's evicted purely by TTL. Reusing the cached,
+        # already-authenticated session across poll cycles avoids re-logging in
+        # to every CPE every cycle — which otherwise floods each device's audit
+        # log with a "management authentication" event per minute.
+        self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, last_used)
         self._last_config_poll: Optional[datetime] = None
         self._last_config_poll_hydrated = False
         self._poll_in_progress = False
@@ -152,6 +158,40 @@ class NetworkPoller:
                 stale.append(ip)
         if stale:
             logger.info(f"Evicted {len(stale)} stale client(s) from cache")
+        self._evict_stale_cpe_clients(now)
+
+    def _evict_stale_cpe_clients(self, now: float):
+        """Evict CPE clients past the TTL (age-only — CPEs aren't in the
+        devices table, and stale topology entries simply age out)."""
+        stale = [ip for ip, (_, last_used) in self._cpe_clients.items()
+                 if (now - last_used) > _CLIENT_TTL_SECONDS]
+        for ip in stale:
+            del self._cpe_clients[ip]
+        if len(self._cpe_clients) > _MAX_CLIENT_CACHE:
+            sorted_by_age = sorted(self._cpe_clients.items(), key=lambda x: x[1][1])
+            excess = len(self._cpe_clients) - _MAX_CLIENT_CACHE
+            for ip, _ in sorted_by_age[:excess]:
+                del self._cpe_clients[ip]
+                stale.append(ip)
+        if stale:
+            logger.debug(f"Evicted {len(stale)} stale CPE client(s) from cache")
+
+    def _get_cached_cpe_client(self, ip: str) -> Optional[VendorDriver]:
+        """Get a cached CPE client, updating its last-used timestamp."""
+        entry = self._cpe_clients.get(ip)
+        if entry:
+            client, _ = entry
+            self._cpe_clients[ip] = (client, time.time())
+            return client
+        return None
+
+    def _cache_cpe_client(self, ip: str, client: VendorDriver):
+        """Cache an authenticated CPE client."""
+        self._cpe_clients[ip] = (client, time.time())
+
+    def _remove_cached_cpe_client(self, ip: str):
+        """Remove a CPE client from the cache."""
+        self._cpe_clients.pop(ip, None)
 
     def _get_cached_client(self, ip: str) -> Optional[VendorDriver]:
         """Get a cached client, updating its last-used timestamp."""
@@ -527,13 +567,39 @@ class NetworkPoller:
         2. Global default device credentials (if enabled)
 
         Returns "ok", "auth_failed", or "unreachable".
+
+        Reuses a cached, already-authenticated session when one exists: a single
+        lightweight authenticated call verifies the token still works instead of
+        re-logging in every poll cycle (a fresh login per CPE per minute floods
+        each device's audit log). A full login only happens on the first probe,
+        after the cached session expires, or when the token stops working.
         """
+        # Fast path: a cached session we authenticated on an earlier cycle.
+        cached = self._get_cached_cpe_client(cpe_ip)
+        if cached:
+            try:
+                state = await cached.session_valid()
+            except Exception as e:
+                logger.debug(f"CPE session check failed for {cpe_ip}: {e}")
+                state = "unreachable"
+            if state == "ok":
+                return "ok"
+            if state == "unreachable":
+                # Don't re-login a device that's currently offline; report it and
+                # keep the cached client so we can revalidate once it's back.
+                return "unreachable"
+            # "expired" — token no longer accepted; drop it and re-authenticate.
+            self._remove_cached_cpe_client(cpe_ip)
+
         # Get effective credentials (device-specific or global defaults)
         effective_user, effective_pass = radius_config.get_device_credentials(username, password)
 
         try:
             client = get_driver("tachyon")(cpe_ip, effective_user, effective_pass, timeout=10)
             status = _classify_cpe_connect(await client.connect())
+            if status == "ok":
+                self._cache_cpe_client(cpe_ip, client)
+                return "ok"
             if status != "auth_failed":
                 return status
 
@@ -548,7 +614,10 @@ class NetworkPoller:
                 if (default_config.username, default_config.password) != (effective_user, effective_pass):
                     logger.debug(f"Trying global default credentials for CPE {cpe_ip}")
                     client = get_driver("tachyon")(cpe_ip, default_config.username, default_config.password, timeout=10)
-                    return _classify_cpe_connect(await client.connect())
+                    status = _classify_cpe_connect(await client.connect())
+                    if status == "ok":
+                        self._cache_cpe_client(cpe_ip, client)
+                    return status
 
             return "auth_failed"
         except Exception as e:
@@ -565,10 +634,15 @@ class NetworkPoller:
                 if age < 86400:  # 24 hours
                     return
 
-            client = get_driver("tachyon")(cpe_ip, username, password, timeout=15)
-            result = await client.connect()
-            if result is not True:
-                return
+            # Reuse the session the auth probe just cached, if it's still good,
+            # so we don't add another login to the device's audit log.
+            client = self._get_cached_cpe_client(cpe_ip)
+            if not client or await client.session_valid() != "ok":
+                client = get_driver("tachyon")(cpe_ip, username, password, timeout=15)
+                result = await client.connect()
+                if result is not True:
+                    return
+                self._cache_cpe_client(cpe_ip, client)
 
             info = await client.get_device_info()
             if info.bank1_version or info.bank2_version:
@@ -585,6 +659,7 @@ class NetworkPoller:
     def invalidate_client(self, ip: str):
         """Remove cached client (e.g., when credentials change)."""
         self._remove_cached_client(ip)
+        self._remove_cached_cpe_client(ip)
 
     async def poll_ap_now(self, ip: str) -> bool:
         """Trigger immediate poll of a specific AP."""
