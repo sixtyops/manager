@@ -328,11 +328,24 @@ class TachyonClient:
             status, body = await self._curl("GET", "/cgi.lua/status?type=system")
         except Exception:
             return "unreachable"
-        if status == 200 and '"system"' in body:
-            return "ok"
         if status == 0:
             return "unreachable"
-        return "expired"
+        if status != 200:
+            # 401/403 etc. — token rejected.
+            return "expired"
+        # Some firmware returns HTTP 200 with an auth-failure body for a stale
+        # token (login() handles the same statusCode-401-in-body case), so a
+        # 200 alone isn't proof — confirm a real system payload and reject any
+        # authorization-failure marker.
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            return "expired"
+        if not isinstance(data, dict):
+            return "expired"
+        if data.get("statusCode") in (401, 403) or "Authorization Failed" in str(data):
+            return "expired"
+        return "ok" if data.get("system") else "expired"
 
     async def get_device_info(self) -> DeviceInfo:
         """Get device information."""

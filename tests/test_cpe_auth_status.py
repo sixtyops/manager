@@ -178,3 +178,14 @@ class TestCheckCpeAuthCaching:
         poller._evict_stale_cpe_clients(now)
         assert "fresh" in poller._cpe_clients
         assert "old" not in poller._cpe_clients
+
+    def test_invalidate_client_clears_cpe_cache(self):
+        # Credentials usually change on the parent AP, but CPE sessions are keyed
+        # by CPE IP and inherit the AP's creds. Dropping only the AP-IP entry
+        # would leave stale CPE sessions authenticating on their old token,
+        # masking the credential change — so the whole CPE cache is cleared.
+        poller = NetworkPoller()
+        poller._cpe_clients["10.0.0.11"] = (MagicMock(), time.time())
+        poller._cpe_clients["10.0.0.12"] = (MagicMock(), time.time())
+        poller.invalidate_client("10.0.0.1")  # the AP's IP, not a CPE's
+        assert poller._cpe_clients == {}

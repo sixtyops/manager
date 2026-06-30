@@ -634,10 +634,12 @@ class NetworkPoller:
                 if age < 86400:  # 24 hours
                     return
 
-            # Reuse the session the auth probe just cached, if it's still good,
-            # so we don't add another login to the device's audit log.
+            # Reuse the session the auth probe just cached (this only runs after
+            # _check_cpe_auth returned "ok", so the cached session was just
+            # validated this cycle) — no extra login on the device's audit log.
+            # Only log in fresh if there's no cached client.
             client = self._get_cached_cpe_client(cpe_ip)
-            if not client or await client.session_valid() != "ok":
+            if not client:
                 client = get_driver("tachyon")(cpe_ip, username, password, timeout=15)
                 result = await client.connect()
                 if result is not True:
@@ -659,7 +661,13 @@ class NetworkPoller:
     def invalidate_client(self, ip: str):
         """Remove cached client (e.g., when credentials change)."""
         self._remove_cached_client(ip)
-        self._remove_cached_cpe_client(ip)
+        # CPE sessions are keyed by CPE IP, but credentials usually change on the
+        # parent AP (whose creds the CPEs inherit) — and we don't have the AP→CPE
+        # mapping here. A cached CPE session keeps authenticating on its old
+        # device-side token, so it would mask a credential change until the token
+        # expired on its own. Credential changes are rare; drop the whole CPE
+        # cache so every CPE re-authenticates with the new creds next cycle.
+        self._cpe_clients.clear()
 
     async def poll_ap_now(self, ip: str) -> bool:
         """Trigger immediate poll of a specific AP."""

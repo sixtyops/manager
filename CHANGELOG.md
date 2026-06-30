@@ -31,9 +31,8 @@ All notable changes to this project are documented in this file.
   "Successful management authentication" events (drowning out real security
   events) and added needless load. The poller now reuses the authenticated
   session across cycles — verifying it with a single lightweight call — and only
-  re-logs in when the session expires (~10 min), the token stops working, or a
-  device first comes online. Access points were already cached this way; clients
-  now are too.
+  re-logs in when the device's session token stops working or a device first
+  comes online. Access points were already cached this way; clients now are too.
 - **Updates refuse to run if any device's firmware family is missing.** If a
   selected batch (or a scheduled wave) includes a device whose platform —
   TNA-303L or TNS-100 — has no matching firmware file chosen, the update now
