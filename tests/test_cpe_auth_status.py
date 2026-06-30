@@ -7,11 +7,13 @@ because the monitor surfaces them differently — an amber "Can't sign in"
 badge vs. the offline dot.
 """
 
+import time
+
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock, call
 
 from updater import radius_config
-from updater.poller import NetworkPoller
+from updater.poller import NetworkPoller, _CLIENT_TTL_SECONDS
 
 
 def _driver_returning(connect_result):
@@ -96,3 +98,94 @@ class TestCheckCpeAuth:
         # Second attempt must reuse the username but swap in the default password.
         assert factory.call_args_list[1] == call("10.0.0.11", "root",
                                                  "cpe-pass", timeout=10)
+
+
+class TestCheckCpeAuthCaching:
+    """The probe reuses an authenticated session across poll cycles instead of
+    re-logging in every minute (which floods each device's audit log)."""
+
+    @pytest.mark.asyncio
+    async def test_successful_login_is_cached(self, mock_db):
+        poller = NetworkPoller()
+        with patch("updater.poller.get_driver",
+                   return_value=_driver_returning(True)):
+            status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
+        assert status == "ok"
+        assert "10.0.0.11" in poller._cpe_clients
+
+    @pytest.mark.asyncio
+    async def test_auth_failed_is_not_cached(self, mock_db):
+        poller = NetworkPoller()
+        with patch("updater.poller.get_driver",
+                   return_value=_driver_returning("Invalid credentials")), \
+             patch("updater.poller.radius_config.is_device_auth_enabled",
+                   return_value=False):
+            status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
+        assert status == "auth_failed"
+        assert "10.0.0.11" not in poller._cpe_clients
+
+    @pytest.mark.asyncio
+    async def test_valid_cached_session_skips_relogin(self, mock_db):
+        # A live cached session is verified with a lightweight call; no fresh
+        # login (no new client built, connect() never called).
+        poller = NetworkPoller()
+        cached = MagicMock()
+        cached.session_valid = AsyncMock(return_value="ok")
+        cached.connect = AsyncMock(return_value=True)
+        poller._cpe_clients["10.0.0.11"] = (cached, time.time())
+        with patch("updater.poller.get_driver") as get_driver_mock:
+            status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
+        assert status == "ok"
+        cached.session_valid.assert_awaited_once()
+        cached.connect.assert_not_awaited()
+        get_driver_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_expired_cached_session_reauthenticates(self, mock_db):
+        poller = NetworkPoller()
+        stale = MagicMock()
+        stale.session_valid = AsyncMock(return_value="expired")
+        poller._cpe_clients["10.0.0.11"] = (stale, time.time())
+        with patch("updater.poller.get_driver",
+                   return_value=_driver_returning(True)):
+            status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
+        assert status == "ok"
+        # The stale client was dropped and replaced by the freshly-authed one.
+        assert poller._cpe_clients["10.0.0.11"][0] is not stale
+
+    @pytest.mark.asyncio
+    async def test_unreachable_cached_session_kept_for_revalidation(self, mock_db):
+        # A device that's momentarily offline should report "unreachable"
+        # without burning a login, and keep its cached client so the next cycle
+        # can revalidate once it's back.
+        poller = NetworkPoller()
+        cached = MagicMock()
+        cached.session_valid = AsyncMock(return_value="unreachable")
+        cached.connect = AsyncMock(return_value=True)
+        poller._cpe_clients["10.0.0.11"] = (cached, time.time())
+        with patch("updater.poller.get_driver") as get_driver_mock:
+            status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
+        assert status == "unreachable"
+        cached.connect.assert_not_awaited()
+        get_driver_mock.assert_not_called()
+        assert "10.0.0.11" in poller._cpe_clients
+
+    def test_evict_stale_cpe_clients_drops_expired_by_ttl(self):
+        poller = NetworkPoller()
+        now = time.time()
+        poller._cpe_clients["fresh"] = (MagicMock(), now)
+        poller._cpe_clients["old"] = (MagicMock(), now - _CLIENT_TTL_SECONDS - 1)
+        poller._evict_stale_cpe_clients(now)
+        assert "fresh" in poller._cpe_clients
+        assert "old" not in poller._cpe_clients
+
+    def test_invalidate_client_clears_cpe_cache(self):
+        # Credentials usually change on the parent AP, but CPE sessions are keyed
+        # by CPE IP and inherit the AP's creds. Dropping only the AP-IP entry
+        # would leave stale CPE sessions authenticating on their old token,
+        # masking the credential change — so the whole CPE cache is cleared.
+        poller = NetworkPoller()
+        poller._cpe_clients["10.0.0.11"] = (MagicMock(), time.time())
+        poller._cpe_clients["10.0.0.12"] = (MagicMock(), time.time())
+        poller.invalidate_client("10.0.0.1")  # the AP's IP, not a CPE's
+        assert poller._cpe_clients == {}
