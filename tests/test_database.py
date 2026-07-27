@@ -655,13 +655,15 @@ class TestDeviceUpdateHistory:
             duration_seconds=60, started_at="2024-01-01T00:00:00",
             completed_at="2024-01-01T00:01:00",
         )
-        # Recent record
+        # Recent record — dated relative to now so the test doesn't expire once
+        # the wall clock passes 180 days after a hardcoded date.
+        recent = datetime.now().isoformat()
         db.save_device_update_history(
             job_id="job-new", ip="10.0.0.1", role="ap", pass_number=1,
             status="success", old_version="1.1", new_version="1.2",
             model=None, error=None, failed_stage=None, stages=[],
-            duration_seconds=60, started_at="2026-01-01T00:00:00",
-            completed_at="2026-01-01T00:01:00",
+            duration_seconds=60, started_at=recent,
+            completed_at=recent,
         )
         db.cleanup_old_device_update_history(max_age_days=180)
         remaining, _ = db.get_device_update_history()

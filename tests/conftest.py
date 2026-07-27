@@ -138,6 +138,21 @@ def memory_db():
             UNIQUE(ap_ip, ip)
         );
         CREATE INDEX idx_cpe_ap ON cpe_cache(ap_ip);
+        CREATE TABLE switch_bridge_entries (
+            switch_ip TEXT NOT NULL,
+            mac TEXT NOT NULL,
+            port TEXT NOT NULL,
+            last_seen TEXT NOT NULL,
+            PRIMARY KEY (switch_ip, mac, port)
+        );
+        CREATE INDEX idx_switch_bridge_entries_mac ON switch_bridge_entries(mac);
+        CREATE TABLE device_identity (
+            ip TEXT PRIMARY KEY,
+            serial TEXT,
+            macs TEXT,
+            updated_at TEXT
+        );
+        CREATE INDEX idx_device_identity_serial ON device_identity(serial);
         CREATE TABLE rollouts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             firmware_file TEXT NOT NULL,

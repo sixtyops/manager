@@ -1574,6 +1574,61 @@ async def update_ap(
     return {"success": True}
 
 
+@app.post("/api/aps/{ip}/change-ip", tags=["devices"])
+async def change_ap_ip(
+    ip: str,
+    new_ip: str = Form(...),
+    session: dict = Depends(require_role("admin", "operator")),
+):
+    """Move a device to a new IP, keeping all of its history.
+
+    For when a device kept its identity but got a new DHCP IP (e.g. after a v1.5.0
+    update). We log into the new address with the device's own credentials and
+    require its **serial** to match the record before moving it — so this can never
+    bind the record to a different unit. Replaces the lossy delete-and-re-add.
+    """
+    _validate_ip(new_ip)
+    if new_ip == ip:
+        raise HTTPException(400, "New address is the same as the current one")
+
+    device = db.get_device(ip)
+    if not device:
+        raise HTTPException(404, f"Device not found: {ip}")
+    if db.get_device(new_ip):
+        raise HTTPException(409, f"{new_ip} is already a managed device")
+
+    from . import device_locator
+    probed = await device_locator.probe_identity(
+        new_ip, device["username"], device["password"], vendor=device.get("vendor", "tachyon")
+    )
+    if not probed:
+        raise HTTPException(400, f"Couldn't reach a device at {new_ip} with this device's saved login")
+
+    stored = db.get_device_identity(ip)
+    known_serial = stored.get("serial") if stored else None
+    if known_serial and probed["serial"] != known_serial:
+        raise HTTPException(
+            409,
+            f"The device at {new_ip} is a different unit (serial {probed['serial']} "
+            f"≠ {known_serial}). Not moving.",
+        )
+
+    db.change_device_ip(ip, new_ip)
+    db.upsert_device_identity(new_ip, serial=probed["serial"], macs=probed.get("macs"))
+    db.log_audit(session["username"], "device.change_ip", device.get("role", "ap"), ip, ip, new_ip)
+
+    poller = get_poller()
+    if poller:
+        poller.invalidate_client(ip)
+        poller.invalidate_client(new_ip)
+        if device.get("role") == "switch":
+            await poller.poll_switch_now(new_ip)
+        else:
+            await poller.poll_ap_now(new_ip)
+
+    return {"success": True, "new_ip": new_ip, "system_name": probed.get("system_name")}
+
+
 @app.delete("/api/aps/{ip}", tags=["devices"])
 async def delete_ap(ip: str, session: dict = Depends(require_role("admin", "operator"))):
     """Delete an access point."""
@@ -4009,6 +4064,8 @@ class DeviceStatus:
     role: str = "ap"
     parent_ap: Optional[str] = None
     model: Optional[str] = None
+    # New DHCP address the device was rediscovered at (v1.5.0 re-IP), if any
+    moved_to: Optional[str] = None
     # Stage tracking for history
     stage_history: list = field(default_factory=list)
     current_stage: Optional[str] = None
@@ -4035,6 +4092,10 @@ class UpdateJob:
     ap_cpe_map: Dict[str, list] = field(default_factory=dict)  # AP IP -> [CPE IPs]
     device_roles: Dict[str, str] = field(default_factory=dict)  # IP -> "ap"/"cpe"
     device_parent: Dict[str, str] = field(default_factory=dict)  # CPE IP -> parent AP IP
+    # Original job IP -> current reach IP, for devices that got a new DHCP IP
+    # mid-update (v1.5.0 re-IP). Job bookkeeping stays keyed on the original IP;
+    # only the address we *reach* the device at changes.
+    ip_overrides: Dict[str, str] = field(default_factory=dict)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     status: str = "pending"
@@ -5400,9 +5461,89 @@ async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
     return (True, "")
 
 
+async def _recover_reipd_device(
+    job: "UpdateJob", ip: str, stale_ip: str, username: str, password: str,
+    vendor_id: str, fw_path: str, pass_number: int, result, progress_callback,
+) -> Optional[str]:
+    """Try to find a device that updated but came back on a new DHCP IP.
+
+    Returns the new IP (and rewrites `result` to success) if the device is located
+    by serial and verified on the target firmware, else None. Reuses the shared
+    `device_locator` and the driver's `verify_firmware` so re-IP handling lives in
+    one place and doesn't duplicate the version-compare logic.
+    """
+    from . import device_locator
+
+    identity = db.get_device_identity(stale_ip)
+    serial = identity.get("serial") if identity else None
+    if not serial:
+        logger.warning(f"Can't rediscover {stale_ip}: no serial on record")
+        return None
+
+    allow_scan = db.get_setting("rediscover_scan_enabled", "true") == "true"
+    progress_callback(ip, "Didn't answer at its address — searching for it...")
+    try:
+        new_ip = await device_locator.locate_device(
+            serial, identity.get("macs") or [], stale_ip, username, password,
+            vendor=vendor_id, allow_scan=allow_scan,
+        )
+    except Exception as e:
+        logger.warning(f"Rediscovery of {stale_ip} (serial {serial}) failed: {e}")
+        return None
+    if not new_ip:
+        return None
+
+    # Verify the device at the new address is on the target firmware before
+    # declaring success. If it isn't, the update genuinely failed — leave `result`
+    # as the failure so the job halts.
+    try:
+        verify_client = get_driver(vendor_id)(new_ip, username, password)
+        verify = await verify_client.verify_firmware(
+            fw_path, old_version=result.old_version, pass_number=pass_number,
+            progress=lambda msg: progress_callback(ip, msg),
+        )
+    except NotImplementedError:
+        logger.info(f"{vendor_id} driver can't verify after move; not adopting {new_ip}")
+        return None
+    except Exception as e:
+        logger.warning(f"Post-move verify of {new_ip} failed: {e}")
+        return None
+
+    if not (verify.success or verify.skipped):
+        logger.warning(f"{stale_ip} moved to {new_ip} but firmware verify failed: {verify.error}")
+        return None
+
+    # Commit the move: the device really did change address. Keep all history.
+    try:
+        db.change_device_ip(stale_ip, new_ip)
+        db.upsert_device_identity(new_ip, serial=serial, macs=identity.get("macs"))
+    except Exception as e:
+        logger.error(f"Located {serial} at {new_ip} but failed to persist move: {e}")
+        return None
+
+    job.ip_overrides[ip] = new_ip
+    job.devices[ip].moved_to = new_ip
+    result.success = verify.success
+    result.skipped = verify.skipped
+    result.error = None
+    result.new_version = verify.new_version
+    result.bank1_version = verify.bank1_version
+    result.bank2_version = verify.bank2_version
+    result.active_bank = verify.active_bank
+    if verify.model:
+        result.model = verify.model
+    logger.info(f"Recovered {serial}: {stale_ip} -> {new_ip} on {result.new_version}")
+    progress_callback(ip, f"Found it — moved to {new_ip}")
+    return new_ip
+
+
 async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1):
     """Update a single device within a job."""
     device_status = job.devices[ip]
+
+    # The address we physically reach this device at. Equals `ip` unless the
+    # device got a new DHCP IP on a prior pass and was rediscovered (v1.5.0).
+    reach_ip = job.ip_overrides.get(ip, ip)
 
     # Graceful shutdown: skip pending devices when shutting down
     if _shutting_down and device_status.status == "pending":
@@ -5550,7 +5691,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
 
     if driver_cls:
         username, password = job.credentials[ip]
-        client = driver_cls(ip, username, password)
+        client = driver_cls(reach_ip, username, password)
 
         # Pre-update config backup (Pro feature)
         if is_feature_enabled(Feature.CONFIG_BACKUP):
@@ -5564,8 +5705,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                         config_hash = hashlib.sha256(config_json.encode()).hexdigest()
                         model = device_status.model or (await client.get_device_info()).model
                         hardware_id = client.get_hardware_id(model)
-                        db.save_device_config(ip, config_json, config_hash, model, hardware_id)
-                        logger.info(f"Pre-update backup saved for {ip}")
+                        db.save_device_config(reach_ip, config_json, config_hash, model, hardware_id)
+                        logger.info(f"Pre-update backup saved for {reach_ip}")
             except Exception as e:
                 logger.warning(f"Pre-update backup failed for {ip} (non-fatal): {e}")
 
@@ -5583,6 +5724,27 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         except asyncio.TimeoutError:
             result = UpdateResult(ip=ip, success=False, error=f"Update timed out after {update_timeout // 60}m")
 
+        # Re-IP recovery: a v1.5.0 device that updated fine can come back on a new
+        # DHCP IP, so it looks like it "did not come back online" at reach_ip. Before
+        # treating that as a failure (which would halt the whole job), try to find it
+        # by its immutable serial and verify it at the new address. This keeps the
+        # fleet updating instead of false-halting; a genuinely-dead device (not
+        # located) still fails and halts, preserving the fail-closed guarantee.
+        if result and not result.success and result.error and "did not come back online" in result.error:
+            recovered_ip = await _recover_reipd_device(
+                job, ip, reach_ip, username, password, vendor_id,
+                fw_path, pass_number, result, progress_callback,
+            )
+            if recovered_ip:
+                reach_ip = recovered_ip
+                # Fresh client at the new address, logged in so the post-update
+                # smoke tests below run against the relocated device.
+                client = driver_cls(reach_ip, username, password)
+                try:
+                    await client.connect()
+                except Exception as e:
+                    logger.debug(f"Post-move reconnect to {reach_ip} failed (smoke will retry): {e}")
+
     device_status.old_version = result.old_version
     device_status.new_version = result.new_version
     device_status.bank1_version = result.bank1_version
@@ -5595,7 +5757,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         device_status.progress_message = f"{prefix}Already on {result.new_version}"
     elif result.success:
         device_status.status = "success"
-        device_status.progress_message = f"{prefix}Updated to {result.new_version}"
+        moved_note = f" (moved to {device_status.moved_to})" if device_status.moved_to else ""
+        device_status.progress_message = f"{prefix}Updated to {result.new_version}{moved_note}"
         duration_secs = (datetime.now() - device_start_time).total_seconds()
         try:
             db.save_device_duration(job.job_id, ip, device_status.role, duration_secs, job.bank_mode)
@@ -5649,10 +5812,10 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         if smoke_clean_pass and result.new_version:
             try:
                 db.mark_device_firmware_confirmed(
-                    ip, result.new_version, datetime.now(timezone.utc).isoformat()
+                    reach_ip, result.new_version, datetime.now(timezone.utc).isoformat()
                 )
             except Exception as e:
-                logger.warning(f"Failed to record firmware confirmation for {ip}: {e}")
+                logger.warning(f"Failed to record firmware confirmation for {reach_ip}: {e}")
         elif smoke_failed:
             _request_job_cancel(job, f"Cancelled: {ip} failed smoke tests")
     else:
@@ -5679,6 +5842,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         "role": device_status.role,
         "parent_ap": device_status.parent_ap,
         "model": device_status.model,
+        "moved_to": device_status.moved_to,
         "smoke_warnings": device_status.smoke_warnings,
         "smoke_checks": device_status.smoke_checks,
     })
@@ -5707,7 +5871,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     duration_secs = (now - device_start_time).total_seconds()
     try:
         db.save_device_update_history(
-            job_id=job.job_id, ip=ip, role=device_status.role,
+            job_id=job.job_id, ip=reach_ip, role=device_status.role,
             pass_number=pass_number, status=device_status.status,
             old_version=device_status.old_version, new_version=device_status.new_version,
             model=device_status.model, error=device_status.error,
@@ -5716,7 +5880,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             started_at=device_start_time.isoformat(), completed_at=now_iso,
         )
     except Exception as e:
-        logger.warning(f"Failed to save device update history for {ip}: {e}")
+        logger.warning(f"Failed to save device update history for {reach_ip}: {e}")
 
 
 async def run_update_job(job: UpdateJob, concurrency: int):

@@ -383,6 +383,16 @@ class NetworkPoller:
                 location=location,
                 **bank_kwargs,
             )
+            # Anchor the device's immutable identity (serial + full MAC set) so a
+            # v1.5.0 DHCP re-IP can be recovered by the device locator.
+            try:
+                db.upsert_device_identity(
+                    ip,
+                    serial=ap_info.get("serial"),
+                    macs=ap_info.get("macs") or ([ap_info["mac"]] if ap_info.get("mac") else None),
+                )
+            except Exception as e:
+                logger.debug(f"Failed to record identity for {ip}: {e}")
             self._check_uptime_transition(ip, "ap", prev_error, None)
             self._record_poll_success(ip)
 
@@ -689,6 +699,14 @@ class NetworkPoller:
                 location=location,
                 **bank_kwargs,
             )
+            try:
+                db.upsert_device_identity(
+                    ip,
+                    serial=ap_info.get("serial"),
+                    macs=ap_info.get("macs") or ([ap_info["mac"]] if ap_info.get("mac") else None),
+                )
+            except Exception as e:
+                logger.debug(f"Failed to record identity for switch {ip}: {e}")
 
             self._check_uptime_transition(ip, "switch", prev_error, None)
             self._record_poll_success(ip)

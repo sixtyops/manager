@@ -3914,6 +3914,7 @@
 
     <div class="context-menu" id="ipContextMenu" role="menu">
         <button type="button" id="ipContextMenuCopy" role="menuitem">Copy IP address</button>
+        <button type="button" id="ipContextMenuChangeIp" role="menuitem">Change IP address…</button>
     </div>
 
     <div class="backup-overlay" id="confirmOverlay" onclick="if(event.target===this)closeConfirmDialog(false)">
@@ -4104,6 +4105,13 @@
                 }
             });
 
+            const changeIpBtn = document.getElementById('ipContextMenuChangeIp');
+            if (changeIpBtn) changeIpBtn.addEventListener('click', () => {
+                const ip = menu.dataset.ip;
+                hideMenu();
+                if (ip) changeDeviceIp(ip);
+            });
+
             document.addEventListener('click', (e) => {
                 if (!menu.contains(e.target)) hideMenu();
             });
@@ -4113,6 +4121,35 @@
             window.addEventListener('scroll', hideMenu, true);
             window.addEventListener('resize', hideMenu);
         })();
+
+        async function changeDeviceIp(currentIp) {
+            const newIp = prompt(
+                `Move this device to a new IP address.\n\n` +
+                `Use this when a device came back on a different address (for example after ` +
+                `a firmware update). We'll check it's the same device before moving it, and ` +
+                `keep all of its history.\n\nNew IP address:`,
+                currentIp
+            );
+            if (newIp === null) return;
+            const trimmed = newIp.trim();
+            if (!trimmed || trimmed === currentIp) return;
+            try {
+                const body = new FormData();
+                body.append('new_ip', trimmed);
+                const resp = await fetch(`/api/aps/${encodeURIComponent(currentIp)}/change-ip`, { method: 'POST', body });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(data.detail || 'Could not move the device');
+                showToast(`Moved to ${trimmed}`, 'success', 2500);
+                const topoResponse = await fetch('/api/topology');
+                if (topoResponse.ok) {
+                    topology = await topoResponse.json();
+                    rebuildTopologyIndex();
+                    updateUI();
+                }
+            } catch (e) {
+                showToast(e.message || 'Could not move the device', 'error', 4000);
+            }
+        }
 
         function showConfirmDialog(message, options = {}) {
             const overlay = document.getElementById('confirmOverlay');

@@ -55,6 +55,11 @@ is paused (`scheduler.on_job_completed` on `failed_count > 0`). A strict-mode sm
 failure (`smoke_test_strict`) marks the device failed and likewise halts the job. With
 the default `parallel_updates=2`, the first bad device stops the run before it spreads.
 
+Before treating "did not come back online" as a failure, the job tries to
+**rediscover** the device by serial in case it just got a new DHCP IP (v1.5.0) — see
+[reip-recovery.md](reip-recovery.md). Recovery decides only *where* a device is; a
+genuinely-dead device still halts the job.
+
 ## Per-device update state
 
 `/api/fleet-status` reports `update_state ∈ {up_to_date, needs_update, on_hold}` plus a

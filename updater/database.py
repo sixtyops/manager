@@ -715,6 +715,20 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_switch_bridge_entries_mac
                 ON switch_bridge_entries(mac);
 
+            -- Immutable identity, keyed by current IP. Serial is the reach-anchor
+            -- (the only thing that survives a v1.5.0 DHCP re-IP); `macs` is the
+            -- device's full interface MAC set (the DHCP-sourcing interface differs
+            -- from eth0, so we keep every MAC as a locator hint). Isolated from the
+            -- devices↔legacy sync triggers on purpose.
+            CREATE TABLE IF NOT EXISTS device_identity (
+                ip TEXT PRIMARY KEY,
+                serial TEXT,
+                macs TEXT,
+                updated_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_device_identity_serial
+                ON device_identity(serial);
+
             CREATE TABLE IF NOT EXISTS cpe_cache (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ap_ip TEXT NOT NULL,
@@ -1207,6 +1221,10 @@ def init_db():
             "admin_password_hash": "",
             "firmware_canary_hold_days": "6",
             "firmware_update_cooldown_days": "30",
+            # Rediscover a device that comes back on a new DHCP IP after an update
+            # (v1.5.0). When on, an unreachable device is located by serial —
+            # including a scan of its own /24 — before the job is halted.
+            "rediscover_scan_enabled": "true",
             "slack_webhook_url": "",
             # Notification health tracking
             "notification_consecutive_failures": "0",
@@ -3489,6 +3507,116 @@ def rebind_snapshots(old_ip: str, new_ip: str, mac: str) -> int:
             (new_ip, old_ip, normalized),
         )
         return cur.rowcount
+
+
+# ─── Device identity (serial + full MAC set) ──────────────────────────────
+# Anchors a device by immutable serial so a v1.5.0 DHCP re-IP can't lose it.
+
+def upsert_device_identity(ip: str, serial: str = None, macs: list[str] = None) -> None:
+    """Record a device's immutable serial and full interface MAC set, keyed by IP.
+
+    Called on every poll. A poll that doesn't return a serial or MAC set keeps the
+    previously stored value rather than clobbering it (transient API gaps happen).
+    """
+    norm_macs = None
+    if macs:
+        norm_macs = json.dumps(sorted({m.upper() for m in macs if m}))
+    with get_db() as db:
+        existing = db.execute(
+            "SELECT serial, macs FROM device_identity WHERE ip = ?", (ip,)
+        ).fetchone()
+        if existing:
+            serial = serial or existing["serial"]
+            norm_macs = norm_macs or existing["macs"]
+        db.execute(
+            """INSERT INTO device_identity (ip, serial, macs, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(ip) DO UPDATE SET
+                   serial = excluded.serial,
+                   macs = excluded.macs,
+                   updated_at = excluded.updated_at""",
+            (ip, serial, norm_macs, datetime.now().isoformat()),
+        )
+
+
+def _identity_row_to_dict(row) -> dict:
+    d = dict(row)
+    d["macs"] = json.loads(d["macs"]) if d.get("macs") else []
+    return d
+
+
+def get_device_identity(ip: str) -> Optional[dict]:
+    """Return {ip, serial, macs: [...], updated_at} for an IP, or None."""
+    with get_db() as db:
+        row = db.execute("SELECT * FROM device_identity WHERE ip = ?", (ip,)).fetchone()
+        return _identity_row_to_dict(row) if row else None
+
+
+def find_identity_ip_by_serial(serial: str, exclude_ip: str = None) -> Optional[str]:
+    """Return the most-recently-seen IP recorded for a serial (for reverse lookup)."""
+    if not serial:
+        return None
+    with get_db() as db:
+        row = db.execute(
+            """SELECT ip FROM device_identity
+                WHERE serial = ? AND (? IS NULL OR ip != ?)
+                ORDER BY updated_at DESC LIMIT 1""",
+            (serial, exclude_ip, exclude_ip),
+        ).fetchone()
+        return row["ip"] if row else None
+
+
+def change_device_ip(old_ip: str, new_ip: str) -> Optional[str]:
+    """Move a managed device from old_ip to new_ip, preserving all history.
+
+    Used when a device keeps its identity (serial) but gets a new DHCP IP. Updates
+    the unified `devices` row and its legacy mirror, then repoints every IP-keyed
+    table (CPE cache, config snapshots, audit history, bridge entries, identity) so
+    nothing is orphaned at the stale address. Callers MUST verify serial identity
+    before invoking this — it does no verification itself. Returns the device MAC.
+    """
+    with get_db() as db:
+        dev = db.execute(
+            "SELECT role, mac FROM devices WHERE ip = ?", (old_ip,)
+        ).fetchone()
+        if not dev:
+            # Idempotent: if the device already lives at new_ip, treat as done.
+            moved = db.execute("SELECT mac FROM devices WHERE ip = ?", (new_ip,)).fetchone()
+            if moved:
+                return moved["mac"]
+            raise ValueError(f"No managed device at {old_ip}")
+        role = dev["role"]
+        mac = dev["mac"]
+
+        # Free the target IP if a stale/duplicate row somehow holds it.
+        db.execute("DELETE FROM devices WHERE ip = ?", (new_ip,))
+
+        # Move the source of truth, then the legacy mirror. The devices→legacy
+        # update trigger matches on the *new* ip and no-ops until the legacy row
+        # is moved; moving the legacy row re-fires its trigger which harmlessly
+        # re-sets the (already-correct) columns on the devices row. Net: both
+        # tables converge on new_ip.
+        db.execute("UPDATE devices SET ip = ? WHERE ip = ?", (new_ip, old_ip))
+        db.execute("UPDATE access_points SET ip = ? WHERE ip = ?", (new_ip, old_ip))
+        db.execute("UPDATE switches SET ip = ? WHERE ip = ?", (new_ip, old_ip))
+
+        # Repoint IP-keyed dependents so history follows the unit.
+        if role == "ap":
+            db.execute("UPDATE cpe_cache SET ap_ip = ? WHERE ap_ip = ?", (new_ip, old_ip))
+        db.execute("UPDATE switch_bridge_entries SET switch_ip = ? WHERE switch_ip = ?", (new_ip, old_ip))
+        db.execute("UPDATE device_update_history SET ip = ? WHERE ip = ?", (new_ip, old_ip))
+        db.execute("UPDATE device_uptime_events SET ip = ? WHERE ip = ?", (new_ip, old_ip))
+        db.execute("UPDATE config_enforce_log SET ip = ? WHERE ip = ?", (new_ip, old_ip))
+        db.execute(
+            "UPDATE device_configs SET ip = ? WHERE ip = ? AND deleted_at IS NULL",
+            (new_ip, old_ip),
+        )
+
+        # Rekey the identity row (drop any stale row already at new_ip first).
+        db.execute("DELETE FROM device_identity WHERE ip = ?", (new_ip,))
+        db.execute("UPDATE device_identity SET ip = ? WHERE ip = ?", (new_ip, old_ip))
+
+    return mac
 
 
 # Config Template operations

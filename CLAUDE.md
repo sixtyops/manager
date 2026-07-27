@@ -99,6 +99,7 @@ Short form:
 | `updater/database.py` | SQLite schema and data access |
 | `updater/scheduler.py` | Auto-update scheduler + gradual rollout (canary→10%→50%→100%) |
 | `updater/rollout_gate.py` | Fail-closed phase gate: one phase per maintenance window + canary soak |
+| `updater/device_locator.py` | Re-IP recovery: find a device by serial after a DHCP IP change (`docs/reip-recovery.md`) |
 | `updater/release_checker.py` | Self-update: checks GitHub releases API |
 | `updater/tachyon.py` | Tachyon device communication client (hardware vendor) |
 | `scripts/install.sh` | Production installer (always pulls `main`) |

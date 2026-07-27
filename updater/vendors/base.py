@@ -118,6 +118,21 @@ class VendorDriver(ABC):
 
     # --- Optional methods with default implementations ---
 
+    async def verify_firmware(
+        self,
+        firmware_path: str,
+        old_version: str = None,
+        pass_number: int = 1,
+        progress: Callable[[str], None] = None,
+    ) -> VendorUpdateResult:
+        """Re-login and confirm the device is on the target firmware, without
+        re-uploading. Used by re-IP recovery to verify a device that came back on
+        a new address. Vendors that support rediscovery override this.
+        """
+        raise NotImplementedError(
+            f"{self.VENDOR_NAME} driver does not support post-move verification"
+        )
+
     async def get_connected_cpes(self) -> list:
         """Get subscriber devices connected to this AP.
 

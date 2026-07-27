@@ -303,6 +303,16 @@ Update an access point's credentials, site assignment, or enabled state.
 ### `DELETE /api/aps/{ip}`
 Remove an access point and its cached CPEs.
 
+### `POST /api/aps/{ip}/change-ip`
+Move a device (AP or switch) to a new IP address, keeping all of its history.
+Logs into the new address with the device's saved credentials and requires the
+device **serial** to match the record before moving — so it can never rebind to a
+different unit. Use when a device came back on a different DHCP IP (e.g. after a
+firmware update).
+
+- **Body** (form): `new_ip`
+- **Response**: `{ "success": true, "new_ip": "...", "system_name": "..." }`
+
 ### `POST /api/aps/{ip}/poll`
 Trigger an immediate poll of a single AP. Returns success status.
 

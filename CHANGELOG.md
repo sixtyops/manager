@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- **Devices that come back on a new IP after an update are found automatically.**
+  The latest v1.5.0 firmware makes some devices pick up a different DHCP address
+  when they reboot, which used to look like the device never came back — halting
+  the whole update. The manager now recognizes each device by its built-in serial
+  number, locates it at its new address (via known neighbors, or a quick scan of
+  its own network), moves its record over — keeping all history — and lets the
+  update continue. A device that's genuinely offline still stops the run. You can
+  also move a device by hand: right-click its name and choose **Change IP
+  address…**; the manager checks it's the same device before moving it. See
+  [docs/reip-recovery.md](docs/reip-recovery.md).
 - Clients (CPEs) the manager **can't sign into** — because they use different
   login credentials than their access point — now show a clear amber
   **"Can't sign in"** badge on their row, distinct from being offline. The

@@ -720,51 +720,20 @@ class TachyonClient:
                 result.error = "Device did not come back online"
                 return result
 
-            # Re-login and verify
+            # Re-login and verify (shared with the re-IP recovery path)
             progress("Verifying...")
-            login_result = await self.login()
-            if login_result is not True:
-                result.error = "Failed to reconnect after reboot"
-                return result
-
-            new_info = await self.get_device_info()
-            result.new_version = new_info.current_version
-            result.bank1_version = new_info.bank1_version
-            result.bank2_version = new_info.bank2_version
-            result.active_bank = new_info.active_bank
-
-            # Extract and normalize versions for comparison
-            target_version = _extract_version_from_firmware(firmware_path)
-            new_version_normalized = _normalize_version(result.new_version or "")
-            old_version_normalized = _normalize_version(result.old_version or "")
-
-            # Verify against target firmware version
-            if target_version and new_version_normalized == target_version:
-                # Device is now running target firmware
-                if old_version_normalized != target_version:
-                    progress(f"Updated: {result.old_version} -> {result.new_version}")
-                elif pass_number >= 2:
-                    progress(f"Updated: both banks now on {result.new_version}")
-                else:
-                    progress(f"Verified: already on {result.new_version}")
-                    result.skipped = True
-                result.success = True
-            elif target_version:
-                # Device is NOT running target firmware - update failed
-                result.error = f"Version mismatch: expected {target_version}, got {result.new_version}"
-                progress(f"Failed: {result.error}")
-            else:
-                # No target version to compare - fall back to old behavior
-                if result.new_version and result.new_version != result.old_version:
-                    progress(f"Updated: {result.old_version} -> {result.new_version}")
-                    result.success = True
-                elif pass_number >= 2:
-                    progress(f"Updated: both banks now on {result.new_version}")
-                    result.success = True
-                else:
-                    progress(f"Skipped: already on {result.new_version}")
-                    result.skipped = True
-                    result.success = True
+            verify = await self.verify_firmware(
+                firmware_path, old_version=result.old_version,
+                pass_number=pass_number, progress=progress,
+            )
+            result.new_version = verify.new_version
+            result.bank1_version = verify.bank1_version
+            result.bank2_version = verify.bank2_version
+            result.active_bank = verify.active_bank
+            result.success = verify.success
+            result.skipped = verify.skipped
+            if verify.error:
+                result.error = verify.error
 
         except Exception as e:
             result.error = str(e)
@@ -772,6 +741,73 @@ class TachyonClient:
 
         # NOTE: Post-update verification is version-string only. Future enhancement:
         # query device firmware hash if supported and compare against known-good checksum.
+        return result
+
+    async def verify_firmware(
+        self,
+        firmware_path: str,
+        old_version: str = None,
+        pass_number: int = 1,
+        progress: Callable[[str], None] = None,
+    ) -> UpdateResult:
+        """Re-login and confirm the device is running the target firmware.
+
+        Extracted from `update_firmware` so the re-IP recovery path (which reaches
+        the device at a *new* address after it came back on a different DHCP IP)
+        can run the exact same version-compare logic instead of duplicating it.
+        """
+        def _progress(msg: str):
+            if progress:
+                progress(msg)
+
+        result = UpdateResult(ip=self.ip, success=False)
+        result.old_version = old_version
+
+        login_result = await self.login()
+        if login_result is not True:
+            result.error = "Failed to reconnect after reboot"
+            return result
+
+        new_info = await self.get_device_info()
+        result.new_version = new_info.current_version
+        result.bank1_version = new_info.bank1_version
+        result.bank2_version = new_info.bank2_version
+        result.active_bank = new_info.active_bank
+        result.model = new_info.model
+
+        # Extract and normalize versions for comparison
+        target_version = _extract_version_from_firmware(firmware_path)
+        new_version_normalized = _normalize_version(result.new_version or "")
+        old_version_normalized = _normalize_version(result.old_version or "")
+
+        # Verify against target firmware version
+        if target_version and new_version_normalized == target_version:
+            # Device is now running target firmware
+            if old_version_normalized != target_version:
+                _progress(f"Updated: {result.old_version} -> {result.new_version}")
+            elif pass_number >= 2:
+                _progress(f"Updated: both banks now on {result.new_version}")
+            else:
+                _progress(f"Verified: already on {result.new_version}")
+                result.skipped = True
+            result.success = True
+        elif target_version:
+            # Device is NOT running target firmware - update failed
+            result.error = f"Version mismatch: expected {target_version}, got {result.new_version}"
+            _progress(f"Failed: {result.error}")
+        else:
+            # No target version to compare - fall back to old behavior
+            if result.new_version and result.new_version != result.old_version:
+                _progress(f"Updated: {result.old_version} -> {result.new_version}")
+                result.success = True
+            elif pass_number >= 2:
+                _progress(f"Updated: both banks now on {result.new_version}")
+                result.success = True
+            else:
+                _progress(f"Skipped: already on {result.new_version}")
+                result.skipped = True
+                result.success = True
+
         return result
 
     async def get_connected_cpes(self) -> List[Dict[str, Any]]:
@@ -907,14 +943,26 @@ class TachyonClient:
             except json.JSONDecodeError:
                 pass
 
-        # Get MAC address
+        # Get MAC address(es). eth0 is the primary identity MAC, but we also
+        # collect every interface's MAC: v1.5.0 sources DHCP from a non-eth0
+        # interface, so the device's new IP binds to one of these other MACs.
+        # The full set lets the device locator match a re-IP'd device.
         status, body = await self._curl("GET", "/cgi.lua/status?type=interfaces")
         if status == 200:
             try:
                 data = json.loads(body)
-                mac = data.get("interfaces", {}).get("eth0", {}).get("mac_address")
-                if mac:
-                    info["mac"] = mac.upper()
+                interfaces = data.get("interfaces", {})
+                macs = []
+                for name, iface in interfaces.items():
+                    m = (iface or {}).get("mac_address")
+                    if m:
+                        macs.append(m.upper())
+                info["macs"] = sorted(set(macs))
+                eth0_mac = interfaces.get("eth0", {}).get("mac_address")
+                if eth0_mac:
+                    info["mac"] = eth0_mac.upper()
+                elif macs:
+                    info["mac"] = macs[0]
             except json.JSONDecodeError:
                 pass
 
