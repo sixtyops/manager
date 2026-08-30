@@ -1,5 +1,12 @@
 # CLAUDE.md
 
+## Communication style (required)
+
+**Always respond in simplified technical English. Make your points up front,
+then give detail.** Lead with the conclusion in 1–3 short bullets. Then the
+detail, in short plain sentences. In docs, every section starts with
+**Key points**, then **Detail**. Never bury the answer under background.
+
 ## Project Overview
 
 SixtyOps Manager — automated firmware update tool for Tachyon wireless
