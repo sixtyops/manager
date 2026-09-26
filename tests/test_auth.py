@@ -125,3 +125,115 @@ class TestLoginFlow:
         resp = authed_client.post("/logout", follow_redirects=False)
         assert resp.status_code == 303
         assert resp.headers["location"] == "/login"
+
+
+@pytest.fixture
+def login_limits(monkeypatch):
+    """Isolate counters and control lock time without sleeping."""
+    import updater.app as app_mod
+
+    monkeypatch.setattr(app_mod, "_auth_rate_attempts", {})
+    monkeypatch.setattr(app_mod, "_login_failures", {})
+    monkeypatch.setattr(app_mod, "_login_locks", {})
+    clock = MagicMock(return_value=1000.0)
+    monkeypatch.setattr(app_mod, "monotonic", clock)
+    return clock
+
+
+def _post_login(client, username="admin", password="wrong"):
+    return client.post("/login", data={"username": username, "password": password},
+                       follow_redirects=False)
+
+
+class TestUsernameLock:
+    @pytest.mark.parametrize("password", ["wrong", "testpass123"])
+    def test_eleventh_attempt_locked_and_expires(self, client, login_limits, password):
+        from updater import database as db
+
+        for _ in range(10):
+            assert _post_login(client).status_code == 401
+        response = _post_login(client, password=password)
+        assert response.status_code == 429
+        assert response.headers["Retry-After"] == "60"
+        assert "Try again in 60 seconds" in response.text
+        assert "session_id" not in response.cookies
+
+        login_limits.return_value = 1059.1
+        for _ in range(25):
+            response = _post_login(client, password="testpass123")
+            assert response.status_code == 429
+            assert response.headers["Retry-After"] == "1"
+        entries = db.get_audit_log(action="auth.lockout")
+        assert len(entries) == 1
+        assert entries[0]["username"] == "admin"
+        assert entries[0]["ip_address"] == "testclient"
+        assert entries[0]["details"] == (
+            "10 failed logins in 60 seconds. Locked for 60 seconds.")
+        assert db.get_user("admin")["enabled"] == 1
+
+        login_limits.return_value = 1060.0
+        response = _post_login(client, password="testpass123")
+        assert response.status_code == 303
+        assert "session_id" in response.cookies
+
+    def test_failures_follow_username_across_ips(self, client, login_limits, monkeypatch):
+        import updater.app as app_mod
+
+        for i in range(10):
+            monkeypatch.setattr(app_mod, "_client_ip", lambda request, i=i: f"192.0.2.{i}")
+            assert _post_login(client).status_code == 401
+        monkeypatch.setattr(app_mod, "_client_ip", lambda request: "192.0.2.100")
+        assert _post_login(client, password="testpass123").status_code == 429
+        assert _post_login(client, username="someone-else").status_code == 401
+
+    def test_ip_limit_still_blocks_different_usernames(self, client, login_limits):
+        import updater.app as app_mod
+
+        for i in range(app_mod.LOGIN_RATE_LIMIT):
+            assert _post_login(client, username=f"unknown-{i}").status_code == 401
+        response = _post_login(client, password="testpass123")
+        assert response.status_code == 429
+        assert response.headers["Retry-After"] == str(app_mod.AUTH_RATE_WINDOW)
+        assert "Too many sign-in attempts" in response.text
+
+    def test_success_resets_both_counters(self, client, login_limits):
+        import updater.app as app_mod
+
+        for _ in range(3):
+            for _ in range(9):
+                assert _post_login(client).status_code == 401
+            assert _post_login(client, password="testpass123").status_code == 303
+            assert app_mod._login_failures == {}
+            assert app_mod._auth_rate_attempts == {}
+
+    def test_failures_outside_window_expire(self, client, login_limits):
+        for _ in range(9):
+            assert _post_login(client).status_code == 401
+        login_limits.return_value = 1060.0
+        assert _post_login(client).status_code == 401
+        assert _post_login(client, password="testpass123").status_code == 303
+
+    def test_live_lane_login_pattern(self, client, login_limits):
+        from updater import database as db
+
+        password = "unit-test-only"
+        hashed = _bcrypt.hashpw(password.encode(), _bcrypt.gensalt(rounds=4)).decode()
+        db.create_user("live-lane", hashed, "admin", "local")
+        # The live lane logs in once per session and follows the redirect.
+        for _ in range(25):
+            client.cookies.clear()
+            response = client.post("/login", data={"username": "live-lane", "password": password})
+            assert response.status_code == 200
+            assert "session_id" in client.cookies
+        assert db.get_audit_log(action="auth.lockout") == []
+
+    def test_idle_state_is_removed(self, client, login_limits):
+        import updater.app as app_mod
+
+        assert _post_login(client, username="idle").status_code == 401
+        for _ in range(10):
+            assert _post_login(client).status_code == 401
+        login_limits.return_value = 1060.0
+        assert _post_login(client, password="testpass123").status_code == 303
+        assert app_mod._login_failures == {}
+        assert app_mod._login_locks == {}

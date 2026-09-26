@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import monotonic
 from typing import Dict, Optional, Set
 
 import aiofiles
@@ -817,6 +818,26 @@ _auth_rate_attempts: Dict[str, list] = {}  # bucket -> list of timestamps
 AUTH_RATE_WINDOW = 300  # 5 minutes
 LOGIN_RATE_LIMIT = 20
 OIDC_RATE_LIMIT = 60
+LOGIN_FAILURE_LIMIT = 10
+LOGIN_LOCK_SECONDS = 60
+# Process-local state, like the IP limiter. Multiple workers need shared state.
+_login_failures: Dict[str, list[float]] = {}
+_login_locks: Dict[str, float] = {}
+
+
+def _login_retry_after(username: str) -> int:
+    """Expire idle counters and return the remaining username lock seconds."""
+    now = monotonic()
+    for name, deadline in list(_login_locks.items()):
+        if deadline <= now:
+            del _login_locks[name]
+    for name, attempts in list(_login_failures.items()):
+        recent = [t for t in attempts if t > now - LOGIN_LOCK_SECONDS]
+        if recent:
+            _login_failures[name] = recent
+        else:
+            del _login_failures[name]
+    return max(0, math.ceil(_login_locks.get(username, now) - now))
 
 
 def _parse_trusted_proxies() -> list:
@@ -897,6 +918,16 @@ async def login(request: Request, username: str = Form(...), password: str = For
     """Handle login form submission."""
     ip_address = _client_ip(request)
     bucket = f"login:{ip_address}"
+    retry_after = _login_retry_after(username)
+    if retry_after:
+        resp = render_template(request, "login.html", {
+            "error": "username_locked",
+            "retry_after": retry_after,
+            "oidc_enabled": oidc_config.is_oidc_enabled(),
+        }, status_code=429)
+        resp.headers["Retry-After"] = str(retry_after)
+        return resp
+
     if _check_rate_limit(bucket, LOGIN_RATE_LIMIT, AUTH_RATE_WINDOW):
         resp = render_template(request, "login.html", {
             "error": "rate_limited",
@@ -908,12 +939,23 @@ async def login(request: Request, username: str = Form(...), password: str = For
     user = authenticate(username, password)
     if not user:
         _record_rate_limit_event(bucket)
+        now = monotonic()
+        attempts = [t for t in _login_failures.get(username, [])
+                    if t > now - LOGIN_LOCK_SECONDS]
+        attempts.append(now)
+        _login_failures[username] = attempts
+        if len(attempts) >= LOGIN_FAILURE_LIMIT:
+            _login_locks[username] = now + LOGIN_LOCK_SECONDS
+            del _login_failures[username]
+            db.log_audit(username, "auth.lockout", None, None,
+                         "10 failed logins in 60 seconds. Locked for 60 seconds.", ip_address)
         return render_template(request, "login.html", {
             "error": True,
             "oidc_enabled": oidc_config.is_oidc_enabled(),
         }, status_code=401)
 
     _clear_rate_limit_bucket(bucket)
+    _login_failures.pop(username, None)
     session_id = create_session(user["username"], ip_address)
     db.log_audit(user["username"], "auth.login", None, None, None, ip_address)
 

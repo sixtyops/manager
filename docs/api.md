@@ -17,7 +17,13 @@ Container/orchestrator health check. **No auth required.** Verifies database con
 Renders the login page. No auth required. Redirects to `/setup` on first run.
 
 ### `POST /login`
-Authenticate and create a session. Rate-limited to 20 attempts per IP per 5 minutes.
+Authenticate and create a session. Rate-limited to 20 failed attempts per IP per 5 minutes.
+After 10 failures for one username in 60 seconds, lock that username for 60 seconds
+across all source IPs. Locked requests return `429` with the remaining seconds in
+`Retry-After` and on the login page. They do not extend the lock. Each lock writes
+an `auth.lockout` audit entry without the password. A successful login clears the
+username and source IP failure counters. Counters stay in memory per process.
+The username lock never disables the account. The separate IP limit still applies.
 
 - **Body**: `username` (form), `password` (form)
 - **Response**: Redirect to `/` on success, re-render login with error on failure
