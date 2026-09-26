@@ -237,6 +237,23 @@ does not walk the whole enabled fleet.
 See [docs/dev-hardware-validation.md](docs/dev-hardware-validation.md) for the
 full workflow and GitHub Actions contract.
 
+## Writing and style
+
+Run all GitHub text and all new code comments through the `ai-copywriter` skill
+(`~/.claude/skills/ai-copywriter`). Load the skill before you write. Use plain
+words, put the bottom line first, and cut filler and AI tells. If this repo
+adopts the ASD-STE100 simple-English rule, apply both.
+
+The rule covers:
+
+- Issue and PR titles and bodies
+- PR comments, issue comments, and review-thread replies
+- Commit messages (they show on GitHub)
+- Sign-off packets and bot status comments
+- Code comments and docstrings in new or changed code
+
+It does not ask you to rewrite old comments.
+
 ## Rules
 
 - Run tests before committing (`pytest -v` — all must pass)

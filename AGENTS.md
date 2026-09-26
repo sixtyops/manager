@@ -9,6 +9,8 @@ keep all instructions in CLAUDE.md, not here.
 Quick pointers:
 - Run `pytest -v` before committing; all must pass. All PRs target `main`.
 - Never push directly to `main`; one feature per branch/PR.
+- Load the `ai-copywriter` skill before you write any GitHub text, commit
+  message, or new code comment. Scope and details: CLAUDE.md, *Writing and style*.
 - Phased rollouts (firmware/config/RADIUS) must advance **one phase per
   maintenance window** with the canary soaked from fleet-canary completion —
   enforced by the fail-closed gate in `updater/rollout_gate.py` and guarded by
