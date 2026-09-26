@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.treehouse.agent-issue-pickup-sixtyops-manager</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/serveradmin/repos/sixtyops-manager/dev-host/scripts/agent-issue-pickup.sh</string>
+    <string>--once</string>
+  </array>
+  <key>UserName</key>
+  <string>serveradmin</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/serveradmin</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>3600</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/serveradmin/Library/Logs/sixtyops-manager-agent-issue-pickup.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/serveradmin/Library/Logs/sixtyops-manager-agent-issue-pickup.err</string>
+</dict>
+</plist>
