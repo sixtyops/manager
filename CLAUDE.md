@@ -104,8 +104,8 @@ Short form:
 | `updater/app.py` | All API routes, WebSocket, update logic |
 | `updater/templates/monitor.html` | Entire frontend (single-page app) |
 | `updater/database.py` | SQLite schema and data access |
-| `updater/scheduler.py` | Auto-update scheduler + gradual rollout (canary→10%→50%→100%) |
-| `updater/rollout_gate.py` | Fail-closed phase gate: one phase per maintenance window + canary soak |
+| `updater/scheduler.py` | Auto-update scheduler + gradual rollout (10%→50%→100%, one wave per window) |
+| `updater/rollout_gate.py` | Fail-closed phase gate: one wave per maintenance window + Firmware Hold |
 | `updater/release_checker.py` | Self-update: checks GitHub releases API |
 | `updater/tachyon.py` | Tachyon device communication client (hardware vendor) |
 | `scripts/install.sh` | Production installer (always pulls `main`) |
@@ -113,6 +113,9 @@ Short form:
 | `docker-compose.standalone.yml` | Standalone overlay (publishes 80/443 + certbot) |
 | `entrypoint.sh` | Runtime prep for self-update (docker socket group + repo ownership) |
 | `.github/release.yml` | GitHub auto-generated release notes config |
+| `docs/north-star.md` | Product direction (v2: Tachyon firmware automation) |
+| `docs/rearchitecture.md` | Rearchitecture decisions, feature disposition, target layout (epic #316) |
+| `docs/rollout-logic.md` | Target rollout model: identity, lifecycle, waves, edge cases |
 | `tests/integration/` | Integration tests against real hardware (requires `SIXTYOPS_TEST_URL`) |
 
 ## Deployment Reality
@@ -147,10 +150,6 @@ Short form:
 ./dev.sh                # uvicorn --reload on localhost:8000
 ./dev.sh --fresh        # wipe DB and re-seed
 
-# Dev Docker (full stack on LAN — nginx, SSL, RADIUS, seed data)
-./dev-docker.sh              # build and start
-./dev-docker.sh --fresh      # wipe DB, rebuild, re-seed
-
 # Run tests
 pytest -v
 
@@ -161,11 +160,11 @@ SIXTYOPS_TEST_URL=https://<your-dev-host> pytest -m integration -v
 **Local dev** (`dev.sh`): Pure Python, hot-reload, localhost only. Best for
 UI/API work that doesn't need hardware.
 
-**Dev Docker** (`dev-docker.sh`): Full production-like stack (nginx + self-signed
-SSL, RADIUS on 1812/udp, app on 8000) accessible from the LAN. Use this for
-testing against real Tachyon hardware. Local seeded login: `admin / admin`.
-This local default does not apply to the shared dev host or live integration
-tests.
+**Docker stack**: there is no `dev-docker.sh`. Run the compose files from
+*Deployment Reality* with `SEED_DATA=1` (development only, never on a
+production host) for a production-like stack on the LAN.
+Local seeded login: `admin / admin`. This local default does not apply to the
+shared dev host or live integration tests.
 
 Seed script (`scripts/seed_dev_data.py`) inserts sample sites, devices, CPEs,
 config templates, and job history. It's idempotent — skips if data exists.
@@ -263,5 +262,5 @@ full workflow and GitHub Actions contract.
   per-wave auto-advance without routing through the gate, and don't let the
   hold-clear path bypass the one-wave-per-window rule. Manual per-device updates
   intentionally bypass the hold. See [docs/gradual-rollout.md](docs/gradual-rollout.md).
-  Config-conformity and RADIUS rollouts are slated to share this gate; keep new
-  rollout logic in one place rather than copying the wave loop.
+  Keep all rollout logic in one engine; never copy the wave loop (rule 21 in
+  [docs/rearchitecture.md](docs/rearchitecture.md)).

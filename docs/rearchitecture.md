@@ -2,8 +2,8 @@
 
 > **Status:** decisions recorded 2026-08-29. The executable plan is epic
 > [#316](https://github.com/sixtyops/manager/issues/316): one issue per PR.
-> **Supersedes** the "firmware, config, RADIUS, and monitoring" framing in
-> `docs/north-star.md` (to be updated in the first PR of this plan).
+> **Supersedes** the "firmware, config, RADIUS, and monitoring" framing of
+> North Star v1. `docs/north-star.md` is now v2.
 
 ## Why
 
@@ -309,8 +309,6 @@ as the removal; use function and route names, not line numbers.
   issues (#51–#60) and #36/#38/#40 should be closed or re-scoped against the
   "drift report only" decision; #189 (self-update hardening) and #120
   (self-update smoke test) are obsolete after A6.
-- CLAUDE.md documents `./dev-docker.sh`, which does not exist in the tree;
-  fix in A1.
 - "Back up `./data`" docs must name the Fernet key file explicitly, or
   restores decrypt nothing.
 
