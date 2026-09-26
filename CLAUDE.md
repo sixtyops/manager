@@ -246,6 +246,9 @@ full workflow and GitHub Actions contract.
 - All PRs target `main`
 - One feature per branch/PR — don't bundle unrelated changes
 - Keep commits focused and atomic with conventional commit messages
+- For UI work (`static/`, `updater/templates/`), load the `frontend-design`
+  skill in `.claude/skills/frontend-design/`. It covers general design craft.
+  The tokens and rules in [UI_STYLE_GUIDE.md](UI_STYLE_GUIDE.md) take precedence.
 - **Fleet rollouts must advance one wave per maintenance window** (10% → 50% →
   100%, no canary phase) and **halt the whole job if a device doesn't come back
   online**. New firmware is held before the first wave by the **Firmware Hold**
