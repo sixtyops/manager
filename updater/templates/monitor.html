@@ -3928,6 +3928,27 @@
     </div>
 
     <script>
+        let sessionExpiryHandled = false;
+
+        function handleSessionExpiry() {
+            const path = window.location.pathname;
+            if (sessionExpiryHandled || /^\/(login|auth)(\/|$)/.test(path)) return;
+            sessionExpiryHandled = true;
+            window.location.replace('/login');
+        }
+
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+            const response = await originalFetch(input, init);
+            const url = new URL(input instanceof Request ? input.url : input, window.location.href);
+            if (response.status === 401 && url.origin === window.location.origin &&
+                url.pathname.startsWith('/api/') &&
+                !/^\/api\/(login|auth)(\/|$)/.test(url.pathname)) {
+                handleSessionExpiry();
+            }
+            return response;
+        };
+
         // Utility: format distance with km for >= 1000m
         function formatDistance(meters) {
             if (meters == null) return '';
@@ -4376,7 +4397,12 @@
                 }
             };
 
-            ws.onclose = () => {
+            ws.onclose = (event) => {
+                if (event.code === 4001) {
+                    handleSessionExpiry();
+                    return;
+                }
+                if (sessionExpiryHandled) return;
                 document.getElementById('connectionStatus').textContent = 'Disconnected';
                 document.getElementById('connectionStatus').classList.add('disconnected');
                 // If a system update is in progress, show the overlay instead of just the disconnect toast

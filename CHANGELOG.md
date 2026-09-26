@@ -59,6 +59,7 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- Return expired sessions to the login screen when an API request or WebSocket reports an authentication failure.
 - **A scheduled wave can no longer be silently skipped when its job fails to
   start.** If starting a wave failed (for example, a missing-family firmware
   refusal), the wave's devices could be left marked "pending" and then excluded
