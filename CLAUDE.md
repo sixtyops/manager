@@ -239,10 +239,14 @@ full workflow and GitHub Actions contract.
 
 ## Writing and style
 
-Run all GitHub text and all new code comments through the `ai-copywriter` skill
-(`~/.claude/skills/ai-copywriter`). Load the skill before you write. Use plain
-words, put the bottom line first, and cut filler and AI tells. If this repo
-adopts the ASD-STE100 simple-English rule, apply both.
+Use plain words, put the bottom line first, and cut filler and AI tells in all
+GitHub text and all new code comments. If this repo adopts the ASD-STE100
+simple-English rule, apply both.
+
+Claude agents: load the `ai-copywriter` skill before you write. The skill
+lives in the user's Claude setup (`~/.claude/skills/ai-copywriter`). This repo
+does not ship it. Other agents, and any agent without the skill: apply the
+rules in this section directly.
 
 The rule covers:
 
