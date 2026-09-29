@@ -23,6 +23,9 @@ All notable changes to this project are documented in this file.
   at flash time** — the same integrity guard manual uploads already get — so a
   file that gets corrupted on disk during the days-long canary soak is caught
   before reboot.
+- A **read-only API token runbook** (`docs/readonly-api-token.md`). It shows
+  how to create, activate, verify, rotate, and revoke a `read`-scoped token for
+  a reporting or monitoring service, without exposing the token value.
 
 ### Changed
 - **The poller no longer re-logs into every client (CPE) on each poll cycle.**
