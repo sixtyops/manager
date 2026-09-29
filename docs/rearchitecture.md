@@ -111,11 +111,13 @@ Where a rule differs from current behavior, the difference is called out;
 
 ### Waves
 
-1. A rollout progresses **10% → 50% → 100%, cumulative, of the frozen
-   membership** (rule 13): for 100 members the waves are 10, 40, 50. No
-   canary phase. **Always on.** *(Today each percentage is taken of the
-   then-remaining candidates, giving 10/45/45.)* Rounding is `ceil`, minimum
-   batch 1; deferred and removed devices are excluded from the denominator.
+1. A rollout progresses **10% → 50% → 100%, cumulative, of the units**
+   (rule 3) built from the frozen membership (rule 13): for 100 units the
+   waves are 10, 40, 50. No canary phase. **Always on.** *(Today each
+   percentage is taken of the then-remaining candidates, giving 10/45/45.)*
+   Rounding is `ceil`, minimum batch 1 unit. Removed and disabled members are
+   not in the denominator. Deferred units stay in the denominator and retry.
+   See [rollout-logic.md §4.2](rollout-logic.md#42-sizing).
 2. **One wave per maintenance window**, DB-backed so restarts cannot cascade.
    **Always on.** The window key must identify a *window instance*, not a
    calendar date, so multiple windows per day and windows crossing midnight
@@ -341,7 +343,8 @@ original findings are kept for the record:
    (`app.py:5766-5776`). Needs one state model: percentages against frozen
    membership persisted at creation; pre-flash unreachable → `deferred`,
    keeps its wave, eligible in any later wave, excluded from the next
-   denominator; post-flash non-return → halt.
+   denominator; post-flash non-return → halt. *(Superseded in part: rule 1
+   keeps deferred units in the denominator.)*
 3. **Rule 3 (switch/PoE) vs sizing.** Waves are sized on APs and switches
    separately and CPEs ride with their AP, so "10%" is already 10% of APs
    plus 10% of switches. Excluding a switch whose APs are in the batch can
