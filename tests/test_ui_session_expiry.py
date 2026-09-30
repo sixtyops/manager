@@ -18,8 +18,8 @@ def test_session_expiry_wiring():
     assert "response.status === 401" in wrapper
     assert "handleSessionExpiry();" in wrapper
     close = source.split("ws.onclose =", 1)[1].split("ws.onmessage =", 1)[0]
-    assert "event.code === 4001" in close
-    assert "handleSessionExpiry();\n                    return;" in close
+    assert "fetch('/api/users/me')" in close
+    assert "if (!sessionExpiryHandled) connectWebSocket();" in close
 
 
 def test_session_expiry_behavior():
@@ -35,7 +35,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const [handler, close] = JSON.parse(fs.readFileSync(0, 'utf8'));
 function setup(path = '/') {
-    const redirects = [], timers = [], calls = [];
+    const redirects = [], timers = [], calls = [], reconnects = [];
     const context = {
         URL, Request, ws: {},
         window: {
@@ -46,14 +46,15 @@ function setup(path = '/') {
             fetch: async (...args) => { calls.push(args); return context.response; },
         },
         response: {status: 401},
+        fetch: (...args) => context.window.fetch(...args),
         document: {getElementById: () => ({classList: {add() {}}})},
         localStorage: {getItem: () => null},
         setTimeout: (...args) => timers.push(args),
-        connectWebSocket() {},
+        connectWebSocket() { reconnects.push(1); },
     };
     vm.createContext(context);
     vm.runInContext(handler + close, context);
-    return {context, redirects, timers, calls};
+    return {context, redirects, timers, calls, reconnects};
 }
 (async () => {
     for (const input of ['/api/updates', new URL('https://manager.test/api/settings'),
@@ -63,12 +64,17 @@ function setup(path = '/') {
         assert.equal(await context.window.fetch(input, init), context.response);
         assert.deepEqual(calls[0], [input, init]);
         await context.window.fetch('/api/settings');
-        context.ws.onclose({code: 4001});
+        context.ws.onclose({code: 1006});
+        await new Promise(resolve => setImmediate(resolve));
         assert.deepEqual(redirects, ['/login']);
         assert.equal(timers.length, 0);
     }
-    for (const input of ['/login', '/auth/oidc/login', '/api/auth/config',
-                         '/api/auth', '/api/login', '/apiary/test',
+    for (const input of ['/api/auth/config', '/api/auth/radius']) {
+        const {context, redirects} = setup();
+        await context.window.fetch(input);
+        assert.deepEqual(redirects, ['/login']);
+    }
+    for (const input of ['/login', '/auth/oidc/login', '/apiary/test',
                          'https://other.test/api/updates']) {
         const {context, redirects} = setup();
         await context.window.fetch(input);
@@ -83,19 +89,27 @@ function setup(path = '/') {
     for (const path of ['/login', '/login/', '/auth', '/auth/oidc/callback']) {
         const {context, redirects, timers} = setup(path);
         await context.window.fetch('/api/settings');
-        context.ws.onclose({code: 4001});
         assert.deepEqual(redirects, []);
-        assert.equal(timers.length, 0);
     }
-    const {context, redirects, timers} = setup();
-    context.ws.onclose({code: 4001});
+    // The server rejects the handshake. The browser sees 1006 and the session check gets 401.
+    const {context, redirects, timers, calls, reconnects} = setup();
+    context.ws.onclose({code: 1006});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls[0][0], '/api/users/me');
     assert.deepEqual(redirects, ['/login']);
-    assert.equal(timers.length, 0);
+    assert.equal(timers.length, 1);
+    timers[0][0]();
+    assert.equal(reconnects.length, 0);
+    // The server goes down while the session is valid. The client reconnects.
     const normal = setup();
+    normal.context.response.status = 200;
     normal.context.ws.onclose({code: 1006});
+    await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(normal.redirects, []);
     assert.equal(normal.timers.length, 1);
     assert.equal(normal.timers[0][1], 2000);
+    normal.timers[0][0]();
+    assert.equal(normal.reconnects.length, 1);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 '''
     result = subprocess.run(
