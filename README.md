@@ -146,6 +146,7 @@ Background polling keeps data current. Check here before scheduling updates to u
 - **[Gradual Rollout](docs/gradual-rollout.md)** — How the 4-night rollout works
 - **[Release System](docs/release-system.md)** — Release channels, versioning, and self-update behavior
 - **[API Reference](docs/api.md)** — REST endpoints and WebSocket protocol
+- **[Read-only API Token](docs/readonly-api-token.md)** — create, activate, verify, and revoke integration tokens
 - **[Architecture](docs/architecture.md)** — System design and data flow
 - **[Troubleshooting](docs/troubleshooting.md)** — Top failure modes with symptom → diagnose → recover
 

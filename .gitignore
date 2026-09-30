@@ -42,3 +42,6 @@ nginx/ssl/
 
 # Logs
 *.log
+
+# local review exports and agent logs
+.review/
