@@ -42,8 +42,11 @@ both rules in.
   seen <24h). Recorded in `firmware_confirmations (ip, version, confirmed_at)`; written
   in the post-update path (`app.py`) on smoke-pass.
 - **Per family.** A confirmed `tna-30x` device never clears a held `tna-303l` family.
-  When some families are cleared and others held, the wave runs for the cleared ones
-  and held-family devices are filtered out (shown "on hold"), to ride a later wave.
+  **If any family in scope is held, the whole first wave waits** (all-or-nothing),
+  including devices of cleared families. This is deliberate: a partial first wave would
+  stamp the window, and the held family would then skip its own 10% wave and ship at
+  50% (`scheduler.py` `_pending_split_by_hold`, pinned by `test_rollout_invariants.py`).
+  See rule 8 in [rearchitecture.md](rearchitecture.md).
 - No manual bypass exists — the hold clears only by elapsed days or a confirmed device.
   A **manual** per-device update (`/api/start-update`, `/api/update-device`) ignores the
   hold entirely, which is how the operator creates the confirming device.

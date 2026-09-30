@@ -1,0 +1,68 @@
+name: Wake the llm01 agent loops
+
+# Publishes a wake message to a secret ntfy topic when a label event moves a
+# PR or issue into a loop's queue, so the matching loop on llm01 runs now
+# instead of on its next hourly tick. Latency only: the loops keep their own
+# locks, budget gates, and label checks, so a duplicate or spurious wake is at
+# worst one paced no-op run. The listener and its design live in
+# isolson/personal-processes (dev-host/scripts/agent-wake-listener.sh,
+# docs/agent-wake.md). It runs this repo's dev-host/scripts wrappers.
+# No AGENT_WAKE_URL secret configured = silent no-op, timers carry on alone.
+#
+# Safe use of pull_request_target: this workflow NEVER checks out or runs PR
+# code. It only reads the event payload and POSTs a fixed-format string.
+# agent-auto-review.yml sends the initial PR wake after it adds the label.
+
+on:
+  pull_request_target:
+    types: [labeled]
+  issues:
+    types: [labeled]
+
+permissions: {}
+
+jobs:
+  wake:
+    if: >
+      (github.event_name == 'issues' && github.event.label.name == 'agent:ready') ||
+      (github.event_name == 'pull_request_target' &&
+       contains(fromJSON('["agent:review","agent:claude"]'), github.event.label.name))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish wake message
+        env:
+          WAKE_URL: ${{ secrets.AGENT_WAKE_URL }}
+          WAKE_TOKEN: ${{ secrets.AGENT_WAKE_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          LABEL: ${{ github.event.label.name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$WAKE_URL" ]; then
+            echo "AGENT_WAKE_URL secret not set; nothing to do"
+            exit 0
+          fi
+          kind=""
+          if [ "$EVENT" = "issues" ]; then
+            kind="pickup"
+          else
+            case "$LABEL" in
+              agent:review) kind="codex-review" ;;
+              agent:claude) kind="review-fix" ;;
+            esac
+          fi
+          if [ -z "$kind" ]; then
+            echo "label '${LABEL:-<none>}' does not map to a loop; nothing to do"
+            exit 0
+          fi
+          auth=()
+          if [ -n "$WAKE_TOKEN" ]; then auth=(-H "Authorization: Bearer $WAKE_TOKEN"); fi
+          publish() {
+            # Body over stdin, mirroring notify-push.sh: a value starting with
+            # "@" or "<" passed as a --data-binary argument is read by curl as
+            # a filename.
+            printf 'repo=%s kind=%s' "$REPO" "$kind" |
+              curl -fsS --max-time 10 -H "Title: agent-wake" "${auth[@]}" --data-binary @- "$WAKE_URL"
+            echo "published wake: kind=$kind repo=$REPO"
+          }
+          publish
