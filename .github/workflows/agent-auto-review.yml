@@ -1,0 +1,94 @@
+name: Auto-review PRs from trusted authors
+
+# Labels a trusted PR `agent:review`. Then it sends one wake message after the
+# label exists, so the Codex review loop on llm01 can start without a retry.
+# PRs from other authors never enter the autonomous pipeline.
+#
+# Safe use of pull_request_target: this workflow NEVER checks out or runs PR
+# code. It reads the event payload, sets a label, and sends a fixed wake message.
+# The review runs on llm01. See docs/security-model.md section 9 in
+# isolson/personal-processes.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  pull-requests: write
+  issues: write   # create the agent:review label if a freshly onboarded repo hasn't seeded it
+
+jobs:
+    # Trusted-author gate. Two modes:
+    #  - Default (repo variable AGENT_AUTHOR_ALLOWLIST unset): association-based —
+    #    OWNER (repo owner), MEMBER (org member), COLLABORATOR (invited);
+    #    CONTRIBUTOR / FIRST_TIME_CONTRIBUTOR / NONE are excluded, so outside
+    #    contributors on this public repo never enter the pipeline.
+    #  - Allowlist (AGENT_AUTHOR_ALLOWLIST set to a comma-separated list of exact
+    #    logins, no spaces, e.g. "isolson" or "isolson,otheruser"): only those
+    #    logins are auto-reviewed, regardless of association. Use on multi-admin
+    #    or externally contributed repos where a co-admin's association would
+    #    otherwise pass. Comma-padding gives an exact match (no substring
+    #    collision).
+  label:
+    if: >
+      github.event.pull_request.draft == false &&
+      (
+        (vars.AGENT_AUTHOR_ALLOWLIST == '' &&
+          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+        ||
+        (vars.AGENT_AUTHOR_ALLOWLIST != '' &&
+          contains(format(',{0},', vars.AGENT_AUTHOR_ALLOWLIST), format(',{0},', github.event.pull_request.user.login)))
+      )
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a full commit SHA, not the floating @v7 tag: this is a
+      # pull_request_target job with write access, so the action is a
+      # supply-chain-sensitive dependency.
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.0.1
+        env:
+          WAKE_URL: ${{ secrets.AGENT_WAKE_URL }}
+          WAKE_TOKEN: ${{ secrets.AGENT_WAKE_TOKEN }}
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const label = 'agent:review';
+            const repo = { owner: context.repo.owner, repo: context.repo.repo };
+            // Ensure the label exists — a freshly onboarded repo may not have
+            // seeded it yet, and addLabels would otherwise fail.
+            try {
+              await github.rest.issues.getLabel({ ...repo, name: label });
+            } catch {
+              await github.rest.issues.createLabel({ ...repo, name: label, color: 'fbca04', description: 'PR ready for review' });
+            }
+            // Let a genuine failure surface (red run) rather than silently
+            // leaving the PR unlabeled and never reviewed.
+            await github.rest.issues.addLabels({ ...repo, issue_number: pr.number, labels: [label] });
+            core.info(`Labeled PR #${pr.number} ${label} (author_association=${pr.author_association})`);
+
+            // GITHUB_TOKEN label writes do not start another workflow. Publish
+            // here, after the label exists, instead of sending an early wake
+            // and paying for a 90-second retry in a second hosted job.
+            const wakeUrl = process.env.WAKE_URL;
+            if (!wakeUrl) {
+              core.info('AGENT_WAKE_URL secret not set; timer loop remains active');
+              return;
+            }
+            const headers = { 'Content-Type': 'text/plain', 'Title': 'agent-wake' };
+            if (process.env.WAKE_TOKEN) {
+              headers.Authorization = `Bearer ${process.env.WAKE_TOKEN}`;
+            }
+            try {
+              const response = await fetch(wakeUrl, {
+                method: 'POST',
+                headers,
+                body: `repo=${context.repo.owner}/${context.repo.repo} kind=codex-review`,
+                signal: AbortSignal.timeout(10000),
+              });
+              if (!response.ok) {
+                core.warning(`Wake publish returned HTTP ${response.status}; timer loop remains active`);
+              } else {
+                core.info('Published wake: kind=codex-review');
+              }
+            } catch (error) {
+              core.warning(`Wake publish failed: ${error.message}; timer loop remains active`);
+            }
