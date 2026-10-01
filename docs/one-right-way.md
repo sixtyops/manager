@@ -60,13 +60,14 @@ devices. Only humans merge. This work never touches the Treehouse production fle
 
 | Rank | Gap and user impact | Code or plan to reuse |
 |---|---|---|
-| 1 | Failures can spread. Snapshot and smoke errors can pass; concurrent writes can fail together. Stop rules must cover every gate and the whole window. | `app.py`: `_update_single_device`, `_run_update_job`; [safety defaults](https://github.com/sixtyops/manager/issues/380); [halt](https://github.com/sixtyops/manager/issues/339) |
+| 1 | Failures can spread. Snapshot and smoke errors can pass; concurrent writes can fail together. Stop rules must cover every gate and the whole window. | `app.py`: `_update_single_device`, `run_update_job`; [safety defaults](https://github.com/sixtyops/manager/issues/380); [halt](https://github.com/sixtyops/manager/issues/339) |
 | 2 | Recovery is not proven. Backup freshness, rollback evidence, and AP traffic recovery need mandatory checks. Hardware CI can skip missing inputs. | `tachyon.py`; [hardware gate](https://github.com/sixtyops/manager/issues/330); [bench baseline](https://github.com/sixtyops/manager/issues/381) |
 | 3 | A parent update can isolate unfinished devices. Existing order covers AP/SM roles and powered APs, not every management and traffic path. | `poller.py`; [topology batches](https://github.com/sixtyops/manager/issues/306) |
 | 4 | Operators lack a saved risk decision and reliable attention rules. Completion notices and history do not provide the full contract above. | [completion events](https://github.com/sixtyops/manager/issues/302); [evidence log](https://github.com/sixtyops/manager/issues/387) |
 | 5 | Setup and safety options cost operator time. UI docs permit safety overrides; rollout docs permit deferral and concurrent exposure that conflict with this target. | [setup guidance](https://github.com/sixtyops/manager/issues/127); `ui-principles.md`; `rollout-logic.md` |
 
-Execution extends [the existing roadmap](https://github.com/sixtyops/manager/issues/316).
+Execution follows [the safety delivery epic](https://github.com/sixtyops/manager/issues/413)
+within [the existing roadmap](https://github.com/sixtyops/manager/issues/316).
 Keep identity, artifact integrity, bridge compatibility, and security work.
 Park broad extraction and revenue work until the safe update path works.
 Follow-up doc changes must align North Star, rollout, UI, and hardware guidance
