@@ -19,7 +19,7 @@ Renders the login page. No auth required. Redirects to `/setup` on first run.
 ### `POST /login`
 Authenticate and create a session. Rate-limited to 20 failed attempts per IP per 5 minutes.
 After 10 failures for one username in 60 seconds, lock that username for 60 seconds
-across all source IPs. Locked requests return `429` with the remaining seconds in
+across all source IPs and all letter cases. Locked requests return `429` with the remaining seconds in
 `Retry-After` and on the login page. They do not extend the lock. Each lock writes
 an `auth.lockout` audit entry without the password. A successful login clears the
 username and source IP failure counters. Counters stay in memory per process.

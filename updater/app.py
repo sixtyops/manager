@@ -918,7 +918,9 @@ async def login(request: Request, username: str = Form(...), password: str = For
     """Handle login form submission."""
     ip_address = _client_ip(request)
     bucket = f"login:{ip_address}"
-    retry_after = _login_retry_after(username)
+    # Usernames match without case in the users table, so the lock key does too.
+    lock_key = username.lower()
+    retry_after = _login_retry_after(lock_key)
     if retry_after:
         resp = render_template(request, "login.html", {
             "error": "username_locked",
@@ -940,13 +942,13 @@ async def login(request: Request, username: str = Form(...), password: str = For
     if not user:
         _record_rate_limit_event(bucket)
         now = monotonic()
-        attempts = [t for t in _login_failures.get(username, [])
+        attempts = [t for t in _login_failures.get(lock_key, [])
                     if t > now - LOGIN_LOCK_SECONDS]
         attempts.append(now)
-        _login_failures[username] = attempts
+        _login_failures[lock_key] = attempts
         if len(attempts) >= LOGIN_FAILURE_LIMIT:
-            _login_locks[username] = now + LOGIN_LOCK_SECONDS
-            del _login_failures[username]
+            _login_locks[lock_key] = now + LOGIN_LOCK_SECONDS
+            del _login_failures[lock_key]
             db.log_audit(username, "auth.lockout", None, None,
                          "10 failed logins in 60 seconds. Locked for 60 seconds.", ip_address)
         return render_template(request, "login.html", {
@@ -955,7 +957,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
         }, status_code=401)
 
     _clear_rate_limit_bucket(bucket)
-    _login_failures.pop(username, None)
+    _login_failures.pop(lock_key, None)
     session_id = create_session(user["username"], ip_address)
     db.log_audit(user["username"], "auth.login", None, None, None, ip_address)
 

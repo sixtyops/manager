@@ -186,6 +186,30 @@ class TestUsernameLock:
         assert _post_login(client, password="testpass123").status_code == 429
         assert _post_login(client, username="someone-else").status_code == 401
 
+    def test_lock_ignores_username_case(self, client, login_limits):
+        from updater import database as db
+
+        hashed = _bcrypt.hashpw(b"unit-test-only", _bcrypt.gensalt(rounds=4)).decode()
+        db.create_user("operator", hashed, "admin", "local")
+        for name in ["operator", "OPERATOR", "Operator", "oPeRaToR", "operator"] * 2:
+            assert _post_login(client, username=name).status_code == 401
+        for name in ["OPERATOR", "Operator", "operator"]:
+            response = _post_login(client, username=name, password="unit-test-only")
+            assert response.status_code == 429
+            assert "session_id" not in response.cookies
+
+    def test_mixed_case_success_resets_counter(self, client, login_limits):
+        import updater.app as app_mod
+        from updater import database as db
+
+        hashed = _bcrypt.hashpw(b"unit-test-only", _bcrypt.gensalt(rounds=4)).decode()
+        db.create_user("operator", hashed, "admin", "local")
+        for _ in range(9):
+            assert _post_login(client, username="operator").status_code == 401
+        response = _post_login(client, username="OPERATOR", password="unit-test-only")
+        assert response.status_code == 303
+        assert app_mod._login_failures == {}
+
     def test_ip_limit_still_blocks_different_usernames(self, client, login_limits):
         import updater.app as app_mod
 
