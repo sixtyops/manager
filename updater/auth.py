@@ -206,7 +206,10 @@ def authenticate_oidc_user(email: str, groups: list[str]) -> Optional[str]:
         logger.info(f"OIDC auth successful for {email} (group: {config.allowed_group})")
         return email
 
-    logger.warning(f"OIDC auth denied for {email}: not in group '{config.allowed_group}'")
+    logger.warning(
+        f"OIDC auth denied for {email}: not in group '{config.allowed_group}' "
+        f"(token groups: {sorted(normalized_groups) if normalized_groups else 'none'})"
+    )
     return None
 
 

@@ -31,6 +31,15 @@ All notable changes to this project are documented in this file.
   a reporting or monitoring service, without exposing the token value.
 
 ### Changed
+- **OIDC/SSO settings now honor environment variables per field, and lock those
+  fields in the UI.** Previously, once SSO was configured the app read all OIDC
+  settings from the database and ignored environment variables entirely. Now
+  each field resolves independently — an env var (e.g. `OIDC_PROVIDER_URL`,
+  `OIDC_SCOPES`, the new `OIDC_ENABLED`) wins for that field, and everything else
+  falls back to the database. Any env-set field is shown read-only in Settings →
+  Access → SSO/OIDC (so you can inject provider/scopes from compose while still
+  setting the client secret in the UI), and env-locked fields are never written
+  back to the database, so the two sources can't drift.
 - **Updates refuse to run if any device's firmware family is missing.** If a
   selected batch (or a scheduled wave) includes a device whose platform —
   TNA-303L or TNS-100 — has no matching firmware file chosen, the update now
@@ -65,6 +74,19 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- **SSO / OIDC settings no longer silently reset scopes (and admin group) on
+  every save.** The settings form never sent the OIDC **Scopes** — there was no
+  field for it — so each *Save SSO* rewrote them back to the default, re-adding
+  `groups`. On Microsoft Entra (Azure AD), which rejects `groups` as a scope,
+  this made SSO login impossible to fix from the UI (`AADSTS650053`). The form
+  now has an editable **Scopes** field, the config summary echoes the saved
+  **Admin Group** (previously dropped, so it was wiped on the next save), and the
+  save API preserves stored scopes when a client omits them. OIDC token-exchange
+  failures now log the provider's response body (e.g. the real `AADSTS` code)
+  instead of a bare status line, and group-based denials log the group claim the
+  token actually carried (so a name-vs-GUID mismatch or a missing/overage claim
+  is obvious). See `docs/oidc-setup.md` for the Entra setup, including the
+  group-claim format (**Group ID**, not "emit as role claims") this requires.
 - **A scheduled wave can no longer be silently skipped when its job fails to
   start.** If starting a wave failed (for example, a missing-family firmware
   refusal), the wave's devices could be left marked "pending" and then excluded

@@ -31,7 +31,12 @@ class TestOIDCConfig:
             assert config.client_id == "test-client-id"
             assert config.allowed_group == "sixtyops-admins"
 
-    def test_db_overrides_env(self, mock_db):
+    def test_env_wins_per_field_over_db(self, mock_db):
+        """Env vars win per field; fields with no env var fall back to the DB.
+
+        (Replaces the old "DB always wins" contract — env vars are now
+        authoritative per field and lock that field in the UI.)
+        """
         with patch.dict(os.environ, {
             "OIDC_PROVIDER_URL": "https://env.example.com/",
             "OIDC_CLIENT_ID": "env-client",
@@ -45,8 +50,41 @@ class TestOIDCConfig:
                 allowed_group="admins",
             ))
             config = get_oidc_config()
-            assert config.provider_url == "https://db.example.com/"
-            assert config.client_id == "db-client"
+            # env-set fields win
+            assert config.provider_url == "https://env.example.com/"
+            assert config.client_id == "env-client"
+            # fields with no env var still come from the DB
+            assert config.client_secret == "db-secret"
+            assert config.allowed_group == "admins"
+
+    def test_env_locked_fields_reported(self, mock_db):
+        from updater.oidc_config import get_oidc_env_locked_fields
+        with patch.dict(os.environ, {
+            "OIDC_SCOPES": "openid email profile",
+            "OIDC_PROVIDER_URL": "https://env.example.com/",
+            "OIDC_ADMIN_GROUP": "   ",  # whitespace-only must NOT lock
+        }):
+            locked = get_oidc_env_locked_fields()
+            assert "scopes" in locked
+            assert "provider_url" in locked
+            assert "admin_group" not in locked
+            assert "client_secret" not in locked
+
+    def test_set_oidc_config_does_not_persist_env_locked_fields(self, mock_db):
+        """An env-locked field must not be written to the DB by a UI save."""
+        from updater.oidc_config import SETTING_OIDC_SCOPES
+        with patch.dict(os.environ, {"OIDC_SCOPES": "openid email profile"}):
+            set_oidc_config(OIDCConfig(
+                enabled=True,
+                provider_url="https://db.example.com/",
+                client_id="db-client",
+                client_secret="db-secret",
+                scopes="openid email profile groups",  # UI-submitted, should be ignored
+            ))
+            # DB row for scopes stays unset; env value is what resolves.
+            from updater import database as db
+            assert db.get_setting(SETTING_OIDC_SCOPES, "__unset__") == "__unset__"
+            assert get_oidc_config().scopes == "openid email profile"
 
     def test_is_oidc_enabled_requires_fields(self, mock_db):
         set_oidc_config(OIDCConfig(
@@ -209,6 +247,70 @@ class TestOIDCRoutes:
         data = resp.json()
         assert "enabled" in data
         assert "configured" in data
+
+    def test_put_preserves_scopes_when_omitted(self, authed_client, mock_db):
+        """A Save that omits `scopes` must NOT reset them to the default.
+
+        Regression: the settings form never sent `scopes`, so every save
+        silently rewrote them to the default (re-adding `groups`), which
+        breaks Entra. Omitting the field must preserve the stored value.
+        """
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://login.microsoftonline.com/tenant/v2.0",
+            client_id="client",
+            client_secret="secret",
+            redirect_uri="https://sixtyops.example.com/auth/oidc/callback",
+            scopes="openid email profile",
+        ))
+        with patch("updater.oidc_config.validate_provider_url"):
+            resp = authed_client.put("/api/auth/oidc", json={
+                "enabled": True,
+                "provider_url": "https://login.microsoftonline.com/tenant/v2.0",
+                "client_id": "client",
+                "redirect_uri": "https://sixtyops.example.com/auth/oidc/callback",
+                # note: no "scopes" key, and no "client_secret"
+            })
+        assert resp.status_code == 200
+        assert get_oidc_config().scopes == "openid email profile"
+
+    def test_put_updates_scopes_when_provided(self, authed_client, mock_db):
+        """An explicit scopes value is persisted (Entra users can drop groups)."""
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://login.microsoftonline.com/tenant/v2.0",
+            client_id="client",
+            client_secret="secret",
+            scopes="openid email profile groups",
+        ))
+        with patch("updater.oidc_config.validate_provider_url"):
+            resp = authed_client.put("/api/auth/oidc", json={
+                "enabled": True,
+                "provider_url": "https://login.microsoftonline.com/tenant/v2.0",
+                "client_id": "client",
+                "scopes": "openid email profile",
+            })
+        assert resp.status_code == 200
+        assert get_oidc_config().scopes == "openid email profile"
+
+    def test_auth_config_summary_includes_admin_group_and_scopes(self, authed_client):
+        """The settings form loads from /api/auth/config; it must echo back
+        admin_group and scopes or the form blanks them and the next save
+        wipes them."""
+        set_oidc_config(OIDCConfig(
+            enabled=True,
+            provider_url="https://auth.example.com/",
+            client_id="client",
+            client_secret="secret",
+            allowed_group="sixtyops-users",
+            admin_group="sixtyops-admins",
+            scopes="openid email profile",
+        ))
+        resp = authed_client.get("/api/auth/config")
+        assert resp.status_code == 200
+        oidc = resp.json()["oidc"]
+        assert oidc["admin_group"] == "sixtyops-admins"
+        assert oidc["scopes"] == "openid email profile"
 
 
 class TestOIDCLogout:

@@ -17,6 +17,14 @@ from . import database as db
 logger = logging.getLogger(__name__)
 
 
+# Default OIDC scopes. `groups` is required by Authentik/Keycloak to emit group
+# membership, but it is NOT a valid OAuth scope on Microsoft Entra (Azure AD),
+# which hard-rejects the whole authorization request (AADSTS650053) rather than
+# ignoring it. Entra deployments must drop `groups` from their scopes; the group
+# claim there is configured on the app registration, not requested as a scope.
+DEFAULT_OIDC_SCOPES = "openid email profile groups"
+
+
 # ---------------------------------------------------------------------------
 # Configuration Data Class
 # ---------------------------------------------------------------------------
@@ -31,7 +39,7 @@ class OIDCConfig:
     redirect_uri: str = ""       # e.g. https://sixtyops.example.com/auth/oidc/callback
     allowed_group: str = ""      # Authentik group name required for access
     admin_group: str = ""        # Authentik group name that grants admin role
-    scopes: str = "openid email profile groups"
+    scopes: str = DEFAULT_OIDC_SCOPES
 
 
 # ---------------------------------------------------------------------------
@@ -49,60 +57,112 @@ SETTING_OIDC_SCOPES = "oidc_scopes"
 
 
 # ---------------------------------------------------------------------------
+# Field <-> env var / DB setting mapping
+# ---------------------------------------------------------------------------
+#
+# Each field can be sourced from an environment variable OR the database. When
+# an env var is set (non-empty), it WINS and the field becomes "env-locked":
+# the settings UI shows it read-only and set_oidc_config() will not persist it.
+# Fields with no env var stay database-backed and remain editable in the UI --
+# so you can inject e.g. the provider URL and scopes via compose while still
+# setting the client secret from the UI, without restarting the container.
+#
+# field name -> (env var, db setting key, default)
+OIDC_FIELDS: dict[str, tuple[str, str, str]] = {
+    "enabled": ("OIDC_ENABLED", SETTING_OIDC_ENABLED, ""),
+    "provider_url": ("OIDC_PROVIDER_URL", SETTING_OIDC_PROVIDER_URL, ""),
+    "client_id": ("OIDC_CLIENT_ID", SETTING_OIDC_CLIENT_ID, ""),
+    "client_secret": ("OIDC_CLIENT_SECRET", SETTING_OIDC_CLIENT_SECRET, ""),
+    "redirect_uri": ("OIDC_REDIRECT_URI", SETTING_OIDC_REDIRECT_URI, ""),
+    "allowed_group": ("OIDC_ALLOWED_GROUP", SETTING_OIDC_ALLOWED_GROUP, ""),
+    "admin_group": ("OIDC_ADMIN_GROUP", SETTING_OIDC_ADMIN_GROUP, ""),
+    "scopes": ("OIDC_SCOPES", SETTING_OIDC_SCOPES, DEFAULT_OIDC_SCOPES),
+}
+
+
+# ---------------------------------------------------------------------------
 # Configuration Read/Write
 # ---------------------------------------------------------------------------
+
+def _env_value(field: str) -> str | None:
+    """Env var value for a field if set (non-empty), else None.
+
+    Empty/whitespace-only env vars are treated as unset, so an inherited blank
+    (e.g. `OIDC_SCOPES=` in compose) does not lock the field.
+    """
+    env_var, _, _ = OIDC_FIELDS[field]
+    val = os.environ.get(env_var)
+    if val is None or val.strip() == "":
+        return None
+    return val
+
+
+def get_oidc_env_locked_fields() -> list[str]:
+    """Field names pinned by an environment variable (UI read-only)."""
+    return [field for field in OIDC_FIELDS if _env_value(field) is not None]
+
+
+def _resolve(field: str) -> str:
+    """Effective raw value for a field: env var wins, else the DB value."""
+    _, setting_key, default = OIDC_FIELDS[field]
+    env_val = _env_value(field)
+    if env_val is not None:
+        return env_val
+    return db.get_setting(setting_key, default)
+
 
 def get_oidc_config() -> OIDCConfig:
     """Get OIDC configuration.
 
-    Priority: Database settings > Environment variables
+    Resolved per field: an environment variable (when set) wins over the stored
+    database value; otherwise the database value is used. See OIDC_FIELDS and
+    get_oidc_env_locked_fields().
     """
-    db_enabled = db.get_setting(SETTING_OIDC_ENABLED, "")
-
-    if db_enabled:
-        return OIDCConfig(
-            enabled=db_enabled.lower() == "true",
-            provider_url=db.get_setting(SETTING_OIDC_PROVIDER_URL, ""),
-            client_id=db.get_setting(SETTING_OIDC_CLIENT_ID, ""),
-            client_secret=db.get_setting(SETTING_OIDC_CLIENT_SECRET, ""),
-            redirect_uri=db.get_setting(SETTING_OIDC_REDIRECT_URI, ""),
-            allowed_group=db.get_setting(SETTING_OIDC_ALLOWED_GROUP, ""),
-            admin_group=db.get_setting(SETTING_OIDC_ADMIN_GROUP, ""),
-            scopes=db.get_setting(SETTING_OIDC_SCOPES, "openid email profile groups"),
-        )
-
-    # Fall back to environment variables
-    provider_url = os.environ.get("OIDC_PROVIDER_URL", "")
-    client_id = os.environ.get("OIDC_CLIENT_ID", "")
-
     return OIDCConfig(
-        enabled=False,
-        provider_url=provider_url,
-        client_id=client_id,
-        client_secret=os.environ.get("OIDC_CLIENT_SECRET", ""),
-        redirect_uri=os.environ.get("OIDC_REDIRECT_URI", ""),
-        allowed_group=os.environ.get("OIDC_ALLOWED_GROUP", ""),
-        admin_group=os.environ.get("OIDC_ADMIN_GROUP", ""),
-        scopes=os.environ.get("OIDC_SCOPES", "openid email profile groups"),
+        enabled=_resolve("enabled").lower() == "true",
+        provider_url=_resolve("provider_url"),
+        client_id=_resolve("client_id"),
+        client_secret=_resolve("client_secret"),
+        redirect_uri=_resolve("redirect_uri"),
+        allowed_group=_resolve("allowed_group"),
+        admin_group=_resolve("admin_group"),
+        scopes=_resolve("scopes"),
     )
 
 
 def set_oidc_config(config: OIDCConfig):
-    """Save OIDC configuration to database."""
+    """Save OIDC configuration to the database.
+
+    Env-locked fields (pinned by an environment variable) are NOT written --
+    the environment stays their single source of truth, so a UI save can't
+    drift from or clobber them.
+    """
     previous = get_oidc_config()
-    db.set_settings({
-        SETTING_OIDC_ENABLED: str(config.enabled).lower(),
-        SETTING_OIDC_PROVIDER_URL: config.provider_url,
-        SETTING_OIDC_CLIENT_ID: config.client_id,
-        SETTING_OIDC_CLIENT_SECRET: config.client_secret,
-        SETTING_OIDC_REDIRECT_URI: config.redirect_uri,
-        SETTING_OIDC_ALLOWED_GROUP: config.allowed_group,
-        SETTING_OIDC_ADMIN_GROUP: config.admin_group,
-        SETTING_OIDC_SCOPES: config.scopes,
-    })
-    if not config.enabled or not config.provider_url or previous.provider_url != config.provider_url:
+    locked = set(get_oidc_env_locked_fields())
+    values = {
+        "enabled": (SETTING_OIDC_ENABLED, str(config.enabled).lower()),
+        "provider_url": (SETTING_OIDC_PROVIDER_URL, config.provider_url),
+        "client_id": (SETTING_OIDC_CLIENT_ID, config.client_id),
+        "client_secret": (SETTING_OIDC_CLIENT_SECRET, config.client_secret),
+        "redirect_uri": (SETTING_OIDC_REDIRECT_URI, config.redirect_uri),
+        "allowed_group": (SETTING_OIDC_ALLOWED_GROUP, config.allowed_group),
+        "admin_group": (SETTING_OIDC_ADMIN_GROUP, config.admin_group),
+        "scopes": (SETTING_OIDC_SCOPES, config.scopes),
+    }
+    to_write = {
+        key: val for field, (key, val) in values.items() if field not in locked
+    }
+    if to_write:
+        db.set_settings(to_write)
+
+    current = get_oidc_config()
+    if (not current.enabled or not current.provider_url
+            or previous.provider_url != current.provider_url):
         db.delete_setting("oidc_end_session_endpoint")
-    logger.info(f"OIDC config updated: enabled={config.enabled}, provider={config.provider_url}")
+    logger.info(
+        f"OIDC config updated: enabled={current.enabled}, "
+        f"provider={current.provider_url}, env_locked={sorted(locked)}"
+    )
 
 
 def is_oidc_enabled() -> bool:

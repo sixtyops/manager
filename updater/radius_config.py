@@ -175,7 +175,9 @@ def get_auth_config_summary() -> dict:
             "client_secret_set": bool(oidc.client_secret),
             "redirect_uri": oidc.redirect_uri,
             "allowed_group": oidc.allowed_group,
+            "admin_group": oidc.admin_group,
             "scopes": oidc.scopes,
+            "env_locked": oidc_config.get_oidc_env_locked_fields(),
             "configured": oidc_config.is_oidc_enabled(),
         },
         "device_defaults": {

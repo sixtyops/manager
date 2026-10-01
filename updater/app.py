@@ -3234,6 +3234,7 @@ async def get_oidc_config_api(session: dict = Depends(require_auth), _pro=Depend
         "allowed_group": config.allowed_group,
         "admin_group": config.admin_group,
         "scopes": config.scopes,
+        "env_locked": oidc_config.get_oidc_env_locked_fields(),
         "configured": oidc_config.is_oidc_enabled(),
     }
 
@@ -3251,13 +3252,18 @@ async def update_oidc_config_api(request: Request, session: dict = Depends(requi
         redirect_uri=data.get("redirect_uri", ""),
         allowed_group=data.get("allowed_group", ""),
         admin_group=data.get("admin_group", ""),
-        scopes=data.get("scopes", "openid email profile groups"),
+        scopes=(data.get("scopes") or "").strip(),
     )
 
-    # Preserve existing secret if not provided (field is cleared on UI load)
+    # Preserve values the caller intentionally omits. The client secret field is
+    # cleared on UI load, and older/partial clients may not send scopes at all —
+    # without this a plain Save would silently reset scopes to the default and
+    # re-add `groups`, breaking providers (e.g. Entra) that reject it.
+    existing = oidc_config.get_oidc_config()
     if not config.client_secret:
-        existing = oidc_config.get_oidc_config()
         config.client_secret = existing.client_secret
+    if not config.scopes:
+        config.scopes = existing.scopes or oidc_config.DEFAULT_OIDC_SCOPES
 
     if config.provider_url:
         try:
@@ -3468,6 +3474,14 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
             })
             token_resp.raise_for_status()
             tokens = token_resp.json()
+    except httpx.HTTPStatusError as e:
+        # The provider's response body carries the real reason (e.g. Entra's
+        # AADSTS codes). raise_for_status() drops it, so log it explicitly.
+        body = e.response.text[:500] if e.response is not None else ""
+        logger.error(
+            f"OIDC token exchange failed: HTTP {e.response.status_code} {body}"
+        )
+        return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
     except Exception as e:
         logger.error(f"OIDC token exchange failed: {e}")
         return RedirectResponse(url="/login?error=oidc_denied", status_code=302)
@@ -3514,6 +3528,19 @@ async def oidc_callback(request: Request, code: str = None, state: str = None, e
 
     email = claims.get("email", "")
     groups = claims.get("groups", [])
+
+    # Diagnostic: surface what the IdP actually put in the token so group-match
+    # failures are debuggable. `groups` is empty here when the claim is missing
+    # from the ID token or was replaced by an overage pointer (too many groups).
+    group_overage = bool(
+        claims.get("_claim_names")
+        or claims.get("_claim_sources")
+        or claims.get("hasgroups")
+    )
+    logger.info(
+        "OIDC token claims for %s: groups=%r overage=%s claim_keys=%s",
+        email or "?", groups, group_overage, sorted(claims.keys()),
+    )
 
     if not email:
         return RedirectResponse(url="/login?error=oidc_denied", status_code=302)

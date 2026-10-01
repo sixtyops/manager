@@ -3671,7 +3671,13 @@
                             <input type="text" id="authOidcAdminGroup" name="authOidcAdminGroup" placeholder="sixtyops-admins" class="u-input-compact">
                         </div>
                         <p class="u-note-block u-span-2" style="margin-top:0;">Users in the Admin Group get the admin role. When an Admin Group is configured, all other SSO users stay viewer (read-only).</p>
+                        <div class="u-span-2">
+                            <label class="u-text-xxs-muted" for="authOidcScopes">Scopes</label>
+                            <input type="text" id="authOidcScopes" name="authOidcScopes" placeholder="openid email profile groups" class="u-input-compact">
+                            <p class="u-note-block" style="margin-top:0;">Space-separated OAuth scopes. Authentik/Keycloak need <code>groups</code> to send group membership. Microsoft Entra (Azure AD) rejects <code>groups</code> as a scope — use <code>openid email profile</code> there and configure the group claim on the app registration instead.</p>
+                        </div>
                     </div>
+                    <p id="oidcEnvNote" class="u-note-block" style="display:none;margin-top:8px;">Greyed-out fields are set by environment variables and are read-only here. Change them in the container configuration (e.g. compose <code>environment:</code>) and restart.</p>
                     <div style="display:flex;gap:6px;align-items:center;margin-top:10px;">
                         <button class="backup-btn" onclick="saveOidcConfig()">Save SSO</button>
                         <button class="backup-btn u-bg-muted-cta" onclick="testOidcConfig()">Test</button>
@@ -7225,6 +7231,25 @@
                 document.getElementById('authOidcRedirectUri').value = data.oidc?.redirect_uri || '';
                 document.getElementById('authOidcAllowedGroup').value = data.oidc?.allowed_group || '';
                 document.getElementById('authOidcAdminGroup').value = data.oidc?.admin_group || '';
+                document.getElementById('authOidcScopes').value = data.oidc?.scopes || '';
+                // Fields set by environment variables win and are read-only here.
+                oidcEnvLockedFields = data.oidc?.env_locked || [];
+                for (const [field, elId] of Object.entries(OIDC_FIELD_ELEMENTS)) {
+                    const el = document.getElementById(elId);
+                    if (!el) continue;
+                    const locked = oidcEnvLockedFields.includes(field);
+                    el.title = locked
+                        ? 'Set by an environment variable — change it in the container configuration, not here.'
+                        : '';
+                    if (locked && field === 'client_secret') {
+                        el.placeholder = '(set by environment)';
+                    }
+                }
+                // The Enabled checkbox lives outside #oidcFields, so lock it here.
+                document.getElementById('authOidcEnabled').disabled =
+                    oidcEnvLockedFields.includes('enabled');
+                const oidcEnvNote = document.getElementById('oidcEnvNote');
+                if (oidcEnvNote) oidcEnvNote.style.display = oidcEnvLockedFields.length ? '' : 'none';
                 toggleOidcFields();
 
                 // Device defaults
@@ -7541,11 +7566,30 @@
             if (ldapSection) ldapSection.classList.toggle('hidden', mode !== 'ldap');
         }
 
+        // OIDC config fields pinned by environment variables (env wins; the UI
+        // shows them read-only). Populated from data.oidc.env_locked on load.
+        let oidcEnvLockedFields = [];
+        const OIDC_FIELD_ELEMENTS = {
+            enabled: 'authOidcEnabled',
+            provider_url: 'authOidcProviderUrl',
+            client_id: 'authOidcClientId',
+            client_secret: 'authOidcClientSecret',
+            redirect_uri: 'authOidcRedirectUri',
+            allowed_group: 'authOidcAllowedGroup',
+            admin_group: 'authOidcAdminGroup',
+            scopes: 'authOidcScopes',
+        };
+
         function toggleOidcFields() {
             const enabled = document.getElementById('authOidcEnabled').checked;
             const fields = document.getElementById('oidcFields');
             fields.style.opacity = enabled ? '1' : '0.5';
-            fields.querySelectorAll('input').forEach(el => el.disabled = !enabled);
+            fields.querySelectorAll('input').forEach(el => {
+                const field = Object.keys(OIDC_FIELD_ELEMENTS)
+                    .find(f => OIDC_FIELD_ELEMENTS[f] === el.id);
+                const locked = field ? oidcEnvLockedFields.includes(field) : false;
+                el.disabled = !enabled || locked;
+            });
         }
 
         function toggleDeviceFields() {
@@ -8249,6 +8293,7 @@
             const redirect_uri = document.getElementById('authOidcRedirectUri').value.trim();
             const allowed_group = document.getElementById('authOidcAllowedGroup').value.trim();
             const admin_group = document.getElementById('authOidcAdminGroup').value.trim();
+            const scopes = document.getElementById('authOidcScopes').value.trim();
 
             if (enabled && (!provider_url || !client_id || (!client_secret && !secretAlreadySet))) {
                 statusEl.textContent = 'Provider URL, Client ID, and Client Secret required when enabled';
@@ -8260,7 +8305,7 @@
                 const resp = await fetch('/api/auth/oidc', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled, provider_url, client_id, client_secret, redirect_uri, allowed_group, admin_group }),
+                    body: JSON.stringify({ enabled, provider_url, client_id, client_secret, redirect_uri, allowed_group, admin_group, scopes }),
                 });
                 if (resp.ok) {
                     statusEl.textContent = 'SSO config saved!';
