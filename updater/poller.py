@@ -90,7 +90,7 @@ class NetworkPoller:
         # already-authenticated session across poll cycles avoids re-logging in
         # to every CPE every cycle — which otherwise floods each device's audit
         # log with a "management authentication" event per minute.
-        self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, last_used)
+        self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, logged_in_at)
         self._last_config_poll: Optional[datetime] = None
         self._last_config_poll_hydrated = False
         self._poll_in_progress = False
@@ -163,8 +163,8 @@ class NetworkPoller:
     def _evict_stale_cpe_clients(self, now: float):
         """Evict CPE clients past the TTL (age-only — CPEs aren't in the
         devices table, and stale topology entries simply age out)."""
-        stale = [ip for ip, (_, last_used) in self._cpe_clients.items()
-                 if (now - last_used) > _CLIENT_TTL_SECONDS]
+        stale = [ip for ip, (_, logged_in_at) in self._cpe_clients.items()
+                 if (now - logged_in_at) >= _CLIENT_TTL_SECONDS]
         for ip in stale:
             del self._cpe_clients[ip]
         if len(self._cpe_clients) > _MAX_CLIENT_CACHE:
@@ -177,11 +177,13 @@ class NetworkPoller:
             logger.debug(f"Evicted {len(stale)} stale CPE client(s) from cache")
 
     def _get_cached_cpe_client(self, ip: str) -> Optional[VendorDriver]:
-        """Get a cached CPE client, updating its last-used timestamp."""
+        """Return a CPE session for at most ten minutes after login."""
         entry = self._cpe_clients.get(ip)
         if entry:
-            client, _ = entry
-            self._cpe_clients[ip] = (client, time.time())
+            client, logged_in_at = entry
+            if time.time() - logged_in_at >= _CLIENT_TTL_SECONDS:
+                self._remove_cached_cpe_client(ip)
+                return None
             return client
         return None
 

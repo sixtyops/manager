@@ -154,6 +154,35 @@ class TestCheckCpeAuthCaching:
         assert poller._cpe_clients["10.0.0.11"][0] is not stale
 
     @pytest.mark.asyncio
+    async def test_active_session_expires_ten_minutes_after_login(self, mock_db):
+        poller = NetworkPoller()
+        cached = MagicMock()
+        cached.session_valid = AsyncMock(return_value="ok")
+        logged_in_at = 1000.0
+        poller._cpe_clients["10.0.0.11"] = (cached, logged_in_at)
+        factory = _driver_returning(True)
+        fresh = factory.return_value
+        with patch("updater.poller.get_driver", return_value=factory) as get_driver_mock:
+            for elapsed in range(60, _CLIENT_TTL_SECONDS, 60):
+                with patch("updater.poller.time.time", return_value=logged_in_at + elapsed):
+                    assert await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass") == "ok"
+                    assert poller._get_cached_cpe_client("10.0.0.11") is cached
+                assert poller._cpe_clients["10.0.0.11"][1] == logged_in_at
+            get_driver_mock.assert_not_called()
+            expires_at = logged_in_at + _CLIENT_TTL_SECONDS
+            with patch("updater.poller.time.time", return_value=expires_at):
+                assert await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass") == "ok"
+        get_driver_mock.assert_called_once()
+        fresh.connect.assert_awaited_once()
+        assert poller._cpe_clients["10.0.0.11"] == (fresh, expires_at)
+
+    def test_cpe_eviction_expires_at_login_time_limit(self):
+        poller = NetworkPoller()
+        poller._cpe_clients["10.0.0.11"] = (MagicMock(), 1000.0)
+        poller._evict_stale_cpe_clients(1000.0 + _CLIENT_TTL_SECONDS)
+        assert "10.0.0.11" not in poller._cpe_clients
+
+    @pytest.mark.asyncio
     async def test_unreachable_cached_session_kept_for_revalidation(self, mock_db):
         # A device that's momentarily offline should report "unreachable"
         # without burning a login, and keep its cached client so the next cycle
