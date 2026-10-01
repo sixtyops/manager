@@ -3928,6 +3928,26 @@
     </div>
 
     <script>
+        let sessionExpiryHandled = false;
+
+        function handleSessionExpiry() {
+            const path = window.location.pathname;
+            if (sessionExpiryHandled || /^\/(login|auth)(\/|$)/.test(path)) return;
+            sessionExpiryHandled = true;
+            window.location.replace('/login');
+        }
+
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+            const response = await originalFetch(input, init);
+            const url = new URL(input instanceof Request ? input.url : input, window.location.href);
+            if (response.status === 401 && url.origin === window.location.origin &&
+                url.pathname.startsWith('/api/')) {
+                handleSessionExpiry();
+            }
+            return response;
+        };
+
         // Utility: format distance with km for >= 1000m
         function formatDistance(meters) {
             if (meters == null) return '';
@@ -4377,6 +4397,11 @@
             };
 
             ws.onclose = () => {
+                if (sessionExpiryHandled) return;
+                // The server rejects a WebSocket without a valid session before accept.
+                // The browser then sees code 1006, not 4001. Check the session with an
+                // API call. The fetch wrapper sends a 401 reply to the login page.
+                fetch('/api/users/me').catch(() => {});
                 document.getElementById('connectionStatus').textContent = 'Disconnected';
                 document.getElementById('connectionStatus').classList.add('disconnected');
                 // If a system update is in progress, show the overlay instead of just the disconnect toast
@@ -4384,7 +4409,9 @@
                 if (updateTs && (Date.now() - parseInt(updateTs, 10) < 300000)) {
                     showSystemUpdateOverlay('System update in progress, waiting for restart...');
                 }
-                setTimeout(connectWebSocket, 2000);
+                setTimeout(() => {
+                    if (!sessionExpiryHandled) connectWebSocket();
+                }, 2000);
             };
 
             ws.onmessage = (event) => {
