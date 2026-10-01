@@ -1,5 +1,13 @@
 # Architecture
 
+> **Status:** this page describes the code as it runs today. The product is being
+> cut back to the firmware core (North Star v2, epic
+> [#316](https://github.com/sixtyops/manager/issues/316)). The target module layout is
+> in [rearchitecture.md](rearchitecture.md#target-layout). Modules marked
+> **(being removed)** below are deleted by that plan: RADIUS, telemetry, SNMP traps,
+> webhooks, syslog forwarding, SFTP backup, the self-update apply path, the vendor
+> abstraction, feature gating, and `devmode.py`.
+
 ## Overview
 
 SixtyOps Manager is a FastAPI application with an async-first architecture. The backend is Python, the frontend is server-rendered HTML with vanilla JavaScript, and real-time updates flow over WebSocket. Device-admin RADIUS authentication is provided by a built-in pyrad-based RADIUS server.
@@ -95,7 +103,7 @@ SQLite database with schema creation, migrations, and CRUD helpers for inventory
 
 Web login authentication for the management UI. Supports local username/password and optional OIDC SSO. Sessions are stored in SQLite with a 24-hour TTL and validated for both HTTP and WebSocket requests.
 
-### `builtin_radius.py` - Device Admin RADIUS Control Plane
+### `builtin_radius.py` - Device Admin RADIUS Control Plane (being removed)
 
 Application-side management for the built-in pyrad RADIUS server used by APs, switches, and other managed devices.
 
@@ -114,7 +122,7 @@ Pydantic models for API validation: `Device`, `CPEInfo`, `APWithCPEs`, `NetworkT
 
 Helpers for IP geolocation, weather forecasts (weather.gov), timezone detection, and NTP time validation.
 
-### `telemetry.py` - Anonymous Usage Telemetry
+### `telemetry.py` - Anonymous Usage Telemetry (being removed)
 
 Sends anonymized job statistics to an AWS Lambda endpoint after each update job completes. Runs as a fire-and-forget background task that never blocks the main flow.
 
@@ -128,7 +136,7 @@ Sends anonymized job statistics to an AWS Lambda endpoint after each update job 
 
 Sends rich webhook notifications on job completion with success/failure counts, failed device details, rollout phase progress, and next scheduled job info. Configured via `slack_webhook_url` in settings.
 
-### `sftp_backup.py` - System Backup & Restore
+### `sftp_backup.py` - System Backup & Restore (being removed)
 
 SFTP-based backup system for the management database, settings, and device configurations.
 
@@ -138,7 +146,7 @@ Key responsibilities:
 - **Retention**: Automatically prunes older backups based on a configurable retention count.
 - **Restore Flow**: Provides an API to list remote backups and restore the local database from a selected archive (requires system restart).
 
-### `features.py` - Feature Classification
+### `features.py` - Feature Classification (being removed)
 
 Defines the `Feature` enum and classifies features as stable or dangerous. All features are always enabled — there is no license gating or remote validation.
 
@@ -148,7 +156,7 @@ Key concepts:
 - **No-op dependencies**: `require_feature()` and `require_pro()` remain in 60+ endpoint signatures but do nothing — kept for minimal diff and future extensibility
 - **Backward compatibility**: `license.py` re-exports everything from `features.py` so existing imports continue to work
 
-### `release_checker.py` - Self-Update
+### `release_checker.py` - Self-Update (apply path being removed; release check stays)
 
 Background service that checks GitHub Releases API for new versions. Compares the current `__version__` against the latest release tag. When a newer version is found, broadcasts a notification over WebSocket. Admins can apply the update from the Settings UI, which pulls the latest Docker image and recreates the container.
 

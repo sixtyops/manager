@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- Local login locks a username for 60 seconds after 10 failures in 60 seconds.
+  The response shows the remaining wait and includes `Retry-After`. Each lock
+  writes an audit entry. The existing source IP limit still applies.
 - Clients (CPEs) the manager **can't sign into** — because they use different
   login credentials than their access point — now show a clear amber
   **"Can't sign in"** badge on their row, distinct from being offline. The

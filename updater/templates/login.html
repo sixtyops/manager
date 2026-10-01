@@ -21,6 +21,8 @@
         <div class="error-message visible">SSO session expired. Please try again.</div>
         {% elif error == "oidc_discovery_failed" %}
         <div class="error-message visible">Could not reach SSO provider. Please try again later.</div>
+        {% elif error == "username_locked" %}
+        <div class="error-message visible">Too many failed sign-in attempts for this username. Try again in {{ retry_after }} seconds.</div>
         {% elif error == "rate_limited" %}
         <div class="error-message visible">Too many sign-in attempts. Please wait and try again.</div>
         {% elif error %}
