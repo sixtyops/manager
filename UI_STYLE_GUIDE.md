@@ -10,6 +10,19 @@ industrial/utilitarian network tool: clean, compact, high information density.
 Every color, size, radius, and duration flows through the `:root` tokens at the
 top of `monitor.html` — never hardcode a hex or pixel value a token covers.
 
+## UI task guidance
+
+**Key points:** Reuse this design system for the
+[one-right-way operator goal](docs/one-right-way.md). Read applicable skills
+before changing UI or copy.
+
+**Detail:** Follow [UI work and skills](CLAUDE.md#ui-work-and-skills) for skill
+discovery, frontend design, copywriter and STE guidance, and accessibility or
+usability checks. These skills help implement the existing system. They do
+not authorize a new visual identity or change the safety contract. Keep
+labels and recovery steps clear. State target behavior separately from what
+the product does today.
+
 ## Color Tokens
 
 ### Accent vs state
