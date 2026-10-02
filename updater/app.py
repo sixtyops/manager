@@ -2391,7 +2391,7 @@ def _validate_settings(filtered: dict):
 
     # Dependency checks
     if filtered.get("snmp_traps_enabled") == "true" and not snmp.is_pysnmp_available():
-        raise HTTPException(400, "Cannot enable SNMP traps: pysnmp-lextudio is not installed")
+        raise HTTPException(400, "Cannot enable SNMP traps: pysnmp is not installed")
 
 
 async def _refresh_firmware_targets() -> None:

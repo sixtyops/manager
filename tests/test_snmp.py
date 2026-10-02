@@ -1,9 +1,15 @@
 """Tests for SNMP trap notifications."""
 
 import asyncio
+from importlib.metadata import PackageNotFoundError, version
+import socket
 from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
+from packaging.version import Version
+from pyasn1.codec.ber import decoder
+from pysnmp.hlapi.v3arch import asyncio as snmp_api
+from pysnmp.proto import api as protocol_api
 
 from updater import snmp
 
@@ -76,22 +82,100 @@ class TestSendSnmpTrap:
     @pytest.mark.asyncio
     async def test_returns_false_on_import_error(self):
         config = {"host": "192.168.1.100", "port": 162, "community": "public", "version": "2c"}
-        with patch.dict("sys.modules", {"pysnmp": None, "pysnmp.hlapi": None, "pysnmp.hlapi.v1arch": None, "pysnmp.hlapi.v1arch.asyncio": None}):
+        with patch.dict("sys.modules", {"pysnmp": None, "pysnmp.hlapi": None, "pysnmp.hlapi.v3arch": None, "pysnmp.hlapi.v3arch.asyncio": None}):
             # Force reimport failure
             with patch("builtins.__import__", side_effect=ImportError("No module")):
                 result = await snmp.send_snmp_trap("1.3.6.1.4.1.99999.1.99", [], config=config)
                 assert result is False
 
     @pytest.mark.asyncio
-    async def test_sends_trap_successfully(self):
-        config = {"host": "192.168.1.100", "port": 162, "community": "public", "version": "2c"}
+    @pytest.mark.parametrize("indication,status,success", [
+        (None, 0, True), ("synthetic failure", 0, False), (None, 1, False),
+    ])
+    async def test_real_adapter_awaits_library_and_closes_engine(self, indication, status, success):
+        config = {"host": "127.0.0.1", "port": 1162, "community": "synthetic", "version": "2c"}
+        engine = MagicMock(spec=snmp_api.SnmpEngine)
+        transport = MagicMock()
+        with patch.object(snmp_api, "SnmpEngine", return_value=engine), \
+             patch.object(snmp_api.UdpTransportTarget, "create", new_callable=AsyncMock, return_value=transport) as create, \
+             patch.object(snmp_api, "send_notification", new_callable=AsyncMock, return_value=(indication, status, 0, [])) as send:
+            assert await snmp.send_snmp_trap(snmp.OID_TRAP_TEST, [(snmp.OID_MESSAGE, "s", "test")], config=config) is success
+        create.assert_awaited_once_with(("127.0.0.1", 1162))
+        send.assert_awaited_once()
+        args = send.call_args.args
+        assert args[0] is engine and args[2] is transport
+        assert isinstance(args[1], snmp_api.CommunityData) and args[1].message_processing_model == 1
+        assert isinstance(args[3], snmp_api.ContextData)
+        assert args[4] == "trap"
+        assert isinstance(args[5], snmp_api.NotificationType)
+        assert isinstance(args[6], snmp_api.ObjectType)
+        engine.close_dispatcher.assert_called_once_with()
 
-        mock_send = AsyncMock(return_value=(None, None, None, []))
-        mock_transport = AsyncMock()
+    @pytest.mark.asyncio
+    async def test_transport_exception_does_not_send(self):
+        config = {"host": "127.0.0.1", "port": 1162, "community": "synthetic", "version": "2c"}
+        with patch.object(snmp_api.UdpTransportTarget, "create", new_callable=AsyncMock, side_effect=OSError("synthetic")), \
+             patch.object(snmp_api, "send_notification", new_callable=AsyncMock) as send:
+            assert await snmp.send_snmp_trap(snmp.OID_TRAP_TEST, [], config=config) is False
+        send.assert_not_called()
 
-        with patch("updater.snmp.send_snmp_trap", new=AsyncMock(return_value=True)) as mock_fn:
-            result = await mock_fn("1.3.6.1.4.1.99999.1.99", [], config=config)
-            assert result is True
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error", [RuntimeError("synthetic"), asyncio.CancelledError()])
+    async def test_send_exception_or_cancellation_closes_engine(self, error):
+        config = {"host": "127.0.0.1", "port": 1162, "community": "synthetic", "version": "2c"}
+        engine = MagicMock(spec=snmp_api.SnmpEngine)
+        with patch.object(snmp_api, "SnmpEngine", return_value=engine), \
+             patch.object(snmp_api.UdpTransportTarget, "create", new_callable=AsyncMock), \
+             patch.object(snmp_api, "send_notification", new_callable=AsyncMock, side_effect=error):
+            if isinstance(error, asyncio.CancelledError):
+                with pytest.raises(asyncio.CancelledError):
+                    await snmp.send_snmp_trap(snmp.OID_TRAP_TEST, [], config=config)
+            else:
+                assert await snmp.send_snmp_trap(snmp.OID_TRAP_TEST, [], config=config) is False
+        engine.close_dispatcher.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    async def test_real_v2c_packet_on_synthetic_loopback(self):
+        """Send only to an ephemeral loopback socket and decode the actual packet."""
+        loop = asyncio.get_running_loop()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
+            receiver.bind(("127.0.0.1", 0))
+            receiver.setblocking(False)
+            config = {"host": "127.0.0.1", "port": receiver.getsockname()[1],
+                      "community": "synthetic", "version": "2c"}
+            engine = snmp_api.SnmpEngine()
+            with patch.object(snmp_api, "SnmpEngine", return_value=engine):
+                assert await snmp.send_snmp_trap(snmp.OID_TRAP_TEST, [
+                    (snmp.OID_MESSAGE, "s", "synthetic notification"),
+                    (snmp.OID_SUCCESS_COUNT, "i", "3"),
+                ], config=config) is True
+            packet, sender = await asyncio.wait_for(loop.sock_recvfrom(receiver, 65535), timeout=3)
+        assert sender[0] == "127.0.0.1"
+        assert engine.transport_dispatcher is None
+        v2c = protocol_api.PROTOCOL_MODULES[protocol_api.SNMP_VERSION_2C]
+        message, remainder = decoder.decode(packet, asn1Spec=v2c.Message())
+        assert not remainder
+        assert int(message["version"]) == 1
+        assert bytes(v2c.apiMessage.get_community(message)) == b"synthetic"
+        pdu = v2c.apiMessage.get_pdu(message)
+        assert pdu.isSameTypeWith(v2c.SNMPv2TrapPDU())
+        pairs = [(str(oid), value) for oid, value in v2c.apiPDU.get_varbinds(pdu)]
+        assert [oid for oid, _ in pairs] == [
+            "1.3.6.1.2.1.1.3.0", "1.3.6.1.6.3.1.1.4.1.0",
+            snmp.OID_MESSAGE, snmp.OID_SUCCESS_COUNT,
+        ]
+        assert str(pairs[1][1]) == snmp.OID_TRAP_TEST
+        assert isinstance(pairs[2][1], v2c.OctetString)
+        assert bytes(pairs[2][1]) == b"synthetic notification"
+        assert isinstance(pairs[3][1], v2c.Integer32) and int(pairs[3][1]) == 3
+
+
+def test_maintained_dependency_and_patched_decoder_are_installed():
+    assert Version(version("pysnmp")) == Version("7.1.30")
+    assert Version(version("pyasn1")) >= Version("0.6.4")
+    with pytest.raises(PackageNotFoundError):
+        version("pysnmp-lextudio")
+    assert snmp.is_pysnmp_available()
 
 
 class TestNotifyJobCompleted:
@@ -209,14 +293,19 @@ class TestSendTestTrap:
 class TestSendWithRetry:
     @pytest.mark.asyncio
     async def test_retries_on_failure(self):
-        with patch("updater.snmp.send_snmp_trap", new_callable=AsyncMock, side_effect=[False, False, True]):
+        with patch("updater.snmp.send_snmp_trap", new_callable=AsyncMock, side_effect=[False, False, True]) as send, \
+             patch("updater.snmp.asyncio.sleep", new_callable=AsyncMock) as sleep:
             await snmp._send_with_retry("1.3.6.1.4.1.99999.1.99", [], {"host": "h", "port": 162, "community": "c", "version": "2c"})
+        assert send.await_count == 3
+        assert [call.args[0] for call in sleep.await_args_list] == [1, 2]
 
     @pytest.mark.asyncio
     async def test_stops_after_max_retries(self):
-        with patch("updater.snmp.send_snmp_trap", new_callable=AsyncMock, return_value=False) as mock_send:
+        with patch("updater.snmp.send_snmp_trap", new_callable=AsyncMock, return_value=False) as mock_send, \
+             patch("updater.snmp.asyncio.sleep", new_callable=AsyncMock) as sleep:
             await snmp._send_with_retry("1.3.6.1.4.1.99999.1.99", [], {"host": "h", "port": 162, "community": "c", "version": "2c"}, max_retries=1)
             assert mock_send.call_count == 2  # Initial + 1 retry
+            sleep.assert_awaited_once_with(1)
 
 
 class TestSnmpSettingsAPI:
