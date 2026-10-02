@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- Application and syslog output handlers now redact registered literal secret
+  values, including exception text. Credential, key, passphrase, and session
+  sources are not registered yet. This is limited output sanitization, not
+  complete credential coverage.
 - Local login locks a username for 60 seconds after 10 failures in 60 seconds.
   The response shows the remaining wait and includes `Retry-After`. Each lock
   writes an audit entry. The existing source IP limit still applies.
