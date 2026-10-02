@@ -22,13 +22,14 @@ not claim that every gate is shipped.
   disappears too.
 - **A rollout is a saved list of devices with a state machine.** It is not a
   query that runs again every minute.
-- **Waves are 10% → 50% → 100% of that saved list.** One wave per
-  maintenance window. A failure after the firmware upload starts pauses the
-  rollout. A problem before the upload starts only defers that device.
-- **A failed check stops the whole maintenance window.** A pre-start block is
-  a hold, not an outage. The operator cannot resume a failed rollout in the
-  same window. A named Hold exception uses the same gates and cannot bypass a
-  failed gate.
+- **Waves are 10% → 50% → 100% of that saved list.** Run one wave per
+  maintenance window. Any failed gate or device check stops new writes for
+  the whole window. Do not resume in that window.
+- **A pre-start gate block is a hold, not an outage.** Keep the same wave
+  pending for a later window. A named Hold exception uses the same gates and
+  cannot bypass a failed gate.
+- **Expose one device write and recovery sequence at a time.** Do not start
+  another until the current device passes every recovery check.
 - **Unknown models are never auto-updated.**
 
 ---
@@ -155,7 +156,8 @@ it.)*
 - Devices use self-signed certificates. We cannot verify them against a CA.
 - We record each device's certificate on first login and refuse to send the
   password if it changes.
-- A changed certificate defers the device. It never fails it.
+- A changed certificate puts the device on hold before login. Stop new writes
+  for the window; the hold is not an outage.
 - The operator accepts a new certificate in one click, per device or per
   site. The manager re-pins by itself when its own firmware update rotated
   the certificate and the serial still matches.
@@ -211,8 +213,8 @@ the artifact id for each family it is rolling. Filenames are for display.
 - Members are saved when the rollout is created. Offline devices that need
   the update are members too.
 - The rollout goes `active` only when no member family is held.
-- A rollout that ends with deferred devices completes anyway. The next
-  rollout picks those devices up.
+- A failed check holds the current wave. The wave does not advance, and the
+  same wave can resume only in a later maintenance window.
 
 ### 3.1 States
 
@@ -224,7 +226,7 @@ create ──► waiting_hold ──hold clears──► active ◄──── 
                     ▼               all members   │ a wave     paused
                 cancelled           terminal      │ fails
                                            ▼      ▼
-                                   completed (or completed_with_deferred)
+                                   completed
 ```
 
 A DB unique index on `status IN (waiting_hold, active, paused)` enforces
@@ -298,6 +300,11 @@ and run its first wave in the same window, if enough of the window is left.
 
 ### 3.4 Wave gate
 
+**Key points:** A failed gate stops new writes for the whole window. An
+unknown, stale, or conflicting topology never makes a parent schedulable.
+
+**Detail:**
+
 `evaluate_wave_start(rollout, now)` runs these checks in order. It returns
 the first failing reason, or `ok`.
 
@@ -312,27 +319,34 @@ the first failing reason, or `ok`.
 | 7 | more than 15 minutes of window left | `window_ending` |
 | 8 | weather guard passes (checked once per window) | `blocked_weather` |
 | 9 | every artifact this wave needs is on disk with a matching sha256 | `artifact_missing` |
-| 10 | the wave has at least one unit to run (§4) | `nothing_schedulable` |
+| 10 | the wave has at least one safe, schedulable unit (§4) | `nothing_schedulable` |
 
 The **window instance key** is `(schedule_id, window_start_utc)`. Two
 windows on one day, or one window across midnight, are different keys.
 *(today: the key is `YYYY-MM-DD`.)* The key, the batch assignment, and the
 per-wave settings snapshot are written in **one transaction** when the wave
-job starts. A `nothing_schedulable` result writes nothing, so the window is
-not consumed.
+job starts. If any gate or device check fails, record a hold/failure for the
+window and do not re-evaluate it to start writes again in that window. A
+topology-blocked parent is never a safe, schedulable unit. It cannot trigger a
+final-wave fallback or phase advance.
 
 The UI's "next attempt" prediction calls the same function with a future
 `now`. It has no rules of its own.
 
 ### 3.5 Advancing and completing
 
-- A wave that finishes with no failures advances `phase`.
+**Key points:** Advance only after required checks pass. A held unit keeps the
+same wave pending for a later window.
+
+**Detail:**
+
+- A wave advances `phase` only after its required units pass every check.
+- Any failed check holds the same wave for a later window. It does not advance
+  past the held unit or start another unit in the failed window.
 - The rollout completes when every member is terminal.
-- If members are still `deferred` after the `pct100` wave, the rollout
-  completes as `completed_with_deferred`. Those devices are still behind, so
-  the next tick creates a new rollout with them. The hold is already clear
-  (by time or proof), so they retry one window later. A rollout never stays
-  open because one customer is dark.
+- A pre-start block keeps the member and wave pending. The rollout does not
+  complete while a member is held. It can retry in a later maintenance
+  window, after the failed check is clear.
 
 ---
 
@@ -342,10 +356,11 @@ The UI's "next attempt" prediction calls the same function with a future
 
 - We count **units**: an AP with its CPEs, a standalone CPE, or a switch.
 - Wave sizes are cumulative against the saved member count: 10%, 50%, 100%.
-- Deferred units go first in the next wave.
+- A held unit stays in its current wave and is retried first in a later window.
 - A switch is never flashed in the same batch as an AP it powers.
-- Problems before the firmware upload defer the device. Problems after it
-  pause the rollout.
+- Any failed check stops new writes for the whole window. A pre-start block is
+  a hold, not an outage.
+- Only one device write and recovery sequence can be active at a time.
 
 ### 4.1 Units
 
@@ -382,45 +397,59 @@ switch update. The final wave is not a fallback.
 
 **Detail:**
 
-Fill the batch in this order:
+Select the next unit in this order:
 
-1. units that were `deferred` before, oldest first;
+1. held units from the current wave, oldest first;
 2. remaining pending units, by `device_id`.
 
-Run the batch as CPEs → APs → switches. `parallel_updates` is a concurrency
-cap. It never changes the batch size.
+Run units in order as CPEs → APs → switches. Process each unit's full write
+and recovery sequence before starting another. The target has no concurrent
+device writes; a pacing setting cannot raise this limit.
 
 **Switch rule.** A switch can run only if every AP it powers is either not
 a member or already `succeeded` in an earlier wave. "Powers" comes from
 the switch-port topology seen in the last 24 hours.
 
-- No topology, or stale topology → the switch waits for the `pct100` wave.
-- In `pct100`, if any powered AP is still not `succeeded` → the switch is
-  `deferred`.
-- Unknown, stale, or conflicting topology blocks an automatic parent update.
-  It does not permit a final-wave fallback.
+- Unknown, stale, or conflicting topology blocks the automatic switch write
+  in every wave. It does not permit a final-wave fallback.
+- A switch with known topology is eligible only after every AP it powers has
+  passed all checks in an earlier wave. It cannot run in the same wave.
 
 *(Today the scheduler uses the final-wave fallback for unknown topology. This
 target rule is not shipped.)*
 
-### 4.4 Deferred vs failed — the point of no return
+### 4.4 Checks before and during a device sequence
 
-Per device, the job runs: reach → snapshot → pre-update reboot → **upload**
-→ install → reboot → verify → smoke test.
+**Key points:** Commit the snapshot before the pre-update reboot and each
+device write. Any failed check stops new writes for the window.
 
-**Before upload starts → `deferred`.** Reasons: `unreachable`,
-`no_address` (ip is NULL), `auth` (cannot sign in), `cert_mismatch` (the
-device's TLS certificate changed and no one has accepted it yet),
-`snapshot_failed`, `prereboot_unreachable` (we never reached it to reboot). Deferred devices
-keep their wave, do not pause the rollout, and go first next wave.
+**Detail:**
 
-**Exception:** a device we **did** reboot and that did not come back is
-`failed`. We caused that outage.
+For each device, the target sequence is: reach → backup and config snapshot →
+pre-update reboot and recovery proof → **upload** → install → reboot → verify
+→ smoke test. Commit the snapshot before the pre-update reboot and before any
+device write.
 
-**From upload onward → `failed`** unless the smoke test passes.
+**Any failed check stops new writes for the whole window.** A failed reach,
+identity, artifact, backup, snapshot, pre-update reboot, install, recovery, or
+smoke check cannot defer one unit while the rollout advances to another.
+Record a pre-start block as `deferred` with a hold reason, or a post-start
+failure as `failed`. Keep the rollout paused and its wave pending. Retry only
+in a later maintenance window after the check passes.
 
-*(today: a login failure before the reboot is recorded as `failed` and
-pauses the rollout. `deferred` only means the window ran out.)*
+**A block before a device write is a hold, not an outage.** Examples include
+`unreachable`, `no_address`, `auth`, `cert_mismatch`, missing artifact, or a
+snapshot that cannot be committed. Do not reboot or flash that device. Stop
+new writes for this window.
+
+If the pre-update reboot or a later device action causes a loss of service,
+record a failure and stop the window. Let the current flash finish. Do not
+start another device sequence until the current device passes every recovery
+check. If it does not pass, no next write starts in that window.
+
+*(Today a login failure before the reboot is recorded as `failed` and pauses
+the rollout. `deferred` means the window ran out. Snapshot failure is
+non-fatal. These shipped behaviors do not satisfy the target.)*
 
 ### 4.5 Halt
 
@@ -429,25 +458,31 @@ available in a later window.
 
 **Detail:**
 
-On the first `failed` device:
+On the first failed gate or device check:
 
-1. Stop launching new devices in this job.
-2. Let devices already past upload finish. Stopping a flash midway is worse.
-3. End the job. Set the rollout to `paused` with a reason and the failed
-   device ids.
-4. Void this wave's confirmations (§3.3).
+1. Stop all new writes for the maintenance window.
+2. Do not interrupt a flash already in progress. Finish its device sequence
+   and recovery checks before any later write.
+3. Set the rollout to `paused` with the hold/failure reason and affected
+   device id.
+4. Void this wave's confirmations (§3.3) if the wave failed.
 5. Send Slack and email.
 
 **Resume** is an operator action for a later maintenance window. It re-runs
-the *same wave*: failed devices go back to `pending` and retry with anything
-not yet launched. The failed window stays stopped. This target behavior is
-not a claim that the shipped engine enforces the whole-window stop.
+the *same wave* after the failed check passes. The failed window stays
+stopped. This target behavior is not a claim that the shipped engine enforces
+the whole-window stop.
 
 ### 4.6 Window cutoff
 
-A device not yet launched when the per-device cutoff passes is
-`deferred (window_cutoff)`. A device already past upload runs to the end,
-even after the window closes.
+**Key points:** Do not start a new device sequence after the cutoff. Finish
+the active sequence and its recovery checks.
+
+**Detail:**
+
+A device not yet started when the per-device cutoff passes stays pending in
+its current wave for a later window. A device already in a write sequence
+runs to the end of its recovery checks, even after the window closes.
 
 ### 4.7 Restart recovery
 
@@ -470,27 +505,32 @@ exception cannot bypass a failed gate.
 |---|---|
 | Device added (or un-archived) and it needs the update | Added as a **straggler**: `wave = pct100`, `status = pending`. `N` grows. **Exception:** if its family had no members at creation, the hold was never checked for that family, so it is *not* added. It waits for the next rollout. Nothing is added after the `pct100` wave has started. |
 | Device changes IP | Nothing. The job reads the IP at flash time. |
-| Device loses its IP (`address_unknown`) | Deferred when its turn comes. |
+| Device loses its IP (`address_unknown`) | Hold the device and stop new writes for the window. Keep the same wave pending. This is not an outage. |
 | CPE moves to another AP | Nothing at the member level. Units follow the current AP. |
-| Device goes offline | Deferred when its turn comes. Still a member. |
+| Device goes offline | Hold the device and stop new writes for the window. Keep the same wave pending. This is not an outage. |
 | Device updated some other way (device UI, or manual "update now") | At selection time it no longer needs the update → `skipped_current`. Terminal. Counts toward the target. |
 | Device disabled | `disabled`. Terminal. Removed from `N`. |
 | Device archived | `removed (archived)`. Terminal. Removed from `N`. Row kept. |
 | Device leaves scope (site excluded) | `removed (scope)`. Terminal. |
 | Device's model is corrected to a family with no target | `removed (no_target)`. |
-| Selected artifact changes for a family **with members** | Rollout `cancelled (artifact_changed)`. Next tick creates a new one. The hold is checked against the new artifact. |
+| Selected artifact changes for a family **with members** | Rollout `cancelled (artifact_changed)`. The next rollout uses the new artifact and its Hold. It cannot start a write in a window already stopped by a failed check. |
 | Selected artifact changes for a family with no members | Nothing. |
-| Artifact file missing or checksum wrong | Gate returns `artifact_missing`. Rollout stays `active` and retries each tick. Operator is notified once. |
-| Auto-update switched off | Rollout `paused (schedule_disabled)`. Switching it on resumes it. The hold is not re-checked. |
-| Operator pauses or cancels | As named. Cancel keeps member rows for history. |
+| Artifact file missing or checksum wrong | Gate returns `artifact_missing`. Hold the wave for the rest of the window. Do not retry to start a write in that window. Notify the operator. |
+| Auto-update switched off | Rollout `paused (schedule_disabled)`. Switching it on does not start writes again in a stopped window. Resume in a later eligible window. The Firmware Hold is not re-checked. |
+| Operator pauses or cancels | Pause stops new writes for the window; resume in a later window. Cancel keeps member rows for history. |
 | Manual "update now" on a member | Target: same safety gates as scheduled work. A named Hold exception is recorded and cannot bypass a failed gate. A clean proof records the exception and result. Today manual routes bypass the Hold; see [gradual-rollout.md](gradual-rollout.md). |
 | Manual "update now" on a non-member | Target: same gates and explicit Hold exception rules. A clean proof records the exception and result. Today manual routes bypass the Hold; see [gradual-rollout.md](gradual-rollout.md). |
-| Every remaining unit was deferred last wave | They are attempted again. Deferred units go first. The engine never assumes a device is still unreachable. |
-| No unit can be launched for a reason other than reachability (no pending member, or only topology-blocked switches) | Gate returns `nothing_schedulable`. The window is **not** used up. `phase` advances only if no safety gate failed. Unknown or conflicting topology blocks the affected switch. |
+| A unit was held by a failed check | Retry it first in the same wave during a later maintenance window, after the check passes. The failed window stays stopped. |
+| Only topology-blocked switches remain | Keep the switches held. Unknown, stale, or conflicting topology never permits an automatic parent write or final-wave fallback. Do not advance past a held member. |
 
 ---
 
 ## 6. Worked examples
+
+**Key points:** Stop at the first failed check. Retry the same wave only in a
+later maintenance window.
+
+**Detail:**
 
 **Roll v1.9 to 200 TNA-30x APs and 30 TNS-100 switches.**
 Operator selects both artifacts. Rollout is created with 230 members,
@@ -504,9 +544,10 @@ wave.** Its proof is gone. `tna-30x` is held again. `tns-100` is still
 proven. The rollout stays `waiting_hold` because holds are all-or-nothing.
 The operator confirms another AP or waits out the hold days.
 
-**First 10% wave runs. 3 of 20 APs fail smoke.** Rollout pauses. The 17
-good confirmations are voided. The window stops. Operator investigates and
-resumes in a later window. The same wave retries the 3. The *next* rollout to
+**First 10% wave runs. The third AP fails its smoke check after two APs
+passed.** The window stops at that first failure. The two confirmations from
+the incomplete wave are voided. Operator investigates and resumes in a later
+window after the check passes. The same wave continues. The *next* rollout to
 this artifact needs fresh proof or elapsed days.
 
 **TNA-303L is CPE-only.** The operator updates one customer's SM by hand.
@@ -557,8 +598,8 @@ RSSI and telemetry), `access_points`, `switches`, `rollout_devices`,
 2. Members are saved at creation. A device that becomes eligible later is
    only added as a straggler with `wave = pct100`, and only if its family
    had members at creation.
-3. Two waves never start in one window instance. This holds across a
-   restart and across a resumed wave.
+3. Two waves never start in one window instance. A failed wave cannot resume
+   in that window, including after restart.
 4. A `waiting_hold` rollout never runs a wave while any member family is
    held. A family with no members never holds a rollout.
 5. Proof is live. A confirmation whose device is offline, errored,
@@ -566,10 +607,11 @@ RSSI and telemetry), `access_points`, `switches`, `rollout_devices`,
 6. Confirmations from a paused wave are voided.
 7. A manual update of a CPE, or of an out-of-scope device, can clear its
    family's hold.
-8. Wave sizes reach `ceil(0.1N)`, `ceil(0.5N)`, `N`. Deferred units do not
-   shrink `N`.
-9. Failures before upload defer. Failures after upload pause. A failed
-   pre-update reboot pauses.
+8. Wave sizes reach `ceil(0.1N)`, `ceil(0.5N)`, `N`. Held units do not shrink
+   `N` or let the wave advance.
+9. Any failed gate or device check stops new writes for the whole window.
+   A pre-start block is a hold, not an outage. Resume is only in a later
+   window. A snapshot passes before the pre-update reboot and every write.
 10. A switch is never in the same batch as an AP it powers. Unknown, stale,
     or conflicting topology blocks an automatic switch update.
 11. `unknown` family devices never appear in a rollout.

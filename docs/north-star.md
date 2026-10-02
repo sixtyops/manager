@@ -48,12 +48,13 @@ exception. It cannot bypass a failed safety gate.
 - **Firmware Hold** — new firmware waits at least 6 days from its release date, per model family, unless one device in that family passes a clean smoke test first. If any family in scope is held, the first wave waits.
 - **Weather Guard** — a wave does not start below the minimum temperature.
 - **NTP drift block** — a wave does not start when the clock has drifted.
-- **Pre-update config snapshot** — committed before upload; a failed snapshot defers the device.
-- **Pre-update reboot** — proves the device recovers before it is flashed.
+- **Pre-update config snapshot** — commit a fresh snapshot before the pre-update reboot and before every device write. A failed snapshot stops new writes for the whole window.
+- **Pre-update reboot** — run only after the snapshot passes. It proves the device recovers before a firmware write.
 - **Smoke test** — version match, CPE re-association, and RSSI sanity after every update.
-- **Halt on failure** — a failure after upload begins stops new devices and pauses the rollout.
+- **Halt on failure** — any failed gate or device check stops new writes for the whole window. Do not resume in that window. A pre-start gate block is a hold, not an outage.
 - **One wave per maintenance window** — 10% → 50% → 100% of the frozen membership, no canary phase.
 - **Switch/PoE ordering** — CPEs, then APs, then switches; a switch waits until every AP it powers has succeeded in an earlier wave.
+- **One active device sequence** — do not start another device write or recovery sequence until the previous device passes every recovery check.
 - **Single-bank updates** — the vendor recommendation; there is no bank-mode setting.
 
 These gates are not all shipped today. The target contract requires a fresh,

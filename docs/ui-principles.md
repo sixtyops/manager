@@ -58,7 +58,8 @@ In both: completed phases fill green; active phase reflects current state (yello
 
 **Key points:** The target has no safety-gate override. A failed gate cannot be
 approved around. A failed rollout cannot resume in the same maintenance
-window. A pre-start block is a hold, not an outage.
+window. A pre-start block is a hold, not an outage. Only one device write and
+recovery sequence can run at a time.
 
 **Detail:** Operators can set timing and pacing within the exposure limits.
 They get a Stop action before and during a wave. Stop prevents new writes but

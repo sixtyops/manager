@@ -108,7 +108,8 @@ firmware selection cancels the active rollout and starts a fresh one at `pct10`.
 **Key points:** The target adds safety gates that are not all shipped. A
 pre-start block is a hold, not an outage. A failed check stops the whole
 maintenance window. The operator cannot resume that rollout in the same
-window or bypass a failed gate.
+window or bypass a failed gate. Only one device write and recovery sequence
+can run at a time.
 
 **Detail:** The target requires a saved risk statement before each wave, a
 fresh restorable backup and committed config snapshot before every write, and

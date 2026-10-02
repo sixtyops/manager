@@ -23,8 +23,9 @@ the first run of a new firmware family, a sole path to other devices, or a polic
 exception. Approval covers that plan only. It cannot bypass a failed gate.
 
 Use cumulative 10%, 50%, and 100% waves, one wave per maintenance window.
-Before each write, verify a fresh, restorable backup and commit a fresh config
-snapshot. Prove recovery with a pre-update reboot. Enforce Firmware Hold,
+Before the pre-update reboot and every device write, verify a fresh, restorable
+backup and commit a fresh config snapshot. Prove recovery with the reboot only
+after the snapshot passes. Enforce Firmware Hold,
 weather, clock, artifact, and maintenance-window gates. Use single-bank writes.
 After each update, verify version, CPE re-association, RSSI, and customer traffic
 recovery. Compare AP traffic with its pre-update baseline within a fixed deadline.
@@ -50,11 +51,11 @@ results, notifications, and operator actions. Failure delivery must survive rest
 
 Every engine or driver change needs real Tachyon bench proof on the exact PR
 head before merge. Unit tests do not prove device behavior. Only Isaac names
-bench devices. Isaac, as repository lead, may merge after independent review,
-current-head CI and sign-off, and any required exact-head bench proof pass.
-Worker agents do not merge. Lead merge authority does not grant authority to
-write production devices or publish stable releases. This work never touches
-the Treehouse production fleet.
+bench devices. The repository lead agent may merge under Isaac’s 2026-10-02
+delegation after independent review, current-head CI and sign-off, and any
+required exact-head bench proof pass. Worker agents do not merge. This
+delegation does not grant authority to write production devices or publish
+stable releases. This work never touches the Treehouse production fleet.
 
 ## Gaps, in priority order
 
