@@ -75,58 +75,43 @@ usually tell you why.
 2. Accept the self-signed certificate warning. Private-network deployments
    keep self-signed by default; Let's Encrypt is offered in the next step.
 3. The first-run screen prompts you to create an admin password (minimum
-   8 characters). The username defaults to `admin` (configurable via the
+   12 characters). The username defaults to `admin` (configurable via the
    `ADMIN_USERNAME` env var — see
    [docs/deployment.md#authentication](deployment.md#authentication)).
 
 <!-- screenshot: first-run password setup -->
 
-## Step 3 — Setup wizard (~1 min)
+## Step 3 — First-run settings (~1 min)
 
-After login the setup wizard opens automatically. Two decisions:
+After login, App Settings opens at **System → HTTPS**.
 
-- **HTTPS certificate** — keep the self-signed cert (fine for private
-  networks) or switch to Let's Encrypt now. The built-in flow uses HTTP-01
-  validation, which requires port 80 reachable from the internet. If
-  you're on a private network and want a trusted cert without inbound
-  internet, see
-  [docs/deployment.md#ssltls](deployment.md#ssltls) for the DNS-01
-  workflow.
-- **SFTP backups** — skip for now if you don't have an SFTP server ready.
-  You can return to Settings → Backups later. (Decide on backups
-  explicitly before you onboard real devices — the post-deploy checklist
-  forces this question.)
+Keep the self-signed certificate for a private network. To use Let's Encrypt,
+configure a domain and email in this panel. The built-in flow uses HTTP-01
+validation, which requires port 80 to be reachable from the internet. If you
+need a trusted certificate on a private network, see
+[docs/deployment.md#ssltls](deployment.md#ssltls) for the DNS-01 workflow.
 
-<!-- screenshot: setup wizard step 1 -->
+Close App Settings to return to the dashboard. Use **Add APs & Switches** there
+to add your first device. You can configure backups later under **System →
+Backup & Restore** in App Settings.
 
-## Step 4 — Add your first tower site (~1 min)
+## Step 4 — Add your first device (~1 min)
 
 From the dashboard:
 
 1. Find the **Add APs & Switches** card at the top-left.
-2. In the site picker, click **+ New site**.
-3. Enter a name (required). Location and lat/lng are optional but help the
-   weather-guard temperature checks and signal-map rendering later.
-4. Save. The site appears in the picker.
+2. Enter the device IP address. Enter one IP on each line if you are adding
+   more than one device.
+3. Enter the device username and password. The username defaults to `root`.
+4. Select **Add APs & Switches**.
 
-(Underlying API: `POST /api/sites`, `updater/app.py:1240`.)
-
-<!-- screenshot: add tower site modal -->
-
-## Step 5 — Add your first AP (~1 min)
-
-In the same **Add APs & Switches** card:
-
-1. Enter the AP's IP, admin username, and admin password.
-2. Pick the tower site you just created.
-3. Save. The first poll fires immediately — no need to wait for the
-   scheduled cycle.
-
-(Underlying API: `POST /api/aps`, `updater/app.py:1300`.)
+Manager identifies APs and switches from the device model. It assigns devices
+to tower sites from the device's `location` field. The first poll starts when
+you add the device.
 
 <!-- screenshot: add AP form -->
 
-## Step 6 — Watch it poll (~2 min)
+## Step 5 — Watch it poll (~2 min)
 
 Within ~60 seconds the AP appears in the main device table with:
 

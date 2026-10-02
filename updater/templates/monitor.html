@@ -3297,6 +3297,9 @@
             <!-- System Panel -->
             <div class="settings-panel active" id="settingsPanel-system">
                 <p class="u-note-inline">Platform maintenance, certificates, backup workflows, and release management.</p>
+                {% if show_settings %}
+                <p class="u-note-inline">Close App Settings to return to the dashboard. Use Add APs &amp; Switches to add your first device.</p>
+                {% endif %}
                 <div class="settings-subtabs" id="systemSubtabs">
                     <button class="settings-subtab active" data-subtab="updates" onclick="switchSystemSubtab('updates')">Updates</button>
                     <button class="settings-subtab" data-subtab="https" onclick="switchSystemSubtab('https')">HTTPS</button>
