@@ -101,13 +101,19 @@ The specific problems this plan fixes:
 > construction, and the edge-case table — is in
 > [docs/rollout-logic.md](rollout-logic.md). The rules below are the summary.
 
-These are the invariants the rebuilt core enforces. They are written as
-rules so they can be pinned by `tests/test_rollout_invariants.py`. Items
-marked **always on** cannot be disabled by the operator; operators configure
-*when* and *how fast*, never *how safe*.
+**Key points:** These are target invariants for the rebuilt core. They are
+not claims about shipped behavior. Operators can set timing and pacing, but
+cannot disable gates or resume after a failed check in the same window. Only
+one device write and recovery sequence can run at a time.
 
-Where a rule differs from current behavior, the difference is called out;
-"always on" describes the target, not necessarily today's code.
+**Detail:** Items marked **always on** describe the target contract. A current
+behavior note names a difference where one is known. The target rules can be
+pinned by `tests/test_rollout_invariants.py` as they are implemented. A
+pre-start gate block is a hold, not an outage. A failure after work starts
+stops the whole window. Do not resume it in that window. Approval is required
+only for no rollback, the first run of a new firmware family, a sole path to
+other devices, or a policy exception such as a named Hold exception. Approval
+covers that plan only. It never bypasses a failed gate.
 
 ### Waves
 
@@ -125,15 +131,15 @@ Where a rule differs from current behavior, the difference is called out;
 3. The accounting unit is the **AP with its attached CPEs**; switches are
    separate units. Within a wave, units run **CPEs → APs → switches**. A
    switch is eligible only after every AP it powers (per the switch-port
-   topology) has succeeded in an *earlier* wave; if a switch's topology is
-   unknown or stale it is held to the final wave. No site-spread or
-   model-spread rules. **Always on.**
-4. Parallelism is read from a settings snapshot taken **at the start of each
-   wave**, not at rollout creation; window and weather settings are read
-   live. Changes are logged. Updates are always **single-bank** (the vendor
-   recommendation) and there is no bank-mode setting. *(Today bank mode is a
-   setting; both are snapshotted once at rollout creation,
-   `scheduler.py:591-596`.)*
+   topology) has succeeded in an *earlier* wave. Unknown, stale, or conflicting
+   topology blocks an automatic switch update; it does not move the switch to
+   the final wave. No site-spread or model-spread rules. **Always on.**
+4. Pacing is set at the start of each wave. Window and weather settings are
+   read live. Changes are logged. Only one device write and recovery sequence
+   can run at a time. Pacing cannot change this limit. Updates are always
+   **single-bank** (the vendor recommendation) and there is no bank-mode
+   setting. *(Today bank mode is a setting; both are snapshotted once at
+   rollout creation, `scheduler.py:591-596`.)*
 
 ### Firmware Hold and confirmation
 
@@ -152,26 +158,30 @@ Where a rule differs from current behavior, the difference is called out;
 
 ### Failure handling
 
-9. Once a device is past the **point of no return** (firmware upload has
-   begun), any failure or non-return **stops launching new devices, lets
-   in-flight flashes finish, and pauses the rollout**. **Always on.**
-   *(Today a generic failure marks the device failed and pauses at job end;
-   only strict smoke failure and non-return cancel immediately,
-   `app.py:5647-5665`.)*
-10. A device that is unreachable **before** the point of no return (login,
-    snapshot, or pre-update reboot never reaches the device) is marked
-    **deferred**: it keeps its wave assignment, the wave completes and the
-    rollout advances without it, and it is eligible in any later wave.
-    *(Today `deferred` means window cutoff, a pre-reboot login failure is
-    recorded as `failed`, and a wave with deferred devices re-runs the same
-    phase, `app.py:5766-5776`, `scheduler.py:1166-1181`.)* A device that was
-    deliberately rebooted and did not recover is a **failure**, not a
-    deferral.
-11. Every device gets a **pre-update config snapshot** committed before
-    upload begins; snapshot failure defers the device. **Always on.**
-    *(Today snapshot failure is non-fatal, `app.py:5569-5570`.)*
-12. **Pre-update reboot** proves the device recovers before flashing.
-    **Always on.** *(Today it is a setting, `app.py:5144`.)*
+9. **Any failed safety gate or device check stops new writes for the whole
+   maintenance window.** This applies before and after firmware upload begins.
+   Do not resume in that window. Let an active flash finish and complete its
+   recovery checks; do not start another device sequence until the current
+   device passes every check. **Always on.** *(Today a generic failure marks
+   the device failed and pauses at job end; only strict smoke failure and
+   non-return cancel immediately, `app.py:5647-5665`.)* A pre-start gate block
+   is a hold, not an outage.
+10. A failed pre-start check, such as unreachable device, unknown identity, or
+    unsafe artifact, holds the member in its current wave and stops new writes
+    for the window. The wave does not advance past it. Retry only in a later
+    window after the check passes. This hold is not an outage. If the
+    pre-update reboot or a later device action loses service, record a failure
+    and stop the window. *(Today `deferred` means window cutoff, a pre-reboot
+    login failure is recorded as `failed`, and a wave with deferred devices
+    re-runs the same phase, `app.py:5766-5776`, `scheduler.py:1166-1181`.)*
+11. Commit a fresh **pre-update config snapshot before the pre-update reboot
+    and before every device write**. A snapshot failure stops new writes for
+    the whole window and holds the current wave. It does not defer one device
+    while the rollout advances. **Always on.** *(Today snapshot failure is
+    non-fatal, `app.py:5569-5570`.)*
+12. **Pre-update reboot** proves the device recovers before flashing. Run it
+    only after the snapshot passes. **Always on.** *(Today it is a setting,
+    `app.py:5144`.)*
 
 ### Fleet membership
 
@@ -202,16 +212,14 @@ Where a rule differs from current behavior, the difference is called out;
 ### Manual updates
 
 20. Exactly **one** manual path: "update this device now." It runs through
-    the same job builder as the scheduler with an explicit, audit-logged
-    `bypass_hold=True` that is set by the route, never by request input.
-    It bypasses **only** the Hold — snapshot, pre-reboot, smoke test, and
-    version checks still apply. It is the intended way to test new firmware
-    and clear the Hold: a clean smoke pass on the rollout's artifact records
-    a confirmation regardless of scheduler scope. *(Today confirmation is
-    scope-restricted, `scheduler.py:787-788`.)* For an AP, "update now"
-    includes its attached CPEs (matching the current `/api/start-update`
-    behavior of the AP button, not `/api/update-device`). Bulk manual
-    selection and the whole-site button do not exist.
+    the same safety gates as the scheduler. A named Hold exception is
+    explicit and audit-logged. It cannot bypass a failed gate. A clean proof
+    records the exception and its result. *(Today manual per-device routes
+    bypass the Firmware Hold; see [gradual-rollout.md](gradual-rollout.md).
+    Today confirmation is scope-restricted, `scheduler.py:787-788`.)* For an
+    AP, "update now" includes its attached CPEs (matching the current
+    `/api/start-update` behavior of the AP button, not `/api/update-device`).
+    Bulk manual selection and the whole-site button do not exist.
 
 ### Engine shape
 
@@ -343,8 +351,9 @@ original findings are kept for the record:
    (`app.py:5766-5776`). Needs one state model: percentages against frozen
    membership persisted at creation; pre-flash unreachable → `deferred`,
    keeps its wave, eligible in any later wave, excluded from the next
-   denominator; post-flash non-return → halt. *(Superseded in part: rule 1
-   keeps deferred units in the denominator.)*
+   denominator; post-flash non-return → halt. *(This old proposal is
+   superseded: target rules 9–11 hold the current wave and stop new writes
+   for the whole window after any failed check.)*
 3. **Rule 3 (switch/PoE) vs sizing.** Waves are sized on APs and switches
    separately and CPEs ride with their AP, so "10%" is already 10% of APs
    plus 10% of switches. Excluding a switch whose APs are in the batch can

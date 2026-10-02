@@ -5,8 +5,10 @@ This repo now has two live-dev validation lanes:
 - `dev_blocking`: merge-gating validation against the shared dev host and dedicated lab devices
 - `dev_sso`: separate non-blocking SSO/OIDC validation lane
 
-The dev host URL is whatever the operating team has put behind
-`SIXTYOPS_TEST_URL` — no shared URL is committed in this repo.
+The authorized dev host is
+[`https://sixtyops-dev.infra.treehouse.mn/`](https://sixtyops-dev.infra.treehouse.mn/).
+Set `SIXTYOPS_TEST_URL` to this URL for the authorized dev validation lane.
+This does not authorize tests against production devices.
 
 ## Manual Commands
 
@@ -61,3 +63,14 @@ pytest -m "integration and dev_sso" -v
 ## Branch Protection
 
 GitHub branch protection is not repo-tracked. After merging the workflow, configure the `Dev Hardware Validation` check as a required status check in repository settings.
+
+## Firmware engine and driver changes
+
+**Key points:** Unit tests do not prove device behavior. Every engine or
+driver change needs real Tachyon bench proof on the exact pull request head
+before merge. Only Isaac names bench devices.
+
+**Detail:** Record the tested models, firmware, recovery evidence, and exact
+commit in the pull request. Re-run bench proof after any change to the pull
+request head. This is a target merge requirement. This documentation change
+does not claim hardware proof.

@@ -1,5 +1,9 @@
 # Gradual Rollout Auto-Update System
 
+**Key points:** This document describes shipped behavior. It does not define
+the complete target safety contract. Read [one-right-way.md](one-right-way.md)
+for the target and [rollout-logic.md](rollout-logic.md) for the design rules.
+
 **Bottom line:** Auto-update rolls new firmware to the fleet in **10% → 50% → 100%**
 waves, **one wave per maintenance window**, and **halts the whole job the moment a
 device doesn't come back online**. New firmware is held for a configurable soak
@@ -98,3 +102,23 @@ firmware selection cancels the active rollout and starts a fresh one at `pct10`.
 4. **New firmware = new rollout** — starts at `pct10`.
 5. **Manual updates bypass the hold** — the operator's deliberate override / canary.
 6. Time validation, scope, and weather checks still gate every wave.
+
+## Target contract
+
+**Key points:** The target adds safety gates that are not all shipped. A
+pre-start block is a hold, not an outage. A failed check stops the whole
+maintenance window. The operator cannot resume that rollout in the same
+window or bypass a failed gate. Only one device write and recovery sequence
+can run at a time.
+
+**Detail:** The target requires a saved risk statement before each wave, a
+fresh restorable backup and committed config snapshot before every write, and
+recovery proof before flashing. It verifies version, CPE re-association, RSSI,
+and customer traffic after each update. Traffic proof needs a tested fallback
+for missing or idle traffic. Unknown, stale, or conflicting topology blocks an
+automatic parent update. Operators can record a named Hold exception only
+after the same safety gates pass. See [one-right-way.md](one-right-way.md).
+
+These target rules do not describe the current scheduler or manual update
+routes. In particular, shipped manual per-device updates bypass the Hold and
+shipped failure handling does not enforce every target stop rule.
