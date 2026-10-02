@@ -30,6 +30,38 @@ HTML/JS frontend, SQLite database, Docker deployment.
 
 ## Branching Model
 
+### Repository lead authority (2026-10-02)
+
+The lead agent owns issue triage, queue labels, implementation, review,
+validated PR merges, and development releases for `sixtyops/manager`.
+Isaac explicitly delegated these duties on 2026-10-02. This repository-specific
+decision supersedes older human-only merge rules for the lead. Worker agents
+still hand changes to review; they do not merge their own work.
+
+- Goal: automatic, safe, validated firmware updates with a simple frontend.
+  Follow the target contract in [PR 412](https://github.com/sixtyops/manager/pull/412)
+  and the delivery order in [issue 413](https://github.com/sixtyops/manager/issues/413).
+  Distinguish target behavior from shipped behavior.
+- Keep one issue per PR. Mark small, dependency-ready work `agent:ready`.
+  Finish active fixes first and keep at most three active build or fix PRs.
+  Use GPT-6.1 Sol for safety work and review. Luna may do bounded low-risk work.
+- Before each merge, verify the current head, independent review, sign-off
+  packet, zero unresolved threads, passing applicable checks, and duplicate
+  changes. Never bypass a failed gate or resolve another reviewer's thread.
+  Engine and driver changes require bench evidence on that exact commit.
+  A skipped hardware test does not pass this requirement.
+- The authorized development system is
+  `https://sixtyops-dev.infra.treehouse.mn/`. Follow the release SOP, verify
+  rollback, record release notes and known risks before deployment, then
+  verify the deployed version and health. Public dev tags reach other
+  dev-channel installs too; confirm release scope before publishing.
+  Stable releases and production-device changes are not covered by this grant.
+- The lead wakes hourly through its Paseo heartbeat and advances eligible
+  work without waiting for another operator prompt. Reuse the existing
+  pickup, review, and fix loops with their locks and budgets. Ask Isaac for
+  major product or safety decisions, missing physical access, and named lab
+  hardware. Continue independent work when hardware proof is blocked.
+
 - **`main`** — The only long-lived branch. Always deployable.
 - **Feature branches** — Branch from `main`, PR back to `main`.
 
