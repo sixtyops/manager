@@ -34,6 +34,10 @@ HTML/JS frontend, SQLite database, Docker deployment.
 
 The lead agent owns issue triage, queue labels, implementation, review,
 validated PR merges, and development releases for `sixtyops/manager`.
+Ongoing ownership includes feature rearchitecture, bug fixes, edge cases,
+security, and resilience. Proactively find, track, prioritize, and resolve gaps
+in these areas. Add regression checks where they prove the fix. Keep changes
+small and aligned with the product goal; escalate major design and risk decisions.
 Isaac explicitly delegated these duties on 2026-10-02. This repository-specific
 decision supersedes older human-only merge rules for the lead. Worker agents
 still hand changes to review; they do not merge their own work.
@@ -45,6 +49,8 @@ still hand changes to review; they do not merge their own work.
 - Keep one issue per PR. Mark small, dependency-ready work `agent:ready`.
   Finish active fixes first and keep at most three active build or fix PRs.
   Use GPT-6.1 Sol for safety work and review. Luna may do bounded low-risk work.
+  Fast mode is authorized where supported until 2026-10-03 00:00
+  America/Chicago. After that cutoff, use normal mode unless Isaac extends it.
 - Before each merge, verify the current head, independent review, sign-off
   packet, zero unresolved threads, passing applicable checks, and duplicate
   changes. Never bypass a failed gate or resolve another reviewer's thread.
