@@ -8,6 +8,7 @@ from unittest.mock import patch, AsyncMock, MagicMock
 import pytest
 from packaging.version import Version
 from pyasn1.codec.ber import decoder
+from pysnmp.entity import config as engine_config
 from pysnmp.hlapi.v3arch import asyncio as snmp_api
 from pysnmp.proto import api as protocol_api
 
@@ -96,7 +97,11 @@ class TestSendSnmpTrap:
         config = {"host": "127.0.0.1", "port": 1162, "community": "synthetic", "version": "2c"}
         engine = MagicMock(spec=snmp_api.SnmpEngine)
         transport = MagicMock()
+        carrier = transport.open_client_mode.return_value
+        carrier._lport = asyncio.get_running_loop().create_future()
+        carrier._lport.set_result(None)
         with patch.object(snmp_api, "SnmpEngine", return_value=engine), \
+             patch.object(engine_config, "add_transport") as register, \
              patch.object(snmp_api.UdpTransportTarget, "create", new_callable=AsyncMock, return_value=transport) as create, \
              patch.object(snmp_api, "send_notification", new_callable=AsyncMock, return_value=(indication, status, 0, [])) as send:
             assert await snmp.send_snmp_trap(snmp.OID_TRAP_TEST, [(snmp.OID_MESSAGE, "s", "test")], config=config) is success
@@ -110,6 +115,8 @@ class TestSendSnmpTrap:
         assert isinstance(args[5], snmp_api.NotificationType)
         assert isinstance(args[6], snmp_api.ObjectType)
         engine.close_dispatcher.assert_called_once_with()
+        register.assert_called_once_with(engine, transport.TRANSPORT_DOMAIN, carrier)
+        carrier.close_transport.assert_called_once_with()
 
     @pytest.mark.asyncio
     async def test_transport_exception_does_not_send(self):
@@ -124,8 +131,13 @@ class TestSendSnmpTrap:
     async def test_send_exception_or_cancellation_closes_engine(self, error):
         config = {"host": "127.0.0.1", "port": 1162, "community": "synthetic", "version": "2c"}
         engine = MagicMock(spec=snmp_api.SnmpEngine)
+        transport = MagicMock()
+        carrier = transport.open_client_mode.return_value
+        carrier._lport = asyncio.get_running_loop().create_future()
+        carrier._lport.set_result(None)
         with patch.object(snmp_api, "SnmpEngine", return_value=engine), \
-             patch.object(snmp_api.UdpTransportTarget, "create", new_callable=AsyncMock), \
+             patch.object(engine_config, "add_transport"), \
+             patch.object(snmp_api.UdpTransportTarget, "create", new_callable=AsyncMock, return_value=transport), \
              patch.object(snmp_api, "send_notification", new_callable=AsyncMock, side_effect=error):
             if isinstance(error, asyncio.CancelledError):
                 with pytest.raises(asyncio.CancelledError):
@@ -133,6 +145,76 @@ class TestSendSnmpTrap:
             else:
                 assert await snmp.send_snmp_trap(snmp.OID_TRAP_TEST, [], config=config) is False
         engine.close_dispatcher.assert_called_once_with()
+        carrier.close_transport.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("outcome", ["delayed", "failure", "cancelled"])
+    async def test_udp_startup_is_awaited_before_send(self, outcome):
+        """Hold real endpoint startup behind an event, with no timing sleep."""
+        loop = asyncio.get_running_loop()
+        create_endpoint = loop.create_datagram_endpoint
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        startup_cancelled = asyncio.Event()
+        carrier_protocols = []
+
+        async def gated_endpoint(factory, **kwargs):
+            carrier_protocols.append(factory())
+            entered.set()
+            try:
+                await release.wait()
+                if outcome == "failure":
+                    raise OSError("synthetic endpoint startup failure")
+                return await create_endpoint(factory, **kwargs)
+            except asyncio.CancelledError:
+                startup_cancelled.set()
+                raise
+
+        engine = snmp_api.SnmpEngine()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
+            receiver.bind(("127.0.0.1", 0))
+            receiver.setblocking(False)
+            config = {"host": "127.0.0.1", "port": receiver.getsockname()[1],
+                      "community": "synthetic", "version": "2c"}
+            with patch.object(snmp_api, "SnmpEngine", return_value=engine), \
+                 patch.object(loop, "create_datagram_endpoint", side_effect=gated_endpoint), \
+                 patch.object(snmp_api, "send_notification", wraps=snmp_api.send_notification) as send:
+                task = asyncio.create_task(snmp.send_snmp_trap(snmp.OID_TRAP_TEST, [], config=config))
+                try:
+                    await asyncio.wait_for(entered.wait(), timeout=3)
+                    assert not task.done()
+                    send.assert_not_called()
+                    if outcome == "cancelled":
+                        task.cancel()
+                        with pytest.raises(asyncio.CancelledError):
+                            await task
+                        assert startup_cancelled.is_set()
+                    else:
+                        release.set()
+                        assert await asyncio.wait_for(task, timeout=3) is (outcome == "delayed")
+                    if outcome == "delayed":
+                        packet, _ = await asyncio.wait_for(loop.sock_recvfrom(receiver, 65535), timeout=3)
+                        v2c = protocol_api.PROTOCOL_MODULES[protocol_api.SNMP_VERSION_2C]
+                        message, remainder = decoder.decode(packet, asn1Spec=v2c.Message())
+                        assert not remainder
+                        pairs = v2c.apiPDU.get_varbinds(v2c.apiMessage.get_pdu(message))
+                        assert str(pairs[1][1]) == snmp.OID_TRAP_TEST
+                        send.assert_awaited_once()
+                    else:
+                        send.assert_not_called()
+                        with pytest.raises(BlockingIOError):
+                            receiver.recvfrom(65535)
+                finally:
+                    if not task.done():
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                    engine.close_dispatcher()
+        assert len(carrier_protocols) == 1
+        carrier = carrier_protocols[0]
+        assert carrier._lport.done()
+        if carrier.transport is not None:
+            assert carrier.transport.is_closing()
+        assert engine.transport_dispatcher is None
 
     @pytest.mark.asyncio
     async def test_real_v2c_packet_on_synthetic_loopback(self):

@@ -109,6 +109,7 @@ async def send_snmp_trap(trap_oid: str, varbinds: list[tuple[str, str, str]],
         return False
 
     try:
+        from pysnmp.entity import config as engine_config
         from pysnmp.hlapi.v3arch.asyncio import (
             CommunityData,
             ContextData,
@@ -137,7 +138,13 @@ async def send_snmp_trap(trap_oid: str, varbinds: list[tuple[str, str, str]],
                 )
 
         engine = SnmpEngine()
+        carrier = None
         try:
+            carrier = transport.open_client_mode()
+            # Pinned pysnmp 7.1.30 exposes socket startup through this task.
+            # Await it before sending; recheck this seam on dependency upgrades.
+            await carrier._lport
+            engine_config.add_transport(engine, transport.TRANSPORT_DOMAIN, carrier)
             error_indication, error_status, error_index, var_binds = await send_notification(
                 engine,
                 CommunityData(config["community"], mpModel=1),
@@ -148,6 +155,8 @@ async def send_snmp_trap(trap_oid: str, varbinds: list[tuple[str, str, str]],
                 *var_bind_list,
             )
         finally:
+            if carrier is not None:
+                carrier.close_transport()
             engine.close_dispatcher()
 
         if error_indication or error_status:
