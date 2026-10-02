@@ -6,6 +6,12 @@
 
 ## Summary
 
+**Key points:** The rollout rules below describe the target contract. They do
+not claim that every gate is shipped.
+
+**Detail:** Shipped differences are marked *(today: …)* or linked to
+[gradual-rollout.md](gradual-rollout.md).
+
 - **A device is an identity, not an IP address.** We identify devices by
   serial number, or by MAC when we cannot log in. IP is just an attribute.
 - **We never delete a device because it went offline.** Offline devices stay
@@ -19,6 +25,10 @@
 - **Waves are 10% → 50% → 100% of that saved list.** One wave per
   maintenance window. A failure after the firmware upload starts pauses the
   rollout. A problem before the upload starts only defers that device.
+- **A failed check stops the whole maintenance window.** A pre-start block is
+  a hold, not an outage. The operator cannot resume a failed rollout in the
+  same window. A named Hold exception uses the same gates and cannot bypass a
+  failed gate.
 - **Unknown models are never auto-updated.**
 
 ---
@@ -367,6 +377,11 @@ N = 3 units gives waves of 1, 1, 1. N = 100 units gives 10, 40, 50.
 
 ### 4.3 Order and topology
 
+**Key points:** Unknown, stale, or conflicting topology blocks an automatic
+switch update. The final wave is not a fallback.
+
+**Detail:**
+
 Fill the batch in this order:
 
 1. units that were `deferred` before, oldest first;
@@ -382,7 +397,11 @@ the switch-port topology seen in the last 24 hours.
 - No topology, or stale topology → the switch waits for the `pct100` wave.
 - In `pct100`, if any powered AP is still not `succeeded` → the switch is
   `deferred`.
-- Unknown topology is treated as "this switch powers every AP at its site".
+- Unknown, stale, or conflicting topology blocks an automatic parent update.
+  It does not permit a final-wave fallback.
+
+*(Today the scheduler uses the final-wave fallback for unknown topology. This
+target rule is not shipped.)*
 
 ### 4.4 Deferred vs failed — the point of no return
 
@@ -405,6 +424,11 @@ pauses the rollout. `deferred` only means the window ran out.)*
 
 ### 4.5 Halt
 
+**Key points:** A failed check stops the maintenance window. Resume is only
+available in a later window.
+
+**Detail:**
+
 On the first `failed` device:
 
 1. Stop launching new devices in this job.
@@ -414,9 +438,10 @@ On the first `failed` device:
 4. Void this wave's confirmations (§3.3).
 5. Send Slack and email.
 
-**Resume** is an operator action. It re-runs the *same wave*: failed
-devices go back to `pending` and retry with anything not yet launched. The
-resumed run is that window's one wave.
+**Resume** is an operator action for a later maintenance window. It re-runs
+the *same wave*: failed devices go back to `pending` and retry with anything
+not yet launched. The failed window stays stopped. This target behavior is
+not a claim that the shipped engine enforces the whole-window stop.
 
 ### 4.6 Window cutoff
 
@@ -435,6 +460,12 @@ re-checked at startup. On target version, reachable, smoke test passes →
 
 ## 5. Changes while a rollout is open
 
+**Key points:** Manual updates use the target safety gates. A named Hold
+exception cannot bypass a failed gate.
+
+**Detail:** Shipped manual routes still bypass the Hold, as described in
+[gradual-rollout.md](gradual-rollout.md).
+
 | Event | What happens |
 |---|---|
 | Device added (or un-archived) and it needs the update | Added as a **straggler**: `wave = pct100`, `status = pending`. `N` grows. **Exception:** if its family had no members at creation, the hold was never checked for that family, so it is *not* added. It waits for the next rollout. Nothing is added after the `pct100` wave has started. |
@@ -452,10 +483,10 @@ re-checked at startup. On target version, reachable, smoke test passes →
 | Artifact file missing or checksum wrong | Gate returns `artifact_missing`. Rollout stays `active` and retries each tick. Operator is notified once. |
 | Auto-update switched off | Rollout `paused (schedule_disabled)`. Switching it on resumes it. The hold is not re-checked. |
 | Operator pauses or cancels | As named. Cancel keeps member rows for history. |
-| Manual "update now" on a member | Same job builder, `bypass_hold=True`. Result is written to the member. A manual failure does **not** pause the rollout — the operator is watching. A clean smoke pass records a confirmation with `source = manual`. |
-| Manual "update now" on a non-member | Same job. Confirmation recorded if clean. No other effect on the rollout, except possibly clearing a hold. |
+| Manual "update now" on a member | Target: same safety gates as scheduled work. A named Hold exception is recorded and cannot bypass a failed gate. A clean proof records the exception and result. Today manual routes bypass the Hold; see [gradual-rollout.md](gradual-rollout.md). |
+| Manual "update now" on a non-member | Target: same gates and explicit Hold exception rules. A clean proof records the exception and result. Today manual routes bypass the Hold; see [gradual-rollout.md](gradual-rollout.md). |
 | Every remaining unit was deferred last wave | They are attempted again. Deferred units go first. The engine never assumes a device is still unreachable. |
-| No unit can be launched for a reason other than reachability (no pending member, or only topology-blocked switches) | Gate returns `nothing_schedulable`. The window is **not** used up. `phase` advances. |
+| No unit can be launched for a reason other than reachability (no pending member, or only topology-blocked switches) | Gate returns `nothing_schedulable`. The window is **not** used up. `phase` advances only if no safety gate failed. Unknown or conflicting topology blocks the affected switch. |
 
 ---
 
@@ -474,9 +505,9 @@ proven. The rollout stays `waiting_hold` because holds are all-or-nothing.
 The operator confirms another AP or waits out the hold days.
 
 **First 10% wave runs. 3 of 20 APs fail smoke.** Rollout pauses. The 17
-good confirmations are voided. Operator investigates, fixes, resumes. The
-same wave retries the 3. The *next* rollout to this artifact needs fresh
-proof or elapsed days.
+good confirmations are voided. The window stops. Operator investigates and
+resumes in a later window. The same wave retries the 3. The *next* rollout to
+this artifact needs fresh proof or elapsed days.
 
 **TNA-303L is CPE-only.** The operator updates one customer's SM by hand.
 It passes smoke → proof for `tna-303l`. *(today: impossible; CPE proof is
@@ -539,8 +570,8 @@ RSSI and telemetry), `access_points`, `switches`, `rollout_devices`,
    shrink `N`.
 9. Failures before upload defer. Failures after upload pause. A failed
    pre-update reboot pauses.
-10. A switch is never in the same batch as an AP it powers. Unknown
-    topology sends the switch to the final wave.
+10. A switch is never in the same batch as an AP it powers. Unknown, stale,
+    or conflicting topology blocks an automatic switch update.
 11. `unknown` family devices never appear in a rollout.
 12. Changing the artifact for a family with members cancels the rollout.
     For a family with no members it does nothing.

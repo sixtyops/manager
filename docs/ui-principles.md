@@ -10,7 +10,9 @@ Three fixed layers, always in this order:
 
 1. **Dashboard** (permanent) — add-devices card, signal/rain-fade chart, fleet-status counts, config-status counts, active-rollout strip when a rollout is in flight. Never changes based on active tab.
 2. **Tabs** (below dashboard) — default open: **Updates**:
-   - **Updates** — update policies (maintenance window, parallelism) + safety-defaults override panel. Live rollout status lives in the status bar, not here.
+   - **Updates** — current shipped UI has update policies (maintenance window,
+     parallelism) and a safety-defaults override panel. The target removes
+     safety overrides. Live rollout status lives in the status bar, not here.
    - **Configuration** — configuration policies + drift resolution.
    - **Devices** — conformity ledger only. Intentional afterthought; one click away, never in the way.
 3. **Persistent status bar** (fixed bottom) — always visible. Two clusters: update status + config conformity. Each cluster is clickable when something is active, expanding a panel upward with full detail (rollout progress or drift card). Abort button appears during active rollouts.
@@ -40,7 +42,7 @@ Three fixed layers, always in this order:
 
 Rollouts display a horizontal phase stepper (dot + label + per-phase count) in the expanded status-bar panel. The phases and advancement differ by type:
 
-- **Firmware rollouts** — three waves: **10% → 50% → 100%** (no canary phase; the first wave is the de-facto canary, protected by halt-on-first-failure). The scheduler auto-advances one wave per maintenance window after each completes (`scheduler.py`, `database.complete_rollout_phase`). Operator controls: resume after failure, cancel. The stepper is informational only — no manual-advance action.
+- **Firmware rollouts** — shipped behavior has three waves: **10% → 50% → 100%** (no canary phase; the first wave is the de-facto canary). The scheduler auto-advances one wave per maintenance window after each completes (`scheduler.py`, `database.complete_rollout_phase`). Current operator controls include resume after failure and cancel. The target stops the whole window on a failed check and permits resume only in a later window. The stepper is informational only — no manual-advance action.
 - **Config-push rollouts** — four phases: **Canary (1 device) → 10% → 50% → 100%**. Advancement is always manual. Operators confirm each phase via `POST /api/config-push/rollout/{id}/advance`. The active-phase panel includes **Skip & advance to N% →** as the gate action.
 
 In both: completed phases fill green; active phase reflects current state (yellow if paused/failed, blue if running); locked phases are grey outlines. Show device rows only for current and completed phases; queued phases show a count only.
@@ -50,7 +52,21 @@ In both: completed phases fill green; active phase reflects current state (yello
 - **"There are no power users."** Zero-config bias. Climate auto-detects from IP geolocation. Antenna kit reads from the AP.
 - **Allow override, never require it.** Climate override dropdown marks the auto-detected zone ("YOUR AREA" with a location pin).
 - **Sensible defaults log once, never nag.** Missing antenna kit → assume AK-150, log it, move on.
-- **We own the safety defaults.** Operators configure two things: maintenance window (default Tue–Thu 03:00–04:00 local) and parallelism. Everything else — Firmware Hold, Weather Guard (backend default: −4 °C / 25 °F, stored in `min_temperature_c`), pre-reboot, auto-pause on failure, single-bank updates — is always on. Expose as an expandable "Safety defaults" section; operators may override but are never prompted to configure them on first use. Show server local time next to the maintenance window so the operator can confirm timezone without asking.
+- **Shipped safety settings.** The current UI exposes a "Safety defaults" override panel. Operators can also set the maintenance window (default Tue–Thu 03:00–04:00 local) and parallelism. The current backend default for Weather Guard is −4 °C / 25 °F (`min_temperature_c`). This describes the shipped interface, not the target contract.
+
+## Target operator contract
+
+**Key points:** The target has no safety-gate override. A failed gate cannot be
+approved around. A failed rollout cannot resume in the same maintenance
+window. A pre-start block is a hold, not an outage.
+
+**Detail:** Operators can set timing and pacing within the exposure limits.
+They get a Stop action before and during a wave. Stop prevents new writes but
+does not interrupt a flash. Approval is limited to a named Hold exception and
+does not bypass a failed gate. A wave shows its saved risk statement, gate
+inputs and results, device results, and operator actions. These are target
+requirements. The current override panel and controls above remain shipped
+behavior until implementation changes them.
 
 ---
 

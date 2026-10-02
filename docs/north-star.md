@@ -36,7 +36,14 @@
 
 ### Always-on safety defaults
 
-The rebuilt engine enforces these. Operators cannot turn them off. The precise rules are in [rearchitecture.md](rearchitecture.md), *Rollout rules*.
+**Key points:** These are target rules for the rebuilt engine. They do not
+describe all shipped behavior. Operators cannot disable a safety gate or
+resume a failed rollout in the same maintenance window.
+
+**Detail:** The precise target rules are in [rearchitecture.md](rearchitecture.md),
+*Rollout rules*. Shipped behavior is stated separately in
+[gradual-rollout.md](gradual-rollout.md). An approval can record a named Hold
+exception. It cannot bypass a failed safety gate.
 
 - **Firmware Hold** — new firmware waits at least 6 days from its release date, per model family, unless one device in that family passes a clean smoke test first. If any family in scope is held, the first wave waits.
 - **Weather Guard** — a wave does not start below the minimum temperature.
@@ -48,6 +55,14 @@ The rebuilt engine enforces these. Operators cannot turn them off. The precise r
 - **One wave per maintenance window** — 10% → 50% → 100% of the frozen membership, no canary phase.
 - **Switch/PoE ordering** — CPEs, then APs, then switches; a switch waits until every AP it powers has succeeded in an earlier wave.
 - **Single-bank updates** — the vendor recommendation; there is no bank-mode setting.
+
+These gates are not all shipped today. The target contract requires a fresh,
+restorable backup and config snapshot before each write, recovery proof before
+flashing, and post-update checks for version, CPE re-association, RSSI, and
+customer traffic. Missing or idle traffic needs a tested fallback. It cannot
+count as proof. Bench evidence must set the traffic floor and deadline before
+that gate is enabled. Read the shipped-behavior notes in
+[gradual-rollout.md](gradual-rollout.md) before relying on a gate.
 
 ---
 

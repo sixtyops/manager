@@ -48,9 +48,13 @@ Undo never means reversing a flash without recovery checks. Routine success
 does not interrupt. Save the risk statement, gate inputs and results, device
 results, notifications, and operator actions. Failure delivery must survive restart.
 
-Every engine or driver change needs real Tachyon bench proof on the PR head
-before merge. Unit tests do not prove device behavior. Only Isaac names bench
-devices. Only humans merge. This work never touches the Treehouse production fleet.
+Every engine or driver change needs real Tachyon bench proof on the exact PR
+head before merge. Unit tests do not prove device behavior. Only Isaac names
+bench devices. Isaac, as repository lead, may merge after independent review,
+current-head CI and sign-off, and any required exact-head bench proof pass.
+Worker agents do not merge. Lead merge authority does not grant authority to
+write production devices or publish stable releases. This work never touches
+the Treehouse production fleet.
 
 ## Gaps, in priority order
 

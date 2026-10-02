@@ -101,13 +101,17 @@ The specific problems this plan fixes:
 > construction, and the edge-case table — is in
 > [docs/rollout-logic.md](rollout-logic.md). The rules below are the summary.
 
-These are the invariants the rebuilt core enforces. They are written as
-rules so they can be pinned by `tests/test_rollout_invariants.py`. Items
-marked **always on** cannot be disabled by the operator; operators configure
-*when* and *how fast*, never *how safe*.
+**Key points:** These are target invariants for the rebuilt core. They are
+not claims about shipped behavior. Operators can set timing and pacing, but
+cannot disable gates, increase concurrent exposure, or resume after a failed
+check in the same window.
 
-Where a rule differs from current behavior, the difference is called out;
-"always on" describes the target, not necessarily today's code.
+**Detail:** Items marked **always on** describe the target contract. A current
+behavior note names a difference where one is known. The target rules can be
+pinned by `tests/test_rollout_invariants.py` as they are implemented. A
+pre-start gate block is a hold, not an outage. A failure after work starts
+stops the whole window. Do not resume it in that window. Approval records a
+named Hold exception only; it never bypasses a failed gate.
 
 ### Waves
 
@@ -125,15 +129,14 @@ Where a rule differs from current behavior, the difference is called out;
 3. The accounting unit is the **AP with its attached CPEs**; switches are
    separate units. Within a wave, units run **CPEs → APs → switches**. A
    switch is eligible only after every AP it powers (per the switch-port
-   topology) has succeeded in an *earlier* wave; if a switch's topology is
-   unknown or stale it is held to the final wave. No site-spread or
-   model-spread rules. **Always on.**
-4. Parallelism is read from a settings snapshot taken **at the start of each
-   wave**, not at rollout creation; window and weather settings are read
-   live. Changes are logged. Updates are always **single-bank** (the vendor
-   recommendation) and there is no bank-mode setting. *(Today bank mode is a
-   setting; both are snapshotted once at rollout creation,
-   `scheduler.py:591-596`.)*
+   topology) has succeeded in an *earlier* wave. Unknown, stale, or conflicting
+   topology blocks an automatic switch update; it does not move the switch to
+   the final wave. No site-spread or model-spread rules. **Always on.**
+4. Pacing is set at the start of each wave. Window and weather settings are
+   read live. Changes are logged. Pacing cannot increase concurrent exposure.
+   Updates are always **single-bank** (the vendor recommendation) and there is
+   no bank-mode setting. *(Today bank mode is a setting; both are snapshotted
+   once at rollout creation, `scheduler.py:591-596`.)*
 
 ### Firmware Hold and confirmation
 
@@ -157,7 +160,9 @@ Where a rule differs from current behavior, the difference is called out;
    in-flight flashes finish, and pauses the rollout**. **Always on.**
    *(Today a generic failure marks the device failed and pauses at job end;
    only strict smoke failure and non-return cancel immediately,
-   `app.py:5647-5665`.)*
+   `app.py:5647-5665`.)* No new device write starts in that maintenance
+   window after a failure. Resume waits for a later window. A gate block before
+   a write is a hold, not an outage.
 10. A device that is unreachable **before** the point of no return (login,
     snapshot, or pre-update reboot never reaches the device) is marked
     **deferred**: it keeps its wave assignment, the wave completes and the
@@ -202,16 +207,14 @@ Where a rule differs from current behavior, the difference is called out;
 ### Manual updates
 
 20. Exactly **one** manual path: "update this device now." It runs through
-    the same job builder as the scheduler with an explicit, audit-logged
-    `bypass_hold=True` that is set by the route, never by request input.
-    It bypasses **only** the Hold — snapshot, pre-reboot, smoke test, and
-    version checks still apply. It is the intended way to test new firmware
-    and clear the Hold: a clean smoke pass on the rollout's artifact records
-    a confirmation regardless of scheduler scope. *(Today confirmation is
-    scope-restricted, `scheduler.py:787-788`.)* For an AP, "update now"
-    includes its attached CPEs (matching the current `/api/start-update`
-    behavior of the AP button, not `/api/update-device`). Bulk manual
-    selection and the whole-site button do not exist.
+    the same safety gates as the scheduler. A named Hold exception is
+    explicit and audit-logged. It cannot bypass a failed gate. A clean proof
+    records the exception and its result. *(Today manual per-device routes
+    bypass the Firmware Hold; see [gradual-rollout.md](gradual-rollout.md).
+    Today confirmation is scope-restricted, `scheduler.py:787-788`.)* For an
+    AP, "update now" includes its attached CPEs (matching the current
+    `/api/start-update` behavior of the AP button, not `/api/update-device`).
+    Bulk manual selection and the whole-site button do not exist.
 
 ### Engine shape
 
