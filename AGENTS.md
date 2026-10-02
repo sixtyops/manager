@@ -21,9 +21,8 @@ Quick pointers:
 - Run `pytest -v` before committing; all must pass. All PRs target `main`.
 - Never push directly to `main`; one feature per branch/PR.
 - Write GitHub text, commit messages, and new code comments in plain words,
-  bottom line first. The `ai-copywriter` skill is Claude-only and is not in
-  this repo; other agents apply the rules directly. See CLAUDE.md,
-  *Writing and style*.
+  bottom line first. See CLAUDE.md, *Writing and style* and *UI work and skills*,
+  for shared skill instructions and the fallback when a skill is unavailable.
 - Firmware rollouts advance **one wave per maintenance window** (10% → 50% →
   100%, no canary phase) and pause on failure — enforced by the fail-closed
   gate in `updater/rollout_gate.py` and guarded by

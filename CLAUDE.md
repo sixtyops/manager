@@ -298,13 +298,19 @@ full workflow and GitHub Actions contract.
 ## Writing and style
 
 Use plain words, put the bottom line first, and cut filler and AI tells in all
-GitHub text and all new code comments. If this repo adopts the ASD-STE100
-simple-English rule, apply both.
+GitHub text and all new code comments. Apply the Simplified Technical English
+rules above: short sentences, one idea per sentence, active voice, and one term
+per concept. Keep UI labels, errors, and recovery instructions consistent.
 
-Claude agents: load the `ai-copywriter` skill before you write. The skill
-lives in the user's Claude setup (`~/.claude/skills/ai-copywriter`). This repo
-does not ship it. Other agents, and any agent without the skill: apply the
-rules in this section directly.
+All agents: read the applicable `ai-copywriter` instructions before writing
+when the file is available. The installed copy is
+`~/.claude/skills/ai-copywriter/SKILL.md`; the repo does not ship it. Readable
+skill instructions can be used by any agent. Verify required tools separately.
+Use its technical and UI writing guidance within this repo's STE rules.
+Technical copy stays factual and neutral. Marketing defaults do not override
+operator clarity or require extra questions when the task context is clear.
+If the skill is unavailable, apply the rules in this section directly and
+report the fallback. Do not claim that an unread or missing skill was loaded.
 
 The rule covers:
 
@@ -316,6 +322,38 @@ The rule covers:
 
 It does not ask you to rewrite old comments.
 
+## UI work and skills
+
+**Key points:** UI workers read the skills that apply to the task. The existing
+design system and the [one-right-way goal](docs/one-right-way.md) take precedence
+over generic design or marketing defaults.
+
+**Detail:** Before changing UI, read [UI_STYLE_GUIDE.md](UI_STYLE_GUIDE.md),
+[UI principles](docs/ui-principles.md), and the relevant existing flow. Reuse
+its tokens, components, and operator terms. Keep "Keep my fleet current" as
+the primary task. Distinguish shipped behavior from the target contract.
+
+Read `.claude/skills/frontend-design/SKILL.md` for UI work, including
+`static/` and `updater/templates/`. Apply the copywriter and STE guidance in
+[Writing and style](#writing-and-style) to UI text and documentation. Search
+skill names first in repo `.claude/skills`, then installed `~/.claude/skills`
+and `~/.codex/skills`. Read relevant UI/frontend, copywriter, and STE files
+before using them. Honor skills the user explicitly names. Do not load every
+skill or install a skill, plugin, or dependency just to satisfy this rule.
+
+Use available accessibility or usability skills when they help the task.
+Check keyboard access, visible focus, clear labels, color-independent status,
+responsive layout, and reduced motion where applicable. Read only the related
+skill instructions and resources. Verify each skill's files and tool needs;
+its install location alone does not make it Claude-only or portable.
+
+If a skill is missing or its tools are unavailable, state the limit and use
+the repo guidance for the parts that can proceed. No dedicated STE skill is
+bundled here; the communication and writing rules remain mandatory. Report a
+missing explicitly requested skill. Stop only the part that requires its
+unavailable capability. Preserve delegation, permission boundaries, tests,
+review gates, and any required bench proof.
+
 ## Rules
 
 - Run tests before committing (`pytest -v` — all must pass)
@@ -325,9 +363,7 @@ It does not ask you to rewrite old comments.
 - All PRs target `main`
 - One feature per branch/PR — don't bundle unrelated changes
 - Keep commits focused and atomic with conventional commit messages
-- For UI work (`static/`, `updater/templates/`), load the `frontend-design`
-  skill in `.claude/skills/frontend-design/`. It covers general design craft.
-  The tokens and rules in [UI_STYLE_GUIDE.md](UI_STYLE_GUIDE.md) take precedence.
+- For UI work, follow [UI work and skills](#ui-work-and-skills).
 - **Fleet rollouts must advance one wave per maintenance window** (10% → 50% →
   100%, no canary phase) and **halt the whole job if a device doesn't come back
   online**. New firmware is held before the first wave by the **Firmware Hold**
