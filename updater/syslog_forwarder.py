@@ -6,6 +6,7 @@ import socket
 from typing import Optional
 
 from . import database as db
+from .logging_filter import install_sanitizer
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ def _setup_handler(config: dict) -> Optional[logging.Handler]:
             socktype=socktype,
         )
         handler.setFormatter(logging.Formatter("sixtyops: %(message)s"))
+        install_sanitizer(handler)
 
         if _syslog_logger is None:
             _syslog_logger = logging.getLogger("sixtyops.syslog")
