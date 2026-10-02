@@ -45,9 +45,9 @@ DEFAULT_COMMUNITY = "public"
 
 
 def is_pysnmp_available() -> bool:
-    """Check if pysnmp-lextudio is installed and importable."""
+    """Check if pysnmp is installed and importable."""
     try:
-        import pysnmp.hlapi.v1arch.asyncio  # noqa: F401
+        import pysnmp.hlapi.v3arch.asyncio  # noqa: F401
         return True
     except ImportError:
         return False
@@ -109,8 +109,11 @@ async def send_snmp_trap(trap_oid: str, varbinds: list[tuple[str, str, str]],
         return False
 
     try:
-        from pysnmp.hlapi.v1arch.asyncio import (
+        from pysnmp.entity import config as engine_config
+        from pysnmp.hlapi.v3arch.asyncio import (
             CommunityData,
+            ContextData,
+            NotificationType,
             ObjectIdentity,
             ObjectType,
             OctetString,
@@ -134,24 +137,37 @@ async def send_snmp_trap(trap_oid: str, varbinds: list[tuple[str, str, str]],
                     ObjectType(ObjectIdentity(oid), OctetString(str(value)))
                 )
 
-        error_indication, error_status, error_index, var_binds = await send_notification(
-            SnmpEngine(),
-            CommunityData(config["community"]),
-            transport,
-            "trap",
-            ObjectIdentity(trap_oid),
-            *var_bind_list,
-        )
+        engine = SnmpEngine()
+        carrier = None
+        try:
+            carrier = transport.open_client_mode()
+            # Pinned pysnmp 7.1.30 exposes socket startup through this task.
+            # Await it before sending; recheck this seam on dependency upgrades.
+            await carrier._lport
+            engine_config.add_transport(engine, transport.TRANSPORT_DOMAIN, carrier)
+            error_indication, error_status, error_index, var_binds = await send_notification(
+                engine,
+                CommunityData(config["community"], mpModel=1),
+                transport,
+                ContextData(),
+                "trap",
+                NotificationType(ObjectIdentity(trap_oid)),
+                *var_bind_list,
+            )
+        finally:
+            if carrier is not None:
+                carrier.close_transport()
+            engine.close_dispatcher()
 
-        if error_indication:
-            logger.warning(f"SNMP trap error: {error_indication}")
+        if error_indication or error_status:
+            logger.warning(f"SNMP trap error: {error_indication or error_status}")
             return False
 
         logger.info(f"SNMP trap sent to {config['host']}:{config['port']}")
         return True
 
     except ImportError:
-        logger.error("pysnmp-lextudio is not installed. Install with: pip install pysnmp-lextudio")
+        logger.error("pysnmp is not installed. Install with: pip install -r requirements.txt")
         return False
     except Exception as e:
         logger.error(f"Failed to send SNMP trap: {e}")
@@ -236,7 +252,7 @@ async def send_test_trap() -> tuple[bool, str]:
     Returns (success, message) tuple.
     """
     if not is_pysnmp_available():
-        return False, "pysnmp-lextudio is not installed. Install with: pip install pysnmp-lextudio"
+        return False, "pysnmp is not installed. Install with: pip install -r requirements.txt"
 
     config = _get_snmp_config()
     if not config:
