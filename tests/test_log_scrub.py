@@ -6,9 +6,14 @@ import logging.handlers
 import sys
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 from updater import logging_filter as scrub
+
+
+SLACK_URL = "https://hooks.slack.com/services/SYNTHETIC_TEAM/SYNTHETIC_CHANNEL/synthetic-capability"
+SLACK_REDACTED = "https://hooks.slack.com/services/[REDACTED]"
 
 
 @pytest.fixture(autouse=True)
@@ -235,14 +240,17 @@ def test_syslog_output_and_reinitialization(monkeypatch, protocol):
             raise ValueError("lookup failed: " + "synthetic-syslog-value")
         except ValueError:
             sf._syslog_logger.exception("Request failed with %s", "synthetic-syslog-value")
+        sf.send_event("device", "Webhook failed: " + SLACK_URL, "error")
         sender = transports[1].sendto if protocol == "udp" else transports[1].sendall
         packets = [call.args[0].decode("utf-8") for call in sender.call_args_list]
-        assert len(packets) == 2
+        assert len(packets) == 3
         assert packets[0] == "<131>sixtyops: [device] Failure: [REDACTED]\x00"
         assert "sixtyops: Request failed with [REDACTED]" in packets[1]
         assert "ValueError: lookup failed: [REDACTED]" in packets[1]
         assert "Traceback (most recent call last)" in packets[1]
         assert all("synthetic-syslog-value" not in packet for packet in packets)
+        assert packets[2] == "<131>sixtyops: [device] Webhook failed: " + SLACK_REDACTED + "\x00"
+        assert "synthetic-capability" not in packets[2]
     finally:
         sf._setup_handler({**config, "enabled": False})
 
@@ -310,3 +318,133 @@ def test_stream_formatter_failure_sanitizes_stderr(monkeypatch):
     assert "ValueError: formatter failed: [REDACTED]" in stream.getvalue()
     assert "Message: value=[REDACTED]" in stream.getvalue()
     assert record.__dict__ == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 403, None])
+async def test_actual_slack_send_sanitizes_httpx_output(application_output, monkeypatch, status):
+    from updater import slack
+
+    _, stream, _ = application_output
+    url = SLACK_URL + "%2Fencoded?synthetic-query=value#synthetic-fragment"
+    payload = {"text": "Synthetic notification"}
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if status is None:
+            raise httpx.ConnectError("Synthetic connection failure: " + url, request=request)
+        return httpx.Response(status, text="Synthetic response")
+
+    real_client = httpx.AsyncClient
+
+    def local_client(**kwargs):
+        return real_client(transport=httpx.MockTransport(respond), **kwargs)
+
+    monkeypatch.setattr(slack.db, "get_setting", lambda key, default: url)
+    monkeypatch.setattr(slack.httpx, "AsyncClient", local_client)
+    assert await slack.send_slack_notification(payload) is (status == 200)
+    assert len(requests) == 1
+    assert requests[0].url == httpx.URL(url)
+    assert requests[0].content == b'{"text":"Synthetic notification"}'
+    output = stream.getvalue()
+    assert SLACK_REDACTED in output
+    assert "synthetic-capability" not in output
+    assert "synthetic-query" not in output
+    assert "synthetic-fragment" not in output
+    if status is None:
+        assert "Failed to send Slack notification: Synthetic connection failure:" in output
+    else:
+        assert f'HTTP Request: POST {SLACK_REDACTED} "HTTP/1.1 {status}' in output
+        assert ("Slack notification sent successfully" if status == 200
+                else "Slack webhook returned status 403") in output
+    assert scrub._secrets == set()
+    assert scrub._pattern is None
+
+
+@pytest.mark.parametrize("wrapper", ["%s", "'%s'", '"%s"', "(%s)", "[%s]", "<%s>", "{%s}", "failed:%s", "url=%s"])
+@pytest.mark.parametrize("suffix", ["", "%2Fencoded", "?synthetic-query=a%26b,c;d#synthetic-fragment"])
+def test_slack_url_boundaries_and_encoding(application_output, wrapper, suffix):
+    app, stream, _ = application_output
+    app.logger.warning("URL: %s next", wrapper % (SLACK_URL + suffix))
+    assert stream.getvalue().endswith("URL: " + wrapper % SLACK_REDACTED + " next\n")
+
+
+@pytest.mark.parametrize("url", [
+    "https://example.com/services/synthetic-capability",
+    "https://hooks.slack.com.example.com/services/synthetic-capability",
+    "https://other.slack.com/services/synthetic-capability",
+    "https://hooks.slack.com/ordinary/synthetic-context",
+    "http://hooks.slack.com/services/synthetic-capability",
+    "xhttps://hooks.slack.com/services/synthetic-capability",
+    "https%3A%2F%2Fhooks.slack.com%2Fservices%2Fsynthetic-capability",
+])
+def test_noncanonical_urls_are_unchanged(application_output, url):
+    app, stream, _ = application_output
+    app.logger.warning("URL: %s", url)
+    assert stream.getvalue().endswith("URL: " + url + "\n")
+
+
+def test_slack_scheme_and_host_case(application_output):
+    app, stream, _ = application_output
+    app.logger.warning("%s", SLACK_URL.replace("https://hooks.slack.com", "HTTPS://HOOKS.SLACK.COM"))
+    assert stream.getvalue().endswith(SLACK_REDACTED + "\n")
+
+
+def test_multiple_slack_urls_do_not_grow_registry(application_output):
+    app, stream, _ = application_output
+    scrub.register_secret("synthetic-registered-value")
+    pattern = scrub._pattern
+    for index in range(100):
+        app.logger.warning("%s | %s | %s", SLACK_URL + str(index),
+                           SLACK_URL + "%2Fsecond", "synthetic-registered-value")
+    assert stream.getvalue().count(SLACK_REDACTED) == 200
+    assert "synthetic-capability" not in stream.getvalue()
+    assert "synthetic-registered-value" not in stream.getvalue()
+    assert scrub._secrets == {"synthetic-registered-value"}
+    assert scrub._pattern is pattern
+
+
+def test_slack_redaction_precedes_registered_literal_matching(application_output):
+    app, stream, _ = application_output
+    scrub.register_secret("hooks.slack.com")
+    app.logger.warning("%s", SLACK_URL)
+    assert stream.getvalue().endswith("https://[REDACTED]/services/[REDACTED]\n")
+
+
+def test_slack_traceback_and_formatter_failure(application_output, monkeypatch):
+    app, stream, handler = application_output
+    try:
+        raise ValueError("Synthetic failure: " + SLACK_URL)
+    except ValueError:
+        app.logger.exception("Request failed: %s", SLACK_URL)
+    assert "Traceback (most recent call last)" in stream.getvalue()
+    assert "ValueError: Synthetic failure: " + SLACK_REDACTED in stream.getvalue()
+    assert "synthetic-capability" not in stream.getvalue()
+
+    class BrokenFormatter(logging.Formatter):
+        def format(self, record):
+            raise ValueError("Synthetic formatter failure: " + SLACK_URL)
+
+    handler.setFormatter(BrokenFormatter())
+    scrub.install_sanitizer(handler)
+    monkeypatch.setattr(sys, "stderr", stream)
+    monkeypatch.setattr(logging, "raiseExceptions", True)
+    record = logging.LogRecord("synthetic", logging.ERROR, __file__, 1,
+                               "Request failed: %s", (SLACK_URL,), None)
+    before = record.__dict__.copy()
+    handler.handle(record)
+    output = stream.getvalue()
+    assert "ValueError: Synthetic formatter failure: " + SLACK_REDACTED in output
+    assert "Message: Request failed: " + SLACK_REDACTED in output
+    assert "synthetic-capability" not in output
+    assert record.__dict__ == before
+
+
+def test_long_slack_input(application_output):
+    app, stream, _ = application_output
+    # Exercise long matches and many near matches without a timing-dependent gate.
+    context = "https://hooks.slack.com/service/ordinary " * 10000
+    app.logger.warning("%s%s end", context, SLACK_URL + "a" * 1000000)
+    assert stream.getvalue().endswith(context + SLACK_REDACTED + " end\n")
+    assert scrub._secrets == set()

@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- Application and syslog output handlers now redact the credential suffix of
+  canonical `https://hooks.slack.com/services/...` URLs, including encoded
+  paths, queries, fragments, and exception text. The static matcher does not
+  add URLs to the secret registry. Other destinations and fully encoded URLs
+  remain outside this protection.
 - Application and syslog output handlers now redact registered literal secret
   values, including exception text. Registration now covers loaded/generated
   storage Fernet keys, plaintext passed through password encryption/decryption,

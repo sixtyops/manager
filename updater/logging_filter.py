@@ -1,4 +1,4 @@
-"""Redact registered literal values from log output.
+"""Redact canonical Slack webhook URLs and registered literals from log output.
 
 Call register_secret(value) before logging a secret. Then call
 install_sanitizer(handler) on each output handler. Registration lasts for
@@ -16,6 +16,12 @@ from types import MethodType
 _secrets: set[str] = set()
 _pattern: re.Pattern[str] | None = None
 _registry_lock = threading.Lock()
+# Match canonical capability URLs up to ordinary log delimiters. The fixed
+# prefix and single character class also cover encoded paths, queries and fragments.
+_slack_webhook = re.compile(
+    r"(?<![\w+./-])https://hooks\.slack\.com/services/[^\s\"'<>()[\]{}]+",
+    re.IGNORECASE,
+)
 
 
 def register_secret(value: str | None) -> None:
@@ -46,6 +52,8 @@ class _SanitizingFormatter(logging.Formatter):
 
 
 def _sanitize(output: str) -> str:
+    # Redact URLs first so a registered substring cannot break their recognition.
+    output = _slack_webhook.sub("https://hooks.slack.com/services/[REDACTED]", output)
     with _registry_lock:
         pattern = _pattern
     return pattern.sub("[REDACTED]", output) if pattern is not None else output
