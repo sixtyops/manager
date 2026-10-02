@@ -10,6 +10,8 @@ on:
       - 'Dockerfile'
       - 'entrypoint.sh'
       - 'nginx/**'
+      - 'updater/app.py'
+      - 'updater/release_checker.py'
       - '.github/workflows/install-smoke.yml'
 
 concurrency:
@@ -82,6 +84,210 @@ jobs:
           fi
           sudo rm -f /etc/systemd/system/sixtyops.service
           sudo rm -rf /tmp/sixtyops-origin.git
+          git config --global --unset user.email || true
+          git config --global --unset user.name || true
+          sudo git config --global --remove-section safe 2>/dev/null || true
+
+  self-update-smoke:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 60
+    needs: [install-smoke]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare local release repo with old install branch and new tag
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+
+          rm -rf /tmp/sixtyops-update-source /tmp/sixtyops-origin.git
+          git clone . /tmp/sixtyops-update-source
+          cd /tmp/sixtyops-update-source
+
+          TARGET_VERSION="$(python3 - <<'PY'
+          from updater import __version__
+          print(__version__)
+          PY
+          )"
+          echo "SELF_UPDATE_TARGET_VERSION=$TARGET_VERSION" >> "$GITHUB_ENV"
+
+          git tag -f "v$TARGET_VERSION" HEAD
+
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          path = Path("updater/__init__.py")
+          text = path.read_text()
+          updated = re.sub(r'__version__ = "[^"]+"', '__version__ = "0.0.0"', text, count=1)
+          if updated == text:
+              raise SystemExit("Could not rewrite updater/__init__.py version")
+          path.write_text(updated)
+          PY
+          git add updater/__init__.py
+          git commit -m "ci: old install version for self-update smoke"
+          git branch -f main HEAD
+
+          git init --bare /tmp/sixtyops-origin.git
+          git remote add ci-origin /tmp/sixtyops-origin.git
+          git push --force ci-origin main
+          git push --force ci-origin "v$TARGET_VERSION"
+
+      - name: Install old version via install.sh
+        run: |
+          sudo env \
+            SIXTYOPS_REPO_URL="file:///tmp/sixtyops-origin.git" \
+            SIXTYOPS_BRANCH="main" \
+            SIXTYOPS_INSTALL_DIR="/opt/sixtyops-ci-update" \
+            ADMIN_PASSWORD="ci-test-password" \
+            bash scripts/install.sh
+
+      - name: Expose release repo to in-container self-update
+        run: |
+          sudo cp -a /tmp/sixtyops-origin.git /opt/sixtyops-ci-update/.ci-origin.git
+          sudo chown -R 1500:1500 /opt/sixtyops-ci-update/.ci-origin.git
+          sudo git config --global --add safe.directory /opt/sixtyops-ci-update
+          sudo git -C /opt/sixtyops-ci-update remote set-url origin file:///app/repo/.ci-origin.git
+
+      - name: Seed preserved data before self-update
+        run: |
+          sudo mkdir -p /opt/sixtyops-ci-update/firmware
+          echo "preserve me" | sudo tee /opt/sixtyops-ci-update/firmware/ci-preserve.bin >/dev/null
+          sudo chown 1500:1500 /opt/sixtyops-ci-update/firmware/ci-preserve.bin
+
+          sudo docker exec -i sixtyops-management python - <<'PY'
+          import sqlite3
+
+          conn = sqlite3.connect("/app/data/sixtyops.db")
+          conn.execute(
+              """
+              INSERT INTO settings(key, value) VALUES(?, ?)
+              ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP
+              """,
+              ("ci_self_update_marker", "preserved"),
+          )
+          conn.commit()
+          PY
+
+      - name: Trigger in-app self-update
+        run: |
+          login_code=$(curl -sk -c /tmp/sixtyops-cookies.txt \
+            -o /tmp/sixtyops-login.out \
+            -w "%{http_code}" \
+            -X POST \
+            -d "username=admin&password=ci-test-password" \
+            https://localhost/login)
+          if [ "$login_code" != "303" ]; then
+            echo "Unexpected /login status: $login_code"
+            cat /tmp/sixtyops-login.out
+            exit 1
+          fi
+
+          sudo docker exec -i \
+            -e TARGET_VERSION="$SELF_UPDATE_TARGET_VERSION" \
+            sixtyops-management python - <<'PY'
+          import os
+          import sqlite3
+
+          conn = sqlite3.connect("/app/data/sixtyops.db")
+          conn.execute(
+              """
+              INSERT INTO settings(key, value) VALUES(?, ?)
+              ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP
+              """,
+              ("autoupdate_available_version", os.environ["TARGET_VERSION"]),
+          )
+          conn.commit()
+          PY
+
+          apply_code=$(curl -sk -b /tmp/sixtyops-cookies.txt \
+            -o /tmp/sixtyops-apply.json \
+            -w "%{http_code}" \
+            -X POST \
+            https://localhost/api/updates/apply)
+          if [ "$apply_code" != "200" ]; then
+            echo "Unexpected /api/updates/apply status: $apply_code"
+            cat /tmp/sixtyops-apply.json
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("/tmp/sixtyops-apply.json").read_text())
+          if not data.get("success"):
+              raise SystemExit(f"self-update apply failed: {data}")
+          PY
+
+      - name: Verify self-update result and preserved state
+        run: |
+          deadline=$((SECONDS + 240))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            status=$(sudo docker inspect --format='{{.State.Health.Status}}' sixtyops-management 2>/dev/null || true)
+            version=$(sudo docker exec -i sixtyops-management python - <<'PY' 2>/dev/null || true
+          from updater import __version__
+          print(__version__)
+          PY
+          )
+            if [ "$status" = "healthy" ] && [ "$version" = "$SELF_UPDATE_TARGET_VERSION" ]; then
+              break
+            fi
+            sleep 5
+          done
+
+          final_version=$(sudo docker exec -i sixtyops-management python - <<'PY'
+          from updater import __version__
+          print(__version__)
+          PY
+          )
+          if [ "$final_version" != "$SELF_UPDATE_TARGET_VERSION" ]; then
+            echo "Expected version $SELF_UPDATE_TARGET_VERSION, got $final_version"
+            sudo docker ps -a
+            sudo docker logs sixtyops-management --tail 100 || true
+            sudo docker logs sixtyops-update-watchdog --tail 100 || true
+            exit 1
+          fi
+
+          marker=$(sudo docker exec -i sixtyops-management python - <<'PY'
+          import sqlite3
+          conn = sqlite3.connect("/app/data/sixtyops.db")
+          row = conn.execute("SELECT value FROM settings WHERE key = ?", ("ci_self_update_marker",)).fetchone()
+          print(row[0] if row else "")
+          PY
+          )
+          if [ "$marker" != "preserved" ]; then
+            echo "DB marker was not preserved"
+            exit 1
+          fi
+
+          if [ ! -f /opt/sixtyops-ci-update/firmware/ci-preserve.bin ]; then
+            echo "Firmware directory marker was not preserved"
+            exit 1
+          fi
+
+          if sudo docker ps -a --format '{{.Names}}' | grep -qx 'sixtyops-update-watchdog'; then
+            echo "Update watchdog container was left behind"
+            sudo docker logs sixtyops-update-watchdog --tail 100 || true
+            exit 1
+          fi
+
+      - name: Teardown
+        if: always()
+        run: |
+          if [ -d /opt/sixtyops-ci-update ]; then
+            sudo docker compose \
+              -f /opt/sixtyops-ci-update/docker-compose.yml \
+              -f /opt/sixtyops-ci-update/docker-compose.standalone.yml \
+              down -v --remove-orphans || true
+            sudo rm -rf /opt/sixtyops-ci-update
+          fi
+          sudo docker rm -f sixtyops-update-watchdog 2>/dev/null || true
+          sudo rm -f /etc/systemd/system/sixtyops.service
+          sudo rm -rf /tmp/sixtyops-origin.git /tmp/sixtyops-update-source
+          rm -f /tmp/sixtyops-cookies.txt /tmp/sixtyops-login.out /tmp/sixtyops-apply.json
           git config --global --unset user.email || true
           git config --global --unset user.name || true
           sudo git config --global --remove-section safe 2>/dev/null || true

@@ -56,9 +56,78 @@ jobs:
           pip install -r requirements.txt
           pytest -v --timeout=60
 
-  release:
+  validate-live-dev:
     needs: [test]
-    if: always() && needs.test.result == 'success'
+    if: github.event_name == 'workflow_dispatch' && needs.test.result == 'success'
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 30
+    env:
+      SIXTYOPS_TEST_URL: ${{ vars.SIXTYOPS_TEST_URL || secrets.SIXTYOPS_TEST_URL }}
+      SIXTYOPS_TEST_USER: ${{ vars.SIXTYOPS_TEST_USER || secrets.SIXTYOPS_TEST_USER }}
+      SIXTYOPS_TEST_PASS: ${{ secrets.SIXTYOPS_TEST_PASS }}
+      SIXTYOPS_TEST_AP_IP: ${{ vars.SIXTYOPS_TEST_AP_IP || secrets.SIXTYOPS_TEST_AP_IP }}
+      SIXTYOPS_TEST_SWITCH_IP: ${{ vars.SIXTYOPS_TEST_SWITCH_IP || secrets.SIXTYOPS_TEST_SWITCH_IP }}
+      SIXTYOPS_RELEASE_VALIDATE_SKIP: ${{ vars.SIXTYOPS_RELEASE_VALIDATE_SKIP || 'firmware_update' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Validate required live-dev inputs
+        run: |
+          missing=()
+          for name in \
+            SIXTYOPS_TEST_URL \
+            SIXTYOPS_TEST_USER \
+            SIXTYOPS_TEST_PASS
+          do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -ne 0 ]; then
+            missing_csv="$(IFS=,; echo "${missing[*]}")"
+            echo "::error::Stable release validation cannot run because required inputs are not configured: $missing_csv"
+            {
+              echo "### Stable release validation blocked"
+              echo
+              echo "Missing inputs: \`$missing_csv\`"
+              echo
+              echo "Configure the live-dev URL and credentials, then re-run the release workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Install validation dependencies
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Run release validator against live dev
+        run: |
+          . .venv/bin/activate
+          args=(
+            --host "$SIXTYOPS_TEST_URL"
+            --username "$SIXTYOPS_TEST_USER"
+            --password "$SIXTYOPS_TEST_PASS"
+            --skip "${SIXTYOPS_RELEASE_VALIDATE_SKIP:-firmware_update}"
+          )
+
+          if [ -n "$SIXTYOPS_TEST_AP_IP" ]; then
+            args+=(--device-ip "$SIXTYOPS_TEST_AP_IP")
+          fi
+
+          if [ -n "$SIXTYOPS_TEST_SWITCH_IP" ]; then
+            args+=(--switch-ip "$SIXTYOPS_TEST_SWITCH_IP")
+          fi
+
+          python scripts/validate_release.py "${args[@]}"
+
+  release:
+    needs: [test, validate-live-dev]
+    if: always() && needs.test.result == 'success' && (needs.validate-live-dev.result == 'success' || needs.validate-live-dev.result == 'skipped')
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 10
     permissions:
@@ -146,8 +215,8 @@ jobs:
           body_path: ${{ steps.meta.outputs.is_prerelease == 'true' && '/tmp/release-notes.md' || '' }}
 
   docker-push:
-    needs: [release]
-    if: always() && needs.release.result == 'success'
+    needs: [release, validate-live-dev]
+    if: always() && needs.release.result == 'success' && (needs.validate-live-dev.result == 'success' || needs.validate-live-dev.result == 'skipped')
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 15
     permissions:
