@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from . import database as db
 from .crypto import decrypt_password, is_encrypted
+from .logging_filter import register_secret
 
 logger = logging.getLogger(__name__)
 
@@ -63,13 +64,16 @@ def _unsafe_cell(value: str) -> str:
 
 def _derive_key(passphrase: str, salt: bytes) -> bytes:
     """Derive a Fernet key from a passphrase using PBKDF2."""
+    register_secret(passphrase)
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
         salt=salt,
         iterations=PBKDF2_ITERATIONS,
     )
-    return base64.urlsafe_b64encode(kdf.derive(passphrase.encode()))
+    key = base64.urlsafe_b64encode(kdf.derive(passphrase.encode()))
+    register_secret(key.decode("ascii"))
+    return key
 
 
 def build_csv_export(passphrase: str) -> tuple[str, str]:
@@ -78,6 +82,7 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
     Returns (csv_content, salt_b64) — the salt is embedded in a comment header
     so the same passphrase can decrypt on import.
     """
+    register_secret(passphrase)
     salt = os.urandom(16)
     key = _derive_key(passphrase, salt)
     fernet = Fernet(key)
@@ -187,6 +192,7 @@ def process_csv_import(csv_content: str, passphrase: str, conflict_mode: str = "
 
     conflict_mode: "skip" keeps existing devices, "update" overwrites credentials.
     """
+    register_secret(passphrase)
     results = {
         "devices": {"added": 0, "updated": 0, "skipped": 0, "failed": 0, "errors": []},
         "radius_users": {"added": 0, "updated": 0, "skipped": 0, "failed": 0, "errors": []},

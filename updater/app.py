@@ -27,6 +27,23 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
+from .logging_filter import install_sanitizer
+
+
+def configure_logging() -> None:
+    """Keep the current logging setup and sanitize its output handlers."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    for handler in logging.getLogger().handlers:
+        # Keep capture and other custom handlers outside this output setup.
+        if type(handler) in (logging.StreamHandler, logging.FileHandler):
+            install_sanitizer(handler)
+
+
+configure_logging()
+
 from .tachyon import TachyonClient, UpdateResult
 from .vendors import init_vendors, get_driver, list_vendors
 from . import __version__
@@ -66,22 +83,6 @@ from .radius_server import (
     RadiusServerConfig,
 )
 from . import radius_users
-from .logging_filter import install_sanitizer
-
-
-def configure_logging() -> None:
-    """Keep the current logging setup and sanitize its output handlers."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    for handler in logging.getLogger().handlers:
-        # Keep capture and other custom handlers outside this output setup.
-        if type(handler) in (logging.StreamHandler, logging.FileHandler):
-            install_sanitizer(handler)
-
-
-configure_logging()
 logger = logging.getLogger(__name__)
 
 DEV_MODE = os.environ.get("SIXTYOPS_DEV_MODE") == "1"

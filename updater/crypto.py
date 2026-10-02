@@ -5,6 +5,8 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
+from .logging_filter import register_secret
+
 logger = logging.getLogger(__name__)
 
 _KEY_PATH = Path(__file__).parent.parent / "data" / ".encryption_key"
@@ -21,10 +23,12 @@ def _load_fernet() -> Fernet:
         key = _KEY_PATH.read_bytes().strip()
     else:
         key = Fernet.generate_key()
+        register_secret(key.decode("ascii", errors="replace"))
         _KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
         _KEY_PATH.write_bytes(key + b"\n")
         _KEY_PATH.chmod(0o600)
         logger.info("Generated new device credential encryption key")
+    register_secret(key.decode("ascii", errors="replace"))
     return Fernet(key)
 
 
@@ -58,12 +62,15 @@ def reset_cache() -> None:
 
 def encrypt_password(plaintext: str) -> str:
     """Encrypt a device password for storage."""
+    register_secret(plaintext)
     return get_fernet().encrypt(plaintext.encode()).decode()
 
 
 def decrypt_password(ciphertext: str) -> str:
     """Decrypt a stored device password."""
-    return get_fernet().decrypt(ciphertext.encode()).decode()
+    plaintext = get_fernet().decrypt(ciphertext.encode()).decode()
+    register_secret(plaintext)
+    return plaintext
 
 
 def is_encrypted(value: str) -> bool:

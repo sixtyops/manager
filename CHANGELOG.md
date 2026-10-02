@@ -6,9 +6,15 @@ All notable changes to this project are documented in this file.
 
 ### Added
 - Application and syslog output handlers now redact registered literal secret
-  values, including exception text. Credential, key, passphrase, and session
-  sources are not registered yet. This is limited output sanitization, not
-  complete credential coverage.
+  values, including exception text. Registration now covers loaded/generated
+  storage Fernet keys, plaintext passed through password encryption/decryption,
+  legacy device password reads, known secret-setting reads, and CSV backup
+  import/export passphrases and derived Fernet keys. Logging is configured
+  before application imports and database initialization. Values remain in the
+  registry for the process lifetime; duplicate reads do not add entries.
+  Matching is literal and starts at these hooks. Nested secrets in config JSON,
+  other credential sources, and session/API/device tokens outside these hooks
+  remain uncovered. No inbound bearer registration is added.
 - Local login locks a username for 60 seconds after 10 failures in 60 seconds.
   The response shows the remaining wait and includes `Retry-After`. Each lock
   writes an audit entry. The existing source IP limit still applies.

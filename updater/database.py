@@ -13,6 +13,7 @@ from typing import Optional
 
 from .db.schema import build_schema
 from .crypto import encrypt_password, decrypt_password, is_encrypted
+from .logging_filter import register_secret
 
 logger = logging.getLogger(__name__)
 
@@ -925,6 +926,8 @@ def _decrypt_device_row(row_dict: dict) -> dict:
     if row_dict and "password" in row_dict and row_dict["password"]:
         if is_encrypted(row_dict["password"]):
             row_dict["password"] = decrypt_password(row_dict["password"])
+        else:
+            register_secret(row_dict["password"])
     return row_dict
 
 
@@ -1482,8 +1485,10 @@ def _maybe_decrypt_setting(key: str, value):
     migration (the migration converts them on the next `init_db()`)."""
     if not value:
         return value
-    if _is_secret_setting(key) and is_encrypted(value):
-        return decrypt_password(value)
+    if _is_secret_setting(key):
+        if is_encrypted(value):
+            return decrypt_password(value)
+        register_secret(value)
     return value
 
 
