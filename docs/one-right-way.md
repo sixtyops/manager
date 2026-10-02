@@ -56,6 +56,10 @@ delegation after independent review, current-head CI and sign-off, and any
 required exact-head bench proof pass. Worker agents do not merge. This
 delegation does not grant authority to write production devices or publish
 stable releases. This work never touches the Treehouse production fleet.
+The lead assigns bounded implementation, investigation, testing, and detailed
+review work to subagents under the
+[repository delegation rules](../CLAUDE.md#repository-lead-authority-2026-10-02).
+Delegation does not grant workers merge or release authority.
 
 ## Gaps, in priority order
 

@@ -42,6 +42,20 @@ Isaac explicitly delegated these duties on 2026-10-02. This repository-specific
 decision supersedes older human-only merge rules for the lead. Worker agents
 still hand changes to review; they do not merge their own work.
 
+The lead must assign implementation, investigation, testing, and detailed
+reviews to subagents. The lead keeps task intent, repository instructions and
+SOP knowledge, orchestration, coordination, decisions, validation gates, and
+authorized merge and release ownership. Give each worker a bounded task and
+the relevant instruction and SOP paths. Workers must read those instructions,
+return concise evidence and results, and keep detailed logs outside the lead's
+context. Reuse active agents and do not duplicate jobs. Preserve loop locks,
+budgets, the three-work-item limit, and review gates. If no subagent capacity is
+available, leave work queued; do not silently implement it in the lead context.
+Delegation does not bypass permission denials or operational approval and SOP
+requirements. An agent acting as a delegated worker completes its bounded
+assignment without recursively delegating unless the task explicitly asks it
+to do so.
+
 - Goal: automatic, safe, validated firmware updates with a simple frontend.
   Follow the target contract in [PR 412](https://github.com/sixtyops/manager/pull/412)
   and the delivery order in [issue 413](https://github.com/sixtyops/manager/issues/413).
