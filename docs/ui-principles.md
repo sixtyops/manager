@@ -63,8 +63,10 @@ recovery sequence can run at a time.
 
 **Detail:** Operators can set timing and pacing within the exposure limits.
 They get a Stop action before and during a wave. Stop prevents new writes but
-does not interrupt a flash. Approval is limited to a named Hold exception and
-does not bypass a failed gate. A wave shows its saved risk statement, gate
+does not interrupt a flash. Approval is required only for no rollback, the
+first run of a new firmware family, a sole path to other devices, or a policy
+exception such as a named Hold exception. Approval covers that plan only. It
+cannot bypass a failed gate. A wave shows its saved risk statement, gate
 inputs and results, device results, and operator actions. These are target
 requirements. The current override panel and controls above remain shipped
 behavior until implementation changes them.

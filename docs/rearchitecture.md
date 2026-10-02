@@ -110,8 +110,10 @@ one device write and recovery sequence can run at a time.
 behavior note names a difference where one is known. The target rules can be
 pinned by `tests/test_rollout_invariants.py` as they are implemented. A
 pre-start gate block is a hold, not an outage. A failure after work starts
-stops the whole window. Do not resume it in that window. Approval records a
-named Hold exception only; it never bypasses a failed gate.
+stops the whole window. Do not resume it in that window. Approval is required
+only for no rollback, the first run of a new firmware family, a sole path to
+other devices, or a policy exception such as a named Hold exception. Approval
+covers that plan only. It never bypasses a failed gate.
 
 ### Waves
 
