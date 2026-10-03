@@ -80,6 +80,8 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- Website menu and FAQ controls announce their expanded state and linked panels.
+  Escape closes the mobile menu and returns focus to its button.
 - Website telemetry copy now states the administrator opt-in and separate
   environment kill switch. Telemetry behavior is unchanged.
 - Filled primary buttons use darker teal backgrounds for readable white text
