@@ -80,6 +80,8 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- Filled primary buttons use darker teal backgrounds for readable white text
+  on the dashboard, login, and setup pages. The general accent stays unchanged.
 - About now distinguishes unchecked or failed update checks from a verified
   current version. Invalid or unavailable status no longer claims the app is current.
 - App Settings tabs wrap when space is limited. All five tabs stay inside the

@@ -27,8 +27,9 @@ the product does today.
 
 ### Accent vs state
 
-- **`--primary` (teal `#0D9488`)**: ALL interactive elements — buttons, toggles,
-  active tabs, links, focus rings, selection tints. The only accent.
+- **`--primary` (teal `#0D9488`)**: interactive accents for toggles, active tabs,
+  links, focus rings, and selection tints. Filled primary buttons use the
+  darker teal fill tokens below.
 - **`--info` (blue `#3b82f6`)**: the fourth semantic state color — *scheduled or
   in progress*. Status pills, device-update spinners, the active phase in the
   rollout stepper, info toasts and banners.
@@ -110,6 +111,21 @@ No em-dashes in rendered copy — rewrite with a period, colon, or `·`.
 
 Sizes: `.btn` 8px 16px, `.btn-sm` 4px 12px. Base `.btn` is always neutral;
 color intent requires an explicit variant class.
+
+### Filled primary button text
+
+**Key points:** White text on filled primary buttons uses the darker teal
+fill tokens. The general accent remains unchanged.
+
+**Detail:** Use `--primary-fill` (`#0F766E`) and `--primary-fill-hover` (`#115E59`)
+with `--primary-fill-text` (`#ffffff`) for `.btn-primary`. These tokens are
+shared by the dashboard, login, and setup pages. Normal-size enabled text
+must have at least 4.5:1 contrast in normal, hover, and keyboard-focus states.
+Do not use the lighter `--primary` as a white-text button fill.
+
+Check the focus indicator and disabled state separately. Inactive controls
+are exempt from the text contrast requirement. This token change does not
+certify all controls, focus indicators, or WCAG compliance.
 
 ## Toggles
 
