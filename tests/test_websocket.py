@@ -234,4 +234,3 @@ async def test_remaining_client_receives_message_when_peer_disconnects():
         await asyncio.gather(task, return_exceptions=True)
     survivor.send_text.assert_awaited_once()
     assert survivor in app_mod.active_websockets and removed not in app_mod.active_websockets
-
