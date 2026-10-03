@@ -3,7 +3,8 @@
 **Bottom line:** Every manager release from **v1.4.0** onward must be a
 GPG-signed git tag from the trusted release key. The manager refuses to install
 an unsigned or untrusted update at or after that version, and CI refuses to
-publish one. Older releases stay installable so rollback always works.
+publish one. Older releases remain eligible for reinstall; this does not prove
+that a host can recover or that its data is compatible with older code.
 
 The self-update path checks out a release tag and rebuilds from it, so the tag
 *is* the code that runs on the host (which holds the Docker socket). Signing the
@@ -56,10 +57,32 @@ under the cutover floor. Sign them anyway — sign everything from 1.4.0 onward.
 
 ## If a bad release ships
 
-Cut and sign a higher patch release with the fix; the fleet updates forward to
+**Key points:** Manager has no app rollback button or app rollback API.
+Verify host recovery before deployment.
+
+**Detail:** Cut and sign a higher patch release with the fix; the fleet updates forward to
 it. To pull a release, delete its GitHub Release/tag so the checker stops
-offering it. Operators can roll a single host back via the in-app rollback
-(the prior ref is saved before every update).
+offering it.
+
+For a source/Compose install, the updater saves the prior ref. When the
+watchdog runs, it retains the old image and attempts recovery after a failed
+health check. It deletes that image after a successful update. If the host
+repo path cannot be found or the watchdog cannot launch, the current updater
+falls back to a direct update without watchdog recovery. A saved ref alone
+does not prove rollback is available.
+
+Operator recovery must match the verified install shape. A source/Compose
+host needs the prior source ref, a retained working image, and the actual
+Compose files and host path. An image-only host can restore a retained
+container or re-pin its previous image as described in
+[deployment.md](deployment.md#updating-an-image-based-install).
+Before deployment, verify a restorable complete data backup, including the
+database and encryption key. Code or image rollback does not restore data
+or prove compatibility. Verify runtime version and health after recovery.
+
+These are recovery paths in the code and documentation, not evidence of a
+successful host recovery drill. See the
+[dev5 readiness limits](release-system.md#dev5-draft-notes-and-readiness).
 
 Related: [release-sop.md](release-sop.md) (how to cut a release),
 [release-system.md](release-system.md), [deployment.md](deployment.md).
