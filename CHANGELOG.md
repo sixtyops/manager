@@ -80,6 +80,8 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- About now distinguishes unchecked or failed update checks from a verified
+  current version. Invalid or unavailable status no longer claims the app is current.
 - App Settings tabs wrap when space is limited. All five tabs stay inside the
   dialog on mobile screens.
 - App Settings now has a named dialog and close button. Opening it moves focus
