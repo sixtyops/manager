@@ -1,6 +1,7 @@
 """Check GitHub releases for application updates."""
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -8,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
@@ -23,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 # Global singleton
 _checker: Optional["ReleaseChecker"] = None
+
+# The shipped app uses one worker. Serialize status reconciliation and initiation
+# across its event loop and request threads. Multiple app workers are unsupported.
+_update_lock = threading.Lock()
 
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "sixtyops/manager")
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -397,6 +403,11 @@ class ReleaseChecker:
                 except Exception:
                     pass
 
+        blocked = _pending_update_block()
+        if blocked:
+            status["can_update"] = False
+            status["blocked_reason"] = blocked["blocked_reason"]
+            status["launch_uncertain"] = blocked["launch_uncertain"]
         return status
 
 
@@ -616,120 +627,263 @@ def _manual_update_instructions(target_tag: str, repo_dir: Optional[Path]) -> di
     }
 
 
-def _build_watchdog_script(
-    host_repo_dir: str,
-    rollback_ref: str,
-    has_standalone: bool,
+def _retain_recovery_image() -> tuple[str, str, str] | None:
+    """Pin the healthy running container's immutable image before mutation."""
+    result = subprocess.run(
+        ["docker", "inspect", "--format",
+         "{{.Image}} {{.Config.Image}} {{.State.Health.Status}}", "sixtyops-management"],
+        capture_output=True, text=True, timeout=10,
+    )
+    fields = result.stdout.strip().split()
+    if result.returncode != 0 or len(fields) != 3:
+        return None
+    image_id, image_name, health = fields
+    if health != "healthy" or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+        return None
+    rollback_image = "sixtyops-manager-rollback:" + image_id.split(":", 1)[1]
+    retained = subprocess.run(
+        ["docker", "tag", image_id, rollback_image],
+        capture_output=True, text=True, timeout=10,
+    )
+    return (image_id, image_name, rollback_image) if retained.returncode == 0 else None
+
+
+def _clear_pending_update() -> None:
+    """Clear a rejected initiation or a verified terminal update outcome."""
+    db.set_settings({"autoupdate_pending_version": "", "autoupdate_pending_at": "",
+                     "autoupdate_rollback_ref": "", "autoupdate_launch_uncertain": "",
+                     "autoupdate_watchdog_id": "", "autoupdate_prior_image_id": ""})
+
+
+def _build_recovery_script(
+    directory: str, rollback_ref: str | None, has_standalone: bool,
+    recovery_image: tuple[str, str, str] | None,
 ) -> str:
-    """Build the shell script that the watchdog container runs.
-
-    The watchdog: builds the new image, tags the old image for rollback,
-    swaps the container, monitors health, and rolls back on failure.
-    """
-    compose_cmd = f"docker compose -f {host_repo_dir}/docker-compose.yml"
+    """Build the shared health and recovery flow for both install shapes."""
+    compose_cmd = f"docker compose -f {directory}/docker-compose.yml"
     if has_standalone:
-        compose_cmd += f" -f {host_repo_dir}/docker-compose.standalone.yml"
-
-    # Use .replace() instead of f-string to avoid escaping {{ }} for docker --format
-    return """#!/bin/sh
-# SixtyOps update watchdog — build, swap, monitor health, rollback on failure
-set -e
-
-CONTAINER="sixtyops-management"
-REPO="__REPO__"
-ROLLBACK_REF="__ROLLBACK_REF__"
-COMPOSE="__COMPOSE_CMD__"
-
-echo "[watchdog] Starting update build..."
-
-# Build new image (current container keeps running)
-cd "$REPO"
-$COMPOSE build sixtyops-mgmt
-if [ $? -ne 0 ]; then
-    echo "[watchdog] Build failed. Reverting git checkout..."
-    apk add --no-cache git > /dev/null 2>&1
-    git config --global --add safe.directory "$REPO"
+        compose_cmd += f" -f {directory}/docker-compose.standalone.yml"
+    image_id, image_name, rollback_image = recovery_image or ("", "", "")
+    restore = """restore_source() {
+    apk add --no-cache git > /dev/null 2>&1 &&
+    git config --global --add safe.directory "$REPO" &&
     git -C "$REPO" checkout "$ROLLBACK_REF"
-    echo "[watchdog] Reverted to $ROLLBACK_REF. No container swap performed."
+}""" if rollback_ref is not None else "restore_source() { return 0; }"
+    build = """if ! $COMPOSE build sixtyops-mgmt; then
+    echo "[watchdog] Build failed. Restoring source without swapping..."
+    if ! restore_source || ! docker tag "$ROLLBACK_IMAGE" "$IMAGE"; then
+        echo "[watchdog] ERROR: Source or image recovery failed."
+        exit 2
+    fi
+    exit 3
+fi""" if rollback_ref is not None else ""
+    return """#!/bin/sh
+set -eu
+REPO=__REPO__
+ROLLBACK_REF=__REF__
+IMAGE_ID=__ID__
+IMAGE=__IMAGE__
+ROLLBACK_IMAGE=__ROLLBACK_IMAGE__
+COMPOSE=__COMPOSE__
+CONTAINER="sixtyops-management"
+__RESTORE__
+
+# A retained immutable image is mandatory before build or swap.
+if [ -z "$IMAGE_ID" ] || [ -z "$IMAGE" ] || [ -z "$ROLLBACK_IMAGE" ] ||
+   [ "$(docker image inspect --format='{{.Id}}' "$ROLLBACK_IMAGE" 2>/dev/null)" != "$IMAGE_ID" ]; then
+    echo "[watchdog] Recovery image unavailable. Refusing update."
+    if ! restore_source; then
+        echo "[watchdog] ERROR: Source recovery failed."
+        exit 2
+    fi
     exit 1
 fi
+cd "$REPO"
+__BUILD__
 
-# Tag current image for rollback before swapping
-IMAGE=$(docker inspect --format='{{.Config.Image}}' "$CONTAINER" 2>/dev/null || echo "")
-if [ -n "$IMAGE" ]; then
-    ROLLBACK_IMAGE="${IMAGE%%:*}:rollback"
-    docker tag "$IMAGE" "$ROLLBACK_IMAGE"
-    echo "[watchdog] Tagged $IMAGE as $ROLLBACK_IMAGE"
-fi
-
-# Swap to new container
-echo "[watchdog] Swapping to new container..."
-$COMPOSE up -d sixtyops-mgmt
-
-# Monitor health (90 seconds: 18 checks x 5s)
-echo "[watchdog] Monitoring health..."
 HEALTHY=false
-for i in $(seq 1 18); do
-    sleep 5
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo "not_found")
-    case "$STATUS" in
-        healthy)
-            echo "[watchdog] Health check passed on attempt $i"
+if $COMPOSE up -d --no-build sixtyops-mgmt; then
+    for i in $(seq 1 18); do
+        sleep 5
+        STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo not_found)
+        if [ "$STATUS" = "healthy" ]; then
             HEALTHY=true
             break
-            ;;
-        *)
-            echo "[watchdog] Health check $i/18: $STATUS"
-            ;;
-    esac
-done
-
+        fi
+    done
+else
+    echo "[watchdog] Swap failed. Starting recovery..."
+fi
 if [ "$HEALTHY" = "true" ]; then
     echo "[watchdog] Update successful!"
-    # Clean up rollback image
-    if [ -n "$ROLLBACK_IMAGE" ]; then
-        docker rmi "$ROLLBACK_IMAGE" 2>/dev/null || true
-    fi
+    docker rmi "$ROLLBACK_IMAGE" 2>/dev/null || true
     rm -f "$REPO/.update-watchdog.sh"
     exit 0
 fi
 
-# ----- Health check failed — roll back -----
-echo "[watchdog] Health check failed after 90s. Rolling back..."
-
-# Install git for rollback
-apk add --no-cache git > /dev/null 2>&1
-git config --global --add safe.directory "$REPO"
-
-# Revert source to previous ref
-git -C "$REPO" checkout "$ROLLBACK_REF"
-
-# Re-tag rollback image as current so compose uses it without rebuilding
-if [ -n "$ROLLBACK_IMAGE" ] && [ -n "$IMAGE" ]; then
-    docker tag "$ROLLBACK_IMAGE" "$IMAGE"
+echo "[watchdog] Update failed. Rolling back..."
+if ! restore_source || ! docker tag "$ROLLBACK_IMAGE" "$IMAGE" ||
+   ! $COMPOSE up -d --no-build sixtyops-mgmt; then
+    echo "[watchdog] ERROR: Rollback command failed; recovery image retained."
+    exit 2
 fi
-
-# Restart from old image (--no-build since we re-tagged it)
-$COMPOSE up -d --no-build sixtyops-mgmt
-
-echo "[watchdog] Rollback initiated. Monitoring recovery..."
 for i in $(seq 1 12); do
     sleep 5
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo "not_found")
+    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo not_found)
     if [ "$STATUS" = "healthy" ]; then
         echo "[watchdog] Rollback successful."
-        docker rmi "$ROLLBACK_IMAGE" 2>/dev/null || true
         rm -f "$REPO/.update-watchdog.sh"
         exit 1
     fi
 done
+echo "[watchdog] ERROR: Rollback failed health check; recovery image retained."
+exit 2
+""".replace("__REPO__", shlex.quote(directory)).replace("__REF__", shlex.quote(rollback_ref or "")) \
+    .replace("__ID__", shlex.quote(image_id)).replace("__IMAGE__", shlex.quote(image_name)) \
+    .replace("__ROLLBACK_IMAGE__", shlex.quote(rollback_image)) \
+    .replace("__COMPOSE__", shlex.quote(compose_cmd)).replace("__RESTORE__", restore) \
+    .replace("__BUILD__", build)
 
-echo "[watchdog] WARNING: Rollback also failed health check."
-rm -f "$REPO/.update-watchdog.sh"
-exit 1
-""".replace("__REPO__", host_repo_dir) \
-   .replace("__ROLLBACK_REF__", rollback_ref) \
-   .replace("__COMPOSE_CMD__", compose_cmd)
+
+def _build_watchdog_script(
+    host_repo_dir: str, rollback_ref: str, has_standalone: bool,
+    recovery_image: tuple[str, str, str] | None = None,
+) -> str:
+    """Build the source update watchdog with a retained recovery image."""
+    return _build_recovery_script(host_repo_dir, rollback_ref, has_standalone, recovery_image)
+
+
+def _observe_uncertain_watchdog() -> None:
+    """Observe daemon state without treating absence as proof of rejection."""
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Status}}", "sixtyops-update-watchdog"],
+            capture_output=True, text=True, timeout=10,
+        )
+        state = result.stdout.strip() if result.returncode == 0 else "unknown"
+        if state not in ("created", "running", "restarting", "exited", "dead"):
+            state = "unknown"
+        logger.warning("Watchdog launch acknowledgement lost; observed state=%s", state)
+    except Exception:
+        logger.warning("Watchdog launch acknowledgement lost; daemon state unavailable")
+    # A delayed request can still be accepted after this observation. Even an
+    # exited/removed watchdog can already have changed the image or source.
+
+
+def _reconcile_pending_update() -> int | None:
+    """Clear acknowledged terminal outcomes only after daemon and runtime proof.
+
+    The caller holds _update_lock. Lost acknowledgements remain fenced.
+    """
+    if db.get_setting("autoupdate_launch_uncertain", "") == "true":
+        return
+    watchdog_id = db.get_setting("autoupdate_watchdog_id", "")
+    prior_image = db.get_setting("autoupdate_prior_image_id", "")
+    if not re.fullmatch(r"[0-9a-f]{64}", watchdog_id):
+        return
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{json .}}", watchdog_id],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return
+        daemon = json.loads(result.stdout)
+        state = daemon["State"]
+        code = state["ExitCode"]
+        if (daemon["Id"] != watchdog_id or state["Status"] != "exited"
+                or state["Running"] is not False or type(code) is not int
+                or code not in (0, 1, 3)):
+            return
+        completed = code == 0
+        if completed and db.get_setting("autoupdate_pending_version", "") != __version__:
+            return
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", prior_image):
+            return
+        runtime = subprocess.run(
+            ["docker", "inspect", "--format", "{{.Image}} {{.State.Health.Status}}",
+             "sixtyops-management"], capture_output=True, text=True, timeout=10,
+        )
+        fields = runtime.stdout.strip().split()
+        if (runtime.returncode != 0 or len(fields) != 2 or fields[1] != "healthy"
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", fields[0])
+                or (not completed and fields[0] != prior_image)):
+            return
+        # Build failure cannot occur in appliance mode. Source recovery must
+        # match the saved commit, not merely the old application's version.
+        rollback_ref = db.get_setting("autoupdate_rollback_ref", "")
+        if not completed and (rollback_ref or code == 3):
+            repo = _get_repo_dir()
+            if not repo or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", rollback_ref):
+                return
+            source = subprocess.run(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if source.returncode != 0 or source.stdout.strip() != rollback_ref:
+                return
+        # No force: remove only this proven stopped daemon. A failed read-back
+        # keeps pending state, even if removal might already have succeeded.
+        removed = subprocess.run(["docker", "rm", watchdog_id],
+                                 capture_output=True, text=True, timeout=10)
+        if removed.returncode != 0:
+            return
+        remaining = subprocess.run(["docker", "ps", "-a", "--no-trunc", "--format", "{{.ID}}"],
+                                   capture_output=True, text=True, timeout=10)
+        ids = remaining.stdout.split()
+        if (remaining.returncode != 0 or watchdog_id in ids
+                or any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in ids)):
+            return
+        _clear_pending_update()
+        if completed:
+            db.set_settings({"autoupdate_available_version": ""})
+        logger.info("Acknowledged update watchdog completed; pending state cleared")
+        return code
+    except Exception:
+        logger.warning("Terminal update proof unavailable; pending state retained")
+
+
+def _terminal_update_event(code: int, pending: str) -> dict:
+    if code == 0:
+        return {"type": "update_completed", "version": __version__, "success": True}
+    event = {"type": "update_failed" if code == 3 else "update_rolled_back",
+             "attempted_version": pending, "current_version": __version__}
+    if code == 3:
+        event["reason"] = "Build failed; prior source and healthy image verified"
+    return event
+
+
+def _pending_update_block(*, locked: bool = False) -> dict | None:
+    if not locked:
+        if not _update_lock.acquire(blocking=False):
+            reason = "Application update reconciliation or initiation is in progress."
+            return {"success": False, "blocked_reason": reason, "message": reason,
+                    "launch_uncertain": False}
+        try:
+            return _pending_update_block(locked=True)
+        finally:
+            _update_lock.release()
+    uncertain = db.get_setting("autoupdate_launch_uncertain", "") == "true"
+    if not uncertain and not db.get_setting("autoupdate_pending_version", ""):
+        return None
+    pending = db.get_setting("autoupdate_pending_version", "")
+    code = _reconcile_pending_update()
+    # Startup can precede daemon completion. The async status route delivers
+    # that later result through the existing checker callback.
+    if code is not None and _checker:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning("Update reconciled without an event loop; result not broadcast")
+        else:
+            loop.create_task(_checker.broadcast_func(_terminal_update_event(code, pending)))
+    if not uncertain and not db.get_setting("autoupdate_pending_version", ""):
+        return None
+    reason = ("Application update launch is uncertain; verify watchdog completion and "
+              "runtime on the host before retrying. Recovery and pending state retained."
+              if uncertain else "Application update already pending; wait for completion.")
+    return {"success": False, "blocked_reason": reason, "message": reason,
+            "launch_uncertain": uncertain}
 
 
 def _launch_watchdog(
@@ -737,20 +891,16 @@ def _launch_watchdog(
     host_repo_dir: str,
     rollback_ref: str,
     has_standalone: bool,
-) -> bool:
+    recovery_image: tuple[str, str, str],
+) -> bool | None:
     """Write the watchdog script and launch it in a detached docker:cli container.
 
-    Returns True if the watchdog was launched successfully.
+    True means acknowledged; False means no launch attempt; None is uncertain.
     """
+    attempted = False
     try:
-        # Remove any leftover watchdog container from a previous attempt
-        subprocess.run(
-            ["docker", "rm", "-f", "sixtyops-update-watchdog"],
-            capture_output=True, timeout=10,
-        )
-
         # Write watchdog script to the repo dir (persists on host via bind mount)
-        script = _build_watchdog_script(host_repo_dir, rollback_ref, has_standalone)
+        script = _build_watchdog_script(host_repo_dir, rollback_ref, has_standalone, recovery_image)
         watchdog_path = repo_dir / ".update-watchdog.sh"
         watchdog_path.write_text(script)
         watchdog_path.chmod(0o755)
@@ -759,9 +909,10 @@ def _launch_watchdog(
 
         # Launch watchdog in a detached container that survives our restart.
         # docker:cli is Alpine-based with docker CLI + compose plugin.
+        attempted = True
         result = subprocess.run(
             [
-                "docker", "run", "--rm", "-d",
+                "docker", "run", "-d",
                 "--name", "sixtyops-update-watchdog",
                 "-v", "/var/run/docker.sock:/var/run/docker.sock",
                 "-v", f"{host_repo_dir}:{host_repo_dir}",
@@ -772,15 +923,20 @@ def _launch_watchdog(
             capture_output=True, text=True, timeout=30,
         )
 
-        if result.returncode == 0:
+        if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{64}", result.stdout.strip()):
+            db.set_settings({"autoupdate_watchdog_id": result.stdout.strip()})
             logger.info(f"Update watchdog launched: {result.stdout.strip()[:12]}")
             return True
         else:
             logger.error(f"Failed to launch watchdog: {result.stderr}")
-            return False
+            _observe_uncertain_watchdog()
+            return None
 
     except Exception as e:
         logger.error(f"Failed to launch watchdog: {e}")
+        if attempted:
+            _observe_uncertain_watchdog()
+            return None
         return False
 
 
@@ -788,113 +944,32 @@ def _launch_watchdog(
 
 
 def _build_appliance_watchdog_script(
-    compose_dir: str,
-    has_standalone: bool,
+    compose_dir: str, has_standalone: bool,
+    recovery_image: tuple[str, str, str] | None = None,
 ) -> str:
-    """Build watchdog script for appliance mode (docker pull, no git)."""
-    compose_cmd = f"docker compose -f {compose_dir}/docker-compose.yml"
-    if has_standalone:
-        compose_cmd += f" -f {compose_dir}/docker-compose.standalone.yml"
-
-    return """#!/bin/sh
-# SixtyOps appliance update watchdog — swap, monitor health, rollback on failure
-set -e
-
-CONTAINER="sixtyops-management"
-COMPOSE="__COMPOSE_CMD__"
-
-echo "[watchdog] Starting appliance update..."
-
-# Tag current image for rollback before swapping
-IMAGE=$(docker inspect --format='{{.Config.Image}}' "$CONTAINER" 2>/dev/null || echo "")
-if [ -n "$IMAGE" ]; then
-    ROLLBACK_IMAGE="${IMAGE%%:*}:rollback"
-    docker tag "$IMAGE" "$ROLLBACK_IMAGE"
-    echo "[watchdog] Tagged $IMAGE as $ROLLBACK_IMAGE"
-fi
-
-# Swap to new container (image already pulled)
-echo "[watchdog] Swapping to new container..."
-$COMPOSE up -d --no-build sixtyops-mgmt
-
-# Monitor health (90 seconds: 18 checks x 5s)
-echo "[watchdog] Monitoring health..."
-HEALTHY=false
-for i in $(seq 1 18); do
-    sleep 5
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo "not_found")
-    case "$STATUS" in
-        healthy)
-            echo "[watchdog] Health check passed on attempt $i"
-            HEALTHY=true
-            break
-            ;;
-        *)
-            echo "[watchdog] Health check $i/18: $STATUS"
-            ;;
-    esac
-done
-
-if [ "$HEALTHY" = "true" ]; then
-    echo "[watchdog] Update successful!"
-    if [ -n "$ROLLBACK_IMAGE" ]; then
-        docker rmi "$ROLLBACK_IMAGE" 2>/dev/null || true
-    fi
-    rm -f "__COMPOSE_DIR__/.update-watchdog.sh"
-    exit 0
-fi
-
-# ----- Health check failed — roll back -----
-echo "[watchdog] Health check failed after 90s. Rolling back..."
-
-# Re-tag rollback image as current so compose uses it
-if [ -n "$ROLLBACK_IMAGE" ] && [ -n "$IMAGE" ]; then
-    docker tag "$ROLLBACK_IMAGE" "$IMAGE"
-fi
-
-# Restart from old image
-$COMPOSE up -d --no-build sixtyops-mgmt
-
-echo "[watchdog] Rollback initiated. Monitoring recovery..."
-for i in $(seq 1 12); do
-    sleep 5
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo "not_found")
-    if [ "$STATUS" = "healthy" ]; then
-        echo "[watchdog] Rollback successful."
-        docker rmi "$ROLLBACK_IMAGE" 2>/dev/null || true
-        rm -f "__COMPOSE_DIR__/.update-watchdog.sh"
-        exit 1
-    fi
-done
-
-echo "[watchdog] WARNING: Rollback also failed health check."
-rm -f "__COMPOSE_DIR__/.update-watchdog.sh"
-exit 1
-""".replace("__COMPOSE_CMD__", compose_cmd) \
-   .replace("__COMPOSE_DIR__", compose_dir)
+    """Build the appliance watchdog with the image retained before pull."""
+    return _build_recovery_script(compose_dir, None, has_standalone, recovery_image)
 
 
 def _launch_appliance_watchdog(
     compose_dir: Path,
     has_standalone: bool,
-) -> bool:
+    recovery_image: tuple[str, str, str],
+) -> bool | None:
     """Launch the appliance watchdog in a detached docker:cli container."""
+    attempted = False
     try:
-        subprocess.run(
-            ["docker", "rm", "-f", "sixtyops-update-watchdog"],
-            capture_output=True, timeout=10,
-        )
-
-        script = _build_appliance_watchdog_script(str(compose_dir), has_standalone)
+        script = _build_appliance_watchdog_script(str(compose_dir), has_standalone, recovery_image)
         watchdog_path = compose_dir / ".update-watchdog.sh"
         watchdog_path.write_text(script)
         watchdog_path.chmod(0o755)
 
         host_script = f"{compose_dir}/.update-watchdog.sh"
 
+        attempted = True
         result = subprocess.run(
             [
-                "docker", "run", "--rm", "-d",
+                "docker", "run", "-d",
                 "--name", "sixtyops-update-watchdog",
                 "-v", "/var/run/docker.sock:/var/run/docker.sock",
                 "-v", f"{compose_dir}:{compose_dir}",
@@ -905,15 +980,20 @@ def _launch_appliance_watchdog(
             capture_output=True, text=True, timeout=30,
         )
 
-        if result.returncode == 0:
+        if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{64}", result.stdout.strip()):
+            db.set_settings({"autoupdate_watchdog_id": result.stdout.strip()})
             logger.info(f"Appliance watchdog launched: {result.stdout.strip()[:12]}")
             return True
         else:
             logger.error(f"Failed to launch appliance watchdog: {result.stderr}")
-            return False
+            _observe_uncertain_watchdog()
+            return None
 
     except Exception as e:
         logger.error(f"Failed to launch appliance watchdog: {e}")
+        if attempted:
+            _observe_uncertain_watchdog()
+            return None
         return False
 
 
@@ -926,9 +1006,18 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
     if not compose_dir:
         return _normalize_apply_result({"success": False, "message": "Cannot find compose directory"})
 
+    blocked = _pending_update_block(locked=True)
+    if blocked:
+        return _normalize_apply_result(blocked)
+
     image_ref = f"{GHCR_IMAGE}:{target_tag}"
+    pending = False
+    launching = False
 
     try:
+        recovery_image = _retain_recovery_image()
+        if not recovery_image:
+            return _normalize_apply_result({"success": False, "message": "Cannot retain a healthy recovery image"})
         # NOTE: appliance/image-pull integrity is a documented follow-up. The
         # git-checkout path (which builds arbitrary local code — the higher
         # risk) is signature-gated via _verify_tag_signature. Pinning/verifying
@@ -950,21 +1039,25 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
         db.set_settings({
             "autoupdate_pending_version": target_version,
             "autoupdate_pending_at": datetime.now().isoformat(),
+            "autoupdate_rollback_ref": "",
+            "autoupdate_launch_uncertain": "true",
+            "autoupdate_watchdog_id": "",
+            "autoupdate_prior_image_id": recovery_image[0],
         })
 
+        pending = True
         has_standalone = (compose_dir / "docker-compose.standalone.yml").exists()
 
         # Launch watchdog for health-checked swap with rollback
-        launched = _launch_appliance_watchdog(compose_dir, has_standalone)
+        launching = True
+        launched = _launch_appliance_watchdog(compose_dir, has_standalone, recovery_image)
+        if launched is None:
+            return _normalize_apply_result(_pending_update_block(locked=True))
+        launching = False
         if not launched:
-            logger.warning("Appliance watchdog failed, falling back to direct swap")
-            compose_cmd = _get_compose_cmd(compose_dir)
-            subprocess.Popen(
-                compose_cmd + ["up", "-d", "--no-build", "sixtyops-mgmt"],
-                cwd=compose_dir,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            raise RuntimeError("Cannot start guarded update: appliance watchdog unavailable")
+        pending = False
+        db.set_settings({"autoupdate_launch_uncertain": ""})
 
         return _normalize_apply_result({
             "success": True,
@@ -972,13 +1065,33 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
         })
 
     except subprocess.TimeoutExpired:
-        return _normalize_apply_result({"success": False, "message": "Docker pull timed out"})
+        if launching:
+            return _normalize_apply_result(_pending_update_block(locked=True))
+        if pending:
+            _clear_pending_update()
+        return _normalize_apply_result({"success": False, "message": "Docker command timed out"})
     except Exception as e:
         logger.exception(f"Appliance update failed: {e}")
+        if launching:
+            return _normalize_apply_result(_pending_update_block(locked=True))
+        if pending:
+            _clear_pending_update()
         return _normalize_apply_result({"success": False, "message": str(e)})
 
 
 async def apply_update() -> dict:
+    """Allow one initiation or reconciliation at a time in the shipped worker."""
+    if not _update_lock.acquire(blocking=False):
+        return _normalize_apply_result({"success": False,
+            "message": "Application update reconciliation or initiation is in progress.",
+            "blocked_reason": "Application update reconciliation or initiation is in progress."})
+    try:
+        return await _apply_update_locked()
+    finally:
+        _update_lock.release()
+
+
+async def _apply_update_locked() -> dict:
     """Fetch the target release tag and launch the update watchdog.
 
     The watchdog (a detached docker:cli container) handles: build, image tagging,
@@ -994,6 +1107,10 @@ async def apply_update() -> dict:
             "message": f"Cannot update now: {reason}. Please try again later.",
             "blocked_reason": reason,
         })
+
+    blocked = _pending_update_block(locked=True)
+    if blocked:
+        return _normalize_apply_result(blocked)
 
     # Determine which version we're updating to
     target_version = db.get_setting("autoupdate_available_version", "")
@@ -1035,7 +1152,9 @@ async def apply_update() -> dict:
     if not _docker_socket_available() or not repo_dir:
         return _normalize_apply_result({"success": False, **_manual_update_instructions(target_tag, repo_dir)})
 
-    compose_cmd = _get_compose_cmd(repo_dir)
+    staged = False
+    launching = False
+    rollback_ref = None
     git_cmd = ["git", "-C", str(repo_dir)]
 
     try:
@@ -1134,149 +1253,89 @@ async def apply_update() -> dict:
                 "message": sig_reason,
             })
 
+        host_repo_dir = _get_host_repo_path()
+        if not host_repo_dir:
+            return _normalize_apply_result({"success": False, "message": "Cannot start guarded update: host repo path unavailable"})
+        recovery_image = _retain_recovery_image()
+        if not recovery_image:
+            return _normalize_apply_result({"success": False, "message": "Cannot retain a healthy recovery image"})
+
         # Checkout the exact tag — no unreviewed code from main
         logger.info(f"Checking out {target_tag}...")
+        staged = True
         checkout_result = subprocess.run(
             git_cmd + ["checkout", target_tag],
             capture_output=True, text=True, timeout=30,
         )
         if checkout_result.returncode != 0:
-            return _normalize_apply_result({
-                "success": False,
-                "message": f"Git checkout failed: {checkout_result.stderr}",
-            })
+            raise RuntimeError(f"Git checkout failed: {checkout_result.stderr}")
 
         # Verify the checked-out version matches what we expect
         version_file = repo_dir / "updater" / "__init__.py"
         if version_file.exists():
             content = version_file.read_text()
             if f'"{target_version}"' not in content:
-                # Revert checkout
-                subprocess.run(git_cmd + ["checkout", rollback_ref],
-                               capture_output=True, timeout=30)
-                return _normalize_apply_result({
-                    "success": False,
-                    "message": f"Version mismatch: tag {target_tag} does not contain version {target_version}",
-                })
+                raise RuntimeError(f"Version mismatch: tag {target_tag} does not contain version {target_version}")
 
         # Store pending update info (persists in DB through restart)
         db.set_settings({
             "autoupdate_pending_version": target_version,
             "autoupdate_pending_at": datetime.now().isoformat(),
+            "autoupdate_launch_uncertain": "true",
+            "autoupdate_watchdog_id": "",
+            "autoupdate_prior_image_id": recovery_image[0],
             "autoupdate_rollback_ref": rollback_ref,
         })
 
-        # Discover host repo path for the watchdog container
-        host_repo_dir = _get_host_repo_path()
         has_standalone = (repo_dir / "docker-compose.standalone.yml").exists()
-
-        if host_repo_dir:
-            # Launch watchdog: build, swap, health check, rollback on failure
-            launched = _launch_watchdog(repo_dir, host_repo_dir, rollback_ref, has_standalone)
-            if not launched:
-                logger.warning("Watchdog failed to launch, falling back to direct update")
-                subprocess.Popen(
-                    compose_cmd + ["up", "-d", "--build", "sixtyops-mgmt"],
-                    cwd=repo_dir,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-        else:
-            # Can't determine host path — proceed without rollback
-            logger.warning("Could not determine host repo path; no rollback available")
-            subprocess.Popen(
-                compose_cmd + ["up", "-d", "--build", "sixtyops-mgmt"],
-                cwd=repo_dir,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+        launching = True
+        launched = _launch_watchdog(repo_dir, host_repo_dir, rollback_ref, has_standalone, recovery_image)
+        if launched is None:
+            return _normalize_apply_result(_pending_update_block(locked=True))
+        launching = False
+        if not launched:
+            raise RuntimeError("Cannot start guarded update: watchdog unavailable")
+        staged = False
+        db.set_settings({"autoupdate_launch_uncertain": ""})
 
         return _normalize_apply_result({
             "success": True,
             "message": f"Updating to {target_tag}. The application will restart shortly.",
         })
 
-    except subprocess.TimeoutExpired:
-        return _normalize_apply_result({
-            "success": False,
-            "message": "Docker command timed out",
-        })
     except Exception as e:
-        logger.exception(f"Update failed: {e}")
-        return _normalize_apply_result({
-            "success": False,
-            "message": str(e),
-        })
+        message = "Docker command timed out" if isinstance(e, subprocess.TimeoutExpired) else str(e)
+        logger.exception("Update initiation failed")
+        if launching:
+            return _normalize_apply_result(_pending_update_block(locked=True))
+        if staged:
+            try:
+                restored = subprocess.run(git_cmd + ["checkout", rollback_ref],
+                                          capture_output=True, timeout=30)
+                if restored.returncode != 0:
+                    message += "; source recovery failed"
+            except Exception:
+                message += "; source recovery failed"
+            _clear_pending_update()
+        return _normalize_apply_result({"success": False, "message": message})
 
 
 async def verify_update_on_startup(broadcast_func: Optional[Callable] = None):
-    """Check if an app update was recently applied and broadcast the result.
-
-    Call this during app startup, after DB is initialized. If we just restarted
-    after an update, the pending version in the DB will match (success) or not
-    match (rollback) our current __version__.
-    """
-    pending = db.get_setting("autoupdate_pending_version", "")
-    if not pending:
+    """Reconcile proven terminal outcomes, then broadcast the startup result."""
+    if not _update_lock.acquire(blocking=False):
         return
-
-    # Check for stuck state: pending for too long without resolution
-    pending_at = db.get_setting("autoupdate_pending_at", "")
-    if pending_at and pending != __version__:
-        try:
-            pending_time = datetime.fromisoformat(pending_at)
-            age_minutes = (datetime.now() - pending_time).total_seconds() / 60
-            if age_minutes > 15:
-                logger.warning(
-                    f"Update to v{pending} has been pending for {age_minutes:.0f} minutes "
-                    f"without completing. Clearing stuck state."
-                )
-                db.set_settings({
-                    "autoupdate_pending_version": "",
-                    "autoupdate_pending_at": "",
-                    "autoupdate_rollback_ref": "",
-                })
-                if broadcast_func:
-                    await broadcast_func({
-                        "type": "update_failed",
-                        "attempted_version": pending,
-                        "current_version": __version__,
-                        "reason": "Update timed out without completing",
-                    })
-                return
-        except (ValueError, TypeError):
-            pass  # Malformed timestamp, fall through to existing logic
-
-    if pending == __version__:
-        logger.info(f"App update to v{__version__} completed successfully")
-        db.set_settings({
-            "autoupdate_pending_version": "",
-            "autoupdate_pending_at": "",
-            "autoupdate_available_version": "",
-            "autoupdate_rollback_ref": "",
-        })
-        if broadcast_func:
-            await broadcast_func({
-                "type": "update_completed",
-                "version": __version__,
-                "success": True,
-            })
-    else:
-        logger.warning(
-            f"App update to v{pending} may have been rolled back "
-            f"(running v{__version__})"
-        )
-        db.set_settings({
-            "autoupdate_pending_version": "",
-            "autoupdate_pending_at": "",
-            "autoupdate_rollback_ref": "",
-        })
-        if broadcast_func:
-            await broadcast_func({
-                "type": "update_rolled_back",
-                "attempted_version": pending,
-                "current_version": __version__,
-            })
+    try:
+        pending = db.get_setting("autoupdate_pending_version", "")
+        if not pending:
+            return
+        code = _reconcile_pending_update()
+    finally:
+        _update_lock.release()
+    # Neither elapsed time nor a version match proves a daemon has stopped.
+    # Legacy attempts without an acknowledged container ID stay fenced.
+    if code is None or not broadcast_func:
+        return
+    await broadcast_func(_terminal_update_event(code, pending))
 
 
 def get_checker() -> Optional[ReleaseChecker]:
