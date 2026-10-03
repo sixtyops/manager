@@ -80,6 +80,9 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- App Settings now has a named dialog and close button. Opening it moves focus
+  inside. Tab and Shift+Tab stay inside visible, enabled controls. Escape or
+  pointer close returns focus to the Settings and account menu button.
 - Dashboard broadcasts now use a connection snapshot. A client that connects
   or disconnects during a send no longer aborts the broadcast. Joining clients
   receive their initial state and subsequent broadcasts. Authentication, send
