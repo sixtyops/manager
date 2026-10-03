@@ -142,7 +142,8 @@ async def broadcast(message: dict):
     import json as _json
     json_text = _json.dumps(message)
     disconnected = set()
-    for ws in active_websockets:
+    # Connect/disconnect can change membership while a send is suspended.
+    for ws in list(active_websockets):
         try:
             await asyncio.wait_for(ws.send_text(json_text), timeout=5.0)
         except asyncio.TimeoutError:

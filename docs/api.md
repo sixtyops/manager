@@ -256,6 +256,10 @@ Real-time bidirectional connection. Requires valid session cookie.
 
 On connect, sends: current topology, active job state, job history (last 20), scheduler status, and rollout status.
 
+Each broadcast uses a connection snapshot. Clients that join during a send
+receive future broadcasts. Failed or timed-out clients are removed. This does
+not guarantee delivery or ordering between concurrent broadcasts.
+
 **Server message types:**
 - `topology_update` — AP/CPE/switch discovery data
 - `device_update` — Single device update progress
