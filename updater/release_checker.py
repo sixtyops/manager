@@ -1,6 +1,7 @@
 """Check GitHub releases for application updates."""
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -8,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
@@ -23,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 # Global singleton
 _checker: Optional["ReleaseChecker"] = None
+
+# The shipped app uses one worker. Serialize status reconciliation and initiation
+# across its event loop and request threads. Multiple app workers are unsupported.
+_update_lock = threading.Lock()
 
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "sixtyops/manager")
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -643,9 +649,10 @@ def _retain_recovery_image() -> tuple[str, str, str] | None:
 
 
 def _clear_pending_update() -> None:
-    """Remove initiation state when no guarded update was started."""
+    """Clear a rejected initiation or a verified terminal update outcome."""
     db.set_settings({"autoupdate_pending_version": "", "autoupdate_pending_at": "",
-                     "autoupdate_rollback_ref": "", "autoupdate_launch_uncertain": ""})
+                     "autoupdate_rollback_ref": "", "autoupdate_launch_uncertain": "",
+                     "autoupdate_watchdog_id": "", "autoupdate_prior_image_id": ""})
 
 
 def _build_recovery_script(
@@ -668,7 +675,7 @@ def _build_recovery_script(
         echo "[watchdog] ERROR: Source or image recovery failed."
         exit 2
     fi
-    exit 1
+    exit 3
 fi""" if rollback_ref is not None else ""
     return """#!/bin/sh
 set -eu
@@ -763,8 +770,113 @@ def _observe_uncertain_watchdog() -> None:
     # exited/removed watchdog can already have changed the image or source.
 
 
-def _pending_update_block() -> dict | None:
+def _reconcile_pending_update() -> int | None:
+    """Clear acknowledged terminal outcomes only after daemon and runtime proof.
+
+    The caller holds _update_lock. Lost acknowledgements remain fenced.
+    """
+    if db.get_setting("autoupdate_launch_uncertain", "") == "true":
+        return
+    watchdog_id = db.get_setting("autoupdate_watchdog_id", "")
+    prior_image = db.get_setting("autoupdate_prior_image_id", "")
+    if not re.fullmatch(r"[0-9a-f]{64}", watchdog_id):
+        return
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{json .}}", watchdog_id],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return
+        daemon = json.loads(result.stdout)
+        state = daemon["State"]
+        code = state["ExitCode"]
+        if (daemon["Id"] != watchdog_id or state["Status"] != "exited"
+                or state["Running"] is not False or type(code) is not int
+                or code not in (0, 1, 3)):
+            return
+        completed = code == 0
+        if completed and db.get_setting("autoupdate_pending_version", "") != __version__:
+            return
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", prior_image):
+            return
+        runtime = subprocess.run(
+            ["docker", "inspect", "--format", "{{.Image}} {{.State.Health.Status}}",
+             "sixtyops-management"], capture_output=True, text=True, timeout=10,
+        )
+        fields = runtime.stdout.strip().split()
+        if (runtime.returncode != 0 or len(fields) != 2 or fields[1] != "healthy"
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", fields[0])
+                or (not completed and fields[0] != prior_image)):
+            return
+        # Build failure cannot occur in appliance mode. Source recovery must
+        # match the saved commit, not merely the old application's version.
+        rollback_ref = db.get_setting("autoupdate_rollback_ref", "")
+        if not completed and (rollback_ref or code == 3):
+            repo = _get_repo_dir()
+            if not repo or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", rollback_ref):
+                return
+            source = subprocess.run(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if source.returncode != 0 or source.stdout.strip() != rollback_ref:
+                return
+        # No force: remove only this proven stopped daemon. A failed read-back
+        # keeps pending state, even if removal might already have succeeded.
+        removed = subprocess.run(["docker", "rm", watchdog_id],
+                                 capture_output=True, text=True, timeout=10)
+        if removed.returncode != 0:
+            return
+        remaining = subprocess.run(["docker", "ps", "-a", "--no-trunc", "--format", "{{.ID}}"],
+                                   capture_output=True, text=True, timeout=10)
+        ids = remaining.stdout.split()
+        if (remaining.returncode != 0 or watchdog_id in ids
+                or any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in ids)):
+            return
+        _clear_pending_update()
+        if completed:
+            db.set_settings({"autoupdate_available_version": ""})
+        logger.info("Acknowledged update watchdog completed; pending state cleared")
+        return code
+    except Exception:
+        logger.warning("Terminal update proof unavailable; pending state retained")
+
+
+def _terminal_update_event(code: int, pending: str) -> dict:
+    if code == 0:
+        return {"type": "update_completed", "version": __version__, "success": True}
+    event = {"type": "update_failed" if code == 3 else "update_rolled_back",
+             "attempted_version": pending, "current_version": __version__}
+    if code == 3:
+        event["reason"] = "Build failed; prior source and healthy image verified"
+    return event
+
+
+def _pending_update_block(*, locked: bool = False) -> dict | None:
+    if not locked:
+        if not _update_lock.acquire(blocking=False):
+            reason = "Application update reconciliation or initiation is in progress."
+            return {"success": False, "blocked_reason": reason, "message": reason,
+                    "launch_uncertain": False}
+        try:
+            return _pending_update_block(locked=True)
+        finally:
+            _update_lock.release()
     uncertain = db.get_setting("autoupdate_launch_uncertain", "") == "true"
+    if not uncertain and not db.get_setting("autoupdate_pending_version", ""):
+        return None
+    pending = db.get_setting("autoupdate_pending_version", "")
+    code = _reconcile_pending_update()
+    # Startup can precede daemon completion. The async status route delivers
+    # that later result through the existing checker callback.
+    if code is not None and _checker:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning("Update reconciled without an event loop; result not broadcast")
+        else:
+            loop.create_task(_checker.broadcast_func(_terminal_update_event(code, pending)))
     if not uncertain and not db.get_setting("autoupdate_pending_version", ""):
         return None
     reason = ("Application update launch is uncertain; verify watchdog completion and "
@@ -800,7 +912,7 @@ def _launch_watchdog(
         attempted = True
         result = subprocess.run(
             [
-                "docker", "run", "--rm", "-d",
+                "docker", "run", "-d",
                 "--name", "sixtyops-update-watchdog",
                 "-v", "/var/run/docker.sock:/var/run/docker.sock",
                 "-v", f"{host_repo_dir}:{host_repo_dir}",
@@ -811,7 +923,8 @@ def _launch_watchdog(
             capture_output=True, text=True, timeout=30,
         )
 
-        if result.returncode == 0:
+        if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{64}", result.stdout.strip()):
+            db.set_settings({"autoupdate_watchdog_id": result.stdout.strip()})
             logger.info(f"Update watchdog launched: {result.stdout.strip()[:12]}")
             return True
         else:
@@ -856,7 +969,7 @@ def _launch_appliance_watchdog(
         attempted = True
         result = subprocess.run(
             [
-                "docker", "run", "--rm", "-d",
+                "docker", "run", "-d",
                 "--name", "sixtyops-update-watchdog",
                 "-v", "/var/run/docker.sock:/var/run/docker.sock",
                 "-v", f"{compose_dir}:{compose_dir}",
@@ -867,7 +980,8 @@ def _launch_appliance_watchdog(
             capture_output=True, text=True, timeout=30,
         )
 
-        if result.returncode == 0:
+        if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{64}", result.stdout.strip()):
+            db.set_settings({"autoupdate_watchdog_id": result.stdout.strip()})
             logger.info(f"Appliance watchdog launched: {result.stdout.strip()[:12]}")
             return True
         else:
@@ -892,7 +1006,7 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
     if not compose_dir:
         return _normalize_apply_result({"success": False, "message": "Cannot find compose directory"})
 
-    blocked = _pending_update_block()
+    blocked = _pending_update_block(locked=True)
     if blocked:
         return _normalize_apply_result(blocked)
 
@@ -925,7 +1039,10 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
         db.set_settings({
             "autoupdate_pending_version": target_version,
             "autoupdate_pending_at": datetime.now().isoformat(),
+            "autoupdate_rollback_ref": "",
             "autoupdate_launch_uncertain": "true",
+            "autoupdate_watchdog_id": "",
+            "autoupdate_prior_image_id": recovery_image[0],
         })
 
         pending = True
@@ -935,7 +1052,7 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
         launching = True
         launched = _launch_appliance_watchdog(compose_dir, has_standalone, recovery_image)
         if launched is None:
-            return _normalize_apply_result(_pending_update_block())
+            return _normalize_apply_result(_pending_update_block(locked=True))
         launching = False
         if not launched:
             raise RuntimeError("Cannot start guarded update: appliance watchdog unavailable")
@@ -949,20 +1066,32 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
 
     except subprocess.TimeoutExpired:
         if launching:
-            return _normalize_apply_result(_pending_update_block())
+            return _normalize_apply_result(_pending_update_block(locked=True))
         if pending:
             _clear_pending_update()
         return _normalize_apply_result({"success": False, "message": "Docker command timed out"})
     except Exception as e:
         logger.exception(f"Appliance update failed: {e}")
         if launching:
-            return _normalize_apply_result(_pending_update_block())
+            return _normalize_apply_result(_pending_update_block(locked=True))
         if pending:
             _clear_pending_update()
         return _normalize_apply_result({"success": False, "message": str(e)})
 
 
 async def apply_update() -> dict:
+    """Allow one initiation or reconciliation at a time in the shipped worker."""
+    if not _update_lock.acquire(blocking=False):
+        return _normalize_apply_result({"success": False,
+            "message": "Application update reconciliation or initiation is in progress.",
+            "blocked_reason": "Application update reconciliation or initiation is in progress."})
+    try:
+        return await _apply_update_locked()
+    finally:
+        _update_lock.release()
+
+
+async def _apply_update_locked() -> dict:
     """Fetch the target release tag and launch the update watchdog.
 
     The watchdog (a detached docker:cli container) handles: build, image tagging,
@@ -979,7 +1108,7 @@ async def apply_update() -> dict:
             "blocked_reason": reason,
         })
 
-    blocked = _pending_update_block()
+    blocked = _pending_update_block(locked=True)
     if blocked:
         return _normalize_apply_result(blocked)
 
@@ -1153,6 +1282,8 @@ async def apply_update() -> dict:
             "autoupdate_pending_version": target_version,
             "autoupdate_pending_at": datetime.now().isoformat(),
             "autoupdate_launch_uncertain": "true",
+            "autoupdate_watchdog_id": "",
+            "autoupdate_prior_image_id": recovery_image[0],
             "autoupdate_rollback_ref": rollback_ref,
         })
 
@@ -1160,7 +1291,7 @@ async def apply_update() -> dict:
         launching = True
         launched = _launch_watchdog(repo_dir, host_repo_dir, rollback_ref, has_standalone, recovery_image)
         if launched is None:
-            return _normalize_apply_result(_pending_update_block())
+            return _normalize_apply_result(_pending_update_block(locked=True))
         launching = False
         if not launched:
             raise RuntimeError("Cannot start guarded update: watchdog unavailable")
@@ -1176,7 +1307,7 @@ async def apply_update() -> dict:
         message = "Docker command timed out" if isinstance(e, subprocess.TimeoutExpired) else str(e)
         logger.exception("Update initiation failed")
         if launching:
-            return _normalize_apply_result(_pending_update_block())
+            return _normalize_apply_result(_pending_update_block(locked=True))
         if staged:
             try:
                 restored = subprocess.run(git_cmd + ["checkout", rollback_ref],
@@ -1190,77 +1321,21 @@ async def apply_update() -> dict:
 
 
 async def verify_update_on_startup(broadcast_func: Optional[Callable] = None):
-    """Check if an app update was recently applied and broadcast the result.
-
-    Call this during app startup, after DB is initialized. If we just restarted
-    after an update, the pending version in the DB will match (success) or not
-    match (rollback) our current __version__.
-    """
-    pending = db.get_setting("autoupdate_pending_version", "")
-    if not pending:
+    """Reconcile proven terminal outcomes, then broadcast the startup result."""
+    if not _update_lock.acquire(blocking=False):
         return
-
-    if db.get_setting("autoupdate_launch_uncertain", "") == "true":
-        logger.warning("Retaining uncertain launch state; host reconciliation required")
+    try:
+        pending = db.get_setting("autoupdate_pending_version", "")
+        if not pending:
+            return
+        code = _reconcile_pending_update()
+    finally:
+        _update_lock.release()
+    # Neither elapsed time nor a version match proves a daemon has stopped.
+    # Legacy attempts without an acknowledged container ID stay fenced.
+    if code is None or not broadcast_func:
         return
-
-    # Check for stuck state: pending for too long without resolution
-    pending_at = db.get_setting("autoupdate_pending_at", "")
-    if pending_at and pending != __version__:
-        try:
-            pending_time = datetime.fromisoformat(pending_at)
-            age_minutes = (datetime.now() - pending_time).total_seconds() / 60
-            if age_minutes > 15:
-                logger.warning(
-                    f"Update to v{pending} has been pending for {age_minutes:.0f} minutes "
-                    f"without completing. Clearing stuck state."
-                )
-                db.set_settings({
-                    "autoupdate_pending_version": "",
-                    "autoupdate_pending_at": "",
-                    "autoupdate_rollback_ref": "",
-                })
-                if broadcast_func:
-                    await broadcast_func({
-                        "type": "update_failed",
-                        "attempted_version": pending,
-                        "current_version": __version__,
-                        "reason": "Update timed out without completing",
-                    })
-                return
-        except (ValueError, TypeError):
-            pass  # Malformed timestamp, fall through to existing logic
-
-    if pending == __version__:
-        logger.info(f"App update to v{__version__} completed successfully")
-        db.set_settings({
-            "autoupdate_pending_version": "",
-            "autoupdate_pending_at": "",
-            "autoupdate_available_version": "",
-            "autoupdate_rollback_ref": "",
-        })
-        if broadcast_func:
-            await broadcast_func({
-                "type": "update_completed",
-                "version": __version__,
-                "success": True,
-            })
-    else:
-        logger.warning(
-            f"App update to v{pending} may have been rolled back "
-            f"(running v{__version__})"
-        )
-        db.set_settings({
-            "autoupdate_pending_version": "",
-            "autoupdate_pending_at": "",
-            "autoupdate_rollback_ref": "",
-        })
-        if broadcast_func:
-            await broadcast_func({
-                "type": "update_rolled_back",
-                "attempted_version": pending,
-                "current_version": __version__,
-            })
+    await broadcast_func(_terminal_update_event(code, pending))
 
 
 def get_checker() -> Optional[ReleaseChecker]:

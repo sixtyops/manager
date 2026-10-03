@@ -1272,39 +1272,20 @@ class TestVerifyUpdateOnStartup:
         self.db.commit()
 
     @pytest.mark.asyncio
-    async def test_success_clears_pending_version(self):
+    @pytest.mark.parametrize("running,pending", [("1.0.1", "1.0.1"), ("1.0.1", "1.0.2")])
+    async def test_unproven_legacy_attempt_remains_fenced(self, running, pending):
         from updater.release_checker import verify_update_on_startup
         from updater import database as db
 
-        self._set_setting("autoupdate_pending_version", "1.0.1")
+        self._set_setting("autoupdate_pending_version", pending)
         self._set_setting("autoupdate_rollback_ref", "abc123")
-        self._set_setting("autoupdate_available_version", "1.0.1")
-
         broadcast = AsyncMock()
-        with patch("updater.release_checker.__version__", "1.0.1"):
+        with patch("updater.release_checker.__version__", running), \
+             patch("updater.release_checker.subprocess.run", side_effect=AssertionError("No daemon proof")):
             await verify_update_on_startup(broadcast)
-
-        assert db.get_setting("autoupdate_pending_version", "") == ""
-        assert db.get_setting("autoupdate_available_version", "") == ""
-        assert db.get_setting("autoupdate_rollback_ref", "") == ""
-        broadcast.assert_called_once()
-        assert broadcast.call_args[0][0]["type"] == "update_completed"
-
-    @pytest.mark.asyncio
-    async def test_rollback_detected(self):
-        from updater.release_checker import verify_update_on_startup
-        from updater import database as db
-
-        self._set_setting("autoupdate_pending_version", "1.0.2")
-        self._set_setting("autoupdate_rollback_ref", "abc123")
-
-        broadcast = AsyncMock()
-        with patch("updater.release_checker.__version__", "1.0.1"):
-            await verify_update_on_startup(broadcast)
-
-        assert db.get_setting("autoupdate_pending_version", "") == ""
-        broadcast.assert_called_once()
-        assert broadcast.call_args[0][0]["type"] == "update_rolled_back"
+        assert db.get_setting("autoupdate_pending_version", "") == pending
+        assert db.get_setting("autoupdate_rollback_ref", "") == "abc123"
+        broadcast.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_pending_is_noop(self):

@@ -162,61 +162,21 @@ class TestStuckUpdateRecovery:
         return row[0] if row else ""
 
     @pytest.mark.asyncio
-    async def test_stuck_pending_update_cleared(self, mock_db):
-        """Pending update older than 15 minutes should be cleared as stuck."""
+    @pytest.mark.parametrize("age,matching", [(20, False), (5, False), (20, True)])
+    async def test_unproven_pending_update_remains_fenced(self, mock_db, age, matching):
+        """Time and version matches cannot prove terminal daemon state."""
         from updater.release_checker import verify_update_on_startup
-
-        self._set_setting(mock_db, "autoupdate_pending_version", "9.9.9")
-        twenty_min_ago = (datetime.now() - timedelta(minutes=20)).isoformat()
-        self._set_setting(mock_db, "autoupdate_pending_at", twenty_min_ago)
-
-        broadcast_mock = AsyncMock()
-        with patch("updater.release_checker.__version__", "1.0.1"):
-            await verify_update_on_startup(broadcast_mock)
-
-        assert self._get_setting(mock_db, "autoupdate_pending_version") == ""
-        assert self._get_setting(mock_db, "autoupdate_pending_at") == ""
-        broadcast_mock.assert_called_once()
-        msg = broadcast_mock.call_args[0][0]
-        assert msg["type"] == "update_failed"
-        assert msg["reason"] == "Update timed out without completing"
-
-    @pytest.mark.asyncio
-    async def test_recent_pending_not_cleared(self, mock_db):
-        """Pending update less than 15 minutes old should NOT be cleared."""
-        from updater.release_checker import verify_update_on_startup
-
-        self._set_setting(mock_db, "autoupdate_pending_version", "9.9.9")
-        five_min_ago = (datetime.now() - timedelta(minutes=5)).isoformat()
-        self._set_setting(mock_db, "autoupdate_pending_at", five_min_ago)
-
-        broadcast_mock = AsyncMock()
-        with patch("updater.release_checker.__version__", "1.0.1"):
-            await verify_update_on_startup(broadcast_mock)
-
-        # Should fall through to the rollback path (version mismatch)
-        assert self._get_setting(mock_db, "autoupdate_pending_version") == ""
-        broadcast_mock.assert_called_once()
-        msg = broadcast_mock.call_args[0][0]
-        assert msg["type"] == "update_rolled_back"
-
-    @pytest.mark.asyncio
-    async def test_successful_update_clears_pending_at(self, mock_db):
-        """Successful update should clear the pending_at timestamp."""
-        from updater.release_checker import verify_update_on_startup
-        from updater import __version__
-
-        self._set_setting(mock_db, "autoupdate_pending_version", __version__)
-        self._set_setting(mock_db, "autoupdate_pending_at", datetime.now().isoformat())
-
-        broadcast_mock = AsyncMock()
-        await verify_update_on_startup(broadcast_mock)
-
-        assert self._get_setting(mock_db, "autoupdate_pending_version") == ""
-        assert self._get_setting(mock_db, "autoupdate_pending_at") == ""
-        broadcast_mock.assert_called_once()
-        msg = broadcast_mock.call_args[0][0]
-        assert msg["type"] == "update_completed"
+        pending = "1.0.1" if matching else "9.9.9"
+        timestamp = (datetime.now() - timedelta(minutes=age)).isoformat()
+        self._set_setting(mock_db, "autoupdate_pending_version", pending)
+        self._set_setting(mock_db, "autoupdate_pending_at", timestamp)
+        broadcast = AsyncMock()
+        with patch("updater.release_checker.__version__", "1.0.1"), \
+             patch("updater.release_checker.subprocess.run", side_effect=AssertionError("No daemon proof")):
+            await verify_update_on_startup(broadcast)
+        assert self._get_setting(mock_db, "autoupdate_pending_version") == pending
+        assert self._get_setting(mock_db, "autoupdate_pending_at") == timestamp
+        broadcast.assert_not_called()
 
 
 class TestDatabasePragmas:

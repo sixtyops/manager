@@ -147,7 +147,7 @@ def test_source_build_and_restore_failures(tmp_path, case):
         assert "Rollback command failed" in result.stdout
     else:
         result, state = execute_watchdog(tmp_path, "source", case)
-        assert result.returncode == 1
+        assert result.returncode == 3
         assert state["ups"] == 0
         assert state["checks"] == 0
         assert state["ref"] == "previous-ref"
@@ -245,6 +245,7 @@ async def test_failed_initiation_is_guarded(tmp_path, monkeypatch, shape, failur
 @pytest.mark.parametrize("shape", ["source", "appliance"])
 @pytest.mark.parametrize("outcome", [0, 1, "timeout"])
 def test_watchdog_launcher_results(tmp_path, monkeypatch, shape, outcome):
+    monkeypatch.setattr(rc, "db", MagicMock())
     calls = []
 
     def run(cmd, **kwargs):
@@ -252,7 +253,7 @@ def test_watchdog_launcher_results(tmp_path, monkeypatch, shape, outcome):
         if cmd[1] == "run" and outcome == "timeout":
             raise subprocess.TimeoutExpired(cmd, 30)
         return subprocess.CompletedProcess(cmd, outcome if cmd[1] == "run" else 0,
-                                           "synthetic-watchdog", "synthetic launch failure")
+                                           "c" * 64, "synthetic launch failure")
 
     monkeypatch.setattr(rc.subprocess, "run", run)
     launched = (rc._launch_watchdog(tmp_path, str(tmp_path), "previous-ref", False, RECOVERY)
@@ -302,7 +303,7 @@ async def test_delayed_daemon_launch_preserves_state(tmp_path, monkeypatch, shap
             if outcome == "timeout":
                 raise subprocess.TimeoutExpired(cmd, 30)
             return subprocess.CompletedProcess(cmd, 0 if outcome == "acknowledged" else 1,
-                                               "synthetic-daemon", "lost acknowledgement")
+                                               "c" * 64, "lost acknowledgement")
         if cmd[0] == "git" and "checkout" in cmd:
             daemon["source"] = cmd[-1]
         assert cmd[0] in ("docker", "git")
@@ -370,3 +371,248 @@ def test_prelaunch_failure_is_known_not_started(tmp_path, monkeypatch, shape):
               if shape == "source" else rc._launch_appliance_watchdog(tmp_path, False, RECOVERY))
     assert result is False
     run.assert_not_called()
+
+
+WATCHDOG_ID = "c" * 64
+PRIOR_REF = "d" * 40
+
+
+@pytest.fixture
+def terminal_pending(tmp_path, monkeypatch):
+    settings = {"autoupdate_pending_version": "1.4.1-dev5",
+                "autoupdate_pending_at": "2000-01-01T00:00:00",
+                "autoupdate_launch_uncertain": "",
+                "autoupdate_watchdog_id": WATCHDOG_ID,
+                "autoupdate_prior_image_id": OLD_ID,
+                "autoupdate_rollback_ref": PRIOR_REF}
+    db = MagicMock()
+    db.get_setting.side_effect = lambda key, default="": settings.get(key, default)
+    db.set_settings.side_effect = lambda values: settings.update(values)
+    monkeypatch.setattr(rc, "db", db)
+    monkeypatch.setattr(rc, "_get_repo_dir", lambda: tmp_path)
+    proof = {"daemon": {"Id": WATCHDOG_ID, "State": {
+        "Status": "exited", "Running": False, "ExitCode": 3}},
+        "runtime": f"{OLD_ID} healthy", "source": PRIOR_REF,
+        "inspect_code": 0, "remove_code": 0, "remaining": "", "list_code": 0}
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        output, code = "", 0
+        if cmd[:2] == ["docker", "inspect"] and cmd[-1] == WATCHDOG_ID:
+            output, code = json.dumps(proof["daemon"]), proof["inspect_code"]
+        elif cmd[:2] == ["docker", "inspect"] and cmd[-1] == "sixtyops-management":
+            output = proof["runtime"]
+        elif cmd[0] == "git":
+            assert cmd[-2:] == ["rev-parse", "HEAD"]
+            output = proof["source"]
+        elif cmd[:2] == ["docker", "rm"]:
+            assert cmd == ["docker", "rm", WATCHDOG_ID]
+            code = proof["remove_code"]
+        elif cmd[:2] == ["docker", "ps"]:
+            output, code = proof["remaining"], proof["list_code"]
+        else:
+            raise AssertionError(f"Unexpected command: {cmd}")
+        return subprocess.CompletedProcess(cmd, code, output, "")
+
+    return settings, proof, calls, run
+
+
+@pytest.mark.asyncio
+async def test_acknowledged_build_failure_reconciles_and_retries(tmp_path, monkeypatch, terminal_pending):
+    from unittest.mock import patch
+    settings, proof, calls, terminal_run = terminal_pending
+    settings.clear()
+    settings["autoupdate_available_version"] = "1.4.1-dev5"
+    (tmp_path / "updater").mkdir()
+    (tmp_path / "updater/__init__.py").write_text('__version__ = "1.4.1-dev5"')
+    monkeypatch.setattr(rc, "_is_safe_to_update", lambda: (True, ""))
+    monkeypatch.setattr(rc, "_docker_socket_available", lambda: True)
+    monkeypatch.setattr(rc, "_get_host_repo_path", lambda: str(tmp_path))
+    monkeypatch.setattr(rc, "_verify_tag_signature", lambda *args: (True, ""))
+    monkeypatch.setattr(rc, "APPLIANCE_MODE", False)
+    launches = []
+
+    def initiate(cmd, **kwargs):
+        if cmd[:2] == ["docker", "inspect"]:
+            return subprocess.CompletedProcess(cmd, 0, f"{OLD_ID} {IMAGE} healthy", "")
+        if cmd[:2] == ["docker", "run"]:
+            assert "--rm" not in cmd
+            launches.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, WATCHDOG_ID, "")
+        assert cmd[0] == "git" or cmd[:2] == ["docker", "tag"]
+        return subprocess.CompletedProcess(cmd, 0, PRIOR_REF if "rev-parse" in cmd else "", "")
+
+    with patch.object(rc.subprocess, "run", side_effect=initiate):
+        first = await rc.apply_update()
+    assert first["action"] == "started" and settings["autoupdate_watchdog_id"] == WATCHDOG_ID
+    execution = tmp_path / "execution"
+    execution.mkdir()
+    result, state = execute_watchdog(execution, "source", "build-fail")
+    assert result.returncode == proof["daemon"]["State"]["ExitCode"] == 3
+    assert state["ups"] == 0 and state["container"] == OLD_ID
+    assert state["ref"] == "previous-ref" and state["aliases"][PIN] == OLD_ID
+    with patch.object(rc.subprocess, "run", side_effect=terminal_run):
+        status = rc.ReleaseChecker(MagicMock()).get_update_status()
+    assert not status.get("blocked_reason") and not settings["autoupdate_pending_version"]
+    assert calls[-2:] == [["docker", "rm", WATCHDOG_ID],
+                         ["docker", "ps", "-a", "--no-trunc", "--format", "{{.ID}}"]]
+    with patch.object(rc.subprocess, "run", side_effect=initiate):
+        retry = await rc.apply_update()
+    assert retry["action"] == "started" and len(launches) == 2
+
+
+@pytest.mark.parametrize("failure", ["absent", "malformed", "wrong-id", "running", "dead",
+    "bad-exit", "boolean-exit", "restore-failed", "runtime-image", "runtime-health",
+    "source", "bad-ref", "remove", "cleanup-readback", "list-error", "list-malformed",
+    "uncertain", "inspect-timeout"])
+def test_terminal_proof_failures_retain_fence(monkeypatch, terminal_pending, failure):
+    settings, proof, calls, run = terminal_pending
+    state = proof["daemon"]["State"]
+    if failure == "absent": proof["inspect_code"] = 1
+    elif failure == "malformed": proof["daemon"] = []
+    elif failure == "wrong-id": proof["daemon"]["Id"] = "e" * 64
+    elif failure == "running": state.update(Status="running", Running=True)
+    elif failure == "dead": state["Status"] = "dead"
+    elif failure == "bad-exit": state["ExitCode"] = 99
+    elif failure == "boolean-exit": state["ExitCode"] = True
+    elif failure == "restore-failed": state["ExitCode"] = 2
+    elif failure == "runtime-image": proof["runtime"] = f"{NEW_ID} healthy"
+    elif failure == "runtime-health": proof["runtime"] = f"{OLD_ID} unhealthy"
+    elif failure == "source": proof["source"] = "e" * 40
+    elif failure == "bad-ref": settings["autoupdate_rollback_ref"] = "malformed"
+    elif failure == "remove": proof["remove_code"] = 1
+    elif failure == "cleanup-readback": proof["remaining"] = WATCHDOG_ID
+    elif failure == "list-error": proof["list_code"] = 1
+    elif failure == "list-malformed": proof["remaining"] = "invalid-id"
+    elif failure == "uncertain": settings["autoupdate_launch_uncertain"] = "true"
+    elif failure == "inspect-timeout":
+        def run(cmd, **kwargs): raise subprocess.TimeoutExpired(cmd, 10)
+    monkeypatch.setattr(rc.subprocess, "run", run)
+    assert rc._pending_update_block() is not None
+    assert settings["autoupdate_pending_version"] == "1.4.1-dev5"
+    assert settings["autoupdate_watchdog_id"] == WATCHDOG_ID
+    assert not any(cmd[:2] == ["docker", "run"] for cmd in calls)
+    if failure not in ("remove", "cleanup-readback", "list-error", "list-malformed"):
+        assert not any(cmd[:2] == ["docker", "rm"] for cmd in calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [0, 1, 3])
+async def test_terminal_startup_controls(monkeypatch, terminal_pending, code):
+    settings, proof, calls, run = terminal_pending
+    proof["daemon"]["State"]["ExitCode"] = code
+    if code == 0:
+        monkeypatch.setattr(rc, "__version__", settings["autoupdate_pending_version"])
+        proof["runtime"] = f"{NEW_ID} healthy"
+    monkeypatch.setattr(rc.subprocess, "run", run)
+    from unittest.mock import AsyncMock
+    broadcast = AsyncMock()
+    await rc.verify_update_on_startup(broadcast)
+    assert broadcast.call_args.args[0]["type"] == {0: "update_completed", 1: "update_rolled_back", 3: "update_failed"}[code]
+    assert not settings["autoupdate_pending_version"]
+
+
+@pytest.mark.asyncio
+async def test_startup_does_not_clear_aged_running_daemon(monkeypatch, terminal_pending):
+    settings, proof, calls, run = terminal_pending
+    proof["daemon"]["State"].update(Status="running", Running=True)
+    monkeypatch.setattr(rc, "__version__", settings["autoupdate_pending_version"])
+    monkeypatch.setattr(rc.subprocess, "run", run)
+    await rc.verify_update_on_startup()
+    assert settings["autoupdate_pending_version"]
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_serializes_against_retry(monkeypatch, terminal_pending):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    settings, proof, calls, run = terminal_pending
+    entered, finish = threading.Event(), threading.Event()
+    def delayed(cmd, **kwargs):
+        if cmd[:2] == ["docker", "inspect"] and cmd[-1] == WATCHDOG_ID:
+            entered.set()
+            assert finish.wait(5)
+        return run(cmd, **kwargs)
+    monkeypatch.setattr(rc.subprocess, "run", delayed)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        reconciliation = pool.submit(rc._pending_update_block)
+        assert entered.wait(5)
+        try:
+            retry = await rc.apply_update()
+            assert retry["action"] == "blocked"
+            assert rc._pending_update_block() is not None
+            assert len(calls) == 0
+        finally:
+            finish.set()
+        assert reconciliation.result(timeout=5) is None
+    assert not settings["autoupdate_pending_version"]
+
+
+@pytest.mark.asyncio
+async def test_two_initiations_cannot_overlap(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import asyncio
+    import threading
+    entered, finish = threading.Event(), threading.Event()
+    calls = []
+    async def initiation():
+        calls.append("initiate")
+        entered.set()
+        assert finish.wait(5)
+        return {"success": True, "action": "started"}
+    monkeypatch.setattr(rc, "_apply_update_locked", initiation)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        first = pool.submit(lambda: asyncio.run(rc.apply_update()))
+        assert entered.wait(5)
+        try:
+            second = await rc.apply_update()
+            assert second["action"] == "blocked" and calls == ["initiate"]
+        finally:
+            finish.set()
+        assert first.result(timeout=5)["action"] == "started"
+    # The lock is released after completion, not after a time delay.
+    assert rc._update_lock.acquire(blocking=False)
+    rc._update_lock.release()
+
+
+@pytest.mark.parametrize("shape", ["source", "appliance"])
+def test_malformed_acknowledgement_is_uncertain(tmp_path, monkeypatch, shape):
+    db = MagicMock()
+    monkeypatch.setattr(rc, "db", db)
+    calls = []
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "invalid-container-id", "")
+    monkeypatch.setattr(rc.subprocess, "run", run)
+    result = (rc._launch_watchdog(tmp_path, str(tmp_path), PRIOR_REF, False, RECOVERY)
+              if shape == "source" else rc._launch_appliance_watchdog(tmp_path, False, RECOVERY))
+    assert result is None
+    db.set_settings.assert_not_called()
+    assert calls[-1][:2] == ["docker", "inspect"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [0, 1, 3])
+async def test_status_broadcasts_terminal_result_after_startup(monkeypatch, terminal_pending, code):
+    import asyncio
+    settings, proof, calls, run = terminal_pending
+    delivered = asyncio.Event()
+    messages = []
+    async def broadcast(event):
+        messages.append(event)
+        delivered.set()
+    monkeypatch.setattr(rc, "_checker", rc.ReleaseChecker(broadcast))
+    if code == 0:
+        monkeypatch.setattr(rc, "__version__", settings["autoupdate_pending_version"])
+        proof["runtime"] = f"{NEW_ID} healthy"
+    proof["daemon"]["State"].update(Status="running", Running=True, ExitCode=code)
+    monkeypatch.setattr(rc.subprocess, "run", run)
+    await rc.verify_update_on_startup(broadcast)
+    assert not delivered.is_set() and settings["autoupdate_pending_version"]
+    proof["daemon"]["State"].update(Status="exited", Running=False)
+    assert rc._pending_update_block() is None
+    await asyncio.wait_for(delivered.wait(), timeout=1)
+    assert messages[0]["type"] == {0: "update_completed", 1: "update_rolled_back", 3: "update_failed"}[code]
+    assert rc._pending_update_block() is None
+    assert len(messages) == 1

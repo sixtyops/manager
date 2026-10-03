@@ -86,7 +86,11 @@ All notable changes to this project are documented in this file.
   block retries until host reconciliation; daemon absence alone is not proof
   of rejection. Watchdogs handle build and partial swap failures explicitly
   and attempt to restore the prior immutable image. Recovery failures retain it and
-  report failure. Isolated fake-command tests do not prove host or data recovery.
+  report failure. Acknowledged failures permit retry only after exact stopped
+  watchdog, healthy prior image, restored source, and cleanup verification.
+  Time or a version match cannot clear pending state. Initiation and status
+  reconciliation share a lock in the shipped single-worker app. Isolated
+  fake-command tests do not prove host or data recovery.
 - Return expired sessions to the login screen when an API request or WebSocket reports an authentication failure.
 - **A scheduled wave can no longer be silently skipped when its job fails to
   start.** If starting a wave failed (for example, a missing-family firmware
