@@ -19,7 +19,7 @@
                   release.yml (auto)
                   → GitHub pre-release
                   → ghcr.io/sixtyops/manager:vX.Y.Z-devN
-                            │ dev-channel installs auto-update
+                            │ dev-channel installs receive the offer
                             ▼
                   dev soak (on the operating team's dev host)
                             │ maintainer tags vX.Y.Z + workflow_dispatch (confirm=RELEASE)
@@ -32,7 +32,11 @@
                   customer installs (stable channel)
 ```
 
-Customers on the stable channel never run `main` HEAD. The dev host runs the dev channel and auto-updates from `vX.Y.Z-devN` tags as they land.
+Release-channel selection controls the update offer. A public dev tag can
+reach other dev-channel installations; applying an update is a separate
+action. The actual dev host's channel, runtime version, and automatic-update
+configuration are not verified by this document. Fresh source installs use
+`main` through the installer; a channel does not prove which code is deployed.
 
 This document describes how releases are produced, published, and consumed by
 the app updater.
@@ -97,7 +101,10 @@ Pipeline:
 
 ## How App Self-Update Consumes Releases
 
-Implementation: `updater/release_checker.py`
+**Key points:** Automatic updates require a healthy retained immutable image
+and a watchdog. A successful launch response is not final recovery proof.
+
+**Detail:** Implementation: `updater/release_checker.py`
 
 - Default release source repo: `GITHUB_REPO=sixtyops/manager`
 - Release channels:
@@ -107,9 +114,15 @@ Implementation: `updater/release_checker.py`
   - strips leading `v`
   - compares parsed versions against current app version
 
-Apply behavior (Docker / non-appliance mode):
-- Fetches and checks out `v<target>` tag in mounted repo (`/app/repo`)
-- Rebuilds and restarts via compose watchdog with rollback on failure
+The source path verifies the release signature, retains the prior
+image, then checks out the target tag and launches the build/swap watchdog.
+The appliance path retains the prior image before pull and guarded swap;
+image integrity remains a separate follow-up. Both paths refuse an unguarded
+fallback. Acknowledged terminal failures permit retry only after daemon,
+healthy runtime, applicable restored-source, and cleanup proof. Unknown
+launches remain fenced. The shipped single-worker process lock and best-effort
+completion messages do not establish multi-process coordination or durable
+notification delivery. See [recovery limits](self-update-signing.md#if-a-bad-release-ships).
 
 ## Important Constraints
 
@@ -166,10 +179,14 @@ version-bump PR, sign the tag at `origin/main`, push the tag by name.
 ## Dev5 draft notes and readiness
 
 **Key points:** `1.4.1-dev5` is a draft candidate, not ready to publish or deploy.
-The assessed base is `5594fa7d07aade8b27e3d581a56ff495956d3539`.
+The refreshed code candidate is `617b7f9bd4d68766868e7fc924b14e14c0ad98ed`,
+which includes [guarded recovery](https://github.com/sixtyops/manager/pull/451).
 Reassess the final candidate commit before publication.
 
-**Detail:** The published baseline is
+**Detail:** The earlier assessment at
+`5594fa7d07aade8b27e3d581a56ff495956d3539` is historical evidence from
+[PR 449](https://github.com/sixtyops/manager/pull/449), before the recovery fix.
+It does not describe current recovery code. The published baseline is
 [v1.4.1-dev4](https://github.com/sixtyops/manager/releases/tag/v1.4.1-dev4),
 at `975741e8fac68ae377ba512aee1aed8059dad7b4`. Its
 [Release run](https://github.com/sixtyops/manager/actions/runs/27728461351)
@@ -182,9 +199,13 @@ already shipped in dev4.
 Coverage references include the
 [logging sanitizer](https://github.com/sixtyops/manager/pull/431),
 [stored-secret hooks](https://github.com/sixtyops/manager/pull/436),
-[Slack URL protection](https://github.com/sixtyops/manager/pull/444), and
-[SNMP migration](https://github.com/sixtyops/manager/pull/441).
-Their test evidence does not establish dev-host delivery or recovery.
+[Slack URL protection](https://github.com/sixtyops/manager/pull/444),
+[SNMP migration](https://github.com/sixtyops/manager/pull/441), and
+[guarded self-update recovery](https://github.com/sixtyops/manager/pull/451).
+The recovery fix passed synthetic validation and
+[exact-head CI](https://github.com/sixtyops/manager/actions/runs/37087732268).
+These results do not establish dev-host delivery, host/data recovery, or
+final-candidate bench proof.
 
 ### Publication gates
 
@@ -226,32 +247,32 @@ Refresh the body and gates for the final candidate first.
 <!-- dev5-notes:start -->
 ## 1.4.1-dev5 draft
 
-**Key points:** Development preview. Not released. Public dev tags reach other installations.
-Runtime, backup, rollback and final-commit hardware proof remain unverified.
+**Key points:** Not released or ready to deploy. Public dev tags reach other installs.
+Runtime, backup, host recovery and final-commit bench proof remain unverified.
 
 **Detail:** Changes since v1.4.1-dev4:
-- Redact registered secrets and canonical Slack webhook URLs from application
-  and syslog output. Other secret sources and noncanonical URLs remain outside
-  coverage.
-- Use pysnmp 7.1.30 and fixed pyasn1 0.6.4 for SNMP notifications. Wait for UDP
-  readiness and preserve cleanup on failures and cancellation. Synthetic tests
-  do not prove delivery to a real receiver.
-- Validate release inputs before shell use and checkout. Keep signing gates.
+- Redact registered secrets and canonical Slack webhook URLs from app/syslog
+  output. Other secret sources and noncanonical URLs remain outside coverage.
+- Use pysnmp 7.1.30 and fixed pyasn1 0.6.4 for notifications. Wait for UDP
+  readiness; clean up failures and cancellation. No real receiver proof.
+- Retain the healthy immutable image before self-update. Guard build/swap
+  recovery. Retry acknowledged failures only after terminal daemon, healthy
+  prior-image/source and cleanup proof. Unknown launches stay blocked and can
+  need host reconciliation. Locking covers the shipped single-worker app;
+  messages are best effort. Synthetic tests do not prove host/data recovery.
+- Validate release inputs before shell use/checkout; preserve signing gates.
 - Lock local usernames for 60 seconds after ten failures in 60 seconds.
-  Return expired sessions to login. Improve Settings and first-run help.
-- Centralize firmware policy, refuse batches with missing-family firmware,
-  and enroll scheduled devices only after job creation. Prefer reported CPE
-  rxPower for display and health checks. These older engine/driver changes
-  lack established bench proof on the final candidate.
-- Share the database schema builder. Update safety, deployment and operator
-  guidance. The one-right-way document describes a target contract, not proof
-  that recovery and traffic gates are implemented.
+  Return expired sessions to login.
+  Improve Settings/setup help and share the database schema builder.
+- Centralize firmware policy, block missing-family batches, and enroll devices
+  after job creation. Prefer reported CPE rxPower. These older engine/driver
+  changes still lack established final-candidate bench proof.
 
-Limits: No real Slack, SNMP receiver, Entra login or hardware proof is claimed.
-Open OIDC and session-cache changes are excluded. The security baseline remains
-unfinished. Reverting code can restore logging exposure and vulnerable SNMP
-dependencies. Preserve the prior artifact and a restorable complete data backup.
-Manager has no app rollback button. Public distribution scope awaits a decision.
+Limits: No real Slack, SNMP, Entra or hardware proof. Open OIDC/session-cache
+changes are excluded. Security baseline unfinished. Reverting code can restore
+logging exposure and vulnerable SNMP dependencies. Keep the prior artifact and
+complete restorable data backup. No app rollback button. Public distribution
+scope awaits a decision. One-right-way describes the target, not shipped proof.
 
-Image after successful publication: ghcr.io/sixtyops/manager:v1.4.1-dev5.
+Image only after successful publication: ghcr.io/sixtyops/manager:v1.4.1-dev5.
 <!-- dev5-notes:end -->
