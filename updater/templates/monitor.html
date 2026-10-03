@@ -4234,9 +4234,28 @@
 
             try {
                 const resp = await fetch('/api/updates', { signal: AbortSignal.timeout(3000) });
+                if (!resp.ok) throw new Error('Update status request failed');
                 const data = await resp.json();
+                if (!data || typeof data.current_version !== 'string' || !data.current_version ||
+                    typeof data.update_available !== 'boolean' || typeof data.available_version !== 'string' ||
+                    data.update_available !== Boolean(data.available_version) ||
+                    typeof data.last_check !== 'string' || typeof data.last_check_error !== 'string' ||
+                    (data.release_notes != null && typeof data.release_notes !== 'string') ||
+                    (data.last_check && !Number.isFinite(Date.parse(data.last_check)))) {
+                    throw new Error('Invalid update status');
+                }
                 const currentVersion = data.current_version ? 'v' + data.current_version : '';
                 if (verEl && currentVersion) verEl.textContent = currentVersion;
+
+                if (whatsNewVersion) whatsNewVersion.textContent = currentVersion;
+                if (data.last_check_error) {
+                    whatsNewBody.textContent = 'Last update check failed. The latest version is unknown.';
+                    return;
+                }
+                if (!data.last_check) {
+                    whatsNewBody.textContent = 'Updates have not been checked yet.';
+                    return;
+                }
 
                 if (data.update_available && data.available_version) {
                     if (whatsNewVersion) whatsNewVersion.textContent = 'v' + data.available_version;
@@ -4252,7 +4271,7 @@
                 whatsNewBody.textContent = 'You are running the latest version on the selected release channel.';
             } catch (e) {
                 if (whatsNewVersion) whatsNewVersion.textContent = '';
-                whatsNewBody.textContent = 'Release notes are not available right now.';
+                whatsNewBody.textContent = 'Update status is not available right now.';
             }
         }
 
