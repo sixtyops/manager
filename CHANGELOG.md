@@ -80,6 +80,8 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- App Settings tabs wrap when space is limited. All five tabs stay inside the
+  dialog on mobile screens.
 - App Settings now has a named dialog and close button. Opening it moves focus
   inside. Tab and Shift+Tab stay inside visible, enabled controls. Escape or
   pointer close returns focus to the Settings and account menu button.
