@@ -46,6 +46,11 @@ All notable changes to this project are documented in this file.
   a reporting or monitoring service, without exposing the token value.
 
 ### Changed
+- The poller reuses a CPE session for at most ten minutes after login.
+  Each poll checks the token without a new login. Reading the cache does not
+  extend its lifetime. At ten minutes, the next probe uses current credentials.
+  An expired token also forces a new login. This reduces device audit events
+  while keeping credential checks bounded.
 - **Updates refuse to run if any device's firmware family is missing.** If a
   selected batch (or a scheduled wave) includes a device whose platform —
   TNA-303L or TNS-100 — has no matching firmware file chosen, the update now
