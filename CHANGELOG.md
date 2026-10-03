@@ -80,6 +80,10 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- Dashboard broadcasts now use a connection snapshot. A client that connects
+  or disconnects during a send no longer aborts the broadcast. Joining clients
+  receive their initial state and subsequent broadcasts. Authentication, send
+  timeouts, failure pruning, and message formats are unchanged.
 - Application self-updates now require a healthy retained recovery image and
   a watchdog. Known failed initiation clears pending state and attempts to restore
   staged source. Lost launch acknowledgements retain pending/recovery state and
