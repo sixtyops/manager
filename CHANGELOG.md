@@ -80,6 +80,8 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- Small teal website links and the 404 return button use darker existing teal
+  shades for readable text. The logo and general palette are unchanged.
 - Website menu and FAQ controls announce their expanded state and linked panels.
   Escape closes the mobile menu and returns focus to its button.
 - Website telemetry copy now states the administrator opt-in and separate
