@@ -32,6 +32,9 @@ HTML/JS frontend, SQLite database, Docker deployment.
 
 ### Repository lead authority (2026-10-02)
 
+Fresh-session and wake procedure: [lead operations SOP](docs/lead-operations-sop.md).
+This section remains the canonical authority.
+
 The lead agent owns issue triage, queue labels, implementation, review,
 validated PR merges, and development releases for `sixtyops/manager`.
 Ongoing ownership includes feature rearchitecture, bug fixes, edge cases,

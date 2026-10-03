@@ -15,7 +15,7 @@ This repository's agent instructions live in **[CLAUDE.md](CLAUDE.md)** — the
 single source of truth for project overview, branching/PR rules, release
 workflow, key files, deployment reality, dev/test commands, and project rules.
 Read it first. This file exists so non-Claude agents discover the same guidance;
-keep all instructions in CLAUDE.md, not here.
+CLAUDE.md remains the canonical authority. Use the SOP entrypoint below to resume.
 
 Quick pointers:
 - Run `pytest -v` before committing; all must pass. All PRs target `main`.
@@ -28,3 +28,10 @@ Quick pointers:
   gate in `updater/rollout_gate.py` and guarded by
   `tests/test_rollout_invariants.py`. See [docs/gradual-rollout.md](docs/gradual-rollout.md)
   and the target design in [docs/rollout-logic.md](docs/rollout-logic.md).
+
+## Lead session entrypoint
+
+Read [lead-operations-sop.md](docs/lead-operations-sop.md) after CLAUDE.md.
+It gives the fresh-start checklist and bootstrap prompt. Discover live owners,
+queue, locks and budgets before acting. Prioritize working system functionality
+under North Star and the one-right-way contract; defer website work.
