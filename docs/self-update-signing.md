@@ -64,17 +64,39 @@ Verify host recovery before deployment.
 it. To pull a release, delete its GitHub Release/tag so the checker stops
 offering it.
 
-For a source/Compose install, the updater saves the prior ref. The watchdog
-attempts image retention and recovery after a failed health check. Recovery
-depends on retaining the actual prior image and reaching the recovery code.
-Known defects are tracked in [issue 450](https://github.com/sixtyops/manager/issues/450).
-The source path builds before tagging a mutable image name, so the rollback
-tag can point to the new image. Recovery can restore the prior ref but restart
-the new image. Unguarded build and initial swap commands can also exit under
-`set -e` before recovery runs. Old-image retention is not guaranteed.
-If the host repo path cannot be found or the watchdog cannot launch, the
-current updater falls back to a direct update without watchdog recovery.
-A saved ref alone does not prove rollback is available.
+The guarded recovery changes in
+[PR 451](https://github.com/sixtyops/manager/pull/451) fixed the defects recorded
+in [issue 450](https://github.com/sixtyops/manager/issues/450). The updater now
+pins the healthy running container's immutable image ID before source
+checkout/build or appliance pull. A missing recovery image, host path, or
+watchdog prevents an automatic update. There is no direct update fallback.
+The watchdog checks the retained image ID before mutation. It handles build,
+initial swap, and health-check failures explicitly. A failed source build
+restores the saved source ref and image alias without swapping the old
+container. Swap or health failure attempts source/image recovery and restart.
+Failed recovery retains the prior image and reports failure.
+
+An acknowledged launch saves the exact watchdog container ID. Status and
+apply calls reconcile only a proven stopped daemon with a recognized terminal
+outcome and verified healthy runtime. Failure recovery also requires the
+prior immutable image and restored source where applicable. Cleanup removes
+only that stopped ID, without force, and is read back before pending state
+clears. Lost acknowledgements, legacy attempts without a validated ID,
+missing proof, or failed cleanup/readback/persistence remain blocked and can
+require operator reconciliation on the host. Neither elapsed time nor daemon
+absence nor a version match alone permits retry. A launch response means
+initiation, not verified final health.
+
+The shared process lock covers the shipped single-Uvicorn-worker app and its
+request threads. It does not coordinate multiple app processes or external
+host operations. Completion messages are best effort. A failure after safe
+pending cleanup can leave stale availability or omit the message; it does
+not release an unknown or active watchdog for retry. See the
+[final safety review](https://github.com/sixtyops/manager/pull/451#pullrequestreview-5398501930)
+and [exact-head CI](https://github.com/sixtyops/manager/actions/runs/37087732268).
+Their synthetic command/daemon evidence is not a host or data recovery drill.
+Appliance image-integrity verification remains a separate follow-up; the
+git-tag signing gate does not establish authenticity of a pulled image.
 
 Operator recovery must match the verified install shape. A source/Compose
 host needs the prior source ref, a retained working image, and the actual
