@@ -76,8 +76,8 @@
           <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.2 Device & Network Data</h3>
           <p>SixtyOps manages your Tachyon wireless devices. The appliance stores device IP addresses, MAC addresses, firmware versions, configuration snapshots, signal metrics, and geographic coordinates locally in an SQLite database on your appliance. <strong>This data is never transmitted to us.</strong></p>
 
-          <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.3 Telemetry (Opt-Out)</h3>
-          <p>By default, SixtyOps sends anonymized, aggregate job statistics after firmware update jobs complete. This includes:</p>
+          <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.3 Telemetry (Opt-In)</h3>
+          <p>Telemetry is off by default. After an administrator opts in, SixtyOps sends anonymized, aggregate job statistics after firmware update jobs complete. This includes:</p>
           <ul class="list-disc list-inside mt-2 space-y-1 text-sm">
             <li>An anonymous install ID (SHA-256 hash, not personally identifiable)</li>
             <li>Device counts and models (e.g., "TNA-301: 12")</li>
@@ -86,7 +86,7 @@
             <li>Job duration and scheduling method</li>
           </ul>
           <p class="mt-3">Telemetry <strong>never</strong> includes IP addresses, MAC addresses, serial numbers, hostnames, credentials, locations, or any personally identifiable information.</p>
-          <p class="mt-2">You can disable telemetry entirely by setting the environment variable <code class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">DISABLE_TELEMETRY=1</code> on your appliance.</p>
+          <p class="mt-2">The separate environment kill switch <code class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">DISABLE_TELEMETRY=1</code> disables telemetry even if an administrator opts in. Set it on your appliance and restart the app.</p>
 
           <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.4 Website Data</h3>
           <p>When you visit sixtyops.net, our hosting provider may collect standard web server logs (IP address, browser type, pages visited). We do not use third-party analytics or advertising trackers on our website.</p>
