@@ -64,12 +64,17 @@ Verify host recovery before deployment.
 it. To pull a release, delete its GitHub Release/tag so the checker stops
 offering it.
 
-For a source/Compose install, the updater saves the prior ref. When the
-watchdog runs, it retains the old image and attempts recovery after a failed
-health check. It deletes that image after a successful update. If the host
-repo path cannot be found or the watchdog cannot launch, the current updater
-falls back to a direct update without watchdog recovery. A saved ref alone
-does not prove rollback is available.
+For a source/Compose install, the updater saves the prior ref. The watchdog
+attempts image retention and recovery after a failed health check. Recovery
+depends on retaining the actual prior image and reaching the recovery code.
+Known defects are tracked in [issue 450](https://github.com/sixtyops/manager/issues/450).
+The source path builds before tagging a mutable image name, so the rollback
+tag can point to the new image. Recovery can restore the prior ref but restart
+the new image. Unguarded build and initial swap commands can also exit under
+`set -e` before recovery runs. Old-image retention is not guaranteed.
+If the host repo path cannot be found or the watchdog cannot launch, the
+current updater falls back to a direct update without watchdog recovery.
+A saved ref alone does not prove rollback is available.
 
 Operator recovery must match the verified install shape. A source/Compose
 host needs the prior source ref, a retained working image, and the actual
