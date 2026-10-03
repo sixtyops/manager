@@ -3278,7 +3278,7 @@
     </div>
 
     <!-- App Settings Modal -->
-    <div class="backup-overlay" id="appSettingsOverlay" onkeydown="handleAppSettingsKeydown(event)" onclick="if(event.target===this)closeAppSettingsModal()">
+    <div class="backup-overlay" id="appSettingsOverlay" onclick="if(event.target===this)closeAppSettingsModal()">
         <div class="backup-modal app-settings-modal" id="appSettingsDialog" role="dialog" aria-modal="true" aria-labelledby="appSettingsTitle" tabindex="-1">
             <div class="app-settings-header">
                 <span id="appSettingsTitle" style="font-size:0.9rem;font-weight:600;">App Settings</span>
@@ -7115,11 +7115,14 @@
         function handleAppSettingsKeydown(event) {
             const overlay = document.getElementById('appSettingsOverlay');
             if (!overlay.classList.contains('open')) return;
+            // Handle keys from Settings, or from the page body after Settings loses focus.
+            // Keys from other dialogs belong to those dialogs.
+            const target = event.target;
+            if (target !== document.body && target !== document.documentElement && !overlay.contains(target)) return;
             // The confirmation dialog owns the keyboard while it is open.
             if (document.getElementById('confirmOverlay')?.classList.contains('open')) return;
             if (event.key === 'Escape') {
                 event.preventDefault();
-                event.stopPropagation();
                 closeAppSettingsModal();
                 return;
             }
@@ -7145,6 +7148,10 @@
                 first.focus();
             }
         }
+
+        // Listen on document so keys still work after a refresh removes the focused control.
+        // This listener is added before the confirmation listener, so it sees the confirmation state first.
+        document.addEventListener('keydown', handleAppSettingsKeydown);
 
         function closeAppSettingsModal() {
             document.getElementById('appSettingsOverlay').classList.remove('open');

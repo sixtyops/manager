@@ -35,12 +35,13 @@ def test_settings_dialog_wiring():
     close = elements['appSettingsClose'][1]
     assert close['aria-label'] == 'Close App Settings'
     assert close['onclick'] == 'closeAppSettingsModal()'
-    assert elements['appSettingsOverlay'][1]['onkeydown'] == 'handleAppSettingsKeydown(event)'
+    assert 'onkeydown' not in elements['appSettingsOverlay'][1]
+    assert "document.addEventListener('keydown', handleAppSettingsKeydown);" in TEMPLATE.read_text()
     assert 'event.target===this' in elements['appSettingsOverlay'][1]['onclick']
     assert elements['settingsMenuTrigger'][0] == 'button'
 
 
-@pytest.mark.parametrize('scenario', ['open', 'wrap', 'excluded', 'empty', 'escape', 'confirm', 'closed', 'close'])
+@pytest.mark.parametrize('scenario', ['open', 'wrap', 'excluded', 'empty', 'escape', 'confirm', 'closed', 'close', 'focus-lost', 'other-dialog'])
 def test_settings_keyboard_behavior(scenario):
     node = shutil.which('node')
     if not node:
@@ -51,11 +52,15 @@ def test_settings_keyboard_behavior(scenario):
         match = re.search(r'        (?:async )?function ' + name + r'\([^\n]*\) \{\n.*?\n        \}', source, re.S)
         assert match, name
         functions.append(match.group())
+    functions.append("        document.addEventListener('keydown', handleAppSettingsKeydown);")
     script = r'''
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const [source, scenario] = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
-const document = {activeElement: null, getElementById: id => elements[id] || null};
+const listeners = [];
+const document = {activeElement: null, getElementById: id => elements[id] || null,
+    addEventListener: (type, fn) => type === 'keydown' && listeners.push(fn)};
+document.body = {id: 'body'}; document.documentElement = {id: 'html'}; document.activeElement = document.body;
 function element(id, options = {}) {
     const classes = new Set();
     return {id, visibility: options.visibility, tabIndex: options.tabIndex ?? 0, textContent: 'old status',
@@ -69,6 +74,9 @@ const elements = Object.fromEntries(['appSettingsOverlay', 'appSettingsDialog', 
     'settingsMenuTrigger', 'userDropdown', 'backupStatus', 'confirmOverlay'].map(id => [id, element(id)]));
 const first = elements.appSettingsClose, middle = element('middle'), last = element('last');
 let controls = [first, middle, last];
+// Settings contains the dialog, its controls, and nodes created inside it.
+const outside = new Set([document.body, document.documentElement]);
+elements.appSettingsOverlay.contains = el => !outside.has(el);
 elements.appSettingsDialog.querySelectorAll = () => controls;
 const calls = [];
 const context = {document, window: {}, getComputedStyle: el => ({visibility: el.visibility || 'visible'}),
@@ -78,10 +86,12 @@ const context = {document, window: {}, getComputedStyle: el => ({visibility: el.
 for (const name of ['loadAppUpdateStatus','loadNotificationsData','loadAuthData','loadAboutPanel','loadSslStatus','loadUsers'])
     context[name] = () => calls.push(name);
 vm.createContext(context); vm.runInContext(source, context);
+// Deliver the key the way a browser does: target is the focused node, and it bubbles to document.
 function key(key, shiftKey = false) {
-    const event = {key, shiftKey, prevented: false, stopped: false,
-        preventDefault() {this.prevented = true;}, stopPropagation() {this.stopped = true;}};
-    context.handleAppSettingsKeydown(event); return event;
+    const event = {key, shiftKey, target: document.activeElement || document.body, prevented: false,
+        preventDefault() {this.prevented = true;}};
+    assert.equal(listeners.length, 1);
+    listeners.forEach(fn => fn(event)); return event;
 }
 (async () => {
     elements.userDropdown.classList.add('open');
@@ -105,12 +115,12 @@ function key(key, shiftKey = false) {
         controls = [element('hidden', {hidden:true}), element('disabled', {disabled:true})];
         assert.equal(key('Tab').prevented, true); assert.equal(document.activeElement, elements.appSettingsDialog);
     } else if (scenario === 'escape') {
-        const event = key('Escape'); assert.equal(event.prevented, true); assert.equal(event.stopped, true);
+        const event = key('Escape'); assert.equal(event.prevented, true);
         assert.equal(elements.appSettingsOverlay.classList.contains('open'), false);
         assert.equal(document.activeElement, elements.settingsMenuTrigger);
     } else if (scenario === 'confirm') {
         elements.confirmOverlay.classList.add('open'); last.focus();
-        const escape = key('Escape'); assert.equal(escape.prevented, false); assert.equal(escape.stopped, false);
+        const escape = key('Escape'); assert.equal(escape.prevented, false);
         assert.equal(elements.appSettingsOverlay.classList.contains('open'), true);
         assert.equal(key('Tab').prevented, false); assert.equal(document.activeElement, last);
         elements.confirmOverlay.classList.remove('open');
@@ -119,6 +129,22 @@ function key(key, shiftKey = false) {
         context.closeAppSettingsModal(); const event = key('Tab');
         assert.equal(event.prevented, false); assert.equal(document.activeElement, elements.settingsMenuTrigger);
         assert.equal(key('Enter').prevented, false);
+    } else if (scenario === 'focus-lost') {
+        // A user-list refresh replaces the focused role select. The browser moves focus to body.
+        const roleSelect = element('roleSelect'); controls = [first, roleSelect, last];
+        roleSelect.focus(); controls = [first, element('newRoleSelect'), last];
+        document.activeElement = document.body;
+        assert.equal(key('Tab').prevented, true); assert.equal(document.activeElement, first);
+        document.activeElement = document.body;
+        const escape = key('Escape'); assert.equal(escape.prevented, true);
+        assert.equal(elements.appSettingsOverlay.classList.contains('open'), false);
+        assert.equal(document.activeElement, elements.settingsMenuTrigger);
+    } else if (scenario === 'other-dialog') {
+        // Keys from a dialog outside Settings belong to that dialog.
+        const otherInput = element('otherDialogInput'); outside.add(otherInput); otherInput.focus();
+        assert.equal(key('Tab').prevented, false); assert.equal(key('Escape').prevented, false);
+        assert.equal(document.activeElement, otherInput);
+        assert.equal(elements.appSettingsOverlay.classList.contains('open'), true);
     } else if (scenario === 'close') {
         context.window._firstRunSetup = true;
         context.closeAppSettingsModal();
