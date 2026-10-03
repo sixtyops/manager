@@ -7115,6 +7115,8 @@
         function handleAppSettingsKeydown(event) {
             const overlay = document.getElementById('appSettingsOverlay');
             if (!overlay.classList.contains('open')) return;
+            // The confirmation dialog owns the keyboard while it is open.
+            if (document.getElementById('confirmOverlay')?.classList.contains('open')) return;
             if (event.key === 'Escape') {
                 event.preventDefault();
                 event.stopPropagation();

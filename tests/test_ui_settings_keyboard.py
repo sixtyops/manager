@@ -40,7 +40,7 @@ def test_settings_dialog_wiring():
     assert elements['settingsMenuTrigger'][0] == 'button'
 
 
-@pytest.mark.parametrize('scenario', ['open', 'wrap', 'excluded', 'empty', 'escape', 'closed', 'close'])
+@pytest.mark.parametrize('scenario', ['open', 'wrap', 'excluded', 'empty', 'escape', 'confirm', 'closed', 'close'])
 def test_settings_keyboard_behavior(scenario):
     node = shutil.which('node')
     if not node:
@@ -66,7 +66,7 @@ function element(id, options = {}) {
         getClientRects: () => options.hidden ? [] : [{}]};
 }
 const elements = Object.fromEntries(['appSettingsOverlay', 'appSettingsDialog', 'appSettingsClose',
-    'settingsMenuTrigger', 'userDropdown', 'backupStatus'].map(id => [id, element(id)]));
+    'settingsMenuTrigger', 'userDropdown', 'backupStatus', 'confirmOverlay'].map(id => [id, element(id)]));
 const first = elements.appSettingsClose, middle = element('middle'), last = element('last');
 let controls = [first, middle, last];
 elements.appSettingsDialog.querySelectorAll = () => controls;
@@ -108,6 +108,13 @@ function key(key, shiftKey = false) {
         const event = key('Escape'); assert.equal(event.prevented, true); assert.equal(event.stopped, true);
         assert.equal(elements.appSettingsOverlay.classList.contains('open'), false);
         assert.equal(document.activeElement, elements.settingsMenuTrigger);
+    } else if (scenario === 'confirm') {
+        elements.confirmOverlay.classList.add('open'); last.focus();
+        const escape = key('Escape'); assert.equal(escape.prevented, false); assert.equal(escape.stopped, false);
+        assert.equal(elements.appSettingsOverlay.classList.contains('open'), true);
+        assert.equal(key('Tab').prevented, false); assert.equal(document.activeElement, last);
+        elements.confirmOverlay.classList.remove('open');
+        assert.equal(key('Tab').prevented, true); assert.equal(document.activeElement, first);
     } else if (scenario === 'closed') {
         context.closeAppSettingsModal(); const event = key('Tab');
         assert.equal(event.prevented, false); assert.equal(document.activeElement, elements.settingsMenuTrigger);
