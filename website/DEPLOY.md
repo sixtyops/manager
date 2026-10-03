@@ -7,7 +7,6 @@ Static site served from S3 via CloudFront. No build step.
 ```
 website/
 ├── index.html          # Single-page site (features, pricing, download)
-├── billing.html        # Stripe Customer Portal page
 ├── 404.html            # Error page
 ├── infra.yml           # CloudFormation (S3 + CloudFront + clean URLs)
 └── assets/
@@ -48,7 +47,7 @@ aws cloudformation deploy \
 This creates:
 - S3 bucket (private, CloudFront-only access via OAC)
 - CloudFront distribution with HTTP/2+3, TLS 1.2+
-- CloudFront Function for clean URLs (`/billing` → `/billing.html`) and www redirect
+- CloudFront Function for clean URLs (`/privacy` → `/privacy.html`) and www redirect
 - Custom error pages (403/404 → `/404.html`)
 
 ### 3. DNS
