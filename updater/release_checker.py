@@ -397,6 +397,11 @@ class ReleaseChecker:
                 except Exception:
                     pass
 
+        blocked = _pending_update_block()
+        if blocked:
+            status["can_update"] = False
+            status["blocked_reason"] = blocked["blocked_reason"]
+            status["launch_uncertain"] = blocked["launch_uncertain"]
         return status
 
 
@@ -640,7 +645,7 @@ def _retain_recovery_image() -> tuple[str, str, str] | None:
 def _clear_pending_update() -> None:
     """Remove initiation state when no guarded update was started."""
     db.set_settings({"autoupdate_pending_version": "", "autoupdate_pending_at": "",
-                     "autoupdate_rollback_ref": ""})
+                     "autoupdate_rollback_ref": "", "autoupdate_launch_uncertain": ""})
 
 
 def _build_recovery_script(
@@ -741,24 +746,47 @@ def _build_watchdog_script(
     return _build_recovery_script(host_repo_dir, rollback_ref, has_standalone, recovery_image)
 
 
+def _observe_uncertain_watchdog() -> None:
+    """Observe daemon state without treating absence as proof of rejection."""
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Status}}", "sixtyops-update-watchdog"],
+            capture_output=True, text=True, timeout=10,
+        )
+        state = result.stdout.strip() if result.returncode == 0 else "unknown"
+        if state not in ("created", "running", "restarting", "exited", "dead"):
+            state = "unknown"
+        logger.warning("Watchdog launch acknowledgement lost; observed state=%s", state)
+    except Exception:
+        logger.warning("Watchdog launch acknowledgement lost; daemon state unavailable")
+    # A delayed request can still be accepted after this observation. Even an
+    # exited/removed watchdog can already have changed the image or source.
+
+
+def _pending_update_block() -> dict | None:
+    uncertain = db.get_setting("autoupdate_launch_uncertain", "") == "true"
+    if not uncertain and not db.get_setting("autoupdate_pending_version", ""):
+        return None
+    reason = ("Application update launch is uncertain; verify watchdog completion and "
+              "runtime on the host before retrying. Recovery and pending state retained."
+              if uncertain else "Application update already pending; wait for completion.")
+    return {"success": False, "blocked_reason": reason, "message": reason,
+            "launch_uncertain": uncertain}
+
+
 def _launch_watchdog(
     repo_dir: Path,
     host_repo_dir: str,
     rollback_ref: str,
     has_standalone: bool,
     recovery_image: tuple[str, str, str],
-) -> bool:
+) -> bool | None:
     """Write the watchdog script and launch it in a detached docker:cli container.
 
-    Returns True if the watchdog was launched successfully.
+    True means acknowledged; False means no launch attempt; None is uncertain.
     """
+    attempted = False
     try:
-        # Remove any leftover watchdog container from a previous attempt
-        subprocess.run(
-            ["docker", "rm", "-f", "sixtyops-update-watchdog"],
-            capture_output=True, timeout=10,
-        )
-
         # Write watchdog script to the repo dir (persists on host via bind mount)
         script = _build_watchdog_script(host_repo_dir, rollback_ref, has_standalone, recovery_image)
         watchdog_path = repo_dir / ".update-watchdog.sh"
@@ -769,6 +797,7 @@ def _launch_watchdog(
 
         # Launch watchdog in a detached container that survives our restart.
         # docker:cli is Alpine-based with docker CLI + compose plugin.
+        attempted = True
         result = subprocess.run(
             [
                 "docker", "run", "--rm", "-d",
@@ -787,10 +816,14 @@ def _launch_watchdog(
             return True
         else:
             logger.error(f"Failed to launch watchdog: {result.stderr}")
-            return False
+            _observe_uncertain_watchdog()
+            return None
 
     except Exception as e:
         logger.error(f"Failed to launch watchdog: {e}")
+        if attempted:
+            _observe_uncertain_watchdog()
+            return None
         return False
 
 
@@ -809,14 +842,10 @@ def _launch_appliance_watchdog(
     compose_dir: Path,
     has_standalone: bool,
     recovery_image: tuple[str, str, str],
-) -> bool:
+) -> bool | None:
     """Launch the appliance watchdog in a detached docker:cli container."""
+    attempted = False
     try:
-        subprocess.run(
-            ["docker", "rm", "-f", "sixtyops-update-watchdog"],
-            capture_output=True, timeout=10,
-        )
-
         script = _build_appliance_watchdog_script(str(compose_dir), has_standalone, recovery_image)
         watchdog_path = compose_dir / ".update-watchdog.sh"
         watchdog_path.write_text(script)
@@ -824,6 +853,7 @@ def _launch_appliance_watchdog(
 
         host_script = f"{compose_dir}/.update-watchdog.sh"
 
+        attempted = True
         result = subprocess.run(
             [
                 "docker", "run", "--rm", "-d",
@@ -842,10 +872,14 @@ def _launch_appliance_watchdog(
             return True
         else:
             logger.error(f"Failed to launch appliance watchdog: {result.stderr}")
-            return False
+            _observe_uncertain_watchdog()
+            return None
 
     except Exception as e:
         logger.error(f"Failed to launch appliance watchdog: {e}")
+        if attempted:
+            _observe_uncertain_watchdog()
+            return None
         return False
 
 
@@ -858,8 +892,13 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
     if not compose_dir:
         return _normalize_apply_result({"success": False, "message": "Cannot find compose directory"})
 
+    blocked = _pending_update_block()
+    if blocked:
+        return _normalize_apply_result(blocked)
+
     image_ref = f"{GHCR_IMAGE}:{target_tag}"
     pending = False
+    launching = False
 
     try:
         recovery_image = _retain_recovery_image()
@@ -886,16 +925,22 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
         db.set_settings({
             "autoupdate_pending_version": target_version,
             "autoupdate_pending_at": datetime.now().isoformat(),
+            "autoupdate_launch_uncertain": "true",
         })
 
         pending = True
         has_standalone = (compose_dir / "docker-compose.standalone.yml").exists()
 
         # Launch watchdog for health-checked swap with rollback
+        launching = True
         launched = _launch_appliance_watchdog(compose_dir, has_standalone, recovery_image)
+        if launched is None:
+            return _normalize_apply_result(_pending_update_block())
+        launching = False
         if not launched:
             raise RuntimeError("Cannot start guarded update: appliance watchdog unavailable")
         pending = False
+        db.set_settings({"autoupdate_launch_uncertain": ""})
 
         return _normalize_apply_result({
             "success": True,
@@ -903,11 +948,15 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
         })
 
     except subprocess.TimeoutExpired:
+        if launching:
+            return _normalize_apply_result(_pending_update_block())
         if pending:
             _clear_pending_update()
         return _normalize_apply_result({"success": False, "message": "Docker command timed out"})
     except Exception as e:
         logger.exception(f"Appliance update failed: {e}")
+        if launching:
+            return _normalize_apply_result(_pending_update_block())
         if pending:
             _clear_pending_update()
         return _normalize_apply_result({"success": False, "message": str(e)})
@@ -929,6 +978,10 @@ async def apply_update() -> dict:
             "message": f"Cannot update now: {reason}. Please try again later.",
             "blocked_reason": reason,
         })
+
+    blocked = _pending_update_block()
+    if blocked:
+        return _normalize_apply_result(blocked)
 
     # Determine which version we're updating to
     target_version = db.get_setting("autoupdate_available_version", "")
@@ -971,6 +1024,7 @@ async def apply_update() -> dict:
         return _normalize_apply_result({"success": False, **_manual_update_instructions(target_tag, repo_dir)})
 
     staged = False
+    launching = False
     rollback_ref = None
     git_cmd = ["git", "-C", str(repo_dir)]
 
@@ -1098,13 +1152,20 @@ async def apply_update() -> dict:
         db.set_settings({
             "autoupdate_pending_version": target_version,
             "autoupdate_pending_at": datetime.now().isoformat(),
+            "autoupdate_launch_uncertain": "true",
             "autoupdate_rollback_ref": rollback_ref,
         })
 
         has_standalone = (repo_dir / "docker-compose.standalone.yml").exists()
-        if not _launch_watchdog(repo_dir, host_repo_dir, rollback_ref, has_standalone, recovery_image):
+        launching = True
+        launched = _launch_watchdog(repo_dir, host_repo_dir, rollback_ref, has_standalone, recovery_image)
+        if launched is None:
+            return _normalize_apply_result(_pending_update_block())
+        launching = False
+        if not launched:
             raise RuntimeError("Cannot start guarded update: watchdog unavailable")
         staged = False
+        db.set_settings({"autoupdate_launch_uncertain": ""})
 
         return _normalize_apply_result({
             "success": True,
@@ -1114,6 +1175,8 @@ async def apply_update() -> dict:
     except Exception as e:
         message = "Docker command timed out" if isinstance(e, subprocess.TimeoutExpired) else str(e)
         logger.exception("Update initiation failed")
+        if launching:
+            return _normalize_apply_result(_pending_update_block())
         if staged:
             try:
                 restored = subprocess.run(git_cmd + ["checkout", rollback_ref],
@@ -1135,6 +1198,10 @@ async def verify_update_on_startup(broadcast_func: Optional[Callable] = None):
     """
     pending = db.get_setting("autoupdate_pending_version", "")
     if not pending:
+        return
+
+    if db.get_setting("autoupdate_launch_uncertain", "") == "true":
+        logger.warning("Retaining uncertain launch state; host reconciliation required")
         return
 
     # Check for stuck state: pending for too long without resolution

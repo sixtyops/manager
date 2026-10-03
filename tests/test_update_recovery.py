@@ -223,6 +223,12 @@ async def test_failed_initiation_is_guarded(tmp_path, monkeypatch, shape, failur
     assert result["success"] is False
     assert result["action"] != "started"
     popen.assert_not_called()
+    if failure == "launch-exception":
+        assert result["launch_uncertain"]
+        assert settings["autoupdate_pending_version"] == "1.4.1-dev5"
+        assert settings["autoupdate_launch_uncertain"] == "true"
+        assert not any(cmd[-1] == "previous-ref" and "checkout" in cmd for cmd in calls)
+        return
     assert not settings.get("autoupdate_pending_version")
     assert not settings.get("autoupdate_pending_at")
     if failure in ("image", "path"):
@@ -252,7 +258,115 @@ def test_watchdog_launcher_results(tmp_path, monkeypatch, shape, outcome):
     launched = (rc._launch_watchdog(tmp_path, str(tmp_path), "previous-ref", False, RECOVERY)
                 if shape == "source" else
                 rc._launch_appliance_watchdog(tmp_path, False, RECOVERY))
-    assert launched is (outcome == 0)
-    assert all(cmd[:2] in (["docker", "rm"], ["docker", "run"]) for cmd in calls)
+    assert launched is (True if outcome == 0 else None)
+    assert all(cmd[:2] in (["docker", "inspect"], ["docker", "run"]) for cmd in calls)
     script = (tmp_path / ".update-watchdog.sh").read_text()
     assert OLD_ID in script and PIN in script
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", ["source", "appliance"])
+@pytest.mark.parametrize("outcome", ["timeout", "lost-ack", "acknowledged"])
+@pytest.mark.parametrize("observation", ["running", "absent", "error", "exited"])
+async def test_delayed_daemon_launch_preserves_state(tmp_path, monkeypatch, shape, outcome, observation):
+    """A late accepted request may mutate after an absent/failed observation."""
+    from datetime import datetime, timedelta
+
+    settings = {"autoupdate_available_version": "1.4.1-dev5"}
+    db = MagicMock()
+    db.get_setting.side_effect = lambda key, default="": settings.get(key, default)
+    db.set_settings.side_effect = lambda values: settings.update(values)
+    monkeypatch.setattr(rc, "db", db)
+    (tmp_path / "updater").mkdir()
+    (tmp_path / "updater/__init__.py").write_text('__version__ = "1.4.1-dev5"')
+    for name, value in [("_is_safe_to_update", lambda: (True, "")),
+                        ("_docker_socket_available", lambda: True),
+                        ("_get_repo_dir", lambda: tmp_path), ("_get_compose_dir", lambda: tmp_path),
+                        ("_get_host_repo_path", lambda: str(tmp_path)),
+                        ("_verify_tag_signature", lambda *args: (True, "")),
+                        ("APPLIANCE_MODE", shape == "appliance")]:
+        monkeypatch.setattr(rc, name, value)
+    daemon = {"accepted": False, "source": "previous-ref", "events": []}
+
+    def run(cmd, **kwargs):
+        daemon["events"].append(cmd)
+        if cmd[:2] == ["docker", "inspect"]:
+            if "{{.State.Status}}" in cmd:
+                if observation == "error":
+                    raise subprocess.TimeoutExpired(cmd, 10)
+                return subprocess.CompletedProcess(cmd, 1 if observation == "absent" else 0,
+                                                   observation, "")
+            return subprocess.CompletedProcess(cmd, 0, f"{OLD_ID} {IMAGE} healthy", "")
+        if cmd[:2] == ["docker", "run"]:
+            daemon["accepted"] = True
+            if outcome == "timeout":
+                raise subprocess.TimeoutExpired(cmd, 30)
+            return subprocess.CompletedProcess(cmd, 0 if outcome == "acknowledged" else 1,
+                                               "synthetic-daemon", "lost acknowledgement")
+        if cmd[0] == "git" and "checkout" in cmd:
+            daemon["source"] = cmd[-1]
+        assert cmd[0] in ("docker", "git")
+        assert cmd[:2] != ["docker", "rm"]
+        return subprocess.CompletedProcess(cmd, 0, "previous-ref" if "rev-parse" in cmd else "", "")
+
+    # Save the real shell runner before patching subprocess globally.
+    real_run = subprocess.run
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(rc.subprocess, "run", run)
+    monkeypatch.setattr(rc.subprocess, "Popen", MagicMock(side_effect=AssertionError("Direct fallback")))
+    result = await rc.apply_update()
+    assert daemon["accepted"]
+    assert settings["autoupdate_pending_version"] == "1.4.1-dev5"
+    assert daemon["source"] == ("v1.4.1-dev5" if shape == "source" else "previous-ref")
+    if outcome == "acknowledged":
+        assert result["success"] and result["action"] == "started"
+        assert not settings["autoupdate_launch_uncertain"]
+        return
+    assert not result["success"] and result["launch_uncertain"]
+    assert result["action"] == "blocked"
+    assert settings["autoupdate_launch_uncertain"] == "true"
+    if shape == "source":
+        assert settings["autoupdate_rollback_ref"] == "previous-ref"
+    events = list(daemon["events"])
+    retry = await rc.apply_update()
+    assert retry["launch_uncertain"] and daemon["events"] == events
+    # Old startup cleanup must not discard uncertainty, even after its timeout
+    # or when the requested version is already running.
+    settings["autoupdate_pending_at"] = (datetime.now() - timedelta(hours=1)).isoformat()
+    monkeypatch.setattr(rc, "__version__", "1.4.1-dev5")
+    await rc.verify_update_on_startup()
+    assert settings["autoupdate_pending_version"] == "1.4.1-dev5"
+    assert settings["autoupdate_launch_uncertain"] == "true"
+    # Execute the actual saved script later with a fake-only PATH. This proves
+    # that the retained state remains coherent when the delayed daemon swaps.
+    state_path = tmp_path / "late-state.json"
+    state = {"case": "healthy", "old_id": OLD_ID, "new_id": NEW_ID,
+             "aliases": {IMAGE: OLD_ID if shape == "source" else NEW_ID, PIN: OLD_ID},
+             "container": OLD_ID, "ref": daemon["source"], "ups": 0, "checks": 0, "events": []}
+    state_path.write_text(json.dumps(state))
+    fakebin = tmp_path / "late-bin"
+    fakebin.mkdir()
+    for name in ("docker", "git", "apk", "seq", "sleep", "rm"):
+        executable = fakebin / name
+        executable.write_text(f"#!{sys.executable}\n" + FAKE_COMMAND)
+        executable.chmod(0o700)
+    monkeypatch.setattr(rc.subprocess, "Popen", real_popen)
+    late = real_run(["/bin/sh", str(tmp_path / ".update-watchdog.sh")], cwd=tmp_path,
+                    env={"PATH": str(fakebin), "RECOVERY_STATE": str(state_path),
+                         "PYTHONDONTWRITEBYTECODE": "1"},
+                    capture_output=True, text=True, timeout=15)
+    assert late.returncode == 0, late.stdout + late.stderr
+    state = json.loads(state_path.read_text())
+    assert state["container"] == NEW_ID and state["ups"] == 1
+    assert settings["autoupdate_launch_uncertain"] == "true"
+
+
+@pytest.mark.parametrize("shape", ["source", "appliance"])
+def test_prelaunch_failure_is_known_not_started(tmp_path, monkeypatch, shape):
+    monkeypatch.setattr(Path, "write_text", MagicMock(side_effect=OSError("Synthetic write failure")))
+    run = MagicMock(side_effect=AssertionError("No daemon request allowed"))
+    monkeypatch.setattr(rc.subprocess, "run", run)
+    result = (rc._launch_watchdog(tmp_path, str(tmp_path), "previous-ref", False, RECOVERY)
+              if shape == "source" else rc._launch_appliance_watchdog(tmp_path, False, RECOVERY))
+    assert result is False
+    run.assert_not_called()

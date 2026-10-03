@@ -81,8 +81,10 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 - Application self-updates now require a healthy retained recovery image and
-  a watchdog. Failed initiation clears pending state and attempts to restore
-  staged source. Watchdogs handle build and partial swap failures explicitly
+  a watchdog. Known failed initiation clears pending state and attempts to restore
+  staged source. Lost launch acknowledgements retain pending/recovery state and
+  block retries until host reconciliation; daemon absence alone is not proof
+  of rejection. Watchdogs handle build and partial swap failures explicitly
   and attempt to restore the prior immutable image. Recovery failures retain it and
   report failure. Isolated fake-command tests do not prove host or data recovery.
 - Return expired sessions to the login screen when an API request or WebSocket reports an authentication failure.
