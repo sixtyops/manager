@@ -7,6 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def retained_image_for_existing_apply_tests(monkeypatch):
+    # Recovery command behavior is exercised separately with isolated fake CLIs.
+    monkeypatch.setattr("updater.release_checker._retain_recovery_image",
+                        lambda: ("sha256:" + "a" * 64, "synthetic:latest", "synthetic:rollback"))
+
+
 # ---------------------------------------------------------------------------
 # Version comparison
 # ---------------------------------------------------------------------------
@@ -515,7 +522,8 @@ class TestApplyUpdateGuardrails:
              patch("updater.release_checker._docker_socket_available", return_value=True), \
              patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
              patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
-             patch("updater.release_checker._get_host_repo_path", return_value=None), \
+             patch("updater.release_checker._get_host_repo_path", return_value="/opt/sixtyops"), \
+             patch("updater.release_checker._launch_watchdog", return_value=True), \
              patch("updater.release_checker.subprocess.run", side_effect=mock_run), \
              patch("updater.release_checker.subprocess.Popen"), \
              patch.object(Path, "exists", return_value=True), \
@@ -601,8 +609,8 @@ class TestApplyUpdateGuardrails:
         mock_popen.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_popen_when_watchdog_fails(self):
-        """If watchdog can't launch, fall back to direct build+swap."""
+    async def test_refuses_update_when_watchdog_fails(self):
+        """A failed watchdog launch must restore source and clear pending state."""
         from updater.release_checker import apply_update
         self._set_setting("autoupdate_available_version", "1.0.2")
 
@@ -623,8 +631,11 @@ class TestApplyUpdateGuardrails:
              patch.object(Path, "read_text", return_value=version_content):
             result = await apply_update()
 
-        assert result["success"] is True
-        mock_popen.assert_called_once()
+        assert result["success"] is False
+        mock_popen.assert_not_called()
+        from updater import database as db
+        assert db.get_setting("autoupdate_pending_version") == ""
+        assert db.get_setting("autoupdate_rollback_ref") == ""
 
     @pytest.mark.asyncio
     async def test_version_mismatch_aborts_and_reverts(self):
@@ -643,6 +654,7 @@ class TestApplyUpdateGuardrails:
              patch("updater.release_checker._docker_socket_available", return_value=True), \
              patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
              patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
+             patch("updater.release_checker._get_host_repo_path", return_value="/opt/sixtyops"), \
              patch("updater.release_checker.subprocess.run", side_effect=mock_run), \
              patch.object(Path, "exists", return_value=True), \
              patch.object(Path, "read_text", return_value=wrong_version):
@@ -768,7 +780,8 @@ class TestDirtyTreeHandling:
              patch("updater.release_checker._docker_socket_available", return_value=True), \
              patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
              patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
-             patch("updater.release_checker._get_host_repo_path", return_value=None), \
+             patch("updater.release_checker._get_host_repo_path", return_value="/opt/sixtyops"), \
+             patch("updater.release_checker._launch_watchdog", return_value=True), \
              patch("updater.release_checker.subprocess.run", side_effect=side_effect), \
              patch("updater.release_checker.subprocess.Popen"), \
              patch.object(Path, "exists", return_value=True), \
@@ -793,7 +806,8 @@ class TestDirtyTreeHandling:
              patch("updater.release_checker._docker_socket_available", return_value=True), \
              patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
              patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
-             patch("updater.release_checker._get_host_repo_path", return_value=None), \
+             patch("updater.release_checker._get_host_repo_path", return_value="/opt/sixtyops"), \
+             patch("updater.release_checker._launch_watchdog", return_value=True), \
              patch("updater.release_checker.subprocess.run", side_effect=side_effect), \
              patch("updater.release_checker.subprocess.Popen"), \
              patch.object(Path, "exists", return_value=True), \
@@ -880,7 +894,8 @@ class TestDirtyTreeHandling:
              patch("updater.release_checker._docker_socket_available", return_value=True), \
              patch("updater.release_checker._get_repo_dir", return_value=repo_dir), \
              patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
-             patch("updater.release_checker._get_host_repo_path", return_value=None), \
+             patch("updater.release_checker._get_host_repo_path", return_value="/opt/sixtyops"), \
+             patch("updater.release_checker._launch_watchdog", return_value=True), \
              patch("updater.release_checker.subprocess.run", side_effect=side_effect), \
              patch("updater.release_checker.subprocess.Popen"), \
              patch.object(Path, "exists", return_value=True), \
@@ -1108,7 +1123,8 @@ class TestApplyUpdateSignatureGate:
              patch("updater.release_checker._docker_socket_available", return_value=True), \
              patch("updater.release_checker._get_repo_dir", return_value=Path("/tmp/repo")), \
              patch("updater.release_checker._get_compose_cmd", return_value=["docker", "compose"]), \
-             patch("updater.release_checker._get_host_repo_path", return_value=None), \
+             patch("updater.release_checker._get_host_repo_path", return_value="/opt/sixtyops"), \
+             patch("updater.release_checker._launch_watchdog", return_value=True), \
              patch("updater.release_checker.subprocess.run", side_effect=run), \
              patch("updater.release_checker.subprocess.Popen"), \
              patch.object(Path, "exists", return_value=True), \
@@ -1203,7 +1219,7 @@ class TestBuildWatchdogScript:
     def test_script_contains_rollback_ref(self):
         from updater.release_checker import _build_watchdog_script
         script = _build_watchdog_script("/opt/sixtyops", "abc123", False)
-        assert 'ROLLBACK_REF="abc123"' in script
+        assert 'ROLLBACK_REF=abc123' in script
 
     def test_script_contains_compose_cmd(self):
         from updater.release_checker import _build_watchdog_script
@@ -1236,7 +1252,7 @@ class TestBuildWatchdogScript:
         from updater.release_checker import _build_watchdog_script
         script = _build_watchdog_script("/opt/sixtyops", "abc123", False)
         assert "docker tag" in script
-        assert ":rollback" in script
+        assert "ROLLBACK_IMAGE" in script
 
 
 # ---------------------------------------------------------------------------
@@ -1427,8 +1443,8 @@ class TestApplianceMode:
         assert "socket" in result["message"].lower()
 
     @pytest.mark.asyncio
-    async def test_appliance_update_fallback_on_watchdog_failure(self):
-        """If watchdog fails to launch, falls back to direct swap."""
+    async def test_appliance_update_refuses_watchdog_failure(self):
+        """A failed appliance watchdog must not trigger an unguarded swap."""
         from updater.release_checker import _apply_update_appliance
 
         def mock_run(cmd, **kwargs):
@@ -1445,8 +1461,10 @@ class TestApplianceMode:
              patch("updater.release_checker.subprocess.Popen") as mock_popen:
             result = await _apply_update_appliance("1.2.0", "v1.2.0")
 
-        assert result["success"] is True
-        mock_popen.assert_called_once()
+        assert result["success"] is False
+        mock_popen.assert_not_called()
+        from updater import database as db
+        assert db.get_setting("autoupdate_pending_version") == ""
 
     @pytest.mark.asyncio
     async def test_apply_update_branches_to_appliance_mode(self):
@@ -1491,7 +1509,7 @@ class TestApplianceWatchdogScript:
         from updater.release_checker import _build_appliance_watchdog_script
         script = _build_appliance_watchdog_script("/opt/sixtyops", False)
         assert "Rolling back" in script
-        assert ":rollback" in script
+        assert "ROLLBACK_IMAGE" in script
 
     def test_script_no_git_operations(self):
         """Appliance watchdog should NOT use git."""

@@ -80,6 +80,11 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- Application self-updates now require a healthy retained recovery image and
+  a watchdog. Failed initiation clears pending state and attempts to restore
+  staged source. Watchdogs handle build and partial swap failures explicitly
+  and attempt to restore the prior immutable image. Recovery failures retain it and
+  report failure. Isolated fake-command tests do not prove host or data recovery.
 - Return expired sessions to the login screen when an API request or WebSocket reports an authentication failure.
 - **A scheduled wave can no longer be silently skipped when its job fails to
   start.** If starting a wave failed (for example, a missing-family firmware

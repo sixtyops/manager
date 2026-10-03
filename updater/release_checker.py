@@ -616,120 +616,129 @@ def _manual_update_instructions(target_tag: str, repo_dir: Optional[Path]) -> di
     }
 
 
-def _build_watchdog_script(
-    host_repo_dir: str,
-    rollback_ref: str,
-    has_standalone: bool,
+def _retain_recovery_image() -> tuple[str, str, str] | None:
+    """Pin the healthy running container's immutable image before mutation."""
+    result = subprocess.run(
+        ["docker", "inspect", "--format",
+         "{{.Image}} {{.Config.Image}} {{.State.Health.Status}}", "sixtyops-management"],
+        capture_output=True, text=True, timeout=10,
+    )
+    fields = result.stdout.strip().split()
+    if result.returncode != 0 or len(fields) != 3:
+        return None
+    image_id, image_name, health = fields
+    if health != "healthy" or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+        return None
+    rollback_image = "sixtyops-manager-rollback:" + image_id.split(":", 1)[1]
+    retained = subprocess.run(
+        ["docker", "tag", image_id, rollback_image],
+        capture_output=True, text=True, timeout=10,
+    )
+    return (image_id, image_name, rollback_image) if retained.returncode == 0 else None
+
+
+def _clear_pending_update() -> None:
+    """Remove initiation state when no guarded update was started."""
+    db.set_settings({"autoupdate_pending_version": "", "autoupdate_pending_at": "",
+                     "autoupdate_rollback_ref": ""})
+
+
+def _build_recovery_script(
+    directory: str, rollback_ref: str | None, has_standalone: bool,
+    recovery_image: tuple[str, str, str] | None,
 ) -> str:
-    """Build the shell script that the watchdog container runs.
-
-    The watchdog: builds the new image, tags the old image for rollback,
-    swaps the container, monitors health, and rolls back on failure.
-    """
-    compose_cmd = f"docker compose -f {host_repo_dir}/docker-compose.yml"
+    """Build the shared health and recovery flow for both install shapes."""
+    compose_cmd = f"docker compose -f {directory}/docker-compose.yml"
     if has_standalone:
-        compose_cmd += f" -f {host_repo_dir}/docker-compose.standalone.yml"
-
-    # Use .replace() instead of f-string to avoid escaping {{ }} for docker --format
-    return """#!/bin/sh
-# SixtyOps update watchdog — build, swap, monitor health, rollback on failure
-set -e
-
-CONTAINER="sixtyops-management"
-REPO="__REPO__"
-ROLLBACK_REF="__ROLLBACK_REF__"
-COMPOSE="__COMPOSE_CMD__"
-
-echo "[watchdog] Starting update build..."
-
-# Build new image (current container keeps running)
-cd "$REPO"
-$COMPOSE build sixtyops-mgmt
-if [ $? -ne 0 ]; then
-    echo "[watchdog] Build failed. Reverting git checkout..."
-    apk add --no-cache git > /dev/null 2>&1
-    git config --global --add safe.directory "$REPO"
+        compose_cmd += f" -f {directory}/docker-compose.standalone.yml"
+    image_id, image_name, rollback_image = recovery_image or ("", "", "")
+    restore = """restore_source() {
+    apk add --no-cache git > /dev/null 2>&1 &&
+    git config --global --add safe.directory "$REPO" &&
     git -C "$REPO" checkout "$ROLLBACK_REF"
-    echo "[watchdog] Reverted to $ROLLBACK_REF. No container swap performed."
+}""" if rollback_ref is not None else "restore_source() { return 0; }"
+    build = """if ! $COMPOSE build sixtyops-mgmt; then
+    echo "[watchdog] Build failed. Restoring source without swapping..."
+    if ! restore_source || ! docker tag "$ROLLBACK_IMAGE" "$IMAGE"; then
+        echo "[watchdog] ERROR: Source or image recovery failed."
+        exit 2
+    fi
+    exit 1
+fi""" if rollback_ref is not None else ""
+    return """#!/bin/sh
+set -eu
+REPO=__REPO__
+ROLLBACK_REF=__REF__
+IMAGE_ID=__ID__
+IMAGE=__IMAGE__
+ROLLBACK_IMAGE=__ROLLBACK_IMAGE__
+COMPOSE=__COMPOSE__
+CONTAINER="sixtyops-management"
+__RESTORE__
+
+# A retained immutable image is mandatory before build or swap.
+if [ -z "$IMAGE_ID" ] || [ -z "$IMAGE" ] || [ -z "$ROLLBACK_IMAGE" ] ||
+   [ "$(docker image inspect --format='{{.Id}}' "$ROLLBACK_IMAGE" 2>/dev/null)" != "$IMAGE_ID" ]; then
+    echo "[watchdog] Recovery image unavailable. Refusing update."
+    if ! restore_source; then
+        echo "[watchdog] ERROR: Source recovery failed."
+        exit 2
+    fi
     exit 1
 fi
+cd "$REPO"
+__BUILD__
 
-# Tag current image for rollback before swapping
-IMAGE=$(docker inspect --format='{{.Config.Image}}' "$CONTAINER" 2>/dev/null || echo "")
-if [ -n "$IMAGE" ]; then
-    ROLLBACK_IMAGE="${IMAGE%%:*}:rollback"
-    docker tag "$IMAGE" "$ROLLBACK_IMAGE"
-    echo "[watchdog] Tagged $IMAGE as $ROLLBACK_IMAGE"
-fi
-
-# Swap to new container
-echo "[watchdog] Swapping to new container..."
-$COMPOSE up -d sixtyops-mgmt
-
-# Monitor health (90 seconds: 18 checks x 5s)
-echo "[watchdog] Monitoring health..."
 HEALTHY=false
-for i in $(seq 1 18); do
-    sleep 5
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo "not_found")
-    case "$STATUS" in
-        healthy)
-            echo "[watchdog] Health check passed on attempt $i"
+if $COMPOSE up -d --no-build sixtyops-mgmt; then
+    for i in $(seq 1 18); do
+        sleep 5
+        STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo not_found)
+        if [ "$STATUS" = "healthy" ]; then
             HEALTHY=true
             break
-            ;;
-        *)
-            echo "[watchdog] Health check $i/18: $STATUS"
-            ;;
-    esac
-done
-
+        fi
+    done
+else
+    echo "[watchdog] Swap failed. Starting recovery..."
+fi
 if [ "$HEALTHY" = "true" ]; then
     echo "[watchdog] Update successful!"
-    # Clean up rollback image
-    if [ -n "$ROLLBACK_IMAGE" ]; then
-        docker rmi "$ROLLBACK_IMAGE" 2>/dev/null || true
-    fi
+    docker rmi "$ROLLBACK_IMAGE" 2>/dev/null || true
     rm -f "$REPO/.update-watchdog.sh"
     exit 0
 fi
 
-# ----- Health check failed — roll back -----
-echo "[watchdog] Health check failed after 90s. Rolling back..."
-
-# Install git for rollback
-apk add --no-cache git > /dev/null 2>&1
-git config --global --add safe.directory "$REPO"
-
-# Revert source to previous ref
-git -C "$REPO" checkout "$ROLLBACK_REF"
-
-# Re-tag rollback image as current so compose uses it without rebuilding
-if [ -n "$ROLLBACK_IMAGE" ] && [ -n "$IMAGE" ]; then
-    docker tag "$ROLLBACK_IMAGE" "$IMAGE"
+echo "[watchdog] Update failed. Rolling back..."
+if ! restore_source || ! docker tag "$ROLLBACK_IMAGE" "$IMAGE" ||
+   ! $COMPOSE up -d --no-build sixtyops-mgmt; then
+    echo "[watchdog] ERROR: Rollback command failed; recovery image retained."
+    exit 2
 fi
-
-# Restart from old image (--no-build since we re-tagged it)
-$COMPOSE up -d --no-build sixtyops-mgmt
-
-echo "[watchdog] Rollback initiated. Monitoring recovery..."
 for i in $(seq 1 12); do
     sleep 5
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo "not_found")
+    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo not_found)
     if [ "$STATUS" = "healthy" ]; then
         echo "[watchdog] Rollback successful."
-        docker rmi "$ROLLBACK_IMAGE" 2>/dev/null || true
         rm -f "$REPO/.update-watchdog.sh"
         exit 1
     fi
 done
+echo "[watchdog] ERROR: Rollback failed health check; recovery image retained."
+exit 2
+""".replace("__REPO__", shlex.quote(directory)).replace("__REF__", shlex.quote(rollback_ref or "")) \
+    .replace("__ID__", shlex.quote(image_id)).replace("__IMAGE__", shlex.quote(image_name)) \
+    .replace("__ROLLBACK_IMAGE__", shlex.quote(rollback_image)) \
+    .replace("__COMPOSE__", shlex.quote(compose_cmd)).replace("__RESTORE__", restore) \
+    .replace("__BUILD__", build)
 
-echo "[watchdog] WARNING: Rollback also failed health check."
-rm -f "$REPO/.update-watchdog.sh"
-exit 1
-""".replace("__REPO__", host_repo_dir) \
-   .replace("__ROLLBACK_REF__", rollback_ref) \
-   .replace("__COMPOSE_CMD__", compose_cmd)
+
+def _build_watchdog_script(
+    host_repo_dir: str, rollback_ref: str, has_standalone: bool,
+    recovery_image: tuple[str, str, str] | None = None,
+) -> str:
+    """Build the source update watchdog with a retained recovery image."""
+    return _build_recovery_script(host_repo_dir, rollback_ref, has_standalone, recovery_image)
 
 
 def _launch_watchdog(
@@ -737,6 +746,7 @@ def _launch_watchdog(
     host_repo_dir: str,
     rollback_ref: str,
     has_standalone: bool,
+    recovery_image: tuple[str, str, str],
 ) -> bool:
     """Write the watchdog script and launch it in a detached docker:cli container.
 
@@ -750,7 +760,7 @@ def _launch_watchdog(
         )
 
         # Write watchdog script to the repo dir (persists on host via bind mount)
-        script = _build_watchdog_script(host_repo_dir, rollback_ref, has_standalone)
+        script = _build_watchdog_script(host_repo_dir, rollback_ref, has_standalone, recovery_image)
         watchdog_path = repo_dir / ".update-watchdog.sh"
         watchdog_path.write_text(script)
         watchdog_path.chmod(0o755)
@@ -788,95 +798,17 @@ def _launch_watchdog(
 
 
 def _build_appliance_watchdog_script(
-    compose_dir: str,
-    has_standalone: bool,
+    compose_dir: str, has_standalone: bool,
+    recovery_image: tuple[str, str, str] | None = None,
 ) -> str:
-    """Build watchdog script for appliance mode (docker pull, no git)."""
-    compose_cmd = f"docker compose -f {compose_dir}/docker-compose.yml"
-    if has_standalone:
-        compose_cmd += f" -f {compose_dir}/docker-compose.standalone.yml"
-
-    return """#!/bin/sh
-# SixtyOps appliance update watchdog — swap, monitor health, rollback on failure
-set -e
-
-CONTAINER="sixtyops-management"
-COMPOSE="__COMPOSE_CMD__"
-
-echo "[watchdog] Starting appliance update..."
-
-# Tag current image for rollback before swapping
-IMAGE=$(docker inspect --format='{{.Config.Image}}' "$CONTAINER" 2>/dev/null || echo "")
-if [ -n "$IMAGE" ]; then
-    ROLLBACK_IMAGE="${IMAGE%%:*}:rollback"
-    docker tag "$IMAGE" "$ROLLBACK_IMAGE"
-    echo "[watchdog] Tagged $IMAGE as $ROLLBACK_IMAGE"
-fi
-
-# Swap to new container (image already pulled)
-echo "[watchdog] Swapping to new container..."
-$COMPOSE up -d --no-build sixtyops-mgmt
-
-# Monitor health (90 seconds: 18 checks x 5s)
-echo "[watchdog] Monitoring health..."
-HEALTHY=false
-for i in $(seq 1 18); do
-    sleep 5
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo "not_found")
-    case "$STATUS" in
-        healthy)
-            echo "[watchdog] Health check passed on attempt $i"
-            HEALTHY=true
-            break
-            ;;
-        *)
-            echo "[watchdog] Health check $i/18: $STATUS"
-            ;;
-    esac
-done
-
-if [ "$HEALTHY" = "true" ]; then
-    echo "[watchdog] Update successful!"
-    if [ -n "$ROLLBACK_IMAGE" ]; then
-        docker rmi "$ROLLBACK_IMAGE" 2>/dev/null || true
-    fi
-    rm -f "__COMPOSE_DIR__/.update-watchdog.sh"
-    exit 0
-fi
-
-# ----- Health check failed — roll back -----
-echo "[watchdog] Health check failed after 90s. Rolling back..."
-
-# Re-tag rollback image as current so compose uses it
-if [ -n "$ROLLBACK_IMAGE" ] && [ -n "$IMAGE" ]; then
-    docker tag "$ROLLBACK_IMAGE" "$IMAGE"
-fi
-
-# Restart from old image
-$COMPOSE up -d --no-build sixtyops-mgmt
-
-echo "[watchdog] Rollback initiated. Monitoring recovery..."
-for i in $(seq 1 12); do
-    sleep 5
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo "not_found")
-    if [ "$STATUS" = "healthy" ]; then
-        echo "[watchdog] Rollback successful."
-        docker rmi "$ROLLBACK_IMAGE" 2>/dev/null || true
-        rm -f "__COMPOSE_DIR__/.update-watchdog.sh"
-        exit 1
-    fi
-done
-
-echo "[watchdog] WARNING: Rollback also failed health check."
-rm -f "__COMPOSE_DIR__/.update-watchdog.sh"
-exit 1
-""".replace("__COMPOSE_CMD__", compose_cmd) \
-   .replace("__COMPOSE_DIR__", compose_dir)
+    """Build the appliance watchdog with the image retained before pull."""
+    return _build_recovery_script(compose_dir, None, has_standalone, recovery_image)
 
 
 def _launch_appliance_watchdog(
     compose_dir: Path,
     has_standalone: bool,
+    recovery_image: tuple[str, str, str],
 ) -> bool:
     """Launch the appliance watchdog in a detached docker:cli container."""
     try:
@@ -885,7 +817,7 @@ def _launch_appliance_watchdog(
             capture_output=True, timeout=10,
         )
 
-        script = _build_appliance_watchdog_script(str(compose_dir), has_standalone)
+        script = _build_appliance_watchdog_script(str(compose_dir), has_standalone, recovery_image)
         watchdog_path = compose_dir / ".update-watchdog.sh"
         watchdog_path.write_text(script)
         watchdog_path.chmod(0o755)
@@ -927,8 +859,12 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
         return _normalize_apply_result({"success": False, "message": "Cannot find compose directory"})
 
     image_ref = f"{GHCR_IMAGE}:{target_tag}"
+    pending = False
 
     try:
+        recovery_image = _retain_recovery_image()
+        if not recovery_image:
+            return _normalize_apply_result({"success": False, "message": "Cannot retain a healthy recovery image"})
         # NOTE: appliance/image-pull integrity is a documented follow-up. The
         # git-checkout path (which builds arbitrary local code — the higher
         # risk) is signature-gated via _verify_tag_signature. Pinning/verifying
@@ -952,19 +888,14 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
             "autoupdate_pending_at": datetime.now().isoformat(),
         })
 
+        pending = True
         has_standalone = (compose_dir / "docker-compose.standalone.yml").exists()
 
         # Launch watchdog for health-checked swap with rollback
-        launched = _launch_appliance_watchdog(compose_dir, has_standalone)
+        launched = _launch_appliance_watchdog(compose_dir, has_standalone, recovery_image)
         if not launched:
-            logger.warning("Appliance watchdog failed, falling back to direct swap")
-            compose_cmd = _get_compose_cmd(compose_dir)
-            subprocess.Popen(
-                compose_cmd + ["up", "-d", "--no-build", "sixtyops-mgmt"],
-                cwd=compose_dir,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            raise RuntimeError("Cannot start guarded update: appliance watchdog unavailable")
+        pending = False
 
         return _normalize_apply_result({
             "success": True,
@@ -972,9 +903,13 @@ async def _apply_update_appliance(target_version: str, target_tag: str) -> dict:
         })
 
     except subprocess.TimeoutExpired:
-        return _normalize_apply_result({"success": False, "message": "Docker pull timed out"})
+        if pending:
+            _clear_pending_update()
+        return _normalize_apply_result({"success": False, "message": "Docker command timed out"})
     except Exception as e:
         logger.exception(f"Appliance update failed: {e}")
+        if pending:
+            _clear_pending_update()
         return _normalize_apply_result({"success": False, "message": str(e)})
 
 
@@ -1035,7 +970,8 @@ async def apply_update() -> dict:
     if not _docker_socket_available() or not repo_dir:
         return _normalize_apply_result({"success": False, **_manual_update_instructions(target_tag, repo_dir)})
 
-    compose_cmd = _get_compose_cmd(repo_dir)
+    staged = False
+    rollback_ref = None
     git_cmd = ["git", "-C", str(repo_dir)]
 
     try:
@@ -1134,30 +1070,29 @@ async def apply_update() -> dict:
                 "message": sig_reason,
             })
 
+        host_repo_dir = _get_host_repo_path()
+        if not host_repo_dir:
+            return _normalize_apply_result({"success": False, "message": "Cannot start guarded update: host repo path unavailable"})
+        recovery_image = _retain_recovery_image()
+        if not recovery_image:
+            return _normalize_apply_result({"success": False, "message": "Cannot retain a healthy recovery image"})
+
         # Checkout the exact tag — no unreviewed code from main
         logger.info(f"Checking out {target_tag}...")
+        staged = True
         checkout_result = subprocess.run(
             git_cmd + ["checkout", target_tag],
             capture_output=True, text=True, timeout=30,
         )
         if checkout_result.returncode != 0:
-            return _normalize_apply_result({
-                "success": False,
-                "message": f"Git checkout failed: {checkout_result.stderr}",
-            })
+            raise RuntimeError(f"Git checkout failed: {checkout_result.stderr}")
 
         # Verify the checked-out version matches what we expect
         version_file = repo_dir / "updater" / "__init__.py"
         if version_file.exists():
             content = version_file.read_text()
             if f'"{target_version}"' not in content:
-                # Revert checkout
-                subprocess.run(git_cmd + ["checkout", rollback_ref],
-                               capture_output=True, timeout=30)
-                return _normalize_apply_result({
-                    "success": False,
-                    "message": f"Version mismatch: tag {target_tag} does not contain version {target_version}",
-                })
+                raise RuntimeError(f"Version mismatch: tag {target_tag} does not contain version {target_version}")
 
         # Store pending update info (persists in DB through restart)
         db.set_settings({
@@ -1166,47 +1101,29 @@ async def apply_update() -> dict:
             "autoupdate_rollback_ref": rollback_ref,
         })
 
-        # Discover host repo path for the watchdog container
-        host_repo_dir = _get_host_repo_path()
         has_standalone = (repo_dir / "docker-compose.standalone.yml").exists()
-
-        if host_repo_dir:
-            # Launch watchdog: build, swap, health check, rollback on failure
-            launched = _launch_watchdog(repo_dir, host_repo_dir, rollback_ref, has_standalone)
-            if not launched:
-                logger.warning("Watchdog failed to launch, falling back to direct update")
-                subprocess.Popen(
-                    compose_cmd + ["up", "-d", "--build", "sixtyops-mgmt"],
-                    cwd=repo_dir,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-        else:
-            # Can't determine host path — proceed without rollback
-            logger.warning("Could not determine host repo path; no rollback available")
-            subprocess.Popen(
-                compose_cmd + ["up", "-d", "--build", "sixtyops-mgmt"],
-                cwd=repo_dir,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+        if not _launch_watchdog(repo_dir, host_repo_dir, rollback_ref, has_standalone, recovery_image):
+            raise RuntimeError("Cannot start guarded update: watchdog unavailable")
+        staged = False
 
         return _normalize_apply_result({
             "success": True,
             "message": f"Updating to {target_tag}. The application will restart shortly.",
         })
 
-    except subprocess.TimeoutExpired:
-        return _normalize_apply_result({
-            "success": False,
-            "message": "Docker command timed out",
-        })
     except Exception as e:
-        logger.exception(f"Update failed: {e}")
-        return _normalize_apply_result({
-            "success": False,
-            "message": str(e),
-        })
+        message = "Docker command timed out" if isinstance(e, subprocess.TimeoutExpired) else str(e)
+        logger.exception("Update initiation failed")
+        if staged:
+            try:
+                restored = subprocess.run(git_cmd + ["checkout", rollback_ref],
+                                          capture_output=True, timeout=30)
+                if restored.returncode != 0:
+                    message += "; source recovery failed"
+            except Exception:
+                message += "; source recovery failed"
+            _clear_pending_update()
+        return _normalize_apply_result({"success": False, "message": message})
 
 
 async def verify_update_on_startup(broadcast_func: Optional[Callable] = None):
