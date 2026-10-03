@@ -2810,7 +2810,7 @@
             </button>
             <span class="role-badge" id="userRoleBadge"></span>
             <div class="user-menu">
-                <button class="user-btn" aria-label="Settings and account menu" onclick="document.getElementById('userDropdown').classList.toggle('open')">
+                <button id="settingsMenuTrigger" class="user-btn" aria-label="Settings and account menu" onclick="document.getElementById('userDropdown').classList.toggle('open')">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
                         <circle cx="12" cy="12" r="3"/>
@@ -3279,10 +3279,10 @@
 
     <!-- App Settings Modal -->
     <div class="backup-overlay" id="appSettingsOverlay" onclick="if(event.target===this)closeAppSettingsModal()">
-        <div class="backup-modal app-settings-modal">
+        <div class="backup-modal app-settings-modal" id="appSettingsDialog" role="dialog" aria-modal="true" aria-labelledby="appSettingsTitle" tabindex="-1">
             <div class="app-settings-header">
-                <span style="font-size:0.9rem;font-weight:600;">App Settings</span>
-                <button onclick="closeAppSettingsModal()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.1rem;line-height:1;padding:4px;">&times;</button>
+                <span id="appSettingsTitle" style="font-size:0.9rem;font-weight:600;">App Settings</span>
+                <button id="appSettingsClose" type="button" aria-label="Close App Settings" onclick="closeAppSettingsModal()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:var(--text-xl);line-height:1;padding:var(--space-2);min-width:var(--space-8);min-height:var(--space-8);">&times;</button>
             </div>
 
             <!-- Tabs -->
@@ -7068,6 +7068,7 @@
             document.getElementById('userDropdown').classList.remove('open');
             document.getElementById('appSettingsOverlay').classList.add('open');
             switchSettingsTab(target.tab, target.subtab);
+            document.getElementById('appSettingsClose').focus();
 
             // Load data for all tabs
             loadAppUpdateStatus();
@@ -7111,8 +7112,50 @@
             }
         }
 
+        function handleAppSettingsKeydown(event) {
+            const overlay = document.getElementById('appSettingsOverlay');
+            if (!overlay.classList.contains('open')) return;
+            // Handle keys from Settings, or from the page body after Settings loses focus.
+            // Keys from other dialogs belong to those dialogs.
+            const target = event.target;
+            if (target !== document.body && target !== document.documentElement && !overlay.contains(target)) return;
+            // The confirmation dialog owns the keyboard while it is open.
+            if (document.getElementById('confirmOverlay')?.classList.contains('open')) return;
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                closeAppSettingsModal();
+                return;
+            }
+            if (event.key !== 'Tab') return;
+            const dialog = document.getElementById('appSettingsDialog');
+            const controls = [...dialog.querySelectorAll('button, a[href], input, select, textarea, [tabindex]')]
+                .filter(el => el.tabIndex >= 0 && !el.matches(':disabled') &&
+                    !el.closest('[inert]') && el.getClientRects().length > 0 &&
+                    !['hidden', 'collapse'].includes(getComputedStyle(el).visibility));
+            const first = controls[0];
+            const last = controls[controls.length - 1];
+            if (!first) {
+                event.preventDefault();
+                dialog.focus();
+            } else if (!controls.includes(document.activeElement)) {
+                event.preventDefault();
+                (event.shiftKey ? last : first).focus();
+            } else if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        }
+
+        // Listen on document so keys still work after a refresh removes the focused control.
+        // This listener is added before the confirmation listener, so it sees the confirmation state first.
+        document.addEventListener('keydown', handleAppSettingsKeydown);
+
         function closeAppSettingsModal() {
             document.getElementById('appSettingsOverlay').classList.remove('open');
+            document.getElementById('settingsMenuTrigger').focus();
             // Clear status messages
             const statusEls = ['backupStatus', 'notifStatus', 'oidcStatus', 'deviceStatus', 'appUpdateStatus', 'radiusConfigStatus', 'radiusPushStatus', 'radiusLdapStatus', 'sslStatus'];
             statusEls.forEach(id => {
