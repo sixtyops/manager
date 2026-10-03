@@ -80,6 +80,8 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- Website telemetry copy now states the administrator opt-in and separate
+  environment kill switch. Telemetry behavior is unchanged.
 - Filled primary buttons use darker teal backgrounds for readable white text
   on the dashboard, login, and setup pages. The general accent stays unchanged.
 - About now distinguishes unchecked or failed update checks from a verified
