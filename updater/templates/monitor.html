@@ -24,6 +24,9 @@
                state colors live in the info/success/warning/danger families. */
             --primary: #0D9488;
             --primary-hover: #0F766E;
+            --primary-fill: #0F766E;
+            --primary-fill-hover: #115E59;
+            --primary-fill-text: #ffffff;
             --primary-text: #115E59;
             --primary-bg: #CCFBF1;
             --primary-bg-hover: #99F6E4;
@@ -845,13 +848,13 @@
             opacity: 0.7;
         }
         .btn-primary {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
+            background: var(--primary-fill);
+            color: var(--primary-fill-text);
+            border-color: var(--primary-fill);
         }
         .btn-primary:hover {
-            background: var(--primary-hover);
-            border-color: var(--primary-hover);
+            background: var(--primary-fill-hover);
+            border-color: var(--primary-fill-hover);
         }
         .btn-danger {
             background: var(--danger);

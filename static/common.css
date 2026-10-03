@@ -15,6 +15,9 @@
     --input-bg: #ffffff;
     --primary: #0D9488;
     --primary-hover: #0F766E;
+    --primary-fill: #0F766E;
+    --primary-fill-hover: #115E59;
+    --primary-fill-text: #ffffff;
     --secondary-bg: #f3f4f6;
     --secondary-hover: #e5e7eb;
     --secondary-text: #374151;
@@ -112,8 +115,8 @@ textarea:focus {
 .btn-primary {
     width: 100%;
     padding: 12px;
-    background: var(--primary);
-    color: #ffffff;
+    background: var(--primary-fill);
+    color: var(--primary-fill-text);
     border: none;
     border-radius: 8px;
     font-size: 0.96rem;
@@ -123,7 +126,7 @@ textarea:focus {
 }
 
 .btn-primary:hover {
-    background: var(--primary-hover);
+    background: var(--primary-fill-hover);
 }
 
 .sso-btn {
