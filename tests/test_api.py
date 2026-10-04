@@ -1857,6 +1857,37 @@ class TestConfigTemplateFormDataStorage:
         with db.get_db() as conn:
             assert [tuple(r) for r in conn.execute("SELECT * FROM config_templates ORDER BY id")] == before
 
+    def test_full_migration_read_failure_rolls_back_old_bytes(self, tmp_path, monkeypatch):
+        import sqlite3
+        from updater import database as db
+        from updater.db.schema import build_schema
+        monkeypatch.setattr(db, "DB_PATH", tmp_path / "read-failure.db")
+        with db.get_db() as conn:
+            build_schema(conn)
+            db._migrate(conn)
+            conn.execute("INSERT INTO devices (ip,role,username,password) VALUES (?,?,?,?)",
+                         ("192.0.2.1", "ap", "fixture", "synthetic-legacy-password"))
+            for index in (1, 2):
+                conn.execute("INSERT INTO config_templates (name,category,config_fragment,form_data) VALUES (?,?,?,?)",
+                             (str(index), "snmp", "{}", json.dumps({"index": index})))
+        with db.get_db() as conn:
+            before = [tuple(r) for r in conn.execute("SELECT * FROM config_templates ORDER BY id")]
+            device_before = tuple(conn.execute("SELECT * FROM devices").fetchone())
+
+        def deny_form_read(action, table, column, *_):
+            if action == sqlite3.SQLITE_READ and table == "config_templates" and column == "form_data":
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        with pytest.raises(sqlite3.DatabaseError, match="prohibited"):
+            with db.get_db() as conn:
+                conn.set_authorizer(deny_form_read)
+                # Run every migration, including device encryption before the failed SELECT.
+                db._migrate(conn)
+        with db.get_db() as conn:
+            assert [tuple(r) for r in conn.execute("SELECT * FROM config_templates ORDER BY id")] == before
+            assert tuple(conn.execute("SELECT * FROM devices").fetchone()) == device_before
+
     @pytest.mark.parametrize("reader", ["one", "list", "category", "device", "grouped"])
     def test_unreadable_form_raises_without_changing_storage(self, mock_db, reader):
         from cryptography.fernet import Fernet, InvalidToken

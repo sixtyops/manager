@@ -529,18 +529,15 @@ def _migrate_encrypt_config_templates(db):
     """Encrypt plaintext config_fragment and form_data with the existing key.
 
     Skip empty values and ciphertext so repeated startup migration is safe.
-    The caller owns the transaction; encryption errors propagate for rollback.
+    The caller owns the transaction; read/write/encryption errors propagate.
     Older readers cannot parse encrypted form_data. A code revert alone cannot
     downgrade migrated data. Restore a verified pre-migration database with its
     matching key before running older code; keep the current data/key backup.
     This migration does not change old backups or other secret-bearing stores.
     """
-    try:
-        rows = db.execute(
-            "SELECT id, config_fragment, form_data FROM config_templates"
-        ).fetchall()
-    except Exception:
-        return
+    rows = db.execute(
+        "SELECT id, config_fragment, form_data FROM config_templates"
+    ).fetchall()
     migrated = 0
     for row in rows:
         updates = {}
