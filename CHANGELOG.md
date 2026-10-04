@@ -10,6 +10,13 @@ All notable changes to this project are documented in this file.
   form data; a code revert alone is not a compatible downgrade. An older-code
   restore needs a verified pre-migration database and its matching key. This does
   not encrypt old backups or cover other secret stores.
+- Application and syslog output redact ordinary and percent-encoded HTTP(S)
+  URL userinfo. Webhook error logs also redact the known configured credentials,
+  including raw spaces and quotes, in a short-lived logging context. Diagnostic
+  context remains outside the generic URL match. Known credential literals are
+  hidden during webhook error logging. Request authentication is unchanged.
+  No request credentials enter the process-lifetime registry. Other path/query
+  tokens, standalone headers and session values remain outside this coverage.
 
 ### Added
 - Application and syslog output handlers now redact the credential suffix of

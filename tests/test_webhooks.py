@@ -202,3 +202,141 @@ class TestFeatureGating:
     def test_webhooks_feature_exists(self):
         from updater.license import Feature
         assert Feature.WEBHOOKS == "webhooks"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 403, None])
+@pytest.mark.parametrize("userinfo,credentials", [
+    ("synthetic-user:synthetic-password", b"synthetic-user:synthetic-password"),
+    ("synthetic%40user:synthetic%3Apassword", b"synthetic@user:synthetic:password"),
+    ("synthetic'user:synthetic(pass)", b"synthetic'user:synthetic(pass)"),
+    ('synthetic-user:synthetic"password', b'synthetic-user:synthetic"password'),
+    ("synthetic-user:synthetic password", b"synthetic-user:synthetic password"),
+    ("synthetic-user:synthetic{password", b"synthetic-user:synthetic{password"),
+    ("synthetic-user:synthetic}password", b"synthetic-user:synthetic}password"),
+    ("synthetic-user:synthetic<password", b"synthetic-user:synthetic<password"),
+    ("synthetic-user:synthetic>password", b"synthetic-user:synthetic>password"),
+])
+async def test_actual_webhook_userinfo_logs_preserve_request(monkeypatch, status, userinfo, credentials):
+    import base64
+    import io
+    import logging
+    import socket
+    import sys
+    from datetime import datetime
+    import httpx
+    from updater import app, webhooks, logging_filter as scrub
+
+    monkeypatch.setattr(scrub, "_secrets", set())
+    monkeypatch.setattr(scrub, "_pattern", None)
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+    monkeypatch.setattr(root, "level", root.level)
+    stream = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", stream)
+    app.configure_logging()
+    url = "https://" + userinfo + "@receiver.example.test:8443/hook?mode=test#result"
+    settings = {"webhook_enabled": "true", "webhook_url": url, "webhook_method": "PUT",
+                "webhook_events": "test", "webhook_headers": '{"X-Synthetic": "unchanged"}'}
+    monkeypatch.setattr(webhooks.db, "get_setting", lambda k, d="": settings.get(k, d))
+    # Exercise actual URL validation without making a DNS query.
+    monkeypatch.setattr(webhooks.socket, "getaddrinfo", lambda *args: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("203.0.113.1", 443))])
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if status is None:
+            raise httpx.ConnectError("Synthetic failure: " + url, request=request)
+        return httpx.Response(status, text="Synthetic response")
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(webhooks.httpx, "AsyncClient", lambda **kwargs:
+                        real_client(transport=httpx.MockTransport(respond), **kwargs))
+    try:
+        assert await webhooks.send_webhook("test", {"synthetic": True}) is (status == 200)
+        assert len(requests) == 1
+        request = requests[0]
+        assert request.url == httpx.URL(url)
+        assert request.method == "PUT"
+        assert request.headers["authorization"] == "Basic " + base64.b64encode(credentials).decode()
+        assert request.headers["X-Synthetic"] == "unchanged"
+        body = json.loads(request.content)
+        assert body["event"] == "test" and body["data"] == {"synthetic": True}
+        assert datetime.fromisoformat(body["timestamp"])
+        output = stream.getvalue()
+        redacted = "https://[REDACTED]@receiver.example.test:8443/hook?mode=test#result"
+        assert redacted in output
+        assert userinfo not in output
+        if status is None:
+            assert "Failed to send webhook: Synthetic failure: " in output
+        else:
+            assert f'HTTP Request: PUT {redacted} "HTTP/1.1 {status}' in output
+        assert scrub._secrets == set() and scrub._pattern is None
+    finally:
+        root.handlers[0].close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["parse", "string", "normal"])
+async def test_webhook_failure_is_safe_before_record_creation(monkeypatch, failure):
+    import io
+    import logging
+    import socket
+    import httpx
+    from updater import logging_filter as scrub, webhooks
+
+    monkeypatch.setattr(scrub, "_secrets", set())
+    monkeypatch.setattr(scrub, "_pattern", None)
+    url = 'https://synthetic-user:synthetic" password@receiver.example.test/hook'
+    control = "Endpoint https://receiver.example.test:8443 failed; contact support@example.test"
+    settings = {"webhook_enabled": "true", "webhook_url": url, "webhook_events": "test"}
+    monkeypatch.setattr(webhooks.db, "get_setting", lambda k, d="": settings.get(k, d))
+    monkeypatch.setattr(webhooks.socket, "getaddrinfo", lambda *args: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("203.0.113.1", 443))])
+    records = []
+
+    class Capture(logging.Handler):
+        def emit(self, record):
+            if record.name == webhooks.logger.name:
+                records.append(record.getMessage())
+
+    class BadString(Exception):
+        def __str__(self):
+            raise ValueError("Bad exception string: " + url)
+
+    def parse_failure(value):
+        raise ValueError("Parser failed: " + url)
+
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if failure == "parse":
+            monkeypatch.setattr(scrub, "urlsplit", parse_failure)
+        if failure == "string":
+            raise BadString()
+        raise httpx.ConnectError("Synthetic failure: " + url + "\n" + control + '\nPassword: synthetic" password', request=request)
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(webhooks.httpx, "AsyncClient", lambda **kwargs:
+                        real_client(transport=httpx.MockTransport(respond), **kwargs))
+    stream = io.StringIO()
+    output = logging.StreamHandler(stream)
+    scrub.install_sanitizer(output)
+    monkeypatch.setattr(webhooks.logger, "handlers", [Capture(), output])
+    monkeypatch.setattr(webhooks.logger, "propagate", False)
+    monkeypatch.setattr(webhooks.logger, "level", logging.INFO)
+    assert await webhooks.send_webhook("test", {"synthetic": True}) is False
+    assert len(requests) == 1
+    assert requests[0].url == httpx.URL(url)
+    assert requests[0].headers["authorization"] == httpx.BasicAuth('synthetic-user', 'synthetic" password')._auth_header
+    assert len(records) == 1 and "synthetic" not in records[0]
+    assert "synthetic" not in stream.getvalue()
+    if failure == "normal":
+        assert control in records[0] and control in stream.getvalue()
+        assert "Password: [REDACTED]" in records[0]
+    else:
+        assert "error details unavailable" in records[0]
+    assert scrub._sanitize('synthetic" password') == 'synthetic" password'
+    assert scrub._secrets == set()
