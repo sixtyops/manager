@@ -202,3 +202,70 @@ class TestFeatureGating:
     def test_webhooks_feature_exists(self):
         from updater.license import Feature
         assert Feature.WEBHOOKS == "webhooks"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 403, None])
+@pytest.mark.parametrize("userinfo,credentials", [
+    ("synthetic-user:synthetic-password", b"synthetic-user:synthetic-password"),
+    ("synthetic%40user:synthetic%3Apassword", b"synthetic@user:synthetic:password"),
+    ("synthetic'user:synthetic(pass)", b"synthetic'user:synthetic(pass)"),
+])
+async def test_actual_webhook_userinfo_logs_preserve_request(monkeypatch, status, userinfo, credentials):
+    import base64
+    import io
+    import logging
+    import socket
+    import sys
+    from datetime import datetime
+    import httpx
+    from updater import app, webhooks, logging_filter as scrub
+
+    monkeypatch.setattr(scrub, "_secrets", set())
+    monkeypatch.setattr(scrub, "_pattern", None)
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+    monkeypatch.setattr(root, "level", root.level)
+    stream = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", stream)
+    app.configure_logging()
+    url = "https://" + userinfo + "@receiver.example.test:8443/hook?mode=test#result"
+    settings = {"webhook_enabled": "true", "webhook_url": url, "webhook_method": "PUT",
+                "webhook_events": "test", "webhook_headers": '{"X-Synthetic": "unchanged"}'}
+    monkeypatch.setattr(webhooks.db, "get_setting", lambda k, d="": settings.get(k, d))
+    # Exercise actual URL validation without making a DNS query.
+    monkeypatch.setattr(webhooks.socket, "getaddrinfo", lambda *args: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("203.0.113.1", 443))])
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if status is None:
+            raise httpx.ConnectError("Synthetic failure: " + url, request=request)
+        return httpx.Response(status, text="Synthetic response")
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(webhooks.httpx, "AsyncClient", lambda **kwargs:
+                        real_client(transport=httpx.MockTransport(respond), **kwargs))
+    try:
+        assert await webhooks.send_webhook("test", {"synthetic": True}) is (status == 200)
+        assert len(requests) == 1
+        request = requests[0]
+        assert request.url == httpx.URL(url)
+        assert request.method == "PUT"
+        assert request.headers["authorization"] == "Basic " + base64.b64encode(credentials).decode()
+        assert request.headers["X-Synthetic"] == "unchanged"
+        body = json.loads(request.content)
+        assert body["event"] == "test" and body["data"] == {"synthetic": True}
+        assert datetime.fromisoformat(body["timestamp"])
+        output = stream.getvalue()
+        redacted = "https://[REDACTED]@receiver.example.test:8443/hook?mode=test#result"
+        assert redacted in output
+        assert userinfo not in output
+        if status is None:
+            assert "Failed to send webhook: Synthetic failure: " in output
+        else:
+            assert f'HTTP Request: PUT {redacted} "HTTP/1.1 {status}' in output
+        assert scrub._secrets == set() and scrub._pattern is None
+    finally:
+        root.handlers[0].close()

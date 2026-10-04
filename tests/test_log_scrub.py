@@ -14,6 +14,8 @@ from updater import logging_filter as scrub
 
 SLACK_URL = "https://hooks.slack.com/services/SYNTHETIC_TEAM/SYNTHETIC_CHANNEL/synthetic-capability"
 SLACK_REDACTED = "https://hooks.slack.com/services/[REDACTED]"
+USERINFO_URL = "https://synthetic-user:synthetic-password@receiver.example.test:8443/hook?mode=test#result"
+USERINFO_REDACTED = "https://[REDACTED]@receiver.example.test:8443/hook?mode=test#result"
 
 
 @pytest.fixture(autouse=True)
@@ -241,9 +243,10 @@ def test_syslog_output_and_reinitialization(monkeypatch, protocol):
         except ValueError:
             sf._syslog_logger.exception("Request failed with %s", "synthetic-syslog-value")
         sf.send_event("device", "Webhook failed: " + SLACK_URL, "error")
+        sf.send_event("device", "Webhook failed: " + USERINFO_URL, "error")
         sender = transports[1].sendto if protocol == "udp" else transports[1].sendall
         packets = [call.args[0].decode("utf-8") for call in sender.call_args_list]
-        assert len(packets) == 3
+        assert len(packets) == 4
         assert packets[0] == "<131>sixtyops: [device] Failure: [REDACTED]\x00"
         assert "sixtyops: Request failed with [REDACTED]" in packets[1]
         assert "ValueError: lookup failed: [REDACTED]" in packets[1]
@@ -251,18 +254,22 @@ def test_syslog_output_and_reinitialization(monkeypatch, protocol):
         assert all("synthetic-syslog-value" not in packet for packet in packets)
         assert packets[2] == "<131>sixtyops: [device] Webhook failed: " + SLACK_REDACTED + "\x00"
         assert "synthetic-capability" not in packets[2]
+        assert packets[3] == "<131>sixtyops: [device] Webhook failed: " + USERINFO_REDACTED + "\x00"
+        assert "synthetic-password" not in packets[3]
     finally:
         sf._setup_handler({**config, "enabled": False})
 
 
 @pytest.mark.parametrize("protocol", ["udp", "tcp"])
 @pytest.mark.parametrize("diagnostics_enabled", [False, True])
-def test_syslog_transport_failure_sanitizes_stderr(monkeypatch, protocol, diagnostics_enabled):
+@pytest.mark.parametrize("secret,redacted", [("synthetic-transport-value", "[REDACTED]"),
+                                              (USERINFO_URL, USERINFO_REDACTED)])
+def test_syslog_transport_failure_sanitizes_stderr(monkeypatch, protocol, diagnostics_enabled, secret, redacted):
     from updater import syslog_forwarder as sf
 
     transport = MagicMock()
-    transport.sendto.side_effect = OSError("send failed: synthetic-transport-value")
-    transport.sendall.side_effect = OSError("send failed: synthetic-transport-value")
+    transport.sendto.side_effect = OSError("send failed: " + secret)
+    transport.sendall.side_effect = OSError("send failed: " + secret)
 
     def local_socket(handler):
         handler.unixsocket = False
@@ -281,17 +288,18 @@ def test_syslog_transport_failure_sanitizes_stderr(monkeypatch, protocol, diagno
     monkeypatch.setattr(logging, "raiseExceptions", diagnostics_enabled)
     config = {"enabled": True, "host": "192.0.2.1", "port": 514,
               "protocol": protocol, "facility": "local0"}
-    scrub.register_secret("synthetic-transport-value")
+    if secret != USERINFO_URL:
+        scrub.register_secret(secret)
     try:
         sf._setup_handler(config)
-        sf.send_event("device", "Failure: synthetic-transport-value", "error")
-        syslog_logger.error("Request failed with %s", "synthetic-transport-value")
+        sf.send_event("device", "Failure: " + secret, "error")
+        syslog_logger.error("Request failed with %s", secret)
         diagnostic = stream.getvalue()
-        assert "synthetic-transport-value" not in diagnostic
+        assert secret not in diagnostic
         if diagnostics_enabled:
-            assert "OSError: send failed: [REDACTED]" in diagnostic
-            assert "Message: [device] Failure: [REDACTED]" in diagnostic
-            assert "Message: Request failed with [REDACTED]" in diagnostic
+            assert "OSError: send failed: " + redacted in diagnostic
+            assert "Message: [device] Failure: " + redacted in diagnostic
+            assert "Message: Request failed with " + redacted in diagnostic
         else:
             assert diagnostic == ""
     finally:
@@ -447,4 +455,98 @@ def test_long_slack_input(application_output):
     context = "https://hooks.slack.com/service/ordinary " * 10000
     app.logger.warning("%s%s end", context, SLACK_URL + "a" * 1000000)
     assert stream.getvalue().endswith(context + SLACK_REDACTED + " end\n")
+    assert scrub._secrets == set()
+
+
+
+
+@pytest.mark.parametrize("url,expected", [
+    (USERINFO_URL, USERINFO_REDACTED),
+    ("HtTpS://synthetic-user:synthetic-password@host.test/path", "HtTpS://[REDACTED]@host.test/path"),
+    ("http://synthetic-user@host.test", "http://[REDACTED]@host.test"),
+    ("https://user%40example:p%3Ass%2Fword@host.test/?q=a@b#c@d", "https://[REDACTED]@host.test/?q=a@b#c@d"),
+    ("https://user:password@[2001:db8::1]:8443/path", "https://[REDACTED]@[2001:db8::1]:8443/path"),
+    ("https://user:password@host.test?next=a@b", "https://[REDACTED]@host.test?next=a@b"),
+    ("https://synthetic'user:p(ass)@host.test/path", "https://[REDACTED]@host.test/path"),
+])
+@pytest.mark.parametrize("wrapper", ["%s", "'%s'", '"%s"', "(%s)", "[%s]", "<%s>", "{%s}", "url=%s"])
+def test_userinfo_authority_and_log_boundaries(application_output, url, expected, wrapper):
+    app, stream, _ = application_output
+    app.logger.warning("URL: %s next", wrapper % url)
+    assert stream.getvalue().endswith("URL: " + wrapper % expected + " next\n")
+    assert scrub._secrets == set()
+
+
+@pytest.mark.parametrize("url", [
+    "https://host.test/path@user:password",
+    "https://host.test?email=user:password@other.test",
+    "https://host.test#user:password@other.test",
+    "https://[2001:db8::1]:8443/path",
+    "https://host.test/no-credentials",
+    "user:password@host.test",
+    "ftp://user:password@host.test/path",
+    "xhttps://user:password@host.test/path",
+    "https%3A%2F%2Fuser%3Apassword%40host.test",
+    "https://host.test/path?text=a@b#c@d",
+])
+def test_userinfo_non_authority_controls(application_output, url):
+    app, stream, _ = application_output
+    app.logger.warning("%s", url)
+    assert stream.getvalue().endswith(url + "\n")
+
+
+def test_userinfo_multiple_urls_and_literal_order(application_output):
+    app, stream, _ = application_output
+    scrub.register_secret("synthetic-user")
+    pattern = scrub._pattern
+    for _ in range(100):
+        app.logger.warning("%s %s %s", USERINFO_URL, USERINFO_URL, SLACK_URL)
+    assert stream.getvalue().count(USERINFO_REDACTED) == 200
+    assert stream.getvalue().count(SLACK_REDACTED) == 100
+    assert "synthetic-user" not in stream.getvalue()
+    assert "synthetic-password" not in stream.getvalue()
+    assert scrub._secrets == {"synthetic-user"}
+    assert scrub._pattern is pattern
+
+
+def test_userinfo_chained_exceptions_and_formatter_diagnostics(application_output, monkeypatch):
+    app, stream, handler = application_output
+    try:
+        try:
+            raise ValueError("Request: " + USERINFO_URL)
+        except ValueError as cause:
+            raise RuntimeError("Retry: " + USERINFO_URL) from cause
+    except RuntimeError:
+        app.logger.exception("Failure: %s", USERINFO_URL)
+    assert "ValueError: Request: " + USERINFO_REDACTED in stream.getvalue()
+    assert "RuntimeError: Retry: " + USERINFO_REDACTED in stream.getvalue()
+    assert "Traceback (most recent call last)" in stream.getvalue()
+
+    class BrokenFormatter(logging.Formatter):
+        def format(self, record):
+            raise ValueError("Formatter: " + USERINFO_URL)
+
+    handler.setFormatter(BrokenFormatter())
+    scrub.install_sanitizer(handler)
+    monkeypatch.setattr(sys, "stderr", stream)
+    monkeypatch.setattr(logging, "raiseExceptions", True)
+    record = logging.LogRecord("synthetic", logging.ERROR, __file__, 1,
+                               "Failure: %s", (USERINFO_URL,), None)
+    handler.handle(record)
+    assert "ValueError: Formatter: " + USERINFO_REDACTED in stream.getvalue()
+    assert "Message: Failure: " + USERINFO_REDACTED in stream.getvalue()
+    assert "synthetic-password" not in stream.getvalue()
+    assert scrub._secrets == set()
+
+
+@pytest.mark.timeout(5)
+def test_userinfo_long_input_is_bounded(application_output):
+    app, stream, _ = application_output
+    # Exercise long nonmatches, a long authority and many repeated matches.
+    context = "https://" + "a" * 1000000 + "/path@ordinary "
+    repeated = ("https://user:password@host.test/path " * 10000)
+    app.logger.warning("%s%s%s end", context, repeated,
+                       "https://user:" + "p" * 1000000 + "@host.test/path")
+    expected = context + "https://[REDACTED]@host.test/path " * 10000
+    assert stream.getvalue().endswith(expected + "https://[REDACTED]@host.test/path end\n")
     assert scrub._secrets == set()
