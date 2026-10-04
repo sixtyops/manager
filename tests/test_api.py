@@ -1717,3 +1717,166 @@ class TestFirmwareHealthFlags:
         _annotate_firmware_health(files)
         assert files[0]["incomplete"] is False
         assert files[0]["duplicate"] is False
+
+
+class TestConfigTemplateFormDataStorage:
+    """Protect template storage while retaining the caller's JSON contract."""
+
+    @pytest.fixture(autouse=True)
+    def memory_key(self, monkeypatch):
+        from cryptography.fernet import Fernet
+        from updater import crypto
+        monkeypatch.setattr(crypto, "_fernet", Fernet(Fernet.generate_key()))
+        monkeypatch.setattr(crypto, "_load_fernet", MagicMock(
+            side_effect=AssertionError("Test attempted to access a key file")))
+
+    def test_api_form_data_encrypted_on_create_and_update(self, authed_client, mock_db):
+        from updater import database as db
+        from updater.crypto import is_encrypted
+        form = {"community": "synthetic-community", "port": 161, "optional": None,
+                "nested": {"label": "é", "values": [1, False, "text"]}}
+        response = authed_client.post("/api/config-templates", json={
+            "name": "Form storage", "category": "snmp",
+            "config_fragment": {"services": {"snmp": {"v2_ro_community": form["community"]}}},
+            "form_data": form,
+        })
+        assert response.status_code == 200
+        tid = response.json()["id"]
+        for new_form in (form, {**form, "community": "synthetic-replacement"}):
+            if new_form != form:
+                response = authed_client.put(f"/api/config-templates/{tid}", json={"form_data": new_form})
+                assert response.status_code == 200
+            raw = mock_db.execute("SELECT form_data FROM config_templates WHERE id=?", (tid,)).fetchone()[0]
+            assert is_encrypted(raw)
+            assert new_form["community"] not in raw
+            assert json.loads(db.get_config_template(tid)["form_data"]) == new_form
+            templates = authed_client.get("/api/config-templates").json()["templates"]
+            assert next(t for t in templates if t["id"] == tid)["form_data"] == new_form
+
+    @pytest.mark.parametrize("fragment_encrypted", [False, True])
+    @pytest.mark.parametrize("form_encrypted", [False, True])
+    def test_mixed_legacy_rows_all_readers_and_migration(self, mock_db, fragment_encrypted, form_encrypted):
+        from updater import database as db
+        from updater.crypto import encrypt_password, is_encrypted
+        site = db.create_tower_site("Form storage site")
+        db.upsert_access_point("192.0.2.1", "fixture", "synthetic", tower_site_id=site)
+        db.upsert_switch("198.51.100.1", "fixture", "synthetic", tower_site_id=site)
+        fragment = json.dumps({"services": {"snmp": {"v2_ro_community": "synthetic"}}})
+        global_form = json.dumps({"community": "synthetic-global"})
+        site_form = json.dumps({"community": "synthetic-site"})
+        ids = []
+        for scope, form in (("global", global_form), ("site", site_form)):
+            cursor = mock_db.execute(
+                "INSERT INTO config_templates (name,category,config_fragment,form_data,scope,site_id) VALUES (?,?,?,?,?,?)",
+                (scope, "snmp", encrypt_password(fragment) if (fragment_encrypted == (scope == "global")) else fragment,
+                 encrypt_password(form) if (form_encrypted == (scope == "global")) else form, scope, site if scope == "site" else None))
+            ids.append(cursor.lastrowid)
+        mock_db.commit()
+
+        def check_readers():
+            assert db.get_config_template(ids[0])["form_data"] == global_form
+            assert {t["id"]: t["form_data"] for t in db.get_config_templates()} == dict(zip(ids, (global_form, site_form)))
+            assert db.get_config_template_by_category("snmp", "site")["form_data"] == site_form
+            assert db.get_config_templates_for_device("192.0.2.1", site)[0]["form_data"] == site_form
+            assert db.get_config_templates_for_device("192.0.2.1")[0]["form_data"] == global_form
+            grouped = db.get_all_effective_templates()
+            assert set(grouped) == {"192.0.2.1", "198.51.100.1"}
+            assert all(ts[0]["form_data"] == site_form for ts in grouped.values())
+            assert all(t["config_fragment"] == fragment for t in db.get_config_templates())
+
+        check_readers()
+        before = mock_db.execute("SELECT config_fragment,form_data FROM config_templates ORDER BY id").fetchall()
+        db._migrate_encrypt_config_templates(mock_db)
+        after = mock_db.execute("SELECT config_fragment,form_data FROM config_templates ORDER BY id").fetchall()
+        assert all(is_encrypted(value) for row in after for value in row)
+        for old, new in zip(before, after):
+            if is_encrypted(old[0]):
+                assert old[0] == new[0]
+            if is_encrypted(old[1]):
+                assert old[1] == new[1]
+        check_readers()
+        db._migrate_encrypt_config_templates(mock_db)
+        assert [tuple(row) for row in after] == [tuple(row) for row in mock_db.execute(
+            "SELECT config_fragment,form_data FROM config_templates ORDER BY id").fetchall()]
+        check_readers()
+
+    @pytest.mark.parametrize("empty", [None, ""])
+    def test_empty_form_values_preserved(self, mock_db, empty):
+        from updater import database as db
+        tid = db.save_config_template("Empty form", "snmp", "{}", form_data=empty)
+        for value in (empty, "{}", empty):
+            db.update_config_template(tid, form_data=value)
+            db._migrate_encrypt_config_templates(mock_db)
+            assert db.get_config_template(tid)["form_data"] == value
+            if not value:
+                assert mock_db.execute("SELECT form_data FROM config_templates WHERE id=?", (tid,)).fetchone()[0] == value
+
+    @pytest.mark.parametrize("operation", ["insert", "update"])
+    def test_encryption_failure_does_not_write_template(self, mock_db, monkeypatch, operation):
+        from updater import database as db
+        tid = db.save_config_template("Keep me", "snmp", "{}", form_data='{"secret":"synthetic-old"}')
+        before = tuple(mock_db.execute("SELECT * FROM config_templates WHERE id=?", (tid,)).fetchone())
+        real_encrypt = db.encrypt_password
+
+        def encrypt(value):
+            if value == '"synthetic-failure"':
+                raise RuntimeError("Synthetic encryption failure")
+            return real_encrypt(value)
+
+        monkeypatch.setattr(db, "encrypt_password", encrypt)
+        with pytest.raises(RuntimeError, match="Synthetic encryption failure"):
+            if operation == "insert":
+                db.save_config_template("Must not exist", "snmp", "{}", form_data='"synthetic-failure"')
+            else:
+                db.update_config_template(tid, name="Must not change", config_fragment='{"changed":true}', form_data='"synthetic-failure"')
+        assert len(db.get_config_templates()) == 1
+        assert tuple(mock_db.execute("SELECT * FROM config_templates WHERE id=?", (tid,)).fetchone()) == before
+
+    def test_migration_failure_rolls_back_prior_rows(self, tmp_path, monkeypatch):
+        from updater import database as db
+        from updater.db.schema import build_schema
+        monkeypatch.setattr(db, "DB_PATH", tmp_path / "synthetic.db")
+        with db.get_db() as conn:
+            build_schema(conn)
+            for index in (1, 2):
+                conn.execute("INSERT INTO config_templates (name,category,config_fragment,form_data) VALUES (?,?,?,?)",
+                             (str(index), "snmp", "{}", json.dumps({"index": index})))
+        with db.get_db() as conn:
+            before = [tuple(r) for r in conn.execute("SELECT * FROM config_templates ORDER BY id")]
+        real_encrypt = db.encrypt_password
+
+        def encrypt(value):
+            if value == json.dumps({"index": 2}):
+                raise RuntimeError("Synthetic second-row failure")
+            return real_encrypt(value)
+
+        monkeypatch.setattr(db, "encrypt_password", encrypt)
+        with pytest.raises(RuntimeError, match="Synthetic second-row failure"):
+            with db.get_db() as conn:
+                db._migrate_encrypt_config_templates(conn)
+        with db.get_db() as conn:
+            assert [tuple(r) for r in conn.execute("SELECT * FROM config_templates ORDER BY id")] == before
+
+    @pytest.mark.parametrize("reader", ["one", "list", "category", "device", "grouped"])
+    def test_unreadable_form_raises_without_changing_storage(self, mock_db, reader):
+        from cryptography.fernet import Fernet, InvalidToken
+        from updater import database as db, crypto
+        db.upsert_access_point("192.0.2.1", "fixture", "synthetic")
+        tid = db.save_config_template("Unreadable form", "snmp", "{}", form_data='{"secret":"synthetic"}')
+        raw = mock_db.execute("SELECT * FROM config_templates WHERE id=?", (tid,)).fetchone()
+        good_key = crypto._fernet
+        # Only form_data uses the wrong generated key. Fragment decryption still succeeds.
+        wrong_form = Fernet(Fernet.generate_key()).encrypt(b'{}').decode()
+        mock_db.execute("UPDATE config_templates SET form_data=? WHERE id=?", (wrong_form, tid))
+        mock_db.commit()
+        corrupted = tuple(mock_db.execute("SELECT * FROM config_templates WHERE id=?", (tid,)).fetchone())
+        readers = {"one": lambda: db.get_config_template(tid), "list": db.get_config_templates,
+                   "category": lambda: db.get_config_template_by_category("snmp"),
+                   "device": lambda: db.get_config_templates_for_device("192.0.2.1"),
+                   "grouped": db.get_all_effective_templates}
+        with pytest.raises(InvalidToken):
+            readers[reader]()
+        assert tuple(mock_db.execute("SELECT * FROM config_templates WHERE id=?", (tid,)).fetchone()) == corrupted
+        assert crypto._fernet is good_key
+        mock_db.execute("UPDATE config_templates SET form_data=? WHERE id=?", (raw["form_data"], tid))
+        assert db.get_config_template(tid)["form_data"] == crypto.decrypt_password(raw["form_data"])
