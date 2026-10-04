@@ -1723,17 +1723,18 @@ class TestUsersTemplateAPIHashing:
         })
         assert resp.status_code == 200, resp.text
         # The stored row should not contain the plaintext, and the
-        # decrypted-at-rest payload should hold a $1$ hash. config_fragment is
-        # Fernet-wrapped per #165, so we read through the public API; form_data
-        # is still plaintext.
+        # decrypted payloads must retain their user password hashes.
+        # Both payloads use Fernet, so inspect hashes through the DB reader.
         raw = mock_db.execute(
             "SELECT config_fragment, form_data FROM config_templates WHERE name = 'Users Test'"
         ).fetchone()
         assert "topsecret" not in raw["config_fragment"]  # encrypted → trivially holds
         assert "topsecret" not in raw["form_data"]
+        from updater.crypto import is_encrypted
+        assert is_encrypted(raw["form_data"])
         tpl = next(t for t in _db.get_config_templates() if t["name"] == "Users Test")
         frag = _json.loads(tpl["config_fragment"])
-        form = _json.loads(raw["form_data"])
+        form = _json.loads(tpl["form_data"])
         assert frag["system"]["users"][0]["password"].startswith("$1$")
         assert form["users"][0]["password"].startswith("$1$")
 
@@ -1791,8 +1792,10 @@ class TestUsersTemplateAPIHashing:
         row = mock_db.execute(
             "SELECT form_data FROM config_templates WHERE id = ?", (tid,)
         ).fetchone()
+        from updater.crypto import is_encrypted
+        assert is_encrypted(row["form_data"])
         frag = _json.loads(tpl["config_fragment"])
-        form = _json.loads(row["form_data"])
+        form = _json.loads(tpl["form_data"])
         assert frag["system"]["users"][0]["password"] == prior_hash
         assert form["users"][0]["password"] == prior_hash
 

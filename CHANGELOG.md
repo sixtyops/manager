@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Security
+- Config-template form data is encrypted at rest with the existing Fernet key.
+  Startup converts legacy plaintext rows. Older readers cannot read the migrated
+  form data; a code revert alone is not a compatible downgrade. An older-code
+  restore needs a verified pre-migration database and its matching key. This does
+  not encrypt old backups or cover other secret stores.
+
 ### Added
 - Application and syslog output handlers now redact the credential suffix of
   canonical `https://hooks.slack.com/services/...` URLs, including encoded
