@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from updater import database as db
+from tests.fixtures.fleet import make_fleet, set_version, set_health, confirm
 from updater import rollout_gate
 from updater.scheduler import AutoUpdateScheduler
 
@@ -56,10 +57,8 @@ def _discard_task(coro):
 
 
 def _seed_aps(n: int):
-    for i in range(n):
-        db.upsert_access_point(
-            f"10.0.0.{10 + i}", "root", "pass", enabled=True, firmware_version="1.0.0"
-        )
+    make_fleet(sites=1, aps_per_site=n, switches_per_site=0,
+               ap_models=("TNA-301",))
 
 
 def _seed_confirmed(ip: str, version: str, *, model: str = None):
@@ -392,3 +391,133 @@ def test_create_rollout_starts_at_pct10(mock_db):
     """New rollouts start at the first fleet wave, not the removed canary phase."""
     rid = db.create_rollout(FW)
     assert db.get_rollout(rid)["phase"] == "pct10"
+
+# Current-schema managed confirmation boundaries. Freeze both clocks used by
+# the real Hold path: scheduler health freshness and database release age.
+_HOLD_NOW = datetime(2026, 6, 2, 3, 15, tzinfo=timezone.utc)
+_HOLD_VERSION = "1.12.3.55002"
+
+
+@pytest.fixture
+def hold_clock(monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _HOLD_NOW.astimezone(tz) if tz else _HOLD_NOW.replace(tzinfo=None)
+
+    monkeypatch.setattr("updater.scheduler.datetime", Clock)
+    monkeypatch.setattr("updater.database.datetime", Clock)
+    return _HOLD_NOW
+
+
+def _fleet_hold_settings(fleet, role):
+    settings = _settings(hold_days=6, firmware="tna-30x-1.12.3-r55002-20260601-x.bin")
+    settings.update(schedule_scope="sites", schedule_scope_data=str(fleet["sites"][0]))
+    if role == "switch":
+        # Same version across families must not make AP proof count for switches.
+        settings["selected_firmware_tns100"] = "tns-100-1.12.3-r55002-20260601-x.bin"
+    return settings
+
+
+def test_managed_fleet_uses_current_schema(mock_db):
+    assert db.get_devices(enabled_only=False) == []
+    fleet = make_fleet()
+    assert len(fleet["sites"]) == 2
+    assert len(fleet["aps"]) == 10
+    assert len(fleet["switches"]) == 2
+    assert {d["model"] for d in fleet["aps"]} == {"TNA-301", "TNA-303L"}
+    for device in fleet["aps"] + fleet["switches"]:
+        row = db.get_device(device["ip"])
+        assert {k: row[k] for k in device} == device
+        assert row["enabled"] == 1
+        assert row["vendor"] == "tachyon"
+        assert row["firmware_version"] == "1.0.0"
+    assert len(db.get_devices(enabled_only=False)) == 12
+
+
+@pytest.mark.parametrize("role", ["ap", "switch"])
+@pytest.mark.parametrize("case", [
+    "valid", "wrong_version", "unconfirmed", "stale", "missing_seen",
+    "invalid_seen", "error", "disabled", "other_site", "wrong_family",
+    "at_cutoff", "before_cutoff", "after_cutoff",
+])
+@pytest.mark.asyncio
+async def test_managed_confirmation_hold_boundaries(mock_db, monkeypatch, hold_clock, role, case):
+    fleet = make_fleet(aps_per_site=3, switches_per_site=3, ap_models=("TNA-301",))
+    settings = _fleet_hold_settings(fleet, role)
+    devices = fleet["aps"] if role == "ap" else fleet["switches"]
+    prover = devices[3] if case == "other_site" else devices[0]
+    family = "tna-30x" if role == "ap" else "tns-100"
+    set_version(prover, "1.1.0" if case == "wrong_version" else _HOLD_VERSION)
+    if case != "missing_seen":
+        seen = hold_clock
+        if case == "stale":
+            seen -= timedelta(days=2)
+        elif case in ("at_cutoff", "before_cutoff", "after_cutoff"):
+            seen -= timedelta(hours=24)
+            seen += timedelta(microseconds={"at_cutoff": 0, "before_cutoff": -1,
+                                            "after_cutoff": 1}[case])
+        set_health(prover, "invalid" if case == "invalid_seen" else seen.isoformat(),
+                   error="synthetic poll failure" if case == "error" else None)
+    if case != "unconfirmed":
+        confirm(prover, _HOLD_VERSION)
+    if case == "disabled":
+        assert db.bulk_set_enabled(role, [prover["ip"]], False) == 1
+    if case == "wrong_family":
+        update = db.update_ap_status if role == "ap" else db.update_switch_status
+        update(prover["ip"], model="TNA-303L" if role == "ap" else "TNA-301")
+    if role == "switch":
+        # Valid AP proof leaves only the switch family's gate to test.
+        ap = fleet["aps"][0]
+        set_version(ap, _HOLD_VERSION)
+        set_health(ap, hold_clock.isoformat())
+        confirm(ap, _HOLD_VERSION)
+
+    db.set_settings(settings)
+    scheduler, start_update = _make_scheduler()
+    accepted = case in ("valid", "at_cutoff", "after_cutoff")
+    held, holds = scheduler._held_families(settings, None)
+    assert (family not in held) is accepted
+    assert holds[family]["confirmed_by"] == (prover["ip"] if accepted else None)
+    h = _Harness(scheduler, monkeypatch)
+    await h.tick()
+    assert start_update.call_count == int(accepted)
+    assert scheduler._state == ("running" if accepted else "blocked_firmware_hold")
+    if accepted:
+        call = start_update.call_args.kwargs
+        candidates = call["switch_ips"] if role == "switch" else call["ap_ips"]
+        assert candidates and prover["ip"] not in candidates
+        h.complete_job()
+        assert db.get_active_rollout()["phase"] == "pct50"
+        await h.tick()
+        assert start_update.call_count == 1, "Hold clearance started a second wave in one window"
+        assert scheduler._state == "waiting"
+
+
+@pytest.mark.parametrize("failed_read", ["get_all_access_points_dict", "get_all_switches_dict"])
+@pytest.mark.asyncio
+async def test_confirmation_fleet_read_failure_keeps_wave_held(mock_db, monkeypatch, hold_clock, failed_read):
+    fleet = make_fleet(aps_per_site=3, switches_per_site=3, ap_models=("TNA-301",))
+    settings = _fleet_hold_settings(fleet, "switch")
+    for prover in (fleet["aps"][0], fleet["switches"][0]):
+        set_version(prover, _HOLD_VERSION)
+        set_health(prover, hold_clock.isoformat())
+        confirm(prover, _HOLD_VERSION)
+    db.set_settings(settings)
+    scheduler, start_update = _make_scheduler()
+    real_read = getattr(db, failed_read)
+
+    def read(*, enabled_only=True):
+        # Fail the confirmation read; leave the pending-work read available.
+        # No Hold or scope helper is replaced.
+        if enabled_only:
+            raise RuntimeError("synthetic fleet read failure")
+        return real_read(enabled_only=enabled_only)
+
+    monkeypatch.setattr(db, failed_read, read)
+    assert scheduler._confirmed_family_devices(settings, {}, scheduler._target_versions(settings, None)) == {}
+    held, _ = scheduler._held_families(settings, None)
+    assert held == {"tna-30x", "tns-100"}
+    await _Harness(scheduler, monkeypatch).tick()
+    assert start_update.call_count == 0
+    assert scheduler._state == "blocked_firmware_hold"
