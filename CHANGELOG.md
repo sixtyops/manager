@@ -5,7 +5,8 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Security
-- Application and syslog output now redact HTTP(S) URL userinfo credentials.
+- Application and syslog output now redact raw and percent-encoded HTTP(S)
+  URL userinfo credentials, including accepted spaces and quote characters.
   The rest of the URL remains visible for diagnosis. This stateless protection
   preserves request authentication and adds no secret-registry entries. Other
   path/query tokens, standalone headers and session values remain outside it.

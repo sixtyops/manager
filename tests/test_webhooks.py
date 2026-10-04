@@ -210,6 +210,12 @@ class TestFeatureGating:
     ("synthetic-user:synthetic-password", b"synthetic-user:synthetic-password"),
     ("synthetic%40user:synthetic%3Apassword", b"synthetic@user:synthetic:password"),
     ("synthetic'user:synthetic(pass)", b"synthetic'user:synthetic(pass)"),
+    ('synthetic-user:synthetic"password', b'synthetic-user:synthetic"password'),
+    ("synthetic-user:synthetic password", b"synthetic-user:synthetic password"),
+    ("synthetic-user:synthetic{password", b"synthetic-user:synthetic{password"),
+    ("synthetic-user:synthetic}password", b"synthetic-user:synthetic}password"),
+    ("synthetic-user:synthetic<password", b"synthetic-user:synthetic<password"),
+    ("synthetic-user:synthetic>password", b"synthetic-user:synthetic>password"),
 ])
 async def test_actual_webhook_userinfo_logs_preserve_request(monkeypatch, status, userinfo, credentials):
     import base64

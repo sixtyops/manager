@@ -22,10 +22,11 @@ _slack_webhook = re.compile(
     r"(?<![\w+./-])https://hooks\.slack\.com/services/[^\s\"'<>()[\]{}]+",
     re.IGNORECASE,
 )
-# Scan only the authority, before a slash, query, fragment or log delimiter.
+# Stop at the path, query or fragment. HTTPX accepts raw spaces and quotes
+# in userinfo; exceptions can contain that raw URL instead of its encoded form.
 # One character class avoids nested repetition; retain the rest of the URL.
 _http_userinfo = re.compile(
-    r"(?<![\w+./-])(https?://)[^/?#\s\"<>[\]{}]+@",
+    r"(?<![\w+./-])(https?://)[^/?#]+@",
     re.IGNORECASE,
 )
 

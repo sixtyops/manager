@@ -509,33 +509,41 @@ def test_userinfo_multiple_urls_and_literal_order(application_output):
     assert scrub._pattern is pattern
 
 
-def test_userinfo_chained_exceptions_and_formatter_diagnostics(application_output, monkeypatch):
+@pytest.mark.parametrize("userinfo", [
+    "synthetic-user:synthetic-password", 'synthetic-user:synthetic"password',
+    "synthetic-user:synthetic password", "synthetic-user:synthetic{password",
+    "synthetic-user:synthetic}password", "synthetic-user:synthetic<password",
+    "synthetic-user:synthetic>password",
+])
+def test_userinfo_chained_exceptions_and_formatter_diagnostics(application_output, monkeypatch, userinfo):
     app, stream, handler = application_output
+    url = "https://" + userinfo + "@receiver.example.test:8443/hook?mode=test#result"
+    redacted = USERINFO_REDACTED
     try:
         try:
-            raise ValueError("Request: " + USERINFO_URL)
+            raise ValueError("Request: " + url)
         except ValueError as cause:
-            raise RuntimeError("Retry: " + USERINFO_URL) from cause
+            raise RuntimeError("Retry: " + url) from cause
     except RuntimeError:
-        app.logger.exception("Failure: %s", USERINFO_URL)
-    assert "ValueError: Request: " + USERINFO_REDACTED in stream.getvalue()
-    assert "RuntimeError: Retry: " + USERINFO_REDACTED in stream.getvalue()
+        app.logger.exception("Failure: %s", url)
+    assert "ValueError: Request: " + redacted in stream.getvalue()
+    assert "RuntimeError: Retry: " + redacted in stream.getvalue()
     assert "Traceback (most recent call last)" in stream.getvalue()
 
     class BrokenFormatter(logging.Formatter):
         def format(self, record):
-            raise ValueError("Formatter: " + USERINFO_URL)
+            raise ValueError("Formatter: " + url)
 
     handler.setFormatter(BrokenFormatter())
     scrub.install_sanitizer(handler)
     monkeypatch.setattr(sys, "stderr", stream)
     monkeypatch.setattr(logging, "raiseExceptions", True)
     record = logging.LogRecord("synthetic", logging.ERROR, __file__, 1,
-                               "Failure: %s", (USERINFO_URL,), None)
+                               "Failure: %s", (url,), None)
     handler.handle(record)
-    assert "ValueError: Formatter: " + USERINFO_REDACTED in stream.getvalue()
-    assert "Message: Failure: " + USERINFO_REDACTED in stream.getvalue()
-    assert "synthetic-password" not in stream.getvalue()
+    assert "ValueError: Formatter: " + redacted in stream.getvalue()
+    assert "Message: Failure: " + redacted in stream.getvalue()
+    assert userinfo.split(":", 1)[1] not in stream.getvalue()
     assert scrub._secrets == set()
 
 
