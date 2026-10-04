@@ -37,7 +37,8 @@ cutover is verified, while no deployed instance is ever stranded:
 - An instance on old (pre-signing) code updates to the first signed release with
   no check — it's running old code. It lands on signed code, and every update
   after that is verified.
-- Existing unsigned releases remain installable for rollback/reinstall.
+- Unsigned releases below the cutover floor remain installable for reinstall
+  or recovery. This does not prove compatibility with the current stored data.
 
 Verification **fails closed** at/after the cutover: if the signing tool, the
 trusted key, or a valid signature is missing, the update is blocked rather than
@@ -104,8 +105,19 @@ Compose files and host path. An image-only host can restore a retained
 container or re-pin its previous image as described in
 [deployment.md](deployment.md#updating-an-image-based-install).
 Before deployment, verify a restorable complete data backup, including the
-database and encryption key. Code or image rollback does not restore data
-or prove compatibility. Verify runtime version and health after recovery.
+database and its matching encryption key. The watchdog restores source and
+image state; it does not restore persistent data or establish compatibility
+between an older image and a migrated database.
+
+Before any data recovery, preserve the current complete database and its
+matching encryption key. Keep this copy separate from the recovery backup.
+Running older code requires a verified compatible database backup and its
+matching key. If a migration makes stored data unreadable by the older code,
+use a verified pre-migration backup and its matching key. A code or image
+revert alone is not a compatible downgrade. Restoring an older snapshot can
+discard later writes. If the required backup or compatibility proof is
+missing, hold the downgrade and obtain a reviewed recovery or forward-fix
+plan. Verify runtime version and health after recovery.
 
 These are recovery paths in the code and documentation, not evidence of a
 successful host recovery drill. See the
