@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import httpx
 
 from . import database as db
+from .logging_filter import redact_url_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,15 @@ async def send_webhook(event_type: str, payload: dict) -> bool:
                 logger.warning(f"Webhook returned status {response.status_code}")
                 return False
     except Exception as e:
-        logger.error(f"Failed to send webhook: {e}")
+        with redact_url_credentials(url, type(e).__name__) as sanitize_error:
+            if sanitize_error is None:
+                detail = f"{type(e).__name__} (error details unavailable)"
+            else:
+                try:
+                    detail = sanitize_error(str(e))
+                except Exception:
+                    detail = f"{type(e).__name__} (error details unavailable)"
+            logger.error("Failed to send webhook: %s", detail)
         return False
 
 

@@ -5,11 +5,13 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Security
-- Application and syslog output now redact raw and percent-encoded HTTP(S)
-  URL userinfo credentials, including accepted spaces and quote characters.
-  The rest of the URL remains visible for diagnosis. This stateless protection
-  preserves request authentication and adds no secret-registry entries. Other
-  path/query tokens, standalone headers and session values remain outside it.
+- Application and syslog output redact ordinary and percent-encoded HTTP(S)
+  URL userinfo. Webhook error logs also redact the known configured credentials,
+  including raw spaces and quotes, in a short-lived logging context. Diagnostic
+  context remains outside the generic URL match. Known credential literals are
+  hidden during webhook error logging. Request authentication is unchanged.
+  No request credentials enter the process-lifetime registry. Other path/query
+  tokens, standalone headers and session values remain outside this coverage.
 
 ### Added
 - Application and syslog output handlers now redact the credential suffix of
