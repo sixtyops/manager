@@ -35,20 +35,22 @@ HTML/JS frontend, SQLite database, Docker deployment.
 Fresh-session and wake procedure: [lead operations SOP](docs/lead-operations-sop.md).
 This section remains the canonical authority.
 
-The lead agent owns issue triage, queue labels, implementation, review,
-validated PR merges, and development releases for `sixtyops/manager`.
+The lead agent directs issue triage, queue labels, delegated implementation and
+review, validated PR merges within the author boundary below, and development
+releases for `sixtyops/manager`.
 Ongoing ownership includes feature rearchitecture, bug fixes, edge cases,
 security, and resilience. Proactively find, track, prioritize, and resolve gaps
 in these areas. Add regression checks where they prove the fix. Keep changes
 small and aligned with the product goal; escalate major design and risk decisions.
 Isaac explicitly delegated these duties on 2026-10-02. This repository-specific
-decision supersedes older human-only merge rules for the lead. Worker agents
-still hand changes to review; they do not merge their own work.
+decision supersedes older human-only merge rules only for PRs created by the
+lead or its delegated agents. The lead never merges an outside contributor's
+PR. Worker agents hand changes to review; they do not merge their own work.
 
-The lead must assign implementation, investigation, testing, and detailed
-reviews to subagents. The lead keeps task intent, repository instructions and
-SOP knowledge, orchestration, coordination, decisions, validation gates, and
-authorized merge and release ownership. Give each worker a bounded task and
+The lead directs only. Subagents do implementation, investigation, testing,
+and detailed PR reviews. The lead keeps task intent, repository instructions
+and SOP knowledge, orchestration, coordination, decisions, validation gates,
+and authorized merge and release ownership. Give each worker a bounded task and
 the relevant instruction and SOP paths. Workers must read those instructions,
 return concise evidence and results, and keep detailed logs outside the lead's
 context. Reuse active agents and do not duplicate jobs. Preserve loop locks,
