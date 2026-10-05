@@ -326,7 +326,7 @@ def _migrate(db):
     # Encrypt any plaintext device_configs.config_json (#35)
     _migrate_encrypt_device_configs(db)
 
-    # Encrypt any plaintext config_templates.config_fragment (#165)
+    # Encrypt plaintext template fragments and form data.
     _migrate_encrypt_config_templates(db)
 
     # Encrypt any plaintext secret-bearing settings rows (#175)
@@ -526,27 +526,30 @@ def _migrate_encrypt_device_configs(db):
 
 
 def _migrate_encrypt_config_templates(db):
-    """One-time migration: encrypt any plaintext config_templates.config_fragment in-place.
+    """Encrypt plaintext config_fragment and form_data with the existing key.
 
-    Templates hold SNMP RW communities, RADIUS service passwords, and
-    `$1$<salt>$<hash>` user password hashes for `system.users` — anyone
-    with read access to the DB file (a SQL dump, a CSV backup, an SFTP
-    backup) could lift them. Same Fernet key as #35; same idempotent
-    `is_encrypted()` skip so the migration is safe to re-run.
+    Skip empty values and ciphertext so repeated startup migration is safe.
+    The caller owns the transaction; read/write/encryption errors propagate.
+    Older readers cannot parse encrypted form_data. A code revert alone cannot
+    downgrade migrated data. Restore a verified pre-migration database with its
+    matching key before running older code; keep the current data/key backup.
+    This migration does not change old backups or other secret-bearing stores.
     """
-    try:
-        rows = db.execute(
-            "SELECT id, config_fragment FROM config_templates"
-        ).fetchall()
-    except Exception:
-        return
+    rows = db.execute(
+        "SELECT id, config_fragment, form_data FROM config_templates"
+    ).fetchall()
     migrated = 0
     for row in rows:
-        frag = row[1]
-        if frag and not is_encrypted(frag):
+        updates = {}
+        for index, field in enumerate(("config_fragment", "form_data"), start=1):
+            value = row[index]
+            if value and not is_encrypted(value):
+                updates[field] = encrypt_password(value)
+        if updates:
+            set_clause = ", ".join(f"{field} = ?" for field in updates)
             db.execute(
-                "UPDATE config_templates SET config_fragment = ? WHERE id = ?",
-                (encrypt_password(frag), row[0]),
+                f"UPDATE config_templates SET {set_clause} WHERE id = ?",
+                (*updates.values(), row[0]),
             )
             migrated += 1
     if migrated:
@@ -2952,11 +2955,12 @@ def _decrypt_config_fragment_field(value):
 
 
 def _decrypt_row_config_fragment(row: Optional[dict]) -> Optional[dict]:
-    """Return the row dict with `config_fragment` decrypted in place."""
+    """Return template payloads decrypted; preserve legacy plaintext values."""
     if row is None:
         return None
-    if "config_fragment" in row:
-        row["config_fragment"] = _decrypt_config_fragment_field(row["config_fragment"])
+    for field in ("config_fragment", "form_data"):
+        if field in row:
+            row[field] = _decrypt_config_fragment_field(row[field])
     return row
 
 
@@ -2966,23 +2970,24 @@ def save_config_template(name: str, category: str, config_fragment: str,
                          device_types: str = None) -> int:
     """Create a new config template. Returns the template ID.
 
-    `config_fragment` is encrypted at rest with the same Fernet key used for
+    `config_fragment` and `form_data` use the same Fernet key as
     device passwords (#35, #165). Callers pass cleartext JSON; reads return
     cleartext too — encryption is transparent at this layer.
     """
     encrypted_fragment = encrypt_password(config_fragment) if config_fragment else config_fragment
+    encrypted_form = encrypt_password(form_data) if form_data else form_data
     with get_db() as db:
         cursor = db.execute(
             """INSERT INTO config_templates
                (name, category, config_fragment, form_data, description, scope, site_id, device_types)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (name, category, encrypted_fragment, form_data, description, scope, site_id, device_types)
+            (name, category, encrypted_fragment, encrypted_form, description, scope, site_id, device_types)
         )
         return cursor.lastrowid
 
 
 def get_config_templates(enabled_only: bool = False) -> list[dict]:
-    """Get all config templates. Returns cleartext `config_fragment`."""
+    """Get templates with cleartext config_fragment and form_data."""
     with get_db() as db:
         query = "SELECT * FROM config_templates"
         if enabled_only:
@@ -2993,7 +2998,7 @@ def get_config_templates(enabled_only: bool = False) -> list[dict]:
 
 
 def get_config_template(template_id: int) -> Optional[dict]:
-    """Get a config template by ID. Returns cleartext `config_fragment`."""
+    """Get a template by ID with both JSON payloads decrypted."""
     with get_db() as db:
         row = db.execute(
             "SELECT * FROM config_templates WHERE id = ?", (template_id,)
@@ -3005,7 +3010,7 @@ def get_config_template_by_category(category: str, scope: str = None) -> Optiona
     """Get a config template by category (returns first match).
 
     If scope is provided, only matches templates with that scope.
-    Returns cleartext `config_fragment`.
+    Returns cleartext config_fragment and form_data.
     """
     with get_db() as db:
         if scope:
@@ -3022,14 +3027,15 @@ def get_config_template_by_category(category: str, scope: str = None) -> Optiona
 
 
 def update_config_template(template_id: int, **kwargs):
-    """Update a config template. `config_fragment` is encrypted at rest."""
+    """Update a template. Both JSON payloads are encrypted at rest."""
     allowed = {"name", "category", "config_fragment", "form_data", "description",
                "enabled", "scope", "site_id", "device_types"}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return
-    if "config_fragment" in updates and updates["config_fragment"]:
-        updates["config_fragment"] = encrypt_password(updates["config_fragment"])
+    for field in ("config_fragment", "form_data"):
+        if field in updates and updates[field]:
+            updates[field] = encrypt_password(updates[field])
     updates["updated_at"] = datetime.now().isoformat()
     set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
     with get_db() as db:

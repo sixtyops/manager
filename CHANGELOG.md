@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Security
+- Config-template form data is encrypted at rest with the existing Fernet key.
+  Startup converts legacy plaintext rows. Older readers cannot read the migrated
+  form data; a code revert alone is not a compatible downgrade. An older-code
+  restore needs a verified pre-migration database and its matching key. This does
+  not encrypt old backups or cover other secret stores.
 - Application and syslog output redact ordinary and percent-encoded HTTP(S)
   URL userinfo. Webhook error logs also redact the known configured credentials,
   including raw spaces and quotes, in a short-lived logging context. Diagnostic
