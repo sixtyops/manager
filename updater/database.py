@@ -2723,7 +2723,7 @@ def get_latest_device_config(ip: str) -> Optional[dict]:
         row = db.execute(
             """SELECT * FROM device_configs
                 WHERE ip = ? AND deleted_at IS NULL
-                ORDER BY fetched_at DESC LIMIT 1""",
+                ORDER BY fetched_at DESC, id DESC LIMIT 1""",
             (ip,)
         ).fetchone()
         return _decrypt_row_config_json(dict(row)) if row else None
@@ -2736,7 +2736,7 @@ def get_device_config_history(ip: str, limit: int = 20) -> list[dict]:
             """SELECT id, ip, config_hash, model, hardware_id, fetched_at
                  FROM device_configs
                 WHERE ip = ? AND deleted_at IS NULL
-                ORDER BY fetched_at DESC LIMIT ?""",
+                ORDER BY fetched_at DESC, id DESC LIMIT ?""",
             (ip, limit)
         ).fetchall()
         return [dict(row) for row in rows]
@@ -2767,15 +2767,13 @@ def get_all_latest_configs() -> dict:
                 COALESCE(d.last_config_poll_status, c.last_config_poll_status) AS last_config_poll_status,
                 COALESCE(d.last_config_poll_error, c.last_config_poll_error) AS last_config_poll_error
             FROM device_configs dc
-            INNER JOIN (
-                SELECT ip, MAX(fetched_at) as max_fetched
-                FROM device_configs
-                WHERE deleted_at IS NULL
-                GROUP BY ip
-            ) latest ON dc.ip = latest.ip AND dc.fetched_at = latest.max_fetched
             LEFT JOIN devices d ON d.ip = dc.ip
             LEFT JOIN cpe_cache c ON c.ip = dc.ip
-            WHERE dc.deleted_at IS NULL
+            WHERE dc.deleted_at IS NULL AND dc.id = (
+                SELECT id FROM device_configs
+                WHERE ip = dc.ip AND deleted_at IS NULL
+                ORDER BY fetched_at DESC, id DESC LIMIT 1
+            )
         """).fetchall()
         return {row["ip"]: _decrypt_row_config_json(dict(row)) for row in rows}
 
@@ -2815,7 +2813,7 @@ def get_latest_config_hash(ip: str) -> Optional[str]:
         row = db.execute(
             """SELECT config_hash FROM device_configs
                 WHERE ip = ? AND deleted_at IS NULL
-                ORDER BY fetched_at DESC LIMIT 1""",
+                ORDER BY fetched_at DESC, id DESC LIMIT 1""",
             (ip,)
         ).fetchone()
         return row["config_hash"] if row else None
@@ -2838,7 +2836,7 @@ def cleanup_old_device_configs(max_per_device: int = 50):
                  WHERE ip = ? AND deleted_at IS NULL AND id NOT IN (
                     SELECT id FROM device_configs
                      WHERE ip = ? AND deleted_at IS NULL
-                     ORDER BY fetched_at DESC LIMIT ?
+                     ORDER BY fetched_at DESC, id DESC LIMIT ?
                 )
             """, (ip, ip, max_per_device))
 

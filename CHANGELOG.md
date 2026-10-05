@@ -98,6 +98,10 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- Live configuration snapshot reads and count pruning use the higher snapshot ID
+  when timestamps match. Timestamp order stays primary. This
+  prevents tied snapshots from selecting or retaining an older inserted row.
+  It does not recover snapshots already deleted by pruning.
 - Backup restore rejects corrupt or empty SQLite snapshots before replacing the
   current database or encryption key. Rejected archives remain available.
 - Small teal website links and the 404 return button use darker existing teal

@@ -4,8 +4,9 @@ hardware-id auto-rebind, and manager-backup round-trip."""
 import json
 
 import pytest
+from cryptography.fernet import Fernet
 
-from updater import backup, database as db
+from updater import backup, crypto, database as db
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -431,3 +432,93 @@ class TestConcurrentRebind:
         # Snapshots ended up under the first IP, not the second
         assert len(db.get_device_config_history("10.0.0.20")) == 2
         assert db.get_device_config_history("10.0.0.21") == []
+
+
+class TestLiveSnapshotOrder:
+    """Reads and pruning use timestamp first, then insertion ID for ties."""
+
+    @pytest.fixture(autouse=True)
+    def memory_cipher(self, monkeypatch):
+        monkeypatch.setattr(crypto, "_fernet", Fernet(Fernet.generate_key()))
+
+    @staticmethod
+    def insert(mock_db, ip, revision, timestamp, deleted_at=None):
+        db.insert_imported_device_config(
+            ip, json.dumps({"revision": revision}), revision, timestamp,
+            deleted_at=deleted_at,
+        )
+        return mock_db.execute(
+            "SELECT id FROM device_configs WHERE ip = ? AND config_hash = ?",
+            (ip, revision),
+        ).fetchone()["id"]
+
+    @pytest.mark.parametrize("reader", ["config", "hash", "history", "bulk"])
+    @pytest.mark.parametrize("tied", [False, True])
+    def test_latest_readers_agree(self, mock_db, reader, tied):
+        ip = "192.0.2.10"
+        self.insert(mock_db, ip, "first", "2026-10-05T00:00:00")
+        timestamp = "2026-10-05T00:00:00" if tied else "2026-10-05T00:00:01"
+        winner = self.insert(mock_db, ip, "second", timestamp)
+        if reader == "config":
+            row = db.get_latest_device_config(ip)
+            assert row["id"] == winner
+            assert json.loads(row["config_json"]) == {"revision": "second"}
+        elif reader == "hash":
+            assert db.get_latest_config_hash(ip) == "second"
+        elif reader == "history":
+            assert db.get_device_config_history(ip, limit=1)[0]["id"] == winner
+        else:
+            # Unordered query results must not decide which tied row wins.
+            mock_db.execute("PRAGMA reverse_unordered_selects = ON")
+            row = db.get_all_latest_configs()[ip]
+            assert row["id"] == winner
+            assert json.loads(row["config_json"]) == {"revision": "second"}
+
+    @pytest.mark.parametrize("tied", [False, True])
+    def test_pruning_retains_the_newest_snapshot(self, mock_db, tied):
+        ip = "192.0.2.10"
+        self.insert(mock_db, ip, "first", "2026-10-05T00:00:00")
+        timestamp = "2026-10-05T00:00:00" if tied else "2026-10-05T00:00:01"
+        winner = self.insert(mock_db, ip, "second", timestamp)
+        db.cleanup_old_device_configs(max_per_device=1)
+        assert [row["id"] for row in db.get_device_config_history(ip)] == [winner]
+
+    def test_timestamp_precedence_device_isolation_and_deleted_rows(self, mock_db):
+        ip, other_ip = "192.0.2.10", "192.0.2.11"
+        first = self.insert(mock_db, ip, "first", "2026-10-05T00:00:01")
+        winner = self.insert(mock_db, ip, "second", "2026-10-05T00:00:01")
+        # A higher ID with an older timestamp must not supersede fresh data.
+        self.insert(mock_db, ip, "late-import", "2026-10-04T00:00:00")
+        deleted = self.insert(
+            mock_db, ip, "deleted", "2026-10-06T00:00:00",
+            deleted_at="2026-10-06T01:00:00",
+        )
+        self.insert(mock_db, other_ip, "other-first", "2026-10-05T00:00:01")
+        other_winner = self.insert(mock_db, other_ip, "other-second", "2026-10-05T00:00:01")
+        mock_db.execute("PRAGMA reverse_unordered_selects = ON")
+        assert db.get_latest_device_config(ip)["id"] == winner
+        assert db.get_latest_config_hash(ip) == "second"
+        assert [row["id"] for row in db.get_device_config_history(ip, limit=2)] == [winner, first]
+        latest = db.get_all_latest_configs()
+        assert {address: row["id"] for address, row in latest.items()} == {
+            ip: winner, other_ip: other_winner,
+        }
+        db.cleanup_old_device_configs(max_per_device=2)
+        assert [row["id"] for row in db.get_device_config_history(ip)] == [winner, first]
+        assert len(db.get_device_config_history(other_ip)) == 2
+        assert db.get_device_config_by_id(deleted)["deleted_at"] == "2026-10-06T01:00:00"
+        db.cleanup_old_device_configs(max_per_device=1)
+        assert [row["id"] for row in db.get_device_config_history(ip)] == [winner]
+        assert [row["id"] for row in db.get_device_config_history(other_ip)] == [other_winner]
+        assert db.get_device_config_by_id(deleted) is not None
+
+    def test_missing_live_history_stays_empty(self, mock_db):
+        ip = "192.0.2.10"
+        self.insert(mock_db, ip, "deleted", "2026-10-05T00:00:00", deleted_at="2026-10-06T00:00:00")
+        for address in (ip, "192.0.2.99"):
+            assert db.get_latest_device_config(address) is None
+            assert db.get_latest_config_hash(address) is None
+            assert db.get_device_config_history(address) == []
+        assert db.get_all_latest_configs() == {}
+        db.cleanup_old_device_configs()
+        assert mock_db.execute("SELECT COUNT(*) FROM device_configs").fetchone()[0] == 1
