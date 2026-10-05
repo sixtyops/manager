@@ -1,12 +1,26 @@
 """Tests for the config-snapshot recycle bin: soft-delete, restore, purge,
 hardware-id auto-rebind, and manager-backup round-trip."""
 
+import csv
+import io
 import json
+import sqlite3
+from unittest.mock import patch
 
 import pytest
 from cryptography.fernet import Fernet
 
 from updater import backup, crypto, database as db
+from updater.db.schema import build_schema
+
+
+@pytest.fixture(autouse=True)
+def snapshot_memory_cipher(monkeypatch):
+    monkeypatch.setattr(crypto, "_fernet", Fernet(Fernet.generate_key()))
+    monkeypatch.setattr(
+        crypto, "_load_fernet",
+        lambda: pytest.fail("Snapshot tests must not load a key file"),
+    )
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -522,3 +536,199 @@ class TestLiveSnapshotOrder:
         assert db.get_all_latest_configs() == {}
         db.cleanup_old_device_configs()
         assert mock_db.execute("SELECT COUNT(*) FROM device_configs").fetchone()[0] == 1
+
+
+class TestSnapshotKinds:
+    """Storage protects only explicit safety tags, not untagged callers."""
+
+    @staticmethod
+    def insert(mock_db, ip, revision, kind="poll", timestamp="2026-10-05T00:00:00", deleted_at=None):
+        db.insert_imported_device_config(
+            ip, json.dumps({"revision": revision}), revision, timestamp,
+            kind=kind, deleted_at=deleted_at,
+        )
+        return mock_db.execute(
+            "SELECT id FROM device_configs WHERE ip = ? AND config_hash = ?",
+            (ip, revision),
+        ).fetchone()["id"]
+
+    @pytest.mark.parametrize("kind", ["poll", "pre_push", "post_push"])
+    def test_save_and_import_preserve_kind_and_encryption(self, mock_db, kind):
+        clear = '{"synthetic":"private config"}'
+        saved = db.save_device_config("192.0.2.10", clear, "saved", kind=kind)
+        imported = self.insert(mock_db, "192.0.2.11", "imported", kind)
+        rows = mock_db.execute("SELECT * FROM device_configs ORDER BY id").fetchall()
+        assert [r["kind"] for r in rows] == [kind, kind]
+        assert all(crypto.is_encrypted(r["config_json"]) for r in rows)
+        assert db.get_device_config_by_id(saved)["config_json"] == clear
+        assert json.loads(db.get_device_config_by_id(imported)["config_json"]) == {"revision": "imported"}
+
+    def test_omitted_kind_stays_poll(self, mock_db):
+        saved = db.save_device_config("192.0.2.10", "{}", "saved")
+        db.insert_imported_device_config("192.0.2.11", "{}", "imported", "2026-10-05T00:00:00")
+        assert db.get_device_config_by_id(saved)["kind"] == "poll"
+        assert {r[0] for r in mock_db.execute("SELECT kind FROM device_configs")} == {"poll"}
+
+    @pytest.mark.parametrize("kind", ["", "unknown", None, 42])
+    @pytest.mark.parametrize("operation", ["save", "import"])
+    def test_invalid_kind_fails_before_encryption_or_connection(self, mock_db, kind, operation):
+        def unexpected(*args, **kwargs):
+            pytest.fail("Invalid kind must fail before encryption or database access")
+        with patch.object(db, "encrypt_password", unexpected), patch.object(db, "get_db", unexpected), pytest.raises(ValueError, match="Invalid snapshot kind"):
+            if operation == "save":
+                db.save_device_config("192.0.2.10", "{}", "invalid", kind=kind)
+            else:
+                db.insert_imported_device_config("192.0.2.10", "{}", "invalid", "2026-10-05T00:00:00", kind=kind)
+        assert mock_db.execute("SELECT COUNT(*) FROM device_configs").fetchone()[0] == 0
+
+    def test_legacy_migration_defaults_without_changing_ciphertext(self, mock_db):
+        saved = db.save_device_config("192.0.2.10", '{"synthetic":"old row"}', "legacy")
+        before = tuple(mock_db.execute("SELECT id, ip, config_json, config_hash, fetched_at FROM device_configs").fetchone())
+        mock_db.execute("ALTER TABLE device_configs DROP COLUMN kind")
+        mock_db.commit()
+        for _ in range(2):
+            build_schema(mock_db)
+            db._migrate(mock_db)
+            mock_db.commit()
+            assert tuple(mock_db.execute("SELECT id, ip, config_json, config_hash, fetched_at FROM device_configs").fetchone()) == before
+            assert db.get_device_config_by_id(saved)["kind"] == "poll"
+        self.insert(mock_db, "192.0.2.10", "tagged", "pre_push")
+        db._migrate(mock_db)
+        assert mock_db.execute("SELECT kind FROM device_configs WHERE config_hash = 'tagged'").fetchone()[0] == "pre_push"
+
+    @pytest.mark.parametrize("legacy", [False, True])
+    def test_schema_rejects_invalid_kind(self, mock_db, legacy):
+        if legacy:
+            mock_db.execute("ALTER TABLE device_configs DROP COLUMN kind")
+            db._migrate(mock_db)
+            mock_db.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            mock_db.execute("INSERT INTO device_configs (ip, config_json, config_hash, kind) VALUES ('192.0.2.10', '{}', 'bad', 'unknown')")
+        mock_db.rollback()
+        assert mock_db.execute("SELECT COUNT(*) FROM device_configs").fetchone()[0] == 0
+
+    @pytest.mark.parametrize("tied", [False, True])
+    def test_pre_push_survives_100_polls_without_using_ordinary_cap(self, mock_db, tied):
+        ip = "192.0.2.10"
+        protected = self.insert(mock_db, ip, "before-write", "pre_push", "2026-10-04T00:00:00")
+        ordinary = []
+        for index in range(100):
+            timestamp = "2026-10-05T00:00:00" if tied else f"2026-10-05T00:{index // 60:02}:{index % 60:02}"
+            ordinary.append(self.insert(mock_db, ip, str(index), "post_push" if index % 2 else "poll", timestamp))
+        newest_protected = self.insert(mock_db, ip, "next-before-write", "pre_push", "2026-10-06T00:00:00")
+        db.cleanup_old_device_configs(50)
+        kept = {r[0] for r in mock_db.execute("SELECT id FROM device_configs")}
+        assert kept == {protected, newest_protected, *ordinary[-50:]}
+        assert db.get_latest_config_hash(ip) == "next-before-write"
+        assert db.get_device_config_by_id(protected)["kind"] == "pre_push"
+        db.cleanup_old_device_configs(50)
+        assert {r[0] for r in mock_db.execute("SELECT id FROM device_configs")} == kept
+
+    def test_mixed_devices_and_recycled_rows_keep_independent_limits(self, mock_db):
+        expected = set()
+        for ip in ("192.0.2.10", "192.0.2.11"):
+            expected.add(self.insert(mock_db, ip, "protected", "pre_push"))
+            expected.add(self.insert(mock_db, ip, "recycled", "post_push", deleted_at="2026-10-05T01:00:00"))
+            for index in range(3):
+                row_id = self.insert(mock_db, ip, str(index))
+            expected.add(row_id)
+        before_recycled = [tuple(r) for r in mock_db.execute("SELECT * FROM device_configs WHERE deleted_at IS NOT NULL ORDER BY id")]
+        db.cleanup_old_device_configs(1)
+        assert {r[0] for r in mock_db.execute("SELECT id FROM device_configs")} == expected
+        assert [tuple(r) for r in mock_db.execute("SELECT * FROM device_configs WHERE deleted_at IS NOT NULL ORDER BY id")] == before_recycled
+
+    def test_cleanup_failure_rolls_back_earlier_deletions(self, mock_db):
+        for ip in ("192.0.2.10", "192.0.2.11"):
+            self.insert(mock_db, ip, "protected", "pre_push")
+            self.insert(mock_db, ip, "old")
+            self.insert(mock_db, ip, "new")
+        before = [tuple(r) for r in mock_db.execute("SELECT * FROM device_configs ORDER BY id")]
+        attempted = []
+        def fail_second(ip):
+            attempted.append(ip)
+            if len(attempted) == 2:
+                raise RuntimeError("Synthetic second deletion failure")
+            return 0
+        mock_db.create_function("fail_second", 1, fail_second)
+        mock_db.execute("CREATE TEMP TRIGGER fail_cleanup BEFORE DELETE ON device_configs BEGIN SELECT fail_second(OLD.ip); END")
+        mock_db.commit()
+        with pytest.raises(sqlite3.OperationalError):
+            db.cleanup_old_device_configs(1)
+        assert len(attempted) == 2
+        assert [tuple(r) for r in mock_db.execute("SELECT * FROM device_configs ORDER BY id")] == before
+
+    @pytest.mark.parametrize("operation", ["save", "import"])
+    def test_failed_insert_does_not_change_existing_rows(self, mock_db, operation):
+        self.insert(mock_db, "192.0.2.10", "existing", "pre_push")
+        before = [tuple(r) for r in mock_db.execute("SELECT * FROM device_configs")]
+        mock_db.execute("CREATE TEMP TRIGGER fail_insert AFTER INSERT ON device_configs BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END")
+        mock_db.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            if operation == "save":
+                db.save_device_config("192.0.2.10", "{}", "failed", kind="pre_push")
+            else:
+                self.insert(mock_db, "192.0.2.10", "failed", "pre_push")
+        assert [tuple(r) for r in mock_db.execute("SELECT * FROM device_configs")] == before
+
+    @staticmethod
+    def change_csv(content, change):
+        prefix, section = content.split("# section=device_configs\n", 1)
+        reader = csv.DictReader(io.StringIO(section))
+        fields, rows = change(list(reader.fieldnames), list(reader))
+        out = io.StringIO()
+        writer = csv.DictWriter(out, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+        return prefix + "# section=device_configs\n" + out.getvalue()
+
+    @pytest.mark.parametrize("legacy", [False, True])
+    def test_encrypted_csv_round_trip_types_recycle_bin_and_repeat_import(self, mock_db, legacy):
+        for index, kind in enumerate(("poll", "pre_push", "post_push")):
+            timestamp = f"2026-10-05T00:00:0{index}" if legacy else "2026-10-05T00:00:00"
+            self.insert(mock_db, "192.0.2.10", kind, kind, timestamp, deleted_at="2026-10-05T01:00:00" if kind == "post_push" else None)
+        before = [dict(r) for r in mock_db.execute("SELECT * FROM device_configs ORDER BY id")]
+        content, _ = backup.build_csv_export("synthetic passphrase")
+        assert all(crypto.decrypt_password(r["config_json"]) not in content for r in before)
+        if legacy:
+            def remove_kind(fields, rows):
+                fields.remove("kind")
+                for row in rows:
+                    row.pop("kind")
+                return fields, rows
+            content = self.change_csv(content, remove_kind)
+        with db.get_db() as conn:
+            conn.execute("DELETE FROM device_configs")
+        first = backup.process_csv_import(content, "synthetic passphrase")
+        second = backup.process_csv_import(content, "synthetic passphrase")
+        assert first["device_configs"]["added"] == 3
+        assert first["device_configs"]["failed"] == 0
+        assert second["device_configs"]["added"] == 0
+        assert second["device_configs"]["skipped"] == 3
+        after = [dict(r) for r in mock_db.execute("SELECT * FROM device_configs ORDER BY fetched_at, id")]
+        assert {r["kind"] for r in after} == ({"poll"} if legacy else {"poll", "pre_push", "post_push"})
+        after_by_hash = {r["config_hash"]: r for r in after}
+        for old in before:
+            restored = after_by_hash[old["config_hash"]]
+            assert crypto.decrypt_password(restored["config_json"]) == crypto.decrypt_password(old["config_json"])
+            assert crypto.is_encrypted(restored["config_json"])
+            for field in ("ip", "config_hash", "fetched_at", "deleted_at", "device_label"):
+                assert restored[field] == old[field]
+        db.cleanup_old_device_configs(0)
+        assert mock_db.execute("SELECT COUNT(*) FROM device_configs WHERE deleted_at IS NOT NULL").fetchone()[0] == 1
+        assert mock_db.execute("SELECT COUNT(*) FROM device_configs WHERE deleted_at IS NULL").fetchone()[0] == (0 if legacy else 1)
+
+    def test_invalid_csv_kind_fails_without_replacing_existing_data(self, mock_db):
+        self.insert(mock_db, "192.0.2.10", "incoming", "pre_push")
+        content, _ = backup.build_csv_export("synthetic passphrase")
+        def invalid_kind(fields, rows):
+            rows[0]["kind"] = "invalid"
+            return fields, rows
+        content = self.change_csv(content, invalid_kind)
+        with db.get_db() as conn:
+            conn.execute("DELETE FROM device_configs")
+        self.insert(mock_db, "192.0.2.11", "existing", "pre_push")
+        before = [tuple(r) for r in mock_db.execute("SELECT * FROM device_configs")]
+        result = backup.process_csv_import(content, "synthetic passphrase")
+        assert result["device_configs"]["added"] == 0
+        assert result["device_configs"]["failed"] == 1
+        assert [tuple(r) for r in mock_db.execute("SELECT * FROM device_configs")] == before

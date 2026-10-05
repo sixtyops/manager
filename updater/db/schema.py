@@ -279,7 +279,9 @@ def build_schema(db: sqlite3.Connection) -> None:
             mac TEXT,
             fetched_at TEXT DEFAULT CURRENT_TIMESTAMP,
             deleted_at TEXT DEFAULT NULL,
-            device_label TEXT DEFAULT NULL
+            device_label TEXT DEFAULT NULL,
+            kind TEXT NOT NULL DEFAULT 'poll'
+                CHECK (kind IN ('poll', 'pre_push', 'post_push'))
         );
         CREATE INDEX IF NOT EXISTS idx_device_configs_ip ON device_configs(ip);
         CREATE INDEX IF NOT EXISTS idx_device_configs_hash ON device_configs(ip, config_hash);

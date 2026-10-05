@@ -340,6 +340,11 @@ def _migrate(db):
         db.execute("ALTER TABLE device_configs ADD COLUMN device_label TEXT DEFAULT NULL")
     if "mac" not in dc_columns:
         db.execute("ALTER TABLE device_configs ADD COLUMN mac TEXT DEFAULT NULL")
+    if "kind" not in dc_columns:
+        db.execute(
+            "ALTER TABLE device_configs ADD COLUMN kind TEXT NOT NULL DEFAULT 'poll' "
+            "CHECK (kind IN ('poll', 'pre_push', 'post_push'))"
+        )
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_device_configs_deleted ON device_configs(deleted_at)"
     )
@@ -2654,7 +2659,7 @@ def _decrypt_row_config_json(row: Optional[dict]) -> Optional[dict]:
 
 def save_device_config(ip: str, config_json: str, config_hash: str,
                        model: str = None, hardware_id: str = None,
-                       mac: str = None) -> int:
+                       mac: str = None, kind: str = "poll") -> int:
     """Save a device config snapshot. Returns the new row id.
 
     `config_json` is encrypted at rest with the same Fernet key used for
@@ -2665,14 +2670,19 @@ def save_device_config(ip: str, config_json: str, config_hash: str,
     `mac` is the per-unit identifier used for auto-rebind on IP changes;
     it should be normalized to upper-case (no separators or with `:`).
     Callers without a known MAC may pass None — rebind will simply not fire.
+
+    Explicit pre_push snapshots are exempt from routine pruning. Existing
+    callers default to poll; storage does not infer a snapshot's purpose.
     """
+    if kind not in ("poll", "pre_push", "post_push"):
+        raise ValueError("Invalid snapshot kind")
     normalized_mac = mac.upper() if mac else None
     encrypted_json = encrypt_password(config_json) if config_json else config_json
     with get_db() as db:
         cursor = db.execute(
-            """INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id, mac, fetched_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (ip, encrypted_json, config_hash, model, hardware_id, normalized_mac, datetime.now().isoformat())
+            """INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id, mac, fetched_at, kind)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ip, encrypted_json, config_hash, model, hardware_id, normalized_mac, datetime.now().isoformat(), kind)
         )
         return cursor.lastrowid
 
@@ -2687,6 +2697,7 @@ def insert_imported_device_config(
     mac: Optional[str] = None,
     deleted_at: Optional[str] = None,
     device_label: Optional[str] = None,
+    kind: str = "poll",
 ) -> None:
     """Insert a device-config row from a backup import.
 
@@ -2695,14 +2706,16 @@ def insert_imported_device_config(
     survive a backup round-trip). `config_json` is cleartext on the way in
     and gets Fernet-wrapped on the way to disk, same as `save_device_config`.
     """
+    if kind not in ("poll", "pre_push", "post_push"):
+        raise ValueError("Invalid snapshot kind")
     normalized_mac = mac.upper() if mac else None
     encrypted_json = encrypt_password(config_json) if config_json else config_json
     with get_db() as db:
         db.execute(
             """INSERT INTO device_configs
                    (ip, config_json, config_hash, model, hardware_id, mac,
-                    fetched_at, deleted_at, device_label)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    fetched_at, deleted_at, device_label, kind)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 ip,
                 encrypted_json,
@@ -2713,6 +2726,7 @@ def insert_imported_device_config(
                 fetched_at,
                 deleted_at,
                 device_label,
+                kind,
             ),
         )
 
@@ -2820,10 +2834,10 @@ def get_latest_config_hash(ip: str) -> Optional[str]:
 
 
 def cleanup_old_device_configs(max_per_device: int = 50):
-    """Keep only the most recent N live snapshots per device.
+    """Keep the most recent N ordinary live snapshots per device.
 
-    Soft-deleted (recycle-bin) snapshots are NOT counted toward the cap and
-    are NOT pruned here — they are managed via the recycle-bin endpoints.
+    Explicit pre_push and recycle-bin snapshots do not count toward the cap
+    and are not pruned here. Protected rows have no automatic size limit.
     """
     with get_db() as db:
         ips = db.execute(
@@ -2833,9 +2847,9 @@ def cleanup_old_device_configs(max_per_device: int = 50):
             ip = row["ip"]
             db.execute("""
                 DELETE FROM device_configs
-                 WHERE ip = ? AND deleted_at IS NULL AND id NOT IN (
+                 WHERE ip = ? AND deleted_at IS NULL AND kind != 'pre_push' AND id NOT IN (
                     SELECT id FROM device_configs
-                     WHERE ip = ? AND deleted_at IS NULL
+                     WHERE ip = ? AND deleted_at IS NULL AND kind != 'pre_push'
                      ORDER BY fetched_at DESC, id DESC LIMIT ?
                 )
             """, (ip, ip, max_per_device))

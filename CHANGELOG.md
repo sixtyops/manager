@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Fixed
+- Config snapshot storage supports `poll`, `pre_push`, and `post_push` types.
+  Routine pruning preserves explicit `pre_push` rows outside the ordinary cap.
+  Encrypted CSV backups preserve types; legacy rows and CSV default to `poll`.
+  Current app and poller callers remain untagged. This storage prerequisite
+  does not protect their before-write snapshots. Older code can resume pruning;
+  code revert cannot recover deleted rows. Protected rows have no size limit.
+
 ### Security
 - Output handlers redact raw, Python repr and JSON forms of already registered
   log secrets. Each raw value supplies at most four deduplicated literal forms.
