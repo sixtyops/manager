@@ -687,3 +687,139 @@ def test_known_short_credential_marker_survives_handler_pass(application_output)
         app.logger.error("Known password: %s", sanitize("R"))
     assert stream.getvalue().endswith("Known password: [REDACTED]\n")
     assert "[[REDACTED]" not in stream.getvalue()
+
+
+ESCAPED_SECRETS = [
+    "synthetic\\credential", "synthetic\n\tcredential",
+    "synthetic-é-credential", "synthetic'\"credential",
+]
+
+
+@pytest.mark.parametrize("secret", ESCAPED_SECRETS)
+@pytest.mark.parametrize("form", ["raw", "repr", "nested", "json_ascii", "json_unicode"])
+def test_registered_secret_escaped_output(application_output, monkeypatch, secret, form):
+    import json
+    from cryptography.fernet import Fernet
+    from updater import crypto
+
+    app, stream, _ = application_output
+    monkeypatch.setattr(crypto, "_fernet", Fernet(Fernet.generate_key()))
+    crypto.encrypt_password(secret)
+    pattern = scrub._pattern
+    if form == "raw":
+        rendered = secret
+        app.logger.warning("Failure: %s; retry later", secret)
+    elif form == "repr":
+        rendered = repr(secret)[1:-1]
+        app.logger.warning("Failure: %r; retry later", secret)
+    elif form == "nested":
+        rendered = repr(secret)[1:-1]
+        app.logger.warning("Failure: %s; retry later", {"values": [secret]})
+    else:
+        ascii_mode = form == "json_ascii"
+        rendered = json.dumps(secret, ensure_ascii=ascii_mode)[1:-1]
+        app.logger.warning("Failure: %s; retry later",
+                           json.dumps({"values": [secret]}, ensure_ascii=ascii_mode))
+    output = stream.getvalue()
+    assert rendered not in output
+    assert "Failure:" in output and "; retry later" in output
+    assert "[REDACTED]" in output
+    assert scrub._secrets == {secret}
+    assert scrub._pattern is pattern
+    scrub.register_secret(secret)
+    assert scrub._pattern is pattern
+
+
+def test_registered_escaped_chained_exceptions(application_output):
+    app, stream, _ = application_output
+    secret = ESCAPED_SECRETS[1]
+    scrub.register_secret(secret)
+    try:
+        try:
+            raise ValueError({"lookup": secret})
+        except ValueError as error:
+            raise RuntimeError({"request": [secret]}) from error
+    except RuntimeError:
+        app.logger.exception("Operation failed; retry later")
+    output = stream.getvalue()
+    assert repr(secret)[1:-1] not in output
+    assert "lookup" in output and "request" in output
+    assert "[REDACTED]" in output and "direct cause" in output
+    assert "Operation failed; retry later" in output
+
+
+def test_registered_escaped_formatter_failure(application_output, monkeypatch):
+    import json
+
+    app, stream, handler = application_output
+    secret = ESCAPED_SECRETS[2]
+    scrub.register_secret(secret)
+
+    class BrokenFormatter(logging.Formatter):
+        def format(self, record):
+            raise ValueError("Formatter failed: " + json.dumps({"value": secret}))
+
+    monkeypatch.setattr(logging, "raiseExceptions", True)
+    monkeypatch.setattr(sys, "stderr", stream)
+    handler.setFormatter(BrokenFormatter())
+    scrub.install_sanitizer(handler)
+    record = logging.LogRecord("synthetic", logging.WARNING, __file__, 1,
+                               "Failure: %r; retry later", (secret,), None)
+    before = record.__dict__.copy()
+    handler.handle(record)
+    output = stream.getvalue()
+    assert secret not in output
+    assert json.dumps(secret)[1:-1] not in output
+    assert "ValueError: Formatter failed:" in output
+    assert "Message: Failure:" in output and "; retry later" in output
+    assert "[REDACTED]" in output
+    assert record.__dict__ == before
+
+
+@pytest.mark.parametrize("protocol", ["udp", "tcp"])
+def test_registered_escaped_syslog(monkeypatch, protocol):
+    import socket
+
+    def local_socket(handler):
+        handler.unixsocket = False
+        handler.socket = MagicMock()
+
+    monkeypatch.setattr(logging.handlers.SysLogHandler, "createSocket", local_socket)
+    secret = ESCAPED_SECRETS[0]
+    scrub.register_secret(secret)
+    handler = logging.handlers.SysLogHandler(
+        address=("192.0.2.1", 514),
+        socktype=socket.SOCK_DGRAM if protocol == "udp" else socket.SOCK_STREAM,
+    )
+    scrub.install_sanitizer(handler)
+    try:
+        record = logging.LogRecord("synthetic", logging.WARNING, __file__, 1,
+                                   "Failure: %r; retry later", (secret,), None)
+        before = record.__dict__.copy()
+        handler.handle(record)
+        sender = handler.socket.sendto if protocol == "udp" else handler.socket.sendall
+        output = sender.call_args.args[0].decode()
+        assert repr(secret)[1:-1] not in output
+        assert "[REDACTED]" in output and "; retry later" in output
+        assert record.__dict__ == before
+    finally:
+        handler.close()
+
+
+def test_registered_escaped_long_output_has_no_registry_growth(application_output):
+    import json
+
+    app, stream, _ = application_output
+    secret = ESCAPED_SECRETS[1]
+    scrub.register_secret(secret)
+    pattern = scrub._pattern
+    # 1.1 million unmatched characters precede 100 known escaped values.
+    context = "diagnostic-" * 100000
+    values = " | ".join(json.dumps(secret) for _ in range(100))
+    app.logger.warning("%s %s END", context, values)
+    output = stream.getvalue()
+    assert context in output and output.endswith(" END\n")
+    assert json.dumps(secret)[1:-1] not in output
+    assert output.count("[REDACTED]") == 100
+    assert scrub._secrets == {secret}
+    assert scrub._pattern is pattern

@@ -111,9 +111,14 @@ def register_secret(value: str | None) -> None:
         if value in _secrets:
             return
         _secrets.add(value)
-        # Match longer values first and do not scan replacement text again.
-        _pattern = re.compile("|".join(re.escape(secret) for secret in
-                                     sorted(_secrets, key=len, reverse=True)))
+        # Derive only four standard forms from each raw registered value.
+        forms = {form for secret in _secrets for form in (
+            secret, repr(secret)[1:-1], json.dumps(secret)[1:-1],
+            json.dumps(secret, ensure_ascii=False)[1:-1],
+        )}
+        # Match longer literals first and do not scan replacement text again.
+        _pattern = re.compile("|".join(re.escape(form) for form in
+                                     sorted(forms, key=len, reverse=True)))
 
 
 class _SanitizingFormatter(logging.Formatter):

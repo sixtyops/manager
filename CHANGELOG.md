@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Security
+- Output handlers redact raw, Python repr and JSON forms of already registered
+  log secrets. Each raw value supplies at most four deduplicated literal forms.
+  Logging does not add registry values. Arbitrary encodings and unregistered
+  secrets remain outside this coverage.
 - Config-template form data is encrypted at rest with the existing Fernet key.
   Startup converts legacy plaintext rows. Older readers cannot read the migrated
   form data; a code revert alone is not a compatible downgrade. An older-code
