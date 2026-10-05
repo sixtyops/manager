@@ -74,8 +74,8 @@ it to pickup while another worker owns it.
 Ask the user only for unresolved intent or a material product/safety decision.
 Do not ask routine preference or implementation questions. Report missing
 access, named bench proof or a protected-write denial as a technical
-prerequisite. Do independent work
-that can proceed safely. Named lab hardware and operational development access
+prerequisite. Assign independent work that can proceed safely. Named lab
+hardware and operational development access
 are authorized when they are in the assigned task scope and follow the relevant
 SOP. This does not extend to production-device writes or stable releases, or
 override task-specific approval requirements. If required access or proof is
@@ -109,8 +109,9 @@ readback. Keep maximum rounds/reopens and publication pacing intact.
 The lead may merge only a PR created by the lead or its delegated agents. The
 lead must not merge a PR from an outside contributor. Workers do not merge.
 Every merge still requires all applicable review, CI, sign-off, thread,
-duplicate, acceptance, and bench gates above. Follow [release-sop.md](release-sop.md) and
-[self-update-signing.md](self-update-signing.md). Before a dev tag, verify the
+duplicate, acceptance, and bench gates above. Follow
+[release-sop.md](release-sop.md) and [self-update-signing.md](self-update-signing.md).
+Before a dev tag, verify the
 merged version/notes, exact candidate, signing/trust gates, intended public
 channel scope, host recovery/backup evidence and known risks. Public dev tags
 can update other dev installs. Confirm scope when existing intent does not
