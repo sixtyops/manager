@@ -32,6 +32,8 @@ Quick pointers:
 ## Lead session entrypoint
 
 Read [lead-operations-sop.md](docs/lead-operations-sop.md) after CLAUDE.md.
-It gives the fresh-start checklist and bootstrap prompt. Discover live owners,
-queue, locks and budgets before acting. Prioritize working system functionality
-under North Star and the one-right-way contract; defer website work.
+It is the one durable lead procedure, with the fresh-start checklist and
+bootstrap prompt. Update that SOP with durable handoff lessons; do not create a
+parallel procedure. Discover live owners, queue, locks and budgets before
+acting. Prioritize working system functionality under North Star and the
+one-right-way contract; defer website work.

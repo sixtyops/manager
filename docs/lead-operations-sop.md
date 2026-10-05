@@ -14,8 +14,11 @@ merge or release. Shared hub procedures do not extend Manager authority.
 
 **Detail:** The lead heartbeat wakes hourly at minute 17 in `America/Chicago`
 (`17 * * * *`). Discover the current lead and its existing heartbeat. Verify
-cadence and timezone through the available Paseo heartbeat tools. Do not create
-a duplicate schedule. A wake gives no exemption from locks or pacing gates.
+cadence and timezone through the available Paseo heartbeat tools. On an owner
+change, the current owner must use the supported handoff to retire its heartbeat.
+The next owner reads back that retirement before creating one replacement. Do
+not create a duplicate heartbeat or work around an ownership denial. A wake
+gives no exemption from locks or pacing gates.
 
 1. Read current `CLAUDE.md`, `AGENTS.md`, and `.github/AGENTS.md` if present.
    Read [North Star](north-star.md), [one-right-way](one-right-way.md), and live
@@ -44,16 +47,27 @@ shipped behavior from target behavior. Fix current defects before new builds.
 Defer website work while system priorities need attention; do not resume a
 parked website PR merely because CI or review passed. Record specific holds in
 live issues and durable status, rather than hardcoding their IDs into this SOP.
-The lead retains intent, instructions, coordination, decisions and gate checks.
-Delegate implementation, investigations, tests and detailed reviews. Discover
-live IDs/status; reuse suitable idle workers and preserve active jobs. Assign
-one writer per branch. Workers do not recursively delegate unless instructed.
-If no capacity exists, leave work queued; do not build in the lead context.
+Use proven management software and existing architecture before proposing a
+new tool or design. The lead directs only. Subagents do all implementation,
+investigation, testing and detailed PR reviews. The lead retains intent,
+instructions, coordination, decisions and gate checks. Discover live IDs and
+status. Reuse suitable workers and preserve active jobs. Give each worker a
+bounded task with evidence. Assign one writer per branch. Workers do not
+recursively delegate unless instructed. If no capacity exists, leave work
+queued; the lead does not implement, investigate, test or conduct a detailed
+PR review.
 Use epic413's model policy: GPT-6.1 Sol medium for safety builds and planning;
 GPT-6 Luna high for bounded low-risk builds; GPT-6.1 Sol medium for reviews,
 high for safety reviews. Verify installed provider/model/thinking IDs before
 sending work. Honor the repository skill guidance; use factual copywriter/STE,
 and frontend-design plus UI guides when UI is in scope.
+Read the installed `ai-copywriter` skill before writing or changing PR titles,
+descriptions, comments or reviews. Use it for documentation, UI copy, commit
+messages and code comments. Apply the repository's Simplified Technical English
+rules. If the skill is unavailable, follow [CLAUDE.md Writing and style](../CLAUDE.md#writing-and-style)
+and report that limit. Before handoff or merge, check changed text against both
+rules and verify its factual claims. Apply this gate to future edits to this
+SOP.
 Each assignment names intent, issue, exact files, dependencies, acceptance,
 required instructions, tests, forbidden actions, evidence path and handoff.
 Require progress updates and completion through a reviewable PR or a concrete
@@ -64,10 +78,16 @@ access proof. A closed dependency alone is insufficient if acceptance proof is
 missing. Keep blocked work queued with named prerequisites. A direct delegated
 claim removes queued/ready and adds in-progress with readback; do not expose
 it to pickup while another worker owns it.
-Ask the user only for unresolved intent or a material product/safety decision,
-not routine implementation choices. Report missing access, named bench proof
-or a protected-write denial as a technical prerequisite. Do independent work
-that can proceed safely. Standing authority does not override a tool denial.
+Ask the user only for unresolved intent or a material product/safety decision.
+Do not ask routine preference or implementation questions. Report missing
+access, named bench proof or a protected-write denial as a technical
+prerequisite. Assign independent work that can proceed safely. Named lab
+hardware and operational development access
+are authorized when they are in the assigned task scope and follow the relevant
+SOP. This does not extend to production-device writes or stable releases, or
+override task-specific approval requirements. If required access or proof is
+outside the named scope, report it as a missing prerequisite. Standing authority
+does not override a tool denial.
 
 ## Review, merge and development release gates
 
@@ -93,9 +113,12 @@ Use the shared [reopen procedure](https://github.com/isolson/personal-processes/
 only after an explicit lead decision, recorded history/budget checks and
 readback. Keep maximum rounds/reopens and publication pacing intact.
 
-Only the authorized lead can perform a validated Manager merge or development
-release under CLAUDE authority. Follow [release-sop.md](release-sop.md) and
-[self-update-signing.md](self-update-signing.md). Before a dev tag, verify the
+The lead may merge only a PR created by the lead or its delegated agents. The
+lead must not merge a PR from an outside contributor. Workers do not merge.
+Every merge still requires all applicable review, CI, sign-off, thread,
+duplicate, acceptance, and bench gates above. Follow
+[release-sop.md](release-sop.md) and [self-update-signing.md](self-update-signing.md).
+Before a dev tag, verify the
 merged version/notes, exact candidate, signing/trust gates, intended public
 channel scope, host recovery/backup evidence and known risks. Public dev tags
 can update other dev installs. Confirm scope when existing intent does not
@@ -165,12 +188,16 @@ services as part of resuming work.
 
 **Key points:** Append at claim and handoff. Read back the exact append.
 
-**Detail:** Record UTC time; latest intent/holds; discovered owner/job status;
-issue/PR links; worktree/branch/base/exact head; scope/dependencies; test/CI/review
-links and counts; skipped/unknown proof; denial/bench/host blockers; next action
-and owner. Keep full logs in a separate artifact path. Preserve earlier evidence.
-A stale heartbeat prompt is not live queue authority. Reconcile durable status
-with current GitHub and job evidence before acting.
+**Detail:** Record UTC time; latest user expectations, intent and holds;
+discovered owner/job status; issue/PR links; worktree/branch/base/exact head;
+scope/dependencies; test/CI/review links and counts; skipped/unknown proof;
+blocked, denied and parked work; denial/bench/host blockers; next action and
+owner. Keep full logs in a separate artifact path. Preserve earlier evidence.
+The next owner checks live state again and preserves locks, budgets and active
+jobs. A stale heartbeat prompt is not live queue authority. Reconcile durable
+status with current GitHub and job evidence before acting. Add durable lessons
+to this SOP; keep its entrypoint in `AGENTS.md` and do not create a parallel
+procedure. Keep transient task and worker IDs in durable status, not here.
 
 Temporary overrides need a recorded grant, scope, expiry, baseline and restore
 evidence. Check time and effective settings at each wake. Restore only when
