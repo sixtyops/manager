@@ -94,6 +94,8 @@ All notable changes to this project are documented in this file.
   they update.
 
 ### Fixed
+- Backup restore rejects corrupt or empty SQLite snapshots before replacing the
+  current database or encryption key. Rejected archives remain available.
 - Small teal website links and the 404 return button use darker existing teal
   shades for readable text. The logo and general palette are unchanged.
 - Website menu and FAQ controls announce their expanded state and linked panels.

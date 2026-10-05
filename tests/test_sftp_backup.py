@@ -8,6 +8,7 @@ complete. These tests pin the round-trip closed.
 """
 
 import io
+import shutil
 import sqlite3
 import tarfile
 from pathlib import Path
@@ -167,3 +168,59 @@ def test_legacy_archive_without_key_restores_db_and_keeps_local_key(tmp_path):
         assert db_file.exists()
         assert key_file.read_bytes() == local_key  # untouched
     crypto.reset_cache()
+
+
+@pytest.mark.parametrize("kind", ["invalid", "empty", "header", "truncated", "no_tables"])
+def test_invalid_restore_preserves_database_key_and_archive(tmp_path, kind):
+    """Reject a bad staged database before any current data or key change."""
+    p_mod, p_key, data, staging = _patched(tmp_path)
+    db_file = data / "sixtyops.db"
+    key_file = data / ".encryption_key"
+    with p_mod, p_key:
+        crypto.reset_cache()
+        try:
+            token = crypto.encrypt_password("synthetic-preserved-password")
+            _make_db(db_file, token)
+            old_db = db_file.read_bytes()
+            old_key = key_file.read_bytes()
+            if kind == "no_tables":
+                empty_db = tmp_path / "empty-schema.sqlite"
+                con = sqlite3.connect(empty_db)
+                try:
+                    con.execute("VACUUM")
+                finally:
+                    con.close()
+                payload = empty_db.read_bytes()
+            else:
+                payload = {
+                    "invalid": b"synthetic non-SQLite database",
+                    "empty": b"",
+                    "header": b"SQLite format 3\x00" + b"\x00" * 84,
+                    "truncated": old_db[:256],
+                }[kind]
+            archive = staging / "sixtyops-backup-invalid.tar.gz"
+            with tarfile.open(archive, "w:gz") as tar:
+                for name, content in [("sixtyops.db", payload),
+                                      (".encryption_key", Fernet.generate_key())]:
+                    member = tarfile.TarInfo(name)
+                    member.size = len(content)
+                    tar.addfile(member, io.BytesIO(content))
+            archive_bytes = archive.read_bytes()
+            with patch("shutil.copy2", wraps=shutil.copy2) as copy, \
+                    patch.object(crypto, "reset_cache", wraps=crypto.reset_cache) as reset:
+                ok, message = sftp_backup._restore_from_archive(archive)
+                assert db_file.read_bytes() == old_db
+                assert key_file.read_bytes() == old_key
+                assert archive.read_bytes() == archive_bytes
+                copy.assert_not_called()
+                reset.assert_not_called()
+            assert ok is False
+            assert message == "Invalid backup database"
+            con = sqlite3.connect(db_file)
+            try:
+                restored_token = con.execute("SELECT v FROM creds").fetchone()[0]
+            finally:
+                con.close()
+            assert crypto.decrypt_password(restored_token) == "synthetic-preserved-password"
+        finally:
+            crypto.reset_cache()

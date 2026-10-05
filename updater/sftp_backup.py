@@ -6,6 +6,7 @@ import json
 import logging
 import sqlite3
 import tarfile
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
@@ -274,6 +275,20 @@ def _restore_from_archive(local_archive: Path) -> Tuple[bool, str]:
     extracted_db = STAGING_DIR / "sixtyops.db"
     if not extracted_db.exists():
         return False, "sixtyops.db not found in backup archive"
+
+    # Validate the staged snapshot before replacing any database or key bytes.
+    # Structural checks do not prove schema or encryption-key compatibility.
+    try:
+        uri = extracted_db.resolve().as_uri() + "?mode=ro&immutable=1"
+        with closing(sqlite3.connect(uri, uri=True)) as conn:
+            integrity = conn.execute("PRAGMA integrity_check").fetchall()
+            tables = conn.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table'"
+            ).fetchone()[0]
+        if integrity != [("ok",)] or tables == 0:
+            return False, "Invalid backup database"
+    except sqlite3.DatabaseError:
+        return False, "Invalid backup database"
 
     # Replace live database file.
     # Note: SQLite might have open connections; in a real deployment this might
