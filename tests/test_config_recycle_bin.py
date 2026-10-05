@@ -2,9 +2,11 @@
 hardware-id auto-rebind, and manager-backup round-trip."""
 
 import csv
+import inspect
 import io
 import json
 import sqlite3
+import textwrap
 from unittest.mock import patch
 
 import pytest
@@ -623,6 +625,26 @@ class TestSnapshotKinds:
         assert db.get_device_config_by_id(protected)["kind"] == "pre_push"
         db.cleanup_old_device_configs(50)
         assert {r[0] for r in mock_db.execute("SELECT id FROM device_configs")} == kept
+
+    def test_negative_control_without_exemption_fails_protected_check(self, mock_db, monkeypatch):
+        # Remove the pre_push exemption from a disposable copy of cleanup.
+        source = textwrap.dedent(inspect.getsource(db.cleanup_old_device_configs))
+        assert source.count(" AND kind != 'pre_push'") == 2
+        namespace = {}
+        exec(source.replace(" AND kind != 'pre_push'", ""), vars(db), namespace)
+        monkeypatch.setattr(db, "cleanup_old_device_configs", namespace["cleanup_old_device_configs"])
+        ip = "192.0.2.10"
+        protected = self.insert(mock_db, ip, "before-write", "pre_push", "2026-10-04T00:00:00")
+        ordinary = [
+            self.insert(mock_db, ip, str(index), "poll", f"2026-10-05T00:00:{index:02}")
+            for index in range(5)
+        ]
+        db.cleanup_old_device_configs(2)
+        kept = {r[0] for r in mock_db.execute("SELECT id FROM device_configs")}
+        assert set(ordinary[-2:]) <= kept
+        assert not set(ordinary[:-2]) & kept
+        with pytest.raises(AssertionError):
+            assert protected in kept
 
     def test_mixed_devices_and_recycled_rows_keep_independent_limits(self, mock_db):
         expected = set()
