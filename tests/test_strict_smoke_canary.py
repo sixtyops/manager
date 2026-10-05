@@ -8,6 +8,7 @@ from updater import app as app_module
 from updater import database as db
 from updater.tachyon import SmokeTestResult
 from updater.vendors.tachyon.client import UpdateResult
+from tests.test_rollout_invariants import hold_clock
 
 
 class TestStrictSmokeSettings:
@@ -140,3 +141,77 @@ class TestConfirmRequiresCleanSmoke:
     async def test_clean_smoke_pass_confirms(self, mock_db):
         await _run_update("10.0.0.11", smoke_passed=True)
         assert "10.0.0.11" in db.get_confirmed_ips_for_version("1.2.3")
+
+
+@pytest.fixture
+def confirmation_cipher(monkeypatch):
+    """Keep synthetic credentials in memory for the full confirmation test."""
+    from cryptography.fernet import Fernet
+    from updater import crypto
+
+    cipher = Fernet(Fernet.generate_key())
+    monkeypatch.setattr(crypto, "_fernet", cipher)
+    monkeypatch.setattr(crypto, "_load_fernet", lambda: cipher)
+
+
+class TestSmokeConfirmationFirmwareHold:
+    """Smoke proof, not observed version alone, can clear Firmware Hold."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("strict", ["false", "true"])
+    @pytest.mark.parametrize("failure", [RuntimeError, TimeoutError])
+    async def test_smoke_exception_keeps_hold(
+        self, mock_db, hold_clock, confirmation_cipher, strict, failure
+    ):
+        from tests.fixtures.fleet import set_version, set_health
+        from tests.test_rollout_invariants import (
+            _HOLD_VERSION, _settings, _make_scheduler,
+        )
+
+        ip = "192.0.2.10"
+        db.set_setting("smoke_test_strict", strict)
+        smoke = AsyncMock(side_effect=failure("Synthetic smoke failure"))
+        with patch.object(_FakeClient, "run_smoke_tests", smoke):
+            job = await _run_update(ip, smoke_passed=True, version=_HOLD_VERSION)
+        smoke.assert_awaited_once()
+        assert job.devices[ip].smoke_warnings == [
+            "Smoke test error: Synthetic smoke failure"
+        ]
+        assert db.get_confirmed_ips_for_version(_HOLD_VERSION) == set()
+
+        # A healthy target-version poll supplies no missing smoke proof.
+        device = {"ip": ip, "role": "ap"}
+        set_version(device, _HOLD_VERSION)
+        set_health(device, hold_clock.isoformat())
+        scheduler, _ = _make_scheduler()
+        settings = _settings(
+            hold_days=6, firmware="tna-30x-1.12.3-r55002-20260601-x.bin"
+        )
+        held, holds = scheduler._held_families(settings, None)
+        assert held == {"tna-30x"}
+        assert holds["tna-30x"]["confirmed_by"] is None
+        assert holds["tna-30x"]["cleared_by_device"] is False
+
+    @pytest.mark.asyncio
+    async def test_clean_smoke_clears_same_family_hold(
+        self, mock_db, hold_clock, confirmation_cipher
+    ):
+        from tests.fixtures.fleet import set_version, set_health
+        from tests.test_rollout_invariants import (
+            _HOLD_VERSION, _settings, _make_scheduler,
+        )
+
+        ip = "192.0.2.11"
+        await _run_update(ip, smoke_passed=True, version=_HOLD_VERSION)
+        assert db.get_confirmed_ips_for_version(_HOLD_VERSION) == {ip}
+        device = {"ip": ip, "role": "ap"}
+        set_version(device, _HOLD_VERSION)
+        set_health(device, hold_clock.isoformat())
+        scheduler, _ = _make_scheduler()
+        settings = _settings(
+            hold_days=6, firmware="tna-30x-1.12.3-r55002-20260601-x.bin"
+        )
+        held, holds = scheduler._held_families(settings, None)
+        assert held == set()
+        assert holds["tna-30x"]["confirmed_by"] == ip
+        assert holds["tna-30x"]["cleared_by_device"] is True
