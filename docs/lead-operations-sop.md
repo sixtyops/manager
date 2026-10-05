@@ -61,6 +61,13 @@ GPT-6 Luna high for bounded low-risk builds; GPT-6.1 Sol medium for reviews,
 high for safety reviews. Verify installed provider/model/thinking IDs before
 sending work. Honor the repository skill guidance; use factual copywriter/STE,
 and frontend-design plus UI guides when UI is in scope.
+Read the installed `ai-copywriter` skill before writing or changing PR titles,
+descriptions, comments or reviews. Use it for documentation, UI copy, commit
+messages and code comments. Apply the repository's Simplified Technical English
+rules. If the skill is unavailable, follow [CLAUDE.md Writing and style](../CLAUDE.md#writing-and-style)
+and report that limit. Before handoff or merge, check changed text against both
+rules and verify its factual claims. Apply this gate to future edits to this
+SOP.
 Each assignment names intent, issue, exact files, dependencies, acceptance,
 required instructions, tests, forbidden actions, evidence path and handoff.
 Require progress updates and completion through a reviewable PR or a concrete
