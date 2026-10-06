@@ -132,6 +132,8 @@ After=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+NoNewPrivileges=true
+PrivateTmp=true
 WorkingDirectory=$INSTALL_DIR
 ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.standalone.yml up -d
 ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.standalone.yml down

@@ -43,6 +43,12 @@ to `/opt/sixtyops`, builds the images, starts the standalone stack
 a `sixtyops.service` systemd unit so the stack comes back after reboot. See
 [docs/deployment.md](deployment.md) for what each piece does in detail.
 
+The generated service sets `NoNewPrivileges=true` and `PrivateTmp=true` for
+its Docker/Compose client processes. These settings do not sandbox the separate
+Docker daemon or its containers. A repository update does not change an already
+installed unit. Runtime enforcement and stack compatibility need a separate
+authorized host check.
+
 This install path is also what the in-app **Apply App Update** button expects:
 the repo is mounted, Docker Compose is present, and the host can rebuild and
 restart cleanly from the Settings page.
