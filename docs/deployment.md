@@ -70,6 +70,27 @@ Update it yourself with [Updating an image-based install](#updating-an-image-bas
   the managed repo + Compose install, one-click app updates can work; if not,
   the UI will show manual update steps instead.
 
+## App filesystem and SFTP keys
+
+**Key points:** Compose makes the app image filesystem read-only. Temporary
+files use `/tmp`; data, firmware, backups, the self-update repository, and SFTP
+keys use explicit writable mounts. The app still has Docker socket access.
+This restriction does not isolate the Docker daemon.
+
+**Detail:** SFTP keys keep the existing container path
+`/app/.ssh/backup_key`. Compose persists this directory in `./data/ssh`.
+Before the first recreation of an older container, preserve any existing SFTP
+key from that container in a private recoverable copy. Place the retained key
+at `./data/ssh/backup_key` before applying the new mount. An empty mount hides
+the old container's key; it does not transfer it. Use UID/GID `1500`, directory
+mode `700`, and key mode `600`. Do not print or commit the key.
+
+Retain the previous image by immutable ID and the previous Compose and startup
+files until health and key read-back pass after recreation. Recovery needs those
+files, the retained image, and the preserved key. A source revert cannot recover
+a lost key. Validate startup, Docker socket access, and key persistence on an
+isolated Docker test host before applying this change to an existing install.
+
 ## Initial Setup
 
 After starting the services, open `https://your-server-ip` in a browser. Accept the self-signed certificate warning — this certificate is suitable for private network deployments and can optionally be replaced with a Let's Encrypt certificate in step 3.

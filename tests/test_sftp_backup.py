@@ -12,13 +12,48 @@ import shutil
 import sqlite3
 import tarfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+import asyncssh
 from cryptography.fernet import Fernet, InvalidToken
 
 from updater import crypto
 from updater import sftp_backup
+
+
+@pytest.mark.asyncio
+async def test_sftp_key_uses_existing_path_and_restrictive_modes(tmp_path):
+    """Exercise key storage and later connection setup without an SFTP server."""
+    key_path = tmp_path / "ssh" / "backup_key"
+    key = asyncssh.generate_private_key("ssh-ed25519").export_private_key().decode()
+    settings = {
+        "backup_sftp_host": "synthetic.invalid",
+        "backup_sftp_port": "22",
+        "backup_sftp_username": "synthetic",
+        "backup_sftp_auth_method": "key",
+    }
+    with patch.object(sftp_backup, "SSH_KEY_PATH", key_path), \
+            patch.object(sftp_backup.db, "set_setting"), \
+            patch.object(sftp_backup.db, "get_all_settings", return_value=settings), \
+            patch.object(sftp_backup, "test_backup_connection",
+                         new=AsyncMock(return_value=(True, "synthetic success"))), \
+            patch.object(sftp_backup.asyncssh, "connect", new=AsyncMock()) as connect:
+        success, _ = await sftp_backup.configure_backup(
+            "synthetic.invalid", 22, "/synthetic", "synthetic", "key", ssh_key=key
+        )
+        assert success
+        before = key_path.read_bytes()
+        assert before == key.encode()
+        assert key_path.stat().st_mode & 0o777 == 0o600
+        assert key_path.parent.stat().st_mode & 0o777 == 0o700
+        await sftp_backup._get_sftp_connection()
+        assert connect.await_args.kwargs["client_keys"] == [str(key_path)]
+        assert key_path.read_bytes() == before
+
+
+def test_sftp_key_path_matches_persistent_compose_destination():
+    assert sftp_backup.SSH_KEY_PATH == Path("/app/.ssh/backup_key")
 
 
 def _paths(tmp_path):

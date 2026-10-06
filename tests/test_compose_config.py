@@ -6,6 +6,7 @@ can drive it via env vars instead of editing the file in place — which would
 leave the working tree dirty and break the in-app self-update flow.
 """
 
+import copy
 import re
 from pathlib import Path
 
@@ -69,8 +70,8 @@ def test_default_publishes_are_secure(compose_doc):
 
 def test_app_container_caps_drop_all_with_entrypoint_minimum(compose_doc):
     """cap_drop: [ALL] is the desired baseline. The entrypoint still runs
-    briefly as root before gosu-dropping to appuser — it chowns the bind-
-    mounted repo for self-update, manages the docker-socket group, and
+    briefly as root before dropping to appuser. It prepares writable
+    mounts for self-update and sets the Docker socket process group, then
     switches user. Those operations require a small set of capabilities;
     everything else (NET_RAW, NET_ADMIN, SYS_PTRACE, MKNOD, …) must stay
     dropped.
@@ -97,8 +98,8 @@ def test_app_container_caps_drop_all_with_entrypoint_minimum(compose_doc):
 
 def test_app_container_no_new_privileges(compose_doc):
     """no-new-privileges prevents setuid-bit escalation inside the container.
-    gosu (used by the entrypoint) uses syscalls, not the setuid bit, so it
-    is not affected. This must stay on for both services."""
+    The entrypoint uses syscalls, not a setuid executable.
+    This must stay on for both services."""
     for svc_name in ("sixtyops-mgmt", "nginx"):
         sec_opt = compose_doc["services"][svc_name].get("security_opt") or []
         assert "no-new-privileges:true" in sec_opt, (
@@ -128,3 +129,49 @@ def _render_defaults(entry: str) -> str:
     needing the docker CLI on the test runner.
     """
     return re.sub(r"\$\{[^}:]+:-([^}]*)\}", r"\1", entry)
+
+
+def _assert_read_only_boundaries(service):
+    assert service.get("read_only") is True
+    assert service.get("tmpfs") == ["/tmp:rw,nosuid,nodev,mode=1777"]
+    writable = {}
+    for volume in service["volumes"]:
+        source, target, *mode = volume.split(":")
+        if mode != ["ro"]:
+            writable[target] = source
+    assert writable == {
+        "/app/firmware": "./firmware",
+        "/app/data": "./data",
+        "/app/.ssh": "./data/ssh",
+        "/app/backups": "./backups",
+        "/var/run/docker.sock": "/var/run/docker.sock",
+        "/app/repo": ".",
+    }
+
+
+def test_read_only_root_and_narrow_writable_paths(compose_doc):
+    _assert_read_only_boundaries(compose_doc["services"]["sixtyops-mgmt"])
+    overlay = yaml.safe_load(
+        COMPOSE_PATH.with_name("docker-compose.standalone.yml").read_text()
+    )["services"]["sixtyops-mgmt"]
+    assert set(overlay).isdisjoint({"read_only", "tmpfs"})
+    assert overlay["volumes"] == [
+        "./certbot/conf:/etc/letsencrypt:ro",
+        "./nginx/conf.d:/app/nginx-conf",
+        "./docker-compose.standalone.yml:/app/docker-compose.standalone.yml:ro",
+    ]
+
+
+@pytest.mark.parametrize("mutation", ["old_root", "no_tmp", "no_ssh", "wide_etc"])
+def test_read_only_boundary_assertions_reject_unsafe_shape(compose_doc, mutation):
+    service = copy.deepcopy(compose_doc["services"]["sixtyops-mgmt"])
+    if mutation == "old_root":
+        service.pop("read_only")
+    elif mutation == "no_tmp":
+        service.pop("tmpfs")
+    elif mutation == "no_ssh":
+        service["volumes"].remove("./data/ssh:/app/.ssh")
+    else:
+        service["volumes"].append("./etc:/etc")
+    with pytest.raises(AssertionError):
+        _assert_read_only_boundaries(service)

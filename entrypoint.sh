@@ -1,20 +1,18 @@
 #!/bin/sh
-# Match Docker socket GID so appuser can run docker commands for self-update
-if [ -S /var/run/docker.sock ]; then
-    SOCK_GID=$(stat -c '%g' /var/run/docker.sock)
-    if ! getent group "$SOCK_GID" > /dev/null 2>&1; then
-        groupadd -g "$SOCK_GID" dockersock
-    fi
-    SOCK_GROUP=$(getent group "$SOCK_GID" | cut -d: -f1)
-    usermod -aG "$SOCK_GROUP" appuser 2>/dev/null || true
-fi
+set -eu
 
 # Fix bind-mounted repo permissions for self-update
 # Host-side git operations (run as root) leave root-owned files that
 # appuser can't overwrite. Chown the entire repo so git checkout works.
 if [ -d /app/repo/.git ]; then
     chown -R 1500:1500 /app/repo
-    git config --global --add safe.directory /app/repo
+fi
+
+# This directory is a persistent mount in Compose. Do not replace key data.
+chown -R 1500:1500 /app/.ssh
+chmod 700 /app/.ssh
+if [ -e /app/.ssh/backup_key ]; then
+    chmod 600 /app/.ssh/backup_key
 fi
 
 # Seed dev data after app creates the DB (local development only).
@@ -39,4 +37,4 @@ if [ "${SEED_DATA:-}" = "1" ] && [ -f /app/repo/scripts/seed_dev_data.py ]; then
     ) &
 fi
 
-exec gosu appuser "$@"
+exec python3 /container_user.py "$@"
