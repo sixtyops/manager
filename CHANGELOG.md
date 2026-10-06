@@ -5,6 +5,7 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Fixed
+- Config-poll fetch exceptions now appear at WARNING level in application logs.
 - Config snapshot storage supports `poll`, `pre_push`, and `post_push` types.
   Routine pruning preserves explicit `pre_push` rows outside the ordinary cap.
   Encrypted CSV backups preserve types; legacy rows and CSV default to `poll`.

@@ -96,6 +96,34 @@ def test_application_chained_exception_output(application_output, explicit_cause
     assert ("direct cause" if explicit_cause else "During handling") in output
 
 
+@pytest.mark.asyncio
+async def test_poller_fetch_warning_uses_sanitized_application_output(application_output):
+    from unittest.mock import AsyncMock, patch
+
+    from updater.poller import NetworkPoller
+
+    _, stream, _ = application_output
+    synthetic_secret = "synthetic-poller-warning-value"
+    scrub.register_secret(synthetic_secret)
+    fake_client = MagicMock()
+    fake_client.connect = AsyncMock(
+        side_effect=RuntimeError(f"fetch failed: {synthetic_secret}")
+    )
+    poller = NetworkPoller()
+
+    with patch("updater.poller.get_driver", return_value=lambda *args, **kwargs: fake_client), \
+            patch("updater.poller.db.update_device_config_poll_status") as update_status:
+        await poller._fetch_and_store_config("10.0.0.1", "test-user", "test-password")
+
+    output = stream.getvalue()
+    assert " - updater.poller - WARNING - Config poll: error fetching config from 10.0.0.1" in output
+    assert "fetch failed: [REDACTED]" in output
+    assert synthetic_secret not in output
+    update_status.assert_called_once_with(
+        "10.0.0.1", "unknown", f"fetch failed: {synthetic_secret}"
+    )
+
+
 def test_empty_and_duplicate_values(application_output):
     app, stream, _ = application_output
     scrub.register_secret(None)
