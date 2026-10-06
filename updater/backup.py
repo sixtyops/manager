@@ -35,7 +35,7 @@ RADIUS_EXPORT_COLUMNS = ["username", "password", "enabled"]
 # across DR so auto-rebind keeps working for restored history.
 CONFIG_EXPORT_COLUMNS = [
     "ip", "fetched_at", "config_hash", "model", "hardware_id", "mac",
-    "deleted_at", "device_label", "config_json",
+    "deleted_at", "device_label", "config_json", "kind",
 ]
 
 # Characters that turn a CSV cell into an executable formula in
@@ -152,7 +152,7 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
         with db.get_db() as conn:
             rows = conn.execute(
                 """SELECT ip, config_json, config_hash, model, hardware_id, mac,
-                          fetched_at, deleted_at, device_label
+                          fetched_at, deleted_at, device_label, kind
                      FROM device_configs
                     ORDER BY ip, fetched_at"""
             ).fetchall()
@@ -177,6 +177,7 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
                     "deleted_at": r["deleted_at"] or "",
                     "device_label": _safe_cell(r["device_label"] or ""),
                     "config_json": fernet.encrypt(cleartext.encode()).decode(),
+                    "kind": r["kind"],
                 })
     except Exception:
         logger.debug("Could not export device_configs", exc_info=True)
@@ -342,17 +343,16 @@ def process_csv_import(csv_content: str, passphrase: str, conflict_mode: str = "
         except Exception:
             logger.debug("Could not import RADIUS users", exc_info=True)
 
-    # Import device config snapshots if present. Idempotent on (ip, fetched_at):
-    # if a row with the same ip+fetched_at already exists we skip rather than
-    # duplicate, so re-importing the same backup is safe.
+    # Skip repeated imports with the same IP, timestamp, and kind. Distinct
+    # kinds at the same timestamp must retain their safety tags.
     if config_lines:
         try:
             cfg_reader = csv.DictReader(io.StringIO("".join(config_lines)))
             with db.get_db() as conn:
                 existing_keys = {
-                    (r["ip"], r["fetched_at"])
+                    (r["ip"], r["fetched_at"], r["kind"])
                     for r in conn.execute(
-                        "SELECT ip, fetched_at FROM device_configs"
+                        "SELECT ip, fetched_at, kind FROM device_configs"
                     ).fetchall()
                 }
             for row in cfg_reader:
@@ -361,7 +361,8 @@ def process_csv_import(csv_content: str, passphrase: str, conflict_mode: str = "
                 if not ip or not fetched_at:
                     results["device_configs"]["failed"] += 1
                     continue
-                if (ip, fetched_at) in existing_keys:
+                kind = row.get("kind", "poll")
+                if (ip, fetched_at, kind) in existing_keys:
                     results["device_configs"]["skipped"] += 1
                     continue
                 try:
@@ -392,8 +393,9 @@ def process_csv_import(csv_content: str, passphrase: str, conflict_mode: str = "
                         mac=mac_value,
                         deleted_at=row.get("deleted_at") or None,
                         device_label=_unsafe_cell(row.get("device_label") or "") or None,
+                        kind=kind,
                     )
-                    existing_keys.add((ip, fetched_at))
+                    existing_keys.add((ip, fetched_at, kind))
                     results["device_configs"]["added"] += 1
                 except Exception as e:
                     results["device_configs"]["failed"] += 1
