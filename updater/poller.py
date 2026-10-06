@@ -1066,7 +1066,7 @@ class NetworkPoller:
             # SSL errors, etc.) bubble here without ever reaching the
             # in-loop status writes — which is exactly the case we'd
             # otherwise lose visibility on.
-            logger.debug(f"Config poll: error fetching config from {ip}: {e}")
+            logger.warning(f"Config poll: error fetching config from {ip}: {e}")
             try:
                 db.update_device_config_poll_status(ip, "unknown", str(e)[:200])
             except Exception:
