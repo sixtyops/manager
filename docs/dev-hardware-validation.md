@@ -74,3 +74,62 @@ before merge. Only Isaac names bench devices.
 commit in the pull request. Re-run bench proof after any change to the pull
 request head. This is a target merge requirement. This documentation change
 does not claim hardware proof.
+
+## Private access records
+
+**Key points:** Keep the access manifest on the authorized private host. It
+contains role names and references to existing credential fields. It does not
+contain credential values or device inventory.
+
+**Detail:** Store the manifest beside the existing private credential file.
+Use an owner-only directory with mode `700` and a manifest with mode `600`.
+Do not commit the manifest or its path. Do not copy usernames, passwords,
+tokens, device addresses, or inventory into shared issues, pull requests, or
+logs.
+
+Map each role to labels for fields that already exist in the private
+credential file. Use references only. Do not copy secret values into the
+manifest. This example shows the information to record. It does not define a
+new manifest schema:
+
+```yaml
+role: <service-or-device-role>
+credential_field_ref: <existing-field-label>
+observation: <operator_reported|verified|failed|not_attempted>
+observed_at_utc: <timestamp-or-unknown>
+method: <method-or-unknown>
+result: <result-or-unknown>
+evidence_source: <source-or-unknown>
+```
+
+Append each new observation. Preserve earlier reports, successes, and failures.
+Mark an operator report as `operator_reported`; it is not a verified login.
+Mark a read or login as `verified` only after that operation succeeds for the
+recorded role. Mark a failed operation as `failed`. Do not infer a cause from
+an error code. Record unknown dates, methods, and sources as `unknown`.
+
+For an update, write a temporary file in the same private directory. Set its
+mode to `600`. Preserve the existing history. Validate the new record and its
+field references without printing credential values. Keep the prior manifest
+for rollback until the replacement passes read-back. Replace the manifest
+atomically only after validation. Check its owner, modes, role names, field
+references, and preserved history. Do not include manifest contents or its
+path in shared output.
+
+### Latest recorded lab access evidence
+
+**Key points:** This dated record reports only the available evidence. It does
+not establish access that was not verified.
+
+**Detail:**
+
+- On 2026-10-06 at 12:59 UTC, the switch discovery and bridge-table reads
+  returned HTTP 200 and listed an AP neighbor. This does not verify direct AP
+  access or account binding.
+- On 2026-10-06 at 12:59 UTC, access-point and Manager login requests returned
+  HTTP 401. Their causes are unknown. Account binding remains unresolved.
+- The operator reports earlier successful access-point and Manager logins.
+  Their dates and methods are unknown. These reports are not current
+  verification.
+- No connected subscriber module was contacted or identified. A Manager
+  deployed-commit read was not verified.

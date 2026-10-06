@@ -89,6 +89,21 @@ override task-specific approval requirements. If required access or proof is
 outside the named scope, report it as a missing prerequisite. Standing authority
 does not override a tool denial.
 
+### Private access evidence
+
+**Key points:** Keep credential values on the authorized private host. Share
+only a safe summary of access evidence.
+
+**Detail:** Follow [Private access records](dev-hardware-validation.md#private-access-records)
+when you record local account roles or access checks. Store only role names,
+references to existing credential fields, and verification metadata. Do not
+copy manifest paths, usernames, credentials, device addresses, or inventory
+into GitHub or committed files. Preserve operator-reported history separately
+from fresh successful reads and failed attempts. Include the date, method,
+result, and evidence source for each new observation. Mark unknown fields as
+unknown. A prior report or a test of a different role does not verify current
+access.
+
 ## Review, merge and development release gates
 
 **Key points:** Exact-head evidence gates every handoff. A label is insufficient.
