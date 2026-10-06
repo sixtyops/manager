@@ -14,6 +14,10 @@ All notable changes to this project are documented in this file.
   code revert cannot recover deleted rows. Protected rows have no size limit.
 
 ### Security
+- New installer-generated systemd units set `NoNewPrivileges=true` and
+  `PrivateTmp=true` for Docker/Compose client processes. Existing installed
+  units do not change. This does not establish Docker daemon or container
+  isolation; runtime enforcement still needs an authorized host check.
 - Output handlers redact raw, Python repr and JSON forms of already registered
   log secrets. Each raw value supplies at most four deduplicated literal forms.
   Logging does not add registry values. Arbitrary encodings and unregistered
