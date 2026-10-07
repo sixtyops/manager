@@ -67,7 +67,8 @@ to do so.
   Distinguish target behavior from shipped behavior.
 - Keep one issue per PR. Mark small, dependency-ready work `agent:ready`.
   Finish active fixes first and keep at most three active build or fix PRs.
-  Use GPT-6.1 Sol for safety work and review. Luna may do bounded low-risk work.
+  Use GPT-6.1 Sol for safety work and review. Use GPT-6 Luna at `high` or
+  `xhigh` thinking for small and medium coding tasks.
   Fast mode is authorized where supported until 2026-10-03 00:00
   America/Chicago. After that cutoff, use normal mode unless Isaac extends it.
 - Before each merge, verify the current head, independent review, sign-off
