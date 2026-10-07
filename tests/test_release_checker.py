@@ -1,10 +1,33 @@
 """Tests for the release checker and self-update mechanism."""
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 
 import pytest
+
+
+def _datetime_at(instant):
+    """Return a datetime class whose now() uses one aware UTC instant."""
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return instant.replace(tzinfo=None)
+            return instant.astimezone(tz)
+
+    return FrozenDateTime
+
+
+@pytest.fixture(autouse=True)
+def _release_checker_test_clock(monkeypatch):
+    """Keep unrelated release-checker tests outside the maintenance window."""
+    from updater import services
+
+    # 09:00 in Chicago on Wednesday, outside the shared 03:00-04:00 window.
+    outside_window = datetime(2026, 1, 7, 15, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(services, "datetime", _datetime_at(outside_window))
 
 
 @pytest.fixture(autouse=True)
@@ -1189,7 +1212,21 @@ class TestGetComposeCmd:
 class TestIsSafeToUpdate:
     @pytest.fixture(autouse=True)
     def _patch_db(self, mock_db):
-        pass
+        self.db = mock_db
+
+    def _set_schedule(self, days="wed", timezone="America/Chicago"):
+        from updater import database
+
+        database.set_setting("schedule_enabled", "true")
+        database.set_setting("schedule_days", days)
+        database.set_setting("schedule_start_hour", "3")
+        database.set_setting("schedule_end_hour", "4")
+        database.set_setting("timezone", timezone)
+
+    def _set_clock(self, monkeypatch, utc_instant):
+        from updater import services
+
+        monkeypatch.setattr(services, "datetime", _datetime_at(utc_instant))
 
     def test_safe_when_no_rollout_no_window(self):
         from updater.release_checker import _is_safe_to_update
@@ -1209,6 +1246,85 @@ class TestIsSafeToUpdate:
 
         assert is_safe is False
         assert "rollout" in reason.lower()
+
+    def test_maintenance_window_includes_start(self, monkeypatch):
+        from updater.release_checker import _is_safe_to_update
+
+        self._set_schedule()
+        # 03:00 CST on Wednesday. The configured start is inclusive.
+        self._set_clock(monkeypatch, datetime(2026, 1, 7, 9, 0, tzinfo=timezone.utc))
+
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None):
+            is_safe, reason = _is_safe_to_update()
+
+        assert is_safe is False
+        assert "maintenance window" in reason.lower()
+
+    def test_maintenance_window_excludes_end(self, monkeypatch):
+        from updater.release_checker import _is_safe_to_update
+
+        self._set_schedule()
+        # 04:00 CST on Wednesday. The configured end is exclusive.
+        self._set_clock(monkeypatch, datetime(2026, 1, 7, 10, 0, tzinfo=timezone.utc))
+
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None):
+            is_safe, reason = _is_safe_to_update()
+
+        assert is_safe is True
+        assert reason == ""
+
+    def test_unscheduled_day_is_outside_window(self, monkeypatch):
+        from updater.release_checker import _is_safe_to_update
+
+        self._set_schedule(days="tue,thu")
+        # 03:30 CST on Wednesday, which is not a scheduled day.
+        self._set_clock(monkeypatch, datetime(2026, 1, 7, 9, 30, tzinfo=timezone.utc))
+
+        with patch("updater.release_checker.db.get_active_rollout", return_value=None):
+            is_safe, reason = _is_safe_to_update()
+
+        assert is_safe is True
+        assert reason == ""
+
+    def test_auto_timezone_uses_chicago_conversion(self, monkeypatch):
+        from updater import services
+        from updater.release_checker import _is_safe_to_update
+
+        self._set_schedule(timezone="auto")
+        # This UTC instant converts to 03:30 CST, inside Wednesday's window.
+        self._set_clock(monkeypatch, datetime(2026, 1, 7, 9, 30, tzinfo=timezone.utc))
+
+        with patch(
+            "updater.release_checker.services.get_current_time",
+            wraps=services.get_current_time,
+        ) as get_current_time, patch(
+            "updater.release_checker.db.get_active_rollout", return_value=None
+        ):
+            is_safe, reason = _is_safe_to_update()
+
+        get_current_time.assert_called_once_with("America/Chicago")
+        assert is_safe is False
+        assert "maintenance window" in reason.lower()
+
+    def test_explicit_timezone_reaches_time_conversion(self, monkeypatch):
+        from updater import services
+        from updater.release_checker import _is_safe_to_update
+
+        self._set_schedule(timezone="America/Los_Angeles")
+        # 03:00 PST on Wednesday. Use the configured timezone conversion.
+        self._set_clock(monkeypatch, datetime(2026, 1, 7, 11, 0, tzinfo=timezone.utc))
+
+        with patch(
+            "updater.release_checker.services.get_current_time",
+            wraps=services.get_current_time,
+        ) as get_current_time, patch(
+            "updater.release_checker.db.get_active_rollout", return_value=None
+        ):
+            is_safe, reason = _is_safe_to_update()
+
+        get_current_time.assert_called_once_with("America/Los_Angeles")
+        assert is_safe is False
+        assert "maintenance window" in reason.lower()
 
 
 # ---------------------------------------------------------------------------
