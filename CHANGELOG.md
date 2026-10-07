@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Removed
+- Removed the unused read-only `/api/reports/update-summary` and
+  `/api/reports/fleet-status` routes and their exclusive database query helpers.
+  Both routes now return 404 and are absent from OpenAPI. Tables, stored data,
+  CSV exports, uptime, `/api/fleet-status`, and authentication remain unchanged.
 - Removed five unused read-only GET routes under `/api/analytics/`: `summary`,
   `trends`, `models`, `errors`, and `reliability`. These routes now return
   404 for authenticated callers and are absent from OpenAPI. Stored data,

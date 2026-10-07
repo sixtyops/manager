@@ -8521,19 +8521,6 @@ def _start_radius_rollout_task(rollout_id: int):
 # Reporting API
 # ---------------------------------------------------------------------------
 
-@app.get("/api/reports/update-summary", tags=["reports"])
-async def report_update_summary(days: int = 30,
-                                session: dict = Depends(require_auth)):
-    if days < 1 or days > 365:
-        raise HTTPException(status_code=400, detail="days must be 1-365")
-    return db.get_update_summary(days)
-
-
-@app.get("/api/reports/fleet-status", tags=["reports"])
-async def report_fleet_status(session: dict = Depends(require_auth)):
-    return db.get_fleet_status()
-
-
 @app.get("/api/reports/export/jobs", tags=["reports"])
 async def export_jobs_csv(days: int = 30,
                           session: dict = Depends(require_auth),

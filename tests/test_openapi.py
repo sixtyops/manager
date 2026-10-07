@@ -43,6 +43,17 @@ class TestOpenAPISchema:
         assert resp.status_code == 200
         assert f"/api/analytics/{endpoint}" not in resp.json()["paths"]
 
+    @pytest.mark.parametrize("endpoint", ["update-summary", "fleet-status"])
+    def test_retired_report_paths_absent(self, authed_client, endpoint):
+        resp = authed_client.get("/openapi.json")
+        assert resp.status_code == 200
+        assert f"/api/reports/{endpoint}" not in resp.json()["paths"]
+        for path in (
+            "/api/reports/export/jobs", "/api/reports/export/devices",
+            "/api/uptime/fleet", "/api/fleet-status",
+        ):
+            assert "get" in resp.json()["paths"][path]
+
     def test_docs_page_requires_auth(self, client):
         """Swagger UI is auth-gated; unauthenticated callers get redirected
         (HTML accept) or 401 (API accept). Avoids anonymously exposing the
