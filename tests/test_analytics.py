@@ -1,4 +1,4 @@
-"""Tests for the update analytics dashboard."""
+"""Tests for retained analytics queries and retired API routes."""
 
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -136,51 +136,19 @@ class TestAnalyticsSummaryDB:
             assert result[0]["success"] == 1
 
 
-class TestAnalyticsAPI:
-    """Test the analytics API endpoints."""
+class TestRetiredAnalyticsAPI:
+    """Retired analytics routes stay absent for both read roles."""
 
-    def test_summary_endpoint(self, authed_client):
-        resp = authed_client.get("/api/analytics/summary?days=30")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "total_jobs" in data
-        assert "success_rate" in data
+    @pytest.mark.parametrize("client_fixture", ["authed_client", "viewer_client"])
+    @pytest.mark.parametrize("endpoint", ["summary", "trends", "models", "errors", "reliability"])
+    @pytest.mark.parametrize("query", ["", "?days=30&limit=10", "?days=0", "?days=999", "?days=invalid"])
+    def test_retired_endpoint_returns_404(self, request, client_fixture, endpoint, query):
+        client = request.getfixturevalue(client_fixture)
+        resp = client.get(f"/api/analytics/{endpoint}{query}")
+        assert resp.status_code == 404
 
-    def test_trends_endpoint(self, authed_client):
-        resp = authed_client.get("/api/analytics/trends?days=30")
-        assert resp.status_code == 200
-        assert "trends" in resp.json()
-
-    def test_models_endpoint(self, authed_client):
-        resp = authed_client.get("/api/analytics/models?days=90")
-        assert resp.status_code == 200
-        assert "models" in resp.json()
-
-    def test_errors_endpoint(self, authed_client):
-        resp = authed_client.get("/api/analytics/errors?days=90")
-        assert resp.status_code == 200
-        assert "errors" in resp.json()
-
-    def test_reliability_endpoint(self, authed_client):
-        resp = authed_client.get("/api/analytics/reliability?days=90")
-        assert resp.status_code == 200
-        assert "devices" in resp.json()
-
-    def test_invalid_days_too_high(self, authed_client):
-        resp = authed_client.get("/api/analytics/summary?days=999")
-        assert resp.status_code == 400
-
-    def test_invalid_days_zero(self, authed_client):
-        resp = authed_client.get("/api/analytics/trends?days=0")
-        assert resp.status_code == 400
-
-    def test_viewer_can_read_analytics(self, viewer_client):
-        resp = viewer_client.get("/api/analytics/summary?days=30")
-        assert resp.status_code == 200
-
-    def test_unauthenticated_denied(self):
-        from fastapi.testclient import TestClient
-        from updater.app import app
-        client = TestClient(app)
-        resp = client.get("/api/analytics/summary")
-        assert resp.status_code in (401, 403, 307)
+    def test_retired_route_absent_without_auth(self, client):
+        resp = client.get("/api/analytics/summary", follow_redirects=False)
+        assert resp.status_code == 404
+        retained = client.get("/api/uptime/fleet", follow_redirects=False)
+        assert retained.status_code == 401

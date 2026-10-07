@@ -35,9 +35,13 @@ class TestOpenAPISchema:
         if "get" in ap_path:
             assert "devices" in ap_path["get"].get("tags", [])
 
-        analytics_path = paths.get("/api/analytics/summary", {})
-        if "get" in analytics_path:
-            assert "analytics" in analytics_path["get"].get("tags", [])
+        assert "analytics" in paths["/api/uptime/fleet"]["get"]["tags"]
+
+    @pytest.mark.parametrize("endpoint", ["summary", "trends", "models", "errors", "reliability"])
+    def test_retired_analytics_paths_absent(self, authed_client, endpoint):
+        resp = authed_client.get("/openapi.json")
+        assert resp.status_code == 200
+        assert f"/api/analytics/{endpoint}" not in resp.json()["paths"]
 
     def test_docs_page_requires_auth(self, client):
         """Swagger UI is auth-gated; unauthenticated callers get redirected

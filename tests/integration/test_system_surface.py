@@ -45,7 +45,7 @@ def test_device_portal_surfaces_ap_switch_and_cpe(session, test_ap, test_switch,
         assert password
 
 
-def test_reporting_and_analytics_endpoints(session, test_ap, request_with_retry):
+def test_reporting_and_uptime_endpoints(session, test_ap, request_with_retry):
     ip = test_ap["ip"]
 
     history_resp = request_with_retry("GET", "/api/device-history", params={"ip": ip})
@@ -70,25 +70,6 @@ def test_reporting_and_analytics_endpoints(session, test_ap, request_with_retry)
     devices_csv = request_with_retry("GET", "/api/reports/export/devices")
     assert devices_csv.status_code == 200
     assert "csv" in devices_csv.headers.get("content-type", "").lower()
-
-    analytics_summary = request_with_retry("GET", "/api/analytics/summary", params={"days": 30})
-    assert analytics_summary.status_code == 200
-
-    analytics_trends = request_with_retry("GET", "/api/analytics/trends", params={"days": 30})
-    assert analytics_trends.status_code == 200
-    assert "trends" in analytics_trends.json()
-
-    analytics_models = request_with_retry("GET", "/api/analytics/models", params={"days": 90})
-    assert analytics_models.status_code == 200
-    assert "models" in analytics_models.json()
-
-    analytics_errors = request_with_retry("GET", "/api/analytics/errors", params={"days": 90, "limit": 10})
-    assert analytics_errors.status_code == 200
-    assert "errors" in analytics_errors.json()
-
-    analytics_reliability = request_with_retry("GET", "/api/analytics/reliability", params={"days": 90, "limit": 20})
-    assert analytics_reliability.status_code == 200
-    assert "devices" in analytics_reliability.json()
 
     uptime_device = request_with_retry("GET", "/api/uptime/device", params={"ip": ip, "days": 30})
     assert uptime_device.status_code == 200

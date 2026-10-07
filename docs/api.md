@@ -878,37 +878,6 @@ Send a test email to verify SMTP configuration. Requires admin role.
 
 - **Response**: `{ "success", "message" }`
 
-## Analytics
-
-### `GET /api/analytics/summary`
-Get aggregate update statistics over a time window.
-
-- **Query**: `days` (1–365, default 90)
-
-### `GET /api/analytics/trends`
-Get daily success/failure trends.
-
-- **Query**: `days` (1–365, default 30)
-- **Response**: `{ "trends": [...] }`
-
-### `GET /api/analytics/models`
-Get update success/failure breakdown by device model.
-
-- **Query**: `days` (1–365, default 90)
-- **Response**: `{ "models": [...] }`
-
-### `GET /api/analytics/errors`
-Get top error messages from failed updates.
-
-- **Query**: `days` (1–365, default 90), `limit` (1–200, default 10)
-- **Response**: `{ "errors": [...] }`
-
-### `GET /api/analytics/reliability`
-Get per-device reliability stats, worst performers first.
-
-- **Query**: `days` (1–365, default 90), `limit` (1–200, default 20)
-- **Response**: `{ "devices": [...] }`
-
 ## Uptime
 
 ### `GET /api/uptime/device`

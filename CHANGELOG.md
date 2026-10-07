@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Removed
+- Removed five unused read-only GET routes under `/api/analytics/`: `summary`,
+  `trends`, `models`, `errors`, and `reliability`. These routes now return
+  404 for authenticated callers and are absent from OpenAPI. Stored data,
+  database query helpers, uptime routes, report export, and authentication
+  remain unchanged.
+
 ### Fixed
 - Config-poll fetch exceptions now appear at WARNING level in application logs.
 - Config snapshot storage supports `poll`, `pre_push`, and `post_push` types.
