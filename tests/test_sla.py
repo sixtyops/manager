@@ -10,9 +10,12 @@ class TestUptimeDatabase:
     """Test uptime tracking database functions."""
 
     def test_record_uptime_event(self, mock_db):
-        from updater.database import record_uptime_event, get_uptime_events
+        from updater.database import record_uptime_event
         record_uptime_event("10.0.0.1", "ap", "down", details="Connection refused")
-        events = get_uptime_events("10.0.0.1", days=30)
+        events = mock_db.execute(
+            "SELECT * FROM device_uptime_events WHERE ip = ? ORDER BY id DESC",
+            ("10.0.0.1",),
+        ).fetchall()
         assert len(events) == 1
         assert events[0]["ip"] == "10.0.0.1"
         assert events[0]["device_type"] == "ap"
@@ -20,67 +23,16 @@ class TestUptimeDatabase:
         assert events[0]["details"] == "Connection refused"
 
     def test_record_up_event(self, mock_db):
-        from updater.database import record_uptime_event, get_uptime_events
+        from updater.database import record_uptime_event
         record_uptime_event("10.0.0.1", "ap", "down")
         record_uptime_event("10.0.0.1", "ap", "up")
-        events = get_uptime_events("10.0.0.1", days=30)
+        events = mock_db.execute(
+            "SELECT * FROM device_uptime_events WHERE ip = ? ORDER BY id DESC",
+            ("10.0.0.1",),
+        ).fetchall()
         assert len(events) == 2
         assert events[0]["event"] == "up"  # Most recent first
         assert events[1]["event"] == "down"
-
-    def test_get_uptime_events_filters_by_ip(self, mock_db):
-        from updater.database import record_uptime_event, get_uptime_events
-        record_uptime_event("10.0.0.1", "ap", "down")
-        record_uptime_event("10.0.0.2", "ap", "down")
-        events = get_uptime_events("10.0.0.1", days=30)
-        assert len(events) == 1
-        assert events[0]["ip"] == "10.0.0.1"
-
-    def test_get_uptime_events_respects_limit(self, mock_db):
-        from updater.database import record_uptime_event, get_uptime_events
-        for i in range(5):
-            record_uptime_event("10.0.0.1", "ap", "down" if i % 2 == 0 else "up")
-        events = get_uptime_events("10.0.0.1", days=30, limit=3)
-        assert len(events) == 3
-
-    def test_device_availability_no_events(self, mock_db):
-        from updater.database import get_device_availability
-        result = get_device_availability("10.0.0.1", days=30)
-        assert result["ip"] == "10.0.0.1"
-        assert result["availability_pct"] == 100.0
-        assert result["downtime_seconds"] == 0
-        assert result["events"] == 0
-
-    def test_device_availability_with_downtime(self, mock_db):
-        from updater.database import get_device_availability
-        now = datetime.now()
-        # Device went down 2 hours ago and came back up 1 hour ago
-        mock_db.execute(
-            "INSERT INTO device_uptime_events (ip, device_type, event, occurred_at) VALUES (?, ?, ?, ?)",
-            ("10.0.0.1", "ap", "down", (now - timedelta(hours=2)).isoformat()),
-        )
-        mock_db.execute(
-            "INSERT INTO device_uptime_events (ip, device_type, event, occurred_at) VALUES (?, ?, ?, ?)",
-            ("10.0.0.1", "ap", "up", (now - timedelta(hours=1)).isoformat()),
-        )
-        mock_db.commit()
-        result = get_device_availability("10.0.0.1", days=1)
-        assert result["availability_pct"] < 100.0
-        assert result["downtime_seconds"] > 0
-        assert result["events"] == 2
-
-    def test_device_availability_currently_down(self, mock_db):
-        from updater.database import get_device_availability
-        now = datetime.now()
-        # Device went down 1 hour ago, still down
-        mock_db.execute(
-            "INSERT INTO device_uptime_events (ip, device_type, event, occurred_at) VALUES (?, ?, ?, ?)",
-            ("10.0.0.1", "ap", "down", (now - timedelta(hours=1)).isoformat()),
-        )
-        mock_db.commit()
-        result = get_device_availability("10.0.0.1", days=1)
-        assert result["availability_pct"] < 100.0
-        assert result["downtime_seconds"] >= 3500  # ~1 hour
 
     def test_fleet_availability(self, mock_db):
         from updater.database import record_uptime_event, get_fleet_availability
@@ -113,28 +65,6 @@ class TestUptimeDatabase:
         # Worst first
         assert result[0]["ip"] == "10.0.0.1"
         assert result[0]["availability_pct"] < result[1]["availability_pct"]
-
-    def test_availability_clamps_to_window(self, mock_db):
-        """Downtime that started before the window should be clamped to window start."""
-        from updater.database import get_device_availability
-        now = datetime.now()
-        # Device went down 5 days ago and came back up 1 day ago
-        # With a 2-day window, only 1 day of downtime should count
-        mock_db.execute(
-            "INSERT INTO device_uptime_events (ip, device_type, event, occurred_at) VALUES (?, ?, ?, ?)",
-            ("10.0.0.1", "ap", "down", (now - timedelta(days=5)).isoformat()),
-        )
-        mock_db.execute(
-            "INSERT INTO device_uptime_events (ip, device_type, event, occurred_at) VALUES (?, ?, ?, ?)",
-            ("10.0.0.1", "ap", "up", (now - timedelta(days=1)).isoformat()),
-        )
-        mock_db.commit()
-        result = get_device_availability("10.0.0.1", days=2)
-        # Should be ~50% (1 day down out of 2 day window), not negative
-        assert result["availability_pct"] > 0
-        assert result["availability_pct"] <= 100
-        # Downtime should be clamped to ~1 day, not 4 days
-        assert result["downtime_seconds"] < 2 * 86400
 
     def test_cleanup_old_events(self, mock_db):
         from updater.database import cleanup_old_uptime_events
@@ -189,13 +119,6 @@ class TestPollerUptimeTransition:
 class TestUptimeAPI:
     """Test uptime API endpoints."""
 
-    def test_device_uptime_endpoint(self, authed_client):
-        resp = authed_client.get("/api/uptime/device?ip=10.0.0.1&days=30")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "availability_pct" in data
-        assert "downtime_seconds" in data
-
     def test_fleet_uptime_endpoint(self, authed_client):
         resp = authed_client.get("/api/uptime/fleet?days=30")
         assert resp.status_code == 200
@@ -209,19 +132,44 @@ class TestUptimeAPI:
         resp = authed_client.get("/api/uptime/fleet?device_type=invalid")
         assert resp.status_code == 400
 
-    def test_uptime_events_endpoint(self, authed_client):
-        resp = authed_client.get("/api/uptime/events?ip=10.0.0.1&days=30")
-        assert resp.status_code == 200
-        assert "events" in resp.json()
-
     def test_uptime_invalid_days(self, authed_client):
-        resp = authed_client.get("/api/uptime/device?ip=10.0.0.1&days=0")
+        resp = authed_client.get("/api/uptime/fleet?days=0")
         assert resp.status_code == 400
 
     def test_uptime_days_too_high(self, authed_client):
-        resp = authed_client.get("/api/uptime/device?ip=10.0.0.1&days=999")
+        resp = authed_client.get("/api/uptime/fleet?days=999")
         assert resp.status_code == 400
 
     def test_viewer_can_read_uptime(self, viewer_client):
         resp = viewer_client.get("/api/uptime/fleet?days=30")
         assert resp.status_code == 200
+
+
+    @pytest.mark.parametrize("client_fixture", ["client", "authed_client", "viewer_client"])
+    @pytest.mark.parametrize("path", [
+        "/api/uptime/device?ip=10.0.0.1&days=30",
+        "/api/uptime/events?ip=10.0.0.1&days=30&limit=25",
+    ])
+    def test_retired_uptime_route_returns_404(self, request, client_fixture, path):
+        client = request.getfixturevalue(client_fixture)
+        assert client.get(path, follow_redirects=False).status_code == 404
+
+    def test_fleet_requires_auth(self, client):
+        assert client.get("/api/uptime/fleet", follow_redirects=False).status_code == 401
+
+    @pytest.mark.parametrize("client_fixture", ["authed_client", "viewer_client"])
+    def test_fleet_filter_reads_retained_events(self, request, client_fixture, mock_db):
+        from updater.database import record_uptime_event
+
+        record_uptime_event("10.0.0.1", "ap", "up")
+        record_uptime_event("10.0.0.2", "switch", "up")
+        client = request.getfixturevalue(client_fixture)
+        all_devices = client.get("/api/uptime/fleet?days=30")
+        assert all_devices.status_code == 200
+        assert {row["ip"] for row in all_devices.json()["devices"]} == {"10.0.0.1", "10.0.0.2"}
+        filtered = client.get("/api/uptime/fleet?device_type=ap&days=30")
+        assert filtered.status_code == 200
+        assert filtered.json()["devices"] == [{
+            "ip": "10.0.0.1", "device_type": "ap", "availability_pct": 100.0,
+            "downtime_seconds": 0, "events": 1, "window_days": 30,
+        }]

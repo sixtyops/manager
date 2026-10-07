@@ -54,6 +54,14 @@ class TestOpenAPISchema:
         ):
             assert "get" in resp.json()["paths"][path]
 
+    @pytest.mark.parametrize("path", ["/api/uptime/device", "/api/uptime/events"])
+    def test_retired_uptime_paths_absent(self, authed_client, path):
+        response = authed_client.get("/openapi.json")
+        assert response.status_code == 200
+        paths = response.json()["paths"]
+        assert path not in paths
+        assert "get" in paths["/api/uptime/fleet"]
+
     def test_quick_add_absent_and_registration_paths_present(self, authed_client):
         resp = authed_client.get("/openapi.json")
         assert resp.status_code == 200

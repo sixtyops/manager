@@ -6235,15 +6235,6 @@ async def cancel_job(job_id: str, session: dict = Depends(require_role("admin", 
 # Uptime API
 # ============================================================================
 
-@app.get("/api/uptime/device", tags=["analytics"])
-async def get_device_uptime(ip: str, days: int = 30, session: dict = Depends(require_auth)):
-    """Get availability/uptime data for a specific device."""
-    if days < 1 or days > 365:
-        raise HTTPException(400, "days must be between 1 and 365")
-    result = db.get_device_availability(ip, days)
-    return result
-
-
 @app.get("/api/uptime/fleet", tags=["analytics"])
 async def get_fleet_uptime(device_type: str = None, days: int = 30, session: dict = Depends(require_auth)):
     """Get fleet-wide availability stats, worst performers first."""
@@ -6253,16 +6244,6 @@ async def get_fleet_uptime(device_type: str = None, days: int = 30, session: dic
         raise HTTPException(400, "device_type must be 'ap' or 'switch'")
     devices = db.get_fleet_availability(device_type, days)
     return {"devices": devices}
-
-
-@app.get("/api/uptime/events", tags=["analytics"])
-async def get_uptime_events(ip: str, days: int = 30, limit: int = 100, session: dict = Depends(require_auth)):
-    """Get raw uptime events for a device."""
-    if days < 1 or days > 365:
-        raise HTTPException(400, "days must be between 1 and 365")
-    limit = max(1, min(limit, 1000))
-    events = db.get_uptime_events(ip, days, limit)
-    return {"events": events}
 
 
 @app.get("/api/device-history", tags=["config"])

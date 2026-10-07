@@ -65,13 +65,6 @@ def test_reporting_and_uptime_endpoints(session, test_ap, request_with_retry):
     assert devices_csv.status_code == 200
     assert "csv" in devices_csv.headers.get("content-type", "").lower()
 
-    uptime_device = request_with_retry("GET", "/api/uptime/device", params={"ip": ip, "days": 30})
-    assert uptime_device.status_code == 200
-
     uptime_fleet = request_with_retry("GET", "/api/uptime/fleet", params={"device_type": "ap", "days": 30})
     assert uptime_fleet.status_code == 200
     assert "devices" in uptime_fleet.json()
-
-    uptime_events = request_with_retry("GET", "/api/uptime/events", params={"ip": ip, "days": 30, "limit": 25})
-    assert uptime_events.status_code == 200
-    assert "events" in uptime_events.json()

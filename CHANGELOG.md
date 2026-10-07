@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Removed
+- Removed `GET /api/uptime/device` and `GET /api/uptime/events`, plus their
+  exclusive database read helpers. Requests that pass unchanged middleware
+  return 404, and OpenAPI omits both paths. External API callers are unknown.
+  Fleet uptime, its release-validator check, event storage, poller writes and
+  cleanup remain unchanged. This is an API compatibility break.
 - Removed `POST /api/quick-add`. Requests now return 404, and OpenAPI omits
   the route. This removes an enrollment entry point that could create a site,
   store AP credentials, start an AP poll, and broadcast scheduler status.
