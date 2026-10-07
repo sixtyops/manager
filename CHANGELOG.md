@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Removed
+- Removed `POST /api/quick-add`. Requests now return 404, and OpenAPI omits
+  the route. This removes an enrollment entry point that could create a site,
+  store AP credentials, start an AP poll, and broadcast scheduler status.
+  Other registration routes, stored data, schema, and device code are unchanged.
 - Removed the unused read-only `/api/reports/update-summary` and
   `/api/reports/fleet-status` routes and their exclusive database query helpers.
   Both routes now return 404 and are absent from OpenAPI. Tables, stored data,

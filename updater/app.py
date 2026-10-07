@@ -2175,48 +2175,6 @@ async def device_portal(ip: str, session: dict = Depends(require_role("admin", "
 
 
 # ============================================================================
-# Quick Add (combines site + AP creation)
-# ============================================================================
-
-@app.post("/api/quick-add", tags=["devices"])
-async def quick_add(
-    ip: str = Form(...),
-    username: str = Form(...),
-    password: str = Form(...),
-    site_name: str = Form(None),
-    session: dict = Depends(require_role("admin", "operator")),
-):
-    """Quick add an AP, optionally creating a new site."""
-    _validate_ip(ip)
-    site_id = None
-
-    if site_name:
-        # Try to find existing site or create new
-        sites = db.get_tower_sites()
-        existing = next((s for s in sites if s["name"] == site_name), None)
-
-        if existing:
-            site_id = existing["id"]
-        else:
-            site_id = db.create_tower_site(site_name)
-
-    # Add the AP
-    ap_id = db.upsert_access_point(ip, username, password, site_id)
-
-    # Trigger immediate poll
-    poller = get_poller()
-    if poller:
-        await poller.poll_ap_now(ip)
-
-    # Broadcast updated scheduler status so predictions reflect the new device
-    scheduler = get_scheduler()
-    if scheduler:
-        await scheduler._broadcast_status()
-
-    return {"ap_id": ap_id, "site_id": site_id, "ip": ip}
-
-
-# ============================================================================
 # Settings API
 # ============================================================================
 
