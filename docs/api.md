@@ -361,14 +361,6 @@ List all cached CPEs.
 
 - **Response**: `{ "cpes": [...] }`
 
-## Quick Add
-
-### `POST /api/quick-add`
-Quick-add an AP, optionally creating a new tower site.
-
-- **Body** (form): `ip`, `username`, `password`, `site_name` (optional)
-- **Response**: `{ "ap_id": ..., "site_id": ..., "ip": "..." }`
-
 ## Settings
 
 ### `GET /api/settings`

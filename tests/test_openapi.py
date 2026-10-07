@@ -54,6 +54,14 @@ class TestOpenAPISchema:
         ):
             assert "get" in resp.json()["paths"][path]
 
+    def test_quick_add_absent_and_registration_paths_present(self, authed_client):
+        resp = authed_client.get("/openapi.json")
+        assert resp.status_code == 200
+        paths = resp.json()["paths"]
+        assert "/api/quick-add" not in paths
+        for path in ("/api/sites", "/api/aps", "/api/devices"):
+            assert "post" in paths[path]
+
     def test_docs_page_requires_auth(self, client):
         """Swagger UI is auth-gated; unauthenticated callers get redirected
         (HTML accept) or 401 (API accept). Avoids anonymously exposing the

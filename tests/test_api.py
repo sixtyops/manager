@@ -362,17 +362,73 @@ class TestTopologyAPI:
         assert "sites" in data or "total_aps" in data
 
 
-class TestQuickAddAPI:
-    def test_quick_add(self, authed_client):
-        resp = authed_client.post("/api/quick-add", data={
-            "ip": "10.0.0.5",
-            "username": "root",
-            "password": "pass",
-            "site_name": "NewSite",
-        })
-        assert resp.status_code == 200
-        assert resp.json()["ip"] == "10.0.0.5"
-        assert resp.json()["site_id"] is not None
+class TestRetiredQuickAddAPI:
+    @pytest.mark.parametrize("client_fixture", [
+        "authed_client", "operator_client", "viewer_client", "client",
+    ])
+    @pytest.mark.parametrize("payload", [
+        {},
+        {"ip": "192.0.2.5", "username": "fixture", "password": "synthetic"},
+        {"ip": "192.0.2.5", "username": "fixture", "password": "synthetic",
+         "site_name": "New fixture site"},
+        {"ip": "192.0.2.5", "username": "fixture", "password": "synthetic",
+         "site_name": "Existing fixture site"},
+    ], ids=["no-fields", "no-site", "new-site", "existing-site"])
+    def test_removed_path_has_no_side_effects(self, request, client_fixture, payload):
+        client = request.getfixturevalue(client_fixture)
+        poller = MagicMock()
+        poller.poll_ap_now = AsyncMock(return_value=True)
+        scheduler = MagicMock()
+        scheduler._broadcast_status = AsyncMock()
+        with patch("updater.app.db.get_tower_sites", return_value=[
+            {"id": 42, "name": "Existing fixture site"},
+        ]) as sites, \
+             patch("updater.app.db.create_tower_site", return_value=43) as create_site, \
+             patch("updater.app.db.upsert_access_point", return_value=44) as add_ap, \
+             patch("updater.app.get_poller", return_value=poller) as get_poller, \
+             patch("updater.app.get_scheduler", return_value=scheduler) as get_scheduler, \
+             patch("updater.app.TachyonClient", side_effect=AssertionError("No device contact")) as device:
+            resp = client.post("/api/quick-add", data=payload)
+        assert resp.status_code == 404
+        for call in (sites, create_site, add_ap, get_poller, get_scheduler, device):
+            call.assert_not_called()
+        poller.poll_ap_now.assert_not_awaited()
+        scheduler._broadcast_status.assert_not_awaited()
+
+
+class TestRetainedEnrollmentAPI:
+    @pytest.mark.parametrize("client_fixture,expected", [
+        ("authed_client", 200), ("operator_client", 200),
+        ("viewer_client", 403), ("client", 401),
+    ])
+    @pytest.mark.parametrize("path", ["/api/sites", "/api/aps", "/api/devices"])
+    def test_registration_roles_remain(self, request, client_fixture, expected, path):
+        client = request.getfixturevalue(client_fixture)
+        payload = {"name": "Retained fixture site"} if path == "/api/sites" else {
+            "ip": "192.0.2.6", "username": "fixture", "password": "synthetic",
+        }
+        device = MagicMock()
+        device.login = AsyncMock(return_value=True)
+        device.get_ap_info = AsyncMock(return_value={"model": "TNA-301"})
+        with patch("updater.app.TachyonClient", return_value=device) as factory, \
+             patch("updater.app.get_poller", return_value=None), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = client.post(path, data=payload)
+        assert resp.status_code == expected
+        if expected == 200:
+            if path == "/api/sites":
+                assert any(s["name"] == payload["name"] for s in db.get_tower_sites())
+            else:
+                assert db.get_access_point(payload["ip"])["username"] == "fixture"
+            if path == "/api/devices":
+                device.login.assert_awaited_once()
+                device.get_ap_info.assert_awaited_once()
+            else:
+                factory.assert_not_called()
+        else:
+            assert db.get_tower_sites() == []
+            assert db.get_access_point("192.0.2.6") is None
+            factory.assert_not_called()
 
 
 class TestFirmwareAPI:
