@@ -57,7 +57,8 @@ recursively delegate unless instructed. If no capacity exists, leave work
 queued; the lead does not implement, investigate, test or conduct a detailed
 PR review.
 Use epic413's model policy: GPT-6.1 Sol medium for safety builds and planning;
-GPT-6 Luna high (`xhigh` for a harder task) for small and medium coding builds; GPT-6.1 Sol medium for reviews,
+GPT-6 Luna high (`xhigh` for a harder task) only for small and medium
+coding builds that are not on a safety path; GPT-6.1 Sol medium for reviews,
 high for safety reviews. Verify installed provider/model/thinking IDs before
 sending work. Honor the repository skill guidance; use factual copywriter/STE,
 and frontend-design plus UI guides when UI is in scope.
