@@ -6274,50 +6274,8 @@ async def cancel_job(job_id: str, session: dict = Depends(require_role("admin", 
 
 
 # ============================================================================
-# Analytics API
+# Uptime API
 # ============================================================================
-
-@app.get("/api/analytics/summary", tags=["analytics"])
-async def get_analytics_summary(days: int = 90, session: dict = Depends(require_auth)):
-    """Get aggregate update statistics over a time window."""
-    if days < 1 or days > 365:
-        raise HTTPException(400, "days must be between 1 and 365")
-    return db.get_analytics_summary(days)
-
-
-@app.get("/api/analytics/trends", tags=["analytics"])
-async def get_analytics_trends(days: int = 30, session: dict = Depends(require_auth)):
-    """Get daily success/failure trends."""
-    if days < 1 or days > 365:
-        raise HTTPException(400, "days must be between 1 and 365")
-    return {"trends": db.get_analytics_trends(days)}
-
-
-@app.get("/api/analytics/models", tags=["analytics"])
-async def get_analytics_models(days: int = 90, session: dict = Depends(require_auth)):
-    """Get update success/failure breakdown by device model."""
-    if days < 1 or days > 365:
-        raise HTTPException(400, "days must be between 1 and 365")
-    return {"models": db.get_analytics_by_model(days)}
-
-
-@app.get("/api/analytics/errors", tags=["analytics"])
-async def get_analytics_errors(days: int = 90, limit: int = 10, session: dict = Depends(require_auth)):
-    """Get top error messages from failed updates."""
-    if days < 1 or days > 365:
-        raise HTTPException(400, "days must be between 1 and 365")
-    limit = max(1, min(limit, 200))
-    return {"errors": db.get_analytics_errors(days, limit)}
-
-
-@app.get("/api/analytics/reliability", tags=["analytics"])
-async def get_analytics_reliability(days: int = 90, limit: int = 20, session: dict = Depends(require_auth)):
-    """Get per-device reliability stats, worst performers first."""
-    if days < 1 or days > 365:
-        raise HTTPException(400, "days must be between 1 and 365")
-    limit = max(1, min(limit, 200))
-    return {"devices": db.get_analytics_device_reliability(days, limit)}
-
 
 @app.get("/api/uptime/device", tags=["analytics"])
 async def get_device_uptime(ip: str, days: int = 30, session: dict = Depends(require_auth)):
