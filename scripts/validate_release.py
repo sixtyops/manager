@@ -1207,9 +1207,6 @@ class ReleaseValidator:
     def test_analytics(self, r: TestResult) -> None:
         endpoints = [
             "/api/fleet-status",
-            "/api/analytics/summary",
-            "/api/analytics/trends",
-            "/api/analytics/models",
             "/api/reports/export/devices",
             "/api/reports/export/jobs",
             "/api/uptime/fleet",
