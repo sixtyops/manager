@@ -57,12 +57,6 @@ def test_reporting_and_uptime_endpoints(session, test_ap, request_with_retry):
     assert jobs_resp.status_code == 200
     assert "jobs" in jobs_resp.json()
 
-    update_summary = request_with_retry("GET", "/api/reports/update-summary")
-    assert update_summary.status_code == 200
-
-    fleet_status = request_with_retry("GET", "/api/reports/fleet-status")
-    assert fleet_status.status_code == 200
-
     jobs_csv = request_with_retry("GET", "/api/reports/export/jobs")
     assert jobs_csv.status_code == 200
     assert "csv" in jobs_csv.headers.get("content-type", "").lower()

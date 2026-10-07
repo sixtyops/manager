@@ -899,14 +899,6 @@ Get raw uptime events for a device.
 
 ## Reports
 
-### `GET /api/reports/update-summary`
-Get update summary report.
-
-- **Query**: `days` (1–365, default 30)
-
-### `GET /api/reports/fleet-status`
-Get fleet status report.
-
 ### `GET /api/reports/export/jobs`
 Export job history as CSV download.
 
