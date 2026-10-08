@@ -16,6 +16,7 @@ from fastapi import Depends, Request, WebSocket, HTTPException
 
 from . import database as db
 from . import oidc_config
+from .logging_filter import register_secret
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +263,7 @@ def _resolve_oidc_role(groups: list[str] | None) -> str:
 def create_session(username: str, ip_address: str) -> str:
     """Create a new session in the DB and return the session_id."""
     session_id = str(uuid.uuid4())
+    register_secret(session_id)
     expires_at = (datetime.now() + timedelta(hours=SESSION_TTL_HOURS)).isoformat()
     db.create_session(session_id, username, ip_address, expires_at)
     return session_id

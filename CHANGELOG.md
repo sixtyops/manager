@@ -60,6 +60,12 @@ All notable changes to this project are documented in this file.
   hidden during webhook error logging. Request authentication is unchanged.
   No request credentials enter the process-lifetime registry. Other path/query
   tokens, standalone headers and session values remain outside this coverage.
+- Manager registers locally generated session IDs before persistence and valid,
+  nonexpired stored session IDs before returning them. Existing output handlers
+  redact these values in messages and exceptions. Unknown cookie values and
+  arbitrary Bearer values are not registered. Authentication and stored rows
+  are unchanged. This closes an injected-diagnostic registration gap, not an
+  observed authentication log leak. API and device token coverage remains open.
 
 ### Added
 - Application and syslog output handlers now redact the credential suffix of
