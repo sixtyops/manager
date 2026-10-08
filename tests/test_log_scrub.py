@@ -851,3 +851,130 @@ def test_registered_escaped_long_output_has_no_registry_growth(application_outpu
     assert output.count("[REDACTED]") == 100
     assert scrub._secrets == {secret}
     assert scrub._pattern is pattern
+
+
+@pytest.fixture
+def session_hooks(mock_db, monkeypatch):
+    """Use existing session hooks with an isolated database and no live access."""
+    import socket
+    from updater import auth, crypto, database
+
+    def deny_access(*args, **kwargs):
+        raise AssertionError("Session tests must not access a key or network")
+
+    monkeypatch.setattr(crypto, "_load_fernet", deny_access)
+    monkeypatch.setattr(socket, "create_connection", deny_access)
+    return auth, database, mock_db
+
+
+def test_session_mint_registers_before_persistence_exception(
+        session_hooks, application_output, monkeypatch):
+    auth, database, connection = session_hooks
+    app, stream, _ = application_output
+    value = "synthetic-minted-session-id"
+    monkeypatch.setattr(auth.uuid, "uuid4", lambda: value)
+    calls = []
+
+    def failed_persistence(session_id, username, ip_address, expires_at):
+        calls.append((session_id, username, ip_address, expires_at))
+        app.logger.warning("Synthetic persistence input: %s", session_id)
+        raise RuntimeError("Synthetic persistence failure: " + session_id)
+
+    monkeypatch.setattr(database, "create_session", failed_persistence)
+    with pytest.raises(RuntimeError):
+        try:
+            auth.create_session("synthetic-user", "192.0.2.1")
+        except RuntimeError:
+            app.logger.exception("Synthetic session creation failed")
+            raise
+
+    output = stream.getvalue()
+    assert value not in output
+    assert "Synthetic persistence input: [REDACTED]" in output
+    assert "RuntimeError: Synthetic persistence failure: [REDACTED]" in output
+    assert "Traceback (most recent call last)" in output
+    assert scrub._secrets == {value}
+    assert len(calls) == 1
+    assert calls[0][:3] == (value, "synthetic-user", "192.0.2.1")
+    assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+
+
+def test_session_mint_preserves_uuid_and_stored_row(session_hooks):
+    import uuid
+    from datetime import datetime, timedelta
+
+    auth, _, connection = session_hooks
+    before = datetime.now()
+    session_id = auth.create_session("synthetic-user", "192.0.2.1")
+    after = datetime.now()
+    row = dict(connection.execute("SELECT * FROM sessions").fetchone())
+    assert uuid.UUID(session_id).version == 4
+    assert row["session_id"] == session_id
+    assert row["username"] == "synthetic-user"
+    assert row["ip_address"] == "192.0.2.1"
+    expiry = datetime.fromisoformat(row["expires_at"])
+    assert before + timedelta(hours=auth.SESSION_TTL_HOURS) <= expiry
+    assert expiry <= after + timedelta(hours=auth.SESSION_TTL_HOURS)
+    assert scrub._secrets == {session_id}
+
+
+def test_session_stored_read_registers_after_restart_without_row_changes(
+        session_hooks, application_output):
+    from datetime import datetime, timedelta
+
+    _, database, connection = session_hooks
+    app, stream, _ = application_output
+    value = "synthetic-stored-session-id"
+    database.create_session(value, "synthetic-user", "192.0.2.1",
+                            (datetime.now() + timedelta(hours=1)).isoformat())
+    before = dict(connection.execute("SELECT * FROM sessions").fetchone())
+    # Simulate a fresh process with a session created before this registry existed.
+    assert scrub._secrets == set()
+    session = database.get_session(value)
+    assert session == before
+    assert dict(connection.execute("SELECT * FROM sessions").fetchone()) == before
+    app.logger.warning("Synthetic loaded session: %s", session)
+    try:
+        raise ValueError("Synthetic loaded-session failure: " + session["session_id"])
+    except ValueError:
+        app.logger.exception("Synthetic session read failed")
+    output = stream.getvalue()
+    assert value not in output
+    assert "'session_id': '[REDACTED]'" in output
+    assert "ValueError: Synthetic loaded-session failure: [REDACTED]" in output
+    assert "Traceback (most recent call last)" in output
+    pattern = scrub._pattern
+    assert database.get_session(value) == before
+    assert scrub._secrets == {value}
+    assert scrub._pattern is pattern
+
+
+def test_session_unknown_and_expired_reads_do_not_register(session_hooks):
+    from datetime import datetime, timedelta
+
+    _, database, connection = session_hooks
+    expired = "synthetic-expired-session-id"
+    database.create_session(expired, "synthetic-user", "192.0.2.1",
+                            (datetime.now() - timedelta(hours=1)).isoformat())
+    before = tuple(connection.execute("SELECT * FROM sessions").fetchone())
+    assert database.get_session("synthetic-unknown-session-id") is None
+    assert database.get_session(expired) is None
+    assert scrub._secrets == set()
+    assert scrub._pattern is None
+    assert tuple(connection.execute("SELECT * FROM sessions").fetchone()) == before
+
+
+@pytest.mark.asyncio
+async def test_session_unknown_cookie_and_bearer_auth_do_not_register(session_hooks):
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    auth, _, _ = session_hooks
+    request = Request({"type": "http", "method": "GET", "path": "/api/devices",
+                       "headers": [(b"cookie", b"session_id=synthetic-unknown-cookie"),
+                                   (b"authorization", b"Bearer synthetic-unknown-bearer")]})
+    with pytest.raises(HTTPException) as error:
+        await auth.require_auth(request)
+    assert error.value.status_code == 401
+    assert scrub._secrets == set()
+    assert scrub._pattern is None

@@ -1870,7 +1870,11 @@ def get_session(session_id: str) -> Optional[dict]:
             "SELECT * FROM sessions WHERE session_id = ? AND expires_at > ?",
             (session_id, datetime.now().isoformat())
         ).fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        session = dict(row)
+        register_secret(session["session_id"])
+        return session
 
 
 def delete_session(session_id: str):
