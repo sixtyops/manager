@@ -34,6 +34,11 @@ All notable changes to this project are documented in this file.
   code revert cannot recover deleted rows. Protected rows have no size limit.
 
 ### Security
+- Compose makes the app root filesystem read-only and uses temporary `/tmp`
+  storage. Startup sets the Docker socket process group without editing account
+  files. SFTP keys persist at their existing container path through `./data/ssh`.
+  Existing keys need a retained copy before the first container recreation.
+  Docker startup, socket access, and recreation still require isolated host proof.
 - New installer-generated systemd units set `NoNewPrivileges=true` and
   `PrivateTmp=true` for Docker/Compose client processes. Existing installed
   units do not change. This does not establish Docker daemon or container

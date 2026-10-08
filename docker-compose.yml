@@ -23,6 +23,8 @@ services:
       - ./firmware:/app/firmware
       # Persist database
       - ./data:/app/data
+      # Keep SFTP keys at their existing path across container recreation.
+      - ./data/ssh:/app/.ssh
       # Git backup repository
       - ./backups:/app/backups
       # Docker socket for self-update capability
@@ -49,11 +51,12 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777
     # Drop every Linux capability, then add back the minimum the entrypoint
-    # needs while it's still running as root (it chowns the bind-mounted
-    # repo for self-update, manages the docker-socket group, and gosu-drops
-    # to appuser). The app process — what actually serves traffic — runs
-    # as the unprivileged appuser (UID 1500) and has no caps; what's
+    # needs while it runs as root: prepare writable mounts and set groups.
+    # The app runs as appuser (UID 1500) with no capabilities. What is
     # kept here is strictly for the few seconds of root bootstrap. The
     # default Docker cap set includes NET_RAW / NET_ADMIN / SYS_PTRACE /
     # MKNOD / KILL etc., none of which this stack needs.
@@ -61,10 +64,10 @@ services:
       - ALL
     cap_add:
       - CHOWN          # chown the bind-mounted repo for self-update
-      - DAC_OVERRIDE   # write /etc/group via groupadd / usermod
+      - DAC_OVERRIDE   # access root-owned bind-mounted files during bootstrap
       - FOWNER         # chown crossing owner boundaries
-      - SETUID         # gosu -> appuser
-      - SETGID         # gosu -> appuser, groupadd
+      - SETUID         # switch to appuser
+      - SETGID         # set the Docker socket supplementary group
     security_opt:
       - no-new-privileges:true
     mem_limit: 512m
