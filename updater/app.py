@@ -6624,6 +6624,8 @@ async def list_config_templates(session: dict = Depends(require_auth), _pro=Depe
 async def create_config_template(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """Create a new config template."""
     data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(400, "Request body must be a JSON object")
     name = data.get("name")
     category = data.get("category")
     config_fragment = data.get("config_fragment")
@@ -6636,6 +6638,8 @@ async def create_config_template(request: Request, session: dict = Depends(requi
             config_fragment = json.loads(config_fragment)
         except json.JSONDecodeError as e:
             raise HTTPException(400, f"Invalid JSON in config_fragment: {e}")
+    if not isinstance(config_fragment, dict):
+        raise HTTPException(400, "config_fragment must be a JSON object")
     try:
         _validate_fragment_safety(config_fragment)
         _validate_ping_watchdog_safety(config_fragment)
@@ -6692,6 +6696,8 @@ async def update_config_template_api(template_id: int, request: Request, session
         raise HTTPException(404, "Template not found")
 
     data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(400, "Request body must be a JSON object")
     updates = {}
     if "name" in data:
         updates["name"] = data["name"]
@@ -6719,6 +6725,8 @@ async def update_config_template_api(template_id: int, request: Request, session
                 frag = json.loads(frag)
             except json.JSONDecodeError as e:
                 raise HTTPException(400, f"Invalid JSON in config_fragment: {e}")
+        if not isinstance(frag, dict):
+            raise HTTPException(400, "config_fragment must be a JSON object")
         try:
             _validate_fragment_safety(frag)
             _validate_ping_watchdog_safety(frag)
