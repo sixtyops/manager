@@ -872,22 +872,11 @@ Send a test email to verify SMTP configuration. Requires admin role.
 
 ## Uptime
 
-### `GET /api/uptime/device`
-Get availability/uptime data for a specific device.
-
-- **Query**: `ip` (required), `days` (1–365, default 30)
-
 ### `GET /api/uptime/fleet`
 Get fleet-wide availability stats, worst performers first.
 
 - **Query**: `device_type` (optional, `"ap"` or `"switch"`), `days` (1–365, default 30)
 - **Response**: `{ "devices": [...] }`
-
-### `GET /api/uptime/events`
-Get raw uptime events for a device.
-
-- **Query**: `ip` (required), `days` (1–365, default 30), `limit` (1–1000, default 100)
-- **Response**: `{ "events": [...] }`
 
 ## Reports
 

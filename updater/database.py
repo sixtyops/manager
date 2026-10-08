@@ -2425,64 +2425,6 @@ def record_uptime_event(ip: str, device_type: str, event: str, details: str = No
         )
 
 
-def get_uptime_events(ip: str, days: int = 30, limit: int = 100) -> list[dict]:
-    """Get recent uptime events for a device."""
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM device_uptime_events WHERE ip = ? AND occurred_at >= ? ORDER BY occurred_at DESC LIMIT ?",
-            (ip, cutoff, limit),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_device_availability(ip: str, days: int = 30) -> dict:
-    """Calculate availability percentage for a device over a time window."""
-    now = datetime.now()
-    window_start = now - timedelta(days=days)
-    cutoff = window_start.isoformat()
-    window_seconds = days * 86400
-
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT event, occurred_at FROM device_uptime_events WHERE ip = ? AND occurred_at >= ? ORDER BY occurred_at ASC",
-            (ip, cutoff),
-        ).fetchall()
-
-    if not rows:
-        return {"ip": ip, "availability_pct": 100.0, "downtime_seconds": 0, "events": 0, "window_days": days}
-
-    downtime = 0.0
-    last_down_at = None
-
-    for row in rows:
-        event = row["event"]
-        ts = datetime.fromisoformat(row["occurred_at"])
-        if event == "down":
-            if last_down_at is None:
-                # Clamp to window start so pre-window downtime isn't counted
-                last_down_at = max(ts, window_start)
-        elif event == "up":
-            if last_down_at is not None:
-                downtime += (ts - last_down_at).total_seconds()
-                last_down_at = None
-
-    # If still down, count up to now
-    if last_down_at is not None:
-        downtime += (now - last_down_at).total_seconds()
-
-    # Clamp downtime to window size
-    downtime = min(downtime, window_seconds)
-    availability = (window_seconds - downtime) / window_seconds * 100
-    return {
-        "ip": ip,
-        "availability_pct": round(availability, 3),
-        "downtime_seconds": round(downtime),
-        "events": len(rows),
-        "window_days": days,
-    }
-
-
 def get_fleet_availability(device_type: str = None, days: int = 30) -> list[dict]:
     """Get availability for all devices with uptime events."""
     now = datetime.now()
