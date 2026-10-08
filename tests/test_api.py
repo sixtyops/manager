@@ -1197,6 +1197,172 @@ class TestConfigTemplatesAPI:
         assert resp.status_code in (401, 303)
 
 
+class TestConfigTemplateObjectAdmission:
+    """Reject non-object input through the actual template API routes."""
+
+    @pytest.fixture
+    def existing_template(self, mock_db):
+        return db.save_config_template(
+            name="Original shape fixture",
+            category="ntp",
+            config_fragment=json.dumps({"services": {"ntp": {"enabled": True}}}),
+            description="Unchanged description",
+        )
+
+    @staticmethod
+    def _raw_rows(mock_db):
+        return [tuple(row) for row in mock_db.execute(
+            "SELECT * FROM config_templates ORDER BY id"
+        ).fetchall()]
+
+    @staticmethod
+    def _request(client, method, template_id, payload, headers=None):
+        path = "/api/config-templates"
+        if method == "PUT":
+            path += f"/{template_id}"
+        return client.request(
+            method, path, content=json.dumps(payload),
+            headers={"Content-Type": "application/json", **(headers or {})},
+            follow_redirects=False,
+        )
+
+    @pytest.mark.parametrize("role_fixture", ["authed_client", "operator_client"])
+    @pytest.mark.parametrize("method", ["POST", "PUT"])
+    @pytest.mark.parametrize("encoded", [False, True], ids=["direct", "encoded"])
+    @pytest.mark.parametrize("fragment", [[], [1], "scalar", 0, 7, False, True, None])
+    def test_non_object_fragment_rejected(
+        self, request, role_fixture, method, encoded, fragment,
+        mock_db, existing_template,
+    ):
+        client = request.getfixturevalue(role_fixture)
+        before = self._raw_rows(mock_db)
+        payload = {
+            "name": "Must not replace the name",
+            "category": "ntp",
+            "description": "Must not replace the description",
+            "config_fragment": json.dumps(fragment) if encoded else fragment,
+        }
+        with patch("updater.app.db.save_config_template", wraps=db.save_config_template) as save, \
+             patch("updater.app.db.update_config_template", wraps=db.update_config_template) as update:
+            response = self._request(client, method, existing_template, payload)
+        assert response.status_code == 400
+        save.assert_not_called()
+        update.assert_not_called()
+        assert self._raw_rows(mock_db) == before
+
+    @pytest.mark.parametrize("method", ["POST", "PUT"])
+    def test_non_object_fragment_makes_no_writes(
+        self, authed_client, mock_db, existing_template, method,
+    ):
+        """Check no-write independently of status for the old-source control."""
+        before = self._raw_rows(mock_db)
+        with patch("updater.app.db.save_config_template", wraps=db.save_config_template) as save, \
+             patch("updater.app.db.update_config_template", wraps=db.update_config_template) as update:
+            self._request(authed_client, method, existing_template, {
+                "name": "Must not persist", "category": "ntp", "config_fragment": [1],
+            })
+        save.assert_not_called()
+        update.assert_not_called()
+        assert self._raw_rows(mock_db) == before
+
+    @pytest.mark.parametrize("role_fixture", ["authed_client", "operator_client"])
+    @pytest.mark.parametrize("method", ["POST", "PUT"])
+    @pytest.mark.parametrize("payload", [[], ["name"], "scalar", 0, True, None])
+    def test_non_object_request_body_rejected(
+        self, request, role_fixture, method, payload, mock_db, existing_template,
+    ):
+        client = request.getfixturevalue(role_fixture)
+        before = self._raw_rows(mock_db)
+        with patch("updater.app.db.save_config_template", wraps=db.save_config_template) as save, \
+             patch("updater.app.db.update_config_template", wraps=db.update_config_template) as update:
+            response = self._request(client, method, existing_template, payload)
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Request body must be a JSON object"
+        save.assert_not_called()
+        update.assert_not_called()
+        assert self._raw_rows(mock_db) == before
+
+    @pytest.mark.parametrize("role_fixture", ["authed_client", "operator_client"])
+    @pytest.mark.parametrize("method", ["POST", "PUT"])
+    @pytest.mark.parametrize("encoded", [False, True], ids=["direct", "encoded"])
+    def test_valid_object_round_trip(
+        self, request, role_fixture, method, encoded, existing_template,
+    ):
+        client = request.getfixturevalue(role_fixture)
+        fragment = {"services": {"ntp": {"server1": "synthetic.example"}}}
+        response = self._request(client, method, existing_template, {
+            "name": "Valid object", "category": "ntp",
+            "config_fragment": json.dumps(fragment) if encoded else fragment,
+            "form_data": {"server1": "synthetic.example"},
+        })
+        assert response.status_code == 200
+        template_id = response.json()["id"] if method == "POST" else existing_template
+        template = db.get_config_template(template_id)
+        assert json.loads(template["config_fragment"]) == fragment
+        assert json.loads(template["form_data"]) == {"server1": "synthetic.example"}
+
+    @pytest.mark.parametrize("method", ["POST", "PUT"])
+    def test_empty_and_missing_fragment_behavior(
+        self, authed_client, existing_template, method,
+    ):
+        if method == "POST":
+            for payload in ({}, {"name": "Empty", "category": "ntp", "config_fragment": {}}):
+                assert self._request(authed_client, method, existing_template, payload).status_code == 400
+            response = self._request(authed_client, method, existing_template, {
+                "name": "Encoded empty", "category": "ntp", "config_fragment": "{}",
+            })
+            assert response.status_code == 200
+            assert json.loads(db.get_config_template(response.json()["id"])["config_fragment"]) == {}
+        else:
+            assert self._request(authed_client, method, existing_template, {}).status_code == 200
+            response = self._request(authed_client, method, existing_template, {"name": "Metadata only"})
+            assert response.status_code == 200
+            assert db.get_config_template(existing_template)["name"] == "Metadata only"
+            for fragment in ({}, "{}"):
+                response = self._request(authed_client, method, existing_template, {"config_fragment": fragment})
+                assert response.status_code == 200
+                assert json.loads(db.get_config_template(existing_template)["config_fragment"]) == {}
+
+    @pytest.mark.parametrize("payload", [[], {"config_fragment": [1]}])
+    def test_missing_template_lookup_precedes_shape_check(self, authed_client, payload):
+        response = self._request(authed_client, "PUT", 9999, payload)
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Template not found"
+
+    @pytest.mark.parametrize("method", ["POST", "PUT"])
+    @pytest.mark.parametrize("role_fixture, expected", [("client", 401), ("viewer_client", 403)])
+    def test_shape_check_preserves_auth_denials(
+        self, request, role_fixture, expected, method, mock_db, existing_template,
+    ):
+        client = request.getfixturevalue(role_fixture)
+        before = self._raw_rows(mock_db)
+        with patch("updater.app.db.save_config_template") as save, \
+             patch("updater.app.db.update_config_template") as update:
+            response = self._request(client, method, existing_template, [])
+        assert response.status_code == expected
+        save.assert_not_called()
+        update.assert_not_called()
+        assert self._raw_rows(mock_db) == before
+
+    @pytest.mark.parametrize("method", ["POST", "PUT"])
+    @pytest.mark.parametrize("origin", ["", "https://attacker.example"])
+    def test_shape_check_preserves_csrf_denial(
+        self, authed_client, mock_db, existing_template, method, origin,
+    ):
+        before = self._raw_rows(mock_db)
+        with patch("updater.app.db.save_config_template") as save, \
+             patch("updater.app.db.update_config_template") as update:
+            response = self._request(
+                authed_client, method, existing_template, [],
+                headers={"Origin": origin, "Referer": ""},
+            )
+        assert response.status_code == 403
+        assert "csrf" in response.text.lower()
+        save.assert_not_called()
+        update.assert_not_called()
+        assert self._raw_rows(mock_db) == before
+
+
 # ============================================================================
 # Config Compliance Tests
 # ============================================================================

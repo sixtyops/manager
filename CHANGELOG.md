@@ -25,6 +25,12 @@ All notable changes to this project are documented in this file.
   remain unchanged.
 
 ### Fixed
+- After existing middleware and role checks, config-template create and update
+  routes reject non-object request bodies and decoded fragments with HTTP 400
+  before template writes. Valid objects and JSON-encoded objects keep their
+  existing behavior. Authentication, CSRF,
+  encryption, and device execution are unchanged. Existing malformed rows are
+  not repaired or migrated.
 - Config-poll fetch exceptions now appear at WARNING level in application logs.
 - Config snapshot storage supports `poll`, `pre_push`, and `post_push` types.
   Routine pruning preserves explicit `pre_push` rows outside the ordinary cap.
