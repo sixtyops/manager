@@ -113,11 +113,31 @@ environment before commit, plus scoped checks and documentation verification.
 They push a feature branch normally and open one PR to `main` with issue closure,
 validation, risks/limits and `agent:review`. Never force-push shared history.
 
-Before a lead merge, require current non-draft OPEN head, MERGEABLE/CLEAN state,
-independent review, shared review with matching recorded `signoff_head`,
-`agent:ready-for-signoff`, and a packet for that same head and correct issue.
-Read all thread pages: zero unresolved threads. Verify all applicable CI on that
-head, duplicate/overlap sweep, acceptance and post-merge check/rollback.
+Fetch `origin/main`, then read the current GitHub pull request state and head
+before you report a pull request as open or hand it to another owner. Do not
+reuse an earlier state after a new event.
+
+Before a lead merge, require a current non-draft OPEN head and MERGEABLE/CLEAN
+state. Require the designated independent review and shared review with
+matching recorded `signoff_head`, `agent:ready-for-signoff`, and a packet for
+that head and issue. Read the formal review record. Record its ID, state, full
+head SHA, submitted time, and assignment source. The designated review must
+have state `APPROVED` on the current head before merge.
+
+A shared-hub `ready-for-signoff` bridge, matching `signoff_head`, label, packet
+sentence, or publication account does not by itself prove the designated
+independent review. A publication account does not prove reviewer identity.
+`COMMENTED` is not `APPROVED`, even when the review body says “approve.” A review
+posted after merge is retrospective and cannot meet the pre-merge gate.
+
+If a merge occurs before the review proof is complete, preserve the event times
+and evidence. A missing or late review record does not by itself require an
+automatic code rollback. The lead must review code and release impact and
+record a separate rollback decision. A later review does not change the
+pre-merge timeline.
+
+Read all thread pages: zero unresolved threads. Verify all applicable CI on
+that head, duplicate/overlap sweep, acceptance and post-merge check/rollback.
 Engine/driver changes also require named real-device bench evidence on that
 commit. Skips and synthetic tests do not provide bench proof. Missing, stale or
 unreadable evidence holds the action. A changed head needs fresh gates.
