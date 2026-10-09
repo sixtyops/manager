@@ -1941,6 +1941,144 @@ class TestFirmwareHealthFlags:
         assert files[0]["duplicate"] is False
 
 
+class TestConfigTemplateFormDataAdmission:
+    """Reject malformed form data before template writes."""
+
+    @pytest.fixture(autouse=True)
+    def offline_key(self, monkeypatch):
+        import socket
+        from cryptography.fernet import Fernet
+        from updater import crypto
+        monkeypatch.setattr(crypto, "_fernet", Fernet(Fernet.generate_key()))
+        monkeypatch.setattr(crypto, "_load_fernet", MagicMock(
+            side_effect=AssertionError("Key file access denied")))
+        monkeypatch.setattr(socket.socket, "connect", MagicMock(
+            side_effect=AssertionError("Socket access denied")))
+
+    @staticmethod
+    def payload(name="Form admission"):
+        return {"name": name, "category": "snmp",
+                "config_fragment": {"services": {"snmp": {"enabled": True}}},
+                "form_data": {"enabled": True}}
+
+    @pytest.mark.parametrize("method", ["post", "put"])
+    @pytest.mark.parametrize("value", [
+        [], [1], 0, 12, True, False, "not-json", " ",
+        "[]", '"text"', "12", "true", "false", "null",
+        json.dumps(json.dumps({"enabled": True})),
+    ])
+    def test_invalid_forms_never_write(self, authed_client, mock_db, method, value):
+        from updater import database as db
+        url = "/api/config-templates"
+        if method == "put":
+            tid = authed_client.post(url, json=self.payload()).json()["id"]
+            url += f"/{tid}"
+        before = [tuple(r) for r in mock_db.execute("SELECT * FROM config_templates ORDER BY id")]
+        payload = {**self.payload("Must not change"), "description": "Must not change",
+                   "config_fragment": {"services": {"snmp": {"enabled": False}}},
+                   "form_data": value}
+        with patch.object(db, "save_config_template", wraps=db.save_config_template) as save, \
+             patch.object(db, "update_config_template", wraps=db.update_config_template) as update:
+            response = getattr(authed_client, method)(url, json=payload)
+            assert response.status_code == 400
+            save.assert_not_called()
+            update.assert_not_called()
+        assert [tuple(r) for r in mock_db.execute("SELECT * FROM config_templates ORDER BY id")] == before
+        assert authed_client.get("/api/config-templates").status_code == 200
+
+    @pytest.mark.parametrize("encoded", [False, True])
+    def test_object_forms_keep_nested_values(self, authed_client, mock_db, encoded):
+        from updater import database as db
+        from updater.crypto import is_encrypted
+        form = {"optional": None, "nested": {"values": [1, False, "é"]}}
+        response = authed_client.post("/api/config-templates", json={
+            **self.payload(), "form_data": json.dumps(form) if encoded else form})
+        assert response.status_code == 200
+        tid = response.json()["id"]
+        changed = {**form, "nested": {"values": [True, 2, "text"]}}
+        response = authed_client.put(f"/api/config-templates/{tid}", json={
+            "form_data": json.dumps(changed) if encoded else changed})
+        assert response.status_code == 200
+        assert json.loads(db.get_config_template(tid)["form_data"]) == changed
+        raw = mock_db.execute("SELECT form_data FROM config_templates WHERE id=?", (tid,)).fetchone()[0]
+        assert is_encrypted(raw)
+        assert authed_client.get("/api/config-templates").json()["templates"][0]["form_data"] == changed
+
+    def test_encoded_user_form_is_hashed_and_masked(self, authed_client, mock_db):
+        from updater import database as db
+        secret = "synthetic-admission-password"
+        users = [{"username": "synthetic-user", "password": secret}]
+        response = authed_client.post("/api/config-templates", json={
+            "name": "Encoded users", "category": "users",
+            "config_fragment": {"system": {"users": users}},
+            "form_data": json.dumps({"users": users})})
+        assert response.status_code == 200
+        tid = response.json()["id"]
+        stored = db.get_config_template(tid)
+        response = authed_client.get("/api/config-templates")
+        assert secret not in response.text
+        form = json.loads(stored["form_data"])
+        assert isinstance(form, dict)
+        password_hash = form["users"][0]["password"]
+        assert password_hash.startswith("$1$") and secret not in stored["form_data"]
+        assert password_hash not in response.text
+        assert response.json()["templates"][0]["form_data"]["users"][0]["password"] == ""
+        replacement = "synthetic-replacement-password"
+        assert authed_client.put(f"/api/config-templates/{tid}", json={
+            "form_data": json.dumps({"users": [{"username": "synthetic-user", "password": replacement}]})
+        }).status_code == 200
+        changed_form = db.get_config_template(tid)["form_data"]
+        assert replacement not in changed_form
+        assert json.loads(changed_form)["users"][0]["password"].startswith("$1$")
+        assert replacement not in authed_client.get("/api/config-templates").text
+        assert authed_client.put(f"/api/config-templates/{tid}", json={
+            "form_data": json.dumps({"users": [{"username": "synthetic-user", "password": ""}]})
+        }).status_code == 200
+        form = json.loads(db.get_config_template(tid)["form_data"])
+        assert form["users"][0]["password"] == json.loads(stored["config_fragment"])["system"]["users"][0]["password"]
+
+    def test_invalid_json_update_keeps_listing_usable(self, authed_client, mock_db):
+        response = authed_client.post("/api/config-templates", json=self.payload())
+        tid = response.json()["id"]
+        before = tuple(mock_db.execute("SELECT * FROM config_templates WHERE id=?", (tid,)).fetchone())
+        response = authed_client.put(f"/api/config-templates/{tid}", json={"form_data": "not-json"})
+        assert response.status_code == 400
+        assert tuple(mock_db.execute("SELECT * FROM config_templates WHERE id=?", (tid,)).fetchone()) == before
+        assert authed_client.get("/api/config-templates").status_code == 200
+
+    @pytest.mark.parametrize("empty", [None, "", {}])
+    def test_optional_empty_forms_keep_existing_semantics(self, authed_client, mock_db, empty):
+        response = authed_client.post("/api/config-templates", json={**self.payload(), "form_data": empty})
+        assert response.status_code == 200
+        tid = response.json()["id"]
+        assert mock_db.execute("SELECT form_data FROM config_templates WHERE id=?", (tid,)).fetchone()[0] is None
+        assert authed_client.put(f"/api/config-templates/{tid}", json={"form_data": empty}).status_code == 200
+        stored = mock_db.execute("SELECT form_data FROM config_templates WHERE id=?", (tid,)).fetchone()[0]
+        if empty is None or empty == "":
+            assert stored == empty
+        else:
+            from updater import database as db
+            assert db.get_config_template(tid)["form_data"] == "{}"
+        before = stored
+        assert authed_client.put(f"/api/config-templates/{tid}", json={"description": "Only metadata"}).status_code == 200
+        assert mock_db.execute("SELECT form_data FROM config_templates WHERE id=?", (tid,)).fetchone()[0] == before
+
+    def test_omitted_form_preserves_stored_form(self, authed_client, mock_db):
+        payload = self.payload()
+        payload.pop("form_data")
+        response = authed_client.post("/api/config-templates", json=payload)
+        assert response.status_code == 200
+        tid = response.json()["id"]
+        assert mock_db.execute("SELECT form_data FROM config_templates WHERE id=?", (tid,)).fetchone()[0] is None
+        assert authed_client.put(f"/api/config-templates/{tid}", json={"form_data": {"enabled": True}}).status_code == 200
+        before = mock_db.execute("SELECT form_data FROM config_templates WHERE id=?", (tid,)).fetchone()[0]
+        assert authed_client.put(f"/api/config-templates/{tid}", json={"description": "Metadata"}).status_code == 200
+        assert mock_db.execute("SELECT form_data FROM config_templates WHERE id=?", (tid,)).fetchone()[0] == before
+
+    def test_missing_template_precedes_form_validation(self, authed_client):
+        assert authed_client.put("/api/config-templates/999999", json={"form_data": "not-json"}).status_code == 404
+
+
 class TestConfigTemplateFormDataStorage:
     """Protect template storage while retaining the caller's JSON contract."""
 
