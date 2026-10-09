@@ -12,8 +12,12 @@ not claim that every gate is shipped.
 **Detail:** Shipped differences are marked *(today: …)* or linked to
 [gradual-rollout.md](gradual-rollout.md).
 
-- **A device is an identity, not an IP address.** We identify devices by
-  serial number, or by MAC when we cannot log in. IP is just an attribute.
+- **A device is an identity, not an IP address.** `device_id` never changes.
+  We identify a device by a serial claim that we verify under a named trust
+  policy. A MAC is a mutable alias. IP is just an attribute.
+- **An address change holds the device.** The system never adopts the newest
+  reported IP. The device waits until a trusted check reads its expected
+  serial (§1.2).
 - **We never delete a device because it went offline.** Offline devices stay
   in the inventory with their history. Only an operator can archive one, and
   the device comes back automatically if we see it again.
@@ -38,22 +42,35 @@ not claim that every gate is shipped.
 
 ### Key points
 
-- Serial number is the identity. MAC is the fallback.
-- A device has **more than one MAC** (Ethernet, radio, …). Any of them can
-  identify it. We keep all of them.
+- `device_id` never changes. Every rollout, confirmation, and history record
+  points at a `device_id`, never at an IP.
+- Identity is a **serial claim, verified under a named trust policy**. It is
+  not absolute hardware proof.
+- A MAC is a mutable alias, not identity. A device has **more than one MAC**
+  (Ethernet, radio, …). We keep all of them as aliases.
+- A row never merges into another row on serial or MAC alone.
 - IP, name, model, and the AP a CPE is on are attributes. They can change.
-- Every rollout, confirmation, and history record points at a `device_id`,
-  never at an IP.
 
 ### Detail
+
+*(Target. This section describes the target contract for address recovery
+([epic #530](https://github.com/sixtyops/manager/issues/530)). It is not
+shipped. Today the poller matches by IP, and jobs and history are keyed by IP.)*
+
+**What identity means.** `device_id` is the row `id`. It never changes.
+Identity is a serial claim. The device reports a serial. We accept it only
+after a connection that passes a named trust policy (see *Trust policies*
+below). A serial read after login proves that the device claims the expected
+serial. It does not prove who owned the endpoint before we sent credentials.
+It is not absolute hardware proof.
 
 **Identity key.**
 
 | Priority | Source | Works for | Notes |
 |---|---|---|---|
-| 1 | Serial number from the device's `/system` info | APs, switches, and CPEs we can log into | Survives factory reset, new IP, new AP. |
-| 2 | Any of the device's MAC addresses | Any CPE listed by its AP | Used when we cannot sign into the CPE. |
-| 3 | `legacy-ip:<ip>` (`uid_source = ip_legacy`) | Rows imported from a bridge archive with no serial or MAC | Import only. Never a rollout candidate. Merged into the real identity on first serial/MAC observation. |
+| 1 | Serial number from `/cgi.lua/status?type=system` | APs, switches, and CPEs we can log into | A claim, verified under a trust policy. Survives factory reset, new IP, new AP. |
+| 2 | Any of the device's MAC addresses | Any CPE listed by its AP | An alias and a candidate only. Used to propose a match, never to prove one. |
+| 3 | `legacy-ip:<ip>` (`uid_source = ip_legacy`) | Rows imported from a bridge archive with no serial or MAC | Import only. Never a rollout candidate. It joins a real identity only by the rules under *Provisional rows*. |
 
 `devices` gets two new columns: `uid` (the identity string) and
 `uid_source` (`serial` or `mac`). `uid` is unique. Everything else
@@ -65,56 +82,98 @@ shows the `eth0` MAC *(today: only `eth0` is read, `client.py:394`)*. So one
 device can be reported under different MACs by different sources.
 
 - All known MACs are stored in `device_macs (device_id, mac, interface,
-  first_seen, last_seen)`. `mac` is unique across the table.
-- An observation matches a device if **any** of its MACs match.
+  first_seen, last_seen)` as **observations**. MACs are mutable aliases.
+  The table has no unique key on `mac`.
+- A MAC observation proposes a candidate device. It does not prove identity.
 - When we sign into a device we read every interface's MAC and add the ones
   we did not know.
-- If a MAC we see already belongs to a *different* device row, and the
-  serials differ, that is a conflict. We log it and do not merge. If one
-  side has no serial (MAC-only row), the rows merge as described below.
-- A MAC-only `uid` is the first MAC we saw. It is only a label; matching
-  always goes through `device_macs`.
+- The same MAC stored under two devices is an **alias conflict**. We log
+  it, and **both devices hold**. No write goes to either device while the conflict is open. A duplicate
+  serial on two devices is also a conflict, and both devices hold.
+- A MAC-only `uid` is the first MAC we saw. It is only a label.
 
 *(today: `devices.ip` is the unique key and the foreign key everywhere.
 CPEs are not in `devices`; they are in `cpe_cache`, keyed by
 `(ap_ip, ip)`. There is no serial column — issue #254.)*
 
-**Upgrading from MAC to serial.** A CPE is first seen in an AP's peer list,
-so we only know its MAC. Later the poller signs in and reads its serial.
-The row's `uid` becomes the serial. The MAC stays as an attribute.
+**Provisional rows.** A CPE is first seen in an AP's peer list, so we only
+know its MAC. That row is a **provisional observation**. Later the poller
+may sign in and read a serial.
 
-If that serial, or any MAC read at login, already belongs to another row
-(for example an archived device, or a MAC-only row made from the peer list),
-the two rows are **merged**. The older `id` is kept. The newer row's history
-and MACs move to it. We write a `device_merged` event.
+- A provisional observation joins a device only after three checks pass:
+  the trust check, the expected-serial check, and the conflict checks.
+- Serial alone or MAC alone never merges two rows.
+- A destructive merge needs its own tested migration and a safe history
+  plan. A conflicting row holds.
+
+**Trust policies.** A trust policy decides whether a connection may carry
+credentials and a serial read. There are two. The system names the policy
+it used in the event it writes.
+
+- **Mode B (existing credential profile).** Reuse an existing management
+  credential profile that the operator already authorized, with bounded
+  targets. It needs no new account. Do not ask the operator again for
+  access already given. Never fall back to global or AP credentials.
+- **Mode A (TLS key pin).** A unique TLS key pin, enforced on the actual
+  login and write connection, proves continuity under stated assumptions.
+  It is not hardware proof. A shared factory certificate does not qualify.
 
 ### 1.2 Address changes
 
 ### Key points
 
-- Two sources report addresses: the AP lists its SMs, and an SM tells us its
-  own IP and its AP.
-- We match each report to a device first, then update the IP.
-- A device that changes IP during a rollout is not affected. The job reads
-  the IP when it flashes the device.
+- *(Target, not shipped.)* An address change holds the device. The system
+  never adopts the newest IP.
+- An observed IP is a **candidate**. It becomes the device address only after
+  a trusted connection reads the expected serial.
+- Direct login does not win. A reused IP does not go to the newest report.
+- No blanket network scan. Recovery checks only named candidates.
 
 ### Detail
 
-Each poll cycle:
+*(today: the poller matches by IP and sets the new IP at once. The newest
+report keeps a shared IP, and the other device gets `ip = NULL`.)*
 
-1. Match every observation to a `device_id` by serial, then by any MAC in
-   `device_macs`. An observation that matches nothing creates a new row with
-   `status = discovered`.
-2. Set the device's `ip` to the observed address. Record it in
-   `device_addresses (device_id, ip, first_seen, last_seen, source)`. Close
-   the old address's `last_seen`. Do not delete anything.
-3. Resolve conflicts:
-   - **One device, two IPs in one cycle.** The direct-login report wins.
-   - **Two devices, one IP.** The newest report keeps the IP. The other
-     device gets `ip = NULL` and `status = address_unknown`. The rollout
-     treats it as unreachable (see §4.4).
-4. A CPE that appears under a different AP gets a new `parent_device_id`
+Candidate sources are the AP peer list, switch neighbor data, and syslog.
+They are **candidates only**. Inbound syslog does not exist. Switch
+`/cgi.lua/discovery` was observed ([#421](https://github.com/sixtyops/manager/issues/421))
+but is not implemented. None of these sources proves identity.
+
+Each poll cycle, for each observation:
+
+1. Propose a `device_id` from the serial or from any MAC alias. An
+   observation that matches nothing creates a provisional row with
+   `status = discovered`. It is never a rollout candidate.
+2. Treat the observed IP as a candidate address. Do not change the device
+   `ip` yet. The device holds with a visible reason.
+3. Connect to the candidate under a trust policy (§1). Read the serial from
+   `/cgi.lua/status?type=system`. A direct login does not skip this check.
+4. Promote the address only if the serial equals the expected serial and no
+   conflict exists. Promotion is one short `BEGIN IMMEDIATE` transaction. It
+   uses compare-and-swap on `address_generation`, the expected serial, and
+   one active owner per IP. It does no network work. It keeps `device_id`,
+   history, credentials, and parent IDs. Record the address in
+   `device_addresses (device_id, ip, first_seen, last_seen, source)` and
+   close the old address's `last_seen`. Discard every cache built under an
+   older generation.
+5. Resolve conflicts by holding:
+   - **Two devices, one IP (reused IP).** Both devices hold. The newest
+     report does not win.
+   - **Duplicate serial or duplicate MAC.** Both devices hold.
+   - **Serial mismatch at the candidate.** The candidate is rejected. The
+     device keeps holding.
+   - **One device, two candidate IPs in one cycle.** Neither is promoted
+     until a trusted check reads the expected serial on one of them.
+6. A CPE that appears under a different AP gets a new `parent_device_id`
    and a `device_rehomed` event. It is still the same device.
+
+A held device stays held until a trusted check passes and no conflict
+remains. Automatic recovery turns on one case at a time, each
+with its own bench proof. Until a case passes its gate, an address change in
+that case holds the device and shows the reason.
+
+**Rollback.** Rolling back any recovery slice disables recovery and holds
+the device. It never restores the CPE prune or unsafe IP-keyed execution.
 
 The config-snapshot code already re-links history by MAC when an IP changes
 (`poller.py:1109-1140`). With identity in place, that special case goes away.
@@ -127,7 +186,8 @@ The config-snapshot code already re-links history by MAC when an IP changes
 - Offline devices keep their site, customer label, config history, update
   history, and confirmations. There is no time limit.
 - Archiving is a manual, reversible operator action.
-- If an archived device is seen again anywhere, it is un-archived.
+- If an archived device is seen again and its serial is verified under a
+  trust policy, it is un-archived.
 
 ### Detail
 
@@ -140,9 +200,11 @@ it.)*
   `offline_archive_hint_days` (default 90). It never archives by itself.
 - **Archive** sets `archived_at`. Archived devices are left out of rollout
   scope and fleet counts. The row stays.
-- **Reappearance.** If we see an archived identity again — same serial or
-  MAC, on any AP, any IP, any site — we un-archive it, record the new
-  location, and raise a `device_reappeared` event. The operator fixes the
+- **Reappearance.** If we see an archived identity again — a verified serial
+  (§1) on any AP, any IP, any site, with no conflict — we un-archive it,
+  record the new location, and raise a `device_reappeared` event. A MAC
+  match alone does not un-archive a device. An unknown MAC does not block
+  it. The operator fixes the
   customer label. This is the "repurposed device" case: the identity follows
   the hardware, the labels follow the operator.
 - **Replacement hardware** at the same IP and name has a new serial and MAC.
@@ -166,8 +228,9 @@ it.)*
 
 Pins are keyed by `device_id`, so an IP change does not trigger a mismatch.
 A mismatch sets `status = cert_mismatch`, writes a `cert_changed` event, and
-stops all logins to that device. Merge and un-archive need a serial **and**
-a known MAC or a matching pin; a serial alone is not proof. If the vendor's
+stops all logins to that device. Un-archive needs a serial verified under a
+trust policy (§1). A serial alone, read over an unverified connection, is
+not proof. If the vendor's
 firmware regenerates certificates, an admin can turn pinning off; the UI
 then shows a permanent warning.
 
@@ -504,7 +567,7 @@ exception cannot bypass a failed gate.
 | Event | What happens |
 |---|---|
 | Device added (or un-archived) and it needs the update | Added as a **straggler**: `wave = pct100`, `status = pending`. `N` grows. **Exception:** if its family had no members at creation, the hold was never checked for that family, so it is *not* added. It waits for the next rollout. Nothing is added after the `pct100` wave has started. |
-| Device changes IP | Nothing. The job reads the IP at flash time. |
+| Device changes IP (*target, not shipped*) | A queued job binds `device_id`, serial, and `address_generation` at admission. An active job revalidates the serial before each write and writes only with that immutable ID and generation. A null or stale address holds the device and halts the window. The window never resumes automatically. A job never retargets silently. There is no second flash: it never repeats an upload or install. Restart recovery stays read-only until the normal engine gates allow the next step. A missed recovery deadline halts the window. *(today: the job reads the IP at flash time.)* |
 | Device loses its IP (`address_unknown`) | Hold the device and stop new writes for the window. Keep the same wave pending. This is not an outage. |
 | CPE moves to another AP | Nothing at the member level. Units follow the current AP. |
 | Device goes offline | Hold the device and stop new writes for the window. Keep the same wave pending. This is not an outage. |
@@ -569,7 +632,8 @@ devices              id, uid, uid_source, role, model, family,
                      firmware_version, bank1_version, bank2_version, active_bank,
                      last_error, username, password
 device_addresses     device_id, ip, first_seen, last_seen, source
-device_macs          device_id, mac (unique), interface, first_seen, last_seen
+device_macs          device_id, mac, interface, first_seen, last_seen
+                     (no unique key on mac; duplicates are alias conflicts)
 device_events        device_id, kind (discovered|offline|online|rehomed|
                      reappeared|merged|archived|unarchived), at, detail
 firmware_artifacts   id, family, version, sha256, release_date, path, verified_at
@@ -617,9 +681,17 @@ RSSI and telemetry), `access_points`, `switches`, `rollout_devices`,
 11. `unknown` family devices never appear in a rollout.
 12. Changing the artifact for a family with members cancels the rollout.
     For a family with no members it does nothing.
-13. Polling never deletes a device row. An archived identity that is seen
-    again is un-archived.
+13. Polling never deletes a device row. An archived identity whose serial
+    is verified under a trust policy is un-archived.
 15. A device reported under two different MACs (radio by the AP, Ethernet
-    by direct login) is one device row, not two.
+    by direct login) keeps one `device_id`. Both MACs are aliases. The same
+    MAC under two devices holds both.
+16. An address change holds the device. No address is adopted from the
+    newest report. A reused IP, a duplicate serial, or a duplicate MAC
+    holds both devices.
+17. A queued job binds device ID, serial, and address generation at
+    admission. An active job revalidates the serial before each write. A
+    null or stale address holds and halts the window. No upload or install
+    repeats.
 14. Rollout, confirmation, and history records survive an IP change and an
     AP move.
