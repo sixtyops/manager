@@ -40,6 +40,12 @@ All notable changes to this project are documented in this file.
   code revert cannot recover deleted rows. Protected rows have no size limit.
 
 ### Security
+- Template listing returns an explicit HTTP 409 for malformed stored JSON or
+  non-object payloads. It returns row IDs and field names, with no payload or
+  partial list. This prevents legacy encoded Users forms from returning
+  plaintext passwords. Existing rows are not repaired. The browser shows an
+  unavailable list instead of an empty successful list. A successful save and
+  failed reload are reported separately, without a write retry.
 - Config-template routes normalize JSON-encoded `form_data` objects before
   existing password hashing and response masking. Malformed JSON and
   non-object form data return HTTP 400 before template writes. This prevents

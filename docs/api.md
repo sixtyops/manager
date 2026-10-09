@@ -752,6 +752,9 @@ Permanently purge soft-deleted snapshots for the given IP. Requires admin role.
 List all config templates. Classified as a dangerous feature.
 
 - **Response**: `{ "templates": [...] }`
+- **Stored-data error**: HTTP `409` if a decrypted row has malformed JSON or a non-object fragment or form. Optional null and empty-string form data remain readable. The response is `{ "detail": { "code": "invalid_template_data", "message": "Stored template data is unreadable. No templates were returned.", "invalid_templates": [{ "id": 1, "field": "form_data" }] } }`. Each invalid entry contains only the numeric row ID and field name. The route returns no template payloads or partial list. It does not change stored bytes or repair historic rows. Ciphertext/key errors retain the existing database-reader behavior. Authentication and feature checks remain unchanged.
+
+The browser marks a failed template load unavailable. It does not replace the cache with an empty successful list or start a merge preview. If a save succeeds but the list reload fails, the browser reports those outcomes separately without retrying the write.
 
 ### `POST /api/config-templates`
 Create a config template. Requires admin or operator role.

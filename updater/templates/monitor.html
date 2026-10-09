@@ -10758,7 +10758,10 @@
                 }
                 const compData = await compResp.json();
                 const cfgData = await cfgResp.json();
-                const tplData = await tplResp.json();
+                const tplData = await tplResp.json().catch(() => null);
+                if (!tplResp.ok || !Array.isArray(tplData?.templates)) {
+                    throw new Error(extractDetail(tplData?.detail) || 'Template list unavailable.');
+                }
                 const rolloutData = await rolloutResp.json();
 
                 configCompliance = compData.devices || {};
@@ -10776,7 +10779,10 @@
                 loadRecycleBin();
             } catch (e) {
                 console.error('Failed to load config data:', e);
+                configLoaded = false;
                 configLoadFailed = true; // drop the loading spinner back to the neutral "—"
+                const badge = document.getElementById('configTemplateBadge');
+                if (badge) badge.textContent = 'Unavailable';
             } finally {
                 // Repaint on every exit (success, pro-gated 403, or failure) so the
                 // Config columns always leave the loading spinner — on failure they
@@ -11066,7 +11072,10 @@
             try {
                 // Get enabled templates
                 const tplResp = await fetch('/api/config-templates');
-                const tplData = await tplResp.json();
+                const tplData = await tplResp.json().catch(() => null);
+                if (!tplResp.ok || !Array.isArray(tplData?.templates)) {
+                    throw new Error(extractDetail(tplData?.detail) || 'Template list unavailable.');
+                }
                 const enabled = (tplData.templates || []).filter(t => t.enabled);
                 if (!enabled.length) { showToast('No config policies enabled.'); return; }
                 const templateIds = enabled.map(t => t.id);
@@ -11610,6 +11619,7 @@
                 name = `${category.charAt(0).toUpperCase() + category.slice(1)} ${siteName}`;
             }
 
+            let saved = false;
             try {
                 let resp;
                 const payload = {config_fragment: fragment, form_data: formData, scope, site_id};
@@ -11639,6 +11649,7 @@
                     return;
                 }
 
+                saved = true;
                 configSuggestedCategories.delete(category);
 
                 if (statusEl) {
@@ -11649,11 +11660,19 @@
 
                 // Reload templates
                 const reloadResp = await fetch('/api/config-templates');
-                const data = await reloadResp.json();
+                const data = await reloadResp.json().catch(() => null);
+                if (!reloadResp.ok || !Array.isArray(data?.templates)) {
+                    throw new Error(extractDetail(data?.detail) || 'Template list unavailable.');
+                }
                 configTemplates = data.templates || [];
                 loadConfigTemplateUI();
             } catch (e) {
-                showToast('Failed to save policy: ' + e.message);
+                showToast((saved ? 'Policy saved. Template list unavailable: ' : 'Failed to save policy: ') + e.message);
+                if (saved) {
+                    configLoadFailed = true;
+                    const badge = document.getElementById('configTemplateBadge');
+                    if (badge) badge.textContent = 'Unavailable';
+                }
             }
         }
 
@@ -11769,10 +11788,18 @@
             // Reload templates
             try {
                 const reloadResp = await fetch('/api/config-templates');
-                const data = await reloadResp.json();
+                const data = await reloadResp.json().catch(() => null);
+                if (!reloadResp.ok || !Array.isArray(data?.templates)) {
+                    throw new Error(extractDetail(data?.detail) || 'Template list unavailable.');
+                }
                 configTemplates = data.templates || [];
                 loadConfigTemplateUI();
-            } catch (_) {}
+            } catch (e) {
+                configLoadFailed = true;
+                const badge = document.getElementById('configTemplateBadge');
+                if (badge) badge.textContent = 'Unavailable';
+                showToast('Template list unavailable: ' + e.message);
+            }
 
             if (errors.length) {
                 alert('Some sections failed to save:\n' + errors.join('\n'));
