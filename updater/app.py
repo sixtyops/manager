@@ -6608,6 +6608,20 @@ def _scrub_stored_user_password_hashes(template: dict) -> None:
                     u["password"] = ""
 
 
+def _parse_template_form_data(value: object) -> dict | str | None:
+    """Accept optional form data or decode one JSON object."""
+    if value is None or value == "":
+        return value
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            raise HTTPException(400, "Invalid JSON in form_data")
+    if not isinstance(value, dict):
+        raise HTTPException(400, "form_data must be a JSON object")
+    return value
+
+
 @app.get("/api/config-templates", tags=["config"])
 async def list_config_templates(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """List all config templates."""
@@ -6631,6 +6645,7 @@ async def create_config_template(request: Request, session: dict = Depends(requi
     config_fragment = data.get("config_fragment")
     if not name or not category or not config_fragment:
         raise HTTPException(400, "name, category, and config_fragment are required")
+    form_data = _parse_template_form_data(data.get("form_data"))
 
     # Validate fragment is valid JSON and doesn't touch protected keys
     if isinstance(config_fragment, str):
@@ -6650,11 +6665,11 @@ async def create_config_template(request: Request, session: dict = Depends(requi
     # storing operator-entered plaintext was a soft-secret leak (SQL dumps,
     # CSV backups, anyone with `config_templates` read access). $1$-prefixed
     # values pass through. See `hash_template_user_passwords` in config_utils.
-    form_data_dict = data.get("form_data") if isinstance(data.get("form_data"), dict) else None
+    form_data_dict = form_data if isinstance(form_data, dict) else None
     _hash_template_user_passwords(config_fragment, form_data_dict, prior_fragment=None)
 
     fragment_str = json.dumps(config_fragment)
-    form_data_str = json.dumps(form_data_dict) if form_data_dict else (json.dumps(data["form_data"]) if data.get("form_data") else None)
+    form_data_str = json.dumps(form_data) if form_data else None
 
     scope = data.get("scope", "global")
     site_id = data.get("site_id")
@@ -6698,6 +6713,7 @@ async def update_config_template_api(template_id: int, request: Request, session
     data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(400, "Request body must be a JSON object")
+    form_data = _parse_template_form_data(data.get("form_data"))
     updates = {}
     if "name" in data:
         updates["name"] = data["name"]
@@ -6733,8 +6749,8 @@ async def update_config_template_api(template_id: int, request: Request, session
         except ValueError as e:
             raise HTTPException(400, str(e))
         incoming_fragment_for_hash = frag if isinstance(frag, dict) else None
-    if "form_data" in data and isinstance(data["form_data"], dict):
-        incoming_form_data_for_hash = data["form_data"]
+    if "form_data" in data and isinstance(form_data, dict):
+        incoming_form_data_for_hash = form_data
 
     if incoming_fragment_for_hash is not None or incoming_form_data_for_hash is not None:
         _hash_template_user_passwords(
@@ -6749,7 +6765,7 @@ async def update_config_template_api(template_id: int, request: Request, session
         if incoming_form_data_for_hash is not None:
             updates["form_data"] = json.dumps(incoming_form_data_for_hash)
         else:
-            updates["form_data"] = data["form_data"]
+            updates["form_data"] = form_data
     if "description" in data:
         updates["description"] = data["description"]
     if "enabled" in data:

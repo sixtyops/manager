@@ -40,6 +40,12 @@ All notable changes to this project are documented in this file.
   code revert cannot recover deleted rows. Protected rows have no size limit.
 
 ### Security
+- Config-template routes normalize JSON-encoded `form_data` objects before
+  existing password hashing and response masking. Malformed JSON and
+  non-object form data return HTTP 400 before template writes. This prevents
+  encoded Users forms from returning plaintext passwords and invalid form
+  text from breaking template listing. Optional empty values retain their
+  behavior. Existing malformed rows and past exposures are not repaired.
 - New installer-generated systemd units set `NoNewPrivileges=true` and
   `PrivateTmp=true` for Docker/Compose client processes. Existing installed
   units do not change. This does not establish Docker daemon or container

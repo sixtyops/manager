@@ -756,15 +756,17 @@ List all config templates. Classified as a dangerous feature.
 ### `POST /api/config-templates`
 Create a config template. Requires admin or operator role.
 
-- **Body** (JSON object): `name`, `category`, `config_fragment` (object or JSON-encoded object), `form_data` (optional), `description` (optional), `scope` (optional, `"global"` or `"site"`), `site_id` (optional), `device_types` (optional)
+- **Body** (JSON object): `name`, `category`, `config_fragment` (object or JSON-encoded object), `form_data` (optional object or JSON-encoded object), `description` (optional), `scope` (optional, `"global"` or `"site"`), `site_id` (optional), `device_types` (optional)
 - **Response**: `{ "id", "success" }`
 - **Input errors**: HTTP `400` if the body or decoded `config_fragment` is not an object. Rejected requests do not write a template. Missing required fields and a direct empty fragment object still return `400`. An encoded empty object (`"{}"`) remains accepted. Authentication, roles, and CSRF checks run unchanged before admission.
 
 ### `PUT /api/config-templates/{template_id}`
 Update a config template. Requires admin or operator role.
 
-- **Body** (JSON object): Any subset of `name`, `category`, `config_fragment`, `form_data`, `description`, `enabled`, `scope`, `site_id`, `device_types`. A supplied `config_fragment` must be an object or a JSON-encoded object.
+- **Body** (JSON object): Any subset of `name`, `category`, `config_fragment`, `form_data`, `description`, `enabled`, `scope`, `site_id`, `device_types`. A supplied `config_fragment` must be an object or a JSON-encoded object. A supplied `form_data` accepts an object or a JSON-encoded object. Omitted, null and empty-string form data retain their optional meaning.
 - **Input errors**: HTTP `400` if the body or supplied decoded fragment is not an object. Rejected requests leave the existing template unchanged, including other submitted fields. Empty objects and metadata-only updates remain accepted. A missing template still returns `404` before body parsing. Authentication, roles, and CSRF checks run unchanged before admission.
+
+Malformed JSON or a decoded non-object in `form_data` returns HTTP 400 before template writes. Encoded objects use the same password hashing and response masking as direct objects. Existing malformed rows are not repaired. These route checks apply after unchanged authentication, role, feature and CSRF checks.
 
 ### `DELETE /api/config-templates/{template_id}`
 Delete a config template. Requires admin or operator role.
