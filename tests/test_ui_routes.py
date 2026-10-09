@@ -21,6 +21,7 @@ FETCH_OPTIONS = re.compile(
 FETCH_METHOD = re.compile(r"^\s*,\s*\{\s*method\s*:\s*(['\"])(GET|POST|PUT|DELETE|PATCH)\1")
 METHOD_PROPERTY = re.compile(
     r"(?<![\w$])method\s*(?=:|,|})|['\"]method['\"]\s*:|"
+    r"(?<![\w$])method\s*/\*|"
     r"\[[^]\n]+\]\s*:|(?:get|set)\s+method\s*\(|__proto__\s*:"
 )
 BODY_PAYLOAD_SPREAD = re.compile(
@@ -235,6 +236,16 @@ def test_ui_request_extractor_rejects_unknown_fetch_expression():
             "fetch('/api/license')",
             "fetch('/api/license', { method: 'GET', method: 'POST' })",
             "duplicate method",
+        ),
+        (
+            "fetch('/api/license')",
+            "fetch('/api/license', { method /* reason */: 'POST' })",
+            "unsupported or duplicate method",
+        ),
+        (
+            "fetch('/api/license')",
+            "fetch('/api/license', { method: 'GET', method /* reason */: 'POST' })",
+            "unsupported or duplicate method",
         ),
         (
             "fetch('/api/license')",
