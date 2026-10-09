@@ -1941,6 +1941,115 @@ class TestFirmwareHealthFlags:
         assert files[0]["duplicate"] is False
 
 
+class TestConfigTemplateReadErrors:
+    """Fail closed on unreadable stored JSON without changing any row."""
+
+    @pytest.fixture(autouse=True)
+    def offline_key(self, monkeypatch):
+        import asyncio
+        import socket
+        from cryptography.fernet import Fernet
+        from updater import crypto
+        monkeypatch.setattr(crypto, "_fernet", Fernet(Fernet.generate_key()))
+        monkeypatch.setattr(crypto, "_load_fernet", MagicMock(
+            side_effect=AssertionError("Key file access denied")))
+        monkeypatch.setattr(socket.socket, "connect", MagicMock(
+            side_effect=AssertionError("Socket access denied")))
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(
+            side_effect=AssertionError("Process access denied")))
+
+    @pytest.mark.parametrize("storage", ["encrypted", "legacy"])
+    @pytest.mark.parametrize("field", ["config_fragment", "form_data"])
+    @pytest.mark.parametrize("value", [
+        "not-json", " ", "[]", '[1]', '"text"', "0", "true", "false", "null",
+        json.dumps(json.dumps({"users": [{"password": "synthetic-read-password"}]})),
+    ])
+    def test_invalid_row_rejects_whole_list(self, authed_client, mock_db, field, value, storage):
+        from updater import database as db
+        db.save_config_template("Healthy", "snmp", "{}", form_data='{"enabled":true}')
+        fields = {"config_fragment": "{}", "form_data": "{}", field: value}
+        bad = db.save_config_template("synthetic-sensitive-name", "users", **fields)
+        if storage == "legacy":
+            mock_db.execute(f"UPDATE config_templates SET {field}=? WHERE id=?", (value, bad))
+            mock_db.commit()
+        before = [tuple(r) for r in mock_db.execute("SELECT * FROM config_templates ORDER BY id")]
+        with patch.object(db, "save_config_template", wraps=db.save_config_template) as save, \
+             patch.object(db, "update_config_template", wraps=db.update_config_template) as update:
+            response = authed_client.get("/api/config-templates")
+            assert response.status_code == 409
+            assert response.json() == {"detail": {
+                "code": "invalid_template_data",
+                "message": "Stored template data is unreadable. No templates were returned.",
+                "invalid_templates": [{"id": bad, "field": field}],
+            }}
+            save.assert_not_called()
+            update.assert_not_called()
+        assert "synthetic-read-password" not in response.text
+        assert "synthetic-sensitive-name" not in response.text
+        assert [tuple(r) for r in mock_db.execute("SELECT * FROM config_templates ORDER BY id")] == before
+
+    def test_both_fields_and_multiple_rows_are_reported(self, authed_client, mock_db):
+        from updater import database as db
+        first = db.save_config_template("A", "snmp", "not-json", form_data="not-json")
+        second = db.save_config_template("B", "snmp", "[]", form_data="{}")
+        response = authed_client.get("/api/config-templates")
+        assert response.status_code == 409
+        assert response.json()["detail"]["invalid_templates"] == [
+            {"id": first, "field": "config_fragment"}, {"id": first, "field": "form_data"},
+            {"id": second, "field": "config_fragment"},
+        ]
+
+    def test_legacy_encoded_users_form_never_returns_plaintext(self, authed_client, mock_db):
+        from updater import database as db
+        secret = "synthetic-read-password"
+        tid = db.save_config_template("Legacy users", "users", "{}", form_data=json.dumps(
+            json.dumps({"users": [{"username": "synthetic-user", "password": secret}]})))
+        before = tuple(mock_db.execute("SELECT * FROM config_templates WHERE id=?", (tid,)).fetchone())
+        response = authed_client.get("/api/config-templates")
+        assert secret not in response.text
+        assert response.status_code == 409
+        assert tuple(mock_db.execute("SELECT * FROM config_templates WHERE id=?", (tid,)).fetchone()) == before
+
+    @pytest.mark.parametrize("form", [None, "", "{}", '{"nested":{"values":[true,null,1]}}'])
+    def test_healthy_order_nested_values_and_optional_forms(self, authed_client, mock_db, form):
+        from updater import database as db
+        b = db.save_config_template("B", "snmp", '{"nested":{"values":[true,null,1]}}', form_data=form)
+        a = db.save_config_template("A", "snmp", "{}", form_data=form)
+        before = [tuple(r) for r in mock_db.execute("SELECT * FROM config_templates ORDER BY id")]
+        response = authed_client.get("/api/config-templates")
+        assert response.status_code == 200
+        templates = response.json()["templates"]
+        assert [t["id"] for t in templates] == [a, b]
+        assert templates[1]["config_fragment"] == {"nested": {"values": [True, None, 1]}}
+        assert templates[0]["form_data"] == (json.loads(form) if form else form)
+        assert [tuple(r) for r in mock_db.execute("SELECT * FROM config_templates ORDER BY id")] == before
+
+    def test_healthy_user_hashes_remain_masked(self, authed_client):
+        from updater import database as db
+        users = {"users": [{"username": "fixture", "password": "$1$synthetic$hash"}]}
+        db.save_config_template("Users", "users", json.dumps({"system": users}), form_data=json.dumps(users))
+        response = authed_client.get("/api/config-templates")
+        assert response.status_code == 200
+        assert "$1$synthetic$hash" not in response.text
+        template = response.json()["templates"][0]
+        assert template["form_data"]["users"][0]["has_stored_password"] is True
+
+    def test_wrong_key_reader_exception_is_unchanged(self, authed_client, mock_db):
+        from cryptography.fernet import Fernet, InvalidToken
+        from updater import database as db
+        tid = db.save_config_template("Unreadable", "snmp", "{}")
+        wrong = Fernet(Fernet.generate_key()).encrypt(b'{}').decode()
+        mock_db.execute("UPDATE config_templates SET form_data=? WHERE id=?", (wrong, tid))
+        mock_db.commit()
+        before = tuple(mock_db.execute("SELECT * FROM config_templates WHERE id=?", (tid,)).fetchone())
+        with pytest.raises(InvalidToken):
+            authed_client.get("/api/config-templates")
+        assert tuple(mock_db.execute("SELECT * FROM config_templates WHERE id=?", (tid,)).fetchone()) == before
+
+    def test_unauthenticated_reader_still_requires_login(self, client):
+        assert client.get("/api/config-templates").status_code == 401
+
+
 class TestConfigTemplateFormDataAdmission:
     """Reject malformed form data before template writes."""
 

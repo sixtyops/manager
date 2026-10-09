@@ -6626,10 +6626,27 @@ def _parse_template_form_data(value: object) -> dict | str | None:
 async def list_config_templates(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_TEMPLATES))):
     """List all config templates."""
     templates = db.get_config_templates()
+    invalid = []
     for t in templates:
-        t["config_fragment"] = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
-        if t.get("form_data"):
-            t["form_data"] = json.loads(t["form_data"]) if isinstance(t["form_data"], str) else t["form_data"]
+        for field in ("config_fragment", "form_data"):
+            try:
+                value = t.get(field)
+                if field == "form_data":
+                    value = _parse_template_form_data(value)
+                else:
+                    value = json.loads(value) if isinstance(value, str) else value
+                    if not isinstance(value, dict):
+                        raise ValueError("Fragment is not an object")
+                t[field] = value
+            except (ValueError, HTTPException):
+                invalid.append({"id": t["id"], "field": field})
+    if invalid:
+        raise HTTPException(409, detail={
+            "code": "invalid_template_data",
+            "message": "Stored template data is unreadable. No templates were returned.",
+            "invalid_templates": invalid,
+        })
+    for t in templates:
         _scrub_stored_user_password_hashes(t)
     return {"templates": templates}
 
