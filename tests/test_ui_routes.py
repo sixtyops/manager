@@ -15,8 +15,21 @@ URL_ARGUMENT = re.compile(
     r"\bfetch\s*\(\s*(?P<url>(?:'[^'\n]*'|\"[^\"\n]*\"|`[^`\n]*`)"
     r"(?:\s*\+\s*encodeURIComponent\([^()\n]*\))?)"
 )
+FETCH_OPTIONS = re.compile(
+    r"^\s*,\s*\{(?P<options>.*?)\}\s*\)(?=\s*(?:;|\.))", re.S
+)
 FETCH_METHOD = re.compile(r"^\s*,\s*\{\s*method\s*:\s*(['\"])(GET|POST|PUT|DELETE|PATCH)\1")
-FETCH_SIGNAL_ONLY = re.compile(r"^\s*,\s*\{\s*signal\s*:\s*AbortSignal\.timeout\(\d+\)\s*\}")
+METHOD_PROPERTY = re.compile(
+    r"(?<![\w$])method\s*(?=:|,|})|['\"]method['\"]\s*:|"
+    r"\[[^]\n]+\]\s*:|(?:get|set)\s+method\s*\(|__proto__\s*:"
+)
+BODY_PAYLOAD_SPREAD = re.compile(
+    r"body\s*:\s*JSON\.stringify\(\{name,\s*category,\s*\.\.\.payload\}\)"
+)
+WINDOW_OPEN_START = re.compile(r"\bwindow\.open\s*\(")
+WINDOW_OPEN_ARGUMENT = re.compile(
+    r"\bwindow\.open\s*\(\s*(?P<url>`[^`\n]*`|'[^'\n]*'|\"[^\"\n]*\")\s*,"
+)
 ENDPOINT_CHOICE = re.compile(
     r"\bconst\s+endpoint\s*=\s*type\s*===\s*(['\"])ap\1\s*\?\s*"
     r"(['\"])(aps)\2\s*:\s*(['\"])(switches)\4\s*;"
@@ -55,10 +68,11 @@ def _request_path(expression: str, endpoint_values: tuple[str, ...]) -> set[str]
 def _ui_requests(source: str) -> set[tuple[str, str]]:
     """Extract supported fetch and browser-navigation API requests.
 
-    The shipped template uses literal/template URLs, one encoded string
-    suffix, and one AP/switch ternary. Other API text is not a request:
-    `startsWith('/api/')` checks response scope, while comments name routes
-    for explanation. The test does not treat those strings as callers.
+    The template uses quoted URLs, one encoded filename suffix, and one
+    conditional that selects the AP or switch route. This test scans only
+    `monitor.html`. It does not scan linked JavaScript files. Extend it if UI
+    API calls move to those files. Other API text is not a request:
+    `startsWith('/api/')` checks response scope, while comments name routes.
     """
     endpoint_match = ENDPOINT_CHOICE.search(source)
     assert endpoint_match, "Could not read the shipped AP/switch endpoint choice"
@@ -76,33 +90,66 @@ def _ui_requests(source: str) -> set[tuple[str, str]]:
         expression = match.group("url")
         request_spans.append(match.span("url"))
         tail = source[match.end():]
-        method_match = FETCH_METHOD.match(tail)
-        if method_match:
-            method = method_match.group(2)
-        elif FETCH_SIGNAL_ONLY.match(tail) or not re.match(r"\s*,", tail):
+        boundary = re.match(r"\s*([,)])", tail)
+        assert boundary, (
+            "Unknown fetch URL tail at template line "
+            f"{source.count(chr(10), 0, fetch.start()) + 1}"
+        )
+        if boundary.group(1) == ")":
             method = "GET"
         else:
-            raise AssertionError(
+            options_match = FETCH_OPTIONS.match(tail)
+            assert options_match, (
                 "Unknown fetch options form at template line "
                 f"{source.count(chr(10), 0, fetch.start()) + 1}"
             )
+            options = options_match.group("options")
+            method_properties = list(METHOD_PROPERTY.finditer(options))
+            safe_body_spreads = list(BODY_PAYLOAD_SPREAD.finditer(options))
+            assert len(safe_body_spreads) <= 1, "Fetch options use an unknown body spread"
+            options_without_body_spread = BODY_PAYLOAD_SPREAD.sub("", options)
+            assert "..." not in options_without_body_spread, (
+                "Fetch options use an unsupported spread"
+            )
+            if method_properties:
+                method_match = FETCH_METHOD.match(tail)
+                assert method_match and len(method_properties) == 1, (
+                    "Fetch options have an unsupported or duplicate method"
+                )
+                method = method_match.group(2)
+            else:
+                method = "GET"
         requests.update((method, path) for path in _request_path(expression, endpoint_values))
 
     # Browser navigations that request API paths: portal links, CSV export,
     # and config downloads. Their HTTP method is GET.
+    window_opens = list(WINDOW_OPEN_START.finditer(source))
+    for opened in window_opens:
+        match = WINDOW_OPEN_ARGUMENT.match(source, opened.start())
+        assert match, (
+            "Unknown window.open URL tail at template line "
+            f"{source.count(chr(10), 0, opened.start()) + 1}"
+        )
+        expression = match.group("url")
+        request_spans.append(match.span("url"))
+        requests.update(("GET", path) for path in _request_path(expression, endpoint_values))
+
     navigation_patterns = (
-        re.compile(r"\bwindow\.open\(\s*(?P<url>`[^`\n]*`|'[^'\n]*'|\"[^\"\n]*\")"),
         re.compile(r"\bwindow\.location\.href\s*=\s*(?P<url>'/api/[^'\n]*'|\"/api/[^\"\n]*\")"),
         re.compile(r"\bhref=(?P<quote>['\"])(?P<path>/api/[^'\"]+)(?P=quote)"),
     )
     for pattern in navigation_patterns:
         for match in pattern.finditer(source):
-            if "url" in match.groupdict():
-                expression = match.group("url")
-                request_spans.append(match.span("url"))
-            else:
+            if "path" in match.groupdict():
                 expression = match.group("quote") + match.group("path") + match.group("quote")
                 request_spans.append(match.span("path"))
+            else:
+                expression = match.group("url")
+                request_spans.append(match.span("url"))
+                assert re.match(r"\s*;", source[match.end():]), (
+                    "Unknown window.location URL tail at template line "
+                    f"{source.count(chr(10), 0, match.start()) + 1}"
+                )
             requests.update(("GET", path) for path in _request_path(expression, endpoint_values))
 
     # Every API path string must belong to a recognized caller, a known
@@ -146,20 +193,82 @@ def _assert_requests_match_routes(
 
 
 def test_ui_api_requests_match_openapi(authed_client: TestClient):
-    """Every supported UI API request must match an OpenAPI path and method."""
+    """Match all 100 inline request pairs in source and rendered page to OpenAPI."""
     response = authed_client.get("/openapi.json")
     assert response.status_code == 200
 
-    requests = _ui_requests(TEMPLATE.read_text())
+    page = authed_client.get("/")
+    assert page.status_code == 200
+    source_requests = _ui_requests(TEMPLATE.read_text())
+    rendered_requests = _ui_requests(page.text)
+    assert len(source_requests) == 100
+    assert rendered_requests == source_requests
     routes = _openapi_routes(response.json())
-    assert requests
-    _assert_requests_match_routes(requests, routes)
+    _assert_requests_match_routes(source_requests, routes)
 
 
 def test_ui_request_extractor_rejects_unknown_fetch_expression():
     source = TEMPLATE.read_text() + "\nfetch(requestUrl);\n"
     with pytest.raises(AssertionError, match="Unknown fetch URL form"):
         _ui_requests(source)
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "message"),
+    [
+        (
+            "fetch('/api/license')",
+            "fetch('/api/license' + '/removed-test-route')",
+            "Unknown fetch URL tail",
+        ),
+        (
+            "fetch('/api/license')",
+            "fetch('/api/license'.replace('license', 'removed-test-route'))",
+            "Unknown fetch URL tail",
+        ),
+        (
+            "window.open(`/api/configs/${ip}/download/${configId}`, '_blank');",
+            "window.open(`/api/configs/${ip}/download/${configId}` + '/removed-test-route', '_blank');",
+            "Unknown window.open URL tail",
+        ),
+        (
+            "fetch('/api/license')",
+            "fetch('/api/license', { method: 'GET', method: 'POST' })",
+            "duplicate method",
+        ),
+        (
+            "fetch('/api/license')",
+            "fetch('/api/license', { headers: {}, method: 'POST' })",
+            "unsupported or duplicate method",
+        ),
+        (
+            "fetch('/api/license')",
+            "fetch('/api/license', { method: 'GET', ...options })",
+            "unsupported spread",
+        ),
+        (
+            "fetch('/api/license')",
+            "fetch('/api/license', { method: 'GET', ['method']: 'POST' })",
+            "unsupported or duplicate method",
+        ),
+    ],
+)
+def test_real_template_mutations_fail_closed(before, after, message):
+    source = TEMPLATE.read_text()
+    assert source.count(before) == 1
+    mutated = source.replace(before, after, 1)
+    with pytest.raises(AssertionError, match=message):
+        _ui_requests(mutated)
+
+
+def test_real_window_open_path_suffix_fails_route_check():
+    source = TEMPLATE.read_text()
+    before = "window.open(`/api/configs/${ip}/download/${configId}`, '_blank');"
+    after = "window.open(`/api/configs/${ip}/download/${configId}/removed-test-route`, '_blank');"
+    assert source.count(before) == 1
+    mutated = source.replace(before, after, 1)
+    with pytest.raises(AssertionError, match="UI requests missing from OpenAPI"):
+        _assert_requests_match_routes(_ui_requests(mutated), _openapi_routes(_schema_for_routes()))
 
 
 def test_ui_route_contract_accepts_valid_and_rejects_stale_or_wrong_method():
