@@ -5,8 +5,11 @@ Part of #288 (identity fixtures) and #393 (TLS certificate stability).
 
 What it does:
 - Reads the bench access file named by SIXTYOPS_BENCH_ACCESS_FILE.
-- Logs in to the lab AP and the lab TNS-100 switch with
-  POST /cgi.lua/login, the same way updater/vendors/tachyon/client.py does.
+- Logs in to the lab TNS-100 switch with POST /cgi.lua/login, the same
+  way updater/vendors/tachyon/client.py does.
+- Skips the lab AP by default. The AP login returned 401 in #421. Do not log
+  in to the AP again until the offline AP account check passes (#530). Then
+  add --include-ap.
 - Sends only the GET requests in READ_ALLOWLIST. Every other request is
   refused before it reaches the network.
 - Records the SHA-256 fingerprint and notAfter of each TLS leaf certificate.
@@ -18,6 +21,8 @@ It never prints a credential value or a device address.
 Usage:
     SIXTYOPS_BENCH_ACCESS_FILE=<path> \
         python3 scripts/bench/capture_lab_fixtures.py --out <dir outside repo>
+
+    Add --include-ap only after the AP account check passes.
 """
 
 from __future__ import annotations
@@ -395,7 +400,8 @@ def check_out_dir(out_dir: Path) -> Path:
 
 def run(out_dir: Path, env: Optional[Dict[str, str]] = None,
         transport: Transport = https_transport,
-        log: Callable[[str], None] = print) -> int:
+        log: Callable[[str], None] = print,
+        include_ap: bool = False) -> int:
     try:
         out = check_out_dir(out_dir)
         access = load_access(env)
@@ -406,7 +412,9 @@ def run(out_dir: Path, env: Optional[Dict[str, str]] = None,
     username = access[KEY_USERNAME]
     password = access[KEY_PASSWORD]
     targets = []
-    if KEY_AP_IP in access:
+    if KEY_AP_IP in access and not include_ap:
+        log("ap: skipped. Add --include-ap only after the AP account check passes.")
+    elif KEY_AP_IP in access:
         targets.append(("ap", access[KEY_AP_IP], AP_READS))
     else:
         log(f"ap: skipped, no '{KEY_AP_IP}' in the access file")
@@ -455,9 +463,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--out", required=True, type=Path,
                         help="Output directory. Must be outside the repository.")
+    parser.add_argument("--include-ap", action="store_true",
+                        help="Log in to the lab AP too. Use only after the AP "
+                             "account check passes (#530).")
     args = parser.parse_args(argv)
     socket.setdefaulttimeout(TIMEOUT_SECONDS)
-    return run(args.out)
+    return run(args.out, include_ap=args.include_ap)
 
 
 if __name__ == "__main__":

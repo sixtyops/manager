@@ -101,10 +101,10 @@ def access_env(tmp_path):
     return {cap.ACCESS_FILE_ENV: str(access)}
 
 
-def _run(tmp_path, env, device, capsys):
+def _run(tmp_path, env, device, capsys, include_ap=True):
     out = tmp_path / "out"
     lines = []
-    rc = cap.run(out, env=env, transport=device, log=lines.append)
+    rc = cap.run(out, env=env, transport=device, log=lines.append, include_ap=include_ap)
     printed = "\n".join(lines) + capsys.readouterr().out
     return rc, out, printed
 
@@ -150,6 +150,24 @@ def test_run_sends_only_login_and_allowlisted_gets(tmp_path, access_env, capsys)
     switch_paths = [c[2] for c in device.calls if c[1] == SWITCH_IP and c[0] == "GET"]
     assert ap_paths == list(cap.AP_READS)
     assert switch_paths == list(cap.SWITCH_READS)
+
+
+def test_ap_is_skipped_by_default(tmp_path, access_env, capsys):
+    device = FakeDevice()
+    rc, out, printed = _run(tmp_path, access_env, device, capsys, include_ap=False)
+    assert rc == 0
+    assert device.calls and all(c[1] == SWITCH_IP for c in device.calls)
+    assert sorted(p.name for p in out.iterdir()) == ["switch.json", "tls.json"]
+    assert "ap: skipped" in printed and "--include-ap" in printed
+
+
+def test_main_passes_include_ap_flag(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(cap.socket, "setdefaulttimeout", lambda _: None)
+    monkeypatch.setattr(cap, "run", lambda out, include_ap=False: seen.append(include_ap) or 0)
+    assert cap.main(["--out", str(tmp_path)]) == 0
+    assert cap.main(["--out", str(tmp_path), "--include-ap"]) == 0
+    assert seen == [False, True]
 
 
 def test_login_matches_tachyon_client_and_reads_send_token(tmp_path, access_env, capsys):
