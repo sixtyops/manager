@@ -131,8 +131,8 @@ it used in the event it writes.
 
 ### Detail
 
-*(today: the poller matches by IP and sets the new IP at once. The newest
-report keeps a shared IP, and the other device gets `ip = NULL`.)*
+*(today: the poller matches by IP. `devices.ip` is `TEXT NOT NULL UNIQUE`,
+so one IP maps to one row. A nullable `devices.ip` is future work.)*
 
 Candidate sources are the AP peer list, switch neighbor data, and syslog.
 They are **candidates only**. Inbound syslog does not exist. Switch
@@ -567,7 +567,7 @@ exception cannot bypass a failed gate.
 | Event | What happens |
 |---|---|
 | Device added (or un-archived) and it needs the update | Added as a **straggler**: `wave = pct100`, `status = pending`. `N` grows. **Exception:** if its family had no members at creation, the hold was never checked for that family, so it is *not* added. It waits for the next rollout. Nothing is added after the `pct100` wave has started. |
-| Device changes IP (*target, not shipped*) | A queued job binds `device_id`, serial, and `address_generation` at admission. An active job revalidates the serial before each write and writes only with that immutable ID and generation. A null or stale address holds the device and halts the window. The window never resumes automatically. A job never retargets silently. There is no second flash: it never repeats an upload or install. Restart recovery stays read-only until the normal engine gates allow the next step. A missed recovery deadline halts the window. *(today: the job reads the IP at flash time.)* |
+| Device changes IP (*target, not shipped*) | A mutating request that uses an old or stale address must carry the expected `device_id` and serial or `address_generation`. Before it admits a job, the engine verifies the device serial under the trust policy. It rejects a stale or mismatched binding. A serial mismatch holds the device and halts the window. A queued job binds `device_id`, serial, and `address_generation` at admission. An active job revalidates the serial before each write and writes only with that immutable ID and generation. A null or stale address holds the device and halts the window. The window never resumes automatically. A job never retargets silently. There is no second flash: it never repeats an upload or install. Restart recovery stays read-only until the normal engine gates allow the next step. A missed recovery deadline halts the window. *(today: the job reads the IP at flash time.)* |
 | Device loses its IP (`address_unknown`) | Hold the device and stop new writes for the window. Keep the same wave pending. This is not an outage. |
 | CPE moves to another AP | Nothing at the member level. Units follow the current AP. |
 | Device goes offline | Hold the device and stop new writes for the window. Keep the same wave pending. This is not an outage. |
@@ -690,7 +690,9 @@ RSSI and telemetry), `access_points`, `switches`, `rollout_devices`,
     newest report. A reused IP, a duplicate serial, or a duplicate MAC
     holds both devices.
 17. A queued job binds device ID, serial, and address generation at
-    admission. An active job revalidates the serial before each write. A
+    admission. A mutating request to a stale or old address must carry the
+    expected identity. A serial mismatch holds and halts the window. An
+    active job revalidates the serial before each write. A
     null or stale address holds and halts the window. No upload or install
     repeats.
 14. Rollout, confirmation, and history records survive an IP change and an
