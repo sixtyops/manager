@@ -215,7 +215,12 @@ SIXTYOPS_TEST_URL=https://<your-dev-host> pytest -m integration -v
 ```
 
 **Local dev** (`dev.sh`): Pure Python, hot-reload, localhost only. Best for
-UI/API work that doesn't need hardware.
+UI/API work that doesn't need hardware. `dev.sh` creates the schema, runs
+`scripts/seed_dev_data.py`, then starts the app with the real poller. The
+seeded devices are unreachable, so connection errors and backoff in the log
+are expected. The seed script does not mark setup complete. After the first
+login, the first-run setup page shows once. Set `PORT` to use another
+loopback port.
 
 **Docker stack**: there is no `dev-docker.sh`. Run the compose files from
 *Deployment Reality* with `SEED_DATA=1` (development only, never on a
@@ -225,7 +230,8 @@ shared dev host or live integration tests.
 
 Seed script (`scripts/seed_dev_data.py`) inserts sample sites, devices, CPEs,
 config templates, and job history. It's idempotent — skips if data exists.
-Runs automatically in the entrypoint when `SEED_DATA=1` is set.
+`dev.sh` runs it on each start. The entrypoint runs it when `SEED_DATA=1`
+is set.
 
 If Docker socket errors appear, start Colima: `colima start`.
 If port conflicts persist after `docker compose down`: `colima restart`.
