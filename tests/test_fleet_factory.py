@@ -1,7 +1,9 @@
 """Tests for the shared fleet factory in tests/fixtures/fleet.py."""
 
 from updater import database as db
-from tests.fixtures.fleet import FAMILY_FILES, make_artifacts, make_fleet
+from tests.fixtures.fleet import (
+    FAMILY_FILES, make_artifacts, make_fleet, select_artifact, set_health, set_offline,
+)
 
 
 def test_default_fleet_counts(mock_db):
@@ -78,3 +80,21 @@ def test_ips_are_unique(mock_db):
     fleet = make_fleet()
     ips = [d["ip"] for d in fleet["aps"] + fleet["switches"]] + [c["ip"] for c in fleet["cpes"]]
     assert len(ips) == len(set(ips))
+
+
+def test_set_offline_keeps_last_seen(mock_db):
+    fleet = make_fleet(sites=1, aps_per_site=1, cpes_per_ap=0)
+    for device in fleet["aps"] + fleet["switches"]:
+        set_health(device, "2026-06-02T03:00:00+00:00")
+        set_offline(device)
+        row = db.get_device(device["ip"])
+        assert row["last_seen"] == "2026-06-02T03:00:00+00:00"
+        assert row["last_error"]
+
+
+def test_select_artifact_sets_family_setting(mock_db):
+    fleet = make_fleet(sites=1, aps_per_site=1, cpes_per_ap=0)
+    select_artifact("tna-303l", fleet["artifacts"]["tna-303l"])
+    select_artifact("tns-100", fleet["artifacts"]["tns-100"])
+    assert db.get_setting("selected_firmware_303l") == FAMILY_FILES["tna-303l"]
+    assert db.get_setting("selected_firmware_tns100") == FAMILY_FILES["tns-100"]

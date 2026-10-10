@@ -4,22 +4,25 @@ Helper         | Effect
 make_fleet     | Create sites and managed AP/switch rows; return IDs and IPs.
 set_version    | Set an observed version through the role's status API.
 set_health     | Set a poll timestamp and error through the role's status API.
+set_offline    | Record a failed poll: keep last_seen, set a poll error.
 confirm        | Record a working-version confirmation through the database API.
 make_artifacts | Register one firmware file per model family; return the names.
+select_artifact| Select a family's firmware file through its selected_firmware_* setting.
 
 make_fleet also writes CPEs (cpe_cache), device MACs, extra MACs and switch
 topology links (switch_bridge_entries), and registers artifacts.
 
 Only the current schema is covered: devices, tower_sites, cpe_cache,
 switch_bridge_entries, firmware_registry and firmware_confirmations.
-Not covered: archived devices, offline flags and artifact selection. The
-current schema has no such state. Add helpers when the schema adds it.
+Not covered: archived devices. The current schema has no archive state.
+Add a helper when the schema adds it.
 Credentials, MACs and addresses are synthetic. No transport runs.
 """
 
 import hashlib
 
 from updater import database as db
+from updater.firmware_policy import PLATFORM_SETTING_KEYS
 
 # One synthetic firmware file per model family. The date in the name makes
 # the release-date Firmware Hold apply to it.
@@ -126,6 +129,17 @@ def set_health(device: dict, last_seen: str, *, error: str | None = None) -> Non
     """Record a synthetic poll result; omit this call to leave last_seen missing."""
     update = db.update_ap_status if device["role"] == "ap" else db.update_switch_status
     update(device["ip"], last_seen=last_seen, last_error=error)
+
+
+def set_offline(device: dict, error: str = "fixture: device unreachable") -> None:
+    """Record a failed poll. last_seen keeps its old value."""
+    update = db.update_ap_status if device["role"] == "ap" else db.update_switch_status
+    update(device["ip"], last_error=error)
+
+
+def select_artifact(family: str, filename: str) -> None:
+    """Make filename the selected firmware for family."""
+    db.set_setting(PLATFORM_SETTING_KEYS[family], filename)
 
 
 def confirm(device: dict, version: str) -> None:
