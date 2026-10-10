@@ -6,7 +6,7 @@
 > in [rearchitecture.md](rearchitecture.md#target-layout). Modules marked
 > **(being removed)** below are deleted by that plan: RADIUS, telemetry, SNMP traps,
 > webhooks, syslog forwarding, SFTP backup, the self-update apply path, the vendor
-> abstraction, feature gating, and `devmode.py`.
+> abstraction, feature gating, and the removed dummy poller.
 
 ## Overview
 

@@ -85,8 +85,6 @@ from .radius_server import (
 from . import radius_users
 logger = logging.getLogger(__name__)
 
-DEV_MODE = os.environ.get("SIXTYOPS_DEV_MODE") == "1"
-
 # Paths
 BASE_DIR = Path(__file__).parent
 FIRMWARE_DIR = BASE_DIR.parent / "firmware"
@@ -532,48 +530,31 @@ async def lifespan(app: FastAPI):
     db.cleanup_expired_sessions()
     _migrate_users_template_password_hashing()
 
-    if DEV_MODE:
-        from .devmode import seed_database, DevModePoller
-        seed_database()
-        poller = DevModePoller(broadcast)
-        set_poller(poller)
-        await poller.start()
-        scheduler = init_scheduler(broadcast, _start_scheduled_update, check_interval=60)
-        await scheduler.start()
-        cleanup_task = asyncio.create_task(
-            _supervised_task("periodic_cleanup", _periodic_cleanup)
-        )
-        # Skip network-dependent services in dev mode
-        fetcher = checker = None
-        backup_task = ws_health_task = None
-        radius_svc = radius_task = None
-        logger.info("Application started (DEV MODE — no network services)")
-    else:
-        poller = init_poller(broadcast, poll_interval=60)
-        await poller.start()
-        scheduler = init_scheduler(broadcast, _start_scheduled_update, check_interval=60)
-        await scheduler.start()
-        fetcher = init_fetcher(FIRMWARE_DIR, broadcast)
-        await fetcher.start()
-        checker = init_checker(broadcast)
-        await checker.start()
-        await verify_update_on_startup(broadcast)
-        _recover_crashed_device_jobs()
-        syslog_forwarder.reload_config()
-        radius_svc = init_radius_service(broadcast)
-        radius_task = asyncio.create_task(
-            _supervised_task("radius_server", radius_svc.run_forever)
-        )
-        cleanup_task = asyncio.create_task(
-            _supervised_task("periodic_cleanup", _periodic_cleanup)
-        )
-        backup_task = asyncio.create_task(
-            _supervised_task("backup_scheduler", _backup_scheduler)
-        )
-        ws_health_task = asyncio.create_task(
-            _supervised_task("ws_health_check", _websocket_health_check)
-        )
-        logger.info("Application started")
+    poller = init_poller(broadcast, poll_interval=60)
+    await poller.start()
+    scheduler = init_scheduler(broadcast, _start_scheduled_update, check_interval=60)
+    await scheduler.start()
+    fetcher = init_fetcher(FIRMWARE_DIR, broadcast)
+    await fetcher.start()
+    checker = init_checker(broadcast)
+    await checker.start()
+    await verify_update_on_startup(broadcast)
+    _recover_crashed_device_jobs()
+    syslog_forwarder.reload_config()
+    radius_svc = init_radius_service(broadcast)
+    radius_task = asyncio.create_task(
+        _supervised_task("radius_server", radius_svc.run_forever)
+    )
+    cleanup_task = asyncio.create_task(
+        _supervised_task("periodic_cleanup", _periodic_cleanup)
+    )
+    backup_task = asyncio.create_task(
+        _supervised_task("backup_scheduler", _backup_scheduler)
+    )
+    ws_health_task = asyncio.create_task(
+        _supervised_task("ws_health_check", _websocket_health_check)
+    )
+    logger.info("Application started")
 
     yield
 

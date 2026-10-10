@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Removed
+- Removed `updater/devmode.py` and `SIXTYOPS_DEV_MODE`. `./dev.sh` now seeds
+  sample devices with `scripts/seed_dev_data.py` and runs the real poller.
+  Seeded devices are unreachable, so connection errors in the log are expected.
+  After login, the first-run setup page shows once. Local login stays admin/admin.
 - Removed `GET /api/uptime/device` and `GET /api/uptime/events`, plus their
   exclusive database read helpers. Requests that pass unchanged middleware
   return 404, and OpenAPI omits both paths. External API callers are unknown.
