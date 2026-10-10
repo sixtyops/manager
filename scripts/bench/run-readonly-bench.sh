@@ -119,7 +119,9 @@ access_file=${SIXTYOPS_BENCH_ACCESS_FILE:-}
 [ -n "$access_file" ] || refuse "SIXTYOPS_BENCH_ACCESS_FILE is not set"
 [ -f "$access_file" ] && [ -r "$access_file" ] || refuse "the access file is missing or not readable"
 [ -O "$access_file" ] || refuse "the current user does not own the access file"
-access_mode=$(stat -f %Lp "$access_file" 2>/dev/null || stat -c %a "$access_file")
+# Try GNU stat first. GNU "stat -f" reports the file system, prints to
+# stdout, and fails, so the BSD form must come second.
+access_mode=$(stat -c %a "$access_file" 2>/dev/null || stat -f %Lp "$access_file")
 case $access_mode in
   600 | 400) ;;
   *) refuse "the access file mode must be 600 or 400 (chmod 600)" ;;
