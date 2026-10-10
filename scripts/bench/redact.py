@@ -8,7 +8,8 @@ Read stdin line by line and write the redacted line to stdout. Replace:
 - each IPv4 address.
 
 Values shorter than 3 characters are not replaced, because they would
-remove normal text. The wrapper never sets such values on purpose.
+remove normal text. run-readonly-bench.sh refuses an access file with such
+a value before it runs a mode.
 """
 
 from __future__ import annotations

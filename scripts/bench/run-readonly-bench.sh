@@ -187,6 +187,12 @@ set +e
     esac
     key=$(trim "${line%%:*}")
     value=$(trim "${line#*:}")
+    # redact.py does not replace values shorter than 3 characters. Stop
+    # before a run can print such a value. Do not print the key or value.
+    if [ -n "$value" ] && [ "${#value}" -lt 3 ]; then
+      echo "run-readonly-bench: REFUSED: an access file value is shorter than 3 characters" >&2
+      exit 2
+    fi
     case $key in
       "Manager URL") export SIXTYOPS_TEST_URL="$value" ;;
       "Manager username") export SIXTYOPS_TEST_USER="$value" ;;
@@ -213,6 +219,10 @@ set +e
   url_host=${SIXTYOPS_TEST_URL:-}
   url_host=${url_host#*://}
   url_host=${url_host%%/*}
+  if [ -n "$url_host" ] && [ "${#url_host}" -lt 3 ]; then
+    echo "run-readonly-bench: REFUSED: the Manager host name is shorter than 3 characters" >&2
+    exit 2
+  fi
   export SIXTYOPS_BENCH_REDACT_HOST="$url_host"
 
   case $mode in

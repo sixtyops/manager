@@ -132,3 +132,47 @@ def test_wrapper_refuses_unknown_mode(tmp_path):
     )
     assert result.returncode == 2
     assert "unknown mode" in result.stderr
+
+
+def test_wrapper_refuses_short_access_value(tmp_path):
+    # redact.py does not replace values shorter than 3 characters, so the
+    # wrapper must stop before it runs a mode.
+    base_env = {"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "HOME": str(tmp_path)}
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README").write_text("bench\n")
+    for cmd in (
+        ["git", "init", "-q"],
+        ["git", "add", "README"],
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false",
+         "commit", "-q", "-m", "init"],
+        ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+    ):
+        subprocess.run(cmd, cwd=repo, env=base_env, check=True, capture_output=True)
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=base_env,
+                          capture_output=True, text=True, check=True).stdout.strip()
+    access = tmp_path / "access.env"
+    access.write_text("Manager URL: https://sixtyops-dev.infra.treehouse.mn\n"
+                      "Manager username: bench-user\nManager password: q7\n")
+    access.chmod(0o600)
+    # A stub Python passes the dependency check. The refusal must come first,
+    # so no lane runs with this stub.
+    stub = tmp_path / "python"
+    stub.write_text("#!/bin/sh\nexit 0\n")
+    stub.chmod(0o755)
+
+    result = subprocess.run(
+        [str(WRAPPER), head],
+        cwd=repo,
+        env={**base_env, "SIXTYOPS_BENCH_ACCESS_FILE": str(access),
+             "SIXTYOPS_BENCH_SUMMARY_DIR": str(tmp_path / "out"),
+             "SIXTYOPS_BENCH_PYTHON": str(stub)},
+        capture_output=True, text=True, timeout=60,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 2
+    assert "shorter than 3 characters" in output
+    assert "== lane:" not in output
+    assert "q7" not in output
+    assert "bench-user" not in output

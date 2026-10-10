@@ -102,7 +102,9 @@ Guards, in this order:
    `conftest.py`, or `pyproject.toml`.
 3. The access file must be owned by the current user, have mode `600` or
    `400`, and be outside the repository. The wrapper parses its
-   `Key: value` lines in a subshell. It does not `source` the file.
+   `Key: value` lines in a subshell. It does not `source` the file. It
+   refuses the run if a value is shorter than 3 characters, because the
+   filter does not replace such short values.
 4. All output goes through `scripts/bench/redact.py`. The filter replaces
    every value in the access file and every IPv4 address. The redacted log
    and a summary go to `SIXTYOPS_BENCH_SUMMARY_DIR`. The default is
