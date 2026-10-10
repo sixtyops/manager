@@ -301,6 +301,8 @@ class TestRollbackSafetySnapshot:
         self, operator_client, rollback_db
     ):
         ctx, instance = self._patch_client(get_config_raises=RuntimeError("boom"))
+        # First read (safety snapshot) fails; the post-apply read-back matches.
+        instance.get_config.side_effect = [RuntimeError("boom"), {"v": "old"}]
         with ctx:
             resp = operator_client.post(
                 "/api/config-push/rollback/10.0.0.5", json={"force": True}
@@ -325,14 +327,165 @@ class TestRollbackSafetySnapshot:
     ):
         from updater import database as db
         ctx, instance = self._patch_client(get_config_result={"v": "current"})
+        instance.get_config.side_effect = [{"v": "current"}, {"v": "old"}]
         with ctx:
             resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["safety_snapshot_saved"] is True
+        assert body["rollback_verified"] is True
         # The pre-rollback snapshot landed in device_configs (DAL decrypts on read)
         latest = db.get_latest_device_config("10.0.0.5")
         assert json.loads(latest["config_json"]) == {"v": "current"}
+
+
+class TestRollbackLockAndVerify:
+    """Rollback takes the per-IP config push lock and verifies the result by
+    reading the config back (issue #311, closes #37 and #39)."""
+
+    @pytest.fixture
+    def rollback_db(self, mock_db):
+        mock_db.execute(
+            "INSERT INTO access_points (ip, username, password, enabled) "
+            "VALUES ('10.0.0.5', 'admin', 'pass', 1)"
+        )
+        mock_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.5", json.dumps({"v": "old"}), "h-old", "2026-01-01T00:00:00"),
+        )
+        mock_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.5", json.dumps({"v": "new"}), "h-new", "2026-01-02T00:00:00"),
+        )
+        mock_db.commit()
+        return mock_db
+
+    def _patch_client(self, read_back):
+        from contextlib import ExitStack
+        from unittest.mock import MagicMock
+        instance = MagicMock()
+        instance.login = AsyncMock(return_value=True)
+        # First read is the safety snapshot; second is the post-apply read-back.
+        instance.get_config = AsyncMock(side_effect=[{"v": "new"}, read_back])
+        instance.apply_config = AsyncMock(return_value={"success": True})
+        instance.get_hardware_id = MagicMock(return_value="tn-110")
+        poller_stub = MagicMock()
+        poller_stub.poll_configs_for_ips = AsyncMock(return_value=None)
+        stack = ExitStack()
+        stack.enter_context(patch("updater.app.TachyonClient", return_value=instance))
+        stack.enter_context(patch("updater.app.get_poller", return_value=poller_stub))
+        return stack, instance
+
+    def test_success_reports_verified_and_releases_lock(self, operator_client, rollback_db):
+        from updater import app as app_module
+        from updater.app import _compute_config_hash
+        ctx, instance = self._patch_client(read_back={"v": "old"})
+        with ctx:
+            resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] == "success"
+        assert body["rollback_verified"] is True
+        assert body["config_hash"] == _compute_config_hash({"v": "old"})
+        assert "10.0.0.5" not in app_module._config_pushing_ips
+
+    def test_hash_mismatch_is_reported_not_success(self, operator_client, rollback_db):
+        from updater import app as app_module
+        # Device accepted the apply but dropped a field.
+        ctx, instance = self._patch_client(read_back={})
+        instance.get_config.side_effect = [{"v": "new"}, {"v": "old", "extra": 1}]
+        with ctx:
+            resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
+        assert resp.status_code == 502, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "rollback_not_verified"
+        assert detail["rollback_verified"] is False
+        assert detail["expected_hash"] != detail["actual_hash"]
+        assert "not verified" in detail["message"]
+        row = rollback_db.execute(
+            "SELECT target_id FROM audit_log WHERE action = 'config.rollback.unverified'"
+        ).fetchone()
+        assert row is not None and row["target_id"] == "10.0.0.5"
+        assert "10.0.0.5" not in app_module._config_pushing_ips
+
+    def test_read_back_failure_is_reported_not_success(self, operator_client, rollback_db):
+        ctx, instance = self._patch_client(read_back=None)
+        with ctx:
+            resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
+        assert resp.status_code == 502, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "rollback_not_verified"
+        assert detail["actual_hash"] is None
+        assert "empty config" in detail["message"]
+
+    def test_rollback_refused_while_push_or_rollback_holds_lock(self, operator_client, rollback_db):
+        from updater import app as app_module
+        ctx, instance = self._patch_client(read_back={"v": "old"})
+        app_module._config_pushing_ips.add("10.0.0.5")
+        try:
+            with ctx:
+                resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
+            assert resp.status_code == 409, resp.text
+            assert resp.json()["detail"]["code"] == "config_change_in_progress"
+            # Fail closed: no device contact at all.
+            instance.login.assert_not_awaited()
+            instance.apply_config.assert_not_awaited()
+            # The refused request must not release the other writer's lock.
+            assert "10.0.0.5" in app_module._config_pushing_ips
+        finally:
+            app_module._config_pushing_ips.discard("10.0.0.5")
+
+    @pytest.mark.asyncio
+    async def test_concurrent_rollbacks_on_one_ip_serialize(self, rollback_db):
+        """Two rollbacks race on one IP: one applies, the other is refused
+        before it touches the device."""
+        import asyncio
+        from unittest.mock import MagicMock
+        from fastapi import HTTPException
+        from updater import app as app_module
+
+        gate = asyncio.Event()
+        entered = asyncio.Event()
+        instance = MagicMock()
+        instance.login = AsyncMock(return_value=True)
+        instance.get_hardware_id = MagicMock(return_value="tn-110")
+        reads = iter([{"v": "new"}, {"v": "old"}])
+
+        async def slow_get_config():
+            entered.set()
+            await gate.wait()
+            return next(reads)
+
+        instance.get_config = AsyncMock(side_effect=slow_get_config)
+        instance.apply_config = AsyncMock(return_value={"success": True})
+        poller_stub = MagicMock()
+        poller_stub.poll_configs_for_ips = AsyncMock(return_value=None)
+
+        request = MagicMock()
+        request.json = AsyncMock(return_value={})
+        request.headers = {}
+        request.client = None
+        session = {"username": "op"}
+
+        with patch("updater.app.TachyonClient", return_value=instance), \
+                patch("updater.app.get_poller", return_value=poller_stub):
+            first = asyncio.create_task(
+                app_module.rollback_device_config("10.0.0.5", request, session, None)
+            )
+            await entered.wait()
+            with pytest.raises(HTTPException) as exc:
+                await app_module.rollback_device_config("10.0.0.5", request, session, None)
+            assert exc.value.status_code == 409
+            assert exc.value.detail["code"] == "config_change_in_progress"
+            gate.set()
+            result = await first
+
+        assert result["rollback_verified"] is True
+        assert instance.login.await_count == 1
+        assert instance.apply_config.await_count == 2  # dry-run + apply, once
+        assert "10.0.0.5" not in app_module._config_pushing_ips
 
 
 class TestConfigPushRolloutAdvance:
