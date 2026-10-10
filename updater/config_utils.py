@@ -7,6 +7,9 @@ from copy import deepcopy
 PROTECTED_CONFIG_KEYS = {"network", "ethernet"}
 # Child keys that are protected only below a `wireless` key.
 PROTECTED_WIRELESS_KEYS = {"radios", "zones"}
+# Keys with these suffixes hold credentials. A template may set them only
+# to a non-empty string. An empty string means "no change".
+CREDENTIAL_KEY_SUFFIXES = ("password", "secret", "key")
 
 
 def _md5_crypt(plain: str) -> str:
@@ -99,6 +102,13 @@ def validate_fragment_safety(fragment: dict):
     merge would replace `radios` and `zones`. A non-object fragment is
     rejected. The walk is iterative, so deep nesting cannot cause a
     RecursionError.
+
+    Keys that end in `password`, `secret`, or `key` (any case, any depth)
+    hold credentials. A non-empty string is allowed. An empty string means
+    "no change": the leaf is removed from `fragment` in place, so the merge
+    keeps the device value. Any other value (null, object, list, number,
+    or boolean) is rejected, because the merge would erase or corrupt the
+    device credential.
     """
     if not isinstance(fragment, dict):
         raise ValueError("Config fragment must be a JSON object")
@@ -112,7 +122,7 @@ def validate_fragment_safety(fragment: dict):
         if not isinstance(node, dict):
             continue
         parent = path[-1].lower() if path else None
-        for key, value in node.items():
+        for key, value in list(node.items()):
             name = key.lower() if isinstance(key, str) else key
             key_path = path + (str(key),)
             protected = name in PROTECTED_CONFIG_KEYS or (
@@ -125,7 +135,33 @@ def validate_fragment_safety(fragment: dict):
                     f"Config templates cannot modify '{'.'.join(key_path)}' — "
                     f"this could make devices unreachable"
                 )
+            if isinstance(name, str) and name.endswith(CREDENTIAL_KEY_SUFFIXES):
+                if value == "":
+                    del node[key]
+                    continue
+                if not isinstance(value, str):
+                    raise ValueError(
+                        f"Config templates cannot set '{'.'.join(key_path)}' "
+                        f"to {_json_type_name(value)}. Use a non-empty text "
+                        f"value, or leave it empty to keep the device value"
+                    )
+                continue
             stack.append((value, key_path))
+
+
+def _json_type_name(value) -> str:
+    """Name a JSON value type for an operator-facing error."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true or false"
+    if isinstance(value, (int, float)):
+        return "a number"
+    if isinstance(value, dict):
+        return "an object"
+    if isinstance(value, list):
+        return "a list"
+    return "a non-text value"
 
 
 # Tachyon's ping_watchdog reboots the device when it fails to ping all
