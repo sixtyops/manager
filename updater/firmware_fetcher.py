@@ -193,11 +193,17 @@ class FirmwareFetcher:
                     # Track as auto-fetched even if already present
                     if release.filename not in auto_fetched:
                         auto_fetched.append(release.filename)
-                    if db.get_firmware_sha256(release.filename) is not None:
+                    stored_sha256 = db.get_firmware_sha256(release.filename)
+                    if stored_sha256 is not None and not self._needs_vendor_check(
+                        release, stored_sha256
+                    ):
                         # Already fingerprinted on a prior cycle; re-register is
                         # a no-op for the hash (COALESCE preserves it).
                         db.register_firmware(release.filename, source="auto")
                         continue
+                    # A stored hash whose artifact was never matched to the
+                    # vendor MD5 (for example a backfilled row) is checked
+                    # again below, the same way as an unfingerprinted file.
                     # No stored hash yet — fingerprint the on-disk file so it
                     # too gets the pre-flash integrity re-check. But an existing
                     # file can't be trusted on faith: a partial/corrupt download
@@ -215,17 +221,27 @@ class FirmwareFetcher:
                         )
                         filepath.unlink(missing_ok=True)
                         # fall through to the download path below (no continue)
-                    else:
+                    elif file_sha256:
+                        matched = bool(release.md5 and file_md5)
                         db.register_firmware(
                             release.filename, source="auto", sha256=file_sha256,
+                            **self._vendor_checksum_kwargs(release, matched),
                         )
+                        continue
+                    else:
+                        # The file vanished while it was hashed.
                         continue
 
                 success, sha256 = await self._download_firmware(release)
                 if success:
                     downloaded.append(release.filename)
                     auto_fetched.append(release.filename)
-                    db.register_firmware(release.filename, source="auto", sha256=sha256)
+                    # _download_firmware rejects an MD5 mismatch, so a
+                    # published MD5 here means the bytes matched it.
+                    db.register_firmware(
+                        release.filename, source="auto", sha256=sha256,
+                        **self._vendor_checksum_kwargs(release, bool(release.md5)),
+                    )
 
                     # Replace older auto-fetched firmware of same platform/channel
                     old_files = self._find_old_firmware(
@@ -505,6 +521,27 @@ class FirmwareFetcher:
             return await asyncio.get_event_loop().run_in_executor(None, _hash)
         except FileNotFoundError:
             return None, None
+
+    @staticmethod
+    def _needs_vendor_check(release: FirmwareRelease, sha256: str) -> bool:
+        """True when the vendor publishes an MD5 but the artifact for these
+        bytes was never matched to it."""
+        if not release.md5:
+            return False
+        artifact = db.get_firmware_artifact(sha256)
+        return not (artifact and artifact.get("verified_at"))
+
+    @staticmethod
+    def _vendor_checksum_kwargs(release: FirmwareRelease, matched: bool) -> dict:
+        """Artifact fields for register_firmware. Only a matched vendor MD5
+        is recorded; the artifact then gets verified_at."""
+        if not (matched and release.md5):
+            return {}
+        return {
+            "vendor_checksum": release.md5,
+            "vendor_checksum_source": FRESHDESK_PAGES.get(release.platform),
+            "vendor_checksum_verified": True,
+        }
 
     def _auto_select(self, platform: str, releases: list[FirmwareRelease],
                      beta_enabled: bool):

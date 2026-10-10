@@ -147,6 +147,8 @@ def firmware_file_health(firmware_dir: Path, filename: str) -> FirmwareFileHealt
     # fingerprinted by the current integrity path. A file with no registry row is
     # allowed so legacy/manual-on-disk installs do not become unusable on upgrade.
     verified = bool(exists and (reg is None or reg.get("sha256")))
+    if verified and reg is not None:
+        verified = _artifact_allows_selection(reg["sha256"])
 
     reason = ""
     if not exists:
@@ -167,6 +169,20 @@ def firmware_file_health(firmware_dir: Path, filename: str) -> FirmwareFileHealt
         deployable=exists and not incomplete and verified,
         reason=reason,
     )
+
+
+def _artifact_allows_selection(sha256: str) -> bool:
+    """Fail closed on the firmware_artifacts row for a registered hash.
+
+    A hashed registry file must have an artifact row. A row that records a
+    vendor checksum but has no verified_at did not match that checksum, so
+    it cannot be selected. Rows with no vendor checksum (backfilled files,
+    or a release page that lists no MD5) stay selectable, as before.
+    """
+    artifact = db.get_firmware_artifact(sha256)
+    if artifact is None:
+        return False
+    return not (artifact.get("vendor_checksum") and not artifact.get("verified_at"))
 
 
 def annotate_firmware_health(files: list[dict], firmware_dir: Path) -> None:
