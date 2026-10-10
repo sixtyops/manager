@@ -1696,6 +1696,99 @@ class TestProtectedConfigKeys:
         with pytest.raises(ValueError, match="network"):
             _validate_fragment_safety({"network": {"ip": "1.2.3.4"}})
 
+    @pytest.mark.parametrize("fragment, path", [
+        ({"system": {"network": {"ip": "1.2.3.4"}}}, "system.network"),
+        ({"services": {"x": {"ethernet": {"speed": "100"}}}}, "services.x.ethernet"),
+        ({"wireless": {"radios": {"wlan0": {"channel": 36}}}}, "wireless.radios"),
+        ({"wireless": {"zones": {}}}, "wireless.zones"),
+        ({"a": {"wireless": {"radios": None}}}, "a.wireless.radios"),
+        ({"system": {"users": [{"username": "x", "network": {}}]}}, "system.users.0.network"),
+        ({"NETWORK": {"ip": "1.2.3.4"}}, "NETWORK"),
+        ({"wireless": None}, "wireless"),
+        ({"wireless": []}, "wireless"),
+    ])
+    def test_validate_fragment_safety_rejects_nested_paths(self, fragment, path):
+        from updater.config_utils import validate_fragment_safety
+        with pytest.raises(ValueError) as exc:
+            validate_fragment_safety(fragment)
+        assert f"'{path}'" in str(exc.value)
+
+    @pytest.mark.parametrize("fragment", [None, [], "network", 1, [{"network": {}}]])
+    def test_validate_fragment_safety_fails_closed_on_non_dict(self, fragment):
+        from updater.config_utils import validate_fragment_safety
+        with pytest.raises(ValueError, match="JSON object"):
+            validate_fragment_safety(fragment)
+
+    def test_validate_fragment_safety_handles_deep_nesting(self):
+        from updater.config_utils import validate_fragment_safety
+        deep = {}
+        node = deep
+        for _ in range(5000):
+            node["n"] = {}
+            node = node["n"]
+        validate_fragment_safety(deep)
+        node["ethernet"] = {}
+        with pytest.raises(ValueError, match="ethernet"):
+            validate_fragment_safety(deep)
+
+    def test_validate_fragment_safety_allows_other_wireless_keys(self):
+        from updater.config_utils import validate_fragment_safety
+        validate_fragment_safety({"wireless": {"country": "US"}})
+        validate_fragment_safety({"services": {"radios": {}, "zones": []}})
+
+    # Fragments in the shape that formDataToFragment (monitor.html) builds for
+    # each shipped template type. They must keep passing until the owner
+    # decides the suffix and Users rules in #310.
+    @pytest.mark.parametrize("fragment", [
+        {"services": {"snmp": {
+            "enabled": True,
+            "v2": {"ro": {"enabled": True, "community": "public"},
+                   "rw": {"enabled": False, "community": ""}},
+            "v3": {"ro": {"enabled": True, "user": "ro", "password": "secret123"},
+                   "rw": {"enabled": True, "user": "rw", "password": "secret456"}},
+            "use_hw_uptime": True,
+        }}},
+        {"system": {"auth": {"method": "radius", "radius": {
+            "auth_server1": "10.0.0.5", "auth_port": 1812, "auth_secret": "s3cret",
+        }}}},
+        {"system": {"users": [
+            {"username": "admin", "password": "$1$abcdefgh$0123456789012345678901",
+             "level": 15, "enabled": True, "first_login": False},
+            {"username": "ops", "password": "plain", "level": 1,
+             "enabled": True, "first_login": False},
+        ]}},
+        {"services": {"ntp": {"enabled": True, "servers": ["pool.ntp.org"]}}},
+        {"services": {"discovery": {"enabled": True, "lldp": True, "mndp": False,
+                                    "cdp": False, "lldp_server": True}}},
+        {"services": {"remote_syslog": {"enabled": True, "server": "10.0.0.9",
+                                        "port": 514, "proto": "udp"}}},
+        {"services": {"ping_watchdog": {"enabled": True, "interval": 300, "delay": 300,
+                                        "failure": 6, "addresses": ["1.1.1.1"]}}},
+    ], ids=["snmp", "radius", "users", "ntp", "discovery", "syslog", "watchdog"])
+    def test_shipped_template_fragments_still_pass(self, fragment):
+        from updater.config_utils import validate_fragment_safety
+        validate_fragment_safety(fragment)
+
+    def test_create_template_with_nested_protected_path_rejected(self, authed_client, mock_db):
+        resp = authed_client.post("/api/config-templates", json={
+            "name": "Nested radios",
+            "category": "custom",
+            "config_fragment": {"wireless": {"radios": {"wlan0": {"channel": 36}}}},
+        })
+        assert resp.status_code == 400
+        assert "wireless.radios" in resp.json()["detail"]
+
+    def test_create_users_template_still_accepted(self, authed_client, mock_db):
+        resp = authed_client.post("/api/config-templates", json={
+            "name": "Users",
+            "category": "users",
+            "config_fragment": {"system": {"users": [
+                {"username": "ops", "password": "plain", "level": 1,
+                 "enabled": True, "first_login": False},
+            ]}},
+        })
+        assert resp.status_code == 200, resp.text
+
     def test_validate_ping_watchdog_safety_direct(self):
         import pytest
         from updater.config_utils import (
