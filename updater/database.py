@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -67,15 +68,16 @@ def _backfill_firmware_sha256(db, firmware_dir: Path) -> None:
     Targets on-disk files whose registry row predates the integrity path (NULL
     hash) so they stop being treated as unverified. Mirrors the fetcher's on-disk
     hashing (1 MB blocks). Files no longer on disk are skipped. Idempotent: once a
-    file is hashed it no longer matches ``sha256 IS NULL``.
+    file is hashed it no longer matches ``sha256 IS NULL``. Each new hash also
+    gets an unverified firmware_artifacts row.
     """
     if not firmware_dir.exists():
         return
     rows = db.execute(
-        "SELECT filename FROM firmware_registry WHERE sha256 IS NULL"
+        "SELECT filename, source FROM firmware_registry WHERE sha256 IS NULL"
     ).fetchall()
     for row in rows:
-        filename = row[0]
+        filename, source = row[0], row[1]
         fpath = firmware_dir / filename
         if not fpath.is_file():
             continue
@@ -90,6 +92,7 @@ def _backfill_firmware_sha256(db, firmware_dir: Path) -> None:
             "UPDATE firmware_registry SET sha256 = ? WHERE filename = ? AND sha256 IS NULL",
             (h.hexdigest(), filename),
         )
+        _upsert_firmware_artifact(db, filename, h.hexdigest(), source or "legacy")
 
 
 def _migrate(db):
@@ -257,6 +260,13 @@ def _migrate(db):
         _backfill_firmware_sha256(db, Path(__file__).parent.parent / "firmware")
     except Exception:
         pass
+
+    # Give every fingerprinted registry file an artifact row (#301).
+    # Best-effort, like the sha256 backfill above.
+    try:
+        _backfill_firmware_artifacts(db)
+    except Exception:
+        logger.exception("firmware_artifacts backfill failed")
 
     # Remove stale license settings (billing removed in open-source conversion)
     _license_keys = (
@@ -1598,13 +1608,114 @@ def set_settings(settings: dict):
 
 
 # Firmware registry operations
-def register_firmware(filename: str, source: str = "manual", sha256: str = None):
+def _artifact_source(registry_source: str) -> str:
+    """Map a firmware_registry source to a firmware_artifacts source."""
+    return "fetched" if registry_source in ("auto", "freshdesk", "fetched") else "uploaded"
+
+
+def _upsert_firmware_artifact(
+    conn,
+    filename: str,
+    sha256: str,
+    source: str,
+    vendor_checksum: Optional[str] = None,
+    vendor_checksum_source: Optional[str] = None,
+    vendor_checksum_verified: bool = False,
+    uploaded_by: Optional[str] = None,
+) -> None:
+    """Write the artifact row for one set of firmware bytes.
+
+    The sha256 is the identity. The same bytes again reuse the existing row.
+    Identity columns never change. A later call can only fill an empty
+    vendor_checksum, uploaded_by, or verified_at. verified_at is set only
+    when the caller matched the vendor checksum, or when an admin uploaded
+    the file and uploaded_by records who. A vendor checksum that differs from
+    the stored one never sets verified_at.
+    """
+    from .firmware_policy import detect_platform, extract_version_from_filename
+
+    artifact_source = _artifact_source(source)
+    if not vendor_checksum_verified:
+        vendor_checksum = None
+        vendor_checksum_source = None
+    if artifact_source != "uploaded":
+        uploaded_by = None
+    verified_at = None
+    if vendor_checksum or uploaded_by:
+        verified_at = datetime.now(timezone.utc).isoformat()
+    release = _extract_release_date_from_filename(filename)
+    conn.execute(
+        "INSERT INTO firmware_artifacts (family, version, sha256, vendor_checksum,"
+        " vendor_checksum_source, source, uploaded_by, release_date, path, verified_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT(sha256) DO UPDATE SET"
+        " vendor_checksum = COALESCE(firmware_artifacts.vendor_checksum, excluded.vendor_checksum),"
+        " vendor_checksum_source = COALESCE(firmware_artifacts.vendor_checksum_source,"
+        " excluded.vendor_checksum_source),"
+        " uploaded_by = CASE WHEN firmware_artifacts.source = 'uploaded'"
+        " THEN COALESCE(firmware_artifacts.uploaded_by, excluded.uploaded_by)"
+        " ELSE firmware_artifacts.uploaded_by END,"
+        " verified_at = COALESCE(firmware_artifacts.verified_at,"
+        " CASE WHEN (excluded.vendor_checksum IS NOT NULL"
+        " AND COALESCE(firmware_artifacts.vendor_checksum, excluded.vendor_checksum)"
+        " = excluded.vendor_checksum)"
+        " OR (firmware_artifacts.source = 'uploaded' AND excluded.uploaded_by IS NOT NULL)"
+        " THEN excluded.verified_at END)",
+        (
+            detect_platform(filename),
+            extract_version_from_filename(filename) or None,
+            sha256.lower(),
+            vendor_checksum.lower() if vendor_checksum else None,
+            vendor_checksum_source,
+            artifact_source,
+            uploaded_by,
+            release.date().isoformat() if release else None,
+            Path(filename).name,
+            verified_at,
+        ),
+    )
+
+
+def _backfill_firmware_artifacts(db) -> None:
+    """Create artifact rows for registry entries that have a sha256.
+
+    Backfilled rows have no verified_at: the old registry did not record a
+    vendor checksum match or the uploader. Idempotent: existing rows are kept.
+    """
+    rows = db.execute(
+        "SELECT filename, source, sha256 FROM firmware_registry WHERE sha256 IS NOT NULL"
+    ).fetchall()
+    for filename, source, sha256 in rows:
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", sha256 or ""):
+            continue
+        if db.execute(
+            "SELECT 1 FROM firmware_artifacts WHERE sha256 = ?", (sha256.lower(),)
+        ).fetchone():
+            continue
+        _upsert_firmware_artifact(db, filename, sha256, source or "legacy")
+
+
+def register_firmware(
+    filename: str,
+    source: str = "manual",
+    sha256: str = None,
+    *,
+    vendor_checksum: Optional[str] = None,
+    vendor_checksum_source: Optional[str] = None,
+    vendor_checksum_verified: bool = False,
+    uploaded_by: Optional[str] = None,
+):
     """Register a firmware file with its addition timestamp.
 
     Updates the SHA256 when one is supplied (e.g. a manual re-upload). A call
     that omits the hash (an idempotent auto re-register) preserves the stored
     hash via COALESCE rather than nulling it — that's what keeps the pre-flash
     integrity check armed across the fetcher's 24h re-registration cycles.
+
+    When a sha256 is supplied, the same transaction writes the
+    firmware_artifacts row for those bytes (see _upsert_firmware_artifact).
+    Pass vendor_checksum_verified=True only after the file matched
+    vendor_checksum.
     """
     with get_db() as conn:
         conn.execute(
@@ -1614,6 +1725,35 @@ def register_firmware(filename: str, source: str = "manual", sha256: str = None)
             " added_at = excluded.added_at",
             (filename, datetime.now().isoformat(), source, sha256)
         )
+        if sha256:
+            _upsert_firmware_artifact(
+                conn,
+                filename,
+                sha256,
+                source,
+                vendor_checksum=vendor_checksum,
+                vendor_checksum_source=vendor_checksum_source,
+                vendor_checksum_verified=vendor_checksum_verified,
+                uploaded_by=uploaded_by,
+            )
+
+
+def get_firmware_artifact(sha256: str) -> Optional[dict]:
+    """Return the artifact row for a sha256, or None."""
+    if not sha256:
+        return None
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM firmware_artifacts WHERE sha256 = ?", (sha256.lower(),)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_firmware_artifacts() -> list[dict]:
+    """Return all artifact rows, newest first."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM firmware_artifacts ORDER BY id DESC").fetchall()
+        return [dict(row) for row in rows]
 
 
 def get_firmware_sha256(filename: str) -> str | None:

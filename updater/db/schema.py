@@ -230,6 +230,39 @@ def build_schema(db: sqlite3.Connection) -> None:
             sha256 TEXT DEFAULT NULL
         );
 
+        -- One immutable row per distinct firmware file (identified by sha256).
+        -- A file name can hold different bytes over time; each set of bytes
+        -- gets its own row. verified_at is set only when the vendor checksum
+        -- matched or an admin uploaded the file and uploaded_by records who.
+        -- Devices do not check firmware signatures, so this row is the guard.
+        -- path is the file name relative to the firmware directory.
+        CREATE TABLE IF NOT EXISTS firmware_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family TEXT NOT NULL,
+            version TEXT,
+            sha256 TEXT NOT NULL UNIQUE CHECK (length(sha256) = 64),
+            vendor_checksum TEXT,
+            vendor_checksum_source TEXT,
+            source TEXT NOT NULL CHECK (source IN ('fetched', 'uploaded')),
+            uploaded_by TEXT,
+            release_date TEXT,
+            path TEXT NOT NULL,
+            verified_at TEXT,
+            CHECK (
+                verified_at IS NULL
+                OR vendor_checksum IS NOT NULL
+                OR (source = 'uploaded' AND uploaded_by IS NOT NULL)
+            )
+        );
+
+        -- The identity columns of an artifact never change.
+        CREATE TRIGGER IF NOT EXISTS firmware_artifacts_immutable
+        BEFORE UPDATE OF family, version, sha256, source, path, release_date
+        ON firmware_artifacts
+        BEGIN
+            SELECT RAISE(ABORT, 'firmware_artifacts identity columns are immutable');
+        END;
+
         -- A device is "confirmed working" on a firmware version when it was
         -- updated to that version and passed its post-update smoke tests.
         -- This is the operator's manual canary: confirming one device of a
