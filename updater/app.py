@@ -4186,7 +4186,10 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
     firmware_sha256 = sha256_hash.hexdigest()
     logger.info(f"Firmware uploaded: {safe_filename} ({total_size:,} bytes, sha256={firmware_sha256})")
 
-    db.register_firmware(safe_filename, source="manual", sha256=firmware_sha256)
+    db.register_firmware(
+        safe_filename, source="manual", sha256=firmware_sha256,
+        uploaded_by=session["username"],
+    )
     db.log_audit(session["username"], "firmware.upload", "firmware", safe_filename,
                  f"{total_size:,} bytes", None)
 

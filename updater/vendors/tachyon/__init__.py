@@ -38,6 +38,9 @@ class TachyonDriver(VendorDriver):
     async def connect(self):
         return await self._client.login()
 
+    async def session_valid(self) -> str:
+        return await self._client.session_valid()
+
     async def get_device_info(self) -> VendorDeviceInfo:
         info = await self._client.get_device_info()
         return VendorDeviceInfo(

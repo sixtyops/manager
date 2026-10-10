@@ -124,11 +124,17 @@ All notable changes to this project are documented in this file.
 - Each firmware file now has one immutable `firmware_artifacts` row, keyed by
   its SHA256. Upload and fetch write the row. Startup backfills rows for
   registered files that already have a hash. A fetched file gets `verified_at`
-  only when it matched the vendor MD5. A file whose recorded vendor MD5 did
-  not match cannot be selected. When the vendor publishes an MD5 for a file
+  only when it matched the vendor MD5. An uploaded file records the user
+  who uploaded it in `uploaded_by` and gets `verified_at`. A file whose
+  recorded vendor MD5 did not match cannot be selected. When the vendor publishes an MD5 for a file
   that was never matched, the fetcher checks the file on disk again. A file
   that fails is deleted and downloaded again. Files with no published MD5
   stay selectable, as before.
+- The poller reuses a CPE session for at most ten minutes after login.
+  Each poll checks the token without a new login. Reading the cache does not
+  extend its lifetime. At ten minutes, the next probe uses current credentials.
+  An expired token also forces a new login. This reduces device audit events
+  while keeping credential checks bounded.
 - **Updates refuse to run if any device's firmware family is missing.** If a
   selected batch (or a scheduled wave) includes a device whose platform —
   TNA-303L or TNS-100 — has no matching firmware file chosen, the update now

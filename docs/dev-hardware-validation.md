@@ -75,6 +75,68 @@ commit in the pull request. Re-run bench proof after any change to the pull
 request head. This is a target merge requirement. This documentation change
 does not claim hardware proof.
 
+## Read-only bench wrapper
+
+**Key points:** The lead runs `scripts/bench/run-readonly-bench.sh` to get
+read-only bench evidence on an exact commit. The wrapper reads the private
+access file and never prints its values. The wrapper does not change device
+firmware or configuration.
+
+**Detail:**
+
+Run it from a trusted checkout of `main`, with the checkout under test as
+the current directory:
+
+```bash
+cd <checkout-under-test>
+SIXTYOPS_BENCH_ACCESS_FILE=<private-file> \
+  <main-checkout>/scripts/bench/run-readonly-bench.sh <full-commit-sha> \
+  [--mode integration|local-poll|session-proof] [--duration-min 35]
+```
+
+Guards, in this order:
+
+1. `HEAD` must equal the given 40-character SHA, and the working tree must be
+   clean. The wrapper checks this before it reads the access file.
+2. The commit must not change `tests/integration/`, `tests/conftest.py`,
+   `conftest.py`, or `pyproject.toml`.
+3. The access file must be owned by the current user, have mode `600` or
+   `400`, and be outside the repository. The wrapper parses its
+   `Key: value` lines in a subshell. It does not `source` the file. It
+   refuses the run if a value is shorter than 3 characters, because the
+   filter does not replace such short values.
+4. All output goes through `scripts/bench/redact.py`. The filter replaces
+   every value in the access file and every IPv4 address. The redacted log
+   and a summary go to `SIXTYOPS_BENCH_SUMMARY_DIR`. The default is
+   `sixtyops-bench` in `XDG_STATE_HOME`, or in `~/.local/state`.
+
+Access file keys: `Manager URL`, `Manager username`, `Manager password`,
+`TNS-100 IP`, `AP IP`, `303L SM IP`, `303X SM IP`, `Shared device username`,
+and `Shared device password`.
+
+Modes:
+
+- `integration` (default): runs the read-only integration tests against the
+  dev host Manager: `test_smoke.py`, `test_device_polling.py`,
+  `test_cpe_lifecycle.py`, `test_config_backup.py`, and
+  `test_system_surface.py`, without the device portal test. The Manager URL
+  must be the authorized dev host. This mode tests the deployed Manager, not
+  the checked-out commit.
+- `local-poll`: logs in to the AP with the commit's driver and reads device
+  information and the CPE list.
+- `session-proof`: for the CPE session reuse proof
+  ([PR 266](https://github.com/sixtyops/manager/pull/266)). It copies the
+  commit to a temporary directory with a fresh database, adds only the AP,
+  and runs the commit's poller for the set duration. The summary gives, per
+  CPE, the count of `login()` calls, the count of reused sessions, and the
+  time of each new login. It runs the poller only, not the web app, so it
+  does not download firmware, check for self-updates, or open the RADIUS
+  port.
+
+`tests/test_bench_wrapper.py` checks the SHA refusal and that the allowlist
+has no write test. The local modes run the commit's driver code with the
+device login. Review the commit before you run them.
+
 ## Private access records
 
 **Key points:** Keep the access manifest on the authorized private host. It

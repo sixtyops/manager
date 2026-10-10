@@ -43,9 +43,9 @@ class TestUpload:
         assert row["version"] == "1.15.0.55151"
         assert row["release_date"] == "2026-06-09"
         assert row["path"] == FW
-        # The upload route does not pass uploaded_by yet, so the row is not
-        # verified. That is the follow-up that needs app.py.
-        assert row["verified_at"] is None
+        # The upload route records the signed-in user as the uploader.
+        assert row["uploaded_by"] == "admin"
+        assert row["verified_at"]
 
 
 class TestRegister:

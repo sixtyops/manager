@@ -73,6 +73,20 @@ class VendorDriver(ABC):
         """
         ...
 
+    async def session_valid(self) -> str:
+        """Cheaply check whether an existing authenticated session is still
+        usable, *without* re-authenticating.
+
+        Used by the poller to reuse a cached client across poll cycles instead
+        of logging in every time (which spams the device's audit log). Returns
+        ``"ok"`` if the current session works, ``"expired"`` if it no longer
+        authenticates (caller should re-login), or ``"unreachable"`` on a
+        network failure. The default is conservative — drivers that don't
+        implement a lightweight probe report ``"expired"`` so the caller falls
+        back to a full ``connect()``.
+        """
+        return "expired"
+
     @abstractmethod
     async def get_device_info(self) -> VendorDeviceInfo:
         """Get device identity, model, and firmware version."""
