@@ -120,7 +120,8 @@ lead.
 **Detail:** Work in the assigned worktree and branch. Run the checks named in
 the brief. Do not grow the scope or start a wake job. Ask the lead about an
 unclear brief or new risk. Report the PR link, changes, check results, evidence,
-and open items. Stop when the assignment is done.
+and open items. Start the completion message with
+`DONE from <id> (<title>):`. Stop when the assignment is done.
 
 ### Lead stop condition
 
@@ -191,6 +192,10 @@ and evidence. A missing or late review record does not by itself require an
 automatic code rollback. The lead must review code and release impact and
 record a separate rollback decision. A later review does not change the
 pre-merge timeline.
+
+A denied or failed command may still run. Read live PR, repository, or device
+state before retrying a merge or write. Record the observed effect and the
+command result separately.
 
 Read all thread pages: zero unresolved threads. Verify all applicable CI on
 that head, duplicate/overlap sweep, acceptance and post-merge check/rollback.

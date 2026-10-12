@@ -176,6 +176,14 @@ review, a clean shared review, `agent:ready-for-signoff`, a matching
 threads, passing CI, no duplicate change, and all acceptance and device proof
 gates. The sign-off process sets the label. A new head needs new evidence.
 
+A command that reports a denial or failure may still have changed live state.
+Check the PR, repository, or device state before you retry it or report that it
+had no effect. Never repeat a merge or live write based only on the command
+result.
+
+Worker completion messages must identify their sender. Start them with
+`DONE from <id> (<title>):`.
+
 ### Branching Rules (MUST follow)
 
 1. **Never push directly to `main`**: all changes go through PRs.
