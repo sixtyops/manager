@@ -78,10 +78,11 @@ for complex code. Luna and Sonnet (`claude-sonnet-5-5`) for easier code.
 Haiku (`claude-haiku-4-5`) for reading large files. Do not give implementation
 work to an architect; give its design to a coding worker.
 
-Use epic413's model policy: GPT-6.1 Sol medium for safety builds and planning;
-GPT-6 Luna high for bounded low-risk builds; GPT-6.1 Sol medium for reviews,
-high for safety reviews. Verify installed provider/model/thinking IDs before
-sending work. Reuse suitable workers and preserve active jobs. Give each worker
+Use epic413's model policy. Use GPT-6.1 Sol medium for safety builds, planning,
+and reviews. Use Sol high for safety reviews. Use GPT-6 Luna high for small or
+medium coding tasks outside the safety path. Use xhigh for a harder task.
+Verify installed provider/model/thinking IDs before sending work. Reuse suitable
+workers and preserve active jobs. Give each worker
 a bounded task with evidence. Assign one writer per branch. Honor
 the repository skill guidance; use factual copywriter/STE, and frontend-design
 plus UI guides when UI is in scope.
