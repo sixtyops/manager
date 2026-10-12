@@ -68,7 +68,7 @@ GitHub branch protection is not repo-tracked. After merging the workflow, config
 
 **Key points:** Unit tests do not prove device behavior. Every engine or
 driver change needs real Tachyon bench proof on the exact pull request head
-before merge. Only Isaac names bench devices.
+before merge. Only the owner names bench devices.
 
 **Detail:** Record the tested models, firmware, recovery evidence, and exact
 commit in the pull request. Re-run bench proof after any change to the pull

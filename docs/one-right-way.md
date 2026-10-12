@@ -2,7 +2,7 @@
 
 **Key points:** Manager owns update safety. The operator chooses when and how
 fast. "Keep my fleet current" is the primary action. This is the target contract,
-not a claim about the current engine. Isaac set this direction on 2026-09-30.
+not a claim about the current engine. The owner set this direction on 2026-09-30.
 
 ## Built-in behavior
 
@@ -50,8 +50,8 @@ does not interrupt. Save the risk statement, gate inputs and results, device
 results, notifications, and operator actions. Failure delivery must survive restart.
 
 Every engine or driver change needs real Tachyon bench proof on the exact PR
-head before merge. Unit tests do not prove device behavior. Only Isaac names
-bench devices. The repository lead agent may merge under Isaac’s 2026-10-02
+head before merge. Unit tests do not prove device behavior. Only the owner names
+bench devices. The repository lead agent may merge under the owner's 2026-10-02
 delegation after independent review, current-head CI and sign-off, and any
 required exact-head bench proof pass. Worker agents do not merge. This
 delegation does not grant authority to write production devices or publish

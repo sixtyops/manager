@@ -6,10 +6,13 @@ Always use Simplified Technical English (STE). Put the result first. Use short
 sentences, active voice, and one idea per sentence. Use one term for each
 concept. In design docs, start each section with **Key points**, then **Detail**.
 
-For every reply to Isaac and every new PR title, body, comment, or review, use
+For every reply to the owner and every new PR title, body, comment, or review, use
 the installed `ai-copywriter` skill when it is available. Draft and audit the
 text with that skill first. Then check it against STE. Keep technical text
 factual and neutral. If the skill is not available, say so and use STE.
+Do not use the owner's personal name in replies, code, comments, documentation,
+commit messages, or PR text. Use "the owner" when the role matters. Functional
+account links and legal attribution can retain their required identifiers.
 
 ## Single source of agent instructions
 
@@ -77,23 +80,23 @@ Ongoing ownership includes feature rearchitecture, bug fixes, edge cases,
 security, and resilience. Proactively find, track, prioritize, and resolve gaps
 in these areas. Add regression checks where they prove the fix. Keep changes
 small and aligned with the product goal; escalate major design and risk decisions.
-Isaac explicitly delegated these duties on 2026-10-02. This repository-specific
+The owner explicitly delegated these duties on 2026-10-02. This repository-specific
 decision supersedes older human-only merge rules only for PRs created by the
 lead or its delegated agents. This is standing merge approval for the Manager
 lead, within the gates in this file and the lead operations SOP. The lead never
 merges an outside contributor's PR. Worker agents hand changes to review; they
 do not merge their own work.
 
-When Isaac says "you are the lead" for a feature, issue, or epic, the agent owns
+When the owner says "you are the lead" for a feature, issue, or epic, the agent owns
 that goal through completion or until every remaining step needs an operator.
 Without that assignment, an agent is a follower and completes one bounded task
 for its lead. If ownership is unclear or two leads claim the same work, hold the
 overlapping task and report it.
 
-The lead normally delegates implementation, investigation, testing, and
-detailed PR reviews. It may make a small, bounded change itself when assigning
-a worker would cost more than the change. The lead must still obtain independent
-review and must not act as the designated reviewer for its own change.
+The lead delegates implementation, investigation, testing, and detailed PR
+reviews. The lead does not perform these tasks, even for a small change. The
+lead must obtain independent review and must not act as the designated reviewer
+for work from its own team.
 The lead keeps task intent, repository instructions and SOP knowledge,
 orchestration, coordination, decisions, validation gates, and authorized merge
 and release ownership. Give each worker a bounded task and the relevant
@@ -101,11 +104,13 @@ instruction and SOP paths. Workers must read those instructions,
 return concise evidence and results, and keep detailed logs outside the lead's
 context. Reuse active agents and do not duplicate jobs. Preserve loop locks,
 budgets, the three-work-item limit, and review gates. If no subagent capacity is
-available for work outside the small-change exception, leave it queued.
+available, leave it queued.
 Delegation does not bypass permission denials or operational approval and SOP
 requirements. An agent acting as a delegated worker completes its bounded
 assignment without recursively delegating unless the task explicitly asks it
 to do so.
+Run delegated Paseo workers in `auto` permission mode with safety review on.
+Do not send direct Signal messages from lead or worker sessions.
 
 - **Choose the model by the job**, when the model is installed and supported:
   Fable (`claude-fable-5-1`) and Astra (`gpt-6-astra`) for architecture,
@@ -123,7 +128,7 @@ to do so.
 - Keep one issue per PR. Mark small, dependency-ready work `agent:ready`.
   Finish active fixes first and keep at most three active build or fix PRs.
   Use GPT-6.1 Sol for safety work and review. Luna may do bounded low-risk work.
-  The fast-mode grant ended on 2026-10-03. Use normal mode unless Isaac
+  The fast-mode grant ended on 2026-10-03. Use normal mode unless the owner
   records a current extension.
 - Before each merge, verify the current head, independent review, sign-off
   packet, zero unresolved threads, passing applicable checks, and duplicate
@@ -138,9 +143,13 @@ to do so.
   Stable releases and production-device changes are not covered by this grant.
 - The lead wakes hourly through its Paseo heartbeat and advances eligible
   work without waiting for another operator prompt. Reuse the existing
-  pickup, review, and fix loops with their locks and budgets. Ask Isaac for
-  major product or safety decisions, missing physical access, and named lab
-  hardware. Continue independent work when hardware proof is blocked.
+  pickup, review, and fix loops with their locks and budgets. Check pending
+  worker permission requests at each wake; do not bypass safety review. Ask
+  the owner for major product or safety decisions, missing physical access, and
+  named lab hardware. First check the authorized private lab records and the
+  current hardware SOP. Do not ask again for access already recorded there.
+  Keep private values out of this repository. Continue independent work when
+  hardware proof is blocked.
 - Keep the lead's plan and slice owners current in durable lead status. Do not
   stop because one PR waits for review when other safe work can proceed. Stop
   only when the goal is complete or every remaining step needs an operator.
@@ -412,12 +421,12 @@ Technical copy stays factual and neutral. Marketing defaults do not override
 operator clarity or require extra questions when the task context is clear.
 If the skill is unavailable, apply the rules in this section directly and
 report the fallback. Do not claim that an unread or missing skill was loaded.
-Run its draft and audit loop for every reply to Isaac and every new PR text.
+Run its draft and audit loop for every reply to the owner and every new PR text.
 Then check each result against the Simplified Technical English rules above.
 
 The rule covers:
 
-- Replies to Isaac
+- Replies to the owner
 - Issue and PR titles and bodies
 - PR comments, issue comments, and review-thread replies
 - Commit messages (they show on GitHub)

@@ -5,7 +5,7 @@ Resume from fresh evidence, not old agent names or a previous green check.
 
 **Detail:** [AGENTS.md](../AGENTS.md#repository-lead-authority-2026-10-02) owns
 repository authority and rules. This procedure explains how to apply them.
-Latest user intent takes precedence. Isaac grants the Manager lead merge
+Latest user intent takes precedence. The owner grants the Manager lead merge
 approval for eligible PRs created by the lead or its delegated workers. Workers
 hand work to review; they do not merge or release. Shared hub procedures do not
 extend Manager authority.
@@ -29,6 +29,9 @@ gives no exemption from locks or pacing gates.
 2. Read durable lead status. Verify every active task against live agent/job,
    branch/head, queue, lock, budget, cooldown, review and fix-round evidence.
    An idle daemon does not prove that an event-started job or worker is idle.
+   Check `paseo permit ls` for pending worker requests at each wake. A request
+   may not wake the lead. Allow only a task-authorized action, then read back
+   the result. Do not bypass safety review.
    Keep the goal, ordered slices, owners, operator waits, and next action current.
    For each open PR, check its current head, CI, review threads, labels, and
    sign-off packet. Give findings to a worker. Reply `addressed in <sha>` after
@@ -56,14 +59,13 @@ parked website PR merely because CI or review passed. Record specific holds in
 live issues and durable status, rather than hardcoding their IDs into this SOP.
 Use proven management software and existing architecture before proposing a
 new tool or design. The lead owns the goal, directs the work, and tracks it
-through completion or until every remaining step needs an operator. It normally
-delegates implementation, investigation, testing, and detailed PR reviews. It
-may make a small, bounded change itself when assigning a worker would cost
-more than the change. The lead must still get independent review and cannot
-serve as the designated reviewer for its own change. If no capacity exists for
-work outside this exception, leave it queued.
+through completion or until every remaining step needs an operator. It
+delegates implementation, investigation, testing, and detailed PR reviews.
+The lead does not perform these tasks, even for a small change. It must get
+independent review and cannot serve as the designated reviewer for work from
+its own team. If no worker capacity exists, leave the work queued.
 
-Isaac names an agent as lead for a feature, issue, or epic. Every other agent
+The owner names an agent as lead for a feature, issue, or epic. Every other agent
 is a follower: it completes one bounded assignment, reports evidence and any
 blocker to its lead, and stops. A follower does not create a wake job or
 delegate unless its brief explicitly asks it to. Hold overlapping work if two
@@ -83,9 +85,14 @@ sending work. Reuse suitable workers and preserve active jobs. Give each worker
 a bounded task with evidence. Assign one writer per branch. Honor
 the repository skill guidance; use factual copywriter/STE, and frontend-design
 plus UI guides when UI is in scope.
+Run delegated Paseo workers in `auto` permission mode with safety review on.
+Do not send direct Signal messages from lead or worker sessions. Check the
+authorized private lab records and [hardware SOP](dev-hardware-validation.md)
+before asking the owner for access already provided. Keep private values out of
+the public repository.
 Read the installed `ai-copywriter` skill before writing or changing PR titles,
 descriptions, comments or reviews. Run its draft and audit loop for every reply
-to Isaac and every new PR text. Use it for documentation, UI copy, commit
+to the owner and every new PR text. Use it for documentation, UI copy, commit
 messages and code comments. Apply the repository's Simplified Technical English
 rules. If the skill is unavailable, follow [AGENTS.md Writing and style](../AGENTS.md#writing-and-style)
 and report that limit. Before handoff or merge, check changed text against both
@@ -314,9 +321,9 @@ Paste into a fresh lead session:
 > safety policy. Verify live agents/jobs, all queue pages, locks/budgets/expiry,
 > worktrees and open PR overlap. Discover IDs; reuse workers. Finish fixes first,
 > WIP3, system functionality before deferred website work. Delegate bounded
-> slices with skills and proof gates. The lead may implement a small bounded
-> change only when assigning a worker would cost more, and still needs an
-> independent review. Preserve parked/denied work. Ask only about unresolved
+> slices with skills and proof gates. The lead does not implement, investigate,
+> test, or review detailed diffs. Require independent review. Preserve
+> parked/denied work. Ask only about unresolved
 > intent or material decisions. Require exact-head independent/shared review,
 > packet, checks, zero threads, duplicates and bench proof where required. No production,
 > stable release, denial bypass or resets. Append/read back claim and result,
