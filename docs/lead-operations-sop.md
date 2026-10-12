@@ -196,9 +196,9 @@ posted after merge is retrospective and cannot meet the pre-merge gate.
 
 If a merge occurs before the review proof is complete, preserve the event times
 and evidence. A missing or late review record does not by itself require an
-automatic code rollback. The lead must review code and release impact and
-record a separate rollback decision. A later review does not change the
-pre-merge timeline.
+automatic code rollback. The lead delegates code and release-impact review,
+evaluates the returned evidence, and records a separate rollback decision. A
+later review does not change the pre-merge timeline.
 
 A denied or failed command may still run. Read live PR, repository, or device
 state before retrying a merge or write. Record the observed effect and the
