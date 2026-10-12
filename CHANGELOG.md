@@ -25,6 +25,8 @@ All notable changes to this project are documented in this file.
   remain unchanged.
 
 ### Fixed
+- The license and policy pages now identify SixtyOps as the licensor and
+  service provider.
 - After existing middleware and role checks, config-template create and update
   routes reject non-object request bodies and decoded fragments with HTTP 400
   before template writes. Valid objects and JSON-encoded objects keep their
