@@ -34,6 +34,13 @@ All notable changes to this project are documented in this file.
   both hashes and writes a `config.rollback.unverified` audit entry. A
   verified rollback returns `rollback_verified: true` and the device hash.
   Closes #37 and #39.
+- Config-template safety checks now find protected paths at any depth.
+  Save, preview, push, rollout resume, and auto-enforce reject any fragment
+  that writes `network`, `ethernet`, `wireless.radios`, or `wireless.zones`
+  anywhere in the tree, including inside list items. They also reject a
+  `wireless` key with a non-object value and any non-object fragment.
+  Shipped SNMP, RADIUS, Users, NTP, discovery, syslog, and watchdog templates
+  still pass. Part of #310.
 - After existing middleware and role checks, config-template create and update
   routes reject non-object request bodies and decoded fragments with HTTP 400
   before template writes. Valid objects and JSON-encoded objects keep their
@@ -130,6 +137,11 @@ All notable changes to this project are documented in this file.
   a reporting or monitoring service, without exposing the token value.
 
 ### Changed
+- The poller reuses a CPE session for at most ten minutes after login.
+  Each poll checks the token without a new login. Reading the cache does not
+  extend its lifetime. At ten minutes, the next probe uses current credentials.
+  An expired token also forces a new login. This reduces device audit events
+  while keeping credential checks bounded.
 - **Updates refuse to run if any device's firmware family is missing.** If a
   selected batch (or a scheduled wave) includes a device whose platform —
   TNA-303L or TNS-100 — has no matching firmware file chosen, the update now
