@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 from zoneinfo import ZoneInfo
 
-from ..database import _parse_freeze_boundary
+from ..database import PHASE_ORDER, _parse_freeze_boundary
 
 # Do not start a wave with this many minutes or less left in the window.
 # Same value as scheduler.SCHEDULE_END_BUFFER_MINUTES.
@@ -189,6 +189,7 @@ class WaveStartContext:
     except `ntp_drift_seconds`, where None means NTP is unreachable.
 
     - `rollout`: rollout row with `status`, `phase`, `last_phase_window`.
+      `phase` must be a value in `database.PHASE_ORDER`.
       `last_phase_window` is None or a key from `window_instance_key`.
     - `freeze_windows`: freeze rows with `start_date`, `end_date`, `enabled`.
     - `weather`: True when the weather guard passes, False when it blocks.
@@ -215,7 +216,11 @@ def _gate_status(ctx: WaveStartContext) -> Decision:
     if not isinstance(ctx.rollout, dict):
         return _block("status_None")
     status = ctx.rollout.get("status")
-    return OK if status == "active" else _block(f"status_{status}")
+    if status != "active":
+        return _block(f"status_{status}")
+    # A missing or unknown phase cannot be checked for the Firmware Hold.
+    phase = ctx.rollout.get("phase")
+    return OK if phase in PHASE_ORDER else _block(f"phase_{phase}")
 
 
 def _gate_job_in_flight(ctx: WaveStartContext) -> Decision:
