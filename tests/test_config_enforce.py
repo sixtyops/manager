@@ -1399,6 +1399,75 @@ class TestFetchConfigClassification:
         assert "connection refused" in err
 
 
+class TestSessionValid:
+    """`TachyonClient.session_valid` verifies a cached token cheaply, without a
+    /login POST (no audit-log event), so the poller can reuse sessions."""
+
+    @pytest.mark.asyncio
+    async def test_no_token_is_expired(self):
+        from updater.vendors.tachyon.client import TachyonClient
+        client = TachyonClient("10.0.0.1", "root", "pass")
+        # No login yet -> no token -> nothing to verify.
+        assert await client.session_valid() == "expired"
+
+    @pytest.mark.asyncio
+    async def test_valid_token_is_ok(self):
+        from updater.vendors.tachyon.client import TachyonClient
+        client = TachyonClient("10.0.0.1", "root", "pass")
+        client._token = "abc"
+        with patch.object(client, "_curl",
+                          new=AsyncMock(return_value=(200, '{"system":{"model":"x"}}'))):
+            assert await client.session_valid() == "ok"
+
+    @pytest.mark.asyncio
+    async def test_rejected_token_is_expired(self):
+        from updater.vendors.tachyon.client import TachyonClient
+        client = TachyonClient("10.0.0.1", "root", "pass")
+        client._token = "stale"
+        with patch.object(client, "_curl",
+                          new=AsyncMock(return_value=(401, "auth failed"))):
+            assert await client.session_valid() == "expired"
+
+    @pytest.mark.asyncio
+    async def test_curl_failure_is_unreachable(self):
+        from updater.vendors.tachyon.client import TachyonClient
+        client = TachyonClient("10.0.0.1", "root", "pass")
+        client._token = "abc"
+        with patch.object(client, "_curl",
+                          new=AsyncMock(side_effect=RuntimeError("curl: timed out"))):
+            assert await client.session_valid() == "unreachable"
+
+    @pytest.mark.asyncio
+    async def test_http_200_with_auth_failure_body_is_expired(self):
+        # Some firmware returns HTTP 200 with an auth-failure payload for a stale
+        # token (login() handles the same case). A bare 200 must not be trusted.
+        from updater.vendors.tachyon.client import TachyonClient
+        client = TachyonClient("10.0.0.1", "root", "pass")
+        client._token = "stale"
+        body = ('{"statusCode":401,"error":{"details":"Authorization Failed",'
+                '"path":"/cgi.lua/status"}}')
+        with patch.object(client, "_curl", new=AsyncMock(return_value=(200, body))):
+            assert await client.session_valid() == "expired"
+
+    @pytest.mark.asyncio
+    async def test_http_200_without_system_payload_is_expired(self):
+        from updater.vendors.tachyon.client import TachyonClient
+        client = TachyonClient("10.0.0.1", "root", "pass")
+        client._token = "abc"
+        with patch.object(client, "_curl",
+                          new=AsyncMock(return_value=(200, '{"other":1}'))):
+            assert await client.session_valid() == "expired"
+
+    @pytest.mark.asyncio
+    async def test_http_200_unparseable_body_is_expired(self):
+        from updater.vendors.tachyon.client import TachyonClient
+        client = TachyonClient("10.0.0.1", "root", "pass")
+        client._token = "abc"
+        with patch.object(client, "_curl",
+                          new=AsyncMock(return_value=(200, "not-json"))):
+            assert await client.session_valid() == "expired"
+
+
 class TestPollerWritesPollStatus:
     """Issue #52: `_fetch_and_store_config` should persist the per-device
     poll outcome so the dashboard can surface failures with a reason."""
