@@ -25,6 +25,15 @@ All notable changes to this project are documented in this file.
   remain unchanged.
 
 ### Fixed
+- Config templates now check credential keys at any depth. A key that ends
+  in `password`, `secret`, or `key` accepts only a non-empty string. An empty
+  string means "no change": the manager removes that leaf before the merge,
+  so the device keeps its value. Null, an object, a list, a number, or
+  true/false at such a key returns a 400 error that names the path. Before
+  this fix, the merge could write null over a device credential. SNMP
+  templates with v3 off, RADIUS templates, and Users templates still save.
+  Stored templates with a bad value now fail preview, push, and rollout with
+  the same error.
 - Config-template safety checks now find protected paths at any depth.
   Save, preview, push, rollout resume, and auto-enforce reject any fragment
   that writes `network`, `ethernet`, `wireless.radios`, or `wireless.zones`
