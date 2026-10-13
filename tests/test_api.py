@@ -1737,7 +1737,8 @@ class TestProtectedConfigKeys:
         validate_fragment_safety({"services": {"radios": {}, "zones": []}})
 
     # Fragments in the shape that formDataToFragment (monitor.html) builds for
-    # each shipped template type. They must keep passing (#310).
+    # each shipped template type. They must keep passing until the owner
+    # decides the Users rule in #310.
     @pytest.mark.parametrize("fragment", [
         {"services": {"snmp": {
             "enabled": True,
