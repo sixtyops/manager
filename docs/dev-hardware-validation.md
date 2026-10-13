@@ -60,6 +60,17 @@ pytest -m "integration and dev_sso" -v
 - On `pull_request`, `Dev Hardware Validation` soft-skips with a warning if the live-dev inputs are not configured yet.
 - On `workflow_dispatch` and `schedule`, missing live-dev inputs are still treated as hard failures.
 
+## UI checks
+
+**Key points:** Three test files check the UI without a browser. They run in the
+normal `pytest -v` unit lane. There is no browser harness.
+
+**Detail:**
+
+- `tests/test_ui_routes.py`: each `/api/` request in `monitor.html` matches an OpenAPI route and method.
+- `tests/test_ui_render.py`: `/` and `/login` render with seeded data, show no template errors, list the expected panel ids, and every `/static/` asset resolves.
+- `tests/test_ui_js.py`: `static/js/*.js` and the inline scripts parse with `node --check`. The tests skip with a clear reason when `node` is not installed.
+
 ## Branch Protection
 
 GitHub branch protection is not repo-tracked. After merging the workflow, configure the `Dev Hardware Validation` check as a required status check in repository settings.

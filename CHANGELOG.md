@@ -27,6 +27,13 @@ All notable changes to this project are documented in this file.
 ### Fixed
 - The license and policy pages now identify SixtyOps as the licensor and
   service provider.
+- Config-template safety checks now find protected paths at any depth.
+  Save, preview, push, rollout resume, and auto-enforce reject any fragment
+  that writes `network`, `ethernet`, `wireless.radios`, or `wireless.zones`
+  anywhere in the tree, including inside list items. They also reject a
+  `wireless` key with a non-object value and any non-object fragment.
+  Shipped SNMP, RADIUS, Users, NTP, discovery, syslog, and watchdog templates
+  still pass. Part of #310.
 - After existing middleware and role checks, config-template create and update
   routes reject non-object request bodies and decoded fragments with HTTP 400
   before template writes. Valid objects and JSON-encoded objects keep their
