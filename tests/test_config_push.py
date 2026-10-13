@@ -487,6 +487,66 @@ class TestRollbackLockAndVerify:
         assert instance.apply_config.await_count == 2  # dry-run + apply, once
         assert "10.0.0.5" not in app_module._config_pushing_ips
 
+    @pytest.mark.asyncio
+    async def test_rollback_refused_during_config_push(self, rollback_db):
+        """A config push holds the lock on one IP. A rollback on that IP gets
+        HTTP 409 and does not contact the device."""
+        import asyncio
+        from unittest.mock import MagicMock
+        from fastapi import HTTPException
+        from updater import app as app_module
+
+        gate = asyncio.Event()
+        entered = asyncio.Event()
+        clients = []
+
+        async def slow_get_config():
+            entered.set()
+            await gate.wait()
+            return {"v": "new"}
+
+        def fake_client(ip, username, password):
+            instance = MagicMock()
+            instance.login = AsyncMock(return_value=True)
+            instance.get_config = AsyncMock(side_effect=slow_get_config)
+            instance.apply_config = AsyncMock(return_value={"success": True})
+            instance.get_hardware_id = MagicMock(return_value="tn-110")
+            clients.append(instance)
+            return instance
+
+        templates = [{"id": 1, "name": "T", "fragment": {"v": "pushed"}, "device_types": None}]
+        devices = [{"ip": "10.0.0.5", "role": "ap", "username": "admin",
+                    "password": "pass", "model": None}]
+        job_info = {"cancelled": False, "success": 0, "failed": 0, "skipped": 0,
+                    "total": 1, "done": False}
+
+        request = MagicMock()
+        request.json = AsyncMock(return_value={})
+        request.headers = {}
+        request.client = None
+        session = {"username": "op"}
+
+        with patch("updater.app.TachyonClient", side_effect=fake_client), \
+                patch("updater.app.broadcast", new=AsyncMock()):
+            push = asyncio.create_task(
+                app_module._run_config_push("push-job", devices, templates, job_info)
+            )
+            await entered.wait()
+            assert "10.0.0.5" in app_module._config_pushing_ips
+            with pytest.raises(HTTPException) as exc:
+                await app_module.rollback_device_config("10.0.0.5", request, session, None)
+            assert exc.value.status_code == 409
+            assert exc.value.detail["code"] == "config_change_in_progress"
+            # Fail closed: the rollback made no client and kept the push lock.
+            assert len(clients) == 1
+            assert "10.0.0.5" in app_module._config_pushing_ips
+            gate.set()
+            await push
+
+        assert job_info["success"] == 1
+        assert clients[0].apply_config.await_count == 2  # push dry-run + apply only
+        assert "10.0.0.5" not in app_module._config_pushing_ips
+
 
 class TestConfigPushRolloutAdvance:
     """`/api/config-push/rollout/{id}/advance` should walk past any empty
