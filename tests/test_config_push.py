@@ -437,6 +437,22 @@ class TestRollbackLockAndVerify:
         finally:
             app_module._config_pushing_ips.discard("10.0.0.5")
 
+    @staticmethod
+    async def _drain(task, gate):
+        """Release the gate and finish the task, so that a failed assertion
+        does not leave the task blocked while it holds the IP lock."""
+        import asyncio
+        gate.set()
+        if task.done():
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=5)
+        except asyncio.TimeoutError:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        except (Exception, asyncio.CancelledError):
+            pass  # The test body reports the failure.
+
     @pytest.mark.asyncio
     async def test_concurrent_rollbacks_on_one_ip_serialize(self, rollback_db):
         """Two rollbacks race on one IP: one applies, the other is refused
@@ -474,13 +490,19 @@ class TestRollbackLockAndVerify:
             first = asyncio.create_task(
                 app_module.rollback_device_config("10.0.0.5", request, session, None)
             )
-            await entered.wait()
-            with pytest.raises(HTTPException) as exc:
-                await app_module.rollback_device_config("10.0.0.5", request, session, None)
-            assert exc.value.status_code == 409
-            assert exc.value.detail["code"] == "config_change_in_progress"
-            gate.set()
-            result = await first
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=5)
+                with pytest.raises(HTTPException) as exc:
+                    await asyncio.wait_for(
+                        app_module.rollback_device_config("10.0.0.5", request, session, None),
+                        timeout=5,
+                    )
+                assert exc.value.status_code == 409
+                assert exc.value.detail["code"] == "config_change_in_progress"
+                gate.set()
+                result = await asyncio.wait_for(first, timeout=5)
+            finally:
+                await self._drain(first, gate)
 
         assert result["rollback_verified"] is True
         assert instance.login.await_count == 1
@@ -488,28 +510,30 @@ class TestRollbackLockAndVerify:
         assert "10.0.0.5" not in app_module._config_pushing_ips
 
     @pytest.mark.asyncio
-    async def test_rollback_refused_during_config_push(self, rollback_db):
-        """A config push holds the lock on one IP. A rollback on that IP gets
-        HTTP 409 and does not contact the device."""
+    async def test_rollback_refused_during_config_push_write(self, rollback_db):
+        """A config push holds the lock on one IP during the device write.
+        A rollback on that IP gets HTTP 409 and does not contact the device."""
         import asyncio
         from unittest.mock import MagicMock
         from fastapi import HTTPException
         from updater import app as app_module
 
         gate = asyncio.Event()
-        entered = asyncio.Event()
+        writing = asyncio.Event()
         clients = []
 
-        async def slow_get_config():
-            entered.set()
-            await gate.wait()
-            return {"v": "new"}
+        async def slow_apply(config, dry_run=False):
+            # The dry run returns at once. The real write pauses at the gate.
+            if not dry_run:
+                writing.set()
+                await gate.wait()
+            return {"success": True}
 
         def fake_client(ip, username, password):
             instance = MagicMock()
             instance.login = AsyncMock(return_value=True)
-            instance.get_config = AsyncMock(side_effect=slow_get_config)
-            instance.apply_config = AsyncMock(return_value={"success": True})
+            instance.get_config = AsyncMock(return_value={"v": "new"})
+            instance.apply_config = AsyncMock(side_effect=slow_apply)
             instance.get_hardware_id = MagicMock(return_value="tn-110")
             clients.append(instance)
             return instance
@@ -531,20 +555,32 @@ class TestRollbackLockAndVerify:
             push = asyncio.create_task(
                 app_module._run_config_push("push-job", devices, templates, job_info)
             )
-            await entered.wait()
-            assert "10.0.0.5" in app_module._config_pushing_ips
-            with pytest.raises(HTTPException) as exc:
-                await app_module.rollback_device_config("10.0.0.5", request, session, None)
-            assert exc.value.status_code == 409
-            assert exc.value.detail["code"] == "config_change_in_progress"
-            # Fail closed: the rollback made no client and kept the push lock.
-            assert len(clients) == 1
-            assert "10.0.0.5" in app_module._config_pushing_ips
-            gate.set()
-            await push
+            try:
+                await asyncio.wait_for(writing.wait(), timeout=5)
+                push_client = clients[0]
+                assert push_client.apply_config.await_count == 2  # dry run + paused write
+                assert "10.0.0.5" in app_module._config_pushing_ips
+                with pytest.raises(HTTPException) as exc:
+                    await asyncio.wait_for(
+                        app_module.rollback_device_config("10.0.0.5", request, session, None),
+                        timeout=5,
+                    )
+                assert exc.value.status_code == 409
+                assert exc.value.detail["code"] == "config_change_in_progress"
+                # Fail closed: the rollback made no client, made no device
+                # call, and kept the push lock.
+                assert len(clients) == 1
+                assert push_client.login.await_count == 1
+                assert push_client.get_config.await_count == 1
+                assert push_client.apply_config.await_count == 2
+                assert "10.0.0.5" in app_module._config_pushing_ips
+                gate.set()
+                await asyncio.wait_for(push, timeout=5)
+            finally:
+                await self._drain(push, gate)
 
         assert job_info["success"] == 1
-        assert clients[0].apply_config.await_count == 2  # push dry-run + apply only
+        assert clients[0].apply_config.await_count == 2  # push dry run + write only
         assert "10.0.0.5" not in app_module._config_pushing_ips
 
 
