@@ -97,6 +97,7 @@ def _backfill_firmware_sha256(db, firmware_dir: Path) -> None:
 
 def _migrate(db):
     """Run schema migrations."""
+    _migrate_firmware_artifact_attestation(db)
     # Check if auth_status column exists on cpe_cache
     columns = [row[1] for row in db.execute("PRAGMA table_info(cpe_cache)").fetchall()]
     if "auth_status" not in columns:
@@ -1608,6 +1609,76 @@ def set_settings(settings: dict):
 
 
 # Firmware registry operations
+def _migrate_firmware_artifact_attestation(conn) -> None:
+    """Permit admin attestation while preserving a fetched artifact's source.
+
+    Preserve old upload marks as unproven history. Current user roles do not
+    prove past admin status. Keep vendor verification and artifact identity.
+    Upgrade the pre-release CHECK, indexes, trigger, and ID sequence atomically.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'firmware_artifacts'"
+    ).fetchone()
+    if not row:
+        return
+    column_names = [column[1] for column in conn.execute("PRAGMA table_info(firmware_artifacts)")]
+    columns = set(column_names)
+    if {"historical_uploaded_by", "historical_verified_at"}.issubset(columns):
+        return
+    if columns & {"historical_uploaded_by", "historical_verified_at"}:
+        raise sqlite3.IntegrityError("Incomplete firmware attestation migration")
+    old_check = "OR (source = 'uploaded' AND uploaded_by IS NOT NULL)"
+    schema = row[0].replace(old_check, "OR uploaded_by IS NOT NULL")
+    schema = schema.replace(
+        "verified_at TEXT,",
+        "verified_at TEXT, historical_uploaded_by TEXT, historical_verified_at TEXT,",
+        1,
+    )
+    schema = re.sub(
+        r'^CREATE TABLE (?:"firmware_artifacts"|firmware_artifacts)(?=\s*\()',
+        "CREATE TABLE firmware_artifacts_upgrade", schema, count=1,
+    )
+    objects = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE tbl_name = 'firmware_artifacts'"
+        " AND type IN ('index', 'trigger') AND sql IS NOT NULL"
+    ).fetchall()
+    sequence = conn.execute(
+        "SELECT seq FROM sqlite_sequence WHERE name = 'firmware_artifacts'"
+    ).fetchone()
+    conn.execute("SAVEPOINT firmware_artifact_attestation")
+    try:
+        conn.execute(schema)
+        fields = ", ".join('"' + name.replace('"', '""') + '"' for name in column_names)
+        conn.execute(
+            f"INSERT INTO firmware_artifacts_upgrade ({fields}) SELECT {fields} FROM firmware_artifacts"
+        )
+        historical_count = conn.execute(
+            "UPDATE firmware_artifacts_upgrade SET historical_uploaded_by = uploaded_by,"
+            " historical_verified_at = verified_at, uploaded_by = NULL,"
+            " verified_at = CASE WHEN vendor_checksum IS NOT NULL THEN verified_at END"
+            " WHERE uploaded_by IS NOT NULL"
+        ).rowcount
+        conn.execute("DROP TABLE firmware_artifacts")
+        conn.execute("ALTER TABLE firmware_artifacts_upgrade RENAME TO firmware_artifacts")
+        if sequence:
+            conn.execute(
+                "UPDATE sqlite_sequence SET seq = ? WHERE name = 'firmware_artifacts'",
+                (sequence[0],),
+            )
+        for obj in objects:
+            conn.execute(obj[0])
+        conn.execute("RELEASE firmware_artifact_attestation")
+    except Exception:
+        conn.execute("ROLLBACK TO firmware_artifact_attestation")
+        conn.execute("RELEASE firmware_artifact_attestation")
+        raise
+    if historical_count:
+        logger.warning(
+            "Preserved %s historical upload attestations as unproven; upload-only verification requires a new admin upload",
+            historical_count,
+        )
+
+
 def _artifact_source(registry_source: str) -> str:
     """Map a firmware_registry source to a firmware_artifacts source."""
     return "fetched" if registry_source in ("auto", "freshdesk", "fetched") else "uploaded"
@@ -1626,9 +1697,9 @@ def _upsert_firmware_artifact(
     """Write the artifact row for one set of firmware bytes.
 
     The sha256 is the identity. The same bytes again reuse the existing row.
-    Identity columns never change. A later call can only fill an empty
-    vendor_checksum, uploaded_by, or verified_at. verified_at is set only
-    when the caller matched the vendor checksum, or when an admin uploaded
+    Identity columns never change. A later vendor match fills empty evidence.
+    Each admin upload records the current admin actor and time. Set verified_at
+    only when the caller matched the vendor checksum, or when an admin uploaded
     the file and uploaded_by records who. A vendor checksum that differs from
     the stored one never sets verified_at.
     """
@@ -1652,15 +1723,13 @@ def _upsert_firmware_artifact(
         " vendor_checksum = COALESCE(firmware_artifacts.vendor_checksum, excluded.vendor_checksum),"
         " vendor_checksum_source = COALESCE(firmware_artifacts.vendor_checksum_source,"
         " excluded.vendor_checksum_source),"
-        " uploaded_by = CASE WHEN firmware_artifacts.source = 'uploaded'"
-        " THEN COALESCE(firmware_artifacts.uploaded_by, excluded.uploaded_by)"
-        " ELSE firmware_artifacts.uploaded_by END,"
-        " verified_at = COALESCE(firmware_artifacts.verified_at,"
+        " uploaded_by = COALESCE(excluded.uploaded_by, firmware_artifacts.uploaded_by),"
+        " verified_at = CASE WHEN excluded.uploaded_by IS NOT NULL THEN excluded.verified_at"
+        " ELSE COALESCE(firmware_artifacts.verified_at,"
         " CASE WHEN (excluded.vendor_checksum IS NOT NULL"
         " AND COALESCE(firmware_artifacts.vendor_checksum, excluded.vendor_checksum)"
         " = excluded.vendor_checksum)"
-        " OR (firmware_artifacts.source = 'uploaded' AND excluded.uploaded_by IS NOT NULL)"
-        " THEN excluded.verified_at END)",
+        " THEN excluded.verified_at END) END",
         (
             detect_platform(filename),
             extract_version_from_filename(filename) or None,
@@ -1715,7 +1784,8 @@ def register_firmware(
     When a sha256 is supplied, the same transaction writes the
     firmware_artifacts row for those bytes (see _upsert_firmware_artifact).
     Pass vendor_checksum_verified=True only after the file matched
-    vendor_checksum.
+    vendor_checksum. Pass uploaded_by only for an authenticated admin upload.
+    Operator uploads retain their attribution in the audit log.
     """
     with get_db() as conn:
         conn.execute(

@@ -123,9 +123,15 @@ All notable changes to this project are documented in this file.
 ### Changed
 - Each firmware file now has one immutable `firmware_artifacts` row, keyed by
   its SHA256. Upload and fetch write the row. Startup backfills rows for
-  registered files that already have a hash. A fetched file gets `verified_at`
-  only when it matched the vendor MD5. An uploaded file records the user
-  who uploaded it in `uploaded_by` and gets `verified_at`. A file whose
+  registered files that already have a hash. A vendor MD5 match or an admin
+  upload sets `verified_at`. `uploaded_by` records the admin who attested the
+  bytes, including bytes first registered as fetched. Operator uploads retain
+  audit attribution and do not establish verification. Artifact source and
+  identity stay unchanged. Startup preserves earlier upload marks in
+  `historical_uploaded_by` and `historical_verified_at`. It clears upload-only
+  verification because historical admin roles are unproven. Vendor checksum
+  verification remains valid. A fresh admin upload records its actor and time.
+  A file whose
   recorded vendor MD5 did not match cannot be selected. When the vendor publishes an MD5 for a file
   that was never matched, the fetcher checks the file on disk again. A file
   that fails is deleted and downloaded again. Files with no published MD5

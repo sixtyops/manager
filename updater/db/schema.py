@@ -248,10 +248,12 @@ def build_schema(db: sqlite3.Connection) -> None:
             release_date TEXT,
             path TEXT NOT NULL,
             verified_at TEXT,
+            historical_uploaded_by TEXT,
+            historical_verified_at TEXT,
             CHECK (
                 verified_at IS NULL
                 OR vendor_checksum IS NOT NULL
-                OR (source = 'uploaded' AND uploaded_by IS NOT NULL)
+                OR uploaded_by IS NOT NULL
             )
         );
 

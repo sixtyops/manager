@@ -4188,7 +4188,7 @@ async def upload_firmware(file: UploadFile = File(...), session: dict = Depends(
 
     db.register_firmware(
         safe_filename, source="manual", sha256=firmware_sha256,
-        uploaded_by=session["username"],
+        uploaded_by=session["username"] if session.get("role") == "admin" else None,
     )
     db.log_audit(session["username"], "firmware.upload", "firmware", safe_filename,
                  f"{total_size:,} bytes", None)
