@@ -26,9 +26,8 @@ Quick pointers:
   `main`. Use one feature per branch and PR.
 - Read the [lead operations SOP](docs/lead-operations-sop.md) before lead work.
   It is the durable lead procedure. Update it with lasting handoff lessons.
-- The Manager lead may merge its own or delegated-worker PRs only after all
-  required gates pass. Workers do not merge. The lead does not merge outside
-  contributor PRs.
+- The Manager lead may merge any SixtyOps Manager PR only after all required
+  sign-off gates pass, under the owner's 2026-10-14 grant. Workers do not merge.
 - Use the model that fits the task. Follow the Manager model and safety rules
   in this file and the lead SOP.
 - Firmware rollouts advance one wave per maintenance window: 10%, then 50%,
@@ -74,18 +73,19 @@ Fresh-session and wake procedure: [lead operations SOP](docs/lead-operations-sop
 This section remains the canonical authority.
 
 The lead agent directs issue triage, queue labels, delegated implementation and
-review, validated PR merges within the author boundary below, and development
+review, validated PR merges under the gates below, and development
 releases for `sixtyops/manager`.
 Ongoing ownership includes feature rearchitecture, bug fixes, edge cases,
 security, and resilience. Proactively find, track, prioritize, and resolve gaps
 in these areas. Add regression checks where they prove the fix. Keep changes
 small and aligned with the product goal; escalate major design and risk decisions.
-The owner explicitly delegated these duties on 2026-10-02. This repository-specific
-decision supersedes older human-only merge rules only for PRs created by the
-lead or its delegated agents. This is standing merge approval for the Manager
-lead, within the gates in this file and the lead operations SOP. The lead never
-merges an outside contributor's PR. Worker agents hand changes to review; they
-do not merge their own work.
+The owner explicitly delegated these duties on 2026-10-02. On 2026-10-14, the
+owner authorized the Manager lead to merge any SixtyOps Manager PR that meets
+the full sign-off criteria, regardless of PR author. This standing merge
+approval supersedes the older human-only merge rules and PR-author restriction.
+All gates in this file and the lead operations SOP still apply. This grant does
+not extend push, deploy, release, or production-device authority. Worker agents
+hand changes to review; they do not merge.
 
 When the owner says "you are the lead" for a feature, issue, or epic, the agent owns
 that goal through completion or until every remaining step needs an operator.

@@ -5,10 +5,11 @@ Resume from fresh evidence, not old agent names or a previous green check.
 
 **Detail:** [AGENTS.md](../AGENTS.md#repository-lead-authority-2026-10-02) owns
 repository authority and rules. This procedure explains how to apply them.
-Latest user intent takes precedence. The owner grants the Manager lead merge
-approval for eligible PRs created by the lead or its delegated workers. Workers
-hand work to review; they do not merge or release. Shared hub procedures do not
-extend Manager authority.
+Latest user intent takes precedence. Under the owner's 2026-10-14 grant, the
+Manager lead may merge any SixtyOps Manager PR that meets the full sign-off
+criteria, regardless of PR author. This supersedes the older PR-author
+restriction. Workers hand work to review; they do not merge or release. Shared
+hub procedures do not extend Manager authority.
 
 ## Fresh start and hourly wake
 
@@ -217,8 +218,9 @@ Use the shared [reopen procedure](https://github.com/isolson/personal-processes/
 only after an explicit lead decision, recorded history/budget checks and
 readback. Keep maximum rounds/reopens and publication pacing intact.
 
-The lead may merge only a PR created by the lead or its delegated agents. The
-lead must not merge a PR from an outside contributor. Workers do not merge.
+The owner's 2026-10-14 grant permits the Manager lead to merge any SixtyOps
+Manager PR, regardless of PR author. Workers do not merge. This grant does not
+extend push, deploy, release, or production-device authority.
 Every merge still requires all applicable review, CI, sign-off, thread,
 duplicate, acceptance, and bench gates above. Follow
 [release-sop.md](release-sop.md) and [self-update-signing.md](self-update-signing.md).
