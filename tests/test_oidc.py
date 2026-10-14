@@ -379,13 +379,13 @@ class TestEnsureOIDCUserRolePersistence:
         self._set_config(admin_group="")
         db.set_setting("oidc_default_role", "viewer")
 
-        user = ensure_oidc_user("isaac@example.com", ["users"])
+        user = ensure_oidc_user("operator@example.com", ["users"])
         assert user["role"] == "viewer"
 
         db.update_user(user["id"], role="admin")
-        assert db.get_user("isaac@example.com")["role"] == "admin"
+        assert db.get_user("operator@example.com")["role"] == "admin"
 
-        user = ensure_oidc_user("isaac@example.com", ["users"])
+        user = ensure_oidc_user("operator@example.com", ["users"])
         assert user["role"] == "admin", (
             "Manual role override must persist when admin_group is not configured"
         )
@@ -398,12 +398,12 @@ class TestEnsureOIDCUserRolePersistence:
         self._set_config(admin_group="")
         db.set_setting("oidc_default_role", "viewer")
 
-        ensure_oidc_user("isaac@example.com", ["users"])
-        user = db.get_user("isaac@example.com")
+        ensure_oidc_user("operator@example.com", ["users"])
+        user = db.get_user("operator@example.com")
         db.update_user(user["id"], role="operator")
 
-        ensure_oidc_user("isaac@example.com", ["different-group", "another"])
-        assert db.get_user("isaac@example.com")["role"] == "operator"
+        ensure_oidc_user("operator@example.com", ["different-group", "another"])
+        assert db.get_user("operator@example.com")["role"] == "operator"
 
     def test_manual_role_override_persists_when_groups_missing(self, mock_db):
         """Login with no groups claim still preserves the manual role."""
@@ -411,12 +411,12 @@ class TestEnsureOIDCUserRolePersistence:
         self._set_config(admin_group="")
         db.set_setting("oidc_default_role", "viewer")
 
-        ensure_oidc_user("isaac@example.com", [])
-        user = db.get_user("isaac@example.com")
+        ensure_oidc_user("operator@example.com", [])
+        user = db.get_user("operator@example.com")
         db.update_user(user["id"], role="admin")
 
-        ensure_oidc_user("isaac@example.com", None)
-        assert db.get_user("isaac@example.com")["role"] == "admin"
+        ensure_oidc_user("operator@example.com", None)
+        assert db.get_user("operator@example.com")["role"] == "admin"
 
     def test_admin_group_promotes_member_on_every_login(self, mock_db):
         """When admin_group is set and user is in it, role is forced to admin."""
