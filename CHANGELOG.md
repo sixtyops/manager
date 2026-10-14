@@ -7,7 +7,8 @@ All notable changes to this project are documented in this file.
 ### Removed
 - Removed `updater/devmode.py` and `SIXTYOPS_DEV_MODE`. `./dev.sh` now seeds
   sample devices with `scripts/seed_dev_data.py` and runs the real poller.
-  Seeded devices are unreachable, so connection errors in the log are expected.
+  Seeded devices use RFC 5737 documentation addresses, so the poller cannot
+  reach a real device. Connection errors in the log are expected.
   After login, the first-run setup page shows once. Local login stays admin/admin.
 - Removed `GET /api/uptime/device` and `GET /api/uptime/events`, plus their
   exclusive database read helpers. Requests that pass unchanged middleware
@@ -29,6 +30,22 @@ All notable changes to this project are documented in this file.
   remain unchanged.
 
 ### Fixed
+- Config templates now check credential keys at any depth. A key that ends
+  in `password`, `secret`, or `key` accepts only a non-empty string. An empty
+  string means "no change": the manager removes that leaf before the merge,
+  so the device keeps its value. Null, an object, a list, a number, or
+  true/false at such a key returns a 400 error that names the path. Before
+  this fix, the merge could write null over a device credential. SNMP
+  templates with v3 off, RADIUS templates, and Users templates still save.
+  Stored templates with a bad value now fail preview, push, and rollout with
+  the same error.
+- Config-template safety checks now find protected paths at any depth.
+  Save, preview, push, rollout resume, and auto-enforce reject any fragment
+  that writes `network`, `ethernet`, `wireless.radios`, or `wireless.zones`
+  anywhere in the tree, including inside list items. They also reject a
+  `wireless` key with a non-object value and any non-object fragment.
+  Shipped SNMP, RADIUS, Users, NTP, discovery, syslog, and watchdog templates
+  still pass. Part of #310.
 - After existing middleware and role checks, config-template create and update
   routes reject non-object request bodies and decoded fragments with HTTP 400
   before template writes. Valid objects and JSON-encoded objects keep their
@@ -125,6 +142,11 @@ All notable changes to this project are documented in this file.
   a reporting or monitoring service, without exposing the token value.
 
 ### Changed
+- The poller reuses a CPE session for at most ten minutes after login.
+  Each poll checks the token without a new login. Reading the cache does not
+  extend its lifetime. At ten minutes, the next probe uses current credentials.
+  An expired token also forces a new login. This reduces device audit events
+  while keeping credential checks bounded.
 - **Updates refuse to run if any device's firmware family is missing.** If a
   selected batch (or a scheduled wave) includes a device whose platform —
   TNA-303L or TNS-100 — has no matching firmware file chosen, the update now

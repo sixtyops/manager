@@ -1,8 +1,9 @@
 #!/bin/bash
 # Start the app for local development with seeded sample devices.
 # No real hardware or Docker required — just Python + pip.
-# The real poller runs against the seeded devices. They are unreachable, so
-# connection errors and backoff in the log are expected.
+# The real poller runs against the seeded devices. They use RFC 5737
+# documentation addresses, so no real device answers. Connection errors and
+# backoff in the log are expected.
 #
 # Usage:
 #   ./dev.sh              # start with default credentials
