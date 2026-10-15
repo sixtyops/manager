@@ -172,3 +172,18 @@ async def test_config_failure_does_not_return_reflected_secrets(status, json_bod
     request.assert_awaited_once_with(
         "POST", "/cgi.lua/config" + ("?dry_run=true" if dry_run else ""), data=payload
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_error", [True, False])
+async def test_trigger_rejection_never_logs_reflected_cookie(with_error, caplog):
+    client = transport.TachyonClient("192.0.2.1", "admin", SECRET)
+    client._token = SECRET
+    reflected = {"statusCode": 403, "cookie": f"Cookie: token={SECRET}"}
+    if with_error:
+        reflected["error"] = f"Cookie: token={SECRET}"
+    with patch.object(client, "_curl", AsyncMock(return_value=(200, json.dumps(reflected)))):
+        assert await client.trigger_update() is False
+    assert caplog.messages == ["Update trigger rejected by 192.0.2.1 (HTTP 200)"]
+    assert SECRET not in caplog.text
+    assert "Cookie:" not in caplog.text

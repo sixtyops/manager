@@ -572,10 +572,10 @@ class TachyonClient:
                     data = json.loads(body)
                     if isinstance(data, dict):
                         if data.get("error"):
-                            logger.error(f"Update trigger error from {self.ip}: {data.get('error')}")
+                            logger.error(f"Update trigger rejected by {self.ip} (HTTP {status})")
                             return False
                         if data.get("statusCode", 200) >= 400:
-                            logger.error(f"Update trigger failed with status: {data}")
+                            logger.error(f"Update trigger rejected by {self.ip} (HTTP {status})")
                             return False
                 except json.JSONDecodeError:
                     pass
