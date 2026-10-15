@@ -137,6 +137,13 @@ Do not send direct Signal messages from lead or worker sessions.
   changes. Never bypass a failed gate or resolve another reviewer's thread.
   Engine and driver changes require bench evidence on that exact commit.
   A skipped hardware test does not pass this requirement.
+- Before an authorized squash merge, audit the exact commit subject and body.
+  Check source commit messages and PR text for personal names and co-author
+  trailers. Use an explicit subject, a reviewed body file, and
+  `--match-head-commit` for the verified head SHA. Read back the squash commit
+  message after merge. Stop further merges if the message has an unwanted
+  trailer. Follow the procedure in
+  [the lead operations SOP](docs/lead-operations-sop.md#explicit-squash-message).
 - The authorized development system is
   `https://sixtyops-dev.infra.treehouse.mn/`. Follow the release SOP, verify
   rollback, record release notes and known risks before deployment, then
