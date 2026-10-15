@@ -113,3 +113,18 @@ def test_fresh_seed_plants_no_credentials(tmp_path):
     assert setting("schedule_enabled") == "false"
     assert con.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
     con.close()
+
+
+def test_seed_addresses_are_documentation_only():
+    """dev.sh runs the real poller against the seed devices. Every seed address
+    must come from an RFC 5737 documentation range, so no real device answers."""
+    import ipaddress
+    import re
+
+    source = (Path(__file__).resolve().parent.parent / "scripts" / "seed_dev_data.py").read_text()
+    addresses = re.findall(r'"(\d{1,3}(?:\.\d{1,3}){3})"', source)
+    assert addresses
+    doc_nets = [ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")]
+    for addr in addresses:
+        ip = ipaddress.ip_address(addr)
+        assert any(ip in net for net in doc_nets), addr
