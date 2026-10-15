@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Changed
+- The website home footer now uses SixtyOps branding instead of a personal
+  credit.
+
 ### Removed
 - Removed `GET /api/uptime/device` and `GET /api/uptime/events`, plus their
   exclusive database read helpers. Requests that pass unchanged middleware
@@ -345,10 +349,9 @@ All notable changes to this project are documented in this file.
   no longer mandatory. Operators who set the token under the previous
   release can leave it in place — it is now opt-in headroom rather
   than a requirement. New installs need nothing.
-- Added an `LICENSE` file at the repo root containing the canonical
-  Elastic License 2.0 text plus a copyright header identifying the
-  licensor as "Isaac Olson, doing business as SixtyOps." README already
-  pointed at this file; the link is now live (#125).
+- Added a `LICENSE` file at the repo root containing the canonical
+  Elastic License 2.0 text plus a copyright header identifying the licensor.
+  README already pointed at this file; the link is now live (#125).
 - The `pull_request`-triggered Actions lanes (`ci`, `install-smoke`,
   `auto-label`) now run on GitHub-hosted `ubuntu-latest` runners
   instead of the self-hosted lab runner. Fork PRs no longer need
