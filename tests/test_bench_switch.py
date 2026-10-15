@@ -159,3 +159,21 @@ def test_switch_fails_closed_without_private_output(bench, case):
     contacts = marker.read_text().splitlines()[1:]
     assert all(json.loads(line)[0] == "GET" for line in contacts)
     assert all(json.loads(line)[1] != "/cgi.lua/config" for line in contacts)
+
+
+def test_switch_rejects_log_write_failure_after_preflight(bench):
+    _, _, _, output, marker, env = bench
+    tee = Path(env["PATH"].split(os.pathsep)[0]) / "tee"
+    tee.write_text("#!/bin/sh\ncat\nexit 1\n")
+    tee.chmod(0o700)
+
+    result = run_bench(bench)
+
+    # The fake driver checks the reserved files before its successful reads.
+    assert marker.read_text().splitlines()[0] == "login"
+    assert "local-switch: read_2: PASS" in result.stdout
+    assert result.returncode == 1
+    assert next(output.glob("*.log")).read_text() == ""
+    summary = next(output.glob("*.summary.txt")).read_text()
+    assert "overall: FAIL" in summary
+    assert "overall: PASS" not in result.stdout + result.stderr + summary

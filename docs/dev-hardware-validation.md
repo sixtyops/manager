@@ -157,7 +157,14 @@ with mode `700`. It creates a new log and summary with mode `600` before
 login. Unsafe output permissions or a failed file creation stop the run before
 device contact. It uses the existing `TNS-100 IP`, `Shared device username`,
 and `Shared device password` fields. Missing fields fail the run. Inherited
-device inputs cannot replace missing fields in the access file.
+device inputs cannot replace missing fields in the access file. A log write
+failure makes the lane fail even when both device reads succeed.
+
+The tool-only change can merge after the normal review and offline gates,
+before a lab run. This makes the wrapper available from trusted `main`.
+Keep route confirmation, account binding, and the exact-commit lab run as open
+post-merge work. A credentialed run also requires a target driver that keeps
+login secrets and tokens out of process arguments.
 
 Run this mode only after the host operator confirms the intended switch route
 and current account binding. Keep the output private. A successful read does

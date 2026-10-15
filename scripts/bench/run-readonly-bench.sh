@@ -307,7 +307,11 @@ set +e
   fi
   exit "$status"
 ) 2>&1 | tee "$log_file"
-run_status=${PIPESTATUS[0]}
+run_statuses=("${PIPESTATUS[@]}")
+run_status=${run_statuses[0]}
+if [ "$mode" = local-switch ] && [ "${run_statuses[1]}" -ne 0 ]; then
+  run_status=1
+fi
 set -e
 
 # The switch reader emits only fixed fields. Keep its summary private.
