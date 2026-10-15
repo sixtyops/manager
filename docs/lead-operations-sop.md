@@ -212,6 +212,72 @@ Engine/driver changes also require named real-device bench evidence on that
 commit. Skips and synthetic tests do not provide bench proof. Missing, stale or
 unreadable evidence holds the action. A changed head needs fresh gates.
 
+### Explicit squash message
+
+**Key points:** Audit the exact squash subject and body before merge. Match the
+verified head SHA. Read back the resulting commit message.
+
+**Detail:** Do not use `--fill` or rely on GitHub's generated message. Inspect
+the source commit messages, PR title, PR body, diff, and issue. Prepare a plain
+subject and body file from that evidence. The subject must state the change in
+the repository's conventional format. The body must state the issue,
+validation, and known risks or limits. Check the subject, body file, source
+commit messages, and PR text for personal names and co-author trailers. Remove
+any such text from the proposed squash message. Check the subject and body for
+factual accuracy, Simplified Technical English, and the copywriter audit. Keep
+the body file unchanged through post-merge verification.
+
+Set these values from the current PR and the reviewed message. Use a body file
+that contains only the intended commit body, with no subject line:
+
+```bash
+set -euo pipefail
+pr_number=123
+expected_head='FULL_VERIFIED_HEAD_SHA'
+squash_subject='fix: describe the change'
+squash_body_file='/path/to/reviewed-body.txt'
+```
+
+Before merge, re-read the PR and confirm that it is open, not a draft, and has
+the expected head. Confirm `mergeable` is `MERGEABLE` and
+`mergeStateStatus` is `CLEAN`. Complete every review, sign-off, thread, CI,
+duplicate, acceptance, and device-proof gate above. Review the exact subject
+and body file. Then run:
+
+```bash
+live_head=$(gh pr view "$pr_number" --json headRefOid --jq .headRefOid)
+test "$live_head" = "$expected_head"
+gh pr merge "$pr_number" --squash \
+  --subject "$squash_subject" \
+  --body-file "$squash_body_file" \
+  --match-head-commit "$expected_head"
+```
+
+After the command, read the PR and squash commit. Confirm the PR is merged and
+read the commit message from GitHub. Compare it with the reviewed subject and
+body file. Record the merge commit SHA and the readback result:
+
+```bash
+merge_sha=$(gh pr view "$pr_number" --json state,mergeCommit \
+  --jq 'select(.state == "MERGED") | .mergeCommit.oid')
+test -n "$merge_sha"
+actual_message=$(gh api "repos/{owner}/{repo}/commits/$merge_sha" \
+  --jq .commit.message)
+expected_message=$(printf '%s\n\n%s' "$squash_subject" "$(cat "$squash_body_file")")
+if [ "$actual_message" != "$expected_message" ]; then
+  printf 'Squash message mismatch for %s\n' "$merge_sha" >&2
+  exit 1
+fi
+printf 'Verified squash message for %s\n' "$merge_sha"
+```
+
+If merge or readback fails, inspect live PR and repository state before retrying.
+Record any observed merge and message separately from the command result. Do
+not retry a merge until the current head and merge state prove that the first
+attempt did not merge. If GitHub adds an unwanted personal-name or co-author
+trailer, stop further merges and record the cause. Do not rewrite the published
+merge commit.
+
 Reply `addressed in <sha>` after a fix. Leave threads to their reviewers.
 Never grant your own sign-off, reset counters, or restart a capped cycle.
 Use the shared [reopen procedure](https://github.com/isolson/personal-processes/blob/master/docs/agentic-workflow.md#reopen-a-pr)
