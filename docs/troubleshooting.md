@@ -34,7 +34,8 @@ an update job reports `unreachable`.
 2. Read the stored `last_error`. `Invalid credentials` means the Tachyon login
    response reported an authentication rejection. `Device not reachable` is
    stored when the login curl request exits with an error. This value does not
-   identify the exact cause. Check the logs for more detail.
+   identify the exact cause. Use the container check in step 3 to see the
+   connection error.
 3. From the Manager container, check whether the device responds:
    ```bash
    docker compose exec sixtyops-mgmt curl -k -m 5 https://<device-ip>/
@@ -45,10 +46,12 @@ an update job reports `unreachable`.
    the AP identity or its login credentials. The Manager polls from inside
    its container's network namespace. Host-side reachability does not confirm
    container-side reachability.
-4. Check `sixtyops-mgmt` logs for `Login curl failed`. The log includes curl's
-   error detail. The Tachyon client stores `Device not reachable` when this
-   login request fails. It stores `Invalid credentials` when the login
-   response reports an authentication rejection.
+4. Check `sixtyops-mgmt` logs for `Login curl failed`. This line shows when
+   the login request failed. It usually has no error detail, because the
+   client runs curl in silent mode. The Tachyon client stores
+   `Device not reachable` when this login request fails. It stores
+   `Invalid credentials` when the login response reports an authentication
+   rejection.
 
 ### Recover
 - **Credentials rejected**: credential repair requires an authenticated
