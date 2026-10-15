@@ -25,6 +25,8 @@ All notable changes to this project are documented in this file.
   remain unchanged.
 
 ### Fixed
+- The license and policy pages now identify SixtyOps as the licensor and
+  service provider.
 - Config templates now check credential keys at any depth. A key that ends
   in `password`, `secret`, or `key` accepts only a non-empty string. An empty
   string means "no change": the manager removes that leaf before the merge,
