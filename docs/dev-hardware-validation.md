@@ -102,7 +102,7 @@ the current directory:
 cd <checkout-under-test>
 SIXTYOPS_BENCH_ACCESS_FILE=<private-file> \
   <main-checkout>/scripts/bench/run-readonly-bench.sh <full-commit-sha> \
-  [--mode integration|local-poll|session-proof] [--duration-min 35]
+  [--mode integration|local-poll|session-proof|local-switch] [--duration-min 35]
 ```
 
 Guards, in this order:
@@ -116,9 +116,10 @@ Guards, in this order:
    `Key: value` lines in a subshell. It does not `source` the file. It
    refuses the run if a value is shorter than 3 characters, because the
    filter does not replace such short values.
-4. All output goes through `scripts/bench/redact.py`. The filter replaces
-   every value in the access file and every IPv4 address. The redacted log
-   and a summary go to `SIXTYOPS_BENCH_SUMMARY_DIR`. The default is
+4. The integration and AP modes send output through `scripts/bench/redact.py`.
+   The filter replaces every access-file value and IPv4 address. The switch
+   mode emits fixed result fields only. The log and summary go to
+   `SIXTYOPS_BENCH_SUMMARY_DIR`. The default is
    `sixtyops-bench` in `XDG_STATE_HOME`, or in `~/.local/state`.
 
 Access file keys: `Manager URL`, `Manager username`, `Manager password`,
@@ -133,6 +134,13 @@ Modes:
   `test_system_surface.py`, without the device portal test. The Manager URL
   must be the authorized dev host. This mode tests the deployed Manager, not
   the checked-out commit.
+- `local-switch`: logs in once to the named TNS-100 switch with the exact
+  commit's `TachyonClient`. It calls `get_device_info()` twice. After login,
+  it permits only GETs for system status, bootbank information, and interface
+  status. Both reads must identify a TNS-100 with a nonempty firmware version.
+  The firmware and bank results must stay the same. It emits only fixed
+  PASS/FAIL fields. It does not save model labels, versions, serials, MAC
+  addresses, raw responses, or exception text.
 - `local-poll`: logs in to the AP with the commit's driver and reads device
   information and the CPE list.
 - `session-proof`: for the CPE session reuse proof
@@ -143,6 +151,20 @@ Modes:
   time of each new login. It runs the poller only, not the web app, so it
   does not download firmware, check for self-updates, or open the RADIUS
   port.
+
+For `local-switch`, the wrapper also requires an owner-only output directory
+with mode `700`. It creates a new log and summary with mode `600` before
+login. Unsafe output permissions or a failed file creation stop the run before
+device contact. It uses the existing `TNS-100 IP`, `Shared device username`,
+and `Shared device password` fields. Missing fields fail the run. Inherited
+device inputs cannot replace missing fields in the access file.
+
+Run this mode only after the host operator confirms the intended switch route
+and current account binding. Keep the output private. A successful read does
+not prove firmware updates, configuration changes, or recovery. This mode does
+not satisfy the other device and recovery gates for
+[PR 558](https://github.com/sixtyops/manager/pull/558). A skipped or failed run
+is not hardware proof.
 
 `tests/test_bench_wrapper.py` checks the SHA refusal and that the allowlist
 has no write test. The local modes run the commit's driver code with the
