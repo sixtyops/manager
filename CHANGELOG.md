@@ -34,6 +34,15 @@ All notable changes to this project are documented in this file.
   templates with v3 off, RADIUS templates, and Users templates still save.
   Stored templates with a bad value now fail preview, push, and rollout with
   the same error.
+- Config rollback (`POST /api/config-push/rollback/{ip}`) now takes the same
+  per-device lock as config push. A rollback that starts while a push or
+  another rollback runs on that device gets HTTP 409
+  `config_change_in_progress` and does not contact the device. After apply,
+  Manager reads the config back and compares its hash to the target snapshot.
+  A mismatch or a failed read returns HTTP 502 `rollback_not_verified` with
+  both hashes and writes a `config.rollback.unverified` audit entry. A
+  verified rollback returns `rollback_verified: true` and the device hash.
+  Closes #37 and #39.
 - Config-template safety checks now find protected paths at any depth.
   Save, preview, push, rollout resume, and auto-enforce reject any fragment
   that writes `network`, `ethernet`, `wireless.radios`, or `wireless.zones`
