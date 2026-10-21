@@ -24,45 +24,12 @@ and cannot drift between the execution path and any future caller (e.g. the UI's
 "next attempt" prediction). The function is **fail-closed**: any unexpected
 rollout state returns "do not run", so a future refactor that introduces a new
 phase or status holds instead of cascading.
+
+The function now lives in `updater/core/gates.py`, where the composed
+`evaluate_wave_start` also calls it. This module re-exports it so existing
+callers keep one definition.
 """
 
-from typing import Optional
+from .core.gates import phase_run_decision
 
-
-def phase_run_decision(
-    rollout: dict,
-    window_key: str,
-    *,
-    first_wave_held: bool = False,
-) -> tuple[bool, Optional[str]]:
-    """Decide whether `rollout` may START its current wave's job right now.
-
-    `window_key` identifies the current maintenance window (its date).
-    `first_wave_held` (computed by the caller) is True when the pct10 wave must
-    still wait out the Firmware Hold — i.e. the firmware's release-date hold has
-    not elapsed AND no in-scope device of any pending family is confirmed working
-    on it yet. It is meaningful only at pct10.
-
-    Returns (may_run, reason). When may_run is False, `reason` is a short
-    machine-readable tag ("status_<x>", "already_ran_this_window", "firmware_hold").
-    When may_run is True, `reason` is None.
-
-    `first_wave_held` gates pct10 only — it never bypasses Rule 1, so waves still
-    advance at most one per maintenance window and never cascade. Fail-closed.
-    """
-    status = rollout.get("status")
-    if status != "active":
-        return False, f"status_{status}"
-
-    # Rule 1: one wave-job per maintenance window. Always enforced and checked
-    # first, so an early-cleared firmware hold can never let a second wave run in
-    # the same window.
-    last_window = rollout.get("last_phase_window")
-    if last_window and last_window == window_key:
-        return False, "already_ran_this_window"
-
-    # Rule 2: the firmware hold gates the first fleet wave (pct10) only.
-    if rollout.get("phase") == "pct10" and first_wave_held:
-        return False, "firmware_hold"
-
-    return True, None
+__all__ = ["phase_run_decision"]
