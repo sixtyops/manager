@@ -137,6 +137,21 @@ All notable changes to this project are documented in this file.
   a reporting or monitoring service, without exposing the token value.
 
 ### Changed
+- Each firmware file now has one immutable `firmware_artifacts` row, keyed by
+  its SHA256. Upload and fetch write the row. Startup backfills rows for
+  registered files that already have a hash. A vendor MD5 match or an admin
+  upload sets `verified_at`. `uploaded_by` records the admin who attested the
+  bytes, including bytes first registered as fetched. Operator uploads retain
+  audit attribution and do not establish verification. Artifact source and
+  identity stay unchanged. Startup preserves earlier upload marks in
+  `historical_uploaded_by` and `historical_verified_at`. It clears upload-only
+  verification because historical admin roles are unproven. Vendor checksum
+  verification remains valid. A fresh admin upload records its actor and time.
+  A file whose
+  recorded vendor MD5 did not match cannot be selected. When the vendor publishes an MD5 for a file
+  that was never matched, the fetcher checks the file on disk again. A file
+  that fails is deleted and downloaded again. Files with no published MD5
+  stay selectable, as before.
 - The poller reuses a CPE session for at most ten minutes after login.
   Each poll checks the token without a new login. Reading the cache does not
   extend its lifetime. At ten minutes, the next probe uses current credentials.

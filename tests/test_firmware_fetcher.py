@@ -17,6 +17,7 @@ from updater.firmware_fetcher import (
     _normalize_version,
     _parse_table_md5s,
 )
+from updater.firmware_policy import firmware_file_health
 
 
 class TestNormalizeVersion:
@@ -581,11 +582,103 @@ class TestCheckAndDownloadHashing:
         # The 24h re-register of an already-present file must not erase its hash
         # (regression for the ON CONFLICT NULL-overwrite; needs the COALESCE fix).
         (tmp_path / self.BETA).write_bytes(b"already-on-disk-firmware")
-        db.register_firmware(self.BETA, source="auto", sha256="preserve-me")
-
         rel = self._release()
+        db.register_firmware(
+            self.BETA, source="auto", sha256="ab" * 32,
+            vendor_checksum=rel.md5, vendor_checksum_verified=True,
+        )
+
         with patch.object(fetcher, "_scrape_page",
                           AsyncMock(side_effect=self._scrape_only_30x(rel))):
             asyncio.run(fetcher.check_and_download())
 
-        assert db.get_firmware_sha256(self.BETA) == "preserve-me"
+        assert db.get_firmware_sha256(self.BETA) == "ab" * 32
+
+
+class TestCheckAndDownloadArtifacts:
+    """check_and_download writes firmware_artifacts rows (#301). verified_at
+    is set only when the bytes matched the vendor MD5."""
+
+    BETA = TestCheckAndDownloadHashing.BETA
+
+    @pytest.fixture
+    def fetcher(self, tmp_path):
+        return FirmwareFetcher(firmware_dir=tmp_path, broadcast_func=AsyncMock())
+
+    def _release(self, md5):
+        return FirmwareRelease(
+            platform="tna-30x", version="1.15.0",
+            download_url=f"https://tachyon-networks.com/fw/{self.BETA}",
+            channel="beta", filename=self.BETA, md5=md5,
+        )
+
+    def _run(self, fetcher, release, body=None):
+        """Run one fetch cycle. `body` is served by a fake download stream."""
+        async def scrape(platform, url):
+            return ([release], []) if platform == "tna-30x" else ([], [])
+
+        patches = [patch.object(fetcher, "_scrape_page", AsyncMock(side_effect=scrape))]
+        if body is not None:
+            patches.append(TestDownloadIntegrity._patch_stream(self, body, len(body)))
+        for p in patches:
+            p.start()
+        try:
+            asyncio.run(fetcher.check_and_download())
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+    def test_download_matching_vendor_md5_is_verified(self, fetcher, tmp_path, mock_db):
+        body = b"vendor-firmware-bytes"
+        self._run(fetcher, self._release(hashlib.md5(body).hexdigest()), body)
+
+        row = db.get_firmware_artifact(hashlib.sha256(body).hexdigest())
+        assert row["source"] == "fetched"
+        assert row["family"] == "tna-30x"
+        assert row["release_date"] == "2026-06-09"
+        assert row["vendor_checksum"] == hashlib.md5(body).hexdigest()
+        assert "freshdesk" in row["vendor_checksum_source"]
+        assert row["verified_at"]
+        assert firmware_file_health(tmp_path, self.BETA).deployable is True
+
+    def test_download_failing_vendor_md5_is_never_verified_or_selectable(
+        self, fetcher, tmp_path, mock_db
+    ):
+        body = b"tampered-firmware-bytes"
+        self._run(fetcher, self._release("0" * 32), body)
+
+        assert db.get_firmware_artifacts() == []
+        assert db.get_firmware_sha256(self.BETA) is None
+        assert not (tmp_path / self.BETA).exists()
+        assert firmware_file_health(tmp_path, self.BETA).deployable is False
+        assert db.get_setting("selected_firmware_30x", "") != self.BETA
+
+    def test_download_without_vendor_md5_is_unverified_but_selectable(
+        self, fetcher, tmp_path, mock_db
+    ):
+        # Fail-open is unchanged: no published MD5 does not block the file.
+        body = b"x" * 1000
+        self._run(fetcher, self._release(None), body)
+
+        row = db.get_firmware_artifact(hashlib.sha256(body).hexdigest())
+        assert row["vendor_checksum"] is None
+        assert row["verified_at"] is None
+        assert firmware_file_health(tmp_path, self.BETA).deployable is True
+
+    def test_unverified_stored_hash_is_rechecked_against_vendor_md5(
+        self, fetcher, tmp_path, mock_db
+    ):
+        # A backfilled row has a hash but no verified_at. When the vendor
+        # publishes an MD5, the next cycle checks the file and verifies it.
+        body = b"already-on-disk-firmware"
+        (tmp_path / self.BETA).write_bytes(body)
+        sha = hashlib.sha256(body).hexdigest()
+        db.register_firmware(self.BETA, source="auto", sha256=sha)
+        assert db.get_firmware_artifact(sha)["verified_at"] is None
+
+        with patch.object(fetcher, "_download_firmware", AsyncMock()) as dl:
+            self._run(fetcher, self._release(hashlib.md5(body).hexdigest()))
+
+        dl.assert_not_awaited()
+        assert db.get_firmware_artifact(sha)["verified_at"]
+        assert len(db.get_firmware_artifacts()) == 1
