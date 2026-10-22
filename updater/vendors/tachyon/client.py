@@ -32,6 +32,52 @@ logger = logging.getLogger(__name__)
 VERIFY_SSL = os.environ.get("TACHYON_VERIFY_SSL", "").lower() in ("1", "true", "yes")
 
 
+def _curl_config_value(value: str) -> str:
+    """Quote one curl config value without permitting another option."""
+    escapes = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t", "\v": "\\v"}
+    if any(ord(char) < 32 and char not in escapes for char in value) or "\x7f" in value:
+        raise ValueError("Unsupported control character in curl request")
+    return '"' + "".join(escapes.get(char, char) for char in value) + '"'
+
+
+async def _run_curl(args: list[str]) -> tuple[int, bytes]:
+    """Send curl options through a private pipe with fixed process arguments."""
+    options = {
+        "-s": ("silent", False), "-k": ("insecure", False),
+        "-m": ("max-time", True), "-X": ("request", True),
+        "-H": ("header", True), "-c": ("cookie-jar", True),
+        "-d": ("data", True), "-F": ("form", True),
+        "-w": ("write-out", True), "--limit-rate": ("limit-rate", True),
+    }
+    lines = []
+    index = 0
+    # Callers supply the URL last. Its contents never select an option.
+    while index < len(args) - 1:
+        option = options.get(args[index])
+        if option is None:
+            raise ValueError("Unsupported curl request option")
+        name, takes_value = option
+        index += 1
+        if takes_value:
+            if index >= len(args) - 1:
+                raise ValueError("Missing curl request option value")
+            lines.append(f"{name} = {_curl_config_value(args[index])}")
+            index += 1
+        else:
+            lines.append(name)
+    lines.append(f"url = {_curl_config_value(args[-1])}")
+    config = ("\n".join(lines) + "\n").encode("utf-8")
+    proc = await asyncio.create_subprocess_exec(
+        "curl", "--disable", "--config", "-",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _stderr = await proc.communicate(config)
+    # Curl diagnostics can include request values. Expose only its exit code.
+    return proc.returncode, stdout
+
+
 def _normalize_user_passwords(config: dict) -> dict:
     """Hash plaintext `system.users[*].password` values into `$1$<salt>$<hash>`
     MD5-crypt format (in-place).
@@ -183,7 +229,7 @@ class TachyonClient:
         """Execute curl command and return (status_code, response_body)."""
         url = f"{self._base_url}{endpoint}"
 
-        cmd = ["curl", "-s", "-m", str(self.timeout)]
+        cmd = ["-s", "-m", str(self.timeout)]
         if not VERIFY_SSL:
             cmd.append("-k")  # Skip certificate verification for self-signed certs
 
@@ -214,15 +260,11 @@ class TachyonClient:
         cmd.extend(["-w", "\n%{http_code}"])
         cmd.append(url)
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
+        returncode, stdout = await _run_curl(cmd)
 
-        if proc.returncode != 0:
-            raise RuntimeError(f"curl failed: {stderr.decode()}")
+        if returncode != 0:
+            detail = ": request timed out" if returncode == 28 else ""
+            raise RuntimeError(f"curl failed{detail} (exit code {returncode})")
 
         output = stdout.decode("utf-8", errors="ignore")
         lines = output.rsplit("\n", 2)
@@ -250,7 +292,7 @@ class TachyonClient:
                 "password": self.password,
             })
 
-            cmd = ["curl", "-s", "-m", str(self.timeout)]
+            cmd = ["-s", "-m", str(self.timeout)]
             if not VERIFY_SSL:
                 cmd.append("-k")
             cmd.extend([
@@ -261,16 +303,10 @@ class TachyonClient:
                 url,
             ])
 
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
+            returncode, stdout = await _run_curl(cmd)
 
-            if proc.returncode != 0:
-                error_msg = stderr.decode().strip()
-                logger.error(f"Login curl failed for {self.ip}: {error_msg}")
+            if returncode != 0:
+                logger.error(f"Login curl failed for {self.ip} (exit code {returncode})")
                 return "Device not reachable"
 
             response = stdout.decode("utf-8", errors="ignore")
@@ -289,7 +325,7 @@ class TachyonClient:
 
             # Check raw response for error messages
             if "Authorization Failed" in response or "Invalid credentials" in response:
-                logger.error(f"Login failed for {self.ip}: {response[:200]}")
+                logger.error(f"Login failed for {self.ip}: Invalid credentials")
                 return "Invalid credentials"
 
             # Extract token from cookie file
@@ -476,7 +512,7 @@ class TachyonClient:
 
             logger.info(f"Uploading firmware to {self.ip}{f' (attempt {attempt + 1}/{max_attempts})' if attempt > 0 else ''}")
 
-            cmd = ["curl", "-s", "-m", "300"]  # 5 min timeout for upload
+            cmd = ["-s", "-m", "300"]  # 5 min timeout for upload
             if bandwidth_limit_kbps and bandwidth_limit_kbps > 0:
                 cmd.extend(["--limit-rate", f"{bandwidth_limit_kbps}k"])
             if not VERIFY_SSL:
@@ -492,29 +528,23 @@ class TachyonClient:
 
             cmd.append(url)
 
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
+            returncode, stdout = await _run_curl(cmd)
 
-            if proc.returncode != 0:
-                logger.error(f"Firmware upload failed for {self.ip}: {stderr.decode()}")
+            if returncode != 0:
+                logger.error(f"Firmware upload failed for {self.ip} (exit code {returncode})")
                 # Transport error — retry if attempts remain
                 if attempt < max_attempts - 1:
                     continue
                 return False
 
             response = stdout.decode("utf-8", errors="ignore")
-            logger.debug(f"Upload response from {self.ip}: {response}")
 
             # Check for error in response
             try:
                 data = json.loads(response)
                 if isinstance(data, dict):
                     if data.get("error") or data.get("statusCode", 200) >= 400:
-                        logger.error(f"Upload error from {self.ip}: {data}")
+                        logger.error(f"Firmware upload rejected by {self.ip}")
                         # Device-side rejection — don't retry
                         return False
             except json.JSONDecodeError:
@@ -542,10 +572,10 @@ class TachyonClient:
                     data = json.loads(body)
                     if isinstance(data, dict):
                         if data.get("error"):
-                            logger.error(f"Update trigger error from {self.ip}: {data.get('error')}")
+                            logger.error(f"Update trigger rejected by {self.ip} (HTTP {status})")
                             return False
                         if data.get("statusCode", 200) >= 400:
-                            logger.error(f"Update trigger failed with status: {data}")
+                            logger.error(f"Update trigger rejected by {self.ip} (HTTP {status})")
                             return False
                 except json.JSONDecodeError:
                     pass
@@ -1130,12 +1160,20 @@ class TachyonClient:
         if dry_run:
             endpoint += "?dry_run=true"
         status, body = await self._curl("POST", endpoint, data=config)
-        result = {"success": status == 200, "status_code": status}
+        failure = {
+            "success": False,
+            "status_code": status,
+            "error": f"Configuration request failed (HTTP {status})",
+        }
+        # Device errors can reflect the submitted config or authentication cookie.
+        if status != 200:
+            return failure
+        result = {"success": True, "status_code": status}
         try:
             result.update(json.loads(body))
         except json.JSONDecodeError:
             result["raw_response"] = body
-        return result
+        return result if result.get("success") else failure
 
     def get_hardware_id(self, model: str) -> str:
         """Get the CONTROL file hardware ID for a device model."""
