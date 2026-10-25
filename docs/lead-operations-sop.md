@@ -3,13 +3,29 @@
 **Key points:** Advance actual system functionality first. Delegate bounded work.
 Resume from fresh evidence, not old agent names or a previous green check.
 
-**Detail:** [AGENTS.md](../AGENTS.md#repository-lead-authority-2026-10-02) owns
+**Detail:** [AGENTS.md](../AGENTS.md#agent-rules) owns
 repository authority and rules. This procedure explains how to apply them.
-Latest user intent takes precedence. Under the owner's 2026-10-14 grant, the
-Manager lead may merge any SixtyOps Manager PR that meets the full sign-off
-criteria, regardless of PR author. This supersedes the older PR-author
-restriction. Workers hand work to review; they do not merge or release. Shared
-hub procedures do not extend Manager authority.
+Latest user intent takes precedence. The loop limits in AGENTS.md apply to
+workers. Operational procedures below require the operator or a lead with
+explicit approval for the named action. Historical grants do not override
+those limits or task-specific restrictions. See the authority history below.
+Workers hand work to review; they do not merge or release. Shared hub
+procedures do not extend Manager authority.
+
+## Authority history
+
+**Key points:** Historical grants do not authorize loop workers to merge or
+release. Current task approval and [Agent rules](../AGENTS.md#agent-rules)
+control each action.
+
+**Detail:** The owner delegated lead duties on 2026-10-02. On 2026-10-14, the
+owner authorized the Manager lead to merge any SixtyOps Manager PR that meets
+the full sign-off criteria, regardless of PR author. This superseded the older
+human-only merge rules and PR-author restriction. The grant did not extend
+push, deploy, release, or production-device authority.
+
+Public-repo rulesets are free. This supersedes the earlier Team-plan
+requirement recorded in [#116](https://github.com/sixtyops/manager/issues/116).
 
 ## Fresh start and hourly wake
 
@@ -72,16 +88,8 @@ blocker to its lead, and stops. A follower does not create a wake job or
 delegate unless its brief explicitly asks it to. Hold overlapping work if two
 agents claim lead ownership, and report the conflict.
 
-Choose the model by the job when it is installed and supported: Fable
-(`claude-fable-5-1`) and Astra (`gpt-6-astra`) for architecture, planning,
-and audits; follow their recommendations. Opus (`claude-opus-5-5`) and Sol
-for complex code. Luna and Sonnet (`claude-sonnet-5-5`) for easier code.
-Haiku (`claude-haiku-4-5`) for reading large files. Do not give implementation
+Use the single [model table](../AGENTS.md#models). Do not give implementation
 work to an architect; give its design to a coding worker.
-
-Use epic413's model policy. Use GPT-6.1 Sol medium for safety builds, planning,
-and reviews. Use Sol high for safety reviews. Use GPT-6 Luna high for small or
-medium coding tasks outside the safety path. Use xhigh for a harder task.
 Verify installed provider/model/thinking IDs before sending work. Reuse suitable
 workers and preserve active jobs. Give each worker
 a bounded task with evidence. Assign one writer per branch. Honor
@@ -284,9 +292,7 @@ Use the shared [reopen procedure](https://github.com/isolson/personal-processes/
 only after an explicit lead decision, recorded history/budget checks and
 readback. Keep maximum rounds/reopens and publication pacing intact.
 
-The owner's 2026-10-14 grant permits the Manager lead to merge any SixtyOps
-Manager PR, regardless of PR author. Workers do not merge. This grant does not
-extend push, deploy, release, or production-device authority.
+The lead merge authority is recorded in [Authority history](#authority-history).
 Every merge still requires all applicable review, CI, sign-off, thread,
 duplicate, acceptance, and bench gates above. Follow
 [release-sop.md](release-sop.md) and [self-update-signing.md](self-update-signing.md).
