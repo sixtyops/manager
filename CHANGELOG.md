@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Security
+- Documented current Manager session, API token, OIDC ID token, and Tachyon
+  device session token storage, expiry, refresh behavior, log paths, and
+  `register_secret` coverage. This inventory changes no runtime behavior.
+
 ### Removed
 - Removed `GET /api/uptime/device` and `GET /api/uptime/events`, plus their
   exclusive database read helpers. Requests that pass unchanged middleware
