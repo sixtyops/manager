@@ -224,8 +224,8 @@ Rules for these checks:
 - A synthetic test does not pass check 3 or check 6. Only a real run counts.
 - A scheduled migration in check 7 names the partner and the agreed plan. It
   does not need a date in this repository.
-- Epic #316 does not contain these criteria yet. Until the lead copies this
-  table into the epic body, this table is the only copy.
+- The criteria are in epic [#316](https://github.com/sixtyops/manager/issues/316).
+  Close #390 after verifying them in the epic body.
 - Issue #390 is not done when this PR merges. It is done when the epic body
   has the criteria. The lead checks the epic body before closing #390.
 - After the copy, the epic body is the live tracker. This table stays the
