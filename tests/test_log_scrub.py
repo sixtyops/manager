@@ -4,6 +4,7 @@ import io
 import logging
 import logging.handlers
 import sys
+from collections import OrderedDict
 from unittest.mock import MagicMock
 
 import httpx
@@ -31,9 +32,55 @@ def test_generated_api_token_is_redacted_from_diagnostic_output(monkeypatch, app
     assert synthetic_token not in stream.getvalue()
 
 
+def test_generated_api_token_redaction_registry_is_bounded(application_output, monkeypatch):
+    from updater import auth
+
+    app, stream, _ = application_output
+    values = iter(f"{index:043d}" for index in range(scrub._GENERATED_API_TOKEN_LIMIT + 1))
+    monkeypatch.setattr(auth.secrets, "token_urlsafe", lambda _: next(values))
+
+    tokens = [auth.generate_api_token()[0] for _ in range(scrub._GENERATED_API_TOKEN_LIMIT + 1)]
+    assert len(scrub._generated_api_tokens) == scrub._GENERATED_API_TOKEN_LIMIT
+    assert tokens[0] not in scrub._generated_api_tokens
+    assert tokens[-1] in scrub._generated_api_tokens
+
+    app.logger.warning("embedded=x%sY current=%s", tokens[0], tokens[-1])
+
+    output = stream.getvalue()
+    assert "embedded=x[REDACTED]Y current=[REDACTED]" in output
+    assert tokens[0] not in output
+    assert tokens[-1] not in output
+
+
+def test_failed_token_persistence_keeps_generated_value_redacted(
+    application_output, authed_client, monkeypatch,
+):
+    from updater import app, auth
+
+    _, stream, _ = application_output
+    token_value = "tach_" + "A" * 43
+    monkeypatch.setattr(auth.secrets, "token_urlsafe", lambda _: "A" * 43)
+
+    def fail_persistence(**_kwargs):
+        raise RuntimeError("synthetic persistence failure")
+
+    monkeypatch.setattr(app.db, "create_api_token", fail_persistence)
+    with pytest.raises(RuntimeError, match="synthetic persistence failure"):
+        authed_client.post("/api/tokens", json={"name": "Synthetic failure"})
+
+    assert token_value in scrub._generated_api_tokens
+    assert len(scrub._generated_api_tokens) <= scrub._GENERATED_API_TOKEN_LIMIT
+    app.logger.warning("failed persistence token=%s", token_value)
+
+    output = stream.getvalue()
+    assert "failed persistence token=[REDACTED]" in output
+    assert token_value not in output
+
+
 @pytest.fixture(autouse=True)
 def isolated_registry(monkeypatch):
     monkeypatch.setattr(scrub, "_secrets", set())
+    monkeypatch.setattr(scrub, "_generated_api_tokens", OrderedDict())
     monkeypatch.setattr(scrub, "_pattern", None)
 
 

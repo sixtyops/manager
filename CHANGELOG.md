@@ -7,9 +7,10 @@ All notable changes to this project are documented in this file.
 ### Security
 - Register generated Manager API tokens with the log sanitizer before hashing
   or storage. Existing output handlers redact these values in diagnostics.
-  Inbound Cookie and Bearer credentials are not registered. Token generation,
-  storage, expiry, scopes, authentication, and one-time response behavior are
-  unchanged.
+  Retain at most 100 token literals; a fixed-format fallback redacts older
+  tokens. Inbound Cookie and Bearer credentials are not registered. Token
+  generation, storage, expiry, scopes, authentication, and one-time response
+  behavior are unchanged.
 
 ### Removed
 - Removed `GET /api/uptime/device` and `GET /api/uptime/events`, plus their

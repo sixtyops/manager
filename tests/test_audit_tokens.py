@@ -135,7 +135,7 @@ class TestApiTokens:
         token = "tach_synthetic_generated_token"
         registered = []
         monkeypatch.setattr(auth.secrets, "token_urlsafe", lambda _: "synthetic_generated_token")
-        monkeypatch.setattr(auth, "register_secret", registered.append)
+        monkeypatch.setattr(auth, "register_generated_api_token", registered.append)
 
         def hash_after_registration(value):
             assert registered == [token]
