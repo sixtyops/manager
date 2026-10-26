@@ -28,7 +28,9 @@ All notable changes to this project are documented in this file.
 - Users templates now add missing users and keep every existing device user.
   Preview, push, rollout resume, and auto-enforce reject entries that change
   an existing user or name the Manager login user. Stored password hashes
-  use the compliance comparison rule. Password rotation stays out of scope.
+  use the compliance comparison rule. The merge hashes only added users.
+  Template applies preserve existing password fields, including plaintext,
+  through the device client. Password rotation stays out of scope.
 - Config templates now check credential keys at any depth. A key that ends
   in `password`, `secret`, or `key` accepts only a non-empty string. An empty
   string means "no change": the manager removes that leaf before the merge,

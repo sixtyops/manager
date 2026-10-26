@@ -3,6 +3,7 @@
 import asyncio
 import json
 from copy import deepcopy
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,12 +12,17 @@ from updater import app as app_module
 from updater import database as db
 from updater.config_utils import check_config_compliance, merge_template_config
 from updater.poller import NetworkPoller
+from updater.vendors.tachyon import TachyonDriver
+from updater.vendors.tachyon.client import TachyonClient
 
 
 LIVE = {"system": {"users": [
     {"username": "manager-login", "password": "synthetic-login", "level": 15},
     {"username": "existing", "password": "$1$abcdefgh$" + "a" * 22, "level": 1,
      "enabled": True, "device_field": "keep"},
+    {"username": "existing-plain", "password": "synthetic-existing", "level": 1},
+    {"username": "existing-empty", "password": "", "level": 1},
+    {"username": "existing-no-password", "level": 1},
 ]}}
 NEW_USER = {"username": "new-user", "password": "$1$ijklmnop$" + "b" * 22, "level": 1}
 
@@ -24,6 +30,7 @@ NEW_USER = {"username": "new-user", "password": "$1$ijklmnop$" + "b" * 22, "leve
 def fragment_for(case):
     user = {
         "add": NEW_USER,
+        "add_plain": {**NEW_USER, "password": "synthetic-new"},
         "change": {"username": "existing", "level": 15},
         "login": {"username": "manager-login"},
         "same": {"username": "existing", "password": "$1$qrstuvwx$" + "c" * 22,
@@ -38,6 +45,15 @@ def assert_add_only(config, fragment):
 
 
 class TestUsersMerge:
+    def test_only_added_plaintext_password_is_hashed(self):
+        from passlib.hash import md5_crypt
+        fragment = fragment_for("add_plain")
+        original = deepcopy(fragment)
+        merged = merge_template_config(LIVE, fragment, "manager-login")
+        assert merged["system"]["users"][:-1] == LIVE["system"]["users"]
+        assert md5_crypt.verify("synthetic-new", merged["system"]["users"][-1]["password"])
+        assert fragment == original
+
     def test_add_preserves_users_inputs_and_compliance(self):
         original = deepcopy(LIVE)
         fragment = fragment_for("add")
@@ -126,29 +142,78 @@ def users_db(mock_db):
     return mock_db
 
 
-def fake_client():
-    client = MagicMock()
-    client.login = AsyncMock(return_value=True)
-    client.connect = AsyncMock(return_value=True)
-    client.get_config = AsyncMock(side_effect=lambda: deepcopy(LIVE))
-    client.get_hardware_id.return_value = "synthetic-model"
-    client.apply_config = AsyncMock(return_value={"success": True})
-    return client
+@pytest.fixture
+def transport():
+    """Run the real client and vendor driver with synthetic transport replies."""
+    captured = {"posts": [], "logins": 0}
+
+    async def curl(client, method, endpoint, data=None):
+        if method == "GET":
+            assert endpoint == "/cgi.lua/config"
+            return 200, json.dumps(LIVE)
+        assert method == "POST"
+        assert endpoint in ("/cgi.lua/config?dry_run=true", "/cgi.lua/config")
+        captured["posts"].append((endpoint, json.loads(json.dumps(data))))
+        return 200, '{"success": true}'
+
+    async def subprocess(*command, **kwargs):
+        assert command[0] == "curl"
+        assert command[-1].endswith("/cgi.lua/login")
+        cookie_path = Path(command[command.index("-c") + 1])
+        cookie_path.write_text("device.test\tFALSE\t/\tFALSE\t0\ttoken\tsynthetic-token\n")
+        captured["logins"] += 1
+        process = MagicMock(returncode=0)
+        process.communicate = AsyncMock(return_value=(b'{"auth": true}', b""))
+        return process
+
+    with patch.object(TachyonClient, "_curl", autospec=True, side_effect=curl), \
+         patch("asyncio.create_subprocess_exec", side_effect=subprocess):
+        yield captured
 
 
-def check_apply(client, case):
+def check_apply(transport, case):
+    posts = transport["posts"]
     if case in ("change", "login"):
-        client.apply_config.assert_not_awaited()
+        assert posts == []
     else:
-        assert client.apply_config.await_count == 2
-        dry, apply = client.apply_config.await_args_list
-        assert dry.kwargs == {"dry_run": True}
-        assert apply.kwargs == {}
-        assert dry.args == apply.args
+        assert len(posts) == 2
+        assert [endpoint for endpoint, _ in posts] == [
+            "/cgi.lua/config?dry_run=true", "/cgi.lua/config",
+        ]
+        dry, apply = [payload for _, payload in posts]
+        assert dry == apply
+        for payload in (dry, apply):
+            assert payload["system"]["users"][:len(LIVE["system"]["users"])] == LIVE["system"]["users"]
         if case == "add":
-            assert_add_only(apply.args[0], fragment_for(case))
+            assert_add_only(apply, fragment_for(case))
+        elif case == "add_plain":
+            from passlib.hash import md5_crypt
+            added = apply["system"]["users"][-1]
+            assert md5_crypt.verify("synthetic-new", added["password"])
+            assert {k: v for k, v in added.items() if k != "password"} == {
+                k: v for k, v in NEW_USER.items() if k != "password"
+            }
         else:
-            assert apply.args[0] == LIVE
+            assert apply == LIVE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", [TachyonClient, TachyonDriver])
+async def test_unrelated_apply_keeps_default_password_normalization(transport, driver):
+    from passlib.hash import md5_crypt
+    client = driver("192.0.2.1", "manager-login", "synthetic-login")
+    config = deepcopy(LIVE)
+    assert (await client.apply_config(config, dry_run=True))["success"]
+    assert (await client.apply_config(config))["success"]
+    posts = transport["posts"]
+    assert len(posts) == 2
+    assert posts[0][1] == posts[1][1]
+    for _, payload in posts:
+        users = payload["system"]["users"]
+        assert md5_crypt.verify("synthetic-login", users[0]["password"])
+        assert md5_crypt.verify("synthetic-existing", users[2]["password"])
+        assert users[1] == LIVE["system"]["users"][1]
+        assert users[3:] == LIVE["system"]["users"][3:]
 
 
 @pytest.mark.parametrize("case", ["add", "same", "change", "login"])
@@ -195,19 +260,18 @@ def test_preview_resolves_login_or_fails_closed(operator_client, users_db, role)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["add", "same", "change", "login"])
-async def test_immediate_push_users(users_db, case):
-    client = fake_client()
+@pytest.mark.parametrize("case", ["add", "add_plain", "same", "change", "login"])
+async def test_immediate_push_users(users_db, transport, case):
     messages = AsyncMock()
     job = {"cancelled": False}
     device = {"ip": "192.0.2.1", "username": "manager-login",
               "password": "synthetic-login", "role": "ap"}
-    with patch("updater.app.TachyonClient", return_value=client), \
-         patch("updater.app.broadcast", messages), patch("updater.app.get_poller", return_value=None):
+    with patch("updater.app.broadcast", messages), patch("updater.app.get_poller", return_value=None):
         await app_module._run_config_push("synthetic-job", [device], [
             {"id": 1, "name": "Users", "fragment": fragment_for(case)},
         ], job)
-    check_apply(client, case)
+    assert transport["logins"] == 1
+    check_apply(transport, case)
     assert job["failed"] == (1 if case in ("change", "login") else 0)
     if job["failed"]:
         errors = [call.args[0].get("error", "") for call in messages.await_args_list]
@@ -217,8 +281,8 @@ async def test_immediate_push_users(users_db, case):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["add", "same", "change", "login"])
-async def test_rollout_resume_users(users_db, case):
+@pytest.mark.parametrize("case", ["add", "add_plain", "same", "change", "login"])
+async def test_rollout_resume_users(users_db, transport, case):
     snapshot = [{"id": 1, "name": "Users", "fragment": fragment_for(case)}]
     cursor = users_db.execute(
         "INSERT INTO config_push_rollouts "
@@ -232,13 +296,12 @@ async def test_rollout_resume_users(users_db, case):
         (rid, "192.0.2.1", "ap", "canary", "failed"),
     )
     users_db.commit()
-    client = fake_client()
-    with patch("updater.app.TachyonClient", return_value=client), \
-         patch("updater.app.broadcast", AsyncMock()), patch("updater.app.get_poller", return_value=None):
+    with patch("updater.app.broadcast", AsyncMock()), patch("updater.app.get_poller", return_value=None):
         result = await app_module.resume_config_push_rollout(rid, session={"role": "operator"})
         assert result == {"status": "resumed"}
         await app_module._config_push_rollout_task
-    check_apply(client, case)
+    assert transport["logins"] == 1
+    check_apply(transport, case)
     row = db.get_config_push_rollout_devices(rid)[0]
     assert row["status"] == ("failed" if case in ("change", "login") else "updated")
     if row["status"] == "failed":
@@ -248,14 +311,13 @@ async def test_rollout_resume_users(users_db, case):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["add", "same", "change", "login"])
-async def test_auto_enforce_users(users_db, case):
-    client = fake_client()
-    with patch("updater.poller.get_driver", return_value=MagicMock(return_value=client)):
-        result = await NetworkPoller()._enforce_device("192.0.2.1", "ap", [
-            {"id": 1, "config_fragment": json.dumps(fragment_for(case))},
-        ], "pct10", asyncio.Semaphore(1))
-    check_apply(client, case)
+@pytest.mark.parametrize("case", ["add", "add_plain", "same", "change", "login"])
+async def test_auto_enforce_users(users_db, transport, case):
+    result = await NetworkPoller()._enforce_device("192.0.2.1", "ap", [
+        {"id": 1, "config_fragment": json.dumps(fragment_for(case))},
+    ], "pct10", asyncio.Semaphore(1))
+    assert transport["logins"] == 1
+    check_apply(transport, case)
     if case in ("change", "login"):
         assert result[0:2] == (False, "policy")
         assert ("users_existing_user_change" if case == "change" else "users_login_protected") in result[2]

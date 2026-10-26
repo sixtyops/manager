@@ -279,8 +279,9 @@ def merge_template_config(base: dict, overlay: dict, login_username: str | None)
     """Add template users by username. Preserve all existing user records.
 
     Reject changes to existing users and any entry for the Manager login.
-    Compare stored passwords with the compliance rule. Other lists use
-    deep_merge and replace the device list.
+    Compare stored passwords with the compliance rule. Hash plaintext
+    passwords only for added users. Template applies must preserve these
+    prepared password fields. Other lists use deep_merge replacement.
     """
     if "system" not in overlay:
         return deep_merge(base, overlay)
@@ -323,7 +324,11 @@ def merge_template_config(base: dict, overlay: dict, login_username: str | None)
             if not _user_lists_compatible([live_by_name[name]], [user]):
                 raise ValueError(f"users_existing_user_change: template changes existing user '{name}'")
         else:
-            additions.append(user)
+            added_user = deepcopy(user)
+            password = added_user.get("password")
+            if isinstance(password, str) and password and not password.startswith("$1$"):
+                added_user["password"] = _md5_crypt(password)
+            additions.append(added_user)
 
     merged = deep_merge(base, overlay)
     merged["system"]["users"] = deepcopy(live_users + additions)

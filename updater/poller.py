@@ -1592,13 +1592,13 @@ class NetworkPoller:
                     merged = merge_template_config(merged, frag, device["username"])
 
                 # Dry-run validation
-                dry_result = await client.apply_config(merged, dry_run=True)
+                dry_result = await client.apply_config(merged, dry_run=True, preserve_user_passwords=True)
                 if not dry_result.get("success"):
                     error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run failed"))
                     raise PolicyEnforceError(f"Dry run rejected: {error_msg}")
 
                 # Apply
-                result = await client.apply_config(merged)
+                result = await client.apply_config(merged, preserve_user_passwords=True)
                 if not result.get("success"):
                     error_msg = result.get("error", result.get("raw_response", "Apply failed"))
                     raise PolicyEnforceError(f"Apply failed: {error_msg}")

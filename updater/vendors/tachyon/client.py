@@ -1109,23 +1109,26 @@ class TachyonClient:
 
         return result
 
-    async def apply_config(self, config: dict, dry_run: bool = False) -> dict:
+    async def apply_config(
+        self, config: dict, dry_run: bool = False, *, preserve_user_passwords: bool = False,
+    ) -> dict:
         """Apply full config to device via POST /cgi.lua/config.
 
-        Plaintext `system.users[*].password` values are MD5-crypt hashed
-        in place before send (see `_normalize_user_passwords`); the
-        validator rejects plaintext for users that don't already exist
-        on the device, so always hashing means the manager doesn't need
-        to track per-device user state.
+        By default, hash plaintext user passwords in place before send.
+        Template callers set preserve_user_passwords after the shared merge
+        helper hashes added users. Existing user fields then stay unchanged.
 
         Args:
-            config: Full device configuration dict. Mutated in place.
+            config: Full device configuration dict.
             dry_run: If True, validate without applying.
+            preserve_user_passwords: Send prepared password fields unchanged.
+                Use only after merge_template_config for template applies.
 
         Returns:
             Dict with 'success' bool and response details.
         """
-        config = _normalize_user_passwords(config)
+        if not preserve_user_passwords:
+            config = _normalize_user_passwords(config)
         endpoint = "/cgi.lua/config"
         if dry_run:
             endpoint += "?dry_run=true"

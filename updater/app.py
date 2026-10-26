@@ -7313,14 +7313,14 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
 
                     # Safety: dry_run first to validate the merged config
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "validating"})
-                    dry_result = await client.apply_config(merged, dry_run=True)
+                    dry_result = await client.apply_config(merged, dry_run=True, preserve_user_passwords=True)
                     if not dry_result.get("success"):
                         error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run validation failed"))
                         raise RuntimeError(f"Dry run rejected: {error_msg}")
 
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "applying"})
 
-                    result = await client.apply_config(merged)
+                    result = await client.apply_config(merged, preserve_user_passwords=True)
                     completed_at = datetime.now().isoformat()
                     duration = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()
 
@@ -7974,14 +7974,14 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
 
                 # Dry-run validation
                 await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "validating", "phase": phase})
-                dry_result = await client.apply_config(merged, dry_run=True)
+                dry_result = await client.apply_config(merged, dry_run=True, preserve_user_passwords=True)
                 if not dry_result.get("success"):
                     error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run validation failed"))
                     raise RuntimeError(f"Dry run rejected: {error_msg}")
 
                 # Apply
                 await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "applying", "phase": phase})
-                result = await client.apply_config(merged)
+                result = await client.apply_config(merged, preserve_user_passwords=True)
                 completed_at = datetime.now().isoformat()
                 duration = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()
 

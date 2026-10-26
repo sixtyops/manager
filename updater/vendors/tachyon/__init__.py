@@ -116,7 +116,11 @@ class TachyonDriver(VendorDriver):
     async def get_bridge_table(self) -> List[Dict[str, str]]:
         return await self._client.get_bridge_table()
 
-    async def apply_config(self, config: dict, dry_run: bool = False) -> dict:
+    async def apply_config(
+        self, config: dict, dry_run: bool = False, *, preserve_user_passwords: bool = False,
+    ) -> dict:
+        if preserve_user_passwords:
+            return await self._client.apply_config(config, dry_run, preserve_user_passwords=True)
         return await self._client.apply_config(config, dry_run)
 
     def get_firmware_types(self) -> List[Dict[str, str]]:
