@@ -18,6 +18,19 @@ USERINFO_URL = "https://synthetic-user:synthetic-password@receiver.example.test:
 USERINFO_REDACTED = "https://[REDACTED]@receiver.example.test:8443/hook?mode=test#result"
 
 
+def test_generated_api_token_is_redacted_from_diagnostic_output(monkeypatch, application_output):
+    from updater import auth
+
+    app, stream, _ = application_output
+    monkeypatch.setattr(auth.secrets, "token_urlsafe", lambda _: "synthetic_diagnostic_token")
+    synthetic_token, _, _ = auth.generate_api_token()
+
+    app.logger.warning("diagnostic included %s", synthetic_token)
+
+    assert "diagnostic included [REDACTED]" in stream.getvalue()
+    assert synthetic_token not in stream.getvalue()
+
+
 @pytest.fixture(autouse=True)
 def isolated_registry(monkeypatch):
     monkeypatch.setattr(scrub, "_secrets", set())
