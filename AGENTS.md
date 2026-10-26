@@ -98,17 +98,18 @@ Start worker completion messages with `DONE from <id> (<title>):`.
 
 ## Models
 
+Only the Manager lead session may use Claude models. Workers must not use them.
 Use installed and supported models. Verify provider, model, and reasoning IDs.
 Use normal mode unless the owner records a current extension.
+Large decisions require a four-agent quorum. The owner is the fifth vote.
 
 | Task | Model | Reasoning |
 |------|-------|-----------|
-| Architecture and audits | Fable (`claude-fable-5-1`) or Astra (`gpt-6-astra`) | Follow their recommendations |
-| Planning and safety builds | GPT-6.1 Sol (`gpt-6.1-sol`) | medium |
+| Architecture, planning, and audits | GPT-6 Astra (`gpt-6-astra`) | Follow its recommendations |
+| Safety builds | GPT-6.1 Sol (`gpt-6.1-sol`) | medium |
 | Reviews; safety reviews | GPT-6.1 Sol (`gpt-6.1-sol`) | medium; high for safety |
-| Small or medium code outside safety paths | GPT-6 Luna (`gpt-6-luna`) | high; xhigh for harder tasks |
-| Other complex code | Opus (`claude-opus-5-5`) or Sol (`gpt-6.1-sol`) | Match the task |
-| Other easy code; large-file reading | Sonnet (`claude-sonnet-5-5`); Haiku (`claude-haiku-4-5`) | Match the task |
+| Easier code outside safety paths | GPT-6 Luna (`gpt-6-luna`) | high; xhigh for harder tasks |
+| Other complex code | GPT-6.1 Sol (`gpt-6.1-sol`) | Match the task |
 
 The specific safety and review rows take precedence over the general rows.
 Give an architect's design to a coding worker for implementation.

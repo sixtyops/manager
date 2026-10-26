@@ -88,8 +88,10 @@ blocker to its lead, and stops. A follower does not create a wake job or
 delegate unless its brief explicitly asks it to. Hold overlapping work if two
 agents claim lead ownership, and report the conflict.
 
-Use the single [model table](../AGENTS.md#models). Do not give implementation
-work to an architect; give its design to a coding worker.
+Use the single [model policy](../AGENTS.md#models) for worker assignments and
+Sol/Luna reasoning levels. Only the Manager lead session may use Claude models.
+Large decisions require a four-agent quorum. The owner is the fifth vote.
+Do not give implementation work to an architect; give its design to a coding worker.
 Verify installed provider/model/thinking IDs before sending work. Reuse suitable
 workers and preserve active jobs. Give each worker
 a bounded task with evidence. Assign one writer per branch. Honor
@@ -181,7 +183,7 @@ The lead checks that each eligible non-draft PR awaiting review has
 for review and sends a wake.
 The review loop also runs hourly. Use its normal schedule, locks, budgets,
 cooldowns, and round limits. When the existing review process flags a PR for
-higher-level review, assign Fable or Astra to review its design, plan, and
+higher-level review, assign GPT-6 Astra to review its design, plan, and
 risks. Record the result and give any code change to a coding worker. Hold
 merge until this review and all normal review and sign-off gates pass. Use the
 existing `agent:escalated` and `agent:needs-human` states; do not create a new
