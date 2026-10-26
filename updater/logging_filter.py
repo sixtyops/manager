@@ -179,6 +179,33 @@ class _SanitizingFormatter(logging.Formatter):
         return _sanitize(output)
 
 
+def _redact_token_spans(output: str, pattern: re.Pattern[str] | None) -> str:
+    """Collect format and literal matches before replacing overlapping spans."""
+    spans = []
+    for matcher in (_generated_api_token_pattern, pattern):
+        if matcher is None:
+            continue
+        position = 0
+        while match := matcher.search(output, position):
+            spans.append(match.span())
+            # An interior match can extend beyond the preceding literal.
+            position = match.start() + 1
+    spans.sort(key=lambda span: (span[0], -span[1]))
+    merged = []
+    for start, end in spans:
+        if merged and start < merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    pieces = []
+    position = 0
+    for start, end in merged:
+        pieces.extend((output[position:start], "[REDACTED]"))
+        position = end
+    pieces.append(output[position:])
+    return "".join(pieces)
+
+
 def _sanitize(output: str) -> str:
     redactor = _url_redactor.get()
     if redactor is not None:
@@ -186,12 +213,9 @@ def _sanitize(output: str) -> str:
     # Redact URLs first so a registered substring cannot break their recognition.
     output = _http_userinfo.sub(r"\1[REDACTED]@", output)
     output = _slack_webhook.sub("https://hooks.slack.com/services/[REDACTED]", output)
-    output = _generated_api_token_pattern.sub("[REDACTED]", output)
     with _registry_lock:
         pattern = _pattern
-    if pattern is not None:
-        output = pattern.sub("[REDACTED]", output)
-    return output
+    return _redact_token_spans(output, pattern)
 
 
 def _handle_error(handler: logging.Handler, record: logging.LogRecord) -> None:

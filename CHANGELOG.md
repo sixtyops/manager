@@ -7,8 +7,9 @@ All notable changes to this project are documented in this file.
 ### Security
 - Register Tachyon session tokens from the login cookie jar before session use.
   Keep one registration per live client until replacement or client collection.
-  Redact all registered literals in one longest-first pass. Login, session
-  reuse, refresh, and request behavior are unchanged.
+  Collect API-format and registered literal matches before replacement.
+  Redact the full span when matches overlap. Login, session reuse, refresh,
+  and request behavior are unchanged.
 - Register generated Manager API tokens with the log sanitizer before hashing
   or storage. Existing output handlers redact these values in diagnostics.
   Retain at most 100 token literals; a fixed-format fallback redacts older

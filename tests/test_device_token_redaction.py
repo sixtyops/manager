@@ -294,3 +294,55 @@ def test_api_and_device_literals_share_one_pass(
     stream, _ = output
     assert "diagnostic=" + form("[REDACTED]") in stream.getvalue()
     assert "synthetic-private-suffix" not in stream.getvalue()
+
+
+@pytest.mark.parametrize("prefix", ["", "synthetic-device-prefix-"])
+@pytest.mark.parametrize("form", [str, repr, json.dumps])
+def test_device_token_with_api_shaped_substring_redacts_full_span(
+        output, token_owner, prefix, form):
+    api_shape = "tach_" + "Q" * 43
+    device_token = prefix + api_shape + "-device-private-suffix"
+    scrub.register_device_token(token_owner, device_token)
+    driver.logger.warning("device=%s", form(device_token))
+    stream, _ = output
+    assert "device=" + form("[REDACTED]") + "\n" in stream.getvalue()
+    assert "device-private-suffix" not in stream.getvalue()
+    assert "synthetic-device-prefix" not in stream.getvalue()
+
+
+@pytest.mark.parametrize("form", [str, repr, json.dumps])
+def test_full_device_span_and_evicted_api_span_survive_shorter_prefix(
+        output, token_owner, monkeypatch, form):
+    monkeypatch.setattr(scrub, "_GENERATED_API_TOKEN_LIMIT", 1)
+    api_shape = "tach_" + "Q" * 43
+    scrub.register_generated_api_token(api_shape)
+    scrub.register_generated_api_token("tach_" + "R" * 43)
+    assert api_shape not in scrub._generated_api_tokens
+    device_token = "synthetic-device-prefix-" + api_shape + "-device-private-suffix"
+    scrub.register_device_token(token_owner, device_token)
+    scrub.register_secret("tach_")
+    driver.logger.warning("device=%s api=%s prefix=%s", form(device_token), form(api_shape), "tach_")
+    stream, _ = output
+    expected = "device=" + form("[REDACTED]") + " api=" + form("[REDACTED]") + " prefix=[REDACTED]\n"
+    assert expected in stream.getvalue()
+    assert "device-private-suffix" not in stream.getvalue()
+    assert "Q" * 43 not in stream.getvalue()
+
+
+@pytest.mark.parametrize("device_first", [True, False])
+@pytest.mark.parametrize("form", [str, repr, json.dumps])
+def test_partially_overlapping_literals_cover_both_private_ends(
+        output, token_owner, device_first, form):
+    left = "synthetic-left-private|synthetic-shared|"
+    right = "synthetic-shared|synthetic-right-private"
+    registrations = [
+        lambda: scrub.register_device_token(token_owner, right),
+        lambda: scrub.register_secret(left),
+    ]
+    for register in registrations if device_first else reversed(registrations):
+        register()
+    driver.logger.warning("diagnostic=%s", form("synthetic-left-private|" + right))
+    stream, _ = output
+    assert "diagnostic=" + form("[REDACTED]") + "\n" in stream.getvalue()
+    assert "synthetic-left-private" not in stream.getvalue()
+    assert "synthetic-right-private" not in stream.getvalue()
