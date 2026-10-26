@@ -79,7 +79,7 @@ is merged and tested on the old schema. Stage 2 can then start.
 - It still self-applies. It exports the full data set and refuses to
   auto-apply anything newer.
 - It is a human gate ([#326](https://github.com/sixtyops/manager/issues/326)).
-  Stable releases need explicit approval from Isaac.
+  Stable releases need explicit approval from the owner.
 
 **Detail:** The bridge export carries devices, users, settings, config
 snapshots, firmware confirmations, job history, and the Fernet key. After
@@ -190,7 +190,7 @@ pinned image tag exists in GHCR.
    them. A partner moves only after the first new-schema stable is published.
    Before each move, confirm the partner is on the bridge release and has a
    backup of `./data` with the Fernet key. Production-device and stable-release
-   actions need Isaac. They are outside the lead's grant.
+   actions need the owner. They are outside the lead's grant.
 3. **Partners who stay behind.** A partner who has not moved stays on the bridge
    release. The bridge release does not auto-apply newer releases. Track each
    such partner in the exit criteria below until they move or have a scheduled
@@ -234,15 +234,15 @@ Rules for these checks:
 ## Risks and open items
 
 **Key points:** Three items can change this plan. Each needs a decision from
-Isaac or a bench result.
+the owner or a bench result.
 
 **Detail:**
 
 - **Stable approval.** The bridge release and the first new-schema stable are
-  stable releases. Stable releases are outside the lead's grant. Isaac approves
+  stable releases. Stable releases are outside the lead's grant. The owner approves
   each one.
 - **Bench readiness.** Hardware proof for engine work depends on named bench
-  devices. Isaac names them. Missing hardware blocks live proof. It does not
+  devices. The owner names them. Missing hardware blocks live proof. It does not
   block document and fixture work.
 - **Stage 3 length.** The dev-only period has no set length. It ends when its
   exit gate passes. Do not shorten it by skipping a gate.
