@@ -25,8 +25,7 @@ def isolated_device_registry(monkeypatch):
     monkeypatch.setattr(scrub, "_device_tokens", {})
     monkeypatch.setattr(scrub, "_secrets", set())
     monkeypatch.setattr(scrub, "_pattern", None)
-    if hasattr(scrub, "_generated_api_tokens"):
-        monkeypatch.setattr(scrub, "_generated_api_tokens", OrderedDict())
+    monkeypatch.setattr(scrub, "_generated_api_tokens", OrderedDict())
 
 
 @pytest.fixture
@@ -279,8 +278,6 @@ def test_longer_ordinary_secret_and_shorter_device_token_share_one_pass(
 @pytest.mark.parametrize("device_first", [True, False])
 @pytest.mark.parametrize("device_longer", [True, False])
 @pytest.mark.parametrize("form", [str, repr, json.dumps])
-@pytest.mark.skipif(not hasattr(scrub, "register_generated_api_token"),
-                    reason="API token registry dependency has not merged")
 def test_api_and_device_literals_share_one_pass(
         output, token_owner, monkeypatch, device_first, device_longer, form):
     monkeypatch.setattr(scrub, "_generated_api_tokens", OrderedDict())
