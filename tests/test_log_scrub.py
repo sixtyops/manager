@@ -52,6 +52,25 @@ def test_generated_api_token_redaction_registry_is_bounded(application_output, m
     assert tokens[-1] not in output
 
 
+def test_evicted_token_is_redacted_before_registered_prefix(application_output, monkeypatch):
+    from updater import auth
+
+    app, stream, _ = application_output
+    values = iter(f"{index:043d}" for index in range(scrub._GENERATED_API_TOKEN_LIMIT + 1))
+    monkeypatch.setattr(auth.secrets, "token_urlsafe", lambda _: next(values))
+
+    tokens = [auth.generate_api_token()[0] for _ in range(scrub._GENERATED_API_TOKEN_LIMIT + 1)]
+    assert tokens[0] not in scrub._generated_api_tokens
+    scrub.register_secret("tach_")
+
+    app.logger.warning("evicted=%s ordinary=%s", tokens[0], "tach_")
+
+    output = stream.getvalue()
+    assert f"evicted=[REDACTED] ordinary=[REDACTED]" in output
+    assert tokens[0] not in output
+    assert tokens[0][5:] not in output
+
+
 def test_failed_token_persistence_keeps_generated_value_redacted(
     application_output, authed_client, monkeypatch,
 ):
