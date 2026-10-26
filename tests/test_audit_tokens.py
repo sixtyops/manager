@@ -129,6 +129,47 @@ class TestApiTokens:
         assert token_prefix.endswith("...")
         assert len(token_hash) == 64  # SHA-256 hex
 
+    def test_generate_api_token_registers_before_hashing(self, monkeypatch):
+        from updater import auth
+
+        token = "tach_synthetic_generated_token"
+        registered = []
+        monkeypatch.setattr(auth.secrets, "token_urlsafe", lambda _: "synthetic_generated_token")
+        monkeypatch.setattr(auth, "register_generated_api_token", registered.append)
+
+        def hash_after_registration(value):
+            assert registered == [token]
+            assert value == token
+            return "synthetic_hash"
+
+        monkeypatch.setattr(auth, "hash_api_token", hash_after_registration)
+        generated, token_hash, token_prefix = auth.generate_api_token()
+
+        assert (generated, token_hash, token_prefix) == (
+            token, "synthetic_hash", "tach_synt...",
+        )
+
+    def test_unknown_inbound_bearer_is_not_registered(self, monkeypatch):
+        from starlette.requests import Request
+        from updater import auth
+
+        registered = []
+        monkeypatch.setattr(auth, "register_secret", registered.append)
+        monkeypatch.setattr(auth.db, "get_api_token_by_hash", lambda _: None)
+        request = Request({
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [(b"authorization", b"Bearer synthetic_inbound_value")],
+            "query_string": b"",
+            "server": ("test", 80),
+            "client": ("test", 1234),
+            "scheme": "http",
+        })
+
+        assert auth._authenticate_bearer(request) is None
+        assert registered == []
+
     def test_hash_api_token_deterministic(self):
         from updater.auth import hash_api_token
         h1 = hash_api_token("test_token_123")

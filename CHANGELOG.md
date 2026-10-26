@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Security
+- Register generated Manager API tokens with the log sanitizer before hashing
+  or storage. Existing output handlers redact these values in diagnostics.
+  Retain at most 100 token literals; a fixed-format fallback redacts older
+  tokens. Inbound Cookie and Bearer credentials are not registered. Token
+  generation, storage, expiry, scopes, authentication, and one-time response
+  behavior are unchanged.
 - Documented current Manager session, API token, OIDC ID token, and Tachyon
   device session token storage, expiry, refresh behavior, log paths, and
   `register_secret` coverage. Manager session registration is already in place
