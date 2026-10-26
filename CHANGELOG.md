@@ -7,7 +7,13 @@ All notable changes to this project are documented in this file.
 ### Security
 - Documented current Manager session, API token, OIDC ID token, and Tachyon
   device session token storage, expiry, refresh behavior, log paths, and
-  `register_secret` coverage. This inventory changes no runtime behavior.
+  `register_secret` coverage. Manager session registration is already in place
+  through [#519](https://github.com/sixtyops/manager/pull/519) for issue
+  [#518](https://github.com/sixtyops/manager/issues/518). Full API-token
+  registration remains open in [#578](https://github.com/sixtyops/manager/issues/578).
+  Tachyon device-token registration remains open in
+  [#579](https://github.com/sixtyops/manager/issues/579). This inventory changes
+  no runtime behavior.
 
 ### Removed
 - Removed `GET /api/uptime/device` and `GET /api/uptime/events`, plus their
