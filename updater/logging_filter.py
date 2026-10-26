@@ -13,6 +13,7 @@ import re
 import sys
 import threading
 import traceback
+import weakref
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -21,13 +22,12 @@ from urllib.parse import unquote, urlsplit
 
 import httpx
 
-_device_tokens: dict[str, None] = {}
-_DEVICE_TOKEN_LIMIT = 100
-_device_token_pattern: re.Pattern[str] | None = None
+_device_tokens: dict[weakref.ReferenceType, str] = {}
 
 _secrets: set[str] = set()
 _pattern: re.Pattern[str] | None = None
-_registry_lock = threading.Lock()
+# Client collection can retire tokens while a literal pattern is being built.
+_registry_lock = threading.RLock()
 # Match canonical capability URLs up to ordinary log delimiters. The fixed
 # prefix and single character class also cover encoded paths, queries and fragments.
 _slack_webhook = re.compile(
@@ -106,45 +106,44 @@ def redact_url_credentials(url: str, error_type: str = "Error") -> Iterator[Call
         _url_redactor.reset(token)
 
 
-def register_device_token(value: str | None) -> None:
-    """Retain at most 100 recent device tokens for literal log redaction.
+def _retire_device_token(owner_ref: weakref.ReferenceType) -> None:
+    with _registry_lock:
+        if owner_ref in _device_tokens:
+            del _device_tokens[owner_ref]
+            _rebuild_secret_pattern()
 
-    Evicted opaque values have no format-based fallback.
-    """
-    global _device_token_pattern
+
+def register_device_token(owner: object, value: str | None) -> None:
+    """Keep one token per live client, without retaining the client or history."""
     if not value:
         return
+    owner_ref = weakref.ref(owner, _retire_device_token)
     with _registry_lock:
-        _device_tokens.pop(value, None)
-        _device_tokens[value] = None
-        if len(_device_tokens) > _DEVICE_TOKEN_LIMIT:
-            del _device_tokens[next(iter(_device_tokens))]
-        forms = set()
-        for token in _device_tokens:
-            forms.update((token, repr(token)[1:-1], json.dumps(token)[1:-1],
-                          json.dumps(token, ensure_ascii=False)[1:-1]))
-        _device_token_pattern = re.compile("|".join(
-            re.escape(form) for form in sorted(forms, key=len, reverse=True)
-        ))
+        _device_tokens[owner_ref] = value
+        _rebuild_secret_pattern()
 
 
 def register_secret(value: str | None) -> None:
     """Register a literal secret. Ignore None, empty values, and duplicates."""
-    global _pattern
     if not value:
         return
     with _registry_lock:
         if value in _secrets:
             return
         _secrets.add(value)
-        # Derive only four standard forms from each raw registered value.
-        forms = {form for secret in _secrets for form in (
-            secret, repr(secret)[1:-1], json.dumps(secret)[1:-1],
-            json.dumps(secret, ensure_ascii=False)[1:-1],
-        )}
-        # Match longer literals first and do not scan replacement text again.
-        _pattern = re.compile("|".join(re.escape(form) for form in
-                                     sorted(forms, key=len, reverse=True)))
+        _rebuild_secret_pattern()
+
+
+def _rebuild_secret_pattern() -> None:
+    """Match the longest literal across ordinary secrets and live device tokens."""
+    global _pattern
+    values = _secrets | set(_device_tokens.values())
+    forms = {form for secret in values for form in (
+        secret, repr(secret)[1:-1], json.dumps(secret)[1:-1],
+        json.dumps(secret, ensure_ascii=False)[1:-1],
+    )}
+    _pattern = re.compile("|".join(re.escape(form) for form in
+                                 sorted(forms, key=len, reverse=True))) if forms else None
 
 
 class _SanitizingFormatter(logging.Formatter):
@@ -168,8 +167,6 @@ def _sanitize(output: str) -> str:
     output = _http_userinfo.sub(r"\1[REDACTED]@", output)
     output = _slack_webhook.sub("https://hooks.slack.com/services/[REDACTED]", output)
     with _registry_lock:
-        if _device_token_pattern is not None:
-            output = _device_token_pattern.sub("[REDACTED]", output)
         pattern = _pattern
     return pattern.sub("[REDACTED]", output) if pattern is not None else output
 

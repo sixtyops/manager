@@ -301,7 +301,7 @@ class TachyonClient:
                     if line and not line.startswith("#"):
                         parts = line.split("\t")
                         if len(parts) >= 7 and parts[5] == "token":
-                            register_device_token(parts[6])
+                            register_device_token(self, parts[6])
                             self._token = parts[6]
                             logger.info(f"Logged in to {self.ip}")
                             return True

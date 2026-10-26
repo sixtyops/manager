@@ -6,9 +6,9 @@ All notable changes to this project are documented in this file.
 
 ### Security
 - Register Tachyon session tokens from the login cookie jar before session use.
-  Output handlers redact the 100 most recently registered device tokens.
-  Evicted opaque tokens have no format-based fallback. Login, session reuse,
-  refresh, and request behavior are unchanged.
+  Keep one registration per live client until replacement or client collection.
+  Redact all registered literals in one longest-first pass. Login, session
+  reuse, refresh, and request behavior are unchanged.
 - Documented current Manager session, API token, OIDC ID token, and Tachyon
   device session token storage, expiry, refresh behavior, log paths, and
   `register_secret` coverage. Manager session registration is already in place
