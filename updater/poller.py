@@ -12,7 +12,7 @@ from typing import Callable, Optional
 from . import database as db
 from . import radius_config
 from .config_utils import (
-    deep_merge,
+    merge_template_config,
     fragment_matches,
     check_config_compliance,
     validate_fragment_safety,
@@ -1589,7 +1589,7 @@ class NetworkPoller:
                 for t in templates:
                     frag = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
                     validate_fragment_safety(frag)
-                    merged = deep_merge(merged, frag)
+                    merged = merge_template_config(merged, frag, device["username"])
 
                 # Dry-run validation
                 dry_result = await client.apply_config(merged, dry_run=True)

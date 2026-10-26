@@ -6327,6 +6327,7 @@ from .config_utils import (
     validate_fragment_safety as _validate_fragment_safety,
     validate_ping_watchdog_safety as _validate_ping_watchdog_safety,
     deep_merge,
+    merge_template_config,
     generate_config_diff,
     check_config_compliance as _check_config_compliance,
     fragment_matches as _fragment_matches,
@@ -7110,10 +7111,20 @@ async def preview_config_merge(request: Request, session: dict = Depends(require
 
     original = json.loads(stored["config_json"]) if isinstance(stored["config_json"], str) else stored["config_json"]
 
+    device = db.get_access_point(ip) or db.get_switch(ip)
+    if not device:
+        cpe = db.get_cpe_by_ip(ip)
+        if cpe:
+            device = db.get_access_point(cpe["ap_ip"])
+    login_username = device.get("username") if device else None
+
     # Apply only the templates that match this device's type
     merged = original
     for t in applicable:
-        merged = deep_merge(merged, t["fragment"])
+        try:
+            merged = merge_template_config(merged, t["fragment"], login_username)
+        except ValueError as e:
+            raise HTTPException(400, f"Template '{t['name']}' rejected for {ip}: {e}")
 
     diff_lines = generate_config_diff(original, merged, label_a="current", label_b="after merge")
 
@@ -7298,7 +7309,7 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                     # Merge applicable templates into current config
                     merged = current_config
                     for t in applicable:
-                        merged = deep_merge(merged, t["fragment"])
+                        merged = merge_template_config(merged, t["fragment"], device["username"])
 
                     # Safety: dry_run first to validate the merged config
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "validating"})
@@ -7946,7 +7957,7 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
                 # Merge applicable templates only
                 merged = current_config
                 for t in applicable:
-                    merged = deep_merge(merged, t["fragment"])
+                    merged = merge_template_config(merged, t["fragment"], creds["username"])
 
                 # Defense-in-depth: even when each template individually
                 # cleared `_validate_ping_watchdog_safety`, the deep_merge

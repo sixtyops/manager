@@ -1736,9 +1736,8 @@ class TestProtectedConfigKeys:
         validate_fragment_safety({"wireless": {"country": "US"}})
         validate_fragment_safety({"services": {"radios": {}, "zones": []}})
 
-    # Fragments in the shape that formDataToFragment (monitor.html) builds for
-    # each shipped template type. They must keep passing until the owner
-    # decides the Users rule in #310.
+    # Save validation allows Users entries. The merge checks live users
+    # and the Manager login before preview or push.
     @pytest.mark.parametrize("fragment", [
         {"services": {"snmp": {
             "enabled": True,

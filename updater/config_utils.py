@@ -275,6 +275,61 @@ def _user_lists_compatible(device_users, template_users) -> bool:
     return True
 
 
+def merge_template_config(base: dict, overlay: dict, login_username: str | None) -> dict:
+    """Add template users by username. Preserve all existing user records.
+
+    Reject changes to existing users and any entry for the Manager login.
+    Compare stored passwords with the compliance rule. Other lists use
+    deep_merge and replace the device list.
+    """
+    if "system" not in overlay:
+        return deep_merge(base, overlay)
+    system = overlay["system"]
+    if not isinstance(system, dict):
+        raise ValueError("users_invalid: template system must be an object")
+    if "users" not in system:
+        return deep_merge(base, overlay)
+    if not isinstance(login_username, str) or not login_username:
+        raise ValueError("users_login_unknown: cannot verify the Manager login user")
+
+    live_system = base.get("system", {})
+    if not isinstance(live_system, dict):
+        raise ValueError("users_invalid: device system must be an object")
+    live_users = live_system.get("users", [])
+    template_users = system["users"]
+
+    def by_username(users, source):
+        if not isinstance(users, list):
+            raise ValueError(f"users_invalid: {source} system.users must be a list")
+        result = {}
+        for user in users:
+            if not isinstance(user, dict):
+                raise ValueError(f"users_invalid: {source} user must be an object")
+            name = user.get("username")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(f"users_invalid: {source} user needs a username")
+            if name in result:
+                raise ValueError(f"users_invalid: {source} has duplicate username '{name}'")
+            result[name] = user
+        return result
+
+    live_by_name = by_username(live_users, "device")
+    template_by_name = by_username(template_users, "template")
+    additions = []
+    for name, user in template_by_name.items():
+        if name == login_username:
+            raise ValueError(f"users_login_protected: template names Manager login user '{name}'")
+        if name in live_by_name:
+            if not _user_lists_compatible([live_by_name[name]], [user]):
+                raise ValueError(f"users_existing_user_change: template changes existing user '{name}'")
+        else:
+            additions.append(user)
+
+    merged = deep_merge(base, overlay)
+    merged["system"]["users"] = deepcopy(live_users + additions)
+    return merged
+
+
 def fragment_matches(config: dict, fragment: dict, _path: tuple = ()) -> bool:
     """Check if all keys in fragment match corresponding values in config.
 
