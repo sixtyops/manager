@@ -79,8 +79,10 @@ for complex code. Luna and Sonnet (`claude-sonnet-5-5`) for easier code.
 Haiku (`claude-haiku-4-5`) for reading large files. Do not give implementation
 work to an architect; give its design to a coding worker.
 
-Use epic413's model policy. Use GPT-6.1 Sol medium for safety builds, planning,
-and reviews. Use Sol high for safety reviews. Use GPT-6 Luna high for small or
+Use epic413's model policy. Use GPT-6.1 Sol medium for safety builds and
+planning. The review loop uses only GPT-6 Luna: medium for reviews, and high for
+safety reviews. It reviews only the safety of managing hardware at scale. The
+focus list is `AGENT_LOOP_REVIEW_FOCUS` in the loop configuration. Use GPT-6 Luna high for small or
 medium coding tasks outside the safety path. Use xhigh for a harder task.
 Verify installed provider/model/thinking IDs before sending work. Reuse suitable
 workers and preserve active jobs. Give each worker

@@ -127,8 +127,9 @@ Do not send direct Signal messages from lead or worker sessions.
   Distinguish target behavior from shipped behavior.
 - Keep one issue per PR. Mark small, dependency-ready work `agent:ready`.
   Finish active fixes first and keep at most three active build or fix PRs.
-  Use GPT-6.1 Sol medium for safety builds and planning. Use GPT-6.1 Sol
-  medium for reviews, or high for safety reviews. Use GPT-6 Luna high for small
+  Use GPT-6.1 Sol medium for safety builds and planning. The review loop uses
+  only GPT-6 Luna: medium for reviews, or high for safety reviews. It reviews
+  only the safety of managing hardware at scale. Use GPT-6 Luna high for small
   or medium coding tasks outside the safety path. Use xhigh for a harder task.
   The fast-mode grant ended on 2026-10-03. Use normal mode unless the owner
   records a current extension.
