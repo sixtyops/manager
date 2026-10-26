@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable, List
 
+from ...logging_filter import register_device_token
+
 logger = logging.getLogger(__name__)
 
 # SSL verification for device connections (disabled by default for self-signed certs)
@@ -299,6 +301,7 @@ class TachyonClient:
                     if line and not line.startswith("#"):
                         parts = line.split("\t")
                         if len(parts) >= 7 and parts[5] == "token":
+                            register_device_token(parts[6])
                             self._token = parts[6]
                             logger.info(f"Logged in to {self.ip}")
                             return True

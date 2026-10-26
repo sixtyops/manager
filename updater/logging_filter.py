@@ -21,6 +21,10 @@ from urllib.parse import unquote, urlsplit
 
 import httpx
 
+_device_tokens: dict[str, None] = {}
+_DEVICE_TOKEN_LIMIT = 100
+_device_token_pattern: re.Pattern[str] | None = None
+
 _secrets: set[str] = set()
 _pattern: re.Pattern[str] | None = None
 _registry_lock = threading.Lock()
@@ -102,6 +106,28 @@ def redact_url_credentials(url: str, error_type: str = "Error") -> Iterator[Call
         _url_redactor.reset(token)
 
 
+def register_device_token(value: str | None) -> None:
+    """Retain at most 100 recent device tokens for literal log redaction.
+
+    Evicted opaque values have no format-based fallback.
+    """
+    global _device_token_pattern
+    if not value:
+        return
+    with _registry_lock:
+        _device_tokens.pop(value, None)
+        _device_tokens[value] = None
+        if len(_device_tokens) > _DEVICE_TOKEN_LIMIT:
+            del _device_tokens[next(iter(_device_tokens))]
+        forms = set()
+        for token in _device_tokens:
+            forms.update((token, repr(token)[1:-1], json.dumps(token)[1:-1],
+                          json.dumps(token, ensure_ascii=False)[1:-1]))
+        _device_token_pattern = re.compile("|".join(
+            re.escape(form) for form in sorted(forms, key=len, reverse=True)
+        ))
+
+
 def register_secret(value: str | None) -> None:
     """Register a literal secret. Ignore None, empty values, and duplicates."""
     global _pattern
@@ -142,6 +168,8 @@ def _sanitize(output: str) -> str:
     output = _http_userinfo.sub(r"\1[REDACTED]@", output)
     output = _slack_webhook.sub("https://hooks.slack.com/services/[REDACTED]", output)
     with _registry_lock:
+        if _device_token_pattern is not None:
+            output = _device_token_pattern.sub("[REDACTED]", output)
         pattern = _pattern
     return pattern.sub("[REDACTED]", output) if pattern is not None else output
 
