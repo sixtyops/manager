@@ -29,6 +29,19 @@ phase or status holds instead of cascading.
 from typing import Optional
 
 
+SCHEDULED_ROLLOUT_SAFETY_REASON = (
+    "Scheduled firmware updates are paused for safety qualification. "
+    "Complete the rollout safety fixes and bench tests, then have the operator record readiness."
+)
+
+
+def scheduled_admission_decision(settings: dict) -> tuple[bool, Optional[str]]:
+    """Admit scheduled work after the operator records safety readiness."""
+    if settings.get("scheduled_rollout_safety_ready") != "true":
+        return False, SCHEDULED_ROLLOUT_SAFETY_REASON
+    return True, None
+
+
 def phase_run_decision(
     rollout: dict,
     window_key: str,

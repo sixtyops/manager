@@ -18,6 +18,33 @@ whether a wave may start. Failures pause the rollout for manual review. Manual
 per-device updates bypass everything (including the hold) — that is how an operator
 tests new firmware before the fleet rolls.
 
+## Scheduled safety readiness
+
+**Key points:** Keep unattended schedules paused until safety qualification is
+complete. `scheduled_rollout_safety_ready` defaults to `false`, including on
+existing installs. `schedule_enabled=true` still requires this readiness record.
+Manual per-device updates remain available and bypass the Firmware Hold.
+
+**Detail:** The scheduler calls `rollout_gate.scheduled_admission_decision` before
+creating a rollout, starting a job, or advancing an empty wave. An existing job
+finishes its recovery. The Auto-Update control shows the safety reason while
+readiness is pending, including when the schedule is off.
+
+Complete [#416](https://github.com/sixtyops/manager/issues/416),
+[#369](https://github.com/sixtyops/manager/issues/369),
+[#337](https://github.com/sixtyops/manager/issues/337),
+[#341](https://github.com/sixtyops/manager/issues/341),
+[#338](https://github.com/sixtyops/manager/issues/338),
+[#367](https://github.com/sixtyops/manager/issues/367),
+[#417](https://github.com/sixtyops/manager/issues/417), and
+[#422](https://github.com/sixtyops/manager/issues/422), with exact-head bench proof.
+Then have the operator record readiness through the admin settings API:
+`POST /api/settings/save` with `{"scheduled_rollout_safety_ready":"true"}`.
+Record the qualification evidence with that decision. This flag records the
+operator decision; it does not check issue status or establish bench proof.
+Set it to `false` to pause new scheduled admission again. The schedule toggle
+changes `schedule_enabled` independently of this flag.
+
 ## The gate (`rollout_gate.py`)
 
 `phase_run_decision(rollout, window_key, *, first_wave_held)` — fail-closed, two rules:
@@ -58,9 +85,11 @@ both rules in.
 ## Halt-on-first-failure
 
 A device that fails to return online cancels the update job (`app.py`) and the rollout
-is paused (`scheduler.on_job_completed` on `failed_count > 0`). A strict-mode smoke
-failure (`smoke_test_strict`) marks the device failed and likewise halts the job. With
-the default `parallel_updates=2`, the first bad device stops the run before it spreads.
+is paused (`scheduler.on_job_completed` on `failed_count > 0`). Smoke-test warnings,
+failed checks, and exceptions mark the device failed and request job cancellation,
+including with `smoke_test_strict=false`. Already active device operations can
+continue. Persistent window stops and serialized recovery require the remaining
+safety fixes.
 
 ## Per-device update state
 

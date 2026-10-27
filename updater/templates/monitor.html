@@ -2952,10 +2952,10 @@
             <!-- Firmware/Updates bar (shown when firmware mode active) -->
             <div class="drawer-handle-half active" id="drawerHandleLeft">
                 <div class="status-bar-section">
-                    <button class="toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-pressed="false" onclick="toggleAutoSchedule(event)" data-min-role-disable="operator"></button>
+                    <button class="toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-describedby="barBlockReason" aria-pressed="false" onclick="toggleAutoSchedule(event)" data-min-role-disable="operator"></button>
                     <span class="status-bar-label">Auto-Update</span>
                     <span class="status-badge status-bar-badge" id="barStateBadge">Off</span>
-                    <span class="status-bar-reason" id="barBlockReason"></span>
+                    <span class="status-bar-reason" id="barBlockReason" role="status"></span>
                 </div>
                 <div class="status-bar-section hidden" id="barDeviceCountSection">
                     <span class="status-bar-count" id="barBehindCount"></span>
@@ -8719,7 +8719,8 @@
 
             if (barToggle) setToggleActive(barToggle, autoUpdateEnabled);
             badge.className = 'status-badge status-bar-badge';
-            reason.textContent = '';
+            reason.textContent = status.safety_block_reason || '';
+            reason.title = status.safety_block_reason || '';
 
             if (state === 'disabled') {
                 badge.innerHTML = '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>Off';
@@ -8741,6 +8742,7 @@
                 idle:                { label: 'Scheduled', cls: 'idle',    icon: SCHEDULED_ICON },
                 waiting:             { label: 'Scheduled', cls: 'idle',    icon: SCHEDULED_ICON },
                 running:             { label: 'Updating',  cls: 'running', icon: RUNNING_ICON },
+                blocked_safety:      { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_weather:     { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_time:        { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_no_firmware: { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
@@ -8797,7 +8799,8 @@
             if (status.hold_clear_reason) {
                 subtitle = status.hold_clear_reason;
             }
-            reason.textContent = subtitle;
+            reason.textContent = status.safety_block_reason || subtitle;
+            reason.title = reason.textContent;
 
             // Track state changes for UI updates
             const prevState = lastAutoState;

@@ -2206,6 +2206,7 @@ async def get_settings(session: dict = Depends(require_auth)):
 
 
 _SETTINGS_WRITABLE = {
+    "scheduled_rollout_safety_ready",
     "schedule_enabled", "schedule_days", "schedule_start_hour", "schedule_end_hour",
     "parallel_updates", "bandwidth_limit_kbps",
     "bank_mode", "allow_downgrade", "timezone", "zip_code",
@@ -2288,6 +2289,7 @@ def _validate_settings(filtered: dict):
         raise HTTPException(400, "temperature_unit must be 'auto', 'c', or 'f'")
 
     bool_like = {
+        "scheduled_rollout_safety_ready",
         "schedule_enabled", "allow_downgrade", "weather_check_enabled",
         "firmware_beta_enabled", "autoupdate_enabled", "pre_update_reboot",
         "snmp_traps_enabled",
@@ -5617,7 +5619,6 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             logger.warning(f"Failed to save device duration for {ip}: {e}")
 
         # Post-update smoke tests
-        strict_mode = db.get_setting("smoke_test_strict", "false") == "true"
         smoke_failed = False
         smoke_clean_pass = False  # smoke ran AND passed cleanly (no warnings, no error)
         if client:
@@ -5628,38 +5629,30 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     pre_update_cpe_count=pre_update_cpe_count,
                 )
                 device_status.smoke_checks = smoke_result.checks
-                if not smoke_result.passed:
+                if not smoke_result.passed or smoke_result.warnings:
+                    smoke_failed = True
                     device_status.smoke_warnings = smoke_result.warnings
-                    warning_summary = "; ".join(smoke_result.warnings[:3])
+                    warning_summary = "; ".join(smoke_result.warnings[:3]) or "Required check failed"
                     if len(warning_summary) > 200:
                         warning_summary = warning_summary[:197] + "..."
-                    if strict_mode:
-                        smoke_failed = True
-                        device_status.status = "failed"
-                        device_status.error = f"Smoke test failed: {warning_summary}"
-                        device_status.progress_message = f"{prefix}Updated to {result.new_version} (FAILED smoke tests: {warning_summary})"
-                        logger.warning(f"Smoke test STRICT FAILURE for {ip}: {smoke_result.warnings}")
-                    else:
-                        device_status.progress_message = f"{prefix}Updated to {result.new_version} (warnings: {warning_summary})"
-                        logger.warning(f"Smoke test warnings for {ip}: {smoke_result.warnings}")
+                    device_status.status = "failed"
+                    device_status.error = f"Smoke test failed: {warning_summary}"
+                    device_status.progress_message = f"{prefix}Updated to {result.new_version}. Smoke test failed: {warning_summary}"
+                    logger.warning(f"Smoke test failure for {ip}: {warning_summary}")
                 else:
                     smoke_clean_pass = True
+                    device_status.status = "success"
                     device_status.progress_message = f"{prefix}Updated to {result.new_version} (smoke tests passed)"
             except Exception as e:
-                logger.warning(f"Smoke test error for {ip} (non-fatal): {e}")
-                device_status.smoke_warnings = [f"Smoke test error: {e}"]
-            # Restore status unless strict mode failed it
-            if not smoke_failed:
-                device_status.status = "success"
+                smoke_failed = True
+                device_status.status = "failed"
+                device_status.error = f"Smoke test error: {e}"
+                device_status.smoke_warnings = [device_status.error]
+                device_status.progress_message = f"{prefix}{device_status.error}"
+                logger.warning(f"Smoke test error for {ip}: {e}")
 
-        # A device that updated and *cleanly* passed its smoke tests is "confirmed
-        # working" on the new firmware. One confirmed device of a model family
-        # clears that family's Firmware Hold for the auto-rollout (the operator's
-        # manual canary). We require a clean smoke pass — NOT just a "success"
-        # status, which non-strict warnings and smoke-test exceptions also leave —
-        # so a device that didn't actually pass smoke can't release the fleet. On a
-        # strict smoke failure, halt the whole job (halt-on-first-failure) so a bad
-        # firmware can't spread past the first device(s) that exhibit it.
+        # Record Firmware Hold proof after a clean smoke pass.
+        # Request job cancellation after each smoke failure.
         if smoke_clean_pass and result.new_version:
             try:
                 db.mark_device_firmware_confirmed(

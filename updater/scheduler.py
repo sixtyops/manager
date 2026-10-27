@@ -408,6 +408,15 @@ class AutoUpdateScheduler:
         if self._current_job_id is not None:
             return
 
+        admitted, reason = rollout_gate.scheduled_admission_decision(settings)
+        if not admitted:
+            if self._state != "blocked_safety":
+                db.log_schedule_event("blocked_safety", reason)
+            self._state = "blocked_safety"
+            self._block_reason = reason
+            await self._broadcast_status()
+            return
+
         tz_str = settings.get("timezone", "auto")
         if tz_str == "auto":
             tz_str = await services.get_timezone()
@@ -1451,6 +1460,11 @@ class AutoUpdateScheduler:
             return {"auto_update_eligible": False, "next_attempt_iso": None,
                     "reason": "Auto-update is off"}
 
+        admitted, reason = rollout_gate.scheduled_admission_decision(settings)
+        if not admitted:
+            return {"auto_update_eligible": False, "next_attempt_iso": None,
+                    "reason": reason}
+
         schedule_days = settings.get("schedule_days", "")
         start_hour = _as_int(settings.get("schedule_start_hour", "3"), 3)
         end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
@@ -1589,6 +1603,7 @@ class AutoUpdateScheduler:
 
         return {
             "state": self._state,
+            "safety_block_reason": rollout_gate.scheduled_admission_decision(settings)[1],
             "block_reason": self._block_reason,
             "weather": self._weather_info,
             "last_run_result": self._last_run_result,
