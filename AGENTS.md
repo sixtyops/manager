@@ -20,9 +20,11 @@ Operational how-to documents do not grant approval to exceed these limits.
   Halt the whole job if a device does not return online. Never bypass
   `updater/rollout_gate.py` or weaken `tests/test_rollout_invariants.py`.
 
-### Must not touch
+### Host access
 
-- Live hardware, a dev host, or a production install.
+- Touch the authorized dev host and known lab devices only for lead-assigned
+  work, under [docs/dev-hardware-validation.md](docs/dev-hardware-validation.md).
+  Production installs stay with the owner.
 - Secrets or credentials. Never print them, put them on a command line,
   store them in memory, or commit them.
 - The live loop clone under `~/repos/`. Do branch work in a git worktree
