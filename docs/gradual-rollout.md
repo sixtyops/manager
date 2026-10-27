@@ -29,7 +29,8 @@ Manual per-device updates remain available and bypass the Firmware Hold.
 creating a rollout, starting a job, or advancing an empty wave. Each boundary
 reads current readiness after asynchronous waits. Queued scheduled reboots,
 uploads, and installs read readiness again after capacity acquisition and device
-preparation. Let a submitted operation finish its recovery. Revoking readiness
+preparation. Each upload attempt also reads readiness before retry backoff and
+again before starting its upload process. Let a submitted operation finish its recovery. Revoking readiness
 stops the next scheduled action, including another bank pass. The Auto-Update control shows the safety reason while
 readiness is pending, including when the schedule is off.
 

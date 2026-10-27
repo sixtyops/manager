@@ -154,3 +154,63 @@ async def test_runtime_guard_rechecks_after_time_validation(runtime_mocks, monke
     allowed, reason = await app_module._scheduled_job_guard(scheduled_job())
     assert not allowed
     assert "safety qualification" in reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scheduled", [True, False])
+@pytest.mark.parametrize("revocation", ["result", "backoff"])
+@pytest.mark.parametrize("revoke_after", [1, 2])
+async def test_upload_retries_recheck_current_readiness(
+    runtime_mocks, monkeypatch, scheduled, revocation, revoke_after
+):
+    job = scheduled_job()
+    job.is_scheduled = scheduled
+    driver = TachyonDriver("192.0.2.1", "user", "pass")
+    client = driver._client
+    info = SimpleNamespace(current_version="1.2.3", model="TNA-301", bank1_version="1.2.3",
+                           bank2_version="1.0.0", active_bank=1)
+    attempts = []
+
+    async def spawn(*args, **kwargs):
+        attempts.append(args)
+        attempt = len(attempts)
+        async def communicate():
+            if revocation == "result" and attempt == revoke_after:
+                db.set_setting("scheduled_rollout_safety_ready", "false")
+            return b"{}", b"Synthetic transport failure"
+        return SimpleNamespace(returncode=0 if attempt == 3 else 1, communicate=communicate)
+
+    async def backoff(delay):
+        if revocation == "backoff" and len(attempts) == revoke_after:
+            db.set_setting("scheduled_rollout_safety_ready", "false")
+
+    monkeypatch.setattr(client, "login", AsyncMock(return_value=True))
+    monkeypatch.setattr(client, "get_device_info", AsyncMock(return_value=info))
+    monkeypatch.setattr(client, "trigger_update", AsyncMock(return_value=True))
+    monkeypatch.setattr(client, "wait_for_reboot", AsyncMock(return_value=True))
+    monkeypatch.setattr("updater.vendors.tachyon.client.asyncio.create_subprocess_exec", spawn)
+    monkeypatch.setattr("updater.vendors.tachyon.client.asyncio.sleep", backoff)
+    options = {"admission_check": lambda: app_module._scheduled_action_decision(job)} if scheduled else {}
+
+    result = await driver.update_firmware("/tmp/tna-30x-1.2.3.bin", **options)
+
+    assert db.get_setting("scheduled_rollout_safety_ready") == "false"
+    assert len(attempts) == (revoke_after if scheduled else 3)
+    assert result.success is (not scheduled)
+    assert job.cancelled is scheduled
+    assert client.trigger_update.await_count == (0 if scheduled else 1)
+
+
+@pytest.mark.asyncio
+async def test_upload_checks_readiness_before_first_attempt(runtime_mocks, monkeypatch):
+    job = scheduled_job()
+    driver = TachyonDriver("192.0.2.1", "user", "pass")
+    spawn = AsyncMock()
+    monkeypatch.setattr("updater.vendors.tachyon.client.asyncio.create_subprocess_exec", spawn)
+    db.set_setting("scheduled_rollout_safety_ready", "false")
+    result = await driver._client.upload_firmware(
+        "/tmp/tna-30x-1.2.3.bin", admission_check=lambda: app_module._scheduled_action_decision(job)
+    )
+    assert result is False
+    assert job.cancelled
+    spawn.assert_not_awaited()

@@ -457,7 +457,10 @@ class TachyonClient:
         expected = " or ".join(patterns)
         return False, f"Firmware mismatch: model {model} requires firmware with '{expected}' in filename, but got '{filename}'"
 
-    async def upload_firmware(self, firmware_path: str, bandwidth_limit_kbps: int = 0) -> bool:
+    async def upload_firmware(
+        self, firmware_path: str, bandwidth_limit_kbps: int = 0,
+        admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
+    ) -> bool:
         """Upload firmware file to device using PUT.
 
         Args:
@@ -469,6 +472,8 @@ class TachyonClient:
         backoff_delays = [0, 30, 60]  # seconds: no delay, 30s, 60s
 
         for attempt in range(max_attempts):
+            if admission_check and not admission_check()[0]:
+                return False
             if attempt > 0:
                 delay = backoff_delays[attempt]
                 logger.info(f"Retrying firmware upload to {self.ip} in {delay}s (attempt {attempt + 1}/{max_attempts})")
@@ -492,6 +497,8 @@ class TachyonClient:
 
             cmd.append(url)
 
+            if admission_check and not admission_check()[0]:
+                return False
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -745,7 +752,10 @@ class TachyonClient:
 
             # Upload firmware
             progress("Uploading firmware...")
-            if not await self.upload_firmware(firmware_path, bandwidth_limit_kbps=bandwidth_limit_kbps):
+            upload_options = {"admission_check": admission_check} if admission_check else {}
+            if not await self.upload_firmware(
+                firmware_path, bandwidth_limit_kbps=bandwidth_limit_kbps, **upload_options
+            ):
                 result.error = "Firmware upload failed"
                 return result
 
