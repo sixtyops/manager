@@ -265,9 +265,11 @@ Start the bench worker with `--env LEAD_AP_ACCESS_FILE=<AP lab file>` and
 recorded under [Private access records](dev-hardware-validation.md#private-access-records),
 never paths from the repository. State in the brief that lab access is
 authorized and recorded. Use the escalation reason `trusted read-only bench
-wrapper, sanitized output only`. In each head checkout, fetch `origin main`
-first. The wrapper compares against that checkout's `origin/main` and refuses
-a valid head when the local reference is stale.
+wrapper, sanitized output only`. In each head checkout, run
+`git fetch origin +refs/heads/main:refs/remotes/origin/main` first. Then check
+`git merge-base origin/main HEAD`; it must match the current `main` commit.
+The wrapper compares against that checkout's `origin/main` and refuses a
+valid head when the local reference is stale.
 
 ### Squash source checks
 
