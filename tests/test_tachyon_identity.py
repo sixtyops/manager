@@ -20,6 +20,20 @@ def fixture_body(name):
     return json.dumps(load_fixture(name))
 
 
+def syntheticize_interface_macs(response):
+    """Replace sanitized fixture placeholders with deterministic test MACs."""
+    response = json.loads(json.dumps(response))
+    interfaces = response.get("interfaces", {})
+    replacements = {}
+    for row in interfaces.values():
+        placeholder = row.get("mac_address") if isinstance(row, dict) else None
+        if isinstance(placeholder, str) and placeholder.startswith("<MAC_"):
+            if placeholder not in replacements:
+                replacements[placeholder] = f"02:00:00:00:00:{len(replacements) + 1:02X}"
+            row["mac_address"] = replacements[placeholder]
+    return response
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role,model,count,distinct", [
     ("ap", "TNA-301", 63, 52),
@@ -29,7 +43,8 @@ async def test_device_info_parses_system_all_macs_and_management_alias(role, mod
     responses = {
         "/cgi.lua/status?type=system": fixture_body(f"{role}_system.json"),
         "/cgi.lua/bootbank": "{}",
-        "/cgi.lua/status?type=interfaces": fixture_body(f"{role}_interfaces.json"),
+        "/cgi.lua/status?type=interfaces": json.dumps(syntheticize_interface_macs(
+            load_fixture(f"{role}_interfaces.json"))),
         "/cgi.lua/status?type=zones": fixture_body(f"{role}_zones.json"),
     }
     client = TachyonClient("placeholder", "user", "password")
@@ -58,7 +73,8 @@ async def test_ap_info_parses_serial_macs_and_management_fields_from_fixtures():
     responses = {
         "/cgi.lua/status?type=system": fixture_body("ap_system.json"),
         "/cgi.lua/status?type=zones": fixture_body("ap_zones.json"),
-        "/cgi.lua/status?type=interfaces": fixture_body("ap_interfaces.json"),
+        "/cgi.lua/status?type=interfaces": json.dumps(syntheticize_interface_macs(
+            load_fixture("ap_interfaces.json"))),
     }
     client = TachyonClient("placeholder", "user", "password")
     client._curl = AsyncMock(side_effect=lambda _method, endpoint: (200, responses[endpoint]))
@@ -76,10 +92,12 @@ async def test_ap_info_parses_serial_macs_and_management_fields_from_fixtures():
 
 @pytest.mark.asyncio
 async def test_cpe_fixture_parses_serial_every_mac_and_bootbank():
+    interfaces = syntheticize_interface_macs(
+        load_fixture("cpe_interfaces.json")["reads"][0]["response"])
     responses = {
         "/cgi.lua/status?type=system": json.dumps(load_fixture("cpe_system.json")["reads"][0]["response"]),
         "/cgi.lua/bootbank": json.dumps(load_fixture("cpe_bootbank.json")["reads"][0]["response"]),
-        "/cgi.lua/status?type=interfaces": json.dumps(load_fixture("cpe_interfaces.json")["reads"][0]["response"]),
+        "/cgi.lua/status?type=interfaces": json.dumps(interfaces),
         "/cgi.lua/status?type=zones": "{}",
     }
     client = TachyonClient("placeholder", "user", "password")
@@ -87,7 +105,7 @@ async def test_cpe_fixture_parses_serial_every_mac_and_bootbank():
 
     info = await client.get_device_info()
 
-    expected_macs = load_fixture("cpe_interfaces.json")["reads"][0]["response"]["interfaces"]
+    expected_macs = interfaces["interfaces"]
     assert info.model == "TNA-303X"
     assert info.serial is None
     assert info.macs == {name: row["mac_address"] for name, row in expected_macs.items()}
@@ -110,3 +128,56 @@ async def test_peer_list_fixture_keeps_cpe_radio_mac_as_candidate_alias():
 @pytest.mark.parametrize("serial", [None, "", "  ", "<SERIAL>", "unknown", [], {}])
 def test_invalid_serial_claims_are_rejected(serial):
     assert TachyonClient._parse_serial({"serial": serial}) is None
+
+
+@pytest.mark.parametrize("mac", [
+    "not-a-mac",
+    "AA:BB:CC:DD:EE",
+    "AA:BB:CC:DD:EE:GG",
+    "<MAC_ETH0>",
+    "<REDACTED>",
+    "",
+    None,
+    123,
+])
+def test_invalid_interface_macs_are_not_identity_aliases(mac):
+    body = json.dumps({"interfaces": {"eth0": {"mac_address": mac}}})
+
+    assert TachyonClient._parse_interface_macs(body) == {}
+
+
+@pytest.mark.parametrize(("mac", "expected"), [
+    ("aabbccddeeff", "AA:BB:CC:DD:EE:FF"),
+    ("aa-bb-cc-dd-ee-ff", "AA:BB:CC:DD:EE:FF"),
+    ("aa:bb:cc:dd:ee:ff", "AA:BB:CC:DD:EE:FF"),
+])
+def test_valid_interface_macs_are_normalized(mac, expected):
+    body = json.dumps({"interfaces": {"eth0": {"mac_address": mac}}})
+
+    assert TachyonClient._parse_interface_macs(body) == {"eth0": expected}
+
+
+@pytest.mark.asyncio
+async def test_missing_identity_fields_fail_safe():
+    responses = {
+        "/cgi.lua/status?type=system": '{"system": {"model": "TNA-301"}}',
+        "/cgi.lua/bootbank": "{}",
+        "/cgi.lua/status?type=interfaces": '{"status": "ok"}',
+        "/cgi.lua/status?type=zones": '{"status": "ok"}',
+    }
+    client = TachyonClient("placeholder", "user", "password")
+    client._curl = AsyncMock(side_effect=lambda _method, endpoint: (200, responses[endpoint]))
+
+    info = await client.get_device_info(include_management=True)
+
+    assert info.serial is None
+    assert info.macs == {}
+    assert info.mac is None
+    assert info.management_interface is None
+    assert info.management_vlan_id is None
+    assert info.management_mac is None
+
+
+def test_missing_interface_and_zone_fields_fail_safe():
+    assert TachyonClient._parse_interface_macs("{}") == {}
+    assert TachyonClient._parse_management_zone("{}") == (None, None)

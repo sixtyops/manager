@@ -258,15 +258,30 @@ class TachyonClient:
         interfaces = data.get("interfaces") if isinstance(data, dict) else None
         if not isinstance(interfaces, dict):
             return {}
-        return {
-            name: row["mac_address"].strip().upper()
-            for name, row in interfaces.items()
-            if isinstance(name, str)
-            and name
-            and isinstance(row, dict)
-            and isinstance(row.get("mac_address"), str)
-            and row["mac_address"].strip()
-        }
+        macs = {}
+        for name, row in interfaces.items():
+            if not isinstance(name, str) or not name or not isinstance(row, dict):
+                continue
+            mac = TachyonClient._normalize_mac(row.get("mac_address"))
+            if mac is not None:
+                macs[name] = mac
+            elif "mac_address" in row:
+                logger.warning("Ignoring invalid MAC for interface %s", name)
+        return macs
+
+    @staticmethod
+    def _normalize_mac(value: Any) -> Optional[str]:
+        """Return a colon-separated uppercase MAC, or None for an invalid claim."""
+        if not isinstance(value, str):
+            return None
+        value = value.strip()
+        if re.fullmatch(r"[0-9A-Fa-f]{12}", value):
+            octets = [value[index:index + 2] for index in range(0, 12, 2)]
+        elif re.fullmatch(r"(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}", value):
+            octets = re.split("[:-]", value)
+        else:
+            return None
+        return ":".join(octet.upper() for octet in octets)
 
     @staticmethod
     def _parse_management_zone(body: str) -> tuple[Optional[str], Optional[int]]:

@@ -6,8 +6,9 @@ All notable changes to this project are documented in this file.
 
 ### Added
 - Parse Tachyon serial numbers, per-interface MAC addresses, and the
-  management interface and VLAN from status responses. Add sanitized AP,
-  CPE, peer-list, and switch captures as parser fixtures.
+  management interface and VLAN from status responses. Normalize valid MACs
+  and reject invalid identity claims. Add sanitized AP, CPE, peer-list, and
+  switch captures as parser fixtures.
 
 ### Security
 - Register Tachyon session tokens from the login cookie jar before session use.
