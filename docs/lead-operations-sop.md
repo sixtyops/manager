@@ -26,6 +26,11 @@ push, deploy, release, or production-device authority.
 
 Public-repo rulesets are free. This supersedes the earlier Team-plan
 requirement recorded in [#116](https://github.com/sixtyops/manager/issues/116).
+On 2026-10-27, the owner directed the lead to launch a new fix worker when a
+pre-review, system review or designated review asks for changes. The brief names
+the review report. If the builder has unpushed work, the new worker uses the
+builder's workspace and verifies that work first. The lead reuses a worker only
+for a follow-up inside that worker's own task, such as a test rerun.
 
 ## Fresh start and hourly wake
 
@@ -62,9 +67,13 @@ gives no exemption from locks or pacing gates.
 4. Select one dependency-ready system slice. Record owner, scope, worktree,
    base/head and next action before building. Use an isolated worktree from
    fetched `origin/main`; keep the shared loop clone and other worktrees intact.
-5. Reuse an available worker or wait for capacity. Send a bounded assignment.
-   Complete or hold it with evidence. Append the result and next owner/action.
-   Read back each GitHub mutation and durable status append.
+5. Launch a new worker for changes requested by a pre-review, system review or
+   designated review. Name the review report in the brief. If the builder has
+   unpushed work, run the new worker in the builder's workspace and have it
+   verify that work first. Reuse a worker only for a follow-up inside its own
+   task, such as a test rerun. Complete or hold the work with evidence. Append
+   the result and next owner/action. Read back each GitHub mutation and durable
+   status append.
 
 ## Priority and delegation
 
@@ -94,9 +103,12 @@ Use the single [model policy](../AGENTS.md#models) for worker assignments and
 Sol/Luna reasoning levels. Only the Manager lead session may use Claude models.
 Large decisions require a four-agent quorum. The owner is the fifth vote.
 Do not give implementation work to an architect; give its design to a coding worker.
-Verify installed provider/model/thinking IDs before sending work. Reuse suitable
-workers and preserve active jobs. Give each worker
-a bounded task with evidence. Assign one writer per branch. Honor
+Verify installed provider/model/thinking IDs before sending work. Launch a new
+worker for review findings and name the review report in its brief. When the
+builder has unpushed work, run that worker in the builder's workspace and have
+it verify the work first. Reuse a worker only for a follow-up inside its own
+task, such as a test rerun. Preserve active jobs. Give each worker a bounded
+task with evidence. Assign one writer per branch. Honor
 the repository skill guidance; use factual copywriter/STE, and frontend-design
 plus UI guides when UI is in scope.
 Run delegated Paseo workers in `auto` permission mode with safety review on.
@@ -188,7 +200,11 @@ cooldowns, and round limits. When the existing review process flags a PR for
 higher-level review, assign a GPT-6.1 Sol reviewer. Use high reasoning for a
 safety path. Do not escalate the whole review to Astra. Astra may answer at
 most one narrow design question, and only when the reviewer names that
-question. Record the review result and give any code change to a coding worker.
+question. Record the review result. Launch a new fix worker for requested
+changes and name the review report in its brief. If the builder has unpushed
+work, run the fix worker in the builder's workspace and have it verify that
+work first. The lead may reuse a worker only for a follow-up inside its own task,
+such as a test rerun.
 Hold merge until the review and all normal review and sign-off gates pass. Use
 the existing `agent:escalated` and `agent:needs-human` states; do not create a
 new review label.
@@ -362,10 +378,13 @@ and [sign-off procedure](https://github.com/isolson/personal-processes/blob/mast
 The supported packet preview is `bash "$hub/scripts/agent-signoff.sh" --config
 "$adapter/dev-host/config/sixtyops-manager-loop.env" --pr "$pr" --dry-run`.
 Set hub/adapter from verified paths. Publication still uses normal gates.
-For reuse, the verified CLI supports `paseo send "$worker_id" --prompt-file
-"$task_file" --no-wait`. For new capacity, inspect `paseo run --help` and provider
-capabilities, then use a bounded prompt and isolated workspace. Do not copy
-stale IDs, spawn a second writer, or use bypass mode. Do not install/restart
+For a follow-up inside a worker's own task, the verified CLI supports `paseo
+send "$worker_id" --prompt-file "$task_file" --no-wait`. For review findings,
+launch a new worker with a brief that names the review report. If the builder
+has unpushed work, use the builder's workspace and require the new worker to
+verify that work first. For new capacity, inspect `paseo run --help` and
+provider capabilities, then use a bounded prompt and isolated workspace. Do not
+copy stale IDs, spawn a second writer, or use bypass mode. Do not install/restart
 services as part of resuming work.
 
 ## Durable record and fresh-session prompt
@@ -400,7 +419,10 @@ Paste into a fresh lead session:
 > docs/lead-operations-sop.md, North Star, one-right-way, live epic413 and durable
 > lead status. Confirm role ownership. Choose models by job within the Manager
 > safety policy. Verify live agents/jobs, all queue pages, locks/budgets/expiry,
-> worktrees and open PR overlap. Discover IDs; reuse workers. Finish fixes first,
+> worktrees and open PR overlap. Discover IDs. Launch a new worker for review
+> findings and name the report in its brief. If the builder has unpushed work,
+> use that workspace and have the new worker verify it first. Reuse a worker
+> only for a follow-up inside its own task, such as a test rerun. Finish fixes first,
 > WIP3, system functionality before deferred website work. Delegate bounded
 > slices with skills and proof gates. The lead does not implement, investigate,
 > test, or review detailed diffs. Require independent review. Preserve
