@@ -384,8 +384,10 @@ the first failing reason, or `ok`.
 | 9 | every artifact this wave needs is on disk with a matching sha256 | `artifact_missing` |
 | 10 | the wave has at least one safe, schedulable unit (§4) | `nothing_schedulable` |
 
-The **window instance key** is `(schedule_id, window_start_utc)`. Two
-windows on one day, or one window across midnight, are different keys.
+The **window instance key** is `(schedule_id, local_start_date)`. The date is an
+ISO date string in the schedule's local time. Different schedule IDs on one
+day give different keys. A window across midnight or a DST offset change
+keeps one key.
 *(today: the key is `YYYY-MM-DD`.)* The key, the batch assignment, and the
 per-wave settings snapshot are written in **one transaction** when the wave
 job starts. If any gate or device check fails, record a hold/failure for the
