@@ -201,6 +201,16 @@ Hold merge until the review and all normal review and sign-off gates pass. Use
 the existing `agent:escalated` and `agent:needs-human` states; do not create a
 new review label.
 
+On 2026-10-27, the owner set one daily merge batch. The lead queues gated PRs
+between batches. The owner runs the batch in the morning, Central time, and may
+run a second batch only for a ready safety fix. Before a batch, a worker merges
+queued PRs in order onto a copy of `main` and runs the tests. A conflicting PR
+waits for the next batch. Queue stacked bases first, then config and docs, then
+code. The owner runs the lead's merge queue script, not the GitHub merge button,
+to preserve order, head checks and audited squash messages. After the batch, one
+worker updates every open PR from `main` in one pass. Benches then run one PR at
+a time, followed by designated approvals.
+
 Fetch `origin/main`, then read the current GitHub pull request state and head
 before you report a pull request as open or hand it to another owner. Do not
 reuse an earlier state after a new event.
