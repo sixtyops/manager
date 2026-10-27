@@ -52,7 +52,7 @@ SIXTYOPS_TEST_SWITCH_IP=<dedicated-switch> \
 SIXTYOPS_TEST_FIRMWARE_AP_IP=<firmware-test-ap> \
 SIXTYOPS_TEST_CONFIG_AP_IP=<config-test-ap> \
 SIXTYOPS_TEST_RADIUS_AP_IP=<radius-test-ap> \
-pytest -m "integration and dev_blocking" -v --timeout=900
+pytest -m "integration and dev_blocking" -v -rA --tb=short --timeout=900
 ```
 
 SSO lane:
@@ -65,8 +65,12 @@ SIXTYOPS_TEST_OIDC_PROVIDER_URL=<provider-url> \
 SIXTYOPS_TEST_OIDC_CLIENT_ID=<client-id> \
 SIXTYOPS_TEST_OIDC_CLIENT_SECRET=<client-secret> \
 SIXTYOPS_TEST_OIDC_REDIRECT_URI=<redirect-uri> \
-pytest -m "integration and dev_sso" -v
+pytest -m "integration and dev_sso" -v -rA --tb=short
 ```
+
+When sharing a failed lane result, include test names and short failure
+reasons only. Do not include credentials, request or response bodies, or raw
+logs.
 
 ## Integration reference
 
