@@ -171,14 +171,12 @@ async def test_upload_retries_recheck_current_readiness(
                            bank2_version="1.0.0", active_bank=1)
     attempts = []
 
-    async def spawn(*args, **kwargs):
+    async def run_curl(args):
         attempts.append(args)
         attempt = len(attempts)
-        async def communicate():
-            if revocation == "result" and attempt == revoke_after:
-                db.set_setting("scheduled_rollout_safety_ready", "false")
-            return b"{}", b"Synthetic transport failure"
-        return SimpleNamespace(returncode=0 if attempt == 3 else 1, communicate=communicate)
+        if revocation == "result" and attempt == revoke_after:
+            db.set_setting("scheduled_rollout_safety_ready", "false")
+        return (0 if attempt == 3 else 1), b"{}"
 
     async def backoff(delay):
         if revocation == "backoff" and len(attempts) == revoke_after:
@@ -188,7 +186,7 @@ async def test_upload_retries_recheck_current_readiness(
     monkeypatch.setattr(client, "get_device_info", AsyncMock(return_value=info))
     monkeypatch.setattr(client, "trigger_update", AsyncMock(return_value=True))
     monkeypatch.setattr(client, "wait_for_reboot", AsyncMock(return_value=True))
-    monkeypatch.setattr("updater.vendors.tachyon.client.asyncio.create_subprocess_exec", spawn)
+    monkeypatch.setattr("updater.vendors.tachyon.client._run_curl", run_curl)
     monkeypatch.setattr("updater.vendors.tachyon.client.asyncio.sleep", backoff)
     options = {"admission_check": lambda: app_module._scheduled_action_decision(job)} if scheduled else {}
 
@@ -205,12 +203,12 @@ async def test_upload_retries_recheck_current_readiness(
 async def test_upload_checks_readiness_before_first_attempt(runtime_mocks, monkeypatch):
     job = scheduled_job()
     driver = TachyonDriver("192.0.2.1", "user", "pass")
-    spawn = AsyncMock()
-    monkeypatch.setattr("updater.vendors.tachyon.client.asyncio.create_subprocess_exec", spawn)
+    run_curl = AsyncMock()
+    monkeypatch.setattr("updater.vendors.tachyon.client._run_curl", run_curl)
     db.set_setting("scheduled_rollout_safety_ready", "false")
     result = await driver._client.upload_firmware(
         "/tmp/tna-30x-1.2.3.bin", admission_check=lambda: app_module._scheduled_action_decision(job)
     )
     assert result is False
     assert job.cancelled
-    spawn.assert_not_awaited()
+    run_curl.assert_not_awaited()

@@ -342,6 +342,11 @@ class TestConfigPushRolloutAdvance:
     leaves pct10/pct50/pct100 unfilled; the operator should not have to
     cancel and restart to finish the rollout."""
 
+    @pytest.fixture(autouse=True)
+    def exercise_retained_rollout(self, monkeypatch):
+        """Exercise retained internals with the safety capability mocked on."""
+        monkeypatch.setattr("updater.config_write_guard.automatic_config_writes_allowed", lambda: True)
+
     @staticmethod
     def _seed_rollout(db_conn, devices_by_phase: dict, status: str = "active",
                       phase: str = "canary") -> int:

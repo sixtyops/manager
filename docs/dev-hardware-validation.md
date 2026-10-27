@@ -16,7 +16,28 @@ This repo now has two live-dev validation lanes:
 The authorized dev host is
 [`https://sixtyops-dev.infra.treehouse.mn/`](https://sixtyops-dev.infra.treehouse.mn/).
 Set `SIXTYOPS_TEST_URL` to this URL for the authorized dev validation lane.
-This does not authorize tests against production devices.
+Use this lane only with its authorized test devices.
+
+## Dev host access
+
+The lead host reaches the authorized dev host through a recorded SSH alias and
+its approved network path. The alias, host details, and access record are on
+the lead host's local disk and in the private system record. Check those
+locations before reporting dev host access as missing. Keep the IP address,
+alias, usernames and host paths in the private record. An agent assigned dev
+host work has full authority on that host, including guest-local `sudo` and
+Docker, within these boundaries:
+
+- Read the repository instructions first.
+- Work in a separate git worktree.
+- Use only the known test devices.
+- Reach the dev host only through the recorded SSH alias and its approved
+  network path.
+- If access is blocked, stop that operation and report it.
+- Keep every change inside the dev host itself; shared infrastructure,
+  production and firewall rules stay as they are.
+- Leave releases and merges to the normal release and merge process.
+- Keep secrets in the private files, out of logs and Git.
 
 ## Manual Commands
 
