@@ -679,6 +679,7 @@ class TachyonClient:
         pass_number: int = 1,
         reboot_timeout: int = 300,
         bandwidth_limit_kbps: int = 0,
+        admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
     ) -> UpdateResult:
         """Perform complete firmware update cycle.
 
@@ -736,11 +737,23 @@ class TachyonClient:
                     progress(f"Firmware validation failed: {error_msg}")
                     return result
 
+            if admission_check:
+                admitted, reason = admission_check()
+                if not admitted:
+                    result.error = reason
+                    return result
+
             # Upload firmware
             progress("Uploading firmware...")
             if not await self.upload_firmware(firmware_path, bandwidth_limit_kbps=bandwidth_limit_kbps):
                 result.error = "Firmware upload failed"
                 return result
+
+            if admission_check:
+                admitted, reason = admission_check()
+                if not admitted:
+                    result.error = reason
+                    return result
 
             # Trigger update (device reboots)
             progress("Installing firmware...")

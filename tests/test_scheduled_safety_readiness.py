@@ -89,3 +89,69 @@ def test_admin_records_readiness_and_schedule_toggle_preserves_it(authed_client,
     response = authed_client.post("/api/settings/save", json={"scheduled_rollout_safety_ready": "invalid"})
     assert response.status_code == 400
     assert db.get_setting("scheduled_rollout_safety_ready") == "true"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary,empty_wave", [
+    ("time", False), ("time", True), ("weather", False), ("weather", True),
+    ("broadcast", False),
+])
+async def test_revocation_during_tick_holds_new_admission(
+    mock_db, monkeypatch, boundary, empty_wave
+):
+    _seed_aps(10)
+    db.set_settings(_settings())
+    scheduler, start = _make_scheduler()
+    harness = _Harness(scheduler, monkeypatch)
+    if empty_wave:
+        rollout_id = db.create_rollout(FW)
+        monkeypatch.setattr(scheduler, "_get_devices_for_phase", lambda *a: [])
+        monkeypatch.setattr(scheduler, "_get_switches_for_phase", lambda *a: [])
+    if boundary == "time":
+        async def revoke_time(*args):
+            db.set_setting("scheduled_rollout_safety_ready", "false")
+            return True, harness.now
+        monkeypatch.setattr("updater.scheduler.services.validate_time_sources", revoke_time)
+    elif boundary == "weather":
+        db.set_setting("weather_check_enabled", "true")
+        async def revoke_weather(*args):
+            db.set_setting("scheduled_rollout_safety_ready", "false")
+            return True, {}
+        monkeypatch.setattr("updater.scheduler.services.check_weather_ok", revoke_weather)
+    else:
+        async def revoke_broadcast(*args):
+            db.set_setting("scheduled_rollout_safety_ready", "false")
+        monkeypatch.setattr(scheduler, "_broadcast_status", revoke_broadcast)
+
+    with patch.object(db, "complete_rollout_phase", wraps=db.complete_rollout_phase) as advance:
+        await harness.tick()
+    start.assert_not_awaited()
+    advance.assert_not_called()
+    assert scheduler._state == "blocked_safety"
+    if boundary in {"time", "weather"} and not empty_wave:
+        assert db.get_current_rollout() is None
+    if empty_wave:
+        assert db.get_rollout(rollout_id)["phase"] == "pct10"
+
+
+def test_unreadable_current_readiness_holds_admission():
+    with patch.object(db, "get_setting", side_effect=RuntimeError("Read failed")):
+        assert rollout_gate.current_scheduled_admission_decision() == (
+            False, rollout_gate.SCHEDULED_ROLLOUT_SAFETY_REASON,
+        )
+
+
+@pytest.mark.asyncio
+async def test_revocation_during_job_keeps_current_wave(mock_db, monkeypatch):
+    _seed_aps(10)
+    db.set_settings(_settings())
+    scheduler, start = _make_scheduler()
+    harness = _Harness(scheduler, monkeypatch)
+    await harness.tick()
+    before = db.get_active_rollout()
+    db.set_setting("scheduled_rollout_safety_ready", "false")
+    harness.complete_job()
+    assert db.get_active_rollout()["phase"] == before["phase"]
+    assert scheduler._state == "blocked_safety"
+    await harness.tick(day=3)
+    assert start.call_count == 1

@@ -42,6 +42,17 @@ def scheduled_admission_decision(settings: dict) -> tuple[bool, Optional[str]]:
     return True, None
 
 
+def current_scheduled_admission_decision() -> tuple[bool, Optional[str]]:
+    """Read current readiness at each scheduled admission boundary."""
+    from . import database as db
+
+    try:
+        readiness = db.get_setting("scheduled_rollout_safety_ready")
+    except Exception:
+        return False, SCHEDULED_ROLLOUT_SAFETY_REASON
+    return scheduled_admission_decision({"scheduled_rollout_safety_ready": readiness})
+
+
 def phase_run_decision(
     rollout: dict,
     window_key: str,

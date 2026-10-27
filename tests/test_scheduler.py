@@ -281,6 +281,7 @@ class TestSchedulerCanaries:
 
     @pytest.mark.asyncio
     async def test_manual_canary_job_disables_window_cutoff(self, mock_db, tmp_path):
+        db.set_setting("scheduled_rollout_safety_ready", "true")
         firmware_dir = tmp_path / "firmware"
         firmware_dir.mkdir()
         fw_name = "tna-30x-1.2.3-r123.bin"

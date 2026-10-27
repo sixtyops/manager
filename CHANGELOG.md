@@ -45,7 +45,9 @@ All notable changes to this project are documented in this file.
 - Keep scheduled firmware job and wave admission paused until the operator records
   `scheduled_rollout_safety_ready=true` after the required safety fixes and bench
   proof. Show the safety reason next to Auto-Update. Keep manual per-device
-  updates available. Count smoke-test warnings and exceptions as device failures
+  updates available. Read current readiness before scheduled admission and each
+  queued reboot, upload, or install; finish recovery for submitted operations.
+  Count smoke-test warnings and exceptions as device failures
   and request job cancellation.
 - Config templates now check credential keys at any depth. A key that ends
   in `password`, `secret`, or `key` accepts only a non-empty string. An empty
