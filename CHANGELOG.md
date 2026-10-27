@@ -12,8 +12,10 @@ All notable changes to this project are documented in this file.
   operator records the failure resolution in a later window before the engine
   admits more firmware writes. Manual stops outside configured windows use a
   local-day identity and can be resolved on a later day. Existing rollouts
-  with a date-only last-wave marker keep that window blocked and can advance
-  in a later window. New markers use the maintenance window instance key.
+  with a date-only last-wave marker wait for a window whose start date is
+  after the marker date. This also blocks ambiguous overnight markers.
+  Scheduled reboots and flashes recheck current safety readiness and the window
+  after device preparation. New markers use the maintenance window instance key.
 
 ### Security
 - Register Tachyon session tokens from the login cookie jar before session use.

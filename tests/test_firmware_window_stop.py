@@ -535,3 +535,62 @@ def test_window_key_stays_constant_across_midnight():
     before_midnight = rollout_gate.firmware_window_key(schedule, datetime.fromisoformat("2026-10-26T23:30:00+00:00"))
     after_midnight = rollout_gate.firmware_window_key(schedule, datetime.fromisoformat("2026-10-27T01:30:00+00:00"))
     assert before_midnight == after_midnight == ("firmware", "2026-10-26")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["pre_reboot", "flash"])
+@pytest.mark.parametrize("closure", ["readiness", "window"])
+@pytest.mark.parametrize("scheduled", [True, False])
+async def test_current_admission_after_connect_blocks_scheduled_writes(
+    mock_db, monkeypatch, boundary, closure, scheduled,
+):
+    db.set_setting("scheduled_rollout_safety_ready", "true")
+    state = {"closed": False}
+    _DeviceClient.calls = {}
+    _DeviceClient.connect_calls = {}
+    _DeviceClient.fail_at = None
+
+    class ClosingClient(_DeviceClient):
+        async def connect(self):
+            result = await super().connect()
+            state["closed"] = True
+            if closure == "readiness":
+                db.set_setting("scheduled_rollout_safety_ready", "false")
+            return result
+
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: ClosingClient)
+    monkeypatch.setattr(app_module, "_address_change_guard", AsyncMock(return_value=True))
+    monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
+    monkeypatch.setattr(app_module, "_shutting_down", False)
+    monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(db, "save_device_duration", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value="UTC"))
+    monkeypatch.setattr(app_module.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(app_module, "_minutes_until_window_end", lambda *args: 60)
+    key = ("firmware", "2026-10-27")
+    monkeypatch.setattr(
+        rollout_gate, "firmware_window_key",
+        lambda *args: None if closure == "window" and state["closed"] else key,
+    )
+    job = app_module.UpdateJob(
+        job_id="admission-closes-during-connect",
+        device_firmware_map={"192.0.2.1": "/tmp/test.bin"},
+        credentials={"192.0.2.1": ("u", "p")}, device_roles={"192.0.2.1": "ap"},
+        devices={"192.0.2.1": app_module.DeviceStatus(ip="192.0.2.1", role="ap", model="TNA-301")},
+        is_scheduled=scheduled, pre_update_reboot=boundary == "pre_reboot",
+        start_hour=0, end_hour=23, schedule_days=["tue"],
+        schedule_timezone="UTC", window_key=key,
+    )
+
+    await app_module._update_single_device(job, "192.0.2.1")
+
+    calls = _DeviceClient.calls["192.0.2.1"]
+    assert "connect" in calls
+    assert (boundary in calls) is not scheduled
+    assert ("flash" in calls) is not scheduled
+    if scheduled:
+        assert job.devices["192.0.2.1"].status == ("cancelled" if closure == "readiness" else "pending")
+        assert job.cancelled is (closure == "readiness")
+    else:
+        assert job.devices["192.0.2.1"].status == "success"

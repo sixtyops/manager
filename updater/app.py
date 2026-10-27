@@ -5551,7 +5551,7 @@ def _hold_scheduled_device(job: "UpdateJob", device_status: "DeviceStatus") -> b
 
 
 async def _firmware_write_gate(job: "UpdateJob", ip: str) -> bool:
-    """Recheck durable stop and scheduled-window cutoff before a device write."""
+    """Recheck the stop, current readiness, and window before a device write."""
     stop = db.get_firmware_window_stop(job.window_key) if job.window_key else None
     if stop:
         reason = _firmware_stop_message(stop)
@@ -5559,6 +5559,9 @@ async def _firmware_write_gate(job: "UpdateJob", ip: str) -> bool:
         job.devices[ip].error = reason
         job.devices[ip].progress_message = reason
         _request_job_cancel(job, reason)
+        return False
+
+    if _hold_scheduled_device(job, job.devices[ip]):
         return False
 
     if not (job.is_scheduled and job.enforce_window_cutoff):

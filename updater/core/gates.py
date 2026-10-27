@@ -173,7 +173,8 @@ def phase_run_decision(
     """Decide whether `rollout` may START its current wave's job right now.
 
     `window_key` identifies the current maintenance window. A legacy date-only
-    `last_phase_window` maps to the current key's local start date on read.
+    `last_phase_window` may refer to a window starting on that date or the
+    previous date. Admit only a window starting after the marker date.
     `first_wave_held` (computed by the caller) is True when the pct10 wave must
     still wait out the Firmware Hold — i.e. the firmware's release-date hold has
     not elapsed AND no in-scope device of any pending family is confirmed working
@@ -213,6 +214,11 @@ def phase_run_decision(
                 return False, "already_ran_this_window"
             if stored_key == current_date:
                 return False, "already_ran_this_window"
+            # The old marker used the clock date, not the window start date.
+            # After midnight it can describe the previous day's window. With
+            # no time or schedule ID, only a later start date proves separation.
+            if current_date < stored_key:
+                return False, "legacy_window_ambiguous"
             last_window = None
         elif _is_window_key(stored_key):
             last_window = tuple(stored_key)
