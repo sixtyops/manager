@@ -154,6 +154,10 @@ class DeviceInfo:
     model: Optional[str] = None
     serial: Optional[str] = None
     mac: Optional[str] = None
+    macs: Dict[str, str] = field(default_factory=dict)
+    management_interface: Optional[str] = None
+    management_vlan_id: Optional[int] = None
+    management_mac: Optional[str] = None
     current_version: Optional[str] = None
     bank1_version: Optional[str] = None
     bank2_version: Optional[str] = None
@@ -218,6 +222,70 @@ class TachyonClient:
         # Set as a side-effect by get_connected_cpes() — channel/BW/freq/kit
         # for the AP's radio, used by the link-budget UI.
         self.last_radio_params: Optional[Dict[str, Any]] = None
+
+    @staticmethod
+    def _parse_system_status(body: str) -> dict:
+        """Return a system object from a status response, or an empty mapping."""
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        system = data.get("system", data)
+        return system if isinstance(system, dict) else {}
+
+    @staticmethod
+    def _parse_serial(system: dict) -> Optional[str]:
+        """Return a usable serial claim; sanitized or empty values are not claims."""
+        serial = system.get("serial")
+        if not isinstance(serial, str):
+            return None
+        serial = serial.strip()
+        if not serial or re.fullmatch(r"<[^>]+>", serial):
+            return None
+        if serial.lower() in {"unknown", "none", "null", "n/a", "na", "serial"}:
+            return None
+        return serial
+
+    @staticmethod
+    def _parse_interface_macs(body: str) -> Dict[str, str]:
+        """Return every named interface MAC from an interfaces status response."""
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        interfaces = data.get("interfaces") if isinstance(data, dict) else None
+        if not isinstance(interfaces, dict):
+            return {}
+        return {
+            name: row["mac_address"].strip().upper()
+            for name, row in interfaces.items()
+            if isinstance(name, str)
+            and name
+            and isinstance(row, dict)
+            and isinstance(row.get("mac_address"), str)
+            and row["mac_address"].strip()
+        }
+
+    @staticmethod
+    def _parse_management_zone(body: str) -> tuple[Optional[str], Optional[int]]:
+        """Return the named management interface and VLAN from zone status."""
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            return None, None
+        zones = data.get("zones") if isinstance(data, dict) else None
+        if not isinstance(zones, dict):
+            return None, None
+        for zone in zones.values():
+            if not isinstance(zone, dict):
+                continue
+            interface = zone.get("management_interface")
+            vlan = zone.get("mgmt_vlan_id")
+            if isinstance(interface, str) and interface.strip():
+                return interface.strip(), vlan if isinstance(vlan, int) and not isinstance(vlan, bool) else None
+        return None, None
 
     async def _curl(
         self,
@@ -393,16 +461,13 @@ class TachyonClient:
         # Get system status
         status, body = await self._curl("GET", "/cgi.lua/status?type=system")
         if status == 200:
-            try:
-                data = json.loads(body)
-                system = data.get("system", data)
-                info.model = system.get("model")
-                info.serial = system.get("serial")
-                version = system.get("version", {})
-                firmux = version.get("firmux", "")
-                info.current_version = self._normalize_version(firmux)
-            except json.JSONDecodeError:
-                pass
+            system = self._parse_system_status(body)
+            info.model = system.get("model")
+            info.serial = self._parse_serial(system)
+            version = system.get("version", {})
+            version = version if isinstance(version, dict) else {}
+            firmux = version.get("firmux", "")
+            info.current_version = self._normalize_version(firmux)
 
         # Get bootbank info
         status, body = await self._curl("GET", "/cgi.lua/bootbank")
@@ -428,13 +493,13 @@ class TachyonClient:
         # Get MAC address
         status, body = await self._curl("GET", "/cgi.lua/status?type=interfaces")
         if status == 200:
-            try:
-                data = json.loads(body)
-                mac = data.get("interfaces", {}).get("eth0", {}).get("mac_address")
-                if mac:
-                    info.mac = mac.upper()
-            except json.JSONDecodeError:
-                pass
+            info.macs = self._parse_interface_macs(body)
+            info.mac = info.macs.get("eth0")
+
+        status, body = await self._curl("GET", "/cgi.lua/status?type=zones")
+        if status == 200:
+            info.management_interface, info.management_vlan_id = self._parse_management_zone(body)
+            info.management_mac = info.macs.get(info.management_interface)
 
         return info
 
@@ -948,6 +1013,10 @@ class TachyonClient:
         info = {
             "ip": self.ip,
             "mac": None,
+            "macs": {},
+            "management_interface": None,
+            "management_vlan_id": None,
+            "management_mac": None,
             "system_name": None,
             "model": None,
             "firmware_version": None,
@@ -960,54 +1029,47 @@ class TachyonClient:
         # Get system status
         status, body = await self._curl("GET", "/cgi.lua/status?type=system")
         if status == 200:
-            try:
-                data = json.loads(body)
-                system = data.get("system", data)
-                general = system.get("general", {})
+            system = self._parse_system_status(body)
+            general = system.get("general", {})
+            general = general if isinstance(general, dict) else {}
 
-                # Basic info
-                info["model"] = system.get("model")
-                info["serial"] = system.get("serial")
+            # Basic info
+            info["model"] = system.get("model")
+            info["serial"] = self._parse_serial(system)
 
-                # Name/hostname from general section
-                info["system_name"] = general.get("name") or general.get("hostname") or system.get("name")
+            # Name/hostname from general section
+            info["system_name"] = general.get("name") or general.get("hostname") or system.get("name")
 
-                # Firmware version
-                version = system.get("version", {})
-                firmux = version.get("firmux", "")
-                info["firmware_version"] = self._normalize_version(firmux)
+            # Firmware version
+            version = system.get("version", {})
+            version = version if isinstance(version, dict) else {}
+            firmux = version.get("firmux", "")
+            info["firmware_version"] = self._normalize_version(firmux)
 
-                # Location from general section
-                info["location"] = general.get("location") or system.get("location") or system.get("site")
-                info["latitude"] = general.get("latitude") or system.get("latitude")
-                info["longitude"] = general.get("longitude") or system.get("longitude")
-            except json.JSONDecodeError:
-                pass
+            # Location from general section
+            info["location"] = general.get("location") or system.get("location") or system.get("site")
+            info["latitude"] = general.get("latitude") or system.get("latitude")
+            info["longitude"] = general.get("longitude") or system.get("longitude")
 
         # Get zone/location from zones endpoint
         status, body = await self._curl("GET", "/cgi.lua/status?type=zones")
         if status == 200:
             try:
                 data = json.loads(body)
-                zones = data.get("zones", {})
+                zones = data.get("zones", {}) if isinstance(data, dict) else {}
                 # Get the first zone name as the zone identifier
-                if zones:
-                    zone_names = list(zones.keys())
-                    if zone_names:
-                        info["zone"] = zone_names[0]
-            except json.JSONDecodeError:
+                if isinstance(zones, dict) and zones:
+                    info["zone"] = next(iter(zones))
+            except (json.JSONDecodeError, TypeError):
                 pass
+            info["management_interface"], info["management_vlan_id"] = self._parse_management_zone(body)
 
         # Get MAC address
         status, body = await self._curl("GET", "/cgi.lua/status?type=interfaces")
         if status == 200:
-            try:
-                data = json.loads(body)
-                mac = data.get("interfaces", {}).get("eth0", {}).get("mac_address")
-                if mac:
-                    info["mac"] = mac.upper()
-            except json.JSONDecodeError:
-                pass
+            info["macs"] = self._parse_interface_macs(body)
+            info["mac"] = info["macs"].get("eth0")
+            info["management_mac"] = info["macs"].get(info["management_interface"])
 
         return info
 

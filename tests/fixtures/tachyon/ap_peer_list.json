@@ -1,0 +1,10 @@
+{
+  "wireless": {
+    "peers": [
+      {
+        "mac": "<MAC_CPE_PEER_001>",
+        "model": "TNA-303X"
+      }
+    ]
+  }
+}

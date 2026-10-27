@@ -1,0 +1,8 @@
+{
+  "zones": {
+    "wan": {
+      "management_interface": "br-wan.12",
+      "mgmt_vlan_id": 12
+    }
+  }
+}
