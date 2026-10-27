@@ -19,9 +19,9 @@ approval and [Agent rules](../AGENTS.md#agent-rules) control each action.
 
 **Detail:** The owner delegated lead duties on 2026-10-02. On 2026-10-14, the
 owner authorized the Manager lead to merge PRs that met sign-off criteria.
-The current process uses owner approval through the personal-processes ops bot.
-The lead sends no Signal messages and runs no merge command. Merge approval
-does not grant push, deploy, release, or production-device authority.
+The current ops bot process in [Review, merge and development release gates](#review-merge-and-development-release-gates)
+replaces that merge procedure. Merge approval does not grant push, deploy,
+release, or production-device authority.
 
 Public-repo rulesets are free. This supersedes the earlier Team-plan
 requirement recorded in [#116](https://github.com/sixtyops/manager/issues/116).
@@ -215,16 +215,18 @@ The personal-processes ops bot sends the owner a Signal ready ping or digest
 for each Manager PR labeled `agent:ready-for-signoff`, with a ready packet.
 The owner approves by replying `merge` on Signal or reacting to the mapped
 message. The ops bot merges with `gh pr merge --squash --match-head-commit`.
-The lead sends no Signal messages and runs no merge command. Manager joins the
-digest through [personal-processes issue #509](https://github.com/isolson/personal-processes/issues/509)
+The lead sends no Signal messages and runs no merge command. After each
+ops-bot merge, read the merge commit message on `main`. If it contains a
+co-author trailer or a personal name, stop applying `agent:ready-for-signoff`
+to PRs and report the finding to the owner. Manager joins the digest through
+[personal-processes issue #509](https://github.com/isolson/personal-processes/issues/509)
 and [PR #510](https://github.com/isolson/personal-processes/pull/510).
 
 The owner prefers a few larger batches, once or twice a day. Main moves only
 when the owner merges. Keep gated PRs ready between batches. After each batch,
 one worker updates every open PR from `main` in one pass. Then benches run one
-PR at a time, followed by designated approvals. Before a PR gets the ready
-label, check its source commits for co-author trailers and personal names.
-Remove them because the ops bot uses GitHub's default squash message.
+PR at a time, followed by designated approvals. Follow [Squash source checks](#squash-source-checks)
+before applying the ready label.
 
 Fetch `origin/main`, then read the current GitHub pull request state and head
 before you report a pull request as open or hand it to another owner. Do not
@@ -276,7 +278,7 @@ bot uses GitHub's default squash message and matches the approved head.
 source commit message for co-author trailers and personal names. Ask a worker
 to remove any such text from the source commits before the PR enters the
 sign-off batch. The ops bot uses GitHub's default squash message and
-`--match-head-commit`; the lead does not run the merge command.
+`--match-head-commit`.
 
 Reply `addressed in <sha>` after a fix. Leave threads to their reviewers.
 Never grant your own sign-off, reset counters, or restart a capped cycle.
@@ -284,8 +286,7 @@ Use the shared [reopen procedure](https://github.com/isolson/personal-processes/
 only after an explicit lead decision, recorded history/budget checks and
 readback. Keep maximum rounds/reopens and publication pacing intact.
 
-The owner approves each merge through the ops bot flow above. The lead does not
-merge. Every merge still requires all applicable review, CI, sign-off, thread,
+Every merge still requires all applicable review, CI, sign-off, thread,
 duplicate, acceptance, and bench gates above. Follow
 [release-sop.md](release-sop.md) and [self-update-signing.md](self-update-signing.md).
 Before a dev tag, verify the

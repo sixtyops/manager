@@ -115,6 +115,7 @@ Use Simplified Technical English (STE): result first, short sentences, active
 voice, one idea per sentence, and one term per concept. Keep technical text
 factual and neutral. In design docs, start each section with **Key points**,
 then **Detail**. Keep UI labels, errors, and recovery instructions consistent.
+State rules and instructions as actions to take.
 
 Read `~/.claude/skills/ai-copywriter/SKILL.md` when available. Run its draft
 and audit loop for every owner reply and new issue or PR text, review, sign-off
