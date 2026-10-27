@@ -85,7 +85,9 @@ and sign-off gates. Update it with lasting handoff lessons.
 The owner assigns a lead. Other agents complete one bounded task as followers.
 Hold overlapping work if ownership is unclear. The lead delegates implementation,
 investigation, testing, and detailed PR reviews. Obtain independent review;
-the lead cannot be the designated reviewer for its team's work. Reuse workers.
+the lead cannot be the designated reviewer for its team's work. Reuse active
+agents for their own task and send review fixes to a new fix worker, as described
+in [the lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
 Preserve locks, budgets, cooldowns, and round limits. If capacity is full, queue work.
 Run delegated Paseo workers in `auto` permission mode with safety review on.
 Keep at most three active build or fix items. Finish active fixes first.
