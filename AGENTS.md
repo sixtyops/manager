@@ -107,6 +107,33 @@ The 2026-10-14 grant lets the lead merge a PR that passes every gate, only when
 the owner asks. The personal-processes ops bot performs the merge after the
 owner approves on Signal. Follow [the lead operations SOP](docs/lead-operations-sop.md#review-merge-and-development-release-gates).
 
+#### Slices and reviews
+
+- Turn big goals into epics. List small slices in dependency order in the epic.
+  Give each slice one issue and one PR. Never add `agent:ready` to an epic.
+- Size each engine or driver slice before work starts. Split a slice before
+  build if it touches more than one rollout core file: `updater/app.py` job
+  runner, `updater/scheduler.py`, `updater/rollout_gate.py`, or
+  `updater/database.py`. Also split a slice that plans more than about 300
+  changed lines of engine code.
+- For each engine slice, ask a Luna worker at high reasoning to write a one-page
+  design note. The note lists every write boundary, every state, and the
+  fail-closed rule for each. Send one narrow hard open question to Astra at
+  medium reasoning. Ask the reviewer to check the code against the note.
+- Require the first review to list every finding at once and mark each one
+  `BLOCKING` or `NON-BLOCKING`. Treat wording, link, and test-name findings as
+  `NON-BLOCKING`.
+- Limit review to the slice. Ask the reviewer to judge the issue's Done-when
+  items and defects the PR introduces. If a gap also exists on `main` and the PR
+  does not make it worse, create a new slice issue in the epic and do not block
+  the PR for that gap.
+- Assign one reviewer to each PR. Keep that reviewer for every review round and
+  ask them to check their earlier findings. Send fixes to a new fix worker.
+- Hold the base during review. Merge `main` into a PR or rebuild it only to
+  resolve a conflict.
+- Treat bench proof as its own gate. The designated reviewer approves the code.
+  The lead owns exact-head bench proof before the PR enters a merge batch.
+
 ## Models
 
 Follow the model routing and quorum policy in

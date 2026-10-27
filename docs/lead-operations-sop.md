@@ -195,6 +195,9 @@ access.
 environment before commit, plus scoped checks and documentation verification.
 They push a feature branch normally and open one PR to `main` with issue closure,
 validation, risks/limits and `agent:review`. Never force-push shared history.
+Follow [Slices and reviews](../AGENTS.md#slices-and-reviews) for epic structure,
+slice sizing, engine design notes, review scope and findings, reviewer
+assignment, base updates, and bench proof ownership.
 
 The lead checks that each eligible non-draft PR awaiting review has
 `agent:review`. The trusted-author workflow adds it on open, reopen, or ready
