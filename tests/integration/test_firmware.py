@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from updater.firmware_policy import detect_platform, extract_version_from_filename
+from updater.firmware_policy import compare_versions, detect_platform, extract_version_from_filename
 from updater.vendors.tachyon.client import TachyonClient
 
 pytestmark = [pytest.mark.integration, pytest.mark.dev_blocking, pytest.mark.slow]
@@ -100,7 +100,7 @@ def _fresh_ap(session, ip, after, timeout=300):
 
 
 def _select_images(ap, files):
-    """Require compatible, deployable images for the target and original build."""
+    """Require a compatible newer target image and the compatible original image."""
     __tracebackhide__ = True
     model = ap.get("model", "")
     patterns = TachyonClient._patterns_for_model(model)
@@ -120,9 +120,10 @@ def _select_images(ap, files):
             if version:
                 compatible.append((name, version))
     rollback = next((item for item in compatible if item[1] == original), None)
-    target = next((item for item in compatible if item[1] != original), None)
+    # Send only an upgrade as the target write. Restoration is the only downgrade.
+    target = next((item for item in compatible if compare_versions(item[1], original) > 0), None)
     _require(rollback, "Compatible original firmware image is required")
-    _require(target, "Compatible target firmware image is required")
+    _require(target, "Compatible newer target firmware image is required")
     return target, rollback
 
 

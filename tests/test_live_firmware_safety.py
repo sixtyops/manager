@@ -122,8 +122,9 @@ def test_completed_job_requires_device_success(client, status):
         firmware._wait_for_job(session, "job", IP)
 
 
-@pytest.mark.parametrize("change", ["rollback-missing", "target-missing", "wrong-family", "unhealthy",
-                                    "unknown-model", "missing-version", "missing-bank", "mixed-banks"])
+@pytest.mark.parametrize("change", ["rollback-missing", "target-missing", "target-older",
+                                    "wrong-family", "unhealthy", "unknown-model", "missing-version",
+                                    "missing-bank", "mixed-banks"])
 def test_preflight_fails_before_any_write(client, change):
     session, state = client
     files = [dict(item) for item in FILES]
@@ -131,6 +132,8 @@ def test_preflight_fails_before_any_write(client, change):
         files.pop(0)
     elif change == "target-missing":
         files.pop()
+    elif change == "target-older":
+        files[1]["name"] = TARGET.replace("r200", "r050")
     elif change == "wrong-family":
         files[0]["name"] = ORIGINAL.replace("tna-30x", "tna-303l")
     elif change == "unhealthy":
