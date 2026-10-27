@@ -14,14 +14,13 @@ procedures do not extend Manager authority.
 
 ## Authority history
 
-**Key points:** The owner approves merges through the ops bot. Current task
-approval and [Agent rules](../AGENTS.md#agent-rules) control each action.
+**Key points:** The owner approves merges through the ops bot.
 
 **Detail:** The owner delegated lead duties on 2026-10-02. On 2026-10-14, the
-owner authorized the Manager lead to merge PRs that met sign-off criteria.
-The current ops bot process in [Review, merge and development release gates](#review-merge-and-development-release-gates)
-replaces that merge procedure. Merge approval does not grant push, deploy,
-release, or production-device authority.
+owner authorized the Manager lead to merge PRs that met sign-off criteria. See
+[Review, merge and development release gates](#review-merge-and-development-release-gates)
+for the current process. This grant does not allow push, deploy, release, or
+production-device actions.
 
 Public-repo rulesets are free. This supersedes the earlier Team-plan
 requirement recorded in [#116](https://github.com/sixtyops/manager/issues/116).
@@ -99,15 +98,16 @@ unpushed work, run the fix worker in the builder's workspace and have it verify
 that work first. Reuse a worker only for a follow-up inside its own task, such
 as a test rerun.
 
-Use Luna as the default worker for nearly all work. Assign docs and small code
-at low or medium reasoning. Assign safety-path code, pre-reviews, re-reviews,
-designated reviews, and bench or dev-host runs at high reasoning. Use Sol at
-medium only after Luna fails at a named step, or for a hard design question
-named by a reviewer. Use Astra for at most one narrow design question at medium;
-never send a whole review to Astra. A PR escalated to Astra also gets a Sol
-review. A large decision uses Astra medium, Sol medium, Luna high, Luna medium,
-and the owner as the fifth vote. [AGENTS.md](../AGENTS.md#models) points here
-for the model policy. Only the Manager lead session may use Claude models.
+Use Luna as the default worker for nearly all work, including safety-path work
+at high reasoning. Assign docs and small code at low or medium reasoning. Assign
+pre-reviews, re-reviews, designated reviews, and bench or dev-host runs at high
+reasoning. Use Sol at medium only after Luna fails at a named step, or for a
+hard design question named by a reviewer. Use Astra for at most one narrow
+design question at medium; never send a whole review to Astra. A PR escalated to
+Astra also gets a Sol review. For large decisions, meaning major product or
+safety decisions, use the five seats: Astra medium, Sol medium, Luna high, Luna
+medium, and the owner. [AGENTS.md](../AGENTS.md#models) points here for model
+routing and quorum. Only the Manager lead session may use Claude models.
 Do not give implementation work to an architect; give its design to a coding worker.
 Verify installed provider/model/thinking IDs before sending work. Follow the
 review-fix rule in [Priority and delegation](#priority-and-delegation). Preserve
@@ -215,7 +215,8 @@ The personal-processes ops bot sends the owner a Signal ready ping or digest
 for each Manager PR labeled `agent:ready-for-signoff`, with a ready packet.
 The owner approves by replying `merge` on Signal or reacting to the mapped
 message. The ops bot merges with `gh pr merge --squash --match-head-commit`.
-The lead sends no Signal messages and runs no merge command. After each
+The lead keeps every gate and uses the 2026-10-14 merge grant only when the
+owner asks. The lead sends no Signal messages. After each
 ops-bot merge, read the merge commit message on `main`. If it contains a
 co-author trailer or a personal name, stop applying `agent:ready-for-signoff`
 to PRs and report the finding to the owner. Manager joins the digest through

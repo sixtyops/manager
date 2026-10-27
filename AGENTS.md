@@ -35,7 +35,8 @@ Operational how-to documents do not grant approval to exceed these limits.
 - Run the integration tests in `tests/integration`, including read-only lanes.
 - Create, move, or push a release tag, bump the release version, or run the
   Release workflow. Release tags must be GPG-signed by the release key.
-- Merge a PR, cancel a CI run, bypass a denial, or weaken a review gate.
+- Merge a PR without the owner's request, cancel a CI run, bypass a denial,
+  or weaken a review gate.
 - Send direct Signal messages from lead or worker sessions.
 
 ### Stop and label agent:needs-human if
@@ -100,12 +101,19 @@ Do not resolve another reviewer's thread. Engine and driver changes need bench
 proof on the exact head from the operator or an approved lead; a skip does not pass.
 Start worker completion messages with `DONE from <id> (<title>):`.
 
+### Repository lead authority
+
+The 2026-10-14 grant lets the lead merge a PR that passes every gate, only when
+the owner asks. The personal-processes ops bot performs the merge after the
+owner approves on Signal. Follow [the lead operations SOP](docs/lead-operations-sop.md#review-merge-and-development-release-gates).
+
 ## Models
 
+Follow the model routing and quorum policy in
+[the lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
 Only the Manager lead session may use Claude models. Workers must not use them.
 Use installed and supported models. Verify provider, model, and reasoning IDs.
 Use normal mode unless the owner records a current extension.
-Use the routing and quorum policy in [the lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
 
 Give an architect's design to a coding worker for implementation.
 
