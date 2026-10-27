@@ -11,7 +11,9 @@ All notable changes to this project are documented in this file.
   restart. Device work runs one complete recovery sequence at a time. An
   operator records the failure resolution in a later window before the engine
   admits more firmware writes. Manual stops outside configured windows use a
-  local-day identity and can be resolved on a later day. Existing rollouts
+  local-day identity and can be resolved on a later day. Resolution compares
+  parsed window start dates and rejects same, earlier, legacy, or malformed
+  window identities. Existing rollouts
   with a date-only last-wave marker wait for a window whose start date is
   after the marker date. This also blocks ambiguous overnight markers.
   Scheduled reboots and flashes recheck current safety readiness and the window

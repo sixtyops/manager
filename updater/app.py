@@ -14,7 +14,7 @@ import subprocess
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from time import monotonic
 from typing import Dict, Optional, Set
@@ -3847,17 +3847,23 @@ async def resolve_firmware_window_stop_api(
     except (TypeError, json.JSONDecodeError):
         stopped_key = None
 
-    if isinstance(stopped_key, list) and len(stopped_key) >= 2 and stopped_key[0] == "manual":
+    if isinstance(stopped_key, list) and stopped_key and stopped_key[0] == "manual":
         # Manual work outside a configured window uses one stop identity per
         # local day. Resolve it only after that day has ended.
+        stopped_day = _firmware_window_key_start_date(stopped_key, "manual")
         current_manual_day = _manual_firmware_window_key()
-        if not current_manual_day or current_manual_day[1] <= stopped_key[1]:
+        current_day = _firmware_window_key_start_date(current_manual_day, "manual")
+        if stopped_day is None or current_day is None or current_day <= stopped_day:
             raise HTTPException(409, "This local-day window is stopped. Resolve it on a later day.")
     else:
+        stopped_start = _firmware_window_key_start_date(stopped_key, "firmware")
         current_window = rollout_gate.firmware_window_key(db.get_all_settings())
-        if not current_window:
+        current_start = _firmware_window_key_start_date(current_window, "firmware")
+        if stopped_start is None:
+            raise HTTPException(409, "Cannot resolve this stop because its window key is invalid or ambiguous.")
+        if current_start is None:
             raise HTTPException(409, "Record the failure resolution during a later maintenance window")
-        if stop["window_key"] == json.dumps(list(current_window), separators=(",", ":")):
+        if current_start <= stopped_start:
             raise HTTPException(409, "This maintenance window is stopped and cannot be resumed")
     resolved = db.resolve_firmware_window_stop(stop_id, session["username"], resolution)
     db.log_audit(session["username"], "firmware.window_stop.resolve", "firmware_window_stop", str(stop_id), resolution, None)
@@ -4139,6 +4145,22 @@ def _manual_firmware_window_key(now: datetime | None = None):
     """Give manual writes a shared durable identity for the local calendar day."""
     now = now or datetime.now().astimezone()
     return ("manual", now.date().isoformat())
+
+
+def _firmware_window_key_start_date(window_key, expected_schedule: str) -> date | None:
+    """Parse a stored firmware window identity, returning None if ambiguous."""
+    if (
+        not isinstance(window_key, (list, tuple))
+        or len(window_key) != 2
+        or window_key[0] != expected_schedule
+        or not isinstance(window_key[1], str)
+    ):
+        return None
+    try:
+        parsed = date.fromisoformat(window_key[1])
+    except ValueError:
+        return None
+    return parsed if parsed.isoformat() == window_key[1] else None
 
 
 def _stop_firmware_window(job: "UpdateJob", ip: str, gate: str, reason: str):

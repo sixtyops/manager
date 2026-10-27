@@ -294,6 +294,43 @@ def test_restart_routes_keep_failed_window_closed_and_record_resolution(tmp_path
         app_module._check_firmware_window_admission(failed_key)
 
 
+@pytest.mark.parametrize(
+    "case,stored_key,current_key,expected_status",
+    [
+        ("same window", '["firmware","2026-10-27"]', ("firmware", "2026-10-27"), 409),
+        ("earlier window", '["firmware","2026-10-28"]', ("firmware", "2026-10-27"), 409),
+        ("later window", '["firmware","2026-10-26"]', ("firmware", "2026-10-27"), 200),
+        ("legacy key", '"2026-10-26"', ("firmware", "2026-10-27"), 409),
+        ("malformed key", '["firmware","not-a-date"]', ("firmware", "2026-10-27"), 409),
+        # A window that starts on Oct 26 and ends on Oct 27 keeps the Oct 26
+        # identity after midnight, so it is still the stopped window.
+        ("same window after midnight", '["firmware","2026-10-26"]', ("firmware", "2026-10-26"), 409),
+    ],
+)
+def test_configured_stop_resolution_requires_a_later_parsed_window(
+    monkeypatch, case, stored_key, current_key, expected_status,
+):
+    stop_id = 12
+    resolved = {"id": stop_id, "resolved_at": "now"}
+    monkeypatch.setattr(db, "get_unresolved_firmware_window_stops", lambda: [{"id": stop_id, "window_key": stored_key}])
+    monkeypatch.setattr(db, "get_all_settings", lambda: {})
+    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda _settings: current_key)
+    monkeypatch.setattr(db, "resolve_firmware_window_stop", lambda *args: resolved)
+    monkeypatch.setattr(db, "log_audit", lambda *args: None)
+
+    if expected_status == 409:
+        with pytest.raises(app_module.HTTPException) as error:
+            asyncio.run(app_module.resolve_firmware_window_stop_api(
+                stop_id, "Recovery verified", {"username": "admin"},
+            ))
+        assert error.value.status_code == expected_status, case
+    else:
+        result = asyncio.run(app_module.resolve_firmware_window_stop_api(
+            stop_id, "Recovery verified", {"username": "admin"},
+        ))
+        assert result == resolved, case
+
+
 @pytest.mark.asyncio
 async def test_manual_local_day_stop_survives_reopen_and_blocks_manual_routes(tmp_path, monkeypatch):
     db_path = tmp_path / "manual-local-day.sqlite"
