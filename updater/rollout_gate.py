@@ -76,7 +76,13 @@ def firmware_window_key(settings: dict, now: datetime | None = None):
             now = now or datetime.now().astimezone()
             timezone_name = None
         else:
-            now = now or datetime.now(ZoneInfo(timezone_name))
+            schedule_tz = ZoneInfo(timezone_name)
+            now = now or datetime.now(schedule_tz)
+            if now.tzinfo is None or now.utcoffset() is None:
+                # A naive injected scheduler time is in the configured schedule
+                # zone. Letting astimezone() infer the host zone makes the
+                # window key depend on where the scheduler process runs.
+                now = now.replace(tzinfo=schedule_tz)
         if now.tzinfo is None or now.utcoffset() is None:
             now = now.astimezone()
         schedule = MaintenanceSchedule(
