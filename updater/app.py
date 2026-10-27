@@ -47,6 +47,7 @@ configure_logging()
 from .tachyon import TachyonClient, UpdateResult
 from .vendors import init_vendors, get_driver, list_vendors
 from . import __version__
+from . import config_write_guard
 from . import database as db
 from .poller import init_poller, get_poller, set_poller
 from .scheduler import init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTES
@@ -6884,7 +6885,9 @@ async def get_config_enforce_status(session: dict = Depends(require_auth), _pro=
     failures = db.get_enforce_failures(since_hours=24)
     recent = db.get_config_enforce_log(limit=10)
     return {
-        "enabled": enabled,
+        "enabled": enabled and config_write_guard.automatic_config_writes_allowed(),
+        "paused_for_safety": not config_write_guard.automatic_config_writes_allowed(),
+        "pause_reason": config_write_guard.CONFIG_WRITES_PAUSED_REASON,
         "running": running,
         "failure_count": len(failures),
         "recent": recent,
@@ -7653,6 +7656,8 @@ async def get_config_push_rollout_status(session: dict = Depends(require_auth)):
 @app.post("/api/config-push/rollout/start")
 async def start_config_push_rollout(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
     """Start a phased config push rollout."""
+    if not config_write_guard.automatic_config_writes_allowed():
+        raise HTTPException(409, config_write_guard.CONFIG_WRITES_PAUSED_REASON)
     global _config_push_rollout_task
 
     data = await request.json()
@@ -7724,6 +7729,8 @@ async def start_config_push_rollout(request: Request, session: dict = Depends(re
 @app.post("/api/config-push/rollout/{rollout_id}/advance")
 async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Manually advance to execute the next phase."""
+    if not config_write_guard.automatic_config_writes_allowed():
+        raise HTTPException(409, config_write_guard.CONFIG_WRITES_PAUSED_REASON)
     global _config_push_rollout_task
 
     rollout = db.get_config_push_rollout(rollout_id)
@@ -7786,6 +7793,8 @@ async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(r
 @app.post("/api/config-push/rollout/{rollout_id}/resume")
 async def resume_config_push_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Resume a paused rollout (retries failed devices in current phase)."""
+    if not config_write_guard.automatic_config_writes_allowed():
+        raise HTTPException(409, config_write_guard.CONFIG_WRITES_PAUSED_REASON)
     global _config_push_rollout_task
 
     rollout = db.get_config_push_rollout(rollout_id)
@@ -7826,9 +7835,7 @@ async def cancel_config_push_rollout(rollout_id: int, session: dict = Depends(re
     if not rollout or rollout["status"] not in ("active", "paused"):
         raise HTTPException(400, "Rollout is not active or paused")
     db.update_config_push_rollout_status(rollout_id, "cancelled")
-    # Stop the running async task if it exists
-    if _config_push_rollout_task and not _config_push_rollout_task.done():
-        _config_push_rollout_task.cancel()
+    # Let submitted device operations finish and record their results.
     await _broadcast_config_push_rollout_state(rollout_id)
     return {"status": "cancelled"}
 
@@ -7859,6 +7866,8 @@ def _resolve_all_rollout_device_credentials(rollout_id: int) -> list[dict]:
 
 async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: list):
     """Execute the current phase of a config push rollout."""
+    if not config_write_guard.automatic_config_writes_allowed():
+        return
     rollout = db.get_config_push_rollout(rollout_id)
     if not rollout or rollout["status"] != "active":
         return
@@ -7923,6 +7932,8 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
 
         try:
             async with sem:
+                if not config_write_guard.automatic_config_writes_allowed():
+                    return
                 await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "connecting", "phase": phase})
 
                 client = TachyonClient(ip, creds["username"], creds["password"])
@@ -7963,6 +7974,8 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
 
                 # Dry-run validation
                 await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "validating", "phase": phase})
+                if not config_write_guard.automatic_config_writes_allowed():
+                    return
                 dry_result = await client.apply_config(merged, dry_run=True)
                 if not dry_result.get("success"):
                     error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run validation failed"))
@@ -7970,6 +7983,11 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
 
                 # Apply
                 await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "applying", "phase": phase})
+                if not config_write_guard.automatic_config_writes_allowed():
+                    return
+                current = db.get_config_push_rollout(rollout_id)
+                if not current or current["status"] != "active":
+                    return
                 result = await client.apply_config(merged)
                 completed_at = datetime.now().isoformat()
                 duration = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()

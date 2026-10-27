@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Security
+- Pause phased config rollout, auto-enforce, and automatic config rollback
+  on the server for safety. Keep status, history, stop, manual push, restore,
+  snapshots, diff, and drift reports available.
 - Register generated Manager API tokens with the log sanitizer before hashing
   or storage. Existing output handlers redact these values in diagnostics.
   Retain at most 100 token literals; a fixed-format fallback redacts older

@@ -2976,15 +2976,15 @@
             <!-- Config bar (shown when config mode active) -->
             <div class="drawer-handle-half" id="drawerHandleRight">
                 <div class="status-bar-section">
-                    <span class="status-bar-label">Config Policies</span>
+                    <span class="status-bar-label" title="Phased config rollout is paused for safety. Use manual push for selected devices.">Config Policies (rollout paused for safety)</span>
                     <span class="status-badge status-bar-badge" id="configTemplateBadge">0 enforced</span>
                 </div>
                 <div class="status-bar-section">
-                    <button class="toggle" id="configAutoEnforceToggle" type="button"
+                    <button class="toggle" id="configAutoEnforceToggle" type="button" disabled
                             aria-label="Toggle auto-enforce" aria-pressed="false"
                             onclick="toggleConfigAutoEnforce(!this.classList.contains('active'));event.stopPropagation();"
                             data-min-role-disable="operator"></button>
-                    <span class="status-bar-label" title="Checks compliance and pushes corrections daily">Auto-Enforce</span>
+                    <span class="status-bar-label" title="Use manual push or restore for selected devices.">Auto-enforce paused for safety</span>
                     <span class="status-badge" id="configEnforceStatusBadge" style="display:none;"></span>
                     <span id="configEnforceAtLabel" class="u-text-xxs-dim" style="display:none;">daily at</span>
                     <select id="configEnforceHour" name="configEnforceHour" class="u-w-64" style="display:none;font-size:var(--text-xs);"
@@ -11827,7 +11827,7 @@
             modal.innerHTML = `
                 <div class="backup-modal" style="width:400px;">
                     <h3 style="margin:0 0 12px;">Push Config Policies</h3>
-                    <p style="font-size:0.8rem;color:#6b7280;margin:0 0 12px;">Pushes in phases: Canary (1 device) → 10% → 50% → 100%. You advance each phase manually.</p>
+                    <p style="font-size:0.8rem;color:#6b7280;margin:0 0 12px;">Phased config rollout is paused for safety. Use manual push for selected devices.</p>
                     <div style="margin-bottom:12px;">
                         <label style="font-size:0.8rem;font-weight:500;display:block;margin-bottom:6px;">Policies to push:</label>
                         ${templateList}
@@ -11844,7 +11844,7 @@
                     <div style="display:flex;gap:8px;justify-content:flex-end;">
                         <button class="btn btn-sm btn-ghost" onclick="this.closest('.backup-overlay').remove()">Cancel</button>
                         <button class="btn btn-sm btn-ghost" onclick="previewConfigPush(this.closest('.backup-overlay'))">Preview</button>
-                        <button class="btn btn-sm btn-primary" onclick="startConfigPushRollout(this.closest('.backup-overlay'))">Start Rollout</button>
+                        <button class="btn btn-sm btn-primary" disabled>Rollout paused for safety</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
@@ -12044,7 +12044,7 @@
             if (pushBtn && isActive) pushBtn.style.display = 'none';
             else if (pushBtn && !isActive) { /* let loadConfigTemplateUI control visibility */ }
             if (cancelBtn) cancelBtn.style.display = isActive ? '' : 'none';
-            if (resumeBtn) resumeBtn.style.display = (r && r.status === 'paused') ? '' : 'none';
+            if (resumeBtn) resumeBtn.style.display = 'none';
 
             // Only render phase pills while a rollout is in flight. Once it
             // completes (or is cancelled), the toast already announced the
@@ -12072,7 +12072,7 @@
             const currentPhaseDevices = devices.filter(d => d.phase_assigned === r.phase);
             const currentPhaseDone = currentPhaseDevices.length > 0 &&
                 currentPhaseDevices.every(d => d.status !== 'pending');
-            const awaitingAdvance = (r.status === 'active' && currentPhaseDone);
+            const awaitingAdvance = false;
             let nextActionableIdx = -1;
             if (awaitingAdvance) {
                 for (let j = currentIdx + 1; j < CONFIG_PUSH_PHASES.length; j++) {
@@ -12241,7 +12241,7 @@
                 const resp = await fetch('/api/config-enforce/status');
                 const data = await resp.json();
                 const toggle = document.getElementById('configAutoEnforceToggle');
-                if (toggle) setToggleActive(toggle, data.enabled);
+                if (toggle) { setToggleActive(toggle, data.enabled); toggle.disabled = data.paused_for_safety; }
                 updateEnforceStatusUI(data);
                 // Show/hide enforce controls based on enabled state
                 const show = data.enabled ? '' : 'none';
