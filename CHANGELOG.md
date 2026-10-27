@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Security
+- Register Tachyon session tokens from the login cookie jar before session use.
+  Keep one registration per live client until replacement or client collection.
+  Collect API-format and registered literal matches before replacement.
+  Redact the full span when matches overlap. Login, session reuse, refresh,
+  and request behavior are unchanged.
 - Pause phased config rollout, auto-enforce, and automatic config rollback
   on the server for safety. Keep status, history, stop, manual push, restore,
   snapshots, diff, and drift reports available.

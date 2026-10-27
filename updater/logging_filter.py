@@ -4,7 +4,7 @@ Call register_secret(value) before logging a secret. Then call
 install_sanitizer(handler) on each output handler. Registration lasts for
 the process lifetime for ordinary secrets. Generated API token literals use a
 bounded registry and a fixed-format fallback. Credential sources are not
-registered here.
+registered here. Device token registrations follow the owning client lifetime.
 """
 
 import copy
@@ -15,6 +15,7 @@ import re
 import sys
 import threading
 import traceback
+import weakref
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -24,11 +25,14 @@ from urllib.parse import unquote, urlsplit
 
 import httpx
 
+_device_tokens: dict[weakref.ReferenceType, str] = {}
+
 _secrets: set[str] = set()
 _generated_api_tokens: OrderedDict[str, None] = OrderedDict()
 _GENERATED_API_TOKEN_LIMIT = 100
 _pattern: re.Pattern[str] | None = None
-_registry_lock = threading.Lock()
+# Client collection can retire tokens while a literal pattern is being built.
+_registry_lock = threading.RLock()
 # Generated tokens use token_urlsafe(32): a fixed prefix and 43 URL-safe chars.
 # This keeps evicted tokens redactable without retaining their literal values.
 _generated_api_token_pattern = re.compile(r"tach_[A-Za-z0-9_-]{43}")
@@ -110,9 +114,25 @@ def redact_url_credentials(url: str, error_type: str = "Error") -> Iterator[Call
         _url_redactor.reset(token)
 
 
+def _retire_device_token(owner_ref: weakref.ReferenceType) -> None:
+    with _registry_lock:
+        if owner_ref in _device_tokens:
+            del _device_tokens[owner_ref]
+            _rebuild_secret_pattern()
+
+
+def register_device_token(owner: object, value: str | None) -> None:
+    """Keep one token per live client, without retaining the client or history."""
+    if not value:
+        return
+    owner_ref = weakref.ref(owner, _retire_device_token)
+    with _registry_lock:
+        _device_tokens[owner_ref] = value
+        _rebuild_secret_pattern()
+
+
 def register_secret(value: str | None) -> None:
     """Register a literal secret. Ignore None, empty values, and duplicates."""
-    global _pattern
     if not value:
         return
     with _registry_lock:
@@ -135,9 +155,9 @@ def register_generated_api_token(value: str | None) -> None:
 
 
 def _rebuild_secret_pattern() -> None:
-    """Compile literal forms from ordinary secrets and retained API tokens."""
+    """Compile one longest-first pattern for all registered literal forms."""
     global _pattern
-    secrets = _secrets | set(_generated_api_tokens)
+    secrets = _secrets | set(_generated_api_tokens) | set(_device_tokens.values())
     forms = {form for secret in secrets for form in (
         secret, repr(secret)[1:-1], json.dumps(secret)[1:-1],
         json.dumps(secret, ensure_ascii=False)[1:-1],
@@ -159,6 +179,33 @@ class _SanitizingFormatter(logging.Formatter):
         return _sanitize(output)
 
 
+def _redact_token_spans(output: str, pattern: re.Pattern[str] | None) -> str:
+    """Collect format and literal matches before replacing overlapping spans."""
+    spans = []
+    for matcher in (_generated_api_token_pattern, pattern):
+        if matcher is None:
+            continue
+        position = 0
+        while match := matcher.search(output, position):
+            spans.append(match.span())
+            # An interior match can extend beyond the preceding literal.
+            position = match.start() + 1
+    spans.sort(key=lambda span: (span[0], -span[1]))
+    merged = []
+    for start, end in spans:
+        if merged and start < merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    pieces = []
+    position = 0
+    for start, end in merged:
+        pieces.extend((output[position:start], "[REDACTED]"))
+        position = end
+    pieces.append(output[position:])
+    return "".join(pieces)
+
+
 def _sanitize(output: str) -> str:
     redactor = _url_redactor.get()
     if redactor is not None:
@@ -166,12 +213,9 @@ def _sanitize(output: str) -> str:
     # Redact URLs first so a registered substring cannot break their recognition.
     output = _http_userinfo.sub(r"\1[REDACTED]@", output)
     output = _slack_webhook.sub("https://hooks.slack.com/services/[REDACTED]", output)
-    output = _generated_api_token_pattern.sub("[REDACTED]", output)
     with _registry_lock:
         pattern = _pattern
-    if pattern is not None:
-        output = pattern.sub("[REDACTED]", output)
-    return output
+    return _redact_token_spans(output, pattern)
 
 
 def _handle_error(handler: logging.Handler, record: logging.LogRecord) -> None:
