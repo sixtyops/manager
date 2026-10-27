@@ -3838,15 +3838,27 @@ async def resolve_firmware_window_stop_api(
     resolution = resolution.strip()
     if not resolution:
         raise HTTPException(400, "A failure resolution is required")
-    current_window = rollout_gate.firmware_window_key(db.get_all_settings())
-    if not current_window:
-        raise HTTPException(409, "Record the failure resolution during a later maintenance window")
     stops = db.get_unresolved_firmware_window_stops()
     stop = next((row for row in stops if row["id"] == stop_id), None)
     if not stop:
         raise HTTPException(404, "Unresolved firmware window stop not found")
-    if stop["window_key"] == json.dumps(list(current_window), separators=(",", ":")):
-        raise HTTPException(409, "This maintenance window is stopped and cannot be resumed")
+    try:
+        stopped_key = json.loads(stop["window_key"])
+    except (TypeError, json.JSONDecodeError):
+        stopped_key = None
+
+    if isinstance(stopped_key, list) and len(stopped_key) >= 2 and stopped_key[0] == "manual":
+        # Manual work outside a configured window uses one stop identity per
+        # local day. Resolve it only after that day has ended.
+        current_manual_day = _manual_firmware_window_key()
+        if not current_manual_day or current_manual_day[1] <= stopped_key[1]:
+            raise HTTPException(409, "This local-day window is stopped. Resolve it on a later day.")
+    else:
+        current_window = rollout_gate.firmware_window_key(db.get_all_settings())
+        if not current_window:
+            raise HTTPException(409, "Record the failure resolution during a later maintenance window")
+        if stop["window_key"] == json.dumps(list(current_window), separators=(",", ":")):
+            raise HTTPException(409, "This maintenance window is stopped and cannot be resumed")
     resolved = db.resolve_firmware_window_stop(stop_id, session["username"], resolution)
     db.log_audit(session["username"], "firmware.window_stop.resolve", "firmware_window_stop", str(stop_id), resolution, None)
     return resolved

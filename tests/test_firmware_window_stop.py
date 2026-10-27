@@ -299,6 +299,12 @@ async def test_manual_local_day_stop_survives_reopen_and_blocks_manual_routes(tm
     db_path = tmp_path / "manual-local-day.sqlite"
     monkeypatch.setattr(db, "DB_PATH", db_path)
     db.init_db()
+    db.set_settings({
+        "schedule_days": "",
+        "schedule_start_hour": "0",
+        "schedule_end_hour": "1",
+        "schedule_timezone": "UTC",
+    })
     _DeviceClient.calls = {}
     _DeviceClient.fail_at = "flash"
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
@@ -310,11 +316,9 @@ async def test_manual_local_day_stop_survives_reopen_and_blocks_manual_routes(tm
     monkeypatch.setattr(app_module, "broadcast", AsyncMock())
     monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value="UTC"))
     monkeypatch.setattr(app_module.asyncio, "sleep", AsyncMock())
-    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: None)
-    fallback_key = ("manual", "2026-10-27")
-    monkeypatch.setattr(app_module, "_manual_firmware_window_key", lambda: fallback_key)
-    failed_key = rollout_gate.firmware_window_key(db.get_all_settings()) or app_module._manual_firmware_window_key()
-    assert failed_key == fallback_key
+    assert rollout_gate.firmware_window_key(db.get_all_settings()) is None
+    failed_key = app_module._manual_firmware_window_key()
+    assert failed_key[0] == "manual"
 
     job = app_module.UpdateJob(
         job_id="manual-local-day-failure",
@@ -358,18 +362,61 @@ async def test_manual_local_day_stop_survives_reopen_and_blocks_manual_routes(tm
     })
     assert same_day_resolution.status_code == 409
 
-    next_key = ("manual", "2026-10-28")
-    monkeypatch.setattr(app_module, "_manual_firmware_window_key", lambda: next_key)
-    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: next_key)
+    next_day = datetime.fromisoformat(failed_key[1]) + timedelta(days=1)
+
+    class NextDayDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = next_day.replace(hour=12, minute=0, second=0, microsecond=0)
+            return value.replace(tzinfo=tz) if tz else value
+
+    monkeypatch.setattr(app_module, "datetime", NextDayDateTime)
     resolved = client.post(f"/api/firmware-window-stops/{stop_id}/resolve", data={
         "resolution": "Bench recovery verified",
     })
     assert resolved.status_code == 200
-    assert db.get_firmware_window_stop(failed_key)["resolved_by"] == "admin"
-    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: None)
+    record = db.get_firmware_window_stop(failed_key)
+    assert record["resolved_by"] == "admin"
+    assert record["resolved_at"]
+    assert app_module._manual_firmware_window_key() != failed_key
+    app_module._check_firmware_window_admission(app_module._manual_firmware_window_key())
     assert client.post("/api/start-update", data={
         "firmware_file": "missing.bin", "device_type": "ap", "ip_list": "192.0.2.2",
     }).status_code == 400
+
+
+def test_resolving_manual_stop_does_not_clear_configured_window_stop(mock_db):
+    db.set_settings({
+        "schedule_days": "",
+        "schedule_start_hour": "0",
+        "schedule_end_hour": "1",
+        "schedule_timezone": "UTC",
+    })
+    today = datetime.now().astimezone().date()
+    manual_key = ("manual", (today - timedelta(days=1)).isoformat())
+    configured_key = ("firmware", (today - timedelta(days=2)).isoformat())
+    manual_stop = db.stop_firmware_window(manual_key, "manual-job", "192.0.2.2", "flash", "Upload failed")
+    configured_stop = db.stop_firmware_window(
+        configured_key, "scheduled-job", "192.0.2.1", "flash", "Upload failed",
+    )
+    expires = (datetime.now() + timedelta(hours=1)).isoformat()
+    with db.get_db() as conn:
+        conn.execute("INSERT OR IGNORE INTO users (username, role, auth_method) VALUES (?, ?, ?)", ("admin", "admin", "local"))
+        conn.execute(
+            "INSERT INTO sessions (session_id, username, ip_address, expires_at) VALUES (?, ?, ?, ?)",
+            ("unrelated-configured-stop-session", "admin", "127.0.0.1", expires),
+        )
+    client = TestClient(app_module.app, headers={"Origin": "http://testserver"})
+    client.cookies.set("session_id", "unrelated-configured-stop-session")
+
+    response = client.post(f"/api/firmware-window-stops/{manual_stop['id']}/resolve", data={
+        "resolution": "Manual device recovery was verified",
+    })
+
+    assert response.status_code == 200
+    assert db.get_firmware_window_stop(manual_key)["resolved_at"]
+    assert db.get_firmware_window_stop(configured_key)["resolved_at"] is None
+    assert db.get_firmware_window_stop(configured_key)["id"] == configured_stop["id"]
 
 
 def test_manual_fallback_admission_is_blocked_by_configured_window_stop(mock_db, monkeypatch):
