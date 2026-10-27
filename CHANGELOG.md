@@ -19,7 +19,8 @@ All notable changes to this project are documented in this file.
   Scheduled reboots and flashes recheck current safety readiness and the window
   after device preparation. The write gate also rechecks the stop record,
   readiness, and cutoff before upload and install trigger. New markers use the
-  maintenance window instance key.
+  maintenance window instance key. Readiness and cutoff holds before upload
+  leave the device pending without recording a window failure.
 
 ### Security
 - Register Tachyon session tokens from the login cookie jar before session use.

@@ -5809,6 +5809,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     device_status.stage_history = []
     device_status.current_stage = "connecting"
     device_status.current_stage_started = device_start_time.isoformat()
+    device_status._firmware_upload_started = False
 
     prefix = f"Pass {pass_number}: " if pass_number > 1 else ""
     device_status.status = "connecting"
@@ -5827,6 +5828,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     fw_path = job.device_firmware_map.get(ip, "")
 
     def progress_callback(device_ip: str, message: str):
+        if "Uploading firmware" in message:
+            device_status._firmware_upload_started = True
         status_map = {
             "Logging in": "connecting",
             "Getting device info": "connecting",
@@ -5873,6 +5876,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     pre_update_cpe_count = len(job.ap_cpe_map.get(ip, [])) if device_status.role == "ap" else 0
 
     client = None
+    admission_denial = {"reason": ""}
     vendor_id = job.device_vendor_map.get(ip, "tachyon")
     try:
         driver_cls = get_driver(vendor_id)
@@ -5996,7 +6000,13 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             bw_limit = 0
         if _hold_scheduled_device(job, device_status):
             return
-        update_options = {"admission_check": lambda: _firmware_write_gate(job, ip)}
+        def _driver_admission_check():
+            admitted, reason = _firmware_write_gate(job, ip)
+            if not admitted:
+                admission_denial["reason"] = reason
+            return admitted, reason
+
+        update_options = {"admission_check": _driver_admission_check}
         try:
             from .vendors.base import VendorDeviceInfo
             try:
@@ -6083,6 +6093,36 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         elif smoke_failed:
             _stop_firmware_window(job, ip, "smoke", device_status.error or "Smoke test failed")
     else:
+        if admission_denial["reason"].startswith("Firmware writes are stopped for window"):
+            # Preserve the existing stop without recording a second device failure.
+            device_status.status = "cancelled"
+            device_status.error = admission_denial["reason"]
+            device_status.progress_message = admission_denial["reason"]
+            await broadcast({
+                "type": "device_update", "job_id": job.job_id, "ip": ip,
+                "status": device_status.status, "message": device_status.progress_message,
+                "error": device_status.error, "role": device_status.role,
+                "parent_ap": device_status.parent_ap,
+            })
+            return
+        is_admission_deferred = (
+            admission_denial["reason"].startswith("Deferred:")
+            or admission_denial["reason"] == rollout_gate.SCHEDULED_ROLLOUT_SAFETY_REASON
+        )
+        if is_admission_deferred and not getattr(device_status, "_firmware_upload_started", False):
+            # A gate hold during driver login is deferred because no firmware write began.
+            device_status.status = "pending"
+            device_status.error = None
+            device_status.progress_message = admission_denial["reason"]
+            deferred_ips = getattr(job, "_deferred_admission_ips", set())
+            deferred_ips.add(ip)
+            job._deferred_admission_ips = deferred_ips
+            await broadcast({
+                "type": "device_update", "job_id": job.job_id, "ip": ip,
+                "status": device_status.status, "message": device_status.progress_message,
+                "role": device_status.role, "parent_ap": device_status.parent_ap,
+            })
+            return
         device_status.status = "failed"
         device_status.error = result.error
         device_status.progress_message = f"{prefix}{result.error or 'Update failed'}"
@@ -6190,7 +6230,10 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         cancel_message = job.cancel_reason or "Cancelled: another device failed to reboot"
         for ip in ips:
             ds = job.devices.get(ip)
-            if ds and ds.status == "pending":
+            if (
+                ds and ds.status == "pending"
+                and ip not in getattr(job, "_deferred_admission_ips", set())
+            ):
                 ds.status = "cancelled"
                 ds.progress_message = cancel_message
                 await broadcast({
