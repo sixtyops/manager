@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from updater.vendors.tachyon.client import TachyonClient
+from updater.vendors.tachyon import TachyonDriver
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "tachyon"
@@ -69,6 +70,25 @@ async def test_device_info_parses_system_all_macs_and_management_alias(role, mod
 
 
 @pytest.mark.asyncio
+async def test_normal_driver_info_includes_switch_management_alias():
+    responses = {
+        "/cgi.lua/status?type=system": fixture_body("switch_system.json"),
+        "/cgi.lua/bootbank": "{}",
+        "/cgi.lua/status?type=interfaces": json.dumps(syntheticize_interface_macs(
+            load_fixture("switch_interfaces.json"))),
+        "/cgi.lua/status?type=zones": fixture_body("switch_zones.json"),
+    }
+    driver = TachyonDriver("placeholder", "user", "password")
+    driver._client._curl = AsyncMock(side_effect=lambda _method, endpoint: (200, responses[endpoint]))
+
+    info = await driver.get_device_info()
+
+    assert info.extra["management_interface"] == "br-wan.12"
+    assert info.extra["management_vlan_id"] == 12
+    assert info.extra["management_mac"] == info.extra["macs"]["br-wan.12"]
+
+
+@pytest.mark.asyncio
 async def test_ap_info_parses_serial_macs_and_management_fields_from_fixtures():
     responses = {
         "/cgi.lua/status?type=system": fixture_body("ap_system.json"),
@@ -114,7 +134,7 @@ async def test_cpe_fixture_parses_serial_every_mac_and_bootbank():
 
 
 @pytest.mark.asyncio
-async def test_peer_list_fixture_keeps_cpe_radio_mac_as_candidate_alias():
+async def test_peer_list_fixture_rejects_invalid_cpe_radio_mac(caplog):
     client = TachyonClient("placeholder", "user", "password")
     client._curl = AsyncMock(return_value=(200, fixture_body("ap_peer_list.json")))
 
@@ -122,7 +142,8 @@ async def test_peer_list_fixture_keeps_cpe_radio_mac_as_candidate_alias():
 
     assert len(cpes) == 1
     assert cpes[0].model == "TNA-303X"
-    assert cpes[0].mac == "<MAC_CPE_PEER_001>"
+    assert cpes[0].mac is None
+    assert "Ignoring invalid MAC for peer" in caplog.text
 
 
 @pytest.mark.parametrize("serial", [None, "", "  ", "<SERIAL>", "unknown", [], {}])

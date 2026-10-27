@@ -973,9 +973,13 @@ class TachyonClient:
             peers = wireless.get("peers", [])
 
             for peer in peers:
+                raw_mac = peer.get("mac")
+                mac = self._normalize_mac(raw_mac)
+                if raw_mac is not None and mac is None:
+                    logger.warning("Ignoring invalid MAC for peer at %s", peer.get("ipv4", ""))
                 cpe = CPEInfo(
                     ip=peer.get("ipv4", ""),
-                    mac=peer.get("mac"),
+                    mac=mac,
                     system_name=peer.get("system_name"),
                     model=peer.get("model"),
                     firmware_version=peer.get("fw"),

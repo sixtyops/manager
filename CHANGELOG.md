@@ -10,6 +10,10 @@ All notable changes to this project are documented in this file.
   and reject invalid identity claims. Add sanitized AP, CPE, peer-list, and
   switch captures as parser fixtures.
 
+### Fixed
+- Validate Tachyon peer-list MAC claims before exposing them as CPE identity.
+  Include switch management interface, VLAN, and MAC data in normal device info.
+
 ### Security
 - Register Tachyon session tokens from the login cookie jar before session use.
   Keep one registration per live client until replacement or client collection.
