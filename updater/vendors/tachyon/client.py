@@ -1173,7 +1173,10 @@ class TachyonClient:
             result.update(json.loads(body))
         except json.JSONDecodeError:
             result["raw_response"] = body
-        return result if result.get("success") else failure
+        # Some firmware returns HTTP 200 with an error field but no
+        # success=false flag. Treat that response as a failure and keep its
+        # text out of the result because it may echo submitted secrets.
+        return result if result.get("success") and "error" not in result else failure
 
     def get_hardware_id(self, model: str) -> str:
         """Get the CONTROL file hardware ID for a device model."""

@@ -259,6 +259,22 @@ async def test_config_failure_does_not_return_reflected_secrets(status, json_bod
 
 
 @pytest.mark.asyncio
+async def test_config_http_200_error_does_not_return_reflected_secret():
+    client = transport.TachyonClient("192.0.2.1", "admin", SECRET)
+    client._token = SECRET
+    payload = {"radius": {"secret": SECRET}}
+    reflected = {"error": f"Rejected value: {SECRET}", "config": payload}
+    with patch.object(client, "_curl", AsyncMock(return_value=(200, json.dumps(reflected)))):
+        result = await client.apply_config(payload)
+    assert result == {
+        "success": False,
+        "status_code": 200,
+        "error": "Configuration request failed (HTTP 200)",
+    }
+    assert SECRET not in json.dumps(result)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("with_error", [True, False])
 async def test_trigger_rejection_never_logs_reflected_cookie(with_error, caplog):
     client = transport.TachyonClient("192.0.2.1", "admin", SECRET)
