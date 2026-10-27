@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Security
+- Pause phased config rollout, auto-enforce, and automatic config rollback
+  on the server for safety. Keep status, history, stop, manual push, restore,
+  snapshots, diff, and drift reports available.
 - Register generated Manager API tokens with the log sanitizer before hashing
   or storage. Existing output handlers redact these values in diagnostics.
   Retain at most 100 token literals; a fixed-format fallback redacts older
@@ -80,6 +83,12 @@ All notable changes to this project are documented in this file.
   code revert cannot recover deleted rows. Protected rows have no size limit.
 
 ### Security
+- Tachyon curl requests send cookies and request bodies through stdin.
+  Login, config writes, and firmware uploads keep secrets out of process
+  arguments. Curl failures report exit codes without raw stderr or payloads.
+  Config request failures return a fixed error and HTTP status to prevent
+  device responses from exposing submitted secrets. HTTP 200 responses with
+  an `error` field also fail without returning the device error text.
 - Template listing returns an explicit HTTP 409 for malformed stored JSON or
   non-object payloads. It returns row IDs and field names, with no payload or
   partial list. This prevents legacy encoded Users forms from returning
