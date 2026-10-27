@@ -53,6 +53,13 @@ All notable changes to this project are documented in this file.
   operations.
   Count smoke-test warnings and exceptions as device failures
   and request job cancellation.
+- Hold firmware updates before the pre-update reboot and flash until the exact
+  source and target builds and artifact SHA-256 values are qualified for the
+  device family, role, management VLAN, DHCP/static mode, and recovery case.
+  Missing artifact or management evidence keeps the device held.
+  Scheduled and manual jobs use the same gate. The qualification table starts
+  empty. The device UI shows the hold reason. Approved named bench plans permit
+  only their listed lab devices and transitions on explicit manual requests.
 - Config templates now check credential keys at any depth. A key that ends
   in `password`, `secret`, or `key` accepts only a non-empty string. An empty
   string means "no change": the manager removes that leaf before the merge,

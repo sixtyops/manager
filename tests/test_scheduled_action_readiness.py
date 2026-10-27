@@ -17,6 +17,7 @@ from tests.test_strict_smoke_canary import _make_job
 @pytest.fixture
 def runtime_mocks(mock_db, monkeypatch):
     db.set_setting("scheduled_rollout_safety_ready", "true")
+    monkeypatch.setattr(app_module, "_address_change_guard", AsyncMock(return_value=True))
     monkeypatch.setattr(app_module, "broadcast", AsyncMock())
     monkeypatch.setattr(app_module, "get_scheduler", lambda: None)
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda *a: False)
@@ -59,6 +60,7 @@ async def test_queued_action_stops_while_submitted_action_recovers(runtime_mocks
         def get_reboot_timeout(self, role): return 5
         def get_update_timeout(self, role): return 5
         async def connect(self): return True
+        async def get_device_info(self): return None
 
         async def recover(self):
             writes.append(self.ip)

@@ -15,8 +15,8 @@ The scheduler auto-detects which in-scope devices are behind their per-family ta
 (`tna-30x` / `tna-303l` / `tns-100`), creates a rollout, and advances it one wave per
 window. A single fail-closed gate (`rollout_gate.py`) is the only place that decides
 whether a wave may start. Failures pause the rollout for manual review. Manual
-per-device updates bypass everything (including the hold) — that is how an operator
-tests new firmware before the fleet rolls.
+per-device updates bypass the release-date Firmware Hold. Address-change
+qualification applies to both scheduled and manual updates, as described below.
 
 ## Scheduled safety readiness
 
@@ -138,7 +138,8 @@ safety fixes.
 `/api/fleet-status` reports `update_state ∈ {up_to_date, needs_update, on_hold}` plus a
 `hold` object (`clears_at`, `confirmed_by`). A device is `on_hold` when it's behind, in
 scope, auto-update is on, and its family's hold hasn't cleared. The UI shows a distinct
-"on hold" glyph; clicking it still updates the device now (skipping the hold).
+"on hold" glyph. The release-date hold permits a manual update. The address-change
+hold shows its reason and waits for qualification or an approved named lab plan.
 
 ## Database (`database.py`)
 
@@ -193,3 +194,78 @@ after the same safety gates pass. See [one-right-way.md](one-right-way.md).
 These target rules do not describe the current scheduler or manual update
 routes. In particular, shipped manual per-device updates bypass the Hold and
 shipped failure handling does not enforce every target stop rule.
+
+## Address-change qualification hold
+
+**Key points:** Qualify both exact builds and artifact SHA-256 values for the
+model family, role, management VLAN, IP mode, and recovery case before writes.
+Scheduled and manual jobs share this hold.
+The qualification table in `updater/rollout_gate.py` starts empty. The Devices
+view shows the hold reason with a clock glyph.
+
+**Detail:** `address_change_decision` requires a release plus revision for both
+builds. It accepts only a matching `AddressTransition` with a recorded
+bench-proof reference. Its key includes `family`, `role`, `source`, `target`,
+`source_sha256`, `target_sha256`, `management_vlan`, `management_ip_mode`, and
+`recovery_case`. Use lowercase 64-digit hashes. Use VLAN `0` for an observed
+untagged management interface or its tagged VLAN ID from 1 through 4094.
+Use `dhcp` or `static` for the observed IP mode. Qualify `pre_update_reboot`
+and `firmware_flash` separately. A reboot proof covers recovery on the installed
+source artifact before any flash. Unknown or missing values stay held.
+Release age and confirmed-working firmware affect only the separate Firmware Hold.
+
+The shared job runner checks saved inventory before connecting, then reads
+live model, firmware, installed-artifact hash, and management scope before the
+pre-update reboot and before each flash. It hashes the selected target file
+at each check, so files with the same numeric build have separate qualifications.
+A held member uses `deferred` with an address-change reason in job history.
+The existing scheduler keeps that wave pending for a later window. Qualification
+is read again at each boundary and survives restart as reviewed source data.
+Keep a member held through all later passes when its pre-reboot scope is held.
+
+Read source evidence independently from inventory fields `firmware_sha256`,
+`management_vlan`, and `management_ip_mode`, and from the same keys in live
+`VendorDeviceInfo.extra`. Current inventory storage and the Tachyon driver
+provide none of these fields. They therefore keep devices held, including
+named lab exceptions, until verified scope collection is available. A build
+number, a registry checksum for another file, and a bench plan supply no
+observed source-artifact or management evidence.
+
+For approved lab validation, set `SIXTYOPS_ADDRESS_BENCH_PLAN_FILE` to a private
+JSON file in the lab Manager environment. Keep the tested source unchanged.
+Use this structure with the approved plan's actual values:
+
+```json
+{
+  "name": "approved-lab-plan",
+  "approval": "approval record reference",
+  "expires_at": "2026-10-28T18:00:00+00:00",
+  "devices": [
+    {"ip": "192.0.2.10", "family": "tna-30x", "role": "ap",
+     "source": "1.12.3.54970", "target": "1.15.0.55142",
+     "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "target_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+     "management_vlan": 100, "management_ip_mode": "dhcp",
+     "recovery_case": "firmware_flash"}
+  ]
+}
+```
+
+Send the plan name as `address_bench_exception` on `/api/start-update` or
+`/api/update-device`. Select it explicitly for each manual job. The gate reads
+the file again at each check. Use normalized four-part builds and the actual
+artifact hashes in the plan. Include a separate entry for `pre_update_reboot`
+when that phase is enabled. Match the independent observed scope at each check.
+An absent, expired, or malformed plan keeps the device held. Scheduled jobs
+use qualification proof. Each accepted bench exception records its name,
+approval, device, and transition in the schedule log. Keep private lab details
+outside the repository.
+
+Use isolated named lab addresses for these plans. Current inventory and jobs
+still use IP addresses; this gate supplies transition containment, while trusted
+identity and address recovery remain separate work under
+[#530](https://github.com/sixtyops/manager/issues/530). Add qualification only
+after exact-head bench proof and independent review. Record source and target
+builds and hashes, model, role, management VLAN/DHCP behavior, recovery timing,
+identity continuity, association, and traffic results with that proof. Keep
+one-wave-per-window admission and all other checks in effect.
