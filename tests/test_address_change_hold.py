@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 import json
+import hashlib
+from dataclasses import replace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,7 +16,22 @@ OTHER_IP = "192.0.2.11"
 SOURCE = "1.12.3.54970"
 TARGET = "1.15.0.55142"
 FW = "tna-30x-1.15.0-r55142-test.bin"
-TRANSITION = gate.AddressTransition("tna-30x", "ap", SOURCE, TARGET)
+ARTIFACT = b"synthetic qualified firmware"
+SCOPE = {
+    "source_sha256": "a" * 64,
+    "target_sha256": hashlib.sha256(ARTIFACT).hexdigest(),
+    "management_vlan": 100,
+    "management_ip_mode": "dhcp",
+    "recovery_case": "firmware_flash",
+}
+OBSERVED = {"firmware_sha256": SCOPE["source_sha256"],
+            "management_vlan": 100, "management_ip_mode": "dhcp"}
+TRANSITION = gate.AddressTransition("tna-30x", "ap", SOURCE, TARGET, **SCOPE)
+
+
+def qualify():
+    for recovery_case in ("pre_update_reboot", "firmware_flash"):
+        gate.ADDRESS_CHANGE_QUALIFICATIONS[replace(TRANSITION, recovery_case=recovery_case)] = "synthetic proof"
 
 
 @pytest.fixture
@@ -38,16 +55,16 @@ def test_shipped_tables_start_empty():
 ])
 def test_qualification_matches_every_key(tables, family, role, source, target):
     gate.ADDRESS_CHANGE_QUALIFICATIONS[TRANSITION] = "synthetic bench proof"
-    allowed, reason = gate.address_change_decision(family, role, source, target)
+    allowed, reason = gate.address_change_decision(family, role, source, target, **SCOPE)
     assert not allowed
     assert "Address-change hold" in reason
 
 
 def test_qualified_exact_build_proceeds(tables):
     gate.ADDRESS_CHANGE_QUALIFICATIONS[TRANSITION] = "synthetic bench proof"
-    assert gate.address_change_decision("tna-30x", "ap", "1.12.3.r54970", TARGET) == (True, None)
+    assert gate.address_change_decision("tna-30x", "ap", "1.12.3.r54970", TARGET, **SCOPE) == (True, None)
     gate.ADDRESS_CHANGE_QUALIFICATIONS[TRANSITION] = ""
-    assert not gate.address_change_decision("tna-30x", "ap", SOURCE, TARGET)[0]
+    assert not gate.address_change_decision("tna-30x", "ap", SOURCE, TARGET, **SCOPE)[0]
 
 
 def write_plan(**overrides):
@@ -56,7 +73,9 @@ def write_plan(**overrides):
     plan = {
         "name": "lab-plan", "approval": "synthetic approval",
         "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
-        "devices": [{"ip": IP, "family": "tna-30x", "role": "ap", "source": SOURCE, "target": TARGET}],
+        "devices": [{"ip": IP, "family": "tna-30x", "role": "ap", "source": SOURCE, "target": TARGET,
+                     **SCOPE, "recovery_case": recovery_case}
+                    for recovery_case in ("pre_update_reboot", "firmware_flash")],
     }
     plan.update(overrides)
     Path(os.environ["SIXTYOPS_ADDRESS_BENCH_PLAN_FILE"]).write_text(json.dumps(plan))
@@ -72,7 +91,7 @@ def write_plan(**overrides):
 def test_named_bench_exception_scope(tables, ip, name, scheduled, source, allowed):
     write_plan()
     assert gate.address_change_decision(
-        "tna-30x", "ap", source, TARGET, ip=ip, bench_exception=name, scheduled=scheduled,
+        "tna-30x", "ap", source, TARGET, ip=ip, bench_exception=name, scheduled=scheduled, **SCOPE,
     )[0] is allowed
 
 
@@ -84,7 +103,7 @@ def test_named_bench_exception_scope(tables, ip, name, scheduled, source, allowe
 def test_invalid_or_expired_plan_holds(tables, overrides):
     write_plan(**overrides)
     assert not gate.address_change_decision(
-        "tna-30x", "ap", SOURCE, TARGET, ip=IP, bench_exception="lab-plan",
+        "tna-30x", "ap", SOURCE, TARGET, ip=IP, bench_exception="lab-plan", **SCOPE,
     )[0]
 
 
@@ -97,7 +116,7 @@ def test_unreadable_plan_holds(tables, contents):
 
 
 @pytest.fixture
-def runner(mock_db, monkeypatch):
+def runner(mock_db, monkeypatch, tmp_path):
     for name in ("broadcast",):
         monkeypatch.setattr(app_module, name, AsyncMock())
     monkeypatch.setattr(app_module, "_scheduled_job_guard", AsyncMock(return_value=(True, "")))
@@ -115,7 +134,7 @@ def runner(mock_db, monkeypatch):
     client = TachyonDriver(IP, "synthetic", "synthetic")
     client.connect = AsyncMock(return_value=True)
     client.get_device_info = AsyncMock(return_value=VendorDeviceInfo(
-        ip=IP, model="TNA-301", current_version=SOURCE,
+        ip=IP, model="TNA-301", current_version=SOURCE, extra=dict(OBSERVED),
     ))
     client.reboot = AsyncMock(return_value=True)
     client.update_firmware = AsyncMock(return_value=VendorUpdateResult(
@@ -126,6 +145,14 @@ def runner(mock_db, monkeypatch):
     monkeypatch.setattr(app_module, "_get_firmware_type_for_model",
                         lambda model: "tna-30x" if model == "TNA-301" else None)
     db.upsert_access_point(IP, "synthetic", "synthetic", model="TNA-301", firmware_version=SOURCE)
+    for name in ("get_access_point", "get_cpe_by_ip", "get_switch"):
+        read = getattr(db, name)
+        def observed_record(ip, read=read):
+            record = read(ip)
+            return {**record, **OBSERVED} if record else None
+        monkeypatch.setattr(db, name, observed_record)
+    (tmp_path / FW).write_bytes(ARTIFACT)
+    monkeypatch.setattr(app_module, "FIRMWARE_DIR", tmp_path)
     return client
 
 
@@ -133,7 +160,7 @@ def make_job(scheduled=False, reboot=True, role="ap", bank_mode="one"):
     return app_module.UpdateJob(
         job_id="address-hold-test", started_at=datetime.now(), is_scheduled=scheduled,
         pre_update_reboot=reboot, bank_mode=bank_mode,
-        device_roles={IP: role}, device_firmware_map={IP: FW},
+        device_roles={IP: role}, device_firmware_map={IP: str(app_module.FIRMWARE_DIR / FW)},
         credentials={IP: ("synthetic", "synthetic")},
         devices={IP: app_module.DeviceStatus(ip=IP, role=role)},
     )
@@ -160,7 +187,7 @@ async def test_unqualified_job_holds_before_writes(tables, runner, scheduled, re
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scheduled", [True, False])
 async def test_qualified_job_reboots_and_flashes(tables, runner, scheduled):
-    gate.ADDRESS_CHANGE_QUALIFICATIONS[TRANSITION] = "synthetic proof"
+    qualify()
     job = make_job(scheduled)
     await app_module.run_update_job(job, 1)
     runner.reboot.assert_awaited_once()
@@ -171,7 +198,7 @@ async def test_qualified_job_reboots_and_flashes(tables, runner, scheduled):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reboot", [True, False])
 async def test_fresh_unqualified_build_holds_at_write_boundary(tables, runner, reboot):
-    gate.ADDRESS_CHANGE_QUALIFICATIONS[TRANSITION] = "synthetic proof"
+    qualify()
     runner.get_device_info.return_value.current_version = "1.12.3.54971"
     job = make_job(reboot=reboot)
     await app_module.run_update_job(job, 1)
@@ -182,7 +209,7 @@ async def test_fresh_unqualified_build_holds_at_write_boundary(tables, runner, r
 
 @pytest.mark.asyncio
 async def test_qualification_rechecked_after_reboot(tables, runner):
-    gate.ADDRESS_CHANGE_QUALIFICATIONS[TRANSITION] = "synthetic proof"
+    qualify()
     async def revoke(**kwargs):
         gate.ADDRESS_CHANGE_QUALIFICATIONS.clear()
         return True
@@ -200,7 +227,7 @@ async def test_bench_plan_runs_only_named_device(tables, runner):
     job.address_bench_exception = "lab-plan"
     job.devices[OTHER_IP] = app_module.DeviceStatus(ip=OTHER_IP, role="ap")
     job.device_roles[OTHER_IP] = "ap"
-    job.device_firmware_map[OTHER_IP] = FW
+    job.device_firmware_map[OTHER_IP] = str(app_module.FIRMWARE_DIR / FW)
     job.credentials[OTHER_IP] = ("synthetic", "synthetic")
     await app_module.run_update_job(job, 1)
     runner.reboot.assert_awaited_once()
@@ -229,7 +256,7 @@ async def test_fleet_status_exposes_hold_reason(tables, mock_db, monkeypatch, tm
 
 @pytest.mark.asyncio
 async def test_live_read_error_holds_before_flash(tables, runner):
-    gate.ADDRESS_CHANGE_QUALIFICATIONS[TRANSITION] = "synthetic proof"
+    qualify()
     runner.get_device_info.side_effect = RuntimeError("synthetic read failure")
     job = make_job(reboot=False)
     await app_module.run_update_job(job, 1)
@@ -270,3 +297,110 @@ async def test_scheduled_hold_keeps_wave_pending(tables, mock_db, monkeypatch):
     assert all(d["status"] == "deferred" for d in db.get_rollout_devices(rollout["id"]))
     await harness.tick()
     assert start.call_count == 1
+
+
+SCOPE_CHANGES = [
+    ("source_sha256", "b" * 64), ("source_sha256", ""), ("source_sha256", None),
+    ("source_sha256", "not-a-hash"), ("target_sha256", "b" * 64),
+    ("target_sha256", ""), ("target_sha256", None),
+    ("management_vlan", 101), ("management_vlan", None),
+    ("management_vlan", True), ("management_vlan", -1), ("management_vlan", 4095),
+    ("management_ip_mode", "static"), ("management_ip_mode", ""),
+    ("management_ip_mode", "unknown"), ("management_ip_mode", None),
+    ("recovery_case", "pre_update_reboot"), ("recovery_case", ""),
+]
+
+
+@pytest.mark.parametrize("bench", [False, True])
+@pytest.mark.parametrize("field,value", SCOPE_CHANGES)
+def test_changed_or_missing_scope_stays_held(tables, bench, field, value):
+    if bench:
+        write_plan()
+    else:
+        gate.ADDRESS_CHANGE_QUALIFICATIONS[TRANSITION] = "synthetic proof"
+    scope = {**SCOPE, field: value}
+    # The plan includes both cases; use an unknown case for this mismatch check.
+    if bench and field == "recovery_case" and value == "pre_update_reboot":
+        scope[field] = "unknown"
+    assert not gate.address_change_decision(
+        "tna-30x", "ap", SOURCE, TARGET, ip=IP,
+        bench_exception="lab-plan" if bench else "", **scope,
+    )[0]
+
+
+@pytest.mark.parametrize("field", list(SCOPE))
+def test_legacy_plan_without_scope_stays_held(tables, field):
+    write_plan()
+    import os
+    from pathlib import Path
+    path = Path(os.environ["SIXTYOPS_ADDRESS_BENCH_PLAN_FILE"])
+    plan = json.loads(path.read_text())
+    for device in plan["devices"]:
+        device.pop(field)
+    path.write_text(json.dumps(plan))
+    assert gate._address_bench_plan("lab-plan") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scheduled", [True, False])
+@pytest.mark.parametrize("reboot", [True, False])
+@pytest.mark.parametrize("field", ["source_sha256", "target_sha256", "management_vlan", "management_ip_mode"])
+async def test_live_scope_change_holds_before_each_write(tables, runner, scheduled, reboot, field):
+    qualify()
+    job = make_job(scheduled, reboot)
+    if field == "target_sha256":
+        async def replace_bytes():
+            from pathlib import Path
+            Path(job.device_firmware_map[IP]).write_bytes(b"different artifact, same build")
+            return True
+        runner.connect.side_effect = replace_bytes
+    else:
+        key = "firmware_sha256" if field == "source_sha256" else field
+        runner.get_device_info.return_value.extra[key] = {
+            "source_sha256": "b" * 64, "management_vlan": 101,
+            "management_ip_mode": "static",
+        }[field]
+    await app_module.run_update_job(job, 1)
+    runner.reboot.assert_not_awaited()
+    runner.update_firmware.assert_not_awaited()
+    assert job.devices[IP].status == "deferred"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scheduled", [True, False])
+@pytest.mark.parametrize("field", ["firmware_sha256", "management_vlan", "management_ip_mode"])
+async def test_missing_inventory_scope_holds_before_connect(tables, runner, monkeypatch, scheduled, field):
+    qualify()
+    read = db.get_access_point
+    def missing(ip):
+        record = read(ip)
+        record.pop(field, None)
+        return record
+    monkeypatch.setattr(db, "get_access_point", missing)
+    job = make_job(scheduled)
+    await app_module.run_update_job(job, 1)
+    runner.connect.assert_not_awaited()
+    runner.reboot.assert_not_awaited()
+    runner.update_firmware.assert_not_awaited()
+    assert job.devices[IP].status == "deferred"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scheduled", [True, False])
+async def test_flash_proof_alone_holds_pre_reboot_and_later_passes(tables, runner, scheduled):
+    gate.ADDRESS_CHANGE_QUALIFICATIONS[TRANSITION] = "synthetic flash-only proof"
+    job = make_job(scheduled, bank_mode="both")
+    await app_module.run_update_job(job, 1)
+    runner.reboot.assert_not_awaited()
+    runner.update_firmware.assert_not_awaited()
+    assert job.devices[IP].status == "deferred"
+
+
+@pytest.mark.asyncio
+async def test_pre_reboot_proof_alone_holds_flash(tables, runner):
+    gate.ADDRESS_CHANGE_QUALIFICATIONS[replace(TRANSITION, recovery_case="pre_update_reboot")] = "synthetic reboot-only proof"
+    job = make_job()
+    await app_module.run_update_job(job, 1)
+    runner.reboot.assert_awaited_once()
+    runner.update_firmware.assert_not_awaited()
+    assert job.devices[IP].status == "deferred"

@@ -126,22 +126,39 @@ shipped failure handling does not enforce every target stop rule.
 
 ## Address-change qualification hold
 
-**Key points:** Qualify each exact source and target build for its model family
-and role before firmware writes. Scheduled and manual jobs share this hold.
+**Key points:** Qualify both exact builds and artifact SHA-256 values for the
+model family, role, management VLAN, IP mode, and recovery case before writes.
+Scheduled and manual jobs share this hold.
 The qualification table in `updater/rollout_gate.py` starts empty. The Devices
 view shows the hold reason with a clock glyph.
 
 **Detail:** `address_change_decision` requires a release plus revision for both
-builds. It accepts only a matching `AddressTransition(family, role, source,
-target)` with a recorded bench-proof reference. Unknown models, roles, builds,
-and transitions stay held. Release age and confirmed-working firmware affect
-only the separate Firmware Hold.
+builds. It accepts only a matching `AddressTransition` with a recorded
+bench-proof reference. Its key includes `family`, `role`, `source`, `target`,
+`source_sha256`, `target_sha256`, `management_vlan`, `management_ip_mode`, and
+`recovery_case`. Use lowercase 64-digit hashes. Use VLAN `0` for an observed
+untagged management interface or its tagged VLAN ID from 1 through 4094.
+Use `dhcp` or `static` for the observed IP mode. Qualify `pre_update_reboot`
+and `firmware_flash` separately. A reboot proof covers recovery on the installed
+source artifact before any flash. Unknown or missing values stay held.
+Release age and confirmed-working firmware affect only the separate Firmware Hold.
 
 The shared job runner checks saved inventory before connecting, then reads
-live model and firmware before the pre-update reboot and before each flash.
+live model, firmware, installed-artifact hash, and management scope before the
+pre-update reboot and before each flash. It hashes the selected target file
+at each check, so files with the same numeric build have separate qualifications.
 A held member uses `deferred` with an address-change reason in job history.
 The existing scheduler keeps that wave pending for a later window. Qualification
 is read again at each boundary and survives restart as reviewed source data.
+Keep a member held through all later passes when its pre-reboot scope is held.
+
+Read source evidence independently from inventory fields `firmware_sha256`,
+`management_vlan`, and `management_ip_mode`, and from the same keys in live
+`VendorDeviceInfo.extra`. Current inventory storage and the Tachyon driver
+provide none of these fields. They therefore keep devices held, including
+named lab exceptions, until verified scope collection is available. A build
+number, a registry checksum for another file, and a bench plan supply no
+observed source-artifact or management evidence.
 
 For approved lab validation, set `SIXTYOPS_ADDRESS_BENCH_PLAN_FILE` to a private
 JSON file in the lab Manager environment. Keep the tested source unchanged.
@@ -154,14 +171,20 @@ Use this structure with the approved plan's actual values:
   "expires_at": "2026-10-28T18:00:00+00:00",
   "devices": [
     {"ip": "192.0.2.10", "family": "tna-30x", "role": "ap",
-     "source": "1.12.3.54970", "target": "1.15.0.55142"}
+     "source": "1.12.3.54970", "target": "1.15.0.55142",
+     "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "target_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+     "management_vlan": 100, "management_ip_mode": "dhcp",
+     "recovery_case": "firmware_flash"}
   ]
 }
 ```
 
 Send the plan name as `address_bench_exception` on `/api/start-update` or
 `/api/update-device`. Select it explicitly for each manual job. The gate reads
-the file again at each check. Use normalized four-part builds in the plan.
+the file again at each check. Use normalized four-part builds and the actual
+artifact hashes in the plan. Include a separate entry for `pre_update_reboot`
+when that phase is enabled. Match the independent observed scope at each check.
 An absent, expired, or malformed plan keeps the device held. Scheduled jobs
 use qualification proof. Each accepted bench exception records its name,
 approval, device, and transition in the schedule log. Keep private lab details

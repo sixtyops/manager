@@ -4529,6 +4529,11 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
         })
 
     from .rollout_gate import address_change_decision
+    records = {(role, record["ip"]): record
+               for role, rows in (("ap", aps), ("cpe", all_cpes), ("switch", switches))
+               for record in rows}
+    target_hashes = {family: await _address_artifact_sha256(str(FIRMWARE_DIR / target["file"]))
+                     for family, target in targets.items() if target["deployable"]}
     for device in devices:
         target = targets.get(device["firmware_type"])
         if not target or not target["deployable"]:
@@ -4537,10 +4542,19 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             device, device["target_version"], settings.get("bank_mode", "one"),
         ):
             continue
-        allowed, reason = address_change_decision(
-            device["firmware_type"], device["role"],
-            device["firmware_version"], device["target_version"],
-        )
+        cases = ["firmware_flash"]
+        if settings.get("pre_update_reboot", "true") == "true":
+            cases.insert(0, "pre_update_reboot")
+        for recovery_case in cases:
+            allowed, reason = address_change_decision(
+                device["firmware_type"], device["role"],
+                device["firmware_version"], device["target_version"],
+                target_sha256=target_hashes.get(device["firmware_type"], ""),
+                recovery_case=recovery_case,
+                **_address_management_scope(records.get((device["role"], device["ip"]), {})),
+            )
+            if not allowed:
+                break
         if not allowed:
             if device["update_state"] != "on_hold":
                 summary["on_hold"] += 1
@@ -5440,7 +5454,34 @@ async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
     return (True, "")
 
 
-async def _address_change_guard(job: "UpdateJob", ip: str, *, info=None, pass_number: int = 1) -> bool:
+async def _address_artifact_sha256(path: str) -> str:
+    """Hash the selected bytes for each admission and write-boundary check."""
+    def hash_file():
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+    try:
+        return await asyncio.to_thread(hash_file)
+    except OSError:
+        return ""
+
+
+def _address_management_scope(record: dict) -> dict:
+    """Use independently observed source scope; keep absent evidence unknown."""
+    record = record if isinstance(record, dict) else {}
+    return {
+        "source_sha256": record.get("firmware_sha256", ""),
+        "management_vlan": record.get("management_vlan"),
+        "management_ip_mode": record.get("management_ip_mode", ""),
+    }
+
+
+async def _address_change_guard(
+    job: "UpdateJob", ip: str, *, info=None, pass_number: int = 1,
+    recovery_case: str = "firmware_flash",
+) -> bool:
     """Check transition qualification and persist a visible hold before writes."""
     from .rollout_gate import address_change_decision
 
@@ -5456,10 +5497,14 @@ async def _address_change_guard(job: "UpdateJob", ip: str, *, info=None, pass_nu
         model, source = record.get("model"), record.get("firmware_version")
     else:
         model, source = info.model, info.current_version
-    target = _extract_version_from_filename(Path(job.device_firmware_map.get(ip, "")).name)
+        record = info.extra
+    fw_path = job.device_firmware_map.get(ip, "")
+    target = _extract_version_from_filename(Path(fw_path).name)
     allowed, reason = address_change_decision(
         _get_firmware_type_for_model(model), ds.role, source, target,
         ip=ip, bench_exception=job.address_bench_exception, scheduled=job.is_scheduled,
+        target_sha256=await _address_artifact_sha256(fw_path),
+        recovery_case=recovery_case, **_address_management_scope(record),
     )
     if allowed:
         if reason:
@@ -5844,7 +5889,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                     ds = job.devices.get(ip)
                     if not ds:
                         return
-                    if not await _address_change_guard(job, ip):
+                    if not await _address_change_guard(job, ip, recovery_case="pre_update_reboot"):
                         return
                     ds.status = "pre-rebooting"
                     ds.progress_message = "Pre-update reboot..."
@@ -5868,7 +5913,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                             ds.progress_message = f"Pre-reboot login failed: {ds.error}"
                             return
                         info = await reboot_client.get_device_info()
-                        if not await _address_change_guard(job, ip, info=info):
+                        if not await _address_change_guard(job, ip, info=info, recovery_case="pre_update_reboot"):
                             return
                         timeout = reboot_client.get_reboot_timeout(ds.role)
                         if not await reboot_client.reboot(timeout=timeout):
@@ -5998,7 +6043,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
 
     async def _run_device(ip, pass_number):
         async with semaphore:
-            if job.cancelled:
+            if job.cancelled or job.devices[ip].status == "deferred":
                 return
             await _update_single_device(job, ip, pass_number=pass_number)
 
@@ -6017,7 +6062,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         if pass_number > 1:
             for ip in device_ips:
                 ds = job.devices.get(ip)
-                if ds:
+                if ds and ds.status != "deferred":
                     ds.status = "pending"
                     ds.progress_message = f"Pass {pass_number}: Waiting..."
                     await broadcast({

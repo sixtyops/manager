@@ -37,12 +37,17 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class AddressTransition:
-    """Bind qualification to a family, role, and two exact firmware builds."""
+    """Bind proof to exact artifacts, management scope, and a recovery case."""
 
     family: str
     role: str
     source: str
     target: str
+    source_sha256: str = ""
+    target_sha256: str = ""
+    management_vlan: Optional[int] = None
+    management_ip_mode: str = ""
+    recovery_case: str = ""
 
 
 @dataclass(frozen=True)
@@ -55,6 +60,21 @@ class AddressBenchPlan:
 
 # Add entries with a recorded bench-proof reference after independent review.
 ADDRESS_CHANGE_QUALIFICATIONS: dict[AddressTransition, str] = {}
+
+
+def _known_address_scope(transition: AddressTransition) -> bool:
+    """Require complete artifact and management evidence with an exact case."""
+    return (
+        isinstance(transition.source_sha256, str)
+        and re.fullmatch(r"[0-9a-f]{64}", transition.source_sha256) is not None
+        and isinstance(transition.target_sha256, str)
+        and re.fullmatch(r"[0-9a-f]{64}", transition.target_sha256) is not None
+        and type(transition.management_vlan) is int and 0 <= transition.management_vlan <= 4094
+        and isinstance(transition.management_ip_mode, str)
+        and transition.management_ip_mode in {"dhcp", "static"}
+        and isinstance(transition.recovery_case, str)
+        and transition.recovery_case in {"pre_update_reboot", "firmware_flash"}
+    )
 
 
 def _address_bench_plan(name: str) -> Optional[AddressBenchPlan]:
@@ -74,9 +94,15 @@ def _address_bench_plan(name: str) -> Optional[AddressBenchPlan]:
         if expires.tzinfo is None or expires <= datetime.now(timezone.utc):
             return None
         devices = frozenset(
-            (d["ip"], AddressTransition(d["family"], d["role"], d["source"], d["target"]))
+            (d["ip"], AddressTransition(
+                d["family"], d["role"], d["source"], d["target"],
+                d["source_sha256"], d["target_sha256"], d["management_vlan"],
+                d["management_ip_mode"], d["recovery_case"],
+            ))
             for d in plan["devices"]
         )
+        if any(not _known_address_scope(transition) for _, transition in devices):
+            return None
         return AddressBenchPlan(plan["approval"], devices)
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -91,14 +117,18 @@ def exact_address_build(version: Optional[str]) -> str:
 def address_change_decision(
     family: Optional[str], role: str, source: Optional[str], target: Optional[str],
     *, ip: str = "", bench_exception: str = "", scheduled: bool = False,
+    source_sha256: str = "", target_sha256: str = "",
+    management_vlan: Optional[int] = None, management_ip_mode: str = "",
+    recovery_case: str = "",
 ) -> tuple[bool, Optional[str]]:
     """Require exact transition proof or an explicitly selected lab plan."""
     transition = AddressTransition(
         family or "unknown", role, exact_address_build(source), exact_address_build(target),
+        source_sha256, target_sha256, management_vlan, management_ip_mode, recovery_case,
     )
     if (transition.family in {"tna-30x", "tna-303l", "tns-100"}
             and role in {"ap", "cpe", "switch"}
-            and transition.source and transition.target):
+            and transition.source and transition.target and _known_address_scope(transition)):
         proof = ADDRESS_CHANGE_QUALIFICATIONS.get(transition)
         if isinstance(proof, str) and proof.strip():
             return True, None
@@ -107,8 +137,9 @@ def address_change_decision(
             return True, f"Bench plan {bench_exception}: {plan.approval}"
     return False, (
         f"Address-change hold: {transition.family} {role}, "
-        f"{source or 'unknown'} to {target or 'unknown'}. "
-        "Record bench qualification for this exact transition or use an approved named lab plan."
+        f"{source or 'unknown'} to {target or 'unknown'}, {recovery_case or 'unknown recovery case'}. "
+        "Record both artifact SHA-256 values and the management VLAN/IP mode, "
+        "then qualify this scope or use an approved named lab plan."
     )
 
 

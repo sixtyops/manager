@@ -43,7 +43,9 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 - Hold firmware updates before the pre-update reboot and flash until the exact
-  source and target builds are qualified for the device family and role.
+  source and target builds and artifact SHA-256 values are qualified for the
+  device family, role, management VLAN, DHCP/static mode, and recovery case.
+  Missing artifact or management evidence keeps the device held.
   Scheduled and manual jobs use the same gate. The qualification table starts
   empty. The device UI shows the hold reason. Approved named bench plans permit
   only their listed lab devices and transitions on explicit manual requests.
