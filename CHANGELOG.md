@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added
+- Parse Tachyon serial numbers, per-interface MAC addresses, and the
+  management interface and VLAN from status responses. Add sanitized AP,
+  CPE, peer-list, and switch captures as parser fixtures.
+
 ### Security
 - Register Tachyon session tokens from the login cookie jar before session use.
   Keep one registration per live client until replacement or client collection.

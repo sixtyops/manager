@@ -95,7 +95,6 @@ async def test_login_payload_and_cookie_cleanup(process, caplog, verify):
         ("GET", "/cgi.lua/status?type=system"),
         ("GET", "/cgi.lua/bootbank"),
         ("GET", "/cgi.lua/status?type=interfaces"),
-        ("GET", "/cgi.lua/status?type=zones"),
     ]),
     ("get_ap_info", {}, [
         ("GET", "/cgi.lua/status?type=system"),

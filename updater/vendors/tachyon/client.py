@@ -454,7 +454,7 @@ class TachyonClient:
             return "expired"
         return "ok" if data.get("system") else "expired"
 
-    async def get_device_info(self) -> DeviceInfo:
+    async def get_device_info(self, include_management: bool = False) -> DeviceInfo:
         """Get device information."""
         info = DeviceInfo(ip=self.ip)
 
@@ -496,10 +496,11 @@ class TachyonClient:
             info.macs = self._parse_interface_macs(body)
             info.mac = info.macs.get("eth0")
 
-        status, body = await self._curl("GET", "/cgi.lua/status?type=zones")
-        if status == 200:
-            info.management_interface, info.management_vlan_id = self._parse_management_zone(body)
-            info.management_mac = info.macs.get(info.management_interface)
+        if include_management:
+            status, body = await self._curl("GET", "/cgi.lua/status?type=zones")
+            if status == 200:
+                info.management_interface, info.management_vlan_id = self._parse_management_zone(body)
+                info.management_mac = info.macs.get(info.management_interface)
 
         return info
 

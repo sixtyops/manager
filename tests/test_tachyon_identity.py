@@ -35,7 +35,7 @@ async def test_device_info_parses_system_all_macs_and_management_alias(role, mod
     client = TachyonClient("placeholder", "user", "password")
     client._curl = AsyncMock(side_effect=lambda _method, endpoint: (200, responses[endpoint]))
 
-    info = await client.get_device_info()
+    info = await client.get_device_info(include_management=True)
 
     assert info.model == model
     assert info.serial is None  # Sanitized serial placeholders are not identity claims.
@@ -72,6 +72,27 @@ async def test_ap_info_parses_serial_macs_and_management_fields_from_fixtures():
     assert info["management_vlan_id"] == 12
     assert info["management_mac"] == info["macs"]["br-wan.12"]
     assert info["mac"] == info["macs"]["eth0"]
+
+
+@pytest.mark.asyncio
+async def test_cpe_fixture_parses_serial_every_mac_and_bootbank():
+    responses = {
+        "/cgi.lua/status?type=system": json.dumps(load_fixture("cpe_system.json")["reads"][0]["response"]),
+        "/cgi.lua/bootbank": json.dumps(load_fixture("cpe_bootbank.json")["reads"][0]["response"]),
+        "/cgi.lua/status?type=interfaces": json.dumps(load_fixture("cpe_interfaces.json")["reads"][0]["response"]),
+        "/cgi.lua/status?type=zones": "{}",
+    }
+    client = TachyonClient("placeholder", "user", "password")
+    client._curl = AsyncMock(side_effect=lambda _method, endpoint: (200, responses[endpoint]))
+
+    info = await client.get_device_info()
+
+    expected_macs = load_fixture("cpe_interfaces.json")["reads"][0]["response"]["interfaces"]
+    assert info.model == "TNA-303X"
+    assert info.serial is None
+    assert info.macs == {name: row["mac_address"] for name, row in expected_macs.items()}
+    assert info.mac == info.macs.get("eth0")
+    assert info.active_bank == 1
 
 
 @pytest.mark.asyncio
