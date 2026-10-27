@@ -1,6 +1,6 @@
 import asyncio
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -69,6 +69,20 @@ class _DeviceClient:
             raise RuntimeError("smoke runner failed")
         passed = not (self.ip == "192.0.2.1" and self.fail_at == "smoke")
         return SimpleNamespace(passed=passed, warnings=[] if passed else ["traffic missing"], checks=[])
+
+
+@pytest.fixture
+def utc_window_clock(monkeypatch):
+    """Keep UTC window tests inside their configured 00:00-23:00 window."""
+    instant = datetime(2026, 10, 27, 22, 0, tzinfo=timezone.utc)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant.astimezone(tz) if tz else instant.astimezone().replace(tzinfo=None)
+
+    monkeypatch.setattr(app_module, "datetime", Clock)
+    return instant
 
 
 @pytest.mark.asyncio
@@ -487,9 +501,9 @@ def test_manual_fallback_admission_is_blocked_by_configured_window_stop(mock_db,
 
 
 @pytest.mark.asyncio
-async def test_manual_fallback_job_does_not_bypass_scheduled_one_wave_gate(mock_db, monkeypatch):
-    from zoneinfo import ZoneInfo
-
+async def test_manual_fallback_job_does_not_bypass_scheduled_one_wave_gate(
+    mock_db, monkeypatch, utc_window_clock,
+):
     db.set_setting("scheduled_rollout_safety_ready", "true")
     settings = {
         "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
@@ -497,7 +511,7 @@ async def test_manual_fallback_job_does_not_bypass_scheduled_one_wave_gate(mock_
         "schedule_end_hour": 23,
         "schedule_timezone": "UTC",
     }
-    now = datetime.now(ZoneInfo("UTC")).replace(minute=0, second=0, microsecond=0)
+    now = utc_window_clock
     configured_key = rollout_gate.firmware_window_key(settings, now)
     assert configured_key is not None
 
@@ -704,7 +718,7 @@ async def test_driver_login_rechecks_write_gate_before_upload_and_trigger(
 
 
 @pytest.mark.asyncio
-async def test_driver_login_device_failure_still_stops_window(mock_db, monkeypatch):
+async def test_driver_login_device_failure_still_stops_window(mock_db, monkeypatch, utc_window_clock):
     key = ("firmware", "2026-10-27")
     db.set_setting("scheduled_rollout_safety_ready", "true")
 
