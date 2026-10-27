@@ -274,12 +274,13 @@ valid head when the local reference is stale.
 
 ### Squash source checks
 
-**Key points:** Check source commit messages before the ready label. The ops
-bot uses GitHub's default squash message and matches the approved head.
+**Key points:** Check source commit messages, PR titles, and PR bodies before
+the ready label. The ops bot uses GitHub's default squash message and matches
+the approved head.
 
 **Detail:** Before the lead applies `agent:ready-for-signoff`, inspect every
-source commit message for co-author trailers and personal names. Ask a worker
-to remove any such text from the source commits before the PR enters the
+source commit message, PR title, and PR body for co-author trailers and
+personal names. Ask a worker to remove any such text before the PR enters the
 sign-off batch. The ops bot uses GitHub's default squash message and
 `--match-head-commit`.
 
