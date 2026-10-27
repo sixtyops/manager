@@ -107,7 +107,7 @@ Large decisions require a four-agent quorum. The owner is the fifth vote.
 |------|-------|-----------|
 | Architecture, planning, and audits | GPT-6 Astra (`gpt-6-astra`) | Follow its recommendations |
 | Safety builds | GPT-6.1 Sol (`gpt-6.1-sol`) | medium |
-| Reviews; safety reviews | GPT-6.1 Sol (`gpt-6.1-sol`) | medium; high for safety |
+| Reviews; safety reviews | GPT-6 Luna (`gpt-6-luna`) | medium; high for safety |
 | Easier code outside safety paths | GPT-6 Luna (`gpt-6-luna`) | high; xhigh for harder tasks |
 | Other complex code | GPT-6.1 Sol (`gpt-6.1-sol`) | Match the task |
 
