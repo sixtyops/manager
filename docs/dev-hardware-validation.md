@@ -18,6 +18,19 @@ The authorized dev host is
 Set `SIXTYOPS_TEST_URL` to this URL for the authorized dev validation lane.
 This does not authorize tests against production devices.
 
+## Dev host access
+
+The lead host reaches the authorized dev host through a local SSH alias. The
+alias, host details, and access record are on the lead host's local disk and in
+the private system record. Check those locations before reporting dev host
+access as missing. An agent assigned dev host work has full authority on that
+host, including guest-local `sudo` and Docker, within these boundaries: read
+repository instructions; use a separate Git worktree; use only the known test
+devices; do not scan for or discover targets, bypass restrictions, tunnel,
+proxy, or seek alternate routes; stop and report if access is blocked; do not
+change shared infrastructure, production, or firewall rules; do not publish
+releases or merge PRs from that access; and keep secrets out of logs and Git.
+
 ## Manual Commands
 
 Blocking lane:
