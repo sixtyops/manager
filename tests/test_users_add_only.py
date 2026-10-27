@@ -147,27 +147,25 @@ def transport():
     """Run the real client and vendor driver with synthetic transport replies."""
     captured = {"posts": [], "logins": 0}
 
-    async def curl(client, method, endpoint, data=None):
-        if method == "GET":
-            assert endpoint == "/cgi.lua/config"
-            return 200, json.dumps(LIVE)
-        assert method == "POST"
+    async def run_curl(args):
+        endpoint = args[-1].removeprefix("https://192.0.2.1")
+        method = args[args.index("-X") + 1]
+        if endpoint.endswith("/cgi.lua/login"):
+            captured["logins"] += 1
+            cookie_path = Path(args[args.index("-c") + 1])
+            cookie_path.write_text("device.test\tFALSE\t/\tFALSE\t0\ttoken\tsynthetic-token\n")
+            return 0, b'{"auth": true}'
+        if endpoint == "/cgi.lua/config" and method == "GET":
+            return 0, json.dumps(LIVE).encode() + b"\n200"
         assert endpoint in ("/cgi.lua/config?dry_run=true", "/cgi.lua/config")
-        captured["posts"].append((endpoint, json.loads(json.dumps(data))))
-        return 200, '{"success": true}'
+        assert method == "POST"
+        assert "-d" in args
+        payload = json.loads(args[args.index("-d") + 1])
+        captured["posts"].append((endpoint, payload))
+        return 0, b'{"success": true}\n200'
 
-    async def subprocess(*command, **kwargs):
-        assert command[0] == "curl"
-        assert command[-1].endswith("/cgi.lua/login")
-        cookie_path = Path(command[command.index("-c") + 1])
-        cookie_path.write_text("device.test\tFALSE\t/\tFALSE\t0\ttoken\tsynthetic-token\n")
-        captured["logins"] += 1
-        process = MagicMock(returncode=0)
-        process.communicate = AsyncMock(return_value=(b'{"auth": true}', b""))
-        return process
-
-    with patch.object(TachyonClient, "_curl", autospec=True, side_effect=curl), \
-         patch("asyncio.create_subprocess_exec", side_effect=subprocess):
+    with patch("updater.config_write_guard.automatic_config_writes_allowed", return_value=True), \
+         patch("updater.vendors.tachyon.client._run_curl", side_effect=run_curl):
         yield captured
 
 

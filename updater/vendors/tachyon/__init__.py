@@ -74,9 +74,12 @@ class TachyonDriver(VendorDriver):
         pass_number: int = 1,
         reboot_timeout: int = 300,
         bandwidth_limit_kbps: int = 0,
+        admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
     ) -> VendorUpdateResult:
+        options = {"admission_check": admission_check} if admission_check else {}
         result = await self._client.update_firmware(
-            firmware_path, progress_callback, pass_number, reboot_timeout, bandwidth_limit_kbps
+            firmware_path, progress_callback, pass_number, reboot_timeout, bandwidth_limit_kbps,
+            **options,
         )
         return VendorUpdateResult(
             ip=result.ip,

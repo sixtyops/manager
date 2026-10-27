@@ -4,6 +4,31 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Security
+- Register Tachyon session tokens from the login cookie jar before session use.
+  Keep one registration per live client until replacement or client collection.
+  Collect API-format and registered literal matches before replacement.
+  Redact the full span when matches overlap. Login, session reuse, refresh,
+  and request behavior are unchanged.
+- Pause phased config rollout, auto-enforce, and automatic config rollback
+  on the server for safety. Keep status, history, stop, manual push, restore,
+  snapshots, diff, and drift reports available.
+- Register generated Manager API tokens with the log sanitizer before hashing
+  or storage. Existing output handlers redact these values in diagnostics.
+  Retain at most 100 token literals; a fixed-format fallback redacts older
+  tokens. Inbound Cookie and Bearer credentials are not registered. Token
+  generation, storage, expiry, scopes, authentication, and one-time response
+  behavior are unchanged.
+- Documented current Manager session, API token, OIDC ID token, and Tachyon
+  device session token storage, expiry, refresh behavior, log paths, and
+  `register_secret` coverage. Manager session registration is already in place
+  through [#519](https://github.com/sixtyops/manager/pull/519) for issue
+  [#518](https://github.com/sixtyops/manager/issues/518). Full API-token
+  registration remains open in [#578](https://github.com/sixtyops/manager/issues/578).
+  Tachyon device-token registration remains open in
+  [#579](https://github.com/sixtyops/manager/issues/579). This inventory changes
+  no runtime behavior.
+
 ### Removed
 - Removed `GET /api/uptime/device` and `GET /api/uptime/events`, plus their
   exclusive database read helpers. Requests that pass unchanged middleware
@@ -31,6 +56,21 @@ All notable changes to this project are documented in this file.
   use the compliance comparison rule. The merge hashes only added users.
   Template applies preserve existing password fields, including plaintext,
   through the device client. Password rotation stays out of scope.
+- Keep scheduled firmware job and wave admission paused until the operator records
+  `scheduled_rollout_safety_ready=true` after the required safety fixes and bench
+  proof. Show the safety reason next to Auto-Update. Keep manual per-device
+  updates available. Read current readiness before scheduled admission and each
+  queued reboot, upload attempt, retry, or install; finish recovery for submitted
+  operations.
+  Count smoke-test warnings and exceptions as device failures
+  and request job cancellation.
+- Hold firmware updates before the pre-update reboot and flash until the exact
+  source and target builds and artifact SHA-256 values are qualified for the
+  device family, role, management VLAN, DHCP/static mode, and recovery case.
+  Missing artifact or management evidence keeps the device held.
+  Scheduled and manual jobs use the same gate. The qualification table starts
+  empty. The device UI shows the hold reason. Approved named bench plans permit
+  only their listed lab devices and transitions on explicit manual requests.
 - Config templates now check credential keys at any depth. A key that ends
   in `password`, `secret`, or `key` accepts only a non-empty string. An empty
   string means "no change": the manager removes that leaf before the merge,
@@ -62,6 +102,12 @@ All notable changes to this project are documented in this file.
   code revert cannot recover deleted rows. Protected rows have no size limit.
 
 ### Security
+- Tachyon curl requests send cookies and request bodies through stdin.
+  Login, config writes, and firmware uploads keep secrets out of process
+  arguments. Curl failures report exit codes without raw stderr or payloads.
+  Config request failures return a fixed error and HTTP status to prevent
+  device responses from exposing submitted secrets. HTTP 200 responses with
+  an `error` field also fail without returning the device error text.
 - Template listing returns an explicit HTTP 409 for malformed stored JSON or
   non-object payloads. It returns row IDs and field names, with no payload or
   partial list. This prevents legacy encoded Users forms from returning

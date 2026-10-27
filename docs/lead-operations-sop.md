@@ -3,13 +3,29 @@
 **Key points:** Advance actual system functionality first. Delegate bounded work.
 Resume from fresh evidence, not old agent names or a previous green check.
 
-**Detail:** [AGENTS.md](../AGENTS.md#repository-lead-authority-2026-10-02) owns
+**Detail:** [AGENTS.md](../AGENTS.md#agent-rules) owns
 repository authority and rules. This procedure explains how to apply them.
-Latest user intent takes precedence. Under the owner's 2026-10-14 grant, the
-Manager lead may merge any SixtyOps Manager PR that meets the full sign-off
-criteria, regardless of PR author. This supersedes the older PR-author
-restriction. Workers hand work to review; they do not merge or release. Shared
-hub procedures do not extend Manager authority.
+Latest user intent takes precedence. The loop limits in AGENTS.md apply to
+workers. Operational procedures below require the operator or a lead with
+explicit approval for the named action. Historical grants do not override
+those limits or task-specific restrictions. See the authority history below.
+Workers hand work to review; they do not merge or release. Shared hub
+procedures do not extend Manager authority.
+
+## Authority history
+
+**Key points:** Historical grants do not authorize loop workers to merge or
+release. Current task approval and [Agent rules](../AGENTS.md#agent-rules)
+control each action.
+
+**Detail:** The owner delegated lead duties on 2026-10-02. On 2026-10-14, the
+owner authorized the Manager lead to merge any SixtyOps Manager PR that meets
+the full sign-off criteria, regardless of PR author. This superseded the older
+human-only merge rules and PR-author restriction. The grant did not extend
+push, deploy, release, or production-device authority.
+
+Public-repo rulesets are free. This supersedes the earlier Team-plan
+requirement recorded in [#116](https://github.com/sixtyops/manager/issues/116).
 
 ## Fresh start and hourly wake
 
@@ -29,6 +45,8 @@ gives no exemption from locks or pacing gates.
    Then read this SOP, the task issue, applicable SOPs and named skills.
 2. Read durable lead status. Verify every active task against live agent/job,
    branch/head, queue, lock, budget, cooldown, review and fix-round evidence.
+   Before reporting missing lab access, follow [Private access records](dev-hardware-validation.md#private-access-records).
+   For dev host access, check the recorded SSH alias and private system record before reporting it missing.
    An idle daemon does not prove that an event-started job or worker is idle.
    Check `paseo permit ls` for pending worker requests at each wake. A request
    may not wake the lead. Allow only a task-authorized action, then read back
@@ -44,9 +62,9 @@ gives no exemption from locks or pacing gates.
 4. Select one dependency-ready system slice. Record owner, scope, worktree,
    base/head and next action before building. Use an isolated worktree from
    fetched `origin/main`; keep the shared loop clone and other worktrees intact.
-5. Reuse an available worker or wait for capacity. Send a bounded assignment.
-   Complete or hold it with evidence. Append the result and next owner/action.
-   Read back each GitHub mutation and durable status append.
+5. Follow the review-fix rule in [Priority and delegation](#priority-and-delegation).
+   Complete or hold the work with evidence. Append the result and next
+   owner/action. Read back each GitHub mutation and durable status append.
 
 ## Priority and delegation
 
@@ -72,19 +90,20 @@ blocker to its lead, and stops. A follower does not create a wake job or
 delegate unless its brief explicitly asks it to. Hold overlapping work if two
 agents claim lead ownership, and report the conflict.
 
-Choose the model by the job when it is installed and supported: Fable
-(`claude-fable-5-1`) and Astra (`gpt-6-astra`) for architecture, planning,
-and audits; follow their recommendations. Opus (`claude-opus-5-5`) and Sol
-for complex code. Luna and Sonnet (`claude-sonnet-5-5`) for easier code.
-Haiku (`claude-haiku-4-5`) for reading large files. Do not give implementation
-work to an architect; give its design to a coding worker.
+When a pre-review, system review or designated review asks for changes, launch
+a new fix worker and name the review report in its brief. If the builder has
+unpushed work, run the fix worker in the builder's workspace and have it verify
+that work first. Reuse a worker only for a follow-up inside its own task, such
+as a test rerun.
 
-Use epic413's model policy. Use GPT-6.1 Sol medium for safety builds, planning,
-and reviews. Use Sol high for safety reviews. Use GPT-6 Luna high for small or
-medium coding tasks outside the safety path. Use xhigh for a harder task.
-Verify installed provider/model/thinking IDs before sending work. Reuse suitable
-workers and preserve active jobs. Give each worker
-a bounded task with evidence. Assign one writer per branch. Honor
+Use the single [model policy](../AGENTS.md#models) for worker assignments and
+Sol/Luna reasoning levels. Only the Manager lead session may use Claude models.
+Large decisions require a four-agent quorum. The owner is the fifth vote.
+Do not give implementation work to an architect; give its design to a coding worker.
+Verify installed provider/model/thinking IDs before sending work. Follow the
+review-fix rule in [Priority and delegation](#priority-and-delegation). Preserve
+active jobs. Give each worker a bounded task with evidence. Assign one writer
+per branch. Honor
 the repository skill guidance; use factual copywriter/STE, and frontend-design
 plus UI guides when UI is in scope.
 Run delegated Paseo workers in `auto` permission mode with safety review on.
@@ -173,11 +192,14 @@ The lead checks that each eligible non-draft PR awaiting review has
 for review and sends a wake.
 The review loop also runs hourly. Use its normal schedule, locks, budgets,
 cooldowns, and round limits. When the existing review process flags a PR for
-higher-level review, assign Fable or Astra to review its design, plan, and
-risks. Record the result and give any code change to a coding worker. Hold
-merge until this review and all normal review and sign-off gates pass. Use the
-existing `agent:escalated` and `agent:needs-human` states; do not create a new
-review label.
+higher-level review, assign a GPT-6.1 Sol reviewer. Use high reasoning for a
+safety path. Do not escalate the whole review to Astra. Astra may answer at
+most one narrow design question, and only when the reviewer names that
+question. Record the review result. Follow the review-fix rule in [Priority
+and delegation](#priority-and-delegation).
+Hold merge until the review and all normal review and sign-off gates pass. Use
+the existing `agent:escalated` and `agent:needs-human` states; do not create a
+new review label.
 
 Fetch `origin/main`, then read the current GitHub pull request state and head
 before you report a pull request as open or hand it to another owner. Do not
@@ -284,9 +306,7 @@ Use the shared [reopen procedure](https://github.com/isolson/personal-processes/
 only after an explicit lead decision, recorded history/budget checks and
 readback. Keep maximum rounds/reopens and publication pacing intact.
 
-The owner's 2026-10-14 grant permits the Manager lead to merge any SixtyOps
-Manager PR, regardless of PR author. Workers do not merge. This grant does not
-extend push, deploy, release, or production-device authority.
+The lead merge authority is recorded in [Authority history](#authority-history).
 Every merge still requires all applicable review, CI, sign-off, thread,
 duplicate, acceptance, and bench gates above. Follow
 [release-sop.md](release-sop.md) and [self-update-signing.md](self-update-signing.md).
@@ -350,10 +370,13 @@ and [sign-off procedure](https://github.com/isolson/personal-processes/blob/mast
 The supported packet preview is `bash "$hub/scripts/agent-signoff.sh" --config
 "$adapter/dev-host/config/sixtyops-manager-loop.env" --pr "$pr" --dry-run`.
 Set hub/adapter from verified paths. Publication still uses normal gates.
-For reuse, the verified CLI supports `paseo send "$worker_id" --prompt-file
-"$task_file" --no-wait`. For new capacity, inspect `paseo run --help` and provider
-capabilities, then use a bounded prompt and isolated workspace. Do not copy
-stale IDs, spawn a second writer, or use bypass mode. Do not install/restart
+For a follow-up inside a worker's own task, the verified CLI supports `paseo
+send "$worker_id" --prompt-file "$task_file" --no-wait`. For review findings,
+launch a new worker with a brief that names the review report. If the builder
+has unpushed work, use the builder's workspace and require the new worker to
+verify that work first. For new capacity, inspect `paseo run --help` and
+provider capabilities, then use a bounded prompt and isolated workspace. Do not
+copy stale IDs, spawn a second writer, or use bypass mode. Do not install/restart
 services as part of resuming work.
 
 ## Durable record and fresh-session prompt
@@ -388,7 +411,8 @@ Paste into a fresh lead session:
 > docs/lead-operations-sop.md, North Star, one-right-way, live epic413 and durable
 > lead status. Confirm role ownership. Choose models by job within the Manager
 > safety policy. Verify live agents/jobs, all queue pages, locks/budgets/expiry,
-> worktrees and open PR overlap. Discover IDs; reuse workers. Finish fixes first,
+> worktrees and open PR overlap. Discover IDs. Follow the review-fix rule in
+> [Priority and delegation](#priority-and-delegation). Finish fixes first,
 > WIP3, system functionality before deferred website work. Delegate bounded
 > slices with skills and proof gates. The lead does not implement, investigate,
 > test, or review detailed diffs. Require independent review. Preserve

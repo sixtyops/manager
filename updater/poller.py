@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
+from . import config_write_guard
 from . import database as db
 from . import radius_config
 from .config_utils import (
@@ -948,7 +949,8 @@ class NetworkPoller:
                         stale_for,
                     )
                     await self.poll_all_configs()
-                    if db.get_setting("config_auto_enforce", "false") == "true":
+                    if (config_write_guard.automatic_config_writes_allowed()
+                            and db.get_setting("config_auto_enforce", "false") == "true"):
                         await self._auto_enforce_compliance()
                     return
 
@@ -968,7 +970,8 @@ class NetworkPoller:
             await self.poll_all_configs()
 
             # After polling, check if auto-enforce is enabled
-            if db.get_setting("config_auto_enforce", "false") == "true":
+            if (config_write_guard.automatic_config_writes_allowed()
+                    and db.get_setting("config_auto_enforce", "false") == "true"):
                 await self._auto_enforce_compliance()
         except Exception as e:
             logger.error(f"Error checking config poll schedule: {e}")
@@ -1163,6 +1166,8 @@ class NetworkPoller:
 
     async def _auto_enforce_compliance(self):
         """Detect non-compliant devices and push corrections in phases."""
+        if not config_write_guard.automatic_config_writes_allowed():
+            return
         if self._enforce_running:
             logger.debug("Config enforce: already running, skipping")
             return
@@ -1177,6 +1182,8 @@ class NetworkPoller:
 
     async def _run_enforce_phases(self):
         """Core enforce loop: find non-compliant devices, push in phases."""
+        if not config_write_guard.automatic_config_writes_allowed():
+            return
         # Skip if a manual config push rollout is active
         active_rollout = db.get_active_config_push_rollout()
         if active_rollout:
@@ -1271,6 +1278,9 @@ class NetworkPoller:
         for phase in PHASE_ORDER:
             if not remaining:
                 break
+
+            if not config_write_guard.automatic_config_writes_allowed():
+                return
 
             # Check if auto-enforce was toggled off
             if db.get_setting("config_auto_enforce", "false") != "true":
@@ -1488,6 +1498,8 @@ class NetworkPoller:
         *entry* while a push is in flight, and a rollback that finishes what
         enforce started is the safer of the two paths to finish first.
         """
+        if not config_write_guard.automatic_config_writes_allowed():
+            return False
         try:
             snapshot = db.get_device_config_by_id(snapshot_id)
             if not snapshot or not snapshot.get("config_json"):
@@ -1505,12 +1517,16 @@ class NetworkPoller:
             if login_result is not True:
                 raise RuntimeError(f"Login failed: {login_result}")
 
+            if not config_write_guard.automatic_config_writes_allowed():
+                return False
             dry = await client.apply_config(rollback_cfg, dry_run=True)
             if not dry.get("success"):
                 raise RuntimeError(
                     f"Dry run rejected: {dry.get('error') or dry.get('raw_response')}"
                 )
 
+            if not config_write_guard.automatic_config_writes_allowed():
+                return False
             result = await client.apply_config(rollback_cfg)
             if not result.get("success"):
                 raise RuntimeError(
@@ -1555,6 +1571,8 @@ class NetworkPoller:
         """
         pre_snapshot_id: Optional[int] = None
         async with sem:
+            if not config_write_guard.automatic_config_writes_allowed():
+                return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, None)
             try:
                 # Get device credentials
                 device = db.get_access_point(ip)
@@ -1592,12 +1610,16 @@ class NetworkPoller:
                     merged = merge_template_config(merged, frag, device["username"])
 
                 # Dry-run validation
+                if not config_write_guard.automatic_config_writes_allowed():
+                    return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, pre_snapshot_id)
                 dry_result = await client.apply_config(merged, dry_run=True, preserve_user_passwords=True)
                 if not dry_result.get("success"):
                     error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run failed"))
                     raise PolicyEnforceError(f"Dry run rejected: {error_msg}")
 
                 # Apply
+                if not config_write_guard.automatic_config_writes_allowed():
+                    return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, pre_snapshot_id)
                 result = await client.apply_config(merged, preserve_user_passwords=True)
                 if not result.get("success"):
                     error_msg = result.get("error", result.get("raw_response", "Apply failed"))

@@ -2,6 +2,9 @@
 halt-on-first-failure) and basic rollout pause/status plumbing."""
 
 import pytest
+import hashlib
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from updater import app as app_module
@@ -91,6 +94,14 @@ class _FakeClient:
     def get_update_timeout(self, role): return 5
     def get_hardware_id(self, model): return "tn-110-prs"
 
+    async def connect(self): return True
+
+    async def get_device_info(self):
+        from updater.vendors.base import VendorDeviceInfo
+        return VendorDeviceInfo(ip="x", model="TNA-301", current_version="1.0.0.100",
+                                extra={"firmware_sha256": "a" * 64,
+                                       "management_vlan": 100, "management_ip_mode": "dhcp"})
+
     async def update_firmware(self, fw_path, cb, **kw):
         return UpdateResult(ip="x", success=True, old_version="1.0.0",
                             new_version=self._version, model="TNA-301")
@@ -113,29 +124,61 @@ def _make_job(ip):
 
 async def _run_update(ip, smoke_passed, version="1.2.3"):
     db.upsert_access_point(ip, "root", "pass", enabled=True, model="TNA-301",
-                           firmware_version="1.0.0")
+                           firmware_version="1.0.0.100")
     job = _make_job(ip)
+    from updater.rollout_gate import ADDRESS_CHANGE_QUALIFICATIONS, AddressTransition
+    target = version if version.count(".") == 3 else version + ".200"
+    release, revision = target.rsplit(".", 1)
+    job.device_firmware_map[ip] = f"/tmp/tna-30x-{release}-r{revision}.bin"
+    artifact = b"synthetic smoke artifact"
+    transition = AddressTransition(
+        "tna-30x", "ap", "1.0.0.100", target,
+        "a" * 64, hashlib.sha256(artifact).hexdigest(), 100, "dhcp", "firmware_flash",
+    )
+    read_record = db.get_access_point
+    def observed_record(ip):
+        return {**read_record(ip), "firmware_sha256": "a" * 64,
+                "management_vlan": 100, "management_ip_mode": "dhcp"}
 
     def fake_driver(vendor):
         return lambda i, u, p: _FakeClient(i, u, p, smoke_passed=smoke_passed, version=version)
 
-    with patch.object(app_module, "get_driver", fake_driver), \
+    with TemporaryDirectory() as firmware_dir, \
+         patch.object(db, "get_access_point", side_effect=observed_record), \
+         patch.object(app_module, "get_driver", fake_driver), \
+         patch.object(app_module, "_get_firmware_type_for_model", return_value="tna-30x"), \
+         patch.dict(ADDRESS_CHANGE_QUALIFICATIONS, {transition: "synthetic smoke-test bench proof"}), \
          patch.object(app_module, "broadcast", AsyncMock()), \
          patch.object(app_module, "_shutting_down", False), \
          patch.object(app_module, "is_feature_enabled", return_value=False):
+        path = Path(firmware_dir) / Path(job.device_firmware_map[ip]).name
+        path.write_bytes(artifact)
+        job.device_firmware_map[ip] = str(path)
         await app_module._update_single_device(job, ip)
     return job
 
 
 class TestConfirmRequiresCleanSmoke:
-    """A confirmation clears the fleet Firmware Hold, so it must require a CLEAN
-    smoke pass — not just a 'success' status (which non-strict warnings leave)."""
+    """Record a Firmware Hold confirmation after a clean smoke pass."""
 
     @pytest.mark.asyncio
     async def test_smoke_warnings_do_not_confirm(self, mock_db):
         job = await _run_update("10.0.0.10", smoke_passed=False)
-        assert job.devices["10.0.0.10"].status == "success"   # non-strict: stays success
+        assert job.devices["10.0.0.10"].status == "failed"
+        assert job.cancelled is True
         assert db.get_confirmed_ips_for_version("1.2.3") == set()  # but NOT confirmed
+
+    @pytest.mark.asyncio
+    async def test_warning_fails_device_even_when_smoke_reports_passed(self, mock_db):
+        smoke = AsyncMock(return_value=SmokeTestResult(
+            passed=True, warnings=["Review CPE recovery"], checks=["warning"]
+        ))
+        with patch.object(_FakeClient, "run_smoke_tests", smoke):
+            job = await _run_update("192.0.2.12", smoke_passed=True)
+        assert job.devices["192.0.2.12"].status == "failed"
+        assert job.devices["192.0.2.12"].error == "Smoke test failed: Review CPE recovery"
+        assert job.cancelled is True
+        assert db.get_confirmed_ips_for_version("1.2.3") == set()
 
     @pytest.mark.asyncio
     async def test_clean_smoke_pass_confirms(self, mock_db):
@@ -177,6 +220,9 @@ class TestSmokeConfirmationFirmwareHold:
         assert job.devices[ip].smoke_warnings == [
             "Smoke test error: Synthetic smoke failure"
         ]
+        assert job.devices[ip].status == "failed"
+        assert job.devices[ip].error == "Smoke test error: Synthetic smoke failure"
+        assert job.cancelled is True
         assert db.get_confirmed_ips_for_version(_HOLD_VERSION) == set()
 
         # A healthy target-version poll supplies no missing smoke proof.

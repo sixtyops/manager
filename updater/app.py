@@ -47,6 +47,7 @@ configure_logging()
 from .tachyon import TachyonClient, UpdateResult
 from .vendors import init_vendors, get_driver, list_vendors
 from . import __version__
+from . import config_write_guard
 from . import database as db
 from .poller import init_poller, get_poller, set_poller
 from .scheduler import init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTES
@@ -60,6 +61,7 @@ from .firmware_policy import (
 )
 from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
 from . import services
+from . import rollout_gate
 from .auth import require_auth, require_auth_ws, require_role, require_write_scope, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user, generate_api_token
 from .backup import build_csv_export, process_csv_import
 from . import telemetry
@@ -2206,6 +2208,7 @@ async def get_settings(session: dict = Depends(require_auth)):
 
 
 _SETTINGS_WRITABLE = {
+    "scheduled_rollout_safety_ready",
     "schedule_enabled", "schedule_days", "schedule_start_hour", "schedule_end_hour",
     "parallel_updates", "bandwidth_limit_kbps",
     "bank_mode", "allow_downgrade", "timezone", "zip_code",
@@ -2288,6 +2291,7 @@ def _validate_settings(filtered: dict):
         raise HTTPException(400, "temperature_unit must be 'auto', 'c', or 'f'")
 
     bool_like = {
+        "scheduled_rollout_safety_ready",
         "schedule_enabled", "allow_downgrade", "weather_check_enabled",
         "firmware_beta_enabled", "autoupdate_enabled", "pre_update_reboot",
         "snmp_traps_enabled",
@@ -4059,6 +4063,7 @@ class UpdateJob:
     schedule_timezone: Optional[str] = None
     pre_update_reboot: bool = True
     enforce_window_cutoff: bool = True
+    address_bench_exception: str = ""
 
 
 async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
@@ -4527,6 +4532,41 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             "next_attempt_reason": sw_next["reason"],
         })
 
+    from .rollout_gate import address_change_decision
+    records = {(role, record["ip"]): record
+               for role, rows in (("ap", aps), ("cpe", all_cpes), ("switch", switches))
+               for record in rows}
+    target_hashes = {family: await _address_artifact_sha256(str(FIRMWARE_DIR / target["file"]))
+                     for family, target in targets.items() if target["deployable"]}
+    for device in devices:
+        target = targets.get(device["firmware_type"])
+        if not target or not target["deployable"]:
+            continue
+        if device["status"] == "current" and _device_on_exact_build(
+            device, device["target_version"], settings.get("bank_mode", "one"),
+        ):
+            continue
+        cases = ["firmware_flash"]
+        if settings.get("pre_update_reboot", "true") == "true":
+            cases.insert(0, "pre_update_reboot")
+        for recovery_case in cases:
+            allowed, reason = address_change_decision(
+                device["firmware_type"], device["role"],
+                device["firmware_version"], device["target_version"],
+                target_sha256=target_hashes.get(device["firmware_type"], ""),
+                recovery_case=recovery_case,
+                **_address_management_scope(records.get((device["role"], device["ip"]), {})),
+            )
+            if not allowed:
+                break
+        if not allowed:
+            if device["update_state"] != "on_hold":
+                summary["on_hold"] += 1
+            device["update_state"] = "on_hold"
+            device["hold"] = {"reason": reason, "code": "address_change_hold"}
+            device["next_attempt_iso"] = None
+            device["next_attempt_reason"] = reason
+
     return {"devices": devices, "summary": summary, "targets": targets}
 
 
@@ -4965,6 +5005,9 @@ async def _start_scheduled_update(
     for sw_ip in valid_switches:
         job.devices[sw_ip] = DeviceStatus(ip=sw_ip, role="switch")
 
+    admitted, reason = _scheduled_action_decision(job)
+    if not admitted:
+        raise RuntimeError(reason)
     update_jobs[job_id] = job
     db.save_active_job(job_id, "running", json.dumps(list(job.devices.keys())), firmware_file)
 
@@ -4992,6 +5035,7 @@ async def start_update(
     firmware_file_303l: str = Form(""),
     firmware_file_tns100: str = Form(""),
     bank_mode: str = Form("both"),
+    address_bench_exception: str = Form(""),
     session: dict = Depends(require_role("admin", "operator")),
 ):
     """Start a firmware update job."""
@@ -5164,6 +5208,7 @@ async def start_update(
         firmware_names=firmware_names,
         device_firmware_map=device_firmware_map,
         device_type=device_type,
+        address_bench_exception=address_bench_exception,
         credentials=credentials,
         bank_mode=bank_mode,
         ap_cpe_map=ap_cpe_map,
@@ -5212,6 +5257,7 @@ async def update_single_device_endpoint(
     firmware_file_303l: str = Form(""),
     firmware_file_tns100: str = Form(""),
     bank_mode: str = Form("both"),
+    address_bench_exception: str = Form(""),
     session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.UPDATE_SINGLE_DEVICE)),
 ):
@@ -5326,6 +5372,7 @@ async def update_single_device_endpoint(
         firmware_names=firmware_names,
         device_firmware_map=device_firmware_map,
         device_type="mixed",
+        address_bench_exception=address_bench_exception,
         credentials=credentials,
         bank_mode=bank_mode,
         ap_cpe_map=ap_cpe_map,
@@ -5377,6 +5424,27 @@ def _minutes_until_window_end(now: datetime, start_hour: int, end_hour: int) -> 
     return services.minutes_until_window_end(now, start_hour, end_hour)
 
 
+def _scheduled_action_decision(job: "UpdateJob") -> tuple[bool, str]:
+    """Admit a scheduled action using current readiness; keep recovery running."""
+    if not job.is_scheduled:
+        return True, ""
+    if job.cancelled:
+        return False, job.cancel_reason or "Scheduled job stopped"
+    admitted, reason = rollout_gate.current_scheduled_admission_decision()
+    if not admitted:
+        _request_job_cancel(job, reason)
+    return admitted, reason or ""
+
+
+def _hold_scheduled_device(job: "UpdateJob", device_status: "DeviceStatus") -> bool:
+    """Keep a queued device stopped when scheduled admission closes."""
+    admitted, reason = _scheduled_action_decision(job)
+    if not admitted:
+        device_status.status = "cancelled"
+        device_status.progress_message = reason
+    return not admitted
+
+
 async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
     """Fail-safe runtime gate for scheduled jobs."""
     if not job.is_scheduled:
@@ -5411,12 +5479,92 @@ async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
     if _minutes_until_window_end(now, job.start_hour, job.end_hour) <= SCHEDULE_END_BUFFER_MINUTES:
         return (False, "Maintenance window ending")
 
-    return (True, "")
+    return _scheduled_action_decision(job)
+
+
+async def _address_artifact_sha256(path: str) -> str:
+    """Hash the selected bytes for each admission and write-boundary check."""
+    def hash_file():
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+    try:
+        return await asyncio.to_thread(hash_file)
+    except OSError:
+        return ""
+
+
+def _address_management_scope(record: dict) -> dict:
+    """Use independently observed source scope; keep absent evidence unknown."""
+    record = record if isinstance(record, dict) else {}
+    return {
+        "source_sha256": record.get("firmware_sha256", ""),
+        "management_vlan": record.get("management_vlan"),
+        "management_ip_mode": record.get("management_ip_mode", ""),
+    }
+
+
+async def _address_change_guard(
+    job: "UpdateJob", ip: str, *, info=None, pass_number: int = 1,
+    recovery_case: str = "firmware_flash",
+) -> bool:
+    """Check transition qualification and persist a visible hold before writes."""
+    from .rollout_gate import address_change_decision
+
+    ds = job.devices[ip]
+    if info is None:
+        if ds.role == "ap":
+            record = db.get_access_point(ip)
+        elif ds.role == "switch":
+            record = db.get_switch(ip)
+        else:
+            record = db.get_cpe_by_ip(ip)
+        record = record or {}
+        model, source = record.get("model"), record.get("firmware_version")
+    else:
+        model, source = info.model, info.current_version
+        record = info.extra
+    fw_path = job.device_firmware_map.get(ip, "")
+    target = _extract_version_from_filename(Path(fw_path).name)
+    allowed, reason = address_change_decision(
+        _get_firmware_type_for_model(model), ds.role, source, target,
+        ip=ip, bench_exception=job.address_bench_exception, scheduled=job.is_scheduled,
+        target_sha256=await _address_artifact_sha256(fw_path),
+        recovery_case=recovery_case, **_address_management_scope(record),
+    )
+    if allowed:
+        if reason:
+            db.log_schedule_event(
+                "address_bench_exception", f"{reason}; {ip}, {source} to {target}",
+                job_id=job.job_id,
+            )
+        return True
+    ds.status = "deferred"
+    ds.error = reason
+    ds.progress_message = reason
+    await broadcast({
+        "type": "device_update", "job_id": job.job_id, "ip": ip,
+        "status": ds.status, "message": reason, "role": ds.role, "parent_ap": ds.parent_ap,
+    })
+    now_iso = datetime.now().isoformat()
+    db.save_device_update_history(
+        job_id=job.job_id, ip=ip, role=ds.role, pass_number=pass_number,
+        status="deferred", old_version=source, new_version=target, model=model,
+        error=reason, failed_stage="address_change_hold", stages=[], duration_seconds=0,
+        started_at=now_iso, completed_at=now_iso,
+    )
+    return False
 
 
 async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1):
     """Update a single device within a job."""
     device_status = job.devices[ip]
+    if _hold_scheduled_device(job, device_status):
+        return
+    if not await _address_change_guard(job, ip, pass_number=pass_number):
+        return
 
     # Graceful shutdown: skip pending devices when shutting down
     if _shutting_down and device_status.status == "pending":
@@ -5589,9 +5737,24 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             bw_limit = int(db.get_setting("bandwidth_limit_kbps", "0"))
         except (ValueError, TypeError):
             bw_limit = 0
+        if _hold_scheduled_device(job, device_status):
+            return
+        update_options = {}
+        if job.is_scheduled:
+            update_options["admission_check"] = lambda: _scheduled_action_decision(job)
         try:
+            from .vendors.base import VendorDeviceInfo
+            try:
+                login_ok = await client.connect()
+                info = await client.get_device_info() if login_ok is True else None
+            except Exception:
+                info = None
+            if info is None:
+                info = VendorDeviceInfo(ip=ip)
+            if not await _address_change_guard(job, ip, info=info, pass_number=pass_number):
+                return
             result = await asyncio.wait_for(
-                client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit),
+                client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit, **update_options),
                 timeout=update_timeout,
             )
         except asyncio.TimeoutError:
@@ -5617,7 +5780,6 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             logger.warning(f"Failed to save device duration for {ip}: {e}")
 
         # Post-update smoke tests
-        strict_mode = db.get_setting("smoke_test_strict", "false") == "true"
         smoke_failed = False
         smoke_clean_pass = False  # smoke ran AND passed cleanly (no warnings, no error)
         if client:
@@ -5628,38 +5790,30 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     pre_update_cpe_count=pre_update_cpe_count,
                 )
                 device_status.smoke_checks = smoke_result.checks
-                if not smoke_result.passed:
+                if not smoke_result.passed or smoke_result.warnings:
+                    smoke_failed = True
                     device_status.smoke_warnings = smoke_result.warnings
-                    warning_summary = "; ".join(smoke_result.warnings[:3])
+                    warning_summary = "; ".join(smoke_result.warnings[:3]) or "Required check failed"
                     if len(warning_summary) > 200:
                         warning_summary = warning_summary[:197] + "..."
-                    if strict_mode:
-                        smoke_failed = True
-                        device_status.status = "failed"
-                        device_status.error = f"Smoke test failed: {warning_summary}"
-                        device_status.progress_message = f"{prefix}Updated to {result.new_version} (FAILED smoke tests: {warning_summary})"
-                        logger.warning(f"Smoke test STRICT FAILURE for {ip}: {smoke_result.warnings}")
-                    else:
-                        device_status.progress_message = f"{prefix}Updated to {result.new_version} (warnings: {warning_summary})"
-                        logger.warning(f"Smoke test warnings for {ip}: {smoke_result.warnings}")
+                    device_status.status = "failed"
+                    device_status.error = f"Smoke test failed: {warning_summary}"
+                    device_status.progress_message = f"{prefix}Updated to {result.new_version}. Smoke test failed: {warning_summary}"
+                    logger.warning(f"Smoke test failure for {ip}: {warning_summary}")
                 else:
                     smoke_clean_pass = True
+                    device_status.status = "success"
                     device_status.progress_message = f"{prefix}Updated to {result.new_version} (smoke tests passed)"
             except Exception as e:
-                logger.warning(f"Smoke test error for {ip} (non-fatal): {e}")
-                device_status.smoke_warnings = [f"Smoke test error: {e}"]
-            # Restore status unless strict mode failed it
-            if not smoke_failed:
-                device_status.status = "success"
+                smoke_failed = True
+                device_status.status = "failed"
+                device_status.error = f"Smoke test error: {e}"
+                device_status.smoke_warnings = [device_status.error]
+                device_status.progress_message = f"{prefix}{device_status.error}"
+                logger.warning(f"Smoke test error for {ip}: {e}")
 
-        # A device that updated and *cleanly* passed its smoke tests is "confirmed
-        # working" on the new firmware. One confirmed device of a model family
-        # clears that family's Firmware Hold for the auto-rollout (the operator's
-        # manual canary). We require a clean smoke pass — NOT just a "success"
-        # status, which non-strict warnings and smoke-test exceptions also leave —
-        # so a device that didn't actually pass smoke can't release the fleet. On a
-        # strict smoke failure, halt the whole job (halt-on-first-failure) so a bad
-        # firmware can't spread past the first device(s) that exhibit it.
+        # Record Firmware Hold proof after a clean smoke pass.
+        # Request job cancellation after each smoke failure.
         if smoke_clean_pass and result.new_version:
             try:
                 db.mark_device_firmware_confirmed(
@@ -5761,6 +5915,10 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                     ds = job.devices.get(ip)
                     if not ds:
                         return
+                    if _hold_scheduled_device(job, ds):
+                        return
+                    if not await _address_change_guard(job, ip, recovery_case="pre_update_reboot"):
+                        return
                     ds.status = "pre-rebooting"
                     ds.progress_message = "Pre-update reboot..."
                     await broadcast({
@@ -5782,7 +5940,12 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                             ds.error = login_result if isinstance(login_result, str) else "Login failed"
                             ds.progress_message = f"Pre-reboot login failed: {ds.error}"
                             return
+                        info = await reboot_client.get_device_info()
+                        if not await _address_change_guard(job, ip, info=info, recovery_case="pre_update_reboot"):
+                            return
                         timeout = reboot_client.get_reboot_timeout(ds.role)
+                        if _hold_scheduled_device(job, ds):
+                            return
                         if not await reboot_client.reboot(timeout=timeout):
                             ds.status = "failed"
                             ds.error = "Device did not come back online after pre-update reboot"
@@ -5910,7 +6073,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
 
     async def _run_device(ip, pass_number):
         async with semaphore:
-            if job.cancelled:
+            if job.cancelled or job.devices[ip].status == "deferred":
                 return
             await _update_single_device(job, ip, pass_number=pass_number)
 
@@ -5929,7 +6092,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         if pass_number > 1:
             for ip in device_ips:
                 ds = job.devices.get(ip)
-                if ds:
+                if ds and ds.status != "deferred":
                     ds.status = "pending"
                     ds.progress_message = f"Pass {pass_number}: Waiting..."
                     await broadcast({
@@ -6885,7 +7048,9 @@ async def get_config_enforce_status(session: dict = Depends(require_auth), _pro=
     failures = db.get_enforce_failures(since_hours=24)
     recent = db.get_config_enforce_log(limit=10)
     return {
-        "enabled": enabled,
+        "enabled": enabled and config_write_guard.automatic_config_writes_allowed(),
+        "paused_for_safety": not config_write_guard.automatic_config_writes_allowed(),
+        "pause_reason": config_write_guard.CONFIG_WRITES_PAUSED_REASON,
         "running": running,
         "failure_count": len(failures),
         "recent": recent,
@@ -7664,6 +7829,8 @@ async def get_config_push_rollout_status(session: dict = Depends(require_auth)):
 @app.post("/api/config-push/rollout/start")
 async def start_config_push_rollout(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
     """Start a phased config push rollout."""
+    if not config_write_guard.automatic_config_writes_allowed():
+        raise HTTPException(409, config_write_guard.CONFIG_WRITES_PAUSED_REASON)
     global _config_push_rollout_task
 
     data = await request.json()
@@ -7735,6 +7902,8 @@ async def start_config_push_rollout(request: Request, session: dict = Depends(re
 @app.post("/api/config-push/rollout/{rollout_id}/advance")
 async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Manually advance to execute the next phase."""
+    if not config_write_guard.automatic_config_writes_allowed():
+        raise HTTPException(409, config_write_guard.CONFIG_WRITES_PAUSED_REASON)
     global _config_push_rollout_task
 
     rollout = db.get_config_push_rollout(rollout_id)
@@ -7797,6 +7966,8 @@ async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(r
 @app.post("/api/config-push/rollout/{rollout_id}/resume")
 async def resume_config_push_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
     """Resume a paused rollout (retries failed devices in current phase)."""
+    if not config_write_guard.automatic_config_writes_allowed():
+        raise HTTPException(409, config_write_guard.CONFIG_WRITES_PAUSED_REASON)
     global _config_push_rollout_task
 
     rollout = db.get_config_push_rollout(rollout_id)
@@ -7837,9 +8008,7 @@ async def cancel_config_push_rollout(rollout_id: int, session: dict = Depends(re
     if not rollout or rollout["status"] not in ("active", "paused"):
         raise HTTPException(400, "Rollout is not active or paused")
     db.update_config_push_rollout_status(rollout_id, "cancelled")
-    # Stop the running async task if it exists
-    if _config_push_rollout_task and not _config_push_rollout_task.done():
-        _config_push_rollout_task.cancel()
+    # Let submitted device operations finish and record their results.
     await _broadcast_config_push_rollout_state(rollout_id)
     return {"status": "cancelled"}
 
@@ -7870,6 +8039,8 @@ def _resolve_all_rollout_device_credentials(rollout_id: int) -> list[dict]:
 
 async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: list):
     """Execute the current phase of a config push rollout."""
+    if not config_write_guard.automatic_config_writes_allowed():
+        return
     rollout = db.get_config_push_rollout(rollout_id)
     if not rollout or rollout["status"] != "active":
         return
@@ -7934,6 +8105,8 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
 
         try:
             async with sem:
+                if not config_write_guard.automatic_config_writes_allowed():
+                    return
                 await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "connecting", "phase": phase})
 
                 client = TachyonClient(ip, creds["username"], creds["password"])
@@ -7974,6 +8147,8 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
 
                 # Dry-run validation
                 await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "validating", "phase": phase})
+                if not config_write_guard.automatic_config_writes_allowed():
+                    return
                 dry_result = await client.apply_config(merged, dry_run=True, preserve_user_passwords=True)
                 if not dry_result.get("success"):
                     error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run validation failed"))
@@ -7981,6 +8156,11 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
 
                 # Apply
                 await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "applying", "phase": phase})
+                if not config_write_guard.automatic_config_writes_allowed():
+                    return
+                current = db.get_config_push_rollout(rollout_id)
+                if not current or current["status"] != "active":
+                    return
                 result = await client.apply_config(merged, preserve_user_passwords=True)
                 completed_at = datetime.now().isoformat()
                 duration = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()
