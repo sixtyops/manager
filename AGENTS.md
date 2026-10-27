@@ -105,17 +105,8 @@ Start worker completion messages with `DONE from <id> (<title>):`.
 Only the Manager lead session may use Claude models. Workers must not use them.
 Use installed and supported models. Verify provider, model, and reasoning IDs.
 Use normal mode unless the owner records a current extension.
-Large decisions require a four-agent quorum. The owner is the fifth vote.
+Use the routing and quorum policy in [the lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
 
-| Task | Model | Reasoning |
-|------|-------|-----------|
-| Architecture, planning, and audits | GPT-6 Astra (`gpt-6-astra`) | Follow its recommendations |
-| Safety builds | GPT-6.1 Sol (`gpt-6.1-sol`) | medium |
-| Reviews; safety reviews | GPT-6 Luna (`gpt-6-luna`) | medium; high for safety |
-| Easier code outside safety paths | GPT-6 Luna (`gpt-6-luna`) | high; xhigh for harder tasks |
-| Other complex code | GPT-6.1 Sol (`gpt-6.1-sol`) | Match the task |
-
-The specific safety and review rows take precedence over the general rows.
 Give an architect's design to a coding worker for implementation.
 
 ## Writing and style
