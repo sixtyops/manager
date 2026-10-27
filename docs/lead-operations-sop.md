@@ -46,7 +46,7 @@ gives no exemption from locks or pacing gates.
 2. Read durable lead status. Verify every active task against live agent/job,
    branch/head, queue, lock, budget, cooldown, review and fix-round evidence.
    Before reporting missing lab access, follow [Private access records](dev-hardware-validation.md#private-access-records).
-   For dev host access, check the lead host's local SSH alias and private system record before reporting it missing.
+   For dev host access, check the recorded SSH alias and private system record before reporting it missing.
    An idle daemon does not prove that an event-started job or worker is idle.
    Check `paseo permit ls` for pending worker requests at each wake. A request
    may not wake the lead. Allow only a task-authorized action, then read back
