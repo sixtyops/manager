@@ -224,6 +224,14 @@ Do not commit the manifest or its path. Do not copy usernames, passwords,
 tokens, device addresses, or inventory into shared issues, pull requests, or
 logs.
 
+On the authorized dev host, the lab access manifest and credential files are
+on local disk in owner-only folders in the operator's home directory. One
+credential file covers the switch lanes; one covers the AP lanes. Check these
+records before reporting access missing. Pass the correct file to the bench
+wrapper with `SIXTYOPS_BENCH_ACCESS_FILE`. Do not ask the owner for access
+already recorded there. Do not read, print, or copy these files. Only the
+wrapper reads them.
+
 Map each role to labels for fields that already exist in the private
 credential file. Use references only. Do not copy secret values into the
 manifest. This example shows the information to record. It does not define a
