@@ -594,3 +594,66 @@ async def test_current_admission_after_connect_blocks_scheduled_writes(
         assert job.cancelled is (closure == "readiness")
     else:
         assert job.devices["192.0.2.1"].status == "success"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closure", ["cutoff", "window_stop"])
+async def test_driver_login_rechecks_write_gate_before_upload_and_trigger(
+    mock_db, monkeypatch, closure,
+):
+    db.set_setting("scheduled_rollout_safety_ready", "true")
+    key = ("firmware", "2026-10-27")
+    state = {"minutes_until_end": 60}
+
+    class SlowLoginClient(_DeviceClient):
+        async def update_firmware(self, *args, admission_check=None, **kwargs):
+            self.calls[self.ip].append("driver_login")
+            await asyncio.sleep(0)
+            if closure == "cutoff":
+                state["minutes_until_end"] = 0
+            else:
+                app_module._stop_firmware_window(
+                    job, "192.0.2.2", "upload", "Another device failed",
+                )
+
+            admitted, reason = admission_check()
+            if not admitted:
+                return app_module.UpdateResult(ip=self.ip, success=False, error=reason)
+
+            self.calls[self.ip].append("upload")
+            admitted, reason = admission_check()
+            if not admitted:
+                return app_module.UpdateResult(ip=self.ip, success=False, error=reason)
+
+            self.calls[self.ip].append("trigger")
+            return app_module.UpdateResult(ip=self.ip, success=True, old_version="1", new_version="2")
+
+    _DeviceClient.calls = {}
+    _DeviceClient.connect_calls = {}
+    _DeviceClient.fail_at = None
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: SlowLoginClient)
+    monkeypatch.setattr(app_module, "_address_change_guard", AsyncMock(return_value=True))
+    monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: False)
+    monkeypatch.setattr(app_module, "_shutting_down", False)
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(app_module, "_minutes_until_window_end", lambda *args: state["minutes_until_end"])
+    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: key)
+    job = app_module.UpdateJob(
+        job_id=f"driver-login-{closure}",
+        device_firmware_map={"192.0.2.1": "/tmp/test.bin"},
+        credentials={"192.0.2.1": ("u", "p")},
+        device_roles={"192.0.2.1": "ap"},
+        devices={"192.0.2.1": app_module.DeviceStatus(ip="192.0.2.1", role="ap", model="TNA-301")},
+        is_scheduled=True, start_hour=0, end_hour=23, schedule_days=["tue"],
+        schedule_timezone="UTC", window_key=key, pre_update_reboot=False,
+    )
+
+    await app_module._update_single_device(job, "192.0.2.1")
+
+    calls = _DeviceClient.calls["192.0.2.1"]
+    assert "driver_login" in calls
+    assert "upload" not in calls
+    assert "trigger" not in calls
+    if closure == "window_stop":
+        stop = db.get_firmware_window_stop(key)
+        assert stop["device_ip"] == "192.0.2.2"

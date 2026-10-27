@@ -15,7 +15,9 @@ All notable changes to this project are documented in this file.
   with a date-only last-wave marker wait for a window whose start date is
   after the marker date. This also blocks ambiguous overnight markers.
   Scheduled reboots and flashes recheck current safety readiness and the window
-  after device preparation. New markers use the maintenance window instance key.
+  after device preparation. The write gate also rechecks the stop record,
+  readiness, and cutoff before upload and install trigger. New markers use the
+  maintenance window instance key.
 
 ### Security
 - Register Tachyon session tokens from the login cookie jar before session use.

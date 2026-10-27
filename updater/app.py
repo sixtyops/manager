@@ -5550,7 +5550,7 @@ def _hold_scheduled_device(job: "UpdateJob", device_status: "DeviceStatus") -> b
     return not admitted
 
 
-async def _firmware_write_gate(job: "UpdateJob", ip: str) -> bool:
+def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
     """Recheck the stop, current readiness, and window before a device write."""
     stop = db.get_firmware_window_stop(job.window_key) if job.window_key else None
     if stop:
@@ -5559,13 +5559,13 @@ async def _firmware_write_gate(job: "UpdateJob", ip: str) -> bool:
         job.devices[ip].error = reason
         job.devices[ip].progress_message = reason
         _request_job_cancel(job, reason)
-        return False
+        return False, reason
 
     if _hold_scheduled_device(job, job.devices[ip]):
-        return False
+        return False, job.devices[ip].progress_message or "Scheduled job stopped"
 
     if not (job.is_scheduled and job.enforce_window_cutoff):
-        return True
+        return True, ""
 
     try:
         if (
@@ -5585,14 +5585,14 @@ async def _firmware_write_gate(job: "UpdateJob", ip: str) -> bool:
         }, now)
         minutes_until_end = _minutes_until_window_end(now, job.start_hour, job.end_hour)
         if current_key == job.window_key and minutes_until_end > SCHEDULE_END_BUFFER_MINUTES:
-            return True
+            return True, ""
         reason = "Deferred: maintenance window ended or is ending; queued device will retry next window"
     except Exception as exc:
         reason = f"Deferred: maintenance window check failed; queued device will retry next window ({exc})"
 
     job.devices[ip].status = "pending"
     job.devices[ip].progress_message = reason
-    return False
+    return False, reason
 
 
 async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
@@ -5938,7 +5938,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 ):
                     return
                 reboot_timeout = client.get_reboot_timeout(device_status.role)
-                if not await _firmware_write_gate(job, ip):
+                if not _firmware_write_gate(job, ip)[0]:
                     return
                 if not await client.reboot(timeout=reboot_timeout):
                     raise RuntimeError("Device did not come back online after pre-update reboot")
@@ -5974,9 +5974,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             bw_limit = 0
         if _hold_scheduled_device(job, device_status):
             return
-        update_options = {}
-        if job.is_scheduled:
-            update_options["admission_check"] = lambda: _scheduled_action_decision(job)
+        update_options = {"admission_check": lambda: _firmware_write_gate(job, ip)}
         try:
             from .vendors.base import VendorDeviceInfo
             try:
@@ -5988,7 +5986,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 info = VendorDeviceInfo(ip=ip)
             if not await _address_change_guard(job, ip, info=info, pass_number=pass_number):
                 return
-            if not await _firmware_write_gate(job, ip):
+            if not _firmware_write_gate(job, ip)[0]:
                 return
             result = await asyncio.wait_for(
                 client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit, **update_options),
