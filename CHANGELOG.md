@@ -50,6 +50,14 @@ All notable changes to this project are documented in this file.
   remain unchanged.
 
 ### Fixed
+- Keep scheduled firmware job and wave admission paused until the operator records
+  `scheduled_rollout_safety_ready=true` after the required safety fixes and bench
+  proof. Show the safety reason next to Auto-Update. Keep manual per-device
+  updates available. Read current readiness before scheduled admission and each
+  queued reboot, upload attempt, retry, or install; finish recovery for submitted
+  operations.
+  Count smoke-test warnings and exceptions as device failures
+  and request job cancellation.
 - Hold firmware updates before the pre-update reboot and flash until the exact
   source and target builds and artifact SHA-256 values are qualified for the
   device family, role, management VLAN, DHCP/static mode, and recovery case.

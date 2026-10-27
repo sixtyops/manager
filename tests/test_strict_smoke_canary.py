@@ -159,14 +159,26 @@ async def _run_update(ip, smoke_passed, version="1.2.3"):
 
 
 class TestConfirmRequiresCleanSmoke:
-    """A confirmation clears the fleet Firmware Hold, so it must require a CLEAN
-    smoke pass — not just a 'success' status (which non-strict warnings leave)."""
+    """Record a Firmware Hold confirmation after a clean smoke pass."""
 
     @pytest.mark.asyncio
     async def test_smoke_warnings_do_not_confirm(self, mock_db):
         job = await _run_update("10.0.0.10", smoke_passed=False)
-        assert job.devices["10.0.0.10"].status == "success"   # non-strict: stays success
+        assert job.devices["10.0.0.10"].status == "failed"
+        assert job.cancelled is True
         assert db.get_confirmed_ips_for_version("1.2.3") == set()  # but NOT confirmed
+
+    @pytest.mark.asyncio
+    async def test_warning_fails_device_even_when_smoke_reports_passed(self, mock_db):
+        smoke = AsyncMock(return_value=SmokeTestResult(
+            passed=True, warnings=["Review CPE recovery"], checks=["warning"]
+        ))
+        with patch.object(_FakeClient, "run_smoke_tests", smoke):
+            job = await _run_update("192.0.2.12", smoke_passed=True)
+        assert job.devices["192.0.2.12"].status == "failed"
+        assert job.devices["192.0.2.12"].error == "Smoke test failed: Review CPE recovery"
+        assert job.cancelled is True
+        assert db.get_confirmed_ips_for_version("1.2.3") == set()
 
     @pytest.mark.asyncio
     async def test_clean_smoke_pass_confirms(self, mock_db):
@@ -208,6 +220,9 @@ class TestSmokeConfirmationFirmwareHold:
         assert job.devices[ip].smoke_warnings == [
             "Smoke test error: Synthetic smoke failure"
         ]
+        assert job.devices[ip].status == "failed"
+        assert job.devices[ip].error == "Smoke test error: Synthetic smoke failure"
+        assert job.cancelled is True
         assert db.get_confirmed_ips_for_version(_HOLD_VERSION) == set()
 
         # A healthy target-version poll supplies no missing smoke proof.

@@ -117,6 +117,7 @@ def test_unreadable_plan_holds(tables, contents):
 
 @pytest.fixture
 def runner(mock_db, monkeypatch, tmp_path):
+    db.set_setting("scheduled_rollout_safety_ready", "true")
     for name in ("broadcast",):
         monkeypatch.setattr(app_module, name, AsyncMock())
     monkeypatch.setattr(app_module, "_scheduled_job_guard", AsyncMock(return_value=(True, "")))

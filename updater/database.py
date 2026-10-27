@@ -635,6 +635,7 @@ def init_db():
         # Insert default settings if not exists
         defaults = {
             "schedule_enabled": "false",
+            "scheduled_rollout_safety_ready": "false",
             "schedule_days": "tue,wed,thu",
             "schedule_start_hour": "3",
             "schedule_end_hour": "4",

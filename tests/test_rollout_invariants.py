@@ -75,6 +75,7 @@ def _seed_confirmed(ip: str, version: str, *, model: str = None):
 def _settings(hold_days: int = 0, firmware: str = FW) -> dict:
     return {
         "schedule_enabled": "true",
+        "scheduled_rollout_safety_ready": "true",
         "timezone": "America/Chicago",
         "schedule_start_hour": "3",
         "schedule_end_hour": "4",

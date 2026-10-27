@@ -18,6 +18,75 @@ whether a wave may start. Failures pause the rollout for manual review. Manual
 per-device updates bypass the release-date Firmware Hold. Address-change
 qualification applies to both scheduled and manual updates, as described below.
 
+## Scheduled safety readiness
+
+**Key points:** Keep unattended schedules paused until safety qualification is
+complete. `scheduled_rollout_safety_ready` defaults to `false`, including on
+existing installs. `schedule_enabled=true` still requires this readiness record.
+Manual per-device updates remain available and bypass the Firmware Hold.
+
+**Detail:** The scheduler calls `rollout_gate.scheduled_admission_decision` before
+creating a rollout, starting a job, or advancing an empty wave. Each boundary
+reads current readiness after asynchronous waits. Queued scheduled reboots,
+uploads, and installs read readiness again after capacity acquisition and device
+preparation. Each upload attempt also reads readiness before retry backoff and
+again before starting its upload process. Let a submitted operation finish its recovery. Revoking readiness
+stops the next scheduled action, including another bank pass. The Auto-Update control shows the safety reason while
+readiness is pending, including when the schedule is off.
+
+Complete [#416](https://github.com/sixtyops/manager/issues/416),
+[#369](https://github.com/sixtyops/manager/issues/369),
+[#337](https://github.com/sixtyops/manager/issues/337),
+[#341](https://github.com/sixtyops/manager/issues/341),
+[#338](https://github.com/sixtyops/manager/issues/338),
+[#367](https://github.com/sixtyops/manager/issues/367),
+[#417](https://github.com/sixtyops/manager/issues/417), and
+[#422](https://github.com/sixtyops/manager/issues/422), with exact-head bench proof.
+Include the engine prerequisites
+[#330](https://github.com/sixtyops/manager/issues/330),
+[#381](https://github.com/sixtyops/manager/issues/381), and
+[#391](https://github.com/sixtyops/manager/issues/391).
+Complete [#418](https://github.com/sixtyops/manager/issues/418) before traffic
+enforcement. Protect mandatory snapshots and verify recovery through
+[#312](https://github.com/sixtyops/manager/issues/312). Wire the window-instance
+model from [#535](https://github.com/sixtyops/manager/pull/535) into runtime
+admission through [#369](https://github.com/sixtyops/manager/issues/369).
+Align [#339](https://github.com/sixtyops/manager/issues/339) with the failed-window
+stop: resume in a later window after the failed check passes.
+
+Complete the identity and recovery prerequisites in
+[#530](https://github.com/sixtyops/manager/issues/530):
+[#288](https://github.com/sixtyops/manager/issues/288),
+[#289](https://github.com/sixtyops/manager/issues/289),
+[#332](https://github.com/sixtyops/manager/issues/332),
+[#333](https://github.com/sixtyops/manager/issues/333),
+[#291](https://github.com/sixtyops/manager/issues/291), nullable-address storage,
+[#290](https://github.com/sixtyops/manager/issues/290),
+[#335](https://github.com/sixtyops/manager/issues/335),
+[#393](https://github.com/sixtyops/manager/issues/393),
+[#394](https://github.com/sixtyops/manager/issues/394), and
+[#217](https://github.com/sixtyops/manager/issues/217).
+Qualify trusted identity continuity before candidate authentication or address
+promotion. Keep automatic parent updates held until topology and child recovery
+proof pass.
+
+Record exact source and target build hashes, model, role, management VLAN,
+DHCP/static behavior, topology, and recovery case. Prove the composed behavior on
+the exact head: induced failures leave the next device unchanged; midnight and
+restart preserve the window stop; held-family additions and late children remain
+safe; complete child, association, and traffic recovery pass. Qualify bounded
+address recovery, a different responder at the old IP, and a missing VLAN lease.
+Use bench evidence to set traffic floors, deadlines, and idle/missing-counter
+fallbacks. Enable only the proven model/build/topology scope. Keep unqualified
+scope held in code and record the approved scope with the readiness decision.
+
+Then have the operator record readiness through the admin settings API:
+`POST /api/settings/save` with `{"scheduled_rollout_safety_ready":"true"}`.
+Record the qualification evidence with that decision. This flag records the
+operator decision; it does not check issue status or establish bench proof.
+Set it to `false` to pause new scheduled admission again. The schedule toggle
+changes `schedule_enabled` independently of this flag.
+
 ## The gate (`rollout_gate.py`)
 
 `phase_run_decision(rollout, window_key, *, first_wave_held)` — fail-closed, two rules:
@@ -58,9 +127,11 @@ both rules in.
 ## Halt-on-first-failure
 
 A device that fails to return online cancels the update job (`app.py`) and the rollout
-is paused (`scheduler.on_job_completed` on `failed_count > 0`). A strict-mode smoke
-failure (`smoke_test_strict`) marks the device failed and likewise halts the job. With
-the default `parallel_updates=2`, the first bad device stops the run before it spreads.
+is paused (`scheduler.on_job_completed` on `failed_count > 0`). Smoke-test warnings,
+failed checks, and exceptions mark the device failed and request job cancellation,
+including with `smoke_test_strict=false`. Already active device operations can
+continue. Persistent window stops and serialized recovery require the remaining
+safety fixes.
 
 ## Per-device update state
 

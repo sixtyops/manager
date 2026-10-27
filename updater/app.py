@@ -61,6 +61,7 @@ from .firmware_policy import (
 )
 from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
 from . import services
+from . import rollout_gate
 from .auth import require_auth, require_auth_ws, require_role, require_write_scope, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user, generate_api_token
 from .backup import build_csv_export, process_csv_import
 from . import telemetry
@@ -2207,6 +2208,7 @@ async def get_settings(session: dict = Depends(require_auth)):
 
 
 _SETTINGS_WRITABLE = {
+    "scheduled_rollout_safety_ready",
     "schedule_enabled", "schedule_days", "schedule_start_hour", "schedule_end_hour",
     "parallel_updates", "bandwidth_limit_kbps",
     "bank_mode", "allow_downgrade", "timezone", "zip_code",
@@ -2289,6 +2291,7 @@ def _validate_settings(filtered: dict):
         raise HTTPException(400, "temperature_unit must be 'auto', 'c', or 'f'")
 
     bool_like = {
+        "scheduled_rollout_safety_ready",
         "schedule_enabled", "allow_downgrade", "weather_check_enabled",
         "firmware_beta_enabled", "autoupdate_enabled", "pre_update_reboot",
         "snmp_traps_enabled",
@@ -5002,6 +5005,9 @@ async def _start_scheduled_update(
     for sw_ip in valid_switches:
         job.devices[sw_ip] = DeviceStatus(ip=sw_ip, role="switch")
 
+    admitted, reason = _scheduled_action_decision(job)
+    if not admitted:
+        raise RuntimeError(reason)
     update_jobs[job_id] = job
     db.save_active_job(job_id, "running", json.dumps(list(job.devices.keys())), firmware_file)
 
@@ -5418,6 +5424,27 @@ def _minutes_until_window_end(now: datetime, start_hour: int, end_hour: int) -> 
     return services.minutes_until_window_end(now, start_hour, end_hour)
 
 
+def _scheduled_action_decision(job: "UpdateJob") -> tuple[bool, str]:
+    """Admit a scheduled action using current readiness; keep recovery running."""
+    if not job.is_scheduled:
+        return True, ""
+    if job.cancelled:
+        return False, job.cancel_reason or "Scheduled job stopped"
+    admitted, reason = rollout_gate.current_scheduled_admission_decision()
+    if not admitted:
+        _request_job_cancel(job, reason)
+    return admitted, reason or ""
+
+
+def _hold_scheduled_device(job: "UpdateJob", device_status: "DeviceStatus") -> bool:
+    """Keep a queued device stopped when scheduled admission closes."""
+    admitted, reason = _scheduled_action_decision(job)
+    if not admitted:
+        device_status.status = "cancelled"
+        device_status.progress_message = reason
+    return not admitted
+
+
 async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
     """Fail-safe runtime gate for scheduled jobs."""
     if not job.is_scheduled:
@@ -5452,7 +5479,7 @@ async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
     if _minutes_until_window_end(now, job.start_hour, job.end_hour) <= SCHEDULE_END_BUFFER_MINUTES:
         return (False, "Maintenance window ending")
 
-    return (True, "")
+    return _scheduled_action_decision(job)
 
 
 async def _address_artifact_sha256(path: str) -> str:
@@ -5534,6 +5561,8 @@ async def _address_change_guard(
 async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1):
     """Update a single device within a job."""
     device_status = job.devices[ip]
+    if _hold_scheduled_device(job, device_status):
+        return
     if not await _address_change_guard(job, ip, pass_number=pass_number):
         return
 
@@ -5708,6 +5737,11 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             bw_limit = int(db.get_setting("bandwidth_limit_kbps", "0"))
         except (ValueError, TypeError):
             bw_limit = 0
+        if _hold_scheduled_device(job, device_status):
+            return
+        update_options = {}
+        if job.is_scheduled:
+            update_options["admission_check"] = lambda: _scheduled_action_decision(job)
         try:
             from .vendors.base import VendorDeviceInfo
             try:
@@ -5720,7 +5754,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             if not await _address_change_guard(job, ip, info=info, pass_number=pass_number):
                 return
             result = await asyncio.wait_for(
-                client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit),
+                client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit, **update_options),
                 timeout=update_timeout,
             )
         except asyncio.TimeoutError:
@@ -5746,7 +5780,6 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             logger.warning(f"Failed to save device duration for {ip}: {e}")
 
         # Post-update smoke tests
-        strict_mode = db.get_setting("smoke_test_strict", "false") == "true"
         smoke_failed = False
         smoke_clean_pass = False  # smoke ran AND passed cleanly (no warnings, no error)
         if client:
@@ -5757,38 +5790,30 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     pre_update_cpe_count=pre_update_cpe_count,
                 )
                 device_status.smoke_checks = smoke_result.checks
-                if not smoke_result.passed:
+                if not smoke_result.passed or smoke_result.warnings:
+                    smoke_failed = True
                     device_status.smoke_warnings = smoke_result.warnings
-                    warning_summary = "; ".join(smoke_result.warnings[:3])
+                    warning_summary = "; ".join(smoke_result.warnings[:3]) or "Required check failed"
                     if len(warning_summary) > 200:
                         warning_summary = warning_summary[:197] + "..."
-                    if strict_mode:
-                        smoke_failed = True
-                        device_status.status = "failed"
-                        device_status.error = f"Smoke test failed: {warning_summary}"
-                        device_status.progress_message = f"{prefix}Updated to {result.new_version} (FAILED smoke tests: {warning_summary})"
-                        logger.warning(f"Smoke test STRICT FAILURE for {ip}: {smoke_result.warnings}")
-                    else:
-                        device_status.progress_message = f"{prefix}Updated to {result.new_version} (warnings: {warning_summary})"
-                        logger.warning(f"Smoke test warnings for {ip}: {smoke_result.warnings}")
+                    device_status.status = "failed"
+                    device_status.error = f"Smoke test failed: {warning_summary}"
+                    device_status.progress_message = f"{prefix}Updated to {result.new_version}. Smoke test failed: {warning_summary}"
+                    logger.warning(f"Smoke test failure for {ip}: {warning_summary}")
                 else:
                     smoke_clean_pass = True
+                    device_status.status = "success"
                     device_status.progress_message = f"{prefix}Updated to {result.new_version} (smoke tests passed)"
             except Exception as e:
-                logger.warning(f"Smoke test error for {ip} (non-fatal): {e}")
-                device_status.smoke_warnings = [f"Smoke test error: {e}"]
-            # Restore status unless strict mode failed it
-            if not smoke_failed:
-                device_status.status = "success"
+                smoke_failed = True
+                device_status.status = "failed"
+                device_status.error = f"Smoke test error: {e}"
+                device_status.smoke_warnings = [device_status.error]
+                device_status.progress_message = f"{prefix}{device_status.error}"
+                logger.warning(f"Smoke test error for {ip}: {e}")
 
-        # A device that updated and *cleanly* passed its smoke tests is "confirmed
-        # working" on the new firmware. One confirmed device of a model family
-        # clears that family's Firmware Hold for the auto-rollout (the operator's
-        # manual canary). We require a clean smoke pass — NOT just a "success"
-        # status, which non-strict warnings and smoke-test exceptions also leave —
-        # so a device that didn't actually pass smoke can't release the fleet. On a
-        # strict smoke failure, halt the whole job (halt-on-first-failure) so a bad
-        # firmware can't spread past the first device(s) that exhibit it.
+        # Record Firmware Hold proof after a clean smoke pass.
+        # Request job cancellation after each smoke failure.
         if smoke_clean_pass and result.new_version:
             try:
                 db.mark_device_firmware_confirmed(
@@ -5890,6 +5915,8 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                     ds = job.devices.get(ip)
                     if not ds:
                         return
+                    if _hold_scheduled_device(job, ds):
+                        return
                     if not await _address_change_guard(job, ip, recovery_case="pre_update_reboot"):
                         return
                     ds.status = "pre-rebooting"
@@ -5917,6 +5944,8 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                         if not await _address_change_guard(job, ip, info=info, recovery_case="pre_update_reboot"):
                             return
                         timeout = reboot_client.get_reboot_timeout(ds.role)
+                        if _hold_scheduled_device(job, ds):
+                            return
                         if not await reboot_client.reboot(timeout=timeout):
                             ds.status = "failed"
                             ds.error = "Device did not come back online after pre-update reboot"

@@ -35,6 +35,30 @@ import re
 from typing import Optional
 
 
+SCHEDULED_ROLLOUT_SAFETY_REASON = (
+    "Scheduled firmware updates are paused for safety qualification. "
+    "Complete the rollout safety fixes and bench tests, then have the operator record readiness."
+)
+
+
+def scheduled_admission_decision(settings: dict) -> tuple[bool, Optional[str]]:
+    """Admit scheduled work after the operator records safety readiness."""
+    if settings.get("scheduled_rollout_safety_ready") != "true":
+        return False, SCHEDULED_ROLLOUT_SAFETY_REASON
+    return True, None
+
+
+def current_scheduled_admission_decision() -> tuple[bool, Optional[str]]:
+    """Read current readiness at each scheduled admission boundary."""
+    from . import database as db
+
+    try:
+        readiness = db.get_setting("scheduled_rollout_safety_ready")
+    except Exception:
+        return False, SCHEDULED_ROLLOUT_SAFETY_REASON
+    return scheduled_admission_decision({"scheduled_rollout_safety_ready": readiness})
+
+
 @dataclass(frozen=True)
 class AddressTransition:
     """Bind proof to exact artifacts, management scope, and a recovery case."""
