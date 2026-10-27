@@ -91,6 +91,12 @@ class _FakeClient:
     def get_update_timeout(self, role): return 5
     def get_hardware_id(self, model): return "tn-110-prs"
 
+    async def connect(self): return True
+
+    async def get_device_info(self):
+        from updater.vendors.base import VendorDeviceInfo
+        return VendorDeviceInfo(ip="x", model="TNA-301", current_version="1.0.0.100")
+
     async def update_firmware(self, fw_path, cb, **kw):
         return UpdateResult(ip="x", success=True, old_version="1.0.0",
                             new_version=self._version, model="TNA-301")
@@ -113,13 +119,20 @@ def _make_job(ip):
 
 async def _run_update(ip, smoke_passed, version="1.2.3"):
     db.upsert_access_point(ip, "root", "pass", enabled=True, model="TNA-301",
-                           firmware_version="1.0.0")
+                           firmware_version="1.0.0.100")
     job = _make_job(ip)
+    from updater.rollout_gate import ADDRESS_CHANGE_QUALIFICATIONS, AddressTransition
+    target = version if version.count(".") == 3 else version + ".200"
+    release, revision = target.rsplit(".", 1)
+    job.device_firmware_map[ip] = f"/tmp/tna-30x-{release}-r{revision}.bin"
+    transition = AddressTransition("tna-30x", "ap", "1.0.0.100", target)
 
     def fake_driver(vendor):
         return lambda i, u, p: _FakeClient(i, u, p, smoke_passed=smoke_passed, version=version)
 
     with patch.object(app_module, "get_driver", fake_driver), \
+         patch.object(app_module, "_get_firmware_type_for_model", return_value="tna-30x"), \
+         patch.dict(ADDRESS_CHANGE_QUALIFICATIONS, {transition: "synthetic smoke-test bench proof"}), \
          patch.object(app_module, "broadcast", AsyncMock()), \
          patch.object(app_module, "_shutting_down", False), \
          patch.object(app_module, "is_feature_enabled", return_value=False):

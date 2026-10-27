@@ -5542,6 +5542,10 @@
                 return '<span class="update-spinner" title="Updating..."></span>';
             }
             const vs = versionStatus(ip);
+            const addressHold = holdInfo(ip);
+            if (addressHold?.code === 'address_change_hold') {
+                return `<span class="status-icon-cell" tabindex="0" aria-label="${escapeHtml(addressHold.reason)}" title="${escapeHtml(addressHold.reason)}" style="color:var(--warning);">&#9201;</span>`;
+            }
             if (vs === 'current') {
                 return '<span class="status-current" title="Current">&#10003;</span>';
             }

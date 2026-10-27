@@ -26,7 +26,90 @@ rollout state returns "do not run", so a future refactor that introduces a new
 phase or status holds instead of cascading.
 """
 
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import re
 from typing import Optional
+
+
+@dataclass(frozen=True)
+class AddressTransition:
+    """Bind qualification to a family, role, and two exact firmware builds."""
+
+    family: str
+    role: str
+    source: str
+    target: str
+
+
+@dataclass(frozen=True)
+class AddressBenchPlan:
+    """Limit an approved bench plan to named addresses and transitions."""
+
+    approval: str
+    devices: frozenset[tuple[str, AddressTransition]]
+
+
+# Add entries with a recorded bench-proof reference after independent review.
+ADDRESS_CHANGE_QUALIFICATIONS: dict[AddressTransition, str] = {}
+
+
+def _address_bench_plan(name: str) -> Optional[AddressBenchPlan]:
+    """Read an operator-provided lab plan with a bounded approval period."""
+    path = os.environ.get("SIXTYOPS_ADDRESS_BENCH_PLAN_FILE", "")
+    if not path or not name:
+        return None
+    try:
+        with Path(path).open() as handle:
+            raw = handle.read(65537)
+        if len(raw) > 65536:
+            return None
+        plan = json.loads(raw)
+        if plan["name"] != name or not isinstance(plan["approval"], str) or not plan["approval"].strip():
+            return None
+        expires = datetime.fromisoformat(plan["expires_at"])
+        if expires.tzinfo is None or expires <= datetime.now(timezone.utc):
+            return None
+        devices = frozenset(
+            (d["ip"], AddressTransition(d["family"], d["role"], d["source"], d["target"]))
+            for d in plan["devices"]
+        )
+        return AddressBenchPlan(plan["approval"], devices)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def exact_address_build(version: Optional[str]) -> str:
+    """Accept a full release and revision; preserve every build component."""
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)[.\s-]+(?:r|rev\s+)?(\d+)", version or "")
+    return f"{match[1]}.{match[2]}" if match else ""
+
+
+def address_change_decision(
+    family: Optional[str], role: str, source: Optional[str], target: Optional[str],
+    *, ip: str = "", bench_exception: str = "", scheduled: bool = False,
+) -> tuple[bool, Optional[str]]:
+    """Require exact transition proof or an explicitly selected lab plan."""
+    transition = AddressTransition(
+        family or "unknown", role, exact_address_build(source), exact_address_build(target),
+    )
+    if (transition.family in {"tna-30x", "tna-303l", "tns-100"}
+            and role in {"ap", "cpe", "switch"}
+            and transition.source and transition.target):
+        proof = ADDRESS_CHANGE_QUALIFICATIONS.get(transition)
+        if isinstance(proof, str) and proof.strip():
+            return True, None
+        plan = _address_bench_plan(bench_exception) if not scheduled else None
+        if plan and plan.approval and (ip, transition) in plan.devices:
+            return True, f"Bench plan {bench_exception}: {plan.approval}"
+    return False, (
+        f"Address-change hold: {transition.family} {role}, "
+        f"{source or 'unknown'} to {target or 'unknown'}. "
+        "Record bench qualification for this exact transition or use an approved named lab plan."
+    )
 
 
 def phase_run_decision(

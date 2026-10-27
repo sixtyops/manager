@@ -4059,6 +4059,7 @@ class UpdateJob:
     schedule_timezone: Optional[str] = None
     pre_update_reboot: bool = True
     enforce_window_cutoff: bool = True
+    address_bench_exception: str = ""
 
 
 async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
@@ -4527,6 +4528,27 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             "next_attempt_reason": sw_next["reason"],
         })
 
+    from .rollout_gate import address_change_decision
+    for device in devices:
+        target = targets.get(device["firmware_type"])
+        if not target or not target["deployable"]:
+            continue
+        if device["status"] == "current" and _device_on_exact_build(
+            device, device["target_version"], settings.get("bank_mode", "one"),
+        ):
+            continue
+        allowed, reason = address_change_decision(
+            device["firmware_type"], device["role"],
+            device["firmware_version"], device["target_version"],
+        )
+        if not allowed:
+            if device["update_state"] != "on_hold":
+                summary["on_hold"] += 1
+            device["update_state"] = "on_hold"
+            device["hold"] = {"reason": reason, "code": "address_change_hold"}
+            device["next_attempt_iso"] = None
+            device["next_attempt_reason"] = reason
+
     return {"devices": devices, "summary": summary, "targets": targets}
 
 
@@ -4992,6 +5014,7 @@ async def start_update(
     firmware_file_303l: str = Form(""),
     firmware_file_tns100: str = Form(""),
     bank_mode: str = Form("both"),
+    address_bench_exception: str = Form(""),
     session: dict = Depends(require_role("admin", "operator")),
 ):
     """Start a firmware update job."""
@@ -5164,6 +5187,7 @@ async def start_update(
         firmware_names=firmware_names,
         device_firmware_map=device_firmware_map,
         device_type=device_type,
+        address_bench_exception=address_bench_exception,
         credentials=credentials,
         bank_mode=bank_mode,
         ap_cpe_map=ap_cpe_map,
@@ -5212,6 +5236,7 @@ async def update_single_device_endpoint(
     firmware_file_303l: str = Form(""),
     firmware_file_tns100: str = Form(""),
     bank_mode: str = Form("both"),
+    address_bench_exception: str = Form(""),
     session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.UPDATE_SINGLE_DEVICE)),
 ):
@@ -5326,6 +5351,7 @@ async def update_single_device_endpoint(
         firmware_names=firmware_names,
         device_firmware_map=device_firmware_map,
         device_type="mixed",
+        address_bench_exception=address_bench_exception,
         credentials=credentials,
         bank_mode=bank_mode,
         ap_cpe_map=ap_cpe_map,
@@ -5414,9 +5440,56 @@ async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
     return (True, "")
 
 
+async def _address_change_guard(job: "UpdateJob", ip: str, *, info=None, pass_number: int = 1) -> bool:
+    """Check transition qualification and persist a visible hold before writes."""
+    from .rollout_gate import address_change_decision
+
+    ds = job.devices[ip]
+    if info is None:
+        if ds.role == "ap":
+            record = db.get_access_point(ip)
+        elif ds.role == "switch":
+            record = db.get_switch(ip)
+        else:
+            record = db.get_cpe_by_ip(ip)
+        record = record or {}
+        model, source = record.get("model"), record.get("firmware_version")
+    else:
+        model, source = info.model, info.current_version
+    target = _extract_version_from_filename(Path(job.device_firmware_map.get(ip, "")).name)
+    allowed, reason = address_change_decision(
+        _get_firmware_type_for_model(model), ds.role, source, target,
+        ip=ip, bench_exception=job.address_bench_exception, scheduled=job.is_scheduled,
+    )
+    if allowed:
+        if reason:
+            db.log_schedule_event(
+                "address_bench_exception", f"{reason}; {ip}, {source} to {target}",
+                job_id=job.job_id,
+            )
+        return True
+    ds.status = "deferred"
+    ds.error = reason
+    ds.progress_message = reason
+    await broadcast({
+        "type": "device_update", "job_id": job.job_id, "ip": ip,
+        "status": ds.status, "message": reason, "role": ds.role, "parent_ap": ds.parent_ap,
+    })
+    now_iso = datetime.now().isoformat()
+    db.save_device_update_history(
+        job_id=job.job_id, ip=ip, role=ds.role, pass_number=pass_number,
+        status="deferred", old_version=source, new_version=target, model=model,
+        error=reason, failed_stage="address_change_hold", stages=[], duration_seconds=0,
+        started_at=now_iso, completed_at=now_iso,
+    )
+    return False
+
+
 async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1):
     """Update a single device within a job."""
     device_status = job.devices[ip]
+    if not await _address_change_guard(job, ip, pass_number=pass_number):
+        return
 
     # Graceful shutdown: skip pending devices when shutting down
     if _shutting_down and device_status.status == "pending":
@@ -5590,6 +5663,16 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         except (ValueError, TypeError):
             bw_limit = 0
         try:
+            from .vendors.base import VendorDeviceInfo
+            try:
+                login_ok = await client.connect()
+                info = await client.get_device_info() if login_ok is True else None
+            except Exception:
+                info = None
+            if info is None:
+                info = VendorDeviceInfo(ip=ip)
+            if not await _address_change_guard(job, ip, info=info, pass_number=pass_number):
+                return
             result = await asyncio.wait_for(
                 client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit),
                 timeout=update_timeout,
@@ -5761,6 +5844,8 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                     ds = job.devices.get(ip)
                     if not ds:
                         return
+                    if not await _address_change_guard(job, ip):
+                        return
                     ds.status = "pre-rebooting"
                     ds.progress_message = "Pre-update reboot..."
                     await broadcast({
@@ -5781,6 +5866,9 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                             ds.status = "failed"
                             ds.error = login_result if isinstance(login_result, str) else "Login failed"
                             ds.progress_message = f"Pre-reboot login failed: {ds.error}"
+                            return
+                        info = await reboot_client.get_device_info()
+                        if not await _address_change_guard(job, ip, info=info):
                             return
                         timeout = reboot_client.get_reboot_timeout(ds.role)
                         if not await reboot_client.reboot(timeout=timeout):
