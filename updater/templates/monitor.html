@@ -2982,8 +2982,7 @@
                 <div class="status-bar-section">
                     <button class="toggle" id="configAutoEnforceToggle" type="button" disabled
                             aria-label="Toggle auto-enforce" aria-pressed="false"
-                            onclick="toggleConfigAutoEnforce(!this.classList.contains('active'));event.stopPropagation();"
-                            data-min-role-disable="operator"></button>
+                            onclick="toggleConfigAutoEnforce(!this.classList.contains('active'));event.stopPropagation();"></button>
                     <span class="status-bar-label" title="Use manual push or restore for selected devices.">Auto-enforce paused for safety</span>
                     <span class="status-badge" id="configEnforceStatusBadge" style="display:none;"></span>
                     <span id="configEnforceAtLabel" class="u-text-xxs-dim" style="display:none;">daily at</span>
@@ -12205,35 +12204,8 @@
 
         async function toggleConfigAutoEnforce(enabled) {
             const toggle = document.getElementById('configAutoEnforceToggle');
-            // Guard: confirm before enabling auto-enforce
-            if (enabled) {
-                const confirmed = await showConfirmDialog(
-                    'Auto-enforce will automatically push config corrections to non-compliant devices daily at the scheduled time. Continue?',
-                    {title: 'Enable Auto-Enforce', confirmText: 'Enable'}
-                );
-                if (!confirmed) {
-                    if (toggle) setToggleActive(toggle, false);
-                    return;
-                }
-            }
-            // Flip the toggle's visual state immediately so the click feels
-            // responsive. Roll back if the PUT fails — leaving the toggle
-            // visually "on" while the server thinks it's off would be worse
-            // than the click appearing to do nothing.
-            if (toggle) setToggleActive(toggle, enabled);
-            try {
-                const resp = await fetch('/api/settings', {
-                    method: 'PUT',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({config_auto_enforce: enabled ? 'true' : 'false'}),
-                });
-                if (!resp.ok) throw new Error('HTTP ' + resp.status);
-                showToast(enabled ? 'Auto-enforce enabled' : 'Auto-enforce disabled');
-                updateEnforceStatusUI({enabled, running: false});
-            } catch (e) {
-                if (toggle) setToggleActive(toggle, !enabled);
-                showToast('Failed to toggle auto-enforce: ' + e.message);
-            }
+            if (toggle) { toggle.disabled = true; setToggleActive(toggle, false); }
+            showToast('Auto-enforce is paused for safety. Use manual push or restore for selected devices.');
         }
 
         async function loadEnforceStatus() {
@@ -12241,7 +12213,7 @@
                 const resp = await fetch('/api/config-enforce/status');
                 const data = await resp.json();
                 const toggle = document.getElementById('configAutoEnforceToggle');
-                if (toggle) { setToggleActive(toggle, data.enabled); toggle.disabled = data.paused_for_safety; }
+                if (toggle) { setToggleActive(toggle, false); toggle.disabled = true; }
                 updateEnforceStatusUI(data);
                 // Show/hide enforce controls based on enabled state
                 const show = data.enabled ? '' : 'none';

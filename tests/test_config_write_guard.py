@@ -1,6 +1,12 @@
 """Verify config containment with the production safety capability."""
 
 import asyncio
+import json
+from html.parser import HTMLParser
+from pathlib import Path
+import re
+import shutil
+import subprocess
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -230,3 +236,81 @@ def test_ui_shows_safety_pause_and_retains_stop(operator_client, push_db):
     assert "Auto-enforce paused for safety" in response.text
     assert 'id="configAutoEnforceToggle" type="button" disabled' in response.text
     assert 'onclick="cancelConfigPushRollout()' in response.text
+
+
+@pytest.mark.parametrize("role", ["operator", "admin", "viewer"])
+@pytest.mark.parametrize("order", ["role-first", "status-first", "status-error"])
+def test_safety_toggle_stays_disabled_through_role_and_status_init(role, order):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required to execute the shipped UI handlers")
+    source = (Path(__file__).resolve().parents[1] / "updater/templates/monitor.html").read_text()
+
+    class ToggleParser(HTMLParser):
+        attrs = None
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "button" and dict(attrs).get("id") == "configAutoEnforceToggle":
+                self.attrs = dict(attrs)
+
+    parser = ToggleParser()
+    parser.feed(source)
+    assert parser.attrs is not None
+    functions = []
+    for name in ["applyRoleVisibility", "loadEnforceStatus", "toggleConfigAutoEnforce"]:
+        match = re.search(r"        (?:async )?function " + name + r"\([^\n]*\) \{\n.*?\n        \}", source, re.S)
+        assert match, name
+        functions.append(match.group())
+    script = r'''
+const assert = require('node:assert/strict'), vm = require('node:vm');
+const [source, attrs, role, order] = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const dataset = {};
+for (const [key, value] of Object.entries(attrs)) {
+    if (key.startsWith('data-')) dataset[key.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value;
+}
+const calls = [], messages = [];
+const toggle = {disabled: Object.hasOwn(attrs, 'disabled'), dataset, style: {},
+    classList: {add(){}, remove(){}},
+    setAttribute(key, value){ if (key === 'disabled') this.disabled = true; },
+    removeAttribute(key){ if (key === 'disabled') this.disabled = false; }};
+const context = {currentUserRole: role, console,
+    document: {body: {classList: {add(){}}},
+        getElementById: id => id === 'configAutoEnforceToggle' ? toggle : null,
+        querySelectorAll: selector => {
+            const attribute = selector.slice(1, -1);
+            return Object.hasOwn(attrs, attribute) ? [toggle] : [];
+        }},
+    setToggleActive(element, active){ element.active = active; },
+    updateEnforceStatusUI(){}, showToast: text => messages.push(text),
+    showConfirmDialog: async () => { throw new Error('Safety pause must precede confirmation'); },
+    fetch: async (url, options) => {
+        calls.push({url, method: options?.method || 'GET'});
+        if (order === 'status-error') throw new Error('Synthetic status failure');
+        return {ok: true, json: async () => ({enabled: false, paused_for_safety: true})};
+    }};
+vm.createContext(context);
+vm.runInContext(source, context);
+(async () => {
+    assert.equal(toggle.disabled, true);
+    await context.toggleConfigAutoEnforce(true);
+    assert.equal(toggle.disabled, true);
+    assert.equal(calls.length, 0);
+    const steps = order === 'role-first'
+        ? [() => context.applyRoleVisibility(), () => context.loadEnforceStatus()]
+        : [() => context.loadEnforceStatus(), () => context.applyRoleVisibility()];
+    for (const step of steps) {
+        await step();
+        assert.equal(toggle.disabled, true, `${role}: ${order}`);
+        await context.toggleConfigAutoEnforce(true);
+        assert.equal(toggle.disabled, true);
+        assert.equal(toggle.active, false);
+    }
+    assert.deepEqual(calls.map(call => call.method), ['GET']);
+    assert.ok(messages.every(text => text.includes('paused for safety')));
+    assert.ok(!messages.includes('Auto-enforce enabled'));
+})().catch(error => {console.error(error); process.exitCode = 1;});
+'''
+    result = subprocess.run([node, "-e", script], input=json.dumps([
+        "\n".join(functions), parser.attrs, role, order,
+    ]), text=True, capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stderr
