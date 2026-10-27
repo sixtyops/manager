@@ -10,7 +10,9 @@ All notable changes to this project are documented in this file.
   error. The stop uses the maintenance window instance key and survives manager
   restart. Device work runs one complete recovery sequence at a time. An
   operator records the failure resolution in a later window before the engine
-  admits more firmware writes.
+  admits more firmware writes. Existing rollouts with a date-only last-wave
+  marker keep that window blocked and can advance in a later window. New markers
+  use the maintenance window instance key.
 
 ### Security
 - Register Tachyon session tokens from the login cookie jar before session use.

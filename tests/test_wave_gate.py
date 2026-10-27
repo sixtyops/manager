@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from updater import rollout_gate
+from updater import database as db, rollout_gate
 from updater.core import gates
 from updater.core.gates import (
     GATES,
@@ -154,6 +154,50 @@ def test_previous_window_key_allows_next_window():
     yesterday = window_instance_key(SCHEDULE, NOW - timedelta(days=1))
     rollout = {"status": "active", "phase": "pct50", "last_phase_window": yesterday}
     assert evaluate_wave_start(_ctx(rollout=rollout)).ok is True
+
+
+def test_legacy_date_only_marker_allows_active_rollout_in_next_window():
+    rollout = {
+        "status": "active",
+        "phase": "pct50",
+        "last_phase_window": "2026-06-09",
+    }
+    assert evaluate_wave_start(_ctx(rollout=rollout)).ok is True
+
+
+def test_legacy_date_only_marker_blocks_second_wave_in_same_window():
+    rollout = {
+        "status": "active",
+        "phase": "pct50",
+        "last_phase_window": "2026-06-10",
+    }
+    assert evaluate_wave_start(_ctx(rollout=rollout)) == Decision(
+        False, "already_ran_this_window"
+    )
+
+
+def test_legacy_date_only_marker_blocks_overnight_window_after_midnight():
+    sched = MaintenanceSchedule(schedule_id=2, days=frozenset({2}), start_hour=22, end_hour=2)
+    rollout = {
+        "status": "active",
+        "phase": "pct50",
+        "last_phase_window": "2026-06-10",
+    }
+    for now in (
+        datetime(2026, 6, 10, 23, 30, tzinfo=CHI),
+        datetime(2026, 6, 11, 1, 30, tzinfo=CHI),
+    ):
+        assert evaluate_wave_start(_ctx(rollout=rollout, schedule=sched, now=now)) == Decision(
+            False, "already_ran_this_window"
+        )
+
+
+def test_new_rollout_window_writes_use_schedule_and_date_key(mock_db):
+    rollout_id = db.create_rollout("firmware.bin")
+    db.set_rollout_phase_window(rollout_id, KEY)
+    assert db.get_active_rollout()["last_phase_window"] == json.dumps(
+        list(KEY), separators=(",", ":")
+    )
 
 
 def test_stored_key_as_list_matches():
