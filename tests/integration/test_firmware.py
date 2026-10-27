@@ -1,6 +1,6 @@
 """Verify lab firmware writes and restore the recorded firmware state."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 import time
 
@@ -81,7 +81,7 @@ def _find_ap(topology, ip):
 
 
 def _fresh_ap(session, ip, after, timeout=300):
-    """Require a successful poll and an observation newer than this step."""
+    """Require a fresh observation and interpret timestamps without an offset as UTC."""
     __tracebackhide__ = True
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -89,6 +89,8 @@ def _fresh_ap(session, ip, after, timeout=300):
             _request(session, "post", f"/api/aps/{ip}/poll")
             ap = _find_ap(_request(session, "get", "/api/topology"), ip)
             seen = datetime.fromisoformat(ap.get("last_seen", "")) if ap else None
+            if seen and seen.tzinfo is None:
+                seen = seen.replace(tzinfo=timezone.utc)
             if seen and after < seen.timestamp() <= time.time() + 5:
                 return ap
         except (FirmwareCheckError, TypeError, ValueError):

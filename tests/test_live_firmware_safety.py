@@ -241,3 +241,30 @@ def test_model_family_selects_matching_image_and_form_field(client, platform, mo
     target, _ = firmware._select_images(ap, files)
     firmware._start_update(session, IP, target[0])
     assert session.post.call_args.kwargs["data"][field] == target[0]
+
+
+@pytest.mark.parametrize("seen, fresh", [
+    ("1970-01-01T00:01:41", True),
+    ("1970-01-01T00:01:41+00:00", True),
+    ("1969-12-31T18:01:41-06:00", True),
+    ("1970-01-01T00:01:39", False),
+    ("1970-01-01T00:01:39+00:00", False),
+    ("1970-01-01T00:01:40", False),
+    ("1970-01-01T00:01:40+00:00", False),
+    ("1970-01-01T00:01:46", False),
+    ("1970-01-01T00:01:46+00:00", False),
+])
+def test_observation_timezone_is_independent_of_runner(client, monkeypatch, seen, fresh):
+    session, _ = client
+    session.get.side_effect = lambda _: response({"sites": [{"aps": [{**BASELINE, "last_seen": seen}]}]})
+    try:
+        with monkeypatch.context() as context:
+            context.setenv("TZ", "America/Chicago")
+            firmware.time.tzset()
+            if fresh:
+                assert firmware._fresh_ap(session, IP, 100, timeout=3)["last_seen"] == seen
+            else:
+                with pytest.raises(firmware.FirmwareCheckError, match="observation timed out"):
+                    firmware._fresh_ap(session, IP, 100, timeout=3)
+    finally:
+        firmware.time.tzset()
