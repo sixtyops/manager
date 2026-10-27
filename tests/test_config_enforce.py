@@ -13,6 +13,13 @@ from updater.config_utils import filter_templates_by_device_type
 from updater.poller import NetworkPoller, PHASE_ORDER
 
 
+@pytest.fixture(autouse=True)
+def exercise_retained_enforcement(monkeypatch):
+    """Exercise retained internals with the safety capability mocked on."""
+    monkeypatch.setattr("updater.config_write_guard.automatic_config_writes_allowed", lambda: True)
+    monkeypatch.setattr("updater.app._config_push_jobs", {})
+
+
 @pytest.fixture
 def scoped_db(memory_db):
     """Memory DB with tower sites and devices pre-populated."""
