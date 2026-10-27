@@ -18,6 +18,7 @@ calls the relocated `phase_run_decision` through `rollout_gate` with a date key.
 """
 
 import math
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Optional
@@ -183,6 +184,16 @@ def phase_run_decision(
     # first, so an early-cleared firmware hold can never let a second wave run in
     # the same window.
     last_window = rollout.get("last_phase_window")
+    if isinstance(last_window, str):
+        try:
+            stored_key = json.loads(last_window)
+        except (TypeError, ValueError):
+            # Legacy date keys cannot prove that this is a different window.
+            return False, "already_ran_this_window"
+        if not _is_window_key(stored_key):
+            return False, "already_ran_this_window"
+        last_window = tuple(stored_key)
+        rollout = {**rollout, "last_phase_window": last_window}
     if last_window and last_window == window_key:
         return False, "already_ran_this_window"
 

@@ -161,6 +161,7 @@ def make_job(scheduled=False, reboot=True, role="ap", bank_mode="one"):
     return app_module.UpdateJob(
         job_id="address-hold-test", started_at=datetime.now(), is_scheduled=scheduled,
         pre_update_reboot=reboot, bank_mode=bank_mode,
+        enforce_window_cutoff=False,
         device_roles={IP: role}, device_firmware_map={IP: str(app_module.FIRMWARE_DIR / FW)},
         credentials={IP: ("synthetic", "synthetic")},
         devices={IP: app_module.DeviceStatus(ip=IP, role=role)},
