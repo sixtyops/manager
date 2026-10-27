@@ -63,7 +63,8 @@ class TestUploadFirmwareBandwidth:
             await client.upload_firmware("/tmp/fw.bin", bandwidth_limit_kbps=0)
 
             cmd = mock_exec.call_args[0]
-            assert "--limit-rate" not in cmd
+            assert cmd == ("curl", "--disable", "--config", "-")
+            assert b"limit-rate" not in mock_proc.communicate.call_args.args[0]
 
     @pytest.mark.asyncio
     async def test_limit_rate_when_set(self):
@@ -80,9 +81,8 @@ class TestUploadFirmwareBandwidth:
             await client.upload_firmware("/tmp/fw.bin", bandwidth_limit_kbps=500)
 
             cmd = mock_exec.call_args[0]
-            assert "--limit-rate" in cmd
-            rate_idx = cmd.index("--limit-rate")
-            assert cmd[rate_idx + 1] == "500k"
+            assert cmd == ("curl", "--disable", "--config", "-")
+            assert b'limit-rate = "500k"\n' in mock_proc.communicate.call_args.args[0]
 
     @pytest.mark.asyncio
     async def test_update_firmware_passes_bandwidth(self):

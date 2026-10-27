@@ -1,4 +1,4 @@
-"""Check trusted device-token registration with synthetic subprocess output."""
+"""Check trusted device-token registration with synthetic curl output."""
 
 import gc
 import io
@@ -55,17 +55,14 @@ def login_stub(monkeypatch):
     paths = []
 
     def install(cookie_text, response=b'{}', returncode=0):
-        async def spawn(*args, **kwargs):
+        async def run_curl(args):
             path = Path(args[args.index("-c") + 1])
             paths.append(path)
             path.write_text(cookie_text)
-            proc = AsyncMock()
-            proc.returncode = returncode
-            proc.communicate.return_value = (response, b"synthetic transport failure")
-            return proc
+            return returncode, response
 
-        mock = AsyncMock(side_effect=spawn)
-        monkeypatch.setattr(driver.asyncio, "create_subprocess_exec", mock)
+        mock = AsyncMock(side_effect=run_curl)
+        monkeypatch.setattr(driver, "_run_curl", mock)
         return mock
 
     yield install

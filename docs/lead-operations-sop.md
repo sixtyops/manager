@@ -45,6 +45,8 @@ gives no exemption from locks or pacing gates.
    Then read this SOP, the task issue, applicable SOPs and named skills.
 2. Read durable lead status. Verify every active task against live agent/job,
    branch/head, queue, lock, budget, cooldown, review and fix-round evidence.
+   Before reporting missing lab access, follow [Private access records](dev-hardware-validation.md#private-access-records).
+   For dev host access, check the recorded SSH alias and private system record before reporting it missing.
    An idle daemon does not prove that an event-started job or worker is idle.
    Check `paseo permit ls` for pending worker requests at each wake. A request
    may not wake the lead. Allow only a task-authorized action, then read back
@@ -183,11 +185,13 @@ The lead checks that each eligible non-draft PR awaiting review has
 for review and sends a wake.
 The review loop also runs hourly. Use its normal schedule, locks, budgets,
 cooldowns, and round limits. When the existing review process flags a PR for
-higher-level review, assign GPT-6 Astra to review its design, plan, and
-risks. Record the result and give any code change to a coding worker. Hold
-merge until this review and all normal review and sign-off gates pass. Use the
-existing `agent:escalated` and `agent:needs-human` states; do not create a new
-review label.
+higher-level review, assign a GPT-6.1 Sol reviewer. Use high reasoning for a
+safety path. Do not escalate the whole review to Astra. Astra may answer at
+most one narrow design question, and only when the reviewer names that
+question. Record the review result and give any code change to a coding worker.
+Hold merge until the review and all normal review and sign-off gates pass. Use
+the existing `agent:escalated` and `agent:needs-human` states; do not create a
+new review label.
 
 Fetch `origin/main`, then read the current GitHub pull request state and head
 before you report a pull request as open or hand it to another owner. Do not

@@ -43,7 +43,11 @@ Three fixed layers, always in this order:
 Rollouts display a horizontal phase stepper (dot + label + per-phase count) in the expanded status-bar panel. The phases and advancement differ by type:
 
 - **Firmware rollouts** — shipped behavior has three waves: **10% → 50% → 100%** (no canary phase; the first wave is the de-facto canary). The scheduler auto-advances one wave per maintenance window after each completes (`scheduler.py`, `database.complete_rollout_phase`). Current operator controls include resume after failure and cancel. The target stops the whole window on a failed check and permits resume only in a later window. The stepper is informational only — no manual-advance action.
-- **Config-push rollouts** — four phases: **Canary (1 device) → 10% → 50% → 100%**. Advancement is always manual. Operators confirm each phase via `POST /api/config-push/rollout/{id}/advance`. The active-phase panel includes **Skip & advance to N% →** as the gate action.
+- **Config-push rollouts** are paused for safety on the server. Auto-enforce
+  and automatic config rollback are also paused. Use manual push or restore
+  for selected devices. Saved rollout status and history remain readable.
+  Use Cancel to stop a saved rollout. An apply already in progress finishes
+  and records its result. Start, advance, and resume return a safety refusal.
 
 In both: completed phases fill green; active phase reflects current state (yellow if paused/failed, blue if running); locked phases are grey outlines. Show device rows only for current and completed phases; queued phases show a count only.
 
