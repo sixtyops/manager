@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Security
+- Register generated Manager API tokens with the log sanitizer before hashing
+  or storage. Existing output handlers redact these values in diagnostics.
+  Retain at most 100 token literals; a fixed-format fallback redacts older
+  tokens. Inbound Cookie and Bearer credentials are not registered. Token
+  generation, storage, expiry, scopes, authentication, and one-time response
+  behavior are unchanged.
+- Documented current Manager session, API token, OIDC ID token, and Tachyon
+  device session token storage, expiry, refresh behavior, log paths, and
+  `register_secret` coverage. Manager session registration is already in place
+  through [#519](https://github.com/sixtyops/manager/pull/519) for issue
+  [#518](https://github.com/sixtyops/manager/issues/518). Full API-token
+  registration remains open in [#578](https://github.com/sixtyops/manager/issues/578).
+  Tachyon device-token registration remains open in
+  [#579](https://github.com/sixtyops/manager/issues/579). This inventory changes
+  no runtime behavior.
+
 ### Removed
 - Removed `GET /api/uptime/device` and `GET /api/uptime/events`, plus their
   exclusive database read helpers. Requests that pass unchanged middleware

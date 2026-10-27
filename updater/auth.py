@@ -16,7 +16,7 @@ from fastapi import Depends, Request, WebSocket, HTTPException
 
 from . import database as db
 from . import oidc_config
-from .logging_filter import register_secret
+from .logging_filter import register_generated_api_token, register_secret
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +309,7 @@ def hash_api_token(token: str) -> str:
 def generate_api_token() -> tuple[str, str, str]:
     """Generate a new API token. Returns (full_token, token_hash, token_prefix)."""
     token = f"tach_{secrets.token_urlsafe(32)}"
+    register_generated_api_token(token)
     token_hash = hash_api_token(token)
     token_prefix = token[:9] + "..."
     return token, token_hash, token_prefix

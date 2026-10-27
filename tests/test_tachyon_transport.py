@@ -63,7 +63,8 @@ async def test_config_and_cookie_round_trip(process, verify):
 
 
 @pytest.mark.asyncio
-async def test_login_payload_and_cookie_cleanup(process, caplog):
+@pytest.mark.parametrize("verify", [False, True])
+async def test_login_payload_and_cookie_cleanup(process, caplog, verify):
     client = transport.TachyonClient("192.0.2.1", SECRET, SECRET)
     cookie_paths = []
 
@@ -75,23 +76,105 @@ async def test_login_payload_and_cookie_cleanup(process, caplog):
         return b'{"auth":true}', b''
 
     process.communicate.side_effect = communicate
-    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=process)) as execute:
+    with patch.object(transport, "VERIFY_SSL", verify), patch(
+        "asyncio.create_subprocess_exec", AsyncMock(return_value=process)
+    ) as execute:
         assert await client.login() is True
     assert_private(execute)
     assert json.loads(config_values(process)["data"][0]) == {"username": SECRET, "password": SECRET}
+    assert ("insecure" in config_values(process)) is (not verify)
     assert client._token == "synthetic-token"
     assert all(not path.exists() for path in cookie_paths)
     assert SECRET not in caplog.text
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method_name,kwargs,requests", [
+    ("session_valid", {}, [("GET", "/cgi.lua/status?type=system")]),
+    ("get_device_info", {}, [
+        ("GET", "/cgi.lua/status?type=system"),
+        ("GET", "/cgi.lua/bootbank"),
+        ("GET", "/cgi.lua/status?type=interfaces"),
+    ]),
+    ("get_ap_info", {}, [
+        ("GET", "/cgi.lua/status?type=system"),
+        ("GET", "/cgi.lua/status?type=zones"),
+        ("GET", "/cgi.lua/status?type=interfaces"),
+    ]),
+    ("get_connected_cpes", {}, [("GET", "/cgi.lua/status?type=wireless,zones")]),
+    ("get_bridge_table", {}, [("GET", "/cgi.lua/bridge_table")]),
+    ("fetch_config", {}, [("GET", "/cgi.lua/config")]),
+    ("get_config", {}, [("GET", "/cgi.lua/config")]),
+    ("apply_config", {"config": {"password": SECRET}}, [("POST", "/cgi.lua/config")]),
+    ("apply_config", {"config": {"password": SECRET}, "dry_run": True}, [
+        ("POST", "/cgi.lua/config?dry_run=true"),
+    ]),
+    ("trigger_update", {}, [("POST", "/cgi.lua/update")]),
+    ("reboot", {}, [("POST", "/reboot")]),
+])
+@pytest.mark.parametrize("verify", [False, True])
+async def test_authenticated_request_paths_keep_secrets_in_stdin(
+    process, method_name, kwargs, requests, verify,
+):
+    client = transport.TachyonClient("192.0.2.1", SECRET, SECRET)
+    client._token = SECRET
+    with patch.object(transport, "VERIFY_SSL", verify), patch(
+        "asyncio.create_subprocess_exec", AsyncMock(return_value=process)
+    ) as execute, patch.object(client, "wait_for_reboot", AsyncMock(return_value=True)):
+        await getattr(client, method_name)(**kwargs)
+    assert execute.await_count == len(requests)
+    assert_private(execute)
+    assert process.communicate.await_count == len(requests)
+    for call, (method, endpoint) in zip(process.communicate.call_args_list, requests):
+        config = call.args[0].decode()
+        assert f'url = "https://192.0.2.1{endpoint}"' in config
+        assert f'request = "{method}"' in config
+        assert "header = " + transport._curl_config_value(f"Cookie: token={SECRET}") in config
+        assert ("insecure\n" in config) is (not verify)
+        if "config" in kwargs:
+            assert "data = " + transport._curl_config_value(json.dumps(kwargs["config"])) in config
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verify", [False, True])
+@pytest.mark.parametrize("ping_available", [False, True])
+async def test_reboot_probes_keep_stored_credentials_out_of_arguments(ping_available, verify):
+    client = transport.TachyonClient("192.0.2.1", SECRET, SECRET)
+    client._token = SECRET
+    ping = AsyncMock(returncode=0)
+    ping.communicate.return_value = (b"", b"")
+    probe = AsyncMock(returncode=0)
+    probe.communicate.return_value = (b"200", b"")
+
+    async def spawn(*args, **kwargs):
+        if args[0] == "ping":
+            if not ping_available:
+                raise FileNotFoundError("synthetic missing ping")
+            return ping
+        return probe
+
+    with patch.object(transport, "VERIFY_SSL", verify), patch("asyncio.create_subprocess_exec", AsyncMock(side_effect=spawn)) as execute, patch(
+        "asyncio.sleep", AsyncMock()
+    ):
+        assert await client.wait_for_reboot() is True
+    curl_calls = [call for call in execute.call_args_list if call.args[0] == "curl"]
+    assert len(curl_calls) == (1 if ping_available else 2)
+    assert all(("-k" in call.args) is (not verify) for call in curl_calls)
+    for call in execute.call_args_list:
+        assert all(SECRET not in argument for argument in call.args)
+        assert "-H" not in call.args
+        assert "-d" not in call.args
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verify", [False, True])
 @pytest.mark.parametrize("returncode,response,expected", [(0, b'{"status":"ok"}', True), (0, b'{"error":"rejected"}', False), (7, b'', False)])
-async def test_upload_preserves_multipart_and_retries(process, returncode, response, expected, caplog):
+async def test_upload_preserves_multipart_and_retries(process, returncode, response, expected, caplog, verify):
     client = transport.TachyonClient("192.0.2.1", "admin", SECRET)
     client._token = SECRET
     process.returncode = returncode
     process.communicate.return_value = (response, SECRET.encode())
-    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=process)) as execute, patch(
+    with patch.object(transport, "VERIFY_SSL", verify), patch("asyncio.create_subprocess_exec", AsyncMock(return_value=process)) as execute, patch(
         "asyncio.sleep", AsyncMock()
     ) as sleep:
         assert await client.upload_firmware("/tmp/fw.bin", bandwidth_limit_kbps=500) is expected
@@ -102,6 +185,7 @@ async def test_upload_preserves_multipart_and_retries(process, returncode, respo
     assert config["request"] == ["PUT"]
     assert config["max-time"] == ["300"]
     assert config["limit-rate"] == ["500k"]
+    assert ("insecure" in config) is (not verify)
     assert execute.call_count == (3 if returncode else 1)
     assert [call.args for call in sleep.call_args_list] == ([(30,), (60,)] if returncode else [])
     assert SECRET not in caplog.text

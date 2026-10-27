@@ -46,7 +46,6 @@
       "Bash(pytest*)",
       "Bash(python -m pytest*)",
       "Bash(./dev.sh*)",
-      "Bash(./dev-docker.sh*)",
       "Bash(git status)",
       "Bash(git diff*)",
       "Bash(git log*)",

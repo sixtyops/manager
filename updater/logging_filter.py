@@ -2,7 +2,9 @@
 
 Call register_secret(value) before logging a secret. Then call
 install_sanitizer(handler) on each output handler. Registration lasts for
-the process lifetime. Credential sources are not registered here.
+the process lifetime for ordinary secrets. Generated API token literals use a
+bounded registry and a fixed-format fallback. Credential sources are not
+registered here.
 """
 
 import copy
@@ -13,6 +15,7 @@ import re
 import sys
 import threading
 import traceback
+from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -22,8 +25,13 @@ from urllib.parse import unquote, urlsplit
 import httpx
 
 _secrets: set[str] = set()
+_generated_api_tokens: OrderedDict[str, None] = OrderedDict()
+_GENERATED_API_TOKEN_LIMIT = 100
 _pattern: re.Pattern[str] | None = None
 _registry_lock = threading.Lock()
+# Generated tokens use token_urlsafe(32): a fixed prefix and 43 URL-safe chars.
+# This keeps evicted tokens redactable without retaining their literal values.
+_generated_api_token_pattern = re.compile(r"tach_[A-Za-z0-9_-]{43}")
 # Match canonical capability URLs up to ordinary log delimiters. The fixed
 # prefix and single character class also cover encoded paths, queries and fragments.
 _slack_webhook = re.compile(
@@ -111,14 +119,31 @@ def register_secret(value: str | None) -> None:
         if value in _secrets:
             return
         _secrets.add(value)
-        # Derive only four standard forms from each raw registered value.
-        forms = {form for secret in _secrets for form in (
-            secret, repr(secret)[1:-1], json.dumps(secret)[1:-1],
-            json.dumps(secret, ensure_ascii=False)[1:-1],
-        )}
-        # Match longer literals first and do not scan replacement text again.
-        _pattern = re.compile("|".join(re.escape(form) for form in
-                                     sorted(forms, key=len, reverse=True)))
+        _rebuild_secret_pattern()
+
+
+def register_generated_api_token(value: str | None) -> None:
+    """Register a generated API token in a bounded registry of recent values."""
+    if not value:
+        return
+    with _registry_lock:
+        _generated_api_tokens.pop(value, None)
+        _generated_api_tokens[value] = None
+        while len(_generated_api_tokens) > _GENERATED_API_TOKEN_LIMIT:
+            _generated_api_tokens.popitem(last=False)
+        _rebuild_secret_pattern()
+
+
+def _rebuild_secret_pattern() -> None:
+    """Compile literal forms from ordinary secrets and retained API tokens."""
+    global _pattern
+    secrets = _secrets | set(_generated_api_tokens)
+    forms = {form for secret in secrets for form in (
+        secret, repr(secret)[1:-1], json.dumps(secret)[1:-1],
+        json.dumps(secret, ensure_ascii=False)[1:-1],
+    )}
+    _pattern = re.compile("|".join(re.escape(form) for form in
+                                 sorted(forms, key=len, reverse=True))) if forms else None
 
 
 class _SanitizingFormatter(logging.Formatter):
@@ -141,9 +166,12 @@ def _sanitize(output: str) -> str:
     # Redact URLs first so a registered substring cannot break their recognition.
     output = _http_userinfo.sub(r"\1[REDACTED]@", output)
     output = _slack_webhook.sub("https://hooks.slack.com/services/[REDACTED]", output)
+    output = _generated_api_token_pattern.sub("[REDACTED]", output)
     with _registry_lock:
         pattern = _pattern
-    return pattern.sub("[REDACTED]", output) if pattern is not None else output
+    if pattern is not None:
+        output = pattern.sub("[REDACTED]", output)
+    return output
 
 
 def _handle_error(handler: logging.Handler, record: logging.LogRecord) -> None:
