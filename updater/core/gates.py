@@ -18,6 +18,7 @@ calls the relocated `phase_run_decision` through `rollout_gate` with a date key.
 """
 
 import math
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Optional
@@ -154,6 +155,15 @@ def _is_window_key(value: Any) -> bool:
         return False
 
 
+def _is_local_window_date(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
+
+
 def phase_run_decision(
     rollout: dict,
     window_key: Any,
@@ -162,7 +172,9 @@ def phase_run_decision(
 ) -> tuple[bool, Optional[str]]:
     """Decide whether `rollout` may START its current wave's job right now.
 
-    `window_key` identifies the current maintenance window.
+    `window_key` identifies the current maintenance window. A legacy date-only
+    `last_phase_window` may refer to a window starting on that date or the
+    previous date. Admit only a window starting after the marker date.
     `first_wave_held` (computed by the caller) is True when the pct10 wave must
     still wait out the Firmware Hold — i.e. the firmware's release-date hold has
     not elapsed AND no in-scope device of any pending family is confirmed working
@@ -183,6 +195,35 @@ def phase_run_decision(
     # first, so an early-cleared firmware hold can never let a second wave run in
     # the same window.
     last_window = rollout.get("last_phase_window")
+    if last_window is not None:
+        stored_key = last_window
+        if isinstance(last_window, str):
+            try:
+                stored_key = json.loads(last_window)
+            except (TypeError, ValueError):
+                # Older installs stored the local maintenance date as plain text.
+                stored_key = last_window
+        if _is_local_window_date(stored_key):
+            if _is_window_key(window_key):
+                current_date = window_key[1]
+            elif _is_local_window_date(window_key):
+                current_date = window_key
+            else:
+                # Without a valid current date, the legacy marker cannot prove
+                # that this is a different maintenance window.
+                return False, "already_ran_this_window"
+            if stored_key == current_date:
+                return False, "already_ran_this_window"
+            # The old marker used the clock date, not the window start date.
+            # After midnight it can describe the previous day's window. With
+            # no time or schedule ID, only a later start date proves separation.
+            if current_date < stored_key:
+                return False, "legacy_window_ambiguous"
+            last_window = None
+        elif _is_window_key(stored_key):
+            last_window = tuple(stored_key)
+        else:
+            return False, "already_ran_this_window"
     if last_window and last_window == window_key:
         return False, "already_ran_this_window"
 
@@ -241,13 +282,6 @@ def _gate_job_in_flight(ctx: WaveStartContext) -> Decision:
 
 def _gate_already_ran_this_window(ctx: WaveStartContext) -> Decision:
     rollout = ctx.rollout
-    last = rollout.get("last_phase_window")
-    if last is not None:
-        # A legacy date key or other unknown format cannot prove this window
-        # is new.
-        if not _is_window_key(last):
-            return _block("already_ran_this_window")
-        rollout = {**rollout, "last_phase_window": tuple(last)}
     key = window_instance_key(ctx.schedule, ctx.now)
     # Unknown hold state blocks pct10.
     held = ctx.first_wave_held is not False

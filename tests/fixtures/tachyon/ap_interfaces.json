@@ -1,0 +1,193 @@
+{
+  "interfaces": {
+    "br-wan": {
+      "mac_address": "<MAC_AP_001>"
+    },
+    "br-wan.12": {
+      "mac_address": "<MAC_AP_001>"
+    },
+    "eth0": {
+      "mac_address": "<MAC_AP_001>"
+    },
+    "eth0p0": {
+      "mac_address": "<MAC_AP_002>"
+    },
+    "eth0p1": {
+      "mac_address": "<MAC_AP_002>"
+    },
+    "eth0p2": {
+      "mac_address": "<MAC_AP_002>"
+    },
+    "eth0p3": {
+      "mac_address": "<MAC_AP_002>"
+    },
+    "eth0p4": {
+      "mac_address": "<MAC_AP_002>"
+    },
+    "eth0p5": {
+      "mac_address": "<MAC_AP_002>"
+    },
+    "eth0p6": {
+      "mac_address": "<MAC_AP_002>"
+    },
+    "eth0p7": {
+      "mac_address": "<MAC_AP_002>"
+    },
+    "gre0": {
+      "mac_address": "<MAC_AP_003>"
+    },
+    "gretap0": {
+      "mac_address": "<MAC_AP_002>"
+    },
+    "lo": {
+      "mac_address": "<MAC_AP_002>"
+    },
+    "prs0": {
+      "mac_address": "<MAC_AP_004>"
+    },
+    "prs1": {
+      "mac_address": "<MAC_AP_005>"
+    },
+    "prs10": {
+      "mac_address": "<MAC_AP_006>"
+    },
+    "prs11": {
+      "mac_address": "<MAC_AP_007>"
+    },
+    "prs12": {
+      "mac_address": "<MAC_AP_008>"
+    },
+    "prs13": {
+      "mac_address": "<MAC_AP_009>"
+    },
+    "prs14": {
+      "mac_address": "<MAC_AP_010>"
+    },
+    "prs15": {
+      "mac_address": "<MAC_AP_011>"
+    },
+    "prs16": {
+      "mac_address": "<MAC_AP_012>"
+    },
+    "prs17": {
+      "mac_address": "<MAC_AP_013>"
+    },
+    "prs18": {
+      "mac_address": "<MAC_AP_014>"
+    },
+    "prs19": {
+      "mac_address": "<MAC_AP_015>"
+    },
+    "prs2": {
+      "mac_address": "<MAC_AP_016>"
+    },
+    "prs20": {
+      "mac_address": "<MAC_AP_017>"
+    },
+    "prs21": {
+      "mac_address": "<MAC_AP_018>"
+    },
+    "prs22": {
+      "mac_address": "<MAC_AP_019>"
+    },
+    "prs23": {
+      "mac_address": "<MAC_AP_020>"
+    },
+    "prs24": {
+      "mac_address": "<MAC_AP_021>"
+    },
+    "prs25": {
+      "mac_address": "<MAC_AP_022>"
+    },
+    "prs26": {
+      "mac_address": "<MAC_AP_023>"
+    },
+    "prs27": {
+      "mac_address": "<MAC_AP_024>"
+    },
+    "prs28": {
+      "mac_address": "<MAC_AP_025>"
+    },
+    "prs29": {
+      "mac_address": "<MAC_AP_026>"
+    },
+    "prs3": {
+      "mac_address": "<MAC_AP_027>"
+    },
+    "prs30": {
+      "mac_address": "<MAC_AP_028>"
+    },
+    "prs31": {
+      "mac_address": "<MAC_AP_029>"
+    },
+    "prs32": {
+      "mac_address": "<MAC_AP_030>"
+    },
+    "prs33": {
+      "mac_address": "<MAC_AP_031>"
+    },
+    "prs34": {
+      "mac_address": "<MAC_AP_032>"
+    },
+    "prs35": {
+      "mac_address": "<MAC_AP_033>"
+    },
+    "prs36": {
+      "mac_address": "<MAC_AP_034>"
+    },
+    "prs37": {
+      "mac_address": "<MAC_AP_035>"
+    },
+    "prs38": {
+      "mac_address": "<MAC_AP_036>"
+    },
+    "prs39": {
+      "mac_address": "<MAC_AP_037>"
+    },
+    "prs4": {
+      "mac_address": "<MAC_AP_038>"
+    },
+    "prs40": {
+      "mac_address": "<MAC_AP_039>"
+    },
+    "prs41": {
+      "mac_address": "<MAC_AP_040>"
+    },
+    "prs42": {
+      "mac_address": "<MAC_AP_041>"
+    },
+    "prs43": {
+      "mac_address": "<MAC_AP_042>"
+    },
+    "prs44": {
+      "mac_address": "<MAC_AP_043>"
+    },
+    "prs45": {
+      "mac_address": "<MAC_AP_044>"
+    },
+    "prs46": {
+      "mac_address": "<MAC_AP_045>"
+    },
+    "prs47": {
+      "mac_address": "<MAC_AP_046>"
+    },
+    "prs5": {
+      "mac_address": "<MAC_AP_047>"
+    },
+    "prs6": {
+      "mac_address": "<MAC_AP_048>"
+    },
+    "prs7": {
+      "mac_address": "<MAC_AP_049>"
+    },
+    "prs8": {
+      "mac_address": "<MAC_AP_050>"
+    },
+    "prs9": {
+      "mac_address": "<MAC_AP_051>"
+    },
+    "wlan0": {
+      "mac_address": "<MAC_AP_052>"
+    }
+  }
+}

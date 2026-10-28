@@ -214,3 +214,48 @@ async def test_upload_checks_readiness_before_first_attempt(runtime_mocks, monke
     assert result is False
     assert job.cancelled
     run_curl.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_upload_admission_denial_after_progress_stays_pending(runtime_mocks, monkeypatch):
+    job = scheduled_job()
+    job.window_key = ("firmware", "2026-06-02T03:00:00Z")
+    job.pre_update_reboot = False
+    job.device_firmware_map["192.0.2.1"] = "/tmp/tna-30x-1.2.3.bin"
+    driver_clients = []
+    progress_messages = []
+    run_curl = AsyncMock()
+    monkeypatch.setattr("updater.vendors.tachyon.client._run_curl", run_curl)
+
+    def make_driver(*args):
+        driver = TachyonDriver(*args)
+        client = driver._client
+        driver_clients.append(client)
+        monkeypatch.setattr(client, "login", AsyncMock(return_value=True))
+        monkeypatch.setattr(client, "get_device_info", AsyncMock(return_value=SimpleNamespace(
+            ip="192.0.2.1", model="TNA-301", current_version="1.2.3",
+            bank1_version="1.2.3", bank2_version="1.0.0", active_bank=1,
+        )))
+        original_update = client.update_firmware
+
+        async def update_with_progress(path, progress, *args, **kwargs):
+            def revoke_after_upload_message(ip, message):
+                progress_messages.append(message)
+                progress(ip, message)
+                if message == "Uploading firmware...":
+                    db.set_setting("scheduled_rollout_safety_ready", "false")
+
+            return await original_update(path, revoke_after_upload_message, *args, **kwargs)
+
+        monkeypatch.setattr(client, "update_firmware", update_with_progress)
+        return driver
+
+    monkeypatch.setattr(app_module, "get_driver", lambda *_: make_driver)
+    await app_module._update_single_device(job, "192.0.2.1")
+
+    assert "Uploading firmware..." in progress_messages
+    assert len(driver_clients) == 1
+    assert job.devices["192.0.2.1"].status == "pending"
+    assert job.devices["192.0.2.1"].error is None
+    run_curl.assert_not_awaited()
+    assert db.get_firmware_window_stop(job.window_key) is None

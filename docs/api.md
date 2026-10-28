@@ -409,13 +409,26 @@ Get scheduler state including: status (`idle`, `running`, `blocked_weather`, etc
 Get the active or paused rollout with device progress counts.
 
 ### `POST /api/rollout/{rollout_id}/resume`
-Resume a paused rollout. Only works if status is `paused`.
+Resume a paused rollout after the failed window has an operator resolution record.
+The stopped window stays closed.
 
 ### `POST /api/rollout/{rollout_id}/cancel`
 Cancel an active or paused rollout.
 
 ### `POST /api/rollout/{rollout_id}/reset`
 Reset a paused rollout — cancels it so a fresh rollout starts next maintenance window.
+
+### `GET /api/firmware-window-stops`
+List stopped firmware windows that still need an operator resolution record.
+Requires admin or operator role.
+
+### `POST /api/firmware-window-stops/{stop_id}/resolve`
+Record the resolution of a failed firmware window from a later maintenance
+window. Requires admin or operator role.
+
+- **Body** (form): `resolution` (required operator note)
+- **Errors**: `404` if the stop is not unresolved, `409` if the current window
+  is stopped or no later window is open
 
 ## Firmware Files
 
