@@ -14,15 +14,13 @@ procedures do not extend Manager authority.
 
 ## Authority history
 
-**Key points:** Historical grants do not authorize loop workers to merge or
-release. Current task approval and [Agent rules](../AGENTS.md#agent-rules)
-control each action.
+**Key points:** The owner approves merges through the ops bot.
 
 **Detail:** The owner delegated lead duties on 2026-10-02. On 2026-10-14, the
-owner authorized the Manager lead to merge any SixtyOps Manager PR that meets
-the full sign-off criteria, regardless of PR author. This superseded the older
-human-only merge rules and PR-author restriction. The grant did not extend
-push, deploy, release, or production-device authority.
+owner authorized the Manager lead to merge PRs that met sign-off criteria. See
+[Review, merge and development release gates](#review-merge-and-development-release-gates)
+for the current process. This grant does not allow push, deploy, release, or
+production-device actions.
 
 Public-repo rulesets are free. This supersedes the earlier Team-plan
 requirement recorded in [#116](https://github.com/sixtyops/manager/issues/116).
@@ -69,7 +67,7 @@ gives no exemption from locks or pacing gates.
 ## Priority and delegation
 
 **Key points:** System safety and working fleet management come before website
-polish. Keep at most three active build or fix items.
+polish. Run parallel workers when their files do not overlap.
 
 **Detail:** Follow North Star and the one-right-way delivery order. Distinguish
 shipped behavior from target behavior. Fix current defects before new builds.
@@ -80,9 +78,18 @@ Use proven management software and existing architecture before proposing a
 new tool or design. The lead owns the goal, directs the work, and tracks it
 through completion or until every remaining step needs an operator. It
 delegates implementation, investigation, testing, and detailed PR reviews.
+Run as many Luna workers in parallel as have no file overlap. Run workers that
+change the same rollout core file one after another: the `updater/app.py` job
+runner, `updater/scheduler.py`, `updater/rollout_gate.py`, or
+`updater/database.py`. This file-overlap rule replaces the three-active-PR
+limit.
 The lead does not perform these tasks, even for a small change. It must get
 independent review and cannot serve as the designated reviewer for work from
 its own team. If no worker capacity exists, leave the work queued.
+
+The shared review-fix loop stays off for Manager under [#599](https://github.com/sixtyops/manager/pull/599),
+because its shared script starts only Claude workers ([personal-processes #515](https://github.com/isolson/personal-processes/issues/515)).
+Send each review fix to a new Luna worker.
 
 The owner names an agent as lead for a feature, issue, or epic. Every other agent
 is a follower: it completes one bounded assignment, reports evidence and any
@@ -96,9 +103,16 @@ unpushed work, run the fix worker in the builder's workspace and have it verify
 that work first. Reuse a worker only for a follow-up inside its own task, such
 as a test rerun.
 
-Use the single [model policy](../AGENTS.md#models) for worker assignments and
-Sol/Luna reasoning levels. Only the Manager lead session may use Claude models.
-Large decisions require a four-agent quorum. The owner is the fifth vote.
+Use Luna as the default worker for nearly all work, including safety-path work
+at high reasoning. Assign docs and small code at low or medium reasoning. Assign
+pre-reviews, re-reviews, designated reviews, and bench or dev-host runs at high
+reasoning. Use Sol at medium only after Luna fails at a named step, or for a
+hard design question named by a reviewer. Use Astra for at most one narrow
+design question at medium; never send a whole review to Astra. A PR escalated to
+Astra also gets a Sol review. For large decisions, meaning major product or
+safety decisions, use the five seats: Astra medium, Sol medium, Luna high, Luna
+medium, and the owner. [AGENTS.md](../AGENTS.md#models) points here for model
+routing and quorum. Only the Manager lead session may use Claude models.
 Do not give implementation work to an architect; give its design to a coding worker.
 Verify installed provider/model/thinking IDs before sending work. Follow the
 review-fix rule in [Priority and delegation](#priority-and-delegation). Preserve
@@ -186,27 +200,56 @@ access.
 environment before commit, plus scoped checks and documentation verification.
 They push a feature branch normally and open one PR to `main` with issue closure,
 validation, risks/limits and `agent:review`. Never force-push shared history.
+Follow [Slices and reviews](../AGENTS.md#slices-and-reviews) for epic structure,
+slice sizing, engine design notes, review scope and findings, reviewer
+assignment, base updates, and bench proof ownership.
 
 The lead checks that each eligible non-draft PR awaiting review has
 `agent:review`. The trusted-author workflow adds it on open, reopen, or ready
 for review and sends a wake.
 The review loop also runs hourly. Use its normal schedule, locks, budgets,
 cooldowns, and round limits. When the existing review process flags a PR for
-higher-level review, assign a GPT-6.1 Sol reviewer. Use high reasoning for a
-safety path. Do not escalate the whole review to Astra. Astra may answer at
-most one narrow design question, and only when the reviewer names that
-question. Record the review result. Follow the review-fix rule in [Priority
-and delegation](#priority-and-delegation).
+higher-level review, follow the model policy in [Priority and delegation](#priority-and-delegation).
+An independent Luna worker pre-reviews every PR against the system review
+criteria before it enters review. The pre-review checks that the PR can pass
+on the first round. A final pre-review reports all remaining findings in one
+pass. Record the review result and follow the review-fix rule in [Priority and
+delegation](#priority-and-delegation).
 Hold merge until the review and all normal review and sign-off gates pass. Use
 the existing `agent:escalated` and `agent:needs-human` states; do not create a
 new review label.
+
+The personal-processes ops bot sends the owner a Signal ready ping or digest
+for each Manager PR labeled `agent:ready-for-signoff`, with a ready packet.
+The owner approves by replying `merge` on Signal or reacting to the mapped
+message. The ops bot merges with `gh pr merge --squash --match-head-commit`.
+The lead keeps every gate and uses the 2026-10-14 merge grant only when the
+owner asks. The lead sends no Signal messages. After each
+ops-bot merge, read the merge commit message on `main`. If it contains a
+co-author trailer or a personal name, stop applying `agent:ready-for-signoff`
+to PRs and report the finding to the owner. Manager joins the digest through
+[personal-processes issue #509](https://github.com/isolson/personal-processes/issues/509)
+and [PR #510](https://github.com/isolson/personal-processes/pull/510).
+
+The owner prefers a few larger batches, once or twice a day. Main moves only
+when the owner merges. Keep gated PRs ready between batches. After each batch,
+one worker updates every open PR from `main` in one pass. Then benches run one
+PR at a time, followed by designated approvals. Follow [Squash source checks](#squash-source-checks)
+before applying the ready label.
+
+Before a merge batch, have a worker create a scratch worktree detached at the
+current `origin/main`. In batch order, squash-apply each queued PR at its
+approved head, then run the full offline test suite. The worker pushes nothing
+and removes the worktree when the trial ends. Move a PR to the next batch if
+it conflicts or introduces a test failure. The trial adds no approval; every
+merge gate still applies.
 
 Fetch `origin/main`, then read the current GitHub pull request state and head
 before you report a pull request as open or hand it to another owner. Do not
 reuse an earlier state after a new event.
 
-Before a lead merge, require a current non-draft OPEN head and MERGEABLE/CLEAN
-state. Require the designated independent review and shared review with
+Before the owner approves a bot merge, require a current non-draft OPEN head
+and MERGEABLE/CLEAN state. Require the designated independent review and shared review with
 matching recorded `signoff_head`, `agent:ready-for-signoff`, and a packet for
 that head and issue. Read the formal review record. Record its ID, state, full
 head SHA, submitted time, and assignment source. The designated review must
@@ -233,72 +276,31 @@ that head, duplicate/overlap sweep, acceptance and post-merge check/rollback.
 Engine/driver changes also require named real-device bench evidence on that
 commit. Skips and synthetic tests do not provide bench proof. Missing, stale or
 unreadable evidence holds the action. A changed head needs fresh gates.
+Start the bench worker with `--env LEAD_AP_ACCESS_FILE=<AP lab file>` and
+`--env LEAD_SWITCH_ACCESS_FILE=<switch lab file>`. Use the private paths
+recorded under [Private access records](dev-hardware-validation.md#private-access-records),
+never paths from the repository. State in the brief that lab access is
+authorized and recorded. Use the escalation reason `trusted read-only bench
+wrapper, sanitized output only`. In each head checkout, run
+`git fetch origin +refs/heads/main:refs/remotes/origin/main` first. Then check
+`git merge-base origin/main HEAD`; it must match the current `main` commit.
+The wrapper compares against that checkout's `origin/main` and refuses a
+valid head when the local reference is stale.
 
-### Explicit squash message
+### Squash source checks
 
-**Key points:** Audit the exact squash subject and body before merge. Match the
-verified head SHA. Read back the resulting commit message.
+**Key points:** Check source commit messages, PR titles, and PR bodies before
+the ready label. The ops bot uses GitHub's default squash message and matches
+the approved head.
 
-**Detail:** Do not use `--fill` or rely on GitHub's generated message. Inspect
-the source commit messages, PR title, PR body, diff, and issue. Prepare a plain
-subject and body file from that evidence. The subject must state the change in
-the repository's conventional format. The body must state the issue,
-validation, and known risks or limits. Check the subject, body file, source
-commit messages, and PR text for personal names and co-author trailers. Remove
-any such text from the proposed squash message. Check the subject and body for
-factual accuracy, Simplified Technical English, and the copywriter audit. Keep
-the body file unchanged through post-merge verification.
-
-Set these values from the current PR and the reviewed message. Use a body file
-that contains only the intended commit body, with no subject line:
-
-```bash
-set -euo pipefail
-pr_number=123
-expected_head='FULL_VERIFIED_HEAD_SHA'
-squash_subject='fix: describe the change'
-squash_body_file='/path/to/reviewed-body.txt'
-```
-
-Before merge, re-read the PR and confirm that it is open, not a draft, and has
-the expected head. Confirm `mergeable` is `MERGEABLE` and
-`mergeStateStatus` is `CLEAN`. Complete every review, sign-off, thread, CI,
-duplicate, acceptance, and device-proof gate above. Review the exact subject
-and body file. Then run:
-
-```bash
-live_head=$(gh pr view "$pr_number" --json headRefOid --jq .headRefOid)
-test "$live_head" = "$expected_head"
-gh pr merge "$pr_number" --squash \
-  --subject "$squash_subject" \
-  --body-file "$squash_body_file" \
-  --match-head-commit "$expected_head"
-```
-
-After the command, read the PR and squash commit. Confirm the PR is merged and
-read the commit message from GitHub. Compare it with the reviewed subject and
-body file. Record the merge commit SHA and the readback result:
-
-```bash
-merge_sha=$(gh pr view "$pr_number" --json state,mergeCommit \
-  --jq 'select(.state == "MERGED") | .mergeCommit.oid')
-test -n "$merge_sha"
-actual_message=$(gh api "repos/{owner}/{repo}/commits/$merge_sha" \
-  --jq .commit.message)
-expected_message=$(printf '%s\n\n%s' "$squash_subject" "$(cat "$squash_body_file")")
-if [ "$actual_message" != "$expected_message" ]; then
-  printf 'Squash message mismatch for %s\n' "$merge_sha" >&2
-  exit 1
-fi
-printf 'Verified squash message for %s\n' "$merge_sha"
-```
-
-If merge or readback fails, inspect live PR and repository state before retrying.
-Record any observed merge and message separately from the command result. Do
-not retry a merge until the current head and merge state prove that the first
-attempt did not merge. If GitHub adds an unwanted personal-name or co-author
-trailer, stop further merges and record the cause. Do not rewrite the published
-merge commit.
+**Detail:** Workers commit as the bot account. In the 2026-10-27 batch,
+GitHub's default squash message added a co-author trailer for commits authored
+under a personal account; the lead still reads back each merge commit message.
+Before the lead applies `agent:ready-for-signoff`, inspect every source
+commit message, PR title, and PR body for co-author trailers and personal
+names. Ask a worker to remove any such text before the PR enters the sign-off
+batch. The ops bot uses
+GitHub's default squash message and `--match-head-commit`.
 
 Reply `addressed in <sha>` after a fix. Leave threads to their reviewers.
 Never grant your own sign-off, reset counters, or restart a capped cycle.
@@ -306,7 +308,6 @@ Use the shared [reopen procedure](https://github.com/isolson/personal-processes/
 only after an explicit lead decision, recorded history/budget checks and
 readback. Keep maximum rounds/reopens and publication pacing intact.
 
-The lead merge authority is recorded in [Authority history](#authority-history).
 Every merge still requires all applicable review, CI, sign-off, thread,
 duplicate, acceptance, and bench gates above. Follow
 [release-sop.md](release-sop.md) and [self-update-signing.md](self-update-signing.md).
@@ -374,8 +375,12 @@ For a follow-up inside a worker's own task, the verified CLI supports `paseo
 send "$worker_id" --prompt-file "$task_file" --no-wait`. For review findings,
 launch a new worker with a brief that names the review report. If the builder
 has unpushed work, use the builder's workspace and require the new worker to
-verify that work first. For new capacity, inspect `paseo run --help` and
-provider capabilities, then use a bounded prompt and isolated workspace. Do not
+verify that work first. For new capacity, inspect `paseo run --help` and provider capabilities, then
+use a bounded prompt and isolated workspace. `paseo run` ignores `--cwd`; use
+`--workspace <id>` or `--new-workspace worktree --worktree-mode branch-off|checkout-pr`.
+Pass secrets only through `--env`. Codex workers need escalated sandbox
+permission for network access, including `gh` and `git fetch`; state this in
+every brief. Keep briefs in the lead state folder, not `/tmp`. Do not
 copy stale IDs, spawn a second writer, or use bypass mode. Do not install/restart
 services as part of resuming work.
 

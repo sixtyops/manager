@@ -32,6 +32,7 @@ markers = [
     "dev_blocking: merge-gating live dev validation against dedicated test devices",
     "dev_sso: separate non-blocking live SSO/OIDC validation lane",
     "slow: tests that take a long time (e.g. firmware update with reboot)",
+    "loopback: tests that require loopback UDP socket access",
 ]
 
 [tool.setuptools.packages.find]
