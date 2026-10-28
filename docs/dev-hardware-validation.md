@@ -52,7 +52,7 @@ SIXTYOPS_TEST_SWITCH_IP=<dedicated-switch> \
 SIXTYOPS_TEST_FIRMWARE_AP_IP=<firmware-test-ap> \
 SIXTYOPS_TEST_CONFIG_AP_IP=<config-test-ap> \
 SIXTYOPS_TEST_RADIUS_AP_IP=<radius-test-ap> \
-pytest -m "integration and dev_blocking" -v --timeout=900
+pytest -m "integration and dev_blocking" -v --tb=no -rN --timeout=900
 ```
 
 SSO lane:
@@ -65,8 +65,13 @@ SIXTYOPS_TEST_OIDC_PROVIDER_URL=<provider-url> \
 SIXTYOPS_TEST_OIDC_CLIENT_ID=<client-id> \
 SIXTYOPS_TEST_OIDC_CLIENT_SECRET=<client-secret> \
 SIXTYOPS_TEST_OIDC_REDIRECT_URI=<redirect-uri> \
-pytest -m "integration and dev_sso" -v
+pytest -m "integration and dev_sso" -v --tb=no -rN
 ```
+
+These options print each test name with its `PASSED`, `FAILED`, or `SKIPPED`
+status without printing tracebacks or a short summary that could include
+failure reasons or response bodies. Investigate a failure by rerunning only
+that test in a private terminal.
 
 ## Integration reference
 
