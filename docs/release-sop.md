@@ -9,8 +9,9 @@ release authority. Follow [Agent rules](../AGENTS.md#agent-rules).
 
 **Bottom line:** every release is a **GPG-signed tag on `main`**: merge the
 version-bump PR first, then sign the tag at `origin/main` and push the tag by
-name. Dev tags publish automatically; stable tags need the manual workflow
-approval. Unsigned tags are refused — by CI and by every fielded instance.
+name. Dev tags start validation and publish only after it passes; stable tags
+need the manual workflow approval. Unsigned tags are refused by CI and by
+every fielded instance.
 
 The tag *is* the code customers run: self-update checks it out and rebuilds on
 hosts that hold the Docker socket. The signature is what makes that safe, so
@@ -52,9 +53,12 @@ trust model: [self-update-signing.md](self-update-signing.md).
    ```
    The `-c` overrides force the GPG release key; without them git uses the
    machine's default (e.g. SSH/1Password) and produces a tag the gate rejects.
-3. The tag push auto-runs **Release**: tests → signature gate → GitHub
-   pre-release → `ghcr.io/sixtyops/manager:vX.Y.Z-devN` + `:dev`. Watch it
-   under Actions (`gh run watch`).
+3. The tag push auto-runs **Release**: tests and development-instance
+   validation → signature gate → GitHub pre-release →
+   `ghcr.io/sixtyops/manager:vX.Y.Z-devN` + `:dev`. The signed tag must exist
+   to start validation. The workflow creates no GitHub Release or GHCR image,
+   and does not move `:dev`, until validation passes. Watch it under Actions
+   (`gh run watch`).
 
 ## Stable release (`vX.Y.Z`)
 
@@ -71,20 +75,21 @@ trust model: [self-update-signing.md](self-update-signing.md).
 - Image tags: `gh api "/orgs/sixtyops/packages/container/manager/versions?per_page=3" --jq '.[].metadata.container.tags'`
 - In-app: Settings → Updates on the dev host offers/applies the new version.
 
-## If the release run fails
+## If release validation fails
 
-Nothing publishes on failure — the gate is fail-closed, so a failed run is
-safe, just dead. Fix forward:
+A failed validation leaves the owner-signed tag in the repository without a
+GitHub Release or GHCR image. The signed tag is the trust root; the workflow
+cannot validate before the tag exists. Fix forward:
 
-1. Land the fix on `main` via PR, bump to the next `devN`.
-2. Delete the dead tag, then cut the new one per the steps above:
-   ```bash
-   git push origin :refs/tags/vX.Y.Z-devN
-   ```
-   The remote prints `Bypassed rule violations` — that's the tag ruleset
-   logging your admin bypass, expected.
-3. Gotcha: tag pushes run the workflow **from the tagged commit**, not from
-   `main` — a workflow fix only takes effect for tags created after it merged.
+1. Read the failed validation output and address the cause.
+2. Land any code or workflow fix on `main` via PR, then bump to the next `devN`.
+3. Sign and push the next tag per the steps above. Do not delete or move the
+   failed signed tag. A tag push runs the workflow from that tagged commit, so
+   workflow fixes apply only to tags created after they merge.
+
+If a later release stage fails after validation passes, check Actions and the
+GitHub Release and GHCR state before retrying. Fix forward with the next
+version; do not assume that all publication steps completed together.
 
 ## Version conventions
 
