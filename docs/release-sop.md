@@ -17,13 +17,14 @@ settings in the environment:
 ```bash
 git worktree add --detach /tmp/sixtyops-release-check <commit-sha>
 cd /tmp/sixtyops-release-check
-python scripts/validate_release.py --host "$RELEASE_VALIDATION_HOST" \
-  --username "$RELEASE_VALIDATION_USERNAME"
+python scripts/validate_release.py
 ```
 
-Set `RELEASE_VALIDATION_HOST` and `RELEASE_VALIDATION_USERNAME` in the
-environment. Store the password in a private file with mode `600`, then set
-`RELEASE_VALIDATION_PASSWORD_FILE` to its path without printing its contents:
+Set `RELEASE_VALIDATION_HOST`, `RELEASE_VALIDATION_USERNAME`,
+`RELEASE_VALIDATION_DEVICE_IP`, `RELEASE_VALIDATION_SWITCH_IP`, and
+`RELEASE_VALIDATION_SKIP` in the environment when needed. Store the password
+in a private file with mode `600`, then set `RELEASE_VALIDATION_PASSWORD_FILE`
+to its path without printing its contents:
 
 ```bash
 export RELEASE_VALIDATION_PASSWORD_FILE=/secure/path/manager-password

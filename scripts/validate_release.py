@@ -1366,9 +1366,18 @@ def main() -> None:
         "--username", default=os.environ.get("RELEASE_VALIDATION_USERNAME", "admin"),
         help="Login username (or RELEASE_VALIDATION_USERNAME; default: admin)",
     )
-    parser.add_argument("--skip", default="", help="Comma-separated categories to skip")
-    parser.add_argument("--device-ip", default=None, help="AP IP for device-specific tests")
-    parser.add_argument("--switch-ip", default=None, help="Switch IP for switch-specific tests")
+    parser.add_argument(
+        "--skip", default=os.environ.get("RELEASE_VALIDATION_SKIP", ""),
+        help="Comma-separated categories to skip (or RELEASE_VALIDATION_SKIP)",
+    )
+    parser.add_argument(
+        "--device-ip", default=os.environ.get("RELEASE_VALIDATION_DEVICE_IP"),
+        help="AP IP for device-specific tests (or RELEASE_VALIDATION_DEVICE_IP)",
+    )
+    parser.add_argument(
+        "--switch-ip", default=os.environ.get("RELEASE_VALIDATION_SWITCH_IP"),
+        help="Switch IP for switch-specific tests (or RELEASE_VALIDATION_SWITCH_IP)",
+    )
     parser.add_argument("--verbose", action="store_true", help="Print request/response details")
     parser.add_argument("--dry-run", action="store_true", help="Print what would be tested without calling APIs")
     parser.add_argument(

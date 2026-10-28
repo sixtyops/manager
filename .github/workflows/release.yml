@@ -130,25 +130,15 @@ jobs:
 
       - name: Validate development instance
         env:
-          SIXTYOPS_TEST_URL: ${{ secrets.SIXTYOPS_TEST_URL }}
-          SIXTYOPS_TEST_USER: ${{ secrets.SIXTYOPS_TEST_USER }}
+          RELEASE_VALIDATION_HOST: ${{ secrets.SIXTYOPS_TEST_URL }}
+          RELEASE_VALIDATION_USERNAME: ${{ secrets.SIXTYOPS_TEST_USER }}
           RELEASE_VALIDATION_PASSWORD: ${{ secrets.SIXTYOPS_TEST_PASS }}
-          SIXTYOPS_TEST_AP_IP: ${{ secrets.SIXTYOPS_TEST_AP_IP }}
-          SIXTYOPS_TEST_SWITCH_IP: ${{ secrets.SIXTYOPS_TEST_SWITCH_IP }}
-          SIXTYOPS_RELEASE_VALIDATION_SKIP: ${{ secrets.SIXTYOPS_RELEASE_VALIDATION_SKIP }}
+          RELEASE_VALIDATION_DEVICE_IP: ${{ secrets.SIXTYOPS_TEST_AP_IP }}
+          RELEASE_VALIDATION_SWITCH_IP: ${{ secrets.SIXTYOPS_TEST_SWITCH_IP }}
+          RELEASE_VALIDATION_SKIP: ${{ secrets.SIXTYOPS_RELEASE_VALIDATION_SKIP }}
         run: |
           set -euo pipefail
-          args=(--host "$SIXTYOPS_TEST_URL" --username "$SIXTYOPS_TEST_USER")
-          if [ -n "$SIXTYOPS_TEST_AP_IP" ]; then
-            args+=(--device-ip "$SIXTYOPS_TEST_AP_IP")
-          fi
-          if [ -n "$SIXTYOPS_TEST_SWITCH_IP" ]; then
-            args+=(--switch-ip "$SIXTYOPS_TEST_SWITCH_IP")
-          fi
-          if [ -n "$SIXTYOPS_RELEASE_VALIDATION_SKIP" ]; then
-            args+=(--skip "$SIXTYOPS_RELEASE_VALIDATION_SKIP")
-          fi
-          python3 scripts/validate_release.py "${args[@]}"
+          python3 scripts/validate_release.py
 
   release:
     needs: [test]

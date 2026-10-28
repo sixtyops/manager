@@ -83,6 +83,29 @@ def test_documented_password_file_usage_keeps_password_out_of_argv() -> None:
 
     assert "--password" not in validator_command
     assert "RELEASE_VALIDATION_PASSWORD_FILE" in sop
+    assert "--host" not in validator_command
+    assert "--username" not in validator_command
+
+
+def test_release_workflow_passes_secret_settings_only_through_environment() -> None:
+    workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    step = workflow.split("      - name: Validate development instance\n", 1)[1]
+    env_block, run_block = step.split("        run: |\n", 1)
+    run_block = run_block.split("\n      - name:", 1)[0]
+
+    secret_bindings = {
+        "RELEASE_VALIDATION_HOST": "SIXTYOPS_TEST_URL",
+        "RELEASE_VALIDATION_USERNAME": "SIXTYOPS_TEST_USER",
+        "RELEASE_VALIDATION_PASSWORD": "SIXTYOPS_TEST_PASS",
+        "RELEASE_VALIDATION_DEVICE_IP": "SIXTYOPS_TEST_AP_IP",
+        "RELEASE_VALIDATION_SWITCH_IP": "SIXTYOPS_TEST_SWITCH_IP",
+        "RELEASE_VALIDATION_SKIP": "SIXTYOPS_RELEASE_VALIDATION_SKIP",
+    }
+    for env_name, secret_name in secret_bindings.items():
+        assert f"{env_name}: ${{{{ secrets.{secret_name} }}}}" in env_block
+
+    assert "${{ secrets." not in run_block
+    assert 'python3 scripts/validate_release.py\n' in run_block
 
 
 def test_cli_reads_release_settings_from_environment_without_printing_password(monkeypatch, capsys) -> None:
@@ -102,6 +125,9 @@ def test_cli_reads_release_settings_from_environment_without_printing_password(m
     monkeypatch.setenv("RELEASE_VALIDATION_HOST", "https://dev.example.test")
     monkeypatch.setenv("RELEASE_VALIDATION_USERNAME", "release-check")
     monkeypatch.setenv("RELEASE_VALIDATION_PASSWORD", "test-password-value")
+    monkeypatch.setenv("RELEASE_VALIDATION_DEVICE_IP", "192.0.2.10")
+    monkeypatch.setenv("RELEASE_VALIDATION_SWITCH_IP", "192.0.2.11")
+    monkeypatch.setenv("RELEASE_VALIDATION_SKIP", "radius,backup")
     monkeypatch.setattr(validate_release, "ReleaseValidator", FakeValidator)
     monkeypatch.setattr(sys, "argv", ["validate_release.py"])
 
@@ -113,4 +139,7 @@ def test_cli_reads_release_settings_from_environment_without_printing_password(m
     assert captured["host"] == "https://dev.example.test"
     assert captured["username"] == "release-check"
     assert captured["password"] == "test-password-value"
+    assert captured["device_ip"] == "192.0.2.10"
+    assert captured["switch_ip"] == "192.0.2.11"
+    assert captured["skip"] == {"radius", "backup"}
     assert "test-password-value" not in capsys.readouterr().out
