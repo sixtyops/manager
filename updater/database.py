@@ -893,6 +893,35 @@ def get_firmware_window_stop(window_key):
         return dict(row) if row else None
 
 
+def hold_firmware_window(window_key, job_id: str, device_ip: str, reason: str):
+    """Persist a qualification hold without creating an operator failure stop."""
+    if not window_key:
+        return None
+    key_json = json.dumps(list(window_key), separators=(",", ":"))
+    with get_db() as db:
+        db.execute(
+            "INSERT OR IGNORE INTO firmware_window_holds "
+            "(window_key, job_id, device_ip, reason, held_at) VALUES (?, ?, ?, ?, ?)",
+            (key_json, job_id, device_ip, reason, datetime.now().isoformat()),
+        )
+        row = db.execute(
+            "SELECT * FROM firmware_window_holds WHERE window_key = ?", (key_json,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_firmware_window_hold(window_key):
+    """Read the qualification hold for one maintenance window instance."""
+    if not window_key:
+        return None
+    key_json = json.dumps(list(window_key), separators=(",", ":"))
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM firmware_window_holds WHERE window_key = ?", (key_json,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def get_unresolved_firmware_window_stops():
     """Return stopped windows that still need an operator resolution record."""
     with get_db() as db:

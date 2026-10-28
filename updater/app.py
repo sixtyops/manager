@@ -4130,11 +4130,21 @@ def _firmware_stop_message(stop: dict) -> str:
     )
 
 
+def _firmware_hold_message(hold: dict) -> str:
+    return (
+        f"Firmware qualification is held for window {hold['window_key']}: "
+        f"{hold['device_ip']} ({hold['reason']})"
+    )
+
+
 def _check_firmware_window_admission(window_key):
     if window_key:
         stop = db.get_firmware_window_stop(window_key)
         if stop:
             raise HTTPException(409, _firmware_stop_message(stop))
+        hold = db.get_firmware_window_hold(window_key)
+        if hold:
+            raise HTTPException(409, _firmware_hold_message(hold))
     unresolved = db.get_unresolved_firmware_window_stops()
     if unresolved:
         stop = unresolved[0]
@@ -5574,6 +5584,15 @@ def _hold_scheduled_device(job: "UpdateJob", device_status: "DeviceStatus") -> b
 
 def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
     """Recheck the stop, current readiness, and window before a device write."""
+    hold = db.get_firmware_window_hold(job.window_key) if job.window_key else None
+    if hold:
+        reason = _firmware_hold_message(hold)
+        job.devices[ip].status = "cancelled"
+        job.devices[ip].error = reason
+        job.devices[ip].progress_message = reason
+        _request_job_cancel(job, reason)
+        return False, reason
+
     stop = db.get_firmware_window_stop(job.window_key) if job.window_key else None
     if stop:
         reason = _firmware_stop_message(stop)
@@ -5727,6 +5746,13 @@ async def _address_change_guard(
         error=reason, failed_stage="address_change_hold", stages=[], duration_seconds=0,
         started_at=now_iso, completed_at=now_iso,
     )
+    if job.window_key:
+        hold = db.hold_firmware_window(job.window_key, job.job_id, ip, reason)
+        _request_job_cancel(job, _firmware_hold_message(hold or {
+            "window_key": json.dumps(list(job.window_key), separators=(",", ":")),
+            "device_ip": ip,
+            "reason": reason,
+        }))
     return False
 
 
@@ -5739,6 +5765,14 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         return
 
     stop = db.get_firmware_window_stop(job.window_key) if job.window_key else None
+    hold = db.get_firmware_window_hold(job.window_key) if job.window_key else None
+    if hold:
+        reason = _firmware_hold_message(hold)
+        device_status.status = "cancelled"
+        device_status.error = reason
+        device_status.progress_message = reason
+        _request_job_cancel(job, reason)
+        return
     if stop:
         device_status.status = "cancelled"
         device_status.error = _firmware_stop_message(stop)
@@ -6093,7 +6127,10 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         elif smoke_failed:
             _stop_firmware_window(job, ip, "smoke", device_status.error or "Smoke test failed")
     else:
-        if admission_denial["reason"].startswith("Firmware writes are stopped for window"):
+        if admission_denial["reason"].startswith((
+            "Firmware writes are stopped for window",
+            "Firmware qualification is held for window",
+        )):
             # Preserve the existing stop without recording a second device failure.
             device_status.status = "cancelled"
             device_status.error = admission_denial["reason"]
@@ -6199,8 +6236,11 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         _request_job_cancel(job, block_reason)
         logger.warning(f"Job {job.job_id} cancelled before start: {block_reason}")
     stop = db.get_firmware_window_stop(job.window_key) if job.window_key else None
-    unresolved = db.get_unresolved_firmware_window_stops() if not stop else []
-    if stop or unresolved:
+    hold = db.get_firmware_window_hold(job.window_key) if job.window_key else None
+    unresolved = db.get_unresolved_firmware_window_stops() if not stop and not hold else []
+    if hold:
+        _request_job_cancel(job, _firmware_hold_message(hold))
+    elif stop or unresolved:
         _request_job_cancel(job, _firmware_stop_message(stop or unresolved[0]))
 
     ap_ips = [ip for ip, role in job.device_roles.items() if role == "ap"]

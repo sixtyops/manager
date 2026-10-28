@@ -210,6 +210,14 @@ def build_schema(db: sqlite3.Connection) -> None:
             resolution TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS firmware_window_holds (
+            window_key TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            device_ip TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            held_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS rollout_devices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             rollout_id INTEGER NOT NULL,

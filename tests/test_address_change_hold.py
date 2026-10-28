@@ -187,6 +187,51 @@ async def test_unqualified_job_holds_before_writes(tables, runner, scheduled, re
 
 
 @pytest.mark.asyncio
+async def test_qualification_hold_stops_window_without_failure_stop(tables, runner):
+    db.upsert_access_point(OTHER_IP, "synthetic", "synthetic", model="TNA-301", firmware_version=SOURCE)
+    first_job = make_job()
+    first_job.job_id = "qualification-hold-first-job"
+    first_job.window_key = ("firmware", "2026-10-27")
+    first_job.devices[OTHER_IP] = app_module.DeviceStatus(ip=OTHER_IP, role="ap")
+    first_job.device_roles[OTHER_IP] = "ap"
+    first_job.device_firmware_map[OTHER_IP] = first_job.device_firmware_map[IP]
+    first_job.credentials[OTHER_IP] = ("synthetic", "synthetic")
+
+    await app_module.run_update_job(first_job, 2)
+
+    runner.reboot.assert_not_awaited()
+    runner.update_firmware.assert_not_awaited()
+    assert first_job.devices[IP].status == "deferred"
+    assert first_job.devices[OTHER_IP].status == "cancelled"
+    assert db.get_firmware_window_hold(first_job.window_key)["device_ip"] == IP
+    assert db.get_firmware_window_stop(first_job.window_key) is None
+
+    same_window_job = make_job()
+    same_window_job.job_id = "qualification-hold-same-window-job"
+    same_window_job.window_key = first_job.window_key
+    await app_module.run_update_job(same_window_job, 1)
+    runner.reboot.assert_not_awaited()
+    runner.update_firmware.assert_not_awaited()
+
+    qualify()
+    next_window_job = make_job()
+    next_window_job.job_id = "qualification-hold-next-window-job"
+    next_window_job.window_key = ("firmware", "2026-10-28")
+    await app_module.run_update_job(next_window_job, 1)
+    runner.reboot.assert_awaited_once()
+    runner.update_firmware.assert_awaited_once()
+    assert next_window_job.devices[IP].status == "success"
+
+    with db.get_db() as conn:
+        assert conn.execute("SELECT 1 FROM firmware_window_stops").fetchone() is None
+        rows = conn.execute(
+            "SELECT status FROM device_update_history WHERE job_id IN (?, ?, ?)",
+            (first_job.job_id, same_window_job.job_id, next_window_job.job_id),
+        ).fetchall()
+    assert all(row["status"] != "failed" for row in rows)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("scheduled", [True, False])
 async def test_qualified_job_reboots_and_flashes(tables, runner, scheduled):
     qualify()
