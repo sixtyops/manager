@@ -8,6 +8,12 @@ approval for the named host, devices, and tests. Loop workers must not run
 [Agent rules](../AGENTS.md#agent-rules). Use existing private credentials
 without putting secret values on a command line.
 
+Write lanes must run on the single self-hosted runner labelled `dev-host` on
+the dev host. The hardware workflow also takes a bounded host-wide lock at
+`/var/lock/sixtyops-dev-hardware.lock` so separate workspaces cannot write to
+the lab at the same time. Set `SIXTYOPS_DEV_HARDWARE_LOCK_FILE` to another
+shared host path only when every runner that can reach the lab uses that path.
+
 This repo now has two live-dev validation lanes:
 
 - `dev_blocking`: merge-gating validation against the shared dev host and dedicated lab devices
