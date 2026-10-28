@@ -1,5 +1,4 @@
-"""Tests for strict smoke-test mode (a strict failure halts the rollout job —
-halt-on-first-failure) and basic rollout pause/status plumbing."""
+"""Tests for failed smoke gates and rollout pause/status behavior."""
 
 import pytest
 import hashlib
@@ -36,7 +35,7 @@ class TestStrictSmokeSettings:
 
 
 class TestSmokeTestStrictMode:
-    """Strict mode fails devices on smoke-test warnings."""
+    """Smoke warnings mark the result as failed."""
 
     def test_smoke_result_with_warnings_sets_passed_false(self):
         result = SmokeTestResult()
@@ -95,6 +94,7 @@ class _FakeClient:
     def get_hardware_id(self, model): return "tn-110-prs"
 
     async def connect(self): return True
+    async def reboot(self, timeout=1): return True
 
     async def get_device_info(self):
         from updater.vendors.base import VendorDeviceInfo
@@ -126,6 +126,7 @@ async def _run_update(ip, smoke_passed, version="1.2.3"):
     db.upsert_access_point(ip, "root", "pass", enabled=True, model="TNA-301",
                            firmware_version="1.0.0.100")
     job = _make_job(ip)
+    job.pre_update_reboot = False
     from updater.rollout_gate import ADDRESS_CHANGE_QUALIFICATIONS, AddressTransition
     target = version if version.count(".") == 3 else version + ".200"
     release, revision = target.rsplit(".", 1)
@@ -159,14 +160,14 @@ async def _run_update(ip, smoke_passed, version="1.2.3"):
 
 
 class TestConfirmRequiresCleanSmoke:
-    """Record a Firmware Hold confirmation after a clean smoke pass."""
+    """A failed smoke gate stops the job and cannot clear Firmware Hold."""
 
     @pytest.mark.asyncio
     async def test_smoke_warnings_do_not_confirm(self, mock_db):
         job = await _run_update("10.0.0.10", smoke_passed=False)
         assert job.devices["10.0.0.10"].status == "failed"
         assert job.cancelled is True
-        assert db.get_confirmed_ips_for_version("1.2.3") == set()  # but NOT confirmed
+        assert db.get_confirmed_ips_for_version("1.2.3") == set()
 
     @pytest.mark.asyncio
     async def test_warning_fails_device_even_when_smoke_reports_passed(self, mock_db):

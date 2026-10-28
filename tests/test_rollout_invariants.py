@@ -393,6 +393,21 @@ def test_create_rollout_starts_at_pct10(mock_db):
     rid = db.create_rollout(FW)
     assert db.get_rollout(rid)["phase"] == "pct10"
 
+
+def test_firmware_window_key_uses_schedule_zone_for_naive_scheduler_time():
+    """A naive injected time represents schedule-local time on every host zone."""
+    key = rollout_gate.firmware_window_key(
+        {
+            "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
+            "schedule_start_hour": 3,
+            "schedule_end_hour": 4,
+            "schedule_timezone": "America/Chicago",
+        },
+        datetime(2026, 6, 2, 3, 15),
+    )
+
+    assert key == ("firmware", "2026-06-02")
+
 # Current-schema managed confirmation boundaries. Freeze both clocks used by
 # the real Hold path: scheduler health freshness and database release age.
 _HOLD_NOW = datetime(2026, 6, 2, 3, 15, tzinfo=timezone.utc)

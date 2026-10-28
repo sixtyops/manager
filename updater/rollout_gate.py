@@ -57,6 +57,44 @@ def current_scheduled_admission_decision() -> tuple[bool, Optional[str]]:
     except Exception:
         return False, SCHEDULED_ROLLOUT_SAFETY_REASON
     return scheduled_admission_decision({"scheduled_rollout_safety_ready": readiness})
+from zoneinfo import ZoneInfo
+
+from .core.gates import MaintenanceSchedule, phase_run_decision, window_instance_key
+
+
+def firmware_window_key(settings: dict, now: datetime | None = None):
+    """Return the shared key for the configured firmware maintenance window."""
+    try:
+        days = frozenset(
+            {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}[day.strip().lower()[:3]]
+            for day in str(settings.get("schedule_days", "")).split(",") if day.strip()
+        )
+        start = int(settings["schedule_start_hour"])
+        end = int(settings["schedule_end_hour"])
+        timezone_name = settings.get("schedule_timezone") or settings.get("timezone")
+        if not timezone_name or timezone_name == "auto":
+            now = now or datetime.now().astimezone()
+            timezone_name = None
+        else:
+            schedule_tz = ZoneInfo(timezone_name)
+            now = now or datetime.now(schedule_tz)
+            if now.tzinfo is None or now.utcoffset() is None:
+                # A naive injected scheduler time is in the configured schedule
+                # zone. Letting astimezone() infer the host zone makes the
+                # window key depend on where the scheduler process runs.
+                now = now.replace(tzinfo=schedule_tz)
+        if now.tzinfo is None or now.utcoffset() is None:
+            now = now.astimezone()
+        schedule = MaintenanceSchedule(
+            schedule_id="firmware",
+            days=days,
+            start_hour=start,
+            end_hour=end,
+            tz=timezone_name,
+        )
+        return window_instance_key(schedule, now)
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -169,4 +207,4 @@ def address_change_decision(
 
 from .core.gates import phase_run_decision
 
-__all__ = ["phase_run_decision", "address_change_decision"]
+__all__ = ["firmware_window_key", "phase_run_decision", "window_instance_key", "address_change_decision"]

@@ -14,7 +14,7 @@ import subprocess
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from time import monotonic
 from typing import Dict, Optional, Set
@@ -51,6 +51,7 @@ from . import config_write_guard
 from . import database as db
 from .poller import init_poller, get_poller, set_poller
 from .scheduler import init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTES
+from . import rollout_gate
 from .firmware_fetcher import init_fetcher, get_fetcher, PLATFORM_SETTING_KEYS, pin_setting_key
 from .firmware_policy import (
     annotate_firmware_health,
@@ -3803,6 +3804,13 @@ async def resume_rollout(rollout_id: int, session: dict = Depends(require_role("
     if rollout["status"] != "paused":
         raise HTTPException(400, "Rollout is not paused")
 
+    current_window = rollout_gate.firmware_window_key(db.get_all_settings())
+    if current_window and db.get_firmware_window_stop(current_window):
+        raise HTTPException(409, "This maintenance window is stopped. Resume in a later window after recording the failure resolution.")
+    unresolved = db.get_unresolved_firmware_window_stops()
+    if unresolved:
+        raise HTTPException(409, "Record the failed window resolution before resuming this rollout.")
+
     db.resume_rollout(rollout_id)
     db.log_schedule_event("rollout_resumed", f"Rollout {rollout_id} resumed by user")
 
@@ -3812,6 +3820,54 @@ async def resume_rollout(rollout_id: int, session: dict = Depends(require_role("
         await scheduler._broadcast_status()
 
     return {"success": True}
+
+
+@app.get("/api/firmware-window-stops", tags=["system"])
+async def list_firmware_window_stops(session: dict = Depends(require_role("admin", "operator"))):
+    """List stopped firmware windows and their resolution state."""
+    return db.get_unresolved_firmware_window_stops()
+
+
+@app.post("/api/firmware-window-stops/{stop_id}/resolve", tags=["system"])
+async def resolve_firmware_window_stop_api(
+    stop_id: int,
+    resolution: str = Form(...),
+    session: dict = Depends(require_role("admin", "operator")),
+):
+    """Record the operator's failure resolution in a later maintenance window."""
+    resolution = resolution.strip()
+    if not resolution:
+        raise HTTPException(400, "A failure resolution is required")
+    stops = db.get_unresolved_firmware_window_stops()
+    stop = next((row for row in stops if row["id"] == stop_id), None)
+    if not stop:
+        raise HTTPException(404, "Unresolved firmware window stop not found")
+    try:
+        stopped_key = json.loads(stop["window_key"])
+    except (TypeError, json.JSONDecodeError):
+        stopped_key = None
+
+    if isinstance(stopped_key, list) and stopped_key and stopped_key[0] == "manual":
+        # Manual work outside a configured window uses one stop identity per
+        # local day. Resolve it only after that day has ended.
+        stopped_day = _firmware_window_key_start_date(stopped_key, "manual")
+        current_manual_day = _manual_firmware_window_key()
+        current_day = _firmware_window_key_start_date(current_manual_day, "manual")
+        if stopped_day is None or current_day is None or current_day <= stopped_day:
+            raise HTTPException(409, "This local-day window is stopped. Resolve it on a later day.")
+    else:
+        stopped_start = _firmware_window_key_start_date(stopped_key, "firmware")
+        current_window = rollout_gate.firmware_window_key(db.get_all_settings())
+        current_start = _firmware_window_key_start_date(current_window, "firmware")
+        if stopped_start is None:
+            raise HTTPException(409, "Cannot resolve this stop because its window key is invalid or ambiguous.")
+        if current_start is None:
+            raise HTTPException(409, "Record the failure resolution during a later maintenance window")
+        if current_start <= stopped_start:
+            raise HTTPException(409, "This maintenance window is stopped and cannot be resumed")
+    resolved = db.resolve_firmware_window_stop(stop_id, session["username"], resolution)
+    db.log_audit(session["username"], "firmware.window_stop.resolve", "firmware_window_stop", str(stop_id), resolution, None)
+    return resolved
 
 
 @app.post("/api/rollout/{rollout_id}/cancel", tags=["system"])
@@ -4064,6 +4120,66 @@ class UpdateJob:
     pre_update_reboot: bool = True
     enforce_window_cutoff: bool = True
     address_bench_exception: str = ""
+    window_key: Optional[tuple] = None
+
+
+def _firmware_stop_message(stop: dict) -> str:
+    return (
+        f"Firmware writes are stopped for window {stop['window_key']}: "
+        f"{stop['device_ip']} failed {stop['gate']} ({stop['reason']})"
+    )
+
+
+def _firmware_hold_message(hold: dict) -> str:
+    return (
+        f"Firmware qualification is held for window {hold['window_key']}: "
+        f"{hold['device_ip']} ({hold['reason']})"
+    )
+
+
+def _check_firmware_window_admission(window_key):
+    if window_key:
+        stop = db.get_firmware_window_stop(window_key)
+        if stop:
+            raise HTTPException(409, _firmware_stop_message(stop))
+        hold = db.get_firmware_window_hold(window_key)
+        if hold:
+            raise HTTPException(409, _firmware_hold_message(hold))
+    unresolved = db.get_unresolved_firmware_window_stops()
+    if unresolved:
+        stop = unresolved[0]
+        raise HTTPException(409, f"Firmware writes need a failure resolution before another window: {stop['device_ip']} ({stop['reason']})")
+
+
+def _manual_firmware_window_key(now: datetime | None = None):
+    """Give manual writes a shared durable identity for the local calendar day."""
+    now = now or datetime.now().astimezone()
+    return ("manual", now.date().isoformat())
+
+
+def _firmware_window_key_start_date(window_key, expected_schedule: str) -> date | None:
+    """Parse a stored firmware window identity, returning None if ambiguous."""
+    if (
+        not isinstance(window_key, (list, tuple))
+        or len(window_key) != 2
+        or window_key[0] != expected_schedule
+        or not isinstance(window_key[1], str)
+    ):
+        return None
+    try:
+        parsed = date.fromisoformat(window_key[1])
+    except ValueError:
+        return None
+    return parsed if parsed.isoformat() == window_key[1] else None
+
+
+def _stop_firmware_window(job: "UpdateJob", ip: str, gate: str, reason: str):
+    stop = db.stop_firmware_window(job.window_key, job.job_id, ip, gate, reason) if job.window_key else None
+    _request_job_cancel(job, _firmware_stop_message(stop or {
+        "window_key": json.dumps(job.window_key) if job.window_key else "unknown",
+        "device_ip": ip, "gate": gate, "reason": reason,
+    }))
+    return stop
 
 
 async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
@@ -4077,6 +4193,7 @@ async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
             ds.status = "failed"
             ds.error = err_text
             ds.progress_message = err_text
+            _stop_firmware_window(job, ds.ip, ds.current_stage or "update", err_text)
 
     job.completed_at = datetime.now()
     job.status = "completed"
@@ -4830,10 +4947,22 @@ async def _start_scheduled_update(
     schedule_timezone: str = None,
     switch_ips: list[str] | None = None,
     enforce_window_cutoff: bool = True,
+    window_key: tuple | None = None,
 ) -> str:
     """Start an update job from the scheduler (Python args, not Form data)."""
     if concurrency < 1:
         raise RuntimeError("parallel_updates must be >= 1")
+
+    window_key = window_key or rollout_gate.firmware_window_key({
+        "schedule_days": ",".join(schedule_days or []),
+        "schedule_start_hour": start_hour,
+        "schedule_end_hour": end_hour,
+        "schedule_timezone": schedule_timezone,
+    })
+    try:
+        _check_firmware_window_admission(window_key)
+    except HTTPException as exc:
+        raise RuntimeError(exc.detail) from exc
 
     safe_fw = validate_firmware_filename(firmware_file)
     firmware_path = FIRMWARE_DIR / safe_fw
@@ -4995,6 +5124,7 @@ async def _start_scheduled_update(
         schedule_timezone=schedule_timezone,
         pre_update_reboot=pre_update_reboot,
         enforce_window_cutoff=enforce_window_cutoff,
+        window_key=window_key,
     )
 
     for ip in valid_aps:
@@ -5041,6 +5171,9 @@ async def start_update(
     """Start a firmware update job."""
     if concurrency < 1 or concurrency > 32:
         raise HTTPException(400, "concurrency must be between 1 and 32")
+
+    window_key = rollout_gate.firmware_window_key(db.get_all_settings()) or _manual_firmware_window_key()
+    _check_firmware_window_admission(window_key)
 
     # Guard: prevent concurrent update jobs (check DB for active jobs, which is cleaned up properly)
     active_db_jobs = db.get_active_jobs()
@@ -5208,7 +5341,6 @@ async def start_update(
         firmware_names=firmware_names,
         device_firmware_map=device_firmware_map,
         device_type=device_type,
-        address_bench_exception=address_bench_exception,
         credentials=credentials,
         bank_mode=bank_mode,
         ap_cpe_map=ap_cpe_map,
@@ -5217,6 +5349,8 @@ async def start_update(
         started_at=datetime.now(),
         status="running",
         pre_update_reboot=pre_update_reboot,
+        window_key=window_key,
+        address_bench_exception=address_bench_exception,
     )
 
     # Create device statuses for all devices (APs + CPEs + Switches)
@@ -5262,6 +5396,8 @@ async def update_single_device_endpoint(
     _pro=Depends(require_feature(Feature.UPDATE_SINGLE_DEVICE)),
 ):
     """Start a firmware update for a single device (AP, CPE, or switch)."""
+    window_key = rollout_gate.firmware_window_key(db.get_all_settings()) or _manual_firmware_window_key()
+    _check_firmware_window_admission(window_key)
     # Validate and check firmware file exists
     safe_fw = validate_firmware_filename(firmware_file)
     firmware_path = FIRMWARE_DIR / safe_fw
@@ -5372,7 +5508,6 @@ async def update_single_device_endpoint(
         firmware_names=firmware_names,
         device_firmware_map=device_firmware_map,
         device_type="mixed",
-        address_bench_exception=address_bench_exception,
         credentials=credentials,
         bank_mode=bank_mode,
         ap_cpe_map=ap_cpe_map,
@@ -5381,6 +5516,8 @@ async def update_single_device_endpoint(
         started_at=datetime.now(),
         status="running",
         pre_update_reboot=pre_update_reboot,
+        window_key=window_key,
+        address_bench_exception=address_bench_exception,
     )
 
     role = device_roles[ip]
@@ -5443,6 +5580,60 @@ def _hold_scheduled_device(job: "UpdateJob", device_status: "DeviceStatus") -> b
         device_status.status = "cancelled"
         device_status.progress_message = reason
     return not admitted
+
+
+def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
+    """Recheck the stop, current readiness, and window before a device write."""
+    hold = db.get_firmware_window_hold(job.window_key) if job.window_key else None
+    if hold:
+        reason = _firmware_hold_message(hold)
+        job.devices[ip].status = "cancelled"
+        job.devices[ip].error = reason
+        job.devices[ip].progress_message = reason
+        _request_job_cancel(job, reason)
+        return False, reason
+
+    stop = db.get_firmware_window_stop(job.window_key) if job.window_key else None
+    if stop:
+        reason = _firmware_stop_message(stop)
+        job.devices[ip].status = "cancelled"
+        job.devices[ip].error = reason
+        job.devices[ip].progress_message = reason
+        _request_job_cancel(job, reason)
+        return False, reason
+
+    if _hold_scheduled_device(job, job.devices[ip]):
+        return False, job.devices[ip].progress_message or "Scheduled job stopped"
+
+    if not (job.is_scheduled and job.enforce_window_cutoff):
+        return True, ""
+
+    try:
+        if (
+            job.start_hour is None
+            or job.end_hour is None
+            or not job.schedule_timezone
+            or not job.schedule_days
+        ):
+            raise ValueError("Scheduled update missing maintenance window metadata")
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo(job.schedule_timezone))
+        current_key = rollout_gate.firmware_window_key({
+            "schedule_days": ",".join(job.schedule_days),
+            "schedule_start_hour": job.start_hour,
+            "schedule_end_hour": job.end_hour,
+            "schedule_timezone": job.schedule_timezone,
+        }, now)
+        minutes_until_end = _minutes_until_window_end(now, job.start_hour, job.end_hour)
+        if current_key == job.window_key and minutes_until_end > SCHEDULE_END_BUFFER_MINUTES:
+            return True, ""
+        reason = "Deferred: maintenance window ended or is ending; queued device will retry next window"
+    except Exception as exc:
+        reason = f"Deferred: maintenance window check failed; queued device will retry next window ({exc})"
+
+    job.devices[ip].status = "pending"
+    job.devices[ip].progress_message = reason
+    return False, reason
 
 
 async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
@@ -5555,6 +5746,13 @@ async def _address_change_guard(
         error=reason, failed_stage="address_change_hold", stages=[], duration_seconds=0,
         started_at=now_iso, completed_at=now_iso,
     )
+    if job.window_key:
+        hold = db.hold_firmware_window(job.window_key, job.job_id, ip, reason)
+        _request_job_cancel(job, _firmware_hold_message(hold or {
+            "window_key": json.dumps(list(job.window_key), separators=(",", ":")),
+            "device_ip": ip,
+            "reason": reason,
+        }))
     return False
 
 
@@ -5563,7 +5761,32 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     device_status = job.devices[ip]
     if _hold_scheduled_device(job, device_status):
         return
-    if not await _address_change_guard(job, ip, pass_number=pass_number):
+    if device_status.status == "deferred":
+        return
+
+    stop = db.get_firmware_window_stop(job.window_key) if job.window_key else None
+    hold = db.get_firmware_window_hold(job.window_key) if job.window_key else None
+    if hold:
+        reason = _firmware_hold_message(hold)
+        device_status.status = "cancelled"
+        device_status.error = reason
+        device_status.progress_message = reason
+        _request_job_cancel(job, reason)
+        return
+    if stop:
+        device_status.status = "cancelled"
+        device_status.error = _firmware_stop_message(stop)
+        device_status.progress_message = device_status.error
+        return
+
+    first_recovery_case = (
+        "pre_update_reboot"
+        if job.pre_update_reboot and pass_number == 1
+        else "firmware_flash"
+    )
+    if not await _address_change_guard(
+        job, ip, pass_number=pass_number, recovery_case=first_recovery_case,
+    ):
         return
 
     # Graceful shutdown: skip pending devices when shutting down
@@ -5620,6 +5843,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     device_status.stage_history = []
     device_status.current_stage = "connecting"
     device_status.current_stage_started = device_start_time.isoformat()
+    device_status._firmware_upload_started = False
 
     prefix = f"Pass {pass_number}: " if pass_number > 1 else ""
     device_status.status = "connecting"
@@ -5684,6 +5908,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     pre_update_cpe_count = len(job.ap_cpe_map.get(ip, [])) if device_status.role == "ap" else 0
 
     client = None
+    admission_denial = {"reason": ""}
     vendor_id = job.device_vendor_map.get(ip, "tachyon")
     try:
         driver_cls = get_driver(vendor_id)
@@ -5716,20 +5941,88 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
 
         # Pre-update config backup (Pro feature)
         if is_feature_enabled(Feature.CONFIG_BACKUP):
+            snapshot_error = None
             try:
                 progress_callback(ip, "Backing up configuration...")
                 login_ok = await client.connect()
-                if login_ok is True:
-                    config = await client.get_config()
-                    if config:
-                        config_json = _canonical_config_json(config)
-                        config_hash = hashlib.sha256(config_json.encode()).hexdigest()
-                        model = device_status.model or (await client.get_device_info()).model
-                        hardware_id = client.get_hardware_id(model)
-                        db.save_device_config(ip, config_json, config_hash, model, hardware_id)
-                        logger.info(f"Pre-update backup saved for {ip}")
+                if login_ok is not True:
+                    raise RuntimeError(login_ok if isinstance(login_ok, str) else "Login failed")
+                config = await client.get_config()
+                if not config:
+                    raise RuntimeError("Configuration snapshot was empty")
+                config_json = _canonical_config_json(config)
+                config_hash = hashlib.sha256(config_json.encode()).hexdigest()
+                model = device_status.model or (await client.get_device_info()).model
+                hardware_id = client.get_hardware_id(model)
+                db.save_device_config(ip, config_json, config_hash, model, hardware_id)
+                logger.info(f"Pre-update backup saved for {ip}")
             except Exception as e:
-                logger.warning(f"Pre-update backup failed for {ip} (non-fatal): {e}")
+                snapshot_error = str(e)
+            if snapshot_error:
+                device_status.status = "failed"
+                device_status.error = f"Configuration snapshot failed: {snapshot_error}"
+                device_status.progress_message = device_status.error
+                _stop_firmware_window(job, ip, "snapshot", device_status.error)
+                now_iso = datetime.now().isoformat()
+                try:
+                    db.save_device_update_history(
+                        job_id=job.job_id, ip=ip, role=device_status.role,
+                        pass_number=pass_number, status="failed", old_version=None,
+                        new_version=None, model=device_status.model,
+                        error=device_status.error, failed_stage="snapshot",
+                        stages=[], duration_seconds=(datetime.now() - device_start_time).total_seconds(),
+                        started_at=device_start_time.isoformat(), completed_at=now_iso,
+                    )
+                except Exception as history_error:
+                    logger.warning(f"Failed to save device history for {ip}: {history_error}")
+                await broadcast({
+                    "type": "device_update", "job_id": job.job_id, "ip": ip,
+                    "status": device_status.status, "message": device_status.progress_message,
+                    "role": device_status.role, "parent_ap": device_status.parent_ap,
+                })
+                return
+
+        if job.pre_update_reboot and pass_number == 1:
+            try:
+                progress_callback(ip, "Pre-update reboot...")
+                login_result = await client.connect()
+                if login_result is not True:
+                    reason = login_result if isinstance(login_result, str) else "Login failed"
+                    raise RuntimeError(reason)
+                info = await client.get_device_info()
+                if not await _address_change_guard(
+                    job, ip, info=info, pass_number=pass_number,
+                    recovery_case="pre_update_reboot",
+                ):
+                    return
+                reboot_timeout = client.get_reboot_timeout(device_status.role)
+                if not _firmware_write_gate(job, ip)[0]:
+                    return
+                if not await client.reboot(timeout=reboot_timeout):
+                    raise RuntimeError("Device did not come back online after pre-update reboot")
+            except Exception as e:
+                device_status.status = "failed"
+                device_status.error = f"Pre-update reboot failed: {e}"
+                device_status.progress_message = device_status.error
+                _stop_firmware_window(job, ip, "pre_reboot", device_status.error)
+                now_iso = datetime.now().isoformat()
+                try:
+                    db.save_device_update_history(
+                        job_id=job.job_id, ip=ip, role=device_status.role,
+                        pass_number=pass_number, status="failed", old_version=None,
+                        new_version=None, model=device_status.model,
+                        error=device_status.error, failed_stage="pre_reboot",
+                        stages=[], duration_seconds=(datetime.now() - device_start_time).total_seconds(),
+                        started_at=device_start_time.isoformat(), completed_at=now_iso,
+                    )
+                except Exception as history_error:
+                    logger.warning(f"Failed to save device history for {ip}: {history_error}")
+                await broadcast({
+                    "type": "device_update", "job_id": job.job_id, "ip": ip,
+                    "status": device_status.status, "message": device_status.progress_message,
+                    "role": device_status.role, "parent_ap": device_status.parent_ap,
+                })
+                return
 
         reboot_timeout = client.get_reboot_timeout(device_status.role)
         update_timeout = client.get_update_timeout(device_status.role)
@@ -5739,9 +6032,19 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             bw_limit = 0
         if _hold_scheduled_device(job, device_status):
             return
-        update_options = {}
-        if job.is_scheduled:
-            update_options["admission_check"] = lambda: _scheduled_action_decision(job)
+        def _driver_admission_check():
+            admitted, reason = _firmware_write_gate(job, ip)
+            if not admitted:
+                admission_denial["reason"] = reason
+            return admitted, reason
+
+        update_options = {
+            "admission_check": _driver_admission_check,
+        }
+        if vendor_id == "tachyon":
+            update_options["upload_started_callback"] = lambda: setattr(
+                device_status, "_firmware_upload_started", True
+            )
         try:
             from .vendors.base import VendorDeviceInfo
             try:
@@ -5753,12 +6056,16 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 info = VendorDeviceInfo(ip=ip)
             if not await _address_change_guard(job, ip, info=info, pass_number=pass_number):
                 return
+            if not _firmware_write_gate(job, ip)[0]:
+                return
             result = await asyncio.wait_for(
                 client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit, **update_options),
                 timeout=update_timeout,
             )
         except asyncio.TimeoutError:
             result = UpdateResult(ip=ip, success=False, error=f"Update timed out after {update_timeout // 60}m")
+        except Exception as e:
+            result = UpdateResult(ip=ip, success=False, error=f"Update failed: {e}")
 
     device_status.old_version = result.old_version
     device_status.new_version = result.new_version
@@ -5822,11 +6129,45 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             except Exception as e:
                 logger.warning(f"Failed to record firmware confirmation for {ip}: {e}")
         elif smoke_failed:
-            _request_job_cancel(job, f"Cancelled: {ip} failed smoke tests")
+            _stop_firmware_window(job, ip, "smoke", device_status.error or "Smoke test failed")
     else:
+        if admission_denial["reason"].startswith((
+            "Firmware writes are stopped for window",
+            "Firmware qualification is held for window",
+        )):
+            # Preserve the existing stop without recording a second device failure.
+            device_status.status = "cancelled"
+            device_status.error = admission_denial["reason"]
+            device_status.progress_message = admission_denial["reason"]
+            await broadcast({
+                "type": "device_update", "job_id": job.job_id, "ip": ip,
+                "status": device_status.status, "message": device_status.progress_message,
+                "error": device_status.error, "role": device_status.role,
+                "parent_ap": device_status.parent_ap,
+            })
+            return
+        is_admission_deferred = (
+            admission_denial["reason"].startswith("Deferred:")
+            or admission_denial["reason"] == rollout_gate.SCHEDULED_ROLLOUT_SAFETY_REASON
+        )
+        if is_admission_deferred and not getattr(device_status, "_firmware_upload_started", False):
+            # A gate hold during driver login is deferred because no firmware write began.
+            device_status.status = "pending"
+            device_status.error = None
+            device_status.progress_message = admission_denial["reason"]
+            deferred_ips = getattr(job, "_deferred_admission_ips", set())
+            deferred_ips.add(ip)
+            job._deferred_admission_ips = deferred_ips
+            await broadcast({
+                "type": "device_update", "job_id": job.job_id, "ip": ip,
+                "status": device_status.status, "message": device_status.progress_message,
+                "role": device_status.role, "parent_ap": device_status.parent_ap,
+            })
+            return
         device_status.status = "failed"
         device_status.error = result.error
         device_status.progress_message = f"{prefix}{result.error or 'Update failed'}"
+        _stop_firmware_window(job, ip, device_status.current_stage or "update", result.error or "Update failed")
 
         # If device didn't come back online, cancel the job
         if result.error and "did not come back online" in result.error:
@@ -5889,7 +6230,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
 
 async def run_update_job(job: UpdateJob, concurrency: int):
     """Run the firmware update job with phase-based ordering driven by bank_mode."""
-    semaphore = asyncio.Semaphore(max(1, concurrency))
+    # One device owns the write path through recovery.
+    semaphore = asyncio.Semaphore(1)
 
     # For scheduled jobs, enforce maintenance window/time-source checks only at start.
     # Once started, let the in-flight job complete even if it runs past window end.
@@ -5897,131 +6239,17 @@ async def run_update_job(job: UpdateJob, concurrency: int):
     if not is_allowed:
         _request_job_cancel(job, block_reason)
         logger.warning(f"Job {job.job_id} cancelled before start: {block_reason}")
+    stop = db.get_firmware_window_stop(job.window_key) if job.window_key else None
+    hold = db.get_firmware_window_hold(job.window_key) if job.window_key else None
+    unresolved = db.get_unresolved_firmware_window_stops() if not stop and not hold else []
+    if hold:
+        _request_job_cancel(job, _firmware_hold_message(hold))
+    elif stop or unresolved:
+        _request_job_cancel(job, _firmware_stop_message(stop or unresolved[0]))
 
     ap_ips = [ip for ip, role in job.device_roles.items() if role == "ap"]
     cpe_ips = [ip for ip, role in job.device_roles.items() if role == "cpe"]
     switch_ips = [ip for ip, role in job.device_roles.items() if role == "switch"]
-
-    # Pre-update reboot phase: reboot all devices before firmware update
-    if job.pre_update_reboot:
-        all_ips = cpe_ips + ap_ips + switch_ips
-        if all_ips:
-            logger.info(f"Job {job.job_id}: starting pre-update reboot phase ({len(all_ips)} devices)")
-
-            async def _reboot_device(ip):
-                async with semaphore:
-                    if job.cancelled:
-                        return
-                    ds = job.devices.get(ip)
-                    if not ds:
-                        return
-                    if _hold_scheduled_device(job, ds):
-                        return
-                    if not await _address_change_guard(job, ip, recovery_case="pre_update_reboot"):
-                        return
-                    ds.status = "pre-rebooting"
-                    ds.progress_message = "Pre-update reboot..."
-                    await broadcast({
-                        "type": "device_update",
-                        "job_id": job.job_id,
-                        "ip": ip,
-                        "status": ds.status,
-                        "message": ds.progress_message,
-                        "role": ds.role,
-                        "parent_ap": ds.parent_ap,
-                    })
-                    username, password = job.credentials.get(ip, ("", ""))
-                    v_id = job.device_vendor_map.get(ip, "tachyon")
-                    reboot_client = get_driver(v_id)(ip, username, password)
-                    try:
-                        login_result = await reboot_client.connect()
-                        if login_result is not True:
-                            ds.status = "failed"
-                            ds.error = login_result if isinstance(login_result, str) else "Login failed"
-                            ds.progress_message = f"Pre-reboot login failed: {ds.error}"
-                            return
-                        info = await reboot_client.get_device_info()
-                        if not await _address_change_guard(job, ip, info=info, recovery_case="pre_update_reboot"):
-                            return
-                        timeout = reboot_client.get_reboot_timeout(ds.role)
-                        if _hold_scheduled_device(job, ds):
-                            return
-                        if not await reboot_client.reboot(timeout=timeout):
-                            ds.status = "failed"
-                            ds.error = "Device did not come back online after pre-update reboot"
-                            ds.progress_message = ds.error
-                            return
-                        ds.status = "pending"
-                        ds.progress_message = "Rebooted, waiting for update..."
-                    except Exception as e:
-                        ds.status = "failed"
-                        ds.error = f"Pre-update reboot failed: {e}"
-                        ds.progress_message = ds.error
-                        return
-                    await broadcast({
-                        "type": "device_update",
-                        "job_id": job.job_id,
-                        "ip": ip,
-                        "status": ds.status,
-                        "message": ds.progress_message,
-                        "role": ds.role,
-                        "parent_ap": ds.parent_ap,
-                    })
-
-            await asyncio.gather(
-                *[_reboot_device(ip) for ip in all_ips],
-                return_exceptions=True,
-            )
-
-            # Check if too many devices failed pre-reboot (>50% threshold)
-            reboot_failed = sum(1 for ip in all_ips if job.devices.get(ip) and job.devices[ip].status == "failed")
-            if reboot_failed > len(all_ips) / 2:
-                _request_job_cancel(job, f"Cancelled: {reboot_failed}/{len(all_ips)} devices failed pre-update reboot")
-                cancel_message = job.cancel_reason
-                for ip in all_ips:
-                    ds = job.devices.get(ip)
-                    if ds and ds.status == "pending":
-                        ds.status = "cancelled"
-                        ds.progress_message = cancel_message
-                        await broadcast({
-                            "type": "device_update",
-                            "job_id": job.job_id,
-                            "ip": ip,
-                            "status": ds.status,
-                            "message": ds.progress_message,
-                            "role": ds.role,
-                            "parent_ap": ds.parent_ap,
-                        })
-                        now_iso = datetime.now().isoformat()
-                        try:
-                            db.save_device_update_history(
-                                job_id=job.job_id, ip=ip, role=ds.role,
-                                pass_number=1, status="cancelled",
-                                old_version=None, new_version=None, model=None,
-                                error=cancel_message,
-                                failed_stage=None, stages=[], duration_seconds=0,
-                                started_at=now_iso, completed_at=now_iso,
-                            )
-                        except Exception as e:
-                            logger.warning(f"Failed to save cancelled device history for {ip}: {e}")
-            elif reboot_failed > 0:
-                # Some devices failed but under threshold — exclude them from update, continue with rest
-                for ip in all_ips:
-                    ds = job.devices.get(ip)
-                    if ds and ds.status == "failed":
-                        now_iso = datetime.now().isoformat()
-                        try:
-                            db.save_device_update_history(
-                                job_id=job.job_id, ip=ip, role=ds.role,
-                                pass_number=1, status="failed",
-                                old_version=None, new_version=None, model=None,
-                                error=ds.error or "Pre-update reboot failed",
-                                failed_stage="pre_reboot", stages=[], duration_seconds=0,
-                                started_at=now_iso, completed_at=now_iso,
-                            )
-                        except Exception as e:
-                            logger.warning(f"Failed to save device history for {ip}: {e}")
-                logger.warning(f"Job {job.job_id}: {reboot_failed}/{len(all_ips)} devices failed pre-reboot, continuing with rest")
 
     # Build phase list based on bank_mode
     # Switches always run last, after all APs and CPEs complete
@@ -6046,7 +6274,10 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         cancel_message = job.cancel_reason or "Cancelled: another device failed to reboot"
         for ip in ips:
             ds = job.devices.get(ip)
-            if ds and ds.status == "pending":
+            if (
+                ds and ds.status == "pending"
+                and ip not in getattr(job, "_deferred_admission_ips", set())
+            ):
                 ds.status = "cancelled"
                 ds.progress_message = cancel_message
                 await broadcast({
@@ -6073,9 +6304,27 @@ async def run_update_job(job: UpdateJob, concurrency: int):
 
     async def _run_device(ip, pass_number):
         async with semaphore:
-            if job.cancelled or job.devices[ip].status == "deferred":
+            if job.cancelled:
                 return
-            await _update_single_device(job, ip, pass_number=pass_number)
+            try:
+                await _update_single_device(job, ip, pass_number=pass_number)
+            except Exception as exc:
+                ds = job.devices[ip]
+                err_text = f"Internal device task error: {exc}"
+                ds.status = "failed"
+                ds.error = err_text
+                ds.progress_message = err_text
+                gate = ds.current_stage or "update"
+                # Set cancellation before writing the stop record so queued
+                # device tasks cannot pass the semaphore if persistence fails.
+                _request_job_cancel(job, _firmware_stop_message({
+                    "window_key": json.dumps(job.window_key) if job.window_key else "unknown",
+                    "device_ip": ip,
+                    "gate": gate,
+                    "reason": err_text,
+                }))
+                _stop_firmware_window(job, ip, gate, err_text)
+                logger.exception("Unexpected device task failure for %s in job %s", ip, job.job_id)
 
     for device_ips, pass_number, phase_label in phases:
         if job.cancelled:
@@ -6107,7 +6356,6 @@ async def run_update_job(job: UpdateJob, concurrency: int):
 
         await asyncio.gather(
             *[_run_device(ip, pass_number) for ip in device_ips],
-            return_exceptions=True,
         )
 
         # Check cancellation after phase completes

@@ -499,6 +499,7 @@ class TachyonClient:
     async def upload_firmware(
         self, firmware_path: str, bandwidth_limit_kbps: int = 0,
         admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
+        upload_started_callback: Optional[Callable[[], None]] = None,
     ) -> bool:
         """Upload firmware file to device using PUT.
 
@@ -539,6 +540,8 @@ class TachyonClient:
             if admission_check and not admission_check()[0]:
                 return False
 
+            if upload_started_callback:
+                upload_started_callback()
             returncode, stdout = await _run_curl(cmd)
 
             if returncode != 0:
@@ -721,6 +724,7 @@ class TachyonClient:
         reboot_timeout: int = 300,
         bandwidth_limit_kbps: int = 0,
         admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
+        upload_started_callback: Optional[Callable[[], None]] = None,
     ) -> UpdateResult:
         """Perform complete firmware update cycle.
 
@@ -786,7 +790,11 @@ class TachyonClient:
 
             # Upload firmware
             progress("Uploading firmware...")
-            upload_options = {"admission_check": admission_check} if admission_check else {}
+            upload_options = {}
+            if admission_check:
+                upload_options["admission_check"] = admission_check
+            if upload_started_callback:
+                upload_options["upload_started_callback"] = upload_started_callback
             if not await self.upload_firmware(
                 firmware_path, bandwidth_limit_kbps=bandwidth_limit_kbps, **upload_options
             ):

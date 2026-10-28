@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Fixed
+- Firmware updates now stop new device writes after the first failed snapshot,
+  pre-reboot, flash, recovery, or smoke gate, or an unexpected device task
+  error. The stop uses the maintenance window instance key and survives manager
+  restart. Device work runs one complete recovery sequence at a time. An
+  operator records the failure resolution in a later window before the engine
+  admits more firmware writes. Manual stops outside configured windows use a
+  local-day identity and can be resolved on a later day. Resolution compares
+  parsed window start dates and rejects same, earlier, legacy, or malformed
+  window identities. Existing rollouts
+  with a date-only last-wave marker wait for a window whose start date is
+  after the marker date. This also blocks ambiguous overnight markers.
+  Scheduled reboots and flashes recheck current safety readiness and the window
+  after device preparation. The write gate also rechecks the stop record,
+  readiness, and cutoff before upload and install trigger. New markers use the
+  maintenance window instance key. Readiness and cutoff holds before upload
+  leave the device pending without recording a window failure.
 - Extract the bench wrapper's Git archive from a temporary file. This avoids
   SIGPIPE when macOS `tar` closes the input pipe before `git archive` exits.
 
@@ -30,7 +46,7 @@ All notable changes to this project are documented in this file.
   [#518](https://github.com/sixtyops/manager/issues/518). Full API-token
   registration remains open in [#578](https://github.com/sixtyops/manager/issues/578).
   Tachyon device-token registration remains open in
-  [#579](https://github.com/sixtyops/manager/issues/579). This inventory changes
+  [#579](https://github.com/sixtyops/manager/pull/579). This inventory changes
   no runtime behavior.
 
 ### Removed
