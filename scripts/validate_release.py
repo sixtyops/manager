@@ -14,6 +14,7 @@ Usage:
 import argparse
 import io
 import json
+import os
 import sys
 import time
 from datetime import datetime, timedelta
@@ -1356,9 +1357,19 @@ def main() -> None:
             "  %(prog)s --host http://localhost:8000 --skip radius,backup --dry-run\n"
         ),
     )
-    parser.add_argument("--host", required=True, help="Base URL (e.g. http://localhost:8000)")
-    parser.add_argument("--username", default="admin", help="Login username (default: admin)")
-    parser.add_argument("--password", default="admin", help="Login password (default: admin)")
+    parser.add_argument(
+        "--host", default=os.environ.get("RELEASE_VALIDATION_HOST"),
+        required="RELEASE_VALIDATION_HOST" not in os.environ,
+        help="Base URL (or RELEASE_VALIDATION_HOST)",
+    )
+    parser.add_argument(
+        "--username", default=os.environ.get("RELEASE_VALIDATION_USERNAME", "admin"),
+        help="Login username (or RELEASE_VALIDATION_USERNAME; default: admin)",
+    )
+    parser.add_argument(
+        "--password", default=os.environ.get("RELEASE_VALIDATION_PASSWORD", "admin"),
+        help="Login password (or RELEASE_VALIDATION_PASSWORD; default: admin)",
+    )
     parser.add_argument("--skip", default="", help="Comma-separated categories to skip")
     parser.add_argument("--device-ip", default=None, help="AP IP for device-specific tests")
     parser.add_argument("--switch-ip", default=None, help="Switch IP for switch-specific tests")

@@ -7,6 +7,29 @@ release authority. Follow [Agent rules](../AGENTS.md#agent-rules).
 
 **Detail:** The steps below describe the approved release process.
 
+## Validate before signing
+
+Before signing a tag, validate the exact `main` commit that you plan to tag
+against the development instance running that commit. Check out the candidate
+commit in a separate worktree and run the validator with the development host
+settings in the environment:
+
+```bash
+git worktree add --detach /tmp/sixtyops-release-check <commit-sha>
+cd /tmp/sixtyops-release-check
+python scripts/validate_release.py --host "$RELEASE_VALIDATION_HOST" \
+  --username "$RELEASE_VALIDATION_USERNAME" \
+  --password "$RELEASE_VALIDATION_PASSWORD"
+```
+
+Set `RELEASE_VALIDATION_HOST`, `RELEASE_VALIDATION_USERNAME`, and
+`RELEASE_VALIDATION_PASSWORD` in the environment before running the command.
+The validator reads these values without printing the password. Do not put
+credentials on the command line. Confirm the development instance runs
+`<commit-sha>` before starting validation. A failed validation stops the
+release. Fix forward on `main`, then validate the new commit before signing
+its tag.
+
 **Bottom line:** every release is a **GPG-signed tag on `main`**: merge the
 version-bump PR first, then sign the tag at `origin/main` and push the tag by
 name. Dev tags start validation and publish only after it passes; stable tags
@@ -43,7 +66,9 @@ trust model: [self-update-signing.md](self-update-signing.md).
    `pyproject.toml`, and the pinned image tag in `website/index.html`. Tagging
    before the bump is on `main` creates a tag whose code claims the wrong
    version — clients refuse it.
-2. **Sign the tag at `origin/main` and verify before pushing:**
+2. **Run the pre-tag validation above for the exact commit at `origin/main`.**
+   Sign only after it passes.
+3. **Sign the tag at `origin/main` and verify before pushing:**
    ```bash
    git fetch origin
    git -c gpg.format=openpgp -c user.signingkey=E2C19E86B24A87283068AEFAF2D6F70883960DCE \

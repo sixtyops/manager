@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Fixed
+- Require release validation against the candidate commit before signing a tag.
+  The validator can read its development host and credentials from environment
+  variables.
 - Extract the bench wrapper's Git archive from a temporary file. This avoids
   SIGPIPE when macOS `tar` closes the input pipe before `git archive` exits.
 

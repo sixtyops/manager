@@ -55,3 +55,29 @@ def test_analytics_checks_match_current_get_routes() -> None:
     assert len(requested_paths) == 4
     assert result.passed == len(requested_paths)
     assert result.failed == 0
+
+
+def test_cli_reads_release_settings_from_environment_without_printing_password(monkeypatch, capsys) -> None:
+    import scripts.validate_release as validate_release
+
+    captured: dict[str, object] = {}
+
+    class FakeValidator:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        def run(self) -> bool:
+            return True
+
+    monkeypatch.setenv("RELEASE_VALIDATION_HOST", "https://dev.example.test")
+    monkeypatch.setenv("RELEASE_VALIDATION_USERNAME", "release-check")
+    monkeypatch.setenv("RELEASE_VALIDATION_PASSWORD", "test-password-value")
+    monkeypatch.setattr(validate_release, "ReleaseValidator", FakeValidator)
+    monkeypatch.setattr(sys, "argv", ["validate_release.py"])
+
+    validate_release.main()
+
+    assert captured["host"] == "https://dev.example.test"
+    assert captured["username"] == "release-check"
+    assert captured["password"] == "test-password-value"
+    assert "test-password-value" not in capsys.readouterr().out
