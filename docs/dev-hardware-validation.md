@@ -13,10 +13,8 @@ This repo now has two live-dev validation lanes:
 - `dev_blocking`: merge-gating validation against the shared dev host and dedicated lab devices
 - `dev_sso`: separate non-blocking SSO/OIDC validation lane
 
-The authorized dev host is
-[`https://sixtyops-dev.infra.treehouse.mn/`](https://sixtyops-dev.infra.treehouse.mn/).
-Set `SIXTYOPS_TEST_URL` to this URL for the authorized dev validation lane.
-Use this lane only with its authorized test devices.
+Set `SIXTYOPS_TEST_URL` to the authorized dev host URL for the authorized dev
+validation lane. Use this lane only with its authorized test devices.
 
 ## Dev host access
 
@@ -39,7 +37,23 @@ Docker, within these boundaries:
 - Leave releases and merges to the normal release and merge process.
 - Keep secrets in the private files, out of logs and Git.
 
+When the lab has fewer devices than test roles, one dedicated lab AP can fill
+several roles; its write tests then run one at a time.
+
 ## Manual Commands
+
+### Lead integration write lane
+
+Run integration write tests from the lead host against the authorized dev host
+through the lead's integration runner. The runner reads the private lab access
+file, exports the required `SIXTYOPS_TEST_*` variables for pytest only, and
+prints no variable value. The runner lives in the lead's private state folder.
+
+The lab has one access point (AP). Use it for the AP, firmware AP, config AP,
+and RADIUS AP roles. Run write tests on this lab one at a time. Before each
+write run, confirm that the lab AP and switch are enabled in the dev host
+inventory, keep autoupdate, schedule, and scheduled readiness settings off,
+and verify a full private backup.
 
 Blocking lane:
 
