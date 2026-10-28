@@ -22,6 +22,64 @@ def _load_validator_module():
         return importlib.import_module("scripts.validate_release")
 
 
+def test_cli_output_does_not_expose_configuration_values(capsys, monkeypatch) -> None:
+    validate_release = _load_validator_module()
+    sample_values = (
+        "manager-secret.example.test",
+        "operator-secret",
+        "password-secret",
+        "192.0.2.41",
+        "192.0.2.42",
+        "api-token-secret",
+    )
+
+    for name, value in zip(
+        (
+            "RELEASE_VALIDATION_HOST",
+            "RELEASE_VALIDATION_USERNAME",
+            "RELEASE_VALIDATION_PASSWORD",
+            "RELEASE_VALIDATION_DEVICE_IP",
+            "RELEASE_VALIDATION_SWITCH_IP",
+        ),
+        sample_values,
+    ):
+        monkeypatch.setenv(name, value)
+
+    with patch("sys.argv", ["validate_release.py", "--dry-run", "--verbose"]):
+        with patch.object(sys, "exit", side_effect=SystemExit) as exit_mock:
+            try:
+                validate_release.main()
+            except SystemExit:
+                pass
+            exit_mock.assert_called_once_with(0)
+
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    output = captured.out + captured.err
+    for value in sample_values:
+        assert value not in output
+
+    validator = validate_release.ReleaseValidator(
+        host=f"https://{sample_values[0]}",
+        username=sample_values[1],
+        password=sample_values[2],
+        device_ip=sample_values[3],
+        switch_ip=sample_values[4],
+    )
+
+    def fail_with_config_in_error(*args: object, **kwargs: object) -> None:
+        raise RuntimeError(" ".join(sample_values))
+
+    validator.session.request = fail_with_config_in_error
+    result = validate_release.TestResult()
+    validator.test_health_auth(result)
+
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    output = captured.out + captured.err
+    assert result.failed > 0
+    for value in sample_values:
+        assert value not in output
+
+
 def test_analytics_checks_match_current_get_routes() -> None:
     registered_get_paths = {
         route.path
