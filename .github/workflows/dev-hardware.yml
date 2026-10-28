@@ -8,7 +8,7 @@ on:
     - cron: "17 6 * * *"
 
 concurrency:
-  group: dev-hardware
+  group: dev-hardware-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -28,9 +28,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate required live-dev inputs
-        id: validate_inputs
+      - name: Lock shared dev host and run validation
         run: |
+          lock_dir="${RUNNER_WORKSPACE:?RUNNER_WORKSPACE is not set}/.locks"
+          mkdir -p "$lock_dir"
+          exec 9>"$lock_dir/sixtyops-dev-hardware.lock"
+          if ! flock --exclusive --wait 900 9; then
+            echo "::error::Timed out after 15 minutes waiting for the shared dev host lock."
+            exit 1
+          fi
+
+          echo "Acquired the shared dev host lock."
           missing=()
           for name in \
             SIXTYOPS_TEST_URL \
@@ -48,35 +56,20 @@ jobs:
           done
 
           if [ "${#missing[@]}" -eq 0 ]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-            exit 0
+            python3 -m venv .venv
+            . .venv/bin/activate
+            pip install -r requirements.txt
+            pytest -m "integration and dev_blocking" -v --timeout=900
+          else
+            missing_csv="$(IFS=,; echo "${missing[*]}")"
+            echo "::warning::Skipping live-dev validation because required inputs are not configured: $missing_csv"
+            {
+              echo "### Dev Hardware Validation skipped"
+              echo
+              echo "Required live-dev inputs are not configured for this repository or environment."
+              echo
+              echo "Missing inputs: \`$missing_csv\`"
+              echo
+              echo "Live-dev validation is soft-skipped until the live-dev secrets or variables are wired (tracked in issue #117). Re-run after secrets are populated."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
-
-          missing_csv="$(IFS=,; echo "${missing[*]}")"
-          echo "ready=false" >> "$GITHUB_OUTPUT"
-          echo "missing=$missing_csv" >> "$GITHUB_OUTPUT"
-
-          echo "::warning::Skipping live-dev validation because required inputs are not configured: $missing_csv"
-          {
-            echo "### Dev Hardware Validation skipped"
-            echo
-            echo "Required live-dev inputs are not configured for this repository or environment."
-            echo
-            echo "Missing inputs: \`$missing_csv\`"
-            echo
-            echo "Live-dev validation is soft-skipped until the live-dev secrets or variables are wired (tracked in issue #117). Re-run after secrets are populated."
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 0
-
-      - name: Install test dependencies
-        if: steps.validate_inputs.outputs.ready == 'true'
-        run: |
-          python3 -m venv .venv
-          . .venv/bin/activate
-          pip install -r requirements.txt
-
-      - name: Run merge-gating live-dev validation
-        if: steps.validate_inputs.outputs.ready == 'true'
-        run: |
-          . .venv/bin/activate
-          pytest -m "integration and dev_blocking" -v --timeout=900

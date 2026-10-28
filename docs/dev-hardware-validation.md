@@ -130,11 +130,17 @@ does not walk the whole enabled fleet.
 ## Workflow Contracts
 
 - `.github/workflows/dev-hardware.yml` runs the merge-gating `dev_blocking` lane on `pull_request`, `workflow_dispatch`, and `schedule`.
-- The workflow uses one concurrency group for all refs. A run waits for the shared dev host and does not cancel an active run.
+- The workflow uses a concurrency group per Git ref and keeps `cancel-in-progress` off. A pending run for one pull request cannot replace a pending run for another pull request.
 - `.github/workflows/dev-sso.yml` runs the separate `dev_sso` lane on `workflow_dispatch` and `schedule`.
 - The Actions workflows accept repository variables or secrets for the non-sensitive host and device inputs, and secrets for passwords.
 - On `pull_request`, `Dev Hardware Validation` soft-skips with a warning if the live-dev inputs are not configured yet.
 - On `workflow_dispatch` and `schedule`, missing live-dev inputs are still treated as hard failures.
+
+The self-hosted job takes an exclusive `flock` lock in the runner work
+directory before checking inputs or contacting devices. It waits up to 15
+minutes for the shared dev host. If the lock stays busy, the job fails with a
+timeout message. The lock stays held through dependency installation and the
+validation run, then the job releases it when the step exits.
 
 ## UI checks
 

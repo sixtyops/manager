@@ -5,6 +5,8 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Fixed
+- Serialize dev hardware validation with a shared-host file lock. Keep separate
+  pending runs for different Git refs.
 - Extract the bench wrapper's Git archive from a temporary file. This avoids
   SIGPIPE when macOS `tar` closes the input pipe before `git archive` exits.
 
