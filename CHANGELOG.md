@@ -21,6 +21,8 @@ All notable changes to this project are documented in this file.
   readiness, and cutoff before upload and install trigger. New markers use the
   maintenance window instance key. Readiness and cutoff holds before upload
   leave the device pending without recording a window failure.
+- Extract the bench wrapper's Git archive from a temporary file. This avoids
+  SIGPIPE when macOS `tar` closes the input pipe before `git archive` exits.
 
 ### Security
 - Register Tachyon session tokens from the login cookie jar before session use.

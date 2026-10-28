@@ -13,10 +13,8 @@ This repo now has two live-dev validation lanes:
 - `dev_blocking`: merge-gating validation against the shared dev host and dedicated lab devices
 - `dev_sso`: separate non-blocking SSO/OIDC validation lane
 
-The authorized dev host is
-[`https://sixtyops-dev.infra.treehouse.mn/`](https://sixtyops-dev.infra.treehouse.mn/).
-Set `SIXTYOPS_TEST_URL` to this URL for the authorized dev validation lane.
-Use this lane only with its authorized test devices.
+Set `SIXTYOPS_TEST_URL` to the authorized dev host URL for the authorized dev
+validation lane. Use this lane only with its authorized test devices.
 
 ## Dev host access
 
@@ -39,7 +37,23 @@ Docker, within these boundaries:
 - Leave releases and merges to the normal release and merge process.
 - Keep secrets in the private files, out of logs and Git.
 
+When the lab has fewer devices than test roles, one dedicated lab AP can fill
+several roles; its write tests then run one at a time.
+
 ## Manual Commands
+
+### Lead integration write lane
+
+Run integration write tests from the lead host against the authorized dev host
+through the lead's integration runner. The runner reads the private lab access
+file, exports the required `SIXTYOPS_TEST_*` variables for pytest only, and
+prints no variable value. The runner lives in the lead's private state folder.
+
+The lab has one access point (AP). Use it for the AP, firmware AP, config AP,
+and RADIUS AP roles. Run write tests on this lab one at a time. Before each
+write run, confirm that the lab AP and switch are enabled in the dev host
+inventory, keep autoupdate, schedule, and scheduled readiness settings off,
+and verify a full private backup.
 
 Blocking lane:
 
@@ -52,7 +66,7 @@ SIXTYOPS_TEST_SWITCH_IP=<dedicated-switch> \
 SIXTYOPS_TEST_FIRMWARE_AP_IP=<firmware-test-ap> \
 SIXTYOPS_TEST_CONFIG_AP_IP=<config-test-ap> \
 SIXTYOPS_TEST_RADIUS_AP_IP=<radius-test-ap> \
-pytest -m "integration and dev_blocking" -v --timeout=900
+pytest -m "integration and dev_blocking" -v --tb=no -rN --timeout=900
 ```
 
 SSO lane:
@@ -65,8 +79,13 @@ SIXTYOPS_TEST_OIDC_PROVIDER_URL=<provider-url> \
 SIXTYOPS_TEST_OIDC_CLIENT_ID=<client-id> \
 SIXTYOPS_TEST_OIDC_CLIENT_SECRET=<client-secret> \
 SIXTYOPS_TEST_OIDC_REDIRECT_URI=<redirect-uri> \
-pytest -m "integration and dev_sso" -v
+pytest -m "integration and dev_sso" -v --tb=no -rN
 ```
+
+These options print each test name with its `PASSED`, `FAILED`, or `SKIPPED`
+status without printing tracebacks or a short summary that could include
+failure reasons or response bodies. Investigate a failure by rerunning only
+that test in a private terminal.
 
 ## Integration reference
 
