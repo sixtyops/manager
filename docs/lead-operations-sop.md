@@ -237,9 +237,12 @@ one worker updates every open PR from `main` in one pass. Then benches run one
 PR at a time, followed by designated approvals. Follow [Squash source checks](#squash-source-checks)
 before applying the ready label.
 
-Before a merge batch, have a worker apply each queued PR in order with a
-squash merge to a copy of `main`, then run the tests. Hold a PR that conflicts
-for the next batch.
+Before a merge batch, have a worker create a scratch worktree detached at the
+current `origin/main`. In batch order, squash-apply each queued PR at its
+approved head, then run the full offline test suite. The worker pushes nothing
+and removes the worktree when the trial ends. Move a PR to the next batch if
+it conflicts or introduces a test failure. The trial adds no approval; every
+merge gate still applies.
 
 Fetch `origin/main`, then read the current GitHub pull request state and head
 before you report a pull request as open or hand it to another owner. Do not
@@ -290,12 +293,13 @@ valid head when the local reference is stale.
 the ready label. The ops bot uses GitHub's default squash message and matches
 the approved head.
 
-**Detail:** Workers commit as the bot account. Paseo sets `GIT_AUTHOR_*` and
-`GIT_COMMITTER_*` through `--env`. The default squash message keeps that bot
-identity and adds no co-author trailer for a personal account. Before the lead
-applies `agent:ready-for-signoff`, inspect every source commit message, PR
-title, and PR body for co-author trailers and personal names. Ask a worker to
-remove any such text before the PR enters the sign-off batch. The ops bot uses
+**Detail:** Workers commit as the bot account. In the 2026-10-27 batch,
+GitHub's default squash message added a co-author trailer for commits authored
+under a personal account; the lead still reads back each merge commit message.
+Before the lead applies `agent:ready-for-signoff`, inspect every source
+commit message, PR title, and PR body for co-author trailers and personal
+names. Ask a worker to remove any such text before the PR enters the sign-off
+batch. The ops bot uses
 GitHub's default squash message and `--match-head-commit`.
 
 Reply `addressed in <sha>` after a fix. Leave threads to their reviewers.

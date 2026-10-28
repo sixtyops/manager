@@ -13,10 +13,8 @@ This repo now has two live-dev validation lanes:
 - `dev_blocking`: merge-gating validation against the shared dev host and dedicated lab devices
 - `dev_sso`: separate non-blocking SSO/OIDC validation lane
 
-The authorized dev host is
-[`https://sixtyops-dev.infra.treehouse.mn/`](https://sixtyops-dev.infra.treehouse.mn/).
-Set `SIXTYOPS_TEST_URL` to this URL for the authorized dev validation lane.
-Use this lane only with its authorized test devices.
+Set `SIXTYOPS_TEST_URL` to the authorized dev host URL for the authorized dev
+validation lane. Use this lane only with its authorized test devices.
 
 ## Dev host access
 
@@ -38,6 +36,9 @@ Docker, within these boundaries:
   production and firewall rules stay as they are.
 - Leave releases and merges to the normal release and merge process.
 - Keep secrets in the private files, out of logs and Git.
+
+When the lab has fewer devices than test roles, one dedicated lab AP can fill
+several roles; its write tests then run one at a time.
 
 ## Manual Commands
 
