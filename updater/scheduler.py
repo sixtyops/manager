@@ -622,7 +622,17 @@ class AutoUpdateScheduler:
         # attached CPEs) rolls together 10% -> 50% -> 100% with no held firmware
         # slipping out — and the rollout never advances/completes with held work
         # still outstanding.
-        window_key = now.strftime("%Y-%m-%d")
+        window_key = rollout_gate.firmware_window_key({
+            "schedule_days": ",".join(schedule_days),
+            "schedule_start_hour": start_hour,
+            "schedule_end_hour": end_hour,
+            "schedule_timezone": tz_str,
+        }, now)
+        if window_key is None:
+            self._state = "waiting"
+            self._block_reason = "Maintenance window identity is invalid"
+            await self._broadcast_status()
+            return
         held_families, family_holds = self._held_families(settings, rollout)
         first_wave_held = False
         if rollout.get("phase") == "pct10" and held_families:
@@ -744,6 +754,7 @@ class AutoUpdateScheduler:
                 end_hour=end_hour,
                 schedule_days=schedule_days,
                 schedule_timezone=tz_str,
+                window_key=window_key,
             )
             # Assign devices to the wave ONLY after the job is created. If
             # start_update_func raised (e.g. a missing-family firmware refusal),

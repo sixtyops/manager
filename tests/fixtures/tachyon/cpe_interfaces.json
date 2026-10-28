@@ -1,0 +1,132 @@
+{
+  "device": "cpe",
+  "endpoint": "/cgi.lua/status?type=interfaces",
+  "reads": [
+    {
+      "captured_at_utc": "2026-10-27T20:56:56.987830Z",
+      "http_status": 200,
+      "read": 1,
+      "response": {
+        "interfaces": {
+          "br-mgmt12": {
+            "mac_address": "<MAC_CPE_001>"
+          },
+          "br-wan": {
+            "mac_address": "<MAC_CPE_001>"
+          },
+          "eth0": {
+            "mac_address": "<MAC_CPE_001>"
+          },
+          "eth0.12": {
+            "mac_address": "<MAC_CPE_001>"
+          },
+          "eth0p0": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "eth0p1": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "eth0p2": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "eth0p3": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "eth0p4": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "eth0p5": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "eth0p6": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "eth0p7": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "gre0": {
+            "mac_address": "<MAC_CPE_003>"
+          },
+          "gretap0": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "lo": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "prs0": {
+            "mac_address": "<MAC_CPE_004>"
+          },
+          "prs0.12": {
+            "mac_address": "<MAC_CPE_004>"
+          },
+          "wlan0": {
+            "mac_address": "<MAC_CPE_004>"
+          }
+        }
+      }
+    },
+    {
+      "captured_at_utc": "2026-10-27T20:59:57.192033Z",
+      "http_status": 200,
+      "read": 2,
+      "response": {
+        "interfaces": {
+          "br-mgmt12": {
+            "mac_address": "<MAC_CPE_001>"
+          },
+          "br-wan": {
+            "mac_address": "<MAC_CPE_001>"
+          },
+          "eth0": {
+            "mac_address": "<MAC_CPE_001>"
+          },
+          "eth0.12": {
+            "mac_address": "<MAC_CPE_001>"
+          },
+          "eth0p0": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "eth0p1": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "eth0p2": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "eth0p3": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "eth0p4": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "eth0p5": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "eth0p6": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "eth0p7": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "gre0": {
+            "mac_address": "<MAC_CPE_003>"
+          },
+          "gretap0": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "lo": {
+            "mac_address": "<MAC_CPE_002>"
+          },
+          "prs0": {
+            "mac_address": "<MAC_CPE_004>"
+          },
+          "prs0.12": {
+            "mac_address": "<MAC_CPE_004>"
+          },
+          "wlan0": {
+            "mac_address": "<MAC_CPE_004>"
+          }
+        }
+      }
+    }
+  ]
+}

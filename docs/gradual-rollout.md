@@ -195,6 +195,20 @@ These target rules do not describe the current scheduler or manual update
 routes. In particular, shipped manual per-device updates bypass the Hold and
 shipped failure handling does not enforce every target stop rule.
 
+## Failed-window stop
+
+**Key points:** Store the first failed device gate under the maintenance window
+instance key. Keep that window closed to new jobs and device actions. Run one
+device through recovery before starting another device.
+
+**Detail:** A failed snapshot, pre-update reboot, firmware action, recovery, or
+smoke test writes a row to `firmware_window_stops`. Keep the stop after a
+manager restart. Apply it to each new job, manual update, scheduled update,
+and rollout resume. In a later maintenance window, the operator records a
+failure resolution through `POST /api/firmware-window-stops/{stop_id}/resolve`.
+Run the normal rollout gates before starting a scheduled wave. Keep the failed
+window stopped after the resolution record is saved.
+
 ## Address-change qualification hold
 
 **Key points:** Qualify both exact builds and artifact SHA-256 values for the

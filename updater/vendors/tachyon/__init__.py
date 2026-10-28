@@ -42,7 +42,7 @@ class TachyonDriver(VendorDriver):
         return await self._client.session_valid()
 
     async def get_device_info(self) -> VendorDeviceInfo:
-        info = await self._client.get_device_info()
+        info = await self._client.get_device_info(include_management=True)
         return VendorDeviceInfo(
             ip=info.ip,
             vendor="tachyon",
@@ -53,6 +53,12 @@ class TachyonDriver(VendorDriver):
             bank1_version=info.bank1_version,
             bank2_version=info.bank2_version,
             active_bank=info.active_bank,
+            extra={
+                "macs": info.macs,
+                "management_interface": info.management_interface,
+                "management_vlan_id": info.management_vlan_id,
+                "management_mac": info.management_mac,
+            },
         )
 
     async def upload_firmware(self, firmware_path: str, bandwidth_limit_kbps: int = 0) -> bool:
@@ -75,8 +81,13 @@ class TachyonDriver(VendorDriver):
         reboot_timeout: int = 300,
         bandwidth_limit_kbps: int = 0,
         admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
+        upload_started_callback: Optional[Callable[[], None]] = None,
     ) -> VendorUpdateResult:
-        options = {"admission_check": admission_check} if admission_check else {}
+        options = {}
+        if admission_check:
+            options["admission_check"] = admission_check
+        if upload_started_callback:
+            options["upload_started_callback"] = upload_started_callback
         result = await self._client.update_firmware(
             firmware_path, progress_callback, pass_number, reboot_timeout, bandwidth_limit_kbps,
             **options,
