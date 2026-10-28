@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Fixed
+- Extract the bench wrapper's Git archive from a temporary file. This avoids
+  SIGPIPE when macOS `tar` closes the input pipe before `git archive` exits.
+
 ### Security
 - Register Tachyon session tokens from the login cookie jar before session use.
   Keep one registration per live client until replacement or client collection.
