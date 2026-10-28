@@ -132,13 +132,13 @@ jobs:
         env:
           SIXTYOPS_TEST_URL: ${{ secrets.SIXTYOPS_TEST_URL }}
           SIXTYOPS_TEST_USER: ${{ secrets.SIXTYOPS_TEST_USER }}
-          SIXTYOPS_TEST_PASS: ${{ secrets.SIXTYOPS_TEST_PASS }}
+          RELEASE_VALIDATION_PASSWORD: ${{ secrets.SIXTYOPS_TEST_PASS }}
           SIXTYOPS_TEST_AP_IP: ${{ secrets.SIXTYOPS_TEST_AP_IP }}
           SIXTYOPS_TEST_SWITCH_IP: ${{ secrets.SIXTYOPS_TEST_SWITCH_IP }}
           SIXTYOPS_RELEASE_VALIDATION_SKIP: ${{ secrets.SIXTYOPS_RELEASE_VALIDATION_SKIP }}
         run: |
           set -euo pipefail
-          args=(--host "$SIXTYOPS_TEST_URL" --username "$SIXTYOPS_TEST_USER" --password "$SIXTYOPS_TEST_PASS")
+          args=(--host "$SIXTYOPS_TEST_URL" --username "$SIXTYOPS_TEST_USER")
           if [ -n "$SIXTYOPS_TEST_AP_IP" ]; then
             args+=(--device-ip "$SIXTYOPS_TEST_AP_IP")
           fi

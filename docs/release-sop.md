@@ -18,13 +18,18 @@ settings in the environment:
 git worktree add --detach /tmp/sixtyops-release-check <commit-sha>
 cd /tmp/sixtyops-release-check
 python scripts/validate_release.py --host "$RELEASE_VALIDATION_HOST" \
-  --username "$RELEASE_VALIDATION_USERNAME" \
-  --password "$RELEASE_VALIDATION_PASSWORD"
+  --username "$RELEASE_VALIDATION_USERNAME"
 ```
 
-Set `RELEASE_VALIDATION_HOST`, `RELEASE_VALIDATION_USERNAME`, and
-`RELEASE_VALIDATION_PASSWORD` in the environment before running the command.
-The validator reads these values without printing the password. Do not put
+Set `RELEASE_VALIDATION_HOST` and `RELEASE_VALIDATION_USERNAME` in the
+environment. Store the password in a private file with mode `600`, then set
+`RELEASE_VALIDATION_PASSWORD_FILE` to its path without printing its contents:
+
+```bash
+export RELEASE_VALIDATION_PASSWORD_FILE=/secure/path/manager-password
+```
+
+The validator reads the file without printing the password. Do not put
 credentials on the command line. Confirm the development instance runs
 `<commit-sha>` before starting validation. A failed validation stops the
 release. Fix forward on `main`, then validate the new commit before signing

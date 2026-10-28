@@ -1,6 +1,7 @@
 """Offline tests for release validator API route checks."""
 
 import importlib
+from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
@@ -8,6 +9,17 @@ from unittest.mock import patch
 from fastapi.routing import APIRoute
 
 from updater.app import app
+
+
+def _load_validator_module():
+    requests_stub = ModuleType("requests")
+    requests_stub.Response = type("Response", (), {})
+    requests_stub.Session = type("Session", (), {})
+    urllib3_stub = ModuleType("urllib3")
+    urllib3_stub.disable_warnings = lambda warning: None
+    urllib3_stub.exceptions = SimpleNamespace(InsecureRequestWarning=RuntimeWarning)
+    with patch.dict(sys.modules, {"requests": requests_stub, "urllib3": urllib3_stub}):
+        return importlib.import_module("scripts.validate_release")
 
 
 def test_analytics_checks_match_current_get_routes() -> None:
@@ -22,18 +34,7 @@ def test_analytics_checks_match_current_get_routes() -> None:
         status_code: int
         url: str
 
-    class FakeSession:
-        pass
-
-    requests_stub = ModuleType("requests")
-    requests_stub.Response = FakeResponse
-    requests_stub.Session = FakeSession
-    urllib3_stub = ModuleType("urllib3")
-    urllib3_stub.disable_warnings = lambda warning: None
-    urllib3_stub.exceptions = SimpleNamespace(InsecureRequestWarning=RuntimeWarning)
-
-    with patch.dict(sys.modules, {"requests": requests_stub, "urllib3": urllib3_stub}):
-        validate_release = importlib.import_module("scripts.validate_release")
+    validate_release = _load_validator_module()
     validator = validate_release.ReleaseValidator("http://manager.test")
 
     def fake_request(method: str, url: str, **kwargs: object) -> FakeResponse:
@@ -57,12 +58,41 @@ def test_analytics_checks_match_current_get_routes() -> None:
     assert result.failed == 0
 
 
+def test_validator_refuses_password_argument(monkeypatch) -> None:
+    validate_release = _load_validator_module()
+    monkeypatch.setattr(
+        sys, "argv",
+        ["validate_release.py", "--host", "https://manager.test", "--password", "synthetic"],
+    )
+    monkeypatch.setenv("RELEASE_VALIDATION_PASSWORD", "synthetic")
+
+    try:
+        validate_release.main()
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("password command-line argument was accepted")
+
+
+def test_documented_password_file_usage_keeps_password_out_of_argv() -> None:
+    sop = Path("docs/release-sop.md").read_text(encoding="utf-8")
+    validator_command = next(
+        line for line in sop.splitlines()
+        if line.startswith("python scripts/validate_release.py")
+    )
+
+    assert "--password" not in validator_command
+    assert "RELEASE_VALIDATION_PASSWORD_FILE" in sop
+
+
 def test_cli_reads_release_settings_from_environment_without_printing_password(monkeypatch, capsys) -> None:
-    import scripts.validate_release as validate_release
+    validate_release = _load_validator_module()
 
     captured: dict[str, object] = {}
 
     class FakeValidator:
+        CATEGORIES = validate_release.ReleaseValidator.CATEGORIES
+
         def __init__(self, **kwargs: object) -> None:
             captured.update(kwargs)
 
@@ -75,7 +105,10 @@ def test_cli_reads_release_settings_from_environment_without_printing_password(m
     monkeypatch.setattr(validate_release, "ReleaseValidator", FakeValidator)
     monkeypatch.setattr(sys, "argv", ["validate_release.py"])
 
-    validate_release.main()
+    try:
+        validate_release.main()
+    except SystemExit as exc:
+        assert exc.code == 0
 
     assert captured["host"] == "https://dev.example.test"
     assert captured["username"] == "release-check"

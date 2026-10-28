@@ -1366,10 +1366,6 @@ def main() -> None:
         "--username", default=os.environ.get("RELEASE_VALIDATION_USERNAME", "admin"),
         help="Login username (or RELEASE_VALIDATION_USERNAME; default: admin)",
     )
-    parser.add_argument(
-        "--password", default=os.environ.get("RELEASE_VALIDATION_PASSWORD", "admin"),
-        help="Login password (or RELEASE_VALIDATION_PASSWORD; default: admin)",
-    )
     parser.add_argument("--skip", default="", help="Comma-separated categories to skip")
     parser.add_argument("--device-ip", default=None, help="AP IP for device-specific tests")
     parser.add_argument("--switch-ip", default=None, help="Switch IP for switch-specific tests")
@@ -1382,6 +1378,19 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    password = os.environ.get("RELEASE_VALIDATION_PASSWORD")
+    password_file = os.environ.get("RELEASE_VALIDATION_PASSWORD_FILE")
+    if password is not None and password_file:
+        parser.error("set only one of RELEASE_VALIDATION_PASSWORD or RELEASE_VALIDATION_PASSWORD_FILE")
+    if password_file:
+        try:
+            with open(password_file, encoding="utf-8") as password_stream:
+                password = password_stream.read().rstrip("\r\n")
+        except OSError as exc:
+            parser.error(f"cannot read RELEASE_VALIDATION_PASSWORD_FILE: {exc}")
+    if not password:
+        parser.error("set RELEASE_VALIDATION_PASSWORD or RELEASE_VALIDATION_PASSWORD_FILE")
 
     skip_set: set[str] = set()
     if args.skip:
@@ -1398,7 +1407,7 @@ def main() -> None:
     validator = ReleaseValidator(
         host=args.host,
         username=args.username,
-        password=args.password,
+        password=password,
         skip=skip_set,
         device_ip=args.device_ip,
         switch_ip=args.switch_ip,
