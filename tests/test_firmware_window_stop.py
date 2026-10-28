@@ -346,7 +346,9 @@ def test_configured_stop_resolution_requires_a_later_parsed_window(
 
 
 @pytest.mark.asyncio
-async def test_manual_local_day_stop_survives_reopen_and_blocks_manual_routes(tmp_path, monkeypatch):
+async def test_manual_local_day_stop_survives_reopen_and_blocks_manual_routes(
+    tmp_path, monkeypatch, utc_window_clock,
+):
     db_path = tmp_path / "manual-local-day.sqlite"
     monkeypatch.setattr(db, "DB_PATH", db_path)
     db.init_db()
