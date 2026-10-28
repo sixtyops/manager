@@ -41,6 +41,19 @@ Docker, within these boundaries:
 
 ## Manual Commands
 
+### Lead integration write lane
+
+Run integration write tests from `llm01` against the authorized dev host
+through the lead's integration runner. The runner reads the private lab access
+file, exports the required `SIXTYOPS_TEST_*` variables for pytest only, and
+prints no variable value. The runner lives in the lead's private state folder.
+
+The lab has one access point (AP). Use it for the AP, firmware AP, config AP,
+and RADIUS AP roles. Run write tests on this lab one at a time. Before each
+write run, confirm that the lab AP and switch are enabled in the dev host
+inventory, keep autoupdate, schedule, and scheduled readiness settings off,
+and verify a full private backup.
+
 Blocking lane:
 
 ```bash

@@ -91,7 +91,9 @@ agents for their own task and send review fixes to a new fix worker, as describe
 in [the lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
 Preserve locks, budgets, cooldowns, and round limits. If capacity is full, queue work.
 Run delegated Paseo workers in `auto` permission mode with safety review on.
-Keep at most three active build or fix items. Finish active fixes first.
+Use the file-overlap worker schedule in the
+[lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
+Finish active fixes first.
 Prioritize system functionality under North Star and one-right-way; defer website work.
 Keep durable lead status, task owners, evidence, and the next action current.
 
