@@ -5862,8 +5862,6 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     fw_path = job.device_firmware_map.get(ip, "")
 
     def progress_callback(device_ip: str, message: str):
-        if "Uploading firmware" in message:
-            device_status._firmware_upload_started = True
         status_map = {
             "Logging in": "connecting",
             "Getting device info": "connecting",
@@ -6040,7 +6038,13 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 admission_denial["reason"] = reason
             return admitted, reason
 
-        update_options = {"admission_check": _driver_admission_check}
+        update_options = {
+            "admission_check": _driver_admission_check,
+        }
+        if vendor_id == "tachyon":
+            update_options["upload_started_callback"] = lambda: setattr(
+                device_status, "_firmware_upload_started", True
+            )
         try:
             from .vendors.base import VendorDeviceInfo
             try:
