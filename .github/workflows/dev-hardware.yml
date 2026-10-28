@@ -8,8 +8,8 @@ on:
     - cron: "17 6 * * *"
 
 concurrency:
-  group: dev-hardware-${{ github.ref }}
-  cancel-in-progress: true
+  group: dev-hardware
+  cancel-in-progress: false
 
 jobs:
   dev-blocking:
