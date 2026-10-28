@@ -119,6 +119,14 @@ def test_wrapper_has_no_tracing_or_environment_dump():
         assert not re.search(r"(^|[|;&]\s*)env\s*($|[|;&])", line.strip()), line
 
 
+def test_wrapper_extracts_archive_from_file_not_pipe():
+    source = WRAPPER.read_text()
+
+    assert 'git archive HEAD > "$archive_file"' in source
+    assert 'tar -x -f "$archive_file" -C "$code_dir"' in source
+    assert 'git archive HEAD | tar' not in source
+
+
 def test_wrapper_parses_access_file_and_never_sources_it():
     source = WRAPPER.read_text()
     assert not re.search(r"^\s*(\.|source)\s+\"?\$access_file", source, re.MULTILINE)

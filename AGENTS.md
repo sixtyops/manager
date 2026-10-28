@@ -35,7 +35,8 @@ Operational how-to documents do not grant approval to exceed these limits.
 - Run the integration tests in `tests/integration`, including read-only lanes.
 - Create, move, or push a release tag, bump the release version, or run the
   Release workflow. Release tags must be GPG-signed by the release key.
-- Merge a PR, cancel a CI run, bypass a denial, or weaken a review gate.
+- The lead merges only when the owner asks. Do not cancel a CI run, bypass a
+  denial, or weaken a review gate.
 - Send direct Signal messages from lead or worker sessions.
 
 ### Stop and label agent:needs-human if
@@ -90,7 +91,9 @@ agents for their own task and send review fixes to a new fix worker, as describe
 in [the lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
 Preserve locks, budgets, cooldowns, and round limits. If capacity is full, queue work.
 Run delegated Paseo workers in `auto` permission mode with safety review on.
-Keep at most three active build or fix items. Finish active fixes first.
+Use the file-overlap worker schedule in the
+[lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
+Finish active fixes first.
 Prioritize system functionality under North Star and one-right-way; defer website work.
 Keep durable lead status, task owners, evidence, and the next action current.
 
@@ -100,22 +103,47 @@ Do not resolve another reviewer's thread. Engine and driver changes need bench
 proof on the exact head from the operator or an approved lead; a skip does not pass.
 Start worker completion messages with `DONE from <id> (<title>):`.
 
+### Repository lead authority
+
+The 2026-10-14 grant lets the lead merge a PR that passes every gate, only when
+the owner asks. The personal-processes ops bot performs the merge after the
+owner approves on Signal. Follow [the lead operations SOP](docs/lead-operations-sop.md#review-merge-and-development-release-gates).
+
+#### Slices and reviews
+
+- Turn big goals into epics. List small slices in dependency order in the epic.
+  Give each slice one issue and one PR. Never add `agent:ready` to an epic.
+- Size each engine or driver slice before work starts. Split a slice before
+  build if it touches more than one rollout core file: `updater/app.py` job
+  runner, `updater/scheduler.py`, `updater/rollout_gate.py`, or
+  `updater/database.py`. Also split a slice that plans more than about 300
+  changed lines of engine code.
+- For each engine slice, ask a Luna worker at high reasoning to write a one-page
+  design note. The note lists every write boundary, every state, and the
+  fail-closed rule for each. Send one narrow hard open question to Astra at
+  medium reasoning. Ask the reviewer to check the code against the note.
+- Require the first review to list every finding at once and mark each one
+  `BLOCKING` or `NON-BLOCKING`. Treat wording, link, and test-name findings as
+  `NON-BLOCKING`.
+- Limit review to the slice. Ask the reviewer to judge the issue's Done-when
+  items and defects the PR introduces. If a gap also exists on `main` and the PR
+  does not make it worse, create a new slice issue in the epic and do not block
+  the PR for that gap.
+- Assign one reviewer to each PR. Keep that reviewer for every review round and
+  ask them to check their earlier findings. Send fixes to a new fix worker.
+- Hold the base during review. Merge `main` into a PR or rebuild it only to
+  resolve a conflict.
+- Treat bench proof as its own gate. The designated reviewer approves the code.
+  The lead owns exact-head bench proof before the PR enters a merge batch.
+
 ## Models
 
+Follow the model routing and quorum policy in
+[the lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
 Only the Manager lead session may use Claude models. Workers must not use them.
 Use installed and supported models. Verify provider, model, and reasoning IDs.
 Use normal mode unless the owner records a current extension.
-Large decisions require a four-agent quorum. The owner is the fifth vote.
 
-| Task | Model | Reasoning |
-|------|-------|-----------|
-| Architecture, planning, and audits | GPT-6 Astra (`gpt-6-astra`) | Follow its recommendations |
-| Safety builds | GPT-6.1 Sol (`gpt-6.1-sol`) | medium |
-| Reviews; safety reviews | GPT-6 Luna (`gpt-6-luna`) | medium; high for safety |
-| Easier code outside safety paths | GPT-6 Luna (`gpt-6-luna`) | high; xhigh for harder tasks |
-| Other complex code | GPT-6.1 Sol (`gpt-6.1-sol`) | Match the task |
-
-The specific safety and review rows take precedence over the general rows.
 Give an architect's design to a coding worker for implementation.
 
 ## Writing and style
@@ -124,6 +152,7 @@ Use Simplified Technical English (STE): result first, short sentences, active
 voice, one idea per sentence, and one term per concept. Keep technical text
 factual and neutral. In design docs, start each section with **Key points**,
 then **Detail**. Keep UI labels, errors, and recovery instructions consistent.
+State rules and instructions as actions to take.
 
 Read `~/.claude/skills/ai-copywriter/SKILL.md` when available. Run its draft
 and audit loop for every owner reply and new issue or PR text, review, sign-off
