@@ -1403,7 +1403,7 @@ def main() -> None:
     valid_cats = set(ReleaseValidator.CATEGORIES)
     invalid = skip_set - valid_cats
     if invalid:
-        print(f"{C.RED}Unknown categories to skip: {', '.join(sorted(invalid))}{C.RESET}")
+        print(f"{C.RED}invalid skip value{C.RESET}")
         print(f"Valid categories: {', '.join(sorted(valid_cats))}")
         sys.exit(2)
 

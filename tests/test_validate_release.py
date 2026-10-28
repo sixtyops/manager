@@ -11,6 +11,25 @@ from fastapi.routing import APIRoute
 from updater.app import app
 
 
+def test_invalid_skip_value_is_not_printed(capsys, monkeypatch) -> None:
+    validate_release = _load_validator_module()
+    secret_skip = "release-validation-secret-value"
+    monkeypatch.setenv("RELEASE_VALIDATION_PASSWORD", "test-password")
+    with patch("sys.argv", [
+        "validate_release.py", "--host", "http://manager.test", "--skip", secret_skip,
+    ]):
+        try:
+            validate_release.main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError("invalid skip value was accepted")
+
+    output = capsys.readouterr().out  # type: ignore[attr-defined]
+    assert "invalid skip value" in output
+    assert secret_skip not in output
+
+
 def _load_validator_module():
     requests_stub = ModuleType("requests")
     requests_stub.Response = type("Response", (), {})
@@ -150,6 +169,11 @@ def test_documented_password_file_usage_keeps_password_out_of_argv() -> None:
 
 def test_release_workflow_passes_secret_settings_only_through_environment() -> None:
     workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    install_step = workflow.split("      - name: Install release validation dependencies\n", 1)[1]
+    install_step = install_step.split("      - name:", 1)[0]
+    assert "env:" not in install_step
+    assert "${{ secrets." not in install_step
+
     step = workflow.split("      - name: Validate development instance\n", 1)[1]
     env_block, run_block = step.split("        run: |\n", 1)
     run_block = run_block.split("\n      - name:", 1)[0]
@@ -164,6 +188,9 @@ def test_release_workflow_passes_secret_settings_only_through_environment() -> N
     }
     for env_name, secret_name in secret_bindings.items():
         assert f"{env_name}: ${{{{ secrets.{secret_name} }}}}" in env_block
+
+    before_validation = workflow.split("      - name: Validate development instance\n", 1)[0]
+    assert "${{ secrets." not in before_validation
 
     assert "${{ secrets." not in run_block
     assert 'python3 scripts/validate_release.py\n' in run_block
