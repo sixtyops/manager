@@ -258,7 +258,7 @@ class ReleaseValidator:
     def run(self) -> bool:
         print(f"\n{C.BOLD}SixtyOps Release Validator{C.RESET}")
         if self.skip:
-            print(f"  Skipping:  {', '.join(sorted(self.skip))}")
+            print(f"  Skipping:  {len(self.skip)} checks")
         if self.dry_run:
             print(f"  {C.YELLOW}DRY-RUN MODE — no API calls will be made{C.RESET}")
 
@@ -1390,8 +1390,8 @@ def main() -> None:
         try:
             with open(password_file, encoding="utf-8") as password_stream:
                 password = password_stream.read().rstrip("\r\n")
-        except OSError as exc:
-            parser.error(f"cannot read RELEASE_VALIDATION_PASSWORD_FILE: {exc}")
+        except OSError:
+            parser.error("password file unreadable")
     if not password:
         parser.error("set RELEASE_VALIDATION_PASSWORD or RELEASE_VALIDATION_PASSWORD_FILE")
 

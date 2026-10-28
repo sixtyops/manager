@@ -30,7 +30,7 @@ def test_cli_output_does_not_expose_configuration_values(capsys, monkeypatch) ->
         "password-secret",
         "192.0.2.41",
         "192.0.2.42",
-        "api-token-secret",
+        "radius,backup",
     )
 
     for name, value in zip(
@@ -40,6 +40,7 @@ def test_cli_output_does_not_expose_configuration_values(capsys, monkeypatch) ->
             "RELEASE_VALIDATION_PASSWORD",
             "RELEASE_VALIDATION_DEVICE_IP",
             "RELEASE_VALIDATION_SWITCH_IP",
+            "RELEASE_VALIDATION_SKIP",
         ),
         sample_values,
     ):
@@ -57,6 +58,8 @@ def test_cli_output_does_not_expose_configuration_values(capsys, monkeypatch) ->
     output = captured.out + captured.err
     for value in sample_values:
         assert value not in output
+
+    assert "Skipping:  2 checks" in output
 
     validator = validate_release.ReleaseValidator(
         host=f"https://{sample_values[0]}",
