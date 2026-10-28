@@ -312,11 +312,8 @@ class TestSchedulerCanaries:
 
 class TestSchedulerStartFailure:
     @pytest.mark.asyncio
-    async def test_failed_job_start_does_not_strand_pending_devices(self, mock_db):
-        """If start_update_func raises (e.g. a missing-family firmware refusal),
-        the wave's devices must NOT be left 'pending'. A stranded pending row is
-        excluded by _get_devices_for_phase next tick, so the wave would silently
-        advance/complete with nothing flashed. They must stay selectable."""
+    async def test_failed_job_start_keeps_reserved_members_retryable(self, mock_db):
+        """A failed admission keeps its committed reservation for a later window."""
         from datetime import datetime as dt
         from zoneinfo import ZoneInfo
         from updater import services
@@ -353,10 +350,10 @@ class TestSchedulerStartFailure:
 
         start.assert_awaited_once()
         statuses = [d["status"] for d in db.get_rollout_devices(rollout_id)]
-        assert "pending" not in statuses
-        assert statuses == []  # nothing assigned because the job never started
+        assert statuses == ["pending"]
+        assert db.get_rollout(rollout_id)["last_phase_window"]
         assert scheduler._current_job_id is None
-        assert scheduler._state == "idle"
+        assert scheduler._state == "waiting"
 
     @pytest.mark.asyncio
     async def test_successful_job_start_assigns_pending_devices(self, mock_db):

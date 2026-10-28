@@ -11,6 +11,10 @@ All notable changes to this project are documented in this file.
   switch captures as parser fixtures.
 
 ### Fixed
+- Reserve each scheduled rollout wave with its window key, member assignments,
+  and settings snapshot in one transaction. A failed job admission consumes
+  that window, and pending members retry in a later window without advancing
+  the phase.
 - Validate Tachyon peer-list MAC claims before exposing them as CPE identity.
   Include switch management interface, VLAN, and MAC data in normal device info.
 ### Fixed
