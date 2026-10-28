@@ -42,7 +42,7 @@ class TachyonDriver(VendorDriver):
         return await self._client.session_valid()
 
     async def get_device_info(self) -> VendorDeviceInfo:
-        info = await self._client.get_device_info()
+        info = await self._client.get_device_info(include_management=True)
         return VendorDeviceInfo(
             ip=info.ip,
             vendor="tachyon",
@@ -53,6 +53,12 @@ class TachyonDriver(VendorDriver):
             bank1_version=info.bank1_version,
             bank2_version=info.bank2_version,
             active_bank=info.active_bank,
+            extra={
+                "macs": info.macs,
+                "management_interface": info.management_interface,
+                "management_vlan_id": info.management_vlan_id,
+                "management_mac": info.management_mac,
+            },
         )
 
     async def upload_firmware(self, firmware_path: str, bandwidth_limit_kbps: int = 0) -> bool:

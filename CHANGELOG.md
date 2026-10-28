@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added
+- Parse Tachyon serial numbers, per-interface MAC addresses, and the
+  management interface and VLAN from status responses. Normalize valid MACs
+  and reject invalid identity claims. Add sanitized AP, CPE, peer-list, and
+  switch captures as parser fixtures.
+
+### Fixed
+- Validate Tachyon peer-list MAC claims before exposing them as CPE identity.
+  Include switch management interface, VLAN, and MAC data in normal device info.
 ### Fixed
 - Firmware updates now stop new device writes after the first failed snapshot,
   pre-reboot, flash, recovery, or smoke gate, or an unexpected device task
