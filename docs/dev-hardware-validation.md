@@ -44,7 +44,7 @@ several roles; its write tests then run one at a time.
 
 ### Lead integration write lane
 
-Run integration write tests from `llm01` against the authorized dev host
+Run integration write tests from the lead host against the authorized dev host
 through the lead's integration runner. The runner reads the private lab access
 file, exports the required `SIXTYOPS_TEST_*` variables for pytest only, and
 prints no variable value. The runner lives in the lead's private state folder.
