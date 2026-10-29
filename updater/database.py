@@ -92,6 +92,66 @@ def _backfill_firmware_sha256(db, firmware_dir: Path) -> None:
         )
 
 
+def _migrate_cpe_rows(db):
+    """Copy every legacy CPE row and its current metrics atomically."""
+    if db.in_transaction:
+        raise RuntimeError("CPE migration requires a clean transaction")
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(devices)")}
+        for name, definition in (("parent_device_id", "INTEGER REFERENCES devices(id)"), ("auth_status", "TEXT"),
+                                 ("bank_last_fetched", "TEXT")):
+            if name not in columns:
+                db.execute(f"ALTER TABLE devices ADD COLUMN {name} {definition}")
+        metric_names = ("link_distance", "rx_power", "combined_signal", "last_local_rssi",
+                        "tx_rate", "rx_rate", "mcs", "link_uptime", "signal_health",
+                        "target_rssi_dbm", "snr_db", "sector_tx", "sector_rx", "antenna_kit",
+                        "max_rain_mm_hr")
+        source_columns = {row[1] for row in db.execute("PRAGMA table_info(cpe_cache)")}
+        for row in db.execute("SELECT * FROM cpe_cache ORDER BY id").fetchall():
+            old_id = row["id"]
+            if db.execute("SELECT 1 FROM cpe_migration_map WHERE old_cpe_id=?", (old_id,)).fetchone():
+                continue
+            parent = db.execute("SELECT id,username,password FROM devices WHERE ip=? AND role='ap'",
+                                (row["ap_ip"],)).fetchone()
+            if not parent:
+                raise ValueError(f"CPE migration row {old_id} has no AP parent at {row['ap_ip']}")
+            owner = db.execute("SELECT id,role FROM devices WHERE ip=?", (row["ip"],)).fetchone()
+            if owner:
+                prior = db.execute(
+                    "SELECT old_cpe_id,device_id FROM cpe_migration_map WHERE device_id=?",
+                    (owner["id"],),
+                ).fetchone()
+                raise ValueError(
+                    f"CPE migration collision rows {prior['old_cpe_id'] if prior else 'existing'} "
+                    f"and {old_id}; parent device IDs {owner['id']} and {parent['id']}; IP {row['ip']}"
+                )
+            values = {name: row[name] for name in source_columns}
+            cursor = db.execute("""INSERT INTO devices (
+                ip,vendor,role,parent_device_id,username,password,system_name,model,mac,
+                firmware_version,last_seen,enabled,bank1_version,bank2_version,active_bank,
+                bank_last_fetched,last_config_poll_at,last_config_poll_status,
+                last_config_poll_error,auth_status,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (row["ip"], values.get("vendor") or "tachyon", "cpe", parent["id"],
+                 parent["username"], parent["password"], row["system_name"], row["model"],
+                 row["mac"], row["firmware_version"], values.get("last_updated"), 1,
+                 values.get("bank1_version"), values.get("bank2_version"),
+                 values.get("active_bank"), values.get("bank_last_fetched"),
+                 values.get("last_config_poll_at"), values.get("last_config_poll_status"),
+                 values.get("last_config_poll_error"), values.get("auth_status"),
+                 values.get("last_updated")))
+            device_id = cursor.lastrowid
+            db.execute(f"INSERT INTO link_metrics(device_id,{','.join(metric_names)}) "
+                       f"VALUES ({','.join('?' for _ in range(len(metric_names)+1))})",
+                       (device_id, *(values.get(name) for name in metric_names)))
+            db.execute("INSERT INTO cpe_migration_map VALUES (?,?)", (old_id, device_id))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
 def _migrate(db):
     """Run schema migrations."""
     # Check if auth_status column exists on cpe_cache
@@ -416,6 +476,8 @@ def _migrate(db):
         pass  # Best-effort backfill; new rows will populate correctly
 
     _migrate_identity(db)
+    db.commit()
+    _migrate_cpe_rows(db)
 
 
 def _migrate_identity(db):
