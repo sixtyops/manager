@@ -194,7 +194,7 @@ def _assert_requests_match_routes(
 
 
 def test_ui_api_requests_match_openapi(authed_client: TestClient):
-    """Match all 100 inline request pairs in source and rendered page to OpenAPI."""
+    """Match all 96 inline request pairs in source and rendered page to OpenAPI."""
     response = authed_client.get("/openapi.json")
     assert response.status_code == 200
 
@@ -202,7 +202,7 @@ def test_ui_api_requests_match_openapi(authed_client: TestClient):
     assert page.status_code == 200
     source_requests = _ui_requests(TEMPLATE.read_text())
     rendered_requests = _ui_requests(page.text)
-    assert len(source_requests) == 100
+    assert len(source_requests) == 96
     assert rendered_requests == source_requests
     routes = _openapi_routes(response.json())
     _assert_requests_match_routes(source_requests, routes)

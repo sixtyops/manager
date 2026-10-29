@@ -37,7 +37,7 @@ def hash_template_user_passwords(
 
     Storing operator-entered plaintext for device users in the manager DB is a
     soft-secret leak: anyone with read access to `config_templates` (a SQL dump,
-    a CSV backup, an SFTP backup) sees the credentials. Hashing at rest in the
+    a CSV export) sees the credentials. Hashing at rest in the
     same `$1$<salt>$<hash>` format the device stores means worst-case exposure
     is a brute-forceable hash, not the password itself.
 

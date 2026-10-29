@@ -5,7 +5,7 @@
 > [#316](https://github.com/sixtyops/manager/issues/316)). The target module layout is
 > in [rearchitecture.md](rearchitecture.md#target-layout). Modules marked
 > **(being removed)** below are deleted by that plan: RADIUS, telemetry, SNMP traps,
-> webhooks, syslog forwarding, SFTP backup, the self-update apply path, the vendor
+> webhooks, syslog forwarding, the self-update apply path, the vendor
 > abstraction, feature gating, and the removed dummy poller.
 
 ## Overview
@@ -156,16 +156,6 @@ Sends anonymized job statistics to an AWS Lambda endpoint after each update job 
 
 Sends rich webhook notifications on job completion with success/failure counts, failed device details, rollout phase progress, and next scheduled job info. Configured via `slack_webhook_url` in settings.
 
-### `sftp_backup.py` - System Backup & Restore (being removed)
-
-SFTP-based backup system for the management database, settings, and device configurations.
-
-Key responsibilities:
-- **Scheduled Backups**: Creates a compressed `tar.gz` archive containing the SQLite database, device inventory, and configuration snapshots.
-- **Remote Storage**: Uploads backups to a configured SFTP server with support for password or SSH key authentication.
-- **Retention**: Automatically prunes older backups based on a configurable retention count.
-- **Restore Flow**: Provides an API to list remote backups and restore the local database from a selected archive (requires system restart).
-
 ### `features.py` - Feature Classification (being removed)
 
 Defines the `Feature` enum and classifies features as stable or dangerous. All features are always enabled — there is no license gating or remote validation.
@@ -216,7 +206,6 @@ Six HTML templates rendered by Jinja2:
 - `monitor.html` - Main UI with firmware, update, auto-update, and network topology
 - `setup.html` - Initial site configuration
 - `setup_wizard.html` - Guided first-run setup
-- `backup_setup.html` - Backup configuration
 - `ssl_setup.html` - SSL certificate setup
 
 JavaScript in `static/js/` handles WebSocket connections and real-time DOM updates. No build step or framework dependencies.
