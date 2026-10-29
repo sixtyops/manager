@@ -68,13 +68,16 @@ trust model: [self-update-signing.md](self-update-signing.md).
 
 ## Dev release (`vX.Y.Z-devN`)
 
-1. **Bump on a branch, merge the PR first.** Update `updater/__init__.py`,
+1. Collect the pull request fragments into the changelog before the version
+   bump: `python scripts/collect_changelog.py X.Y.Z-devN YYYY-MM-DD`. Review
+   the new version section and confirm the fragment files were removed.
+2. **Bump on a branch, merge the PR first.** Update `updater/__init__.py`,
    `pyproject.toml`, and the pinned image tag in `website/index.html`. Tagging
    before the bump is on `main` creates a tag whose code claims the wrong
    version — clients refuse it.
-2. **Run the pre-tag validation above for the exact commit at `origin/main`.**
+3. **Run the pre-tag validation above for the exact commit at `origin/main`.**
    Sign only after it passes.
-3. **Sign the tag at `origin/main` and verify before pushing:**
+4. **Sign the tag at `origin/main` and verify before pushing:**
    ```bash
    git fetch origin
    git -c gpg.format=openpgp -c user.signingkey=E2C19E86B24A87283068AEFAF2D6F70883960DCE \
@@ -93,8 +96,10 @@ trust model: [self-update-signing.md](self-update-signing.md).
 
 ## Stable release (`vX.Y.Z`)
 
-1. Bump to the stable version and move CHANGELOG `Unreleased` items under a
-   version header. PR → merge.
+1. Collect the pull request fragments into the changelog:
+   `python scripts/collect_changelog.py X.Y.Z YYYY-MM-DD`. Review the new
+   version section and confirm the fragment files were removed. Bump to the
+   stable version on a branch and merge the PR.
 2. Sign + verify + push the tag exactly as above.
 3. **Actions → Release → Run workflow**, enter the tag, type `RELEASE`.
 4. Publishes the GitHub Release and `:vX.Y.Z` + `:latest`; the non-prerelease
@@ -142,8 +147,10 @@ version; do not assume that all publication steps completed together.
   `fix:` → `bug`, `chore:` → `chore`, etc.). No manual labeling needed.
 - **Write clear PR titles**: they become the stable release note line items.
   Use conventional format: `feat: add X`, `fix: resolve Y`, `chore: update Z`.
-- **CHANGELOG.md**: Update the `## Unreleased` section when making notable
-  changes. When cutting a release, move the Unreleased items under a new
-  version header (e.g., `## 1.2.0 - 2025-03-15`).
+- **CHANGELOG.md**: Add one or two STE lines to
+  `changelog.d/<issue-number>.<kind>.md` for each notable change. Do not edit
+  `CHANGELOG.md` in a pull request. At release time, run
+  `python scripts/collect_changelog.py <version> <date>` to group fragments
+  under the version header and remove the fragment files.
 - Release notes are displayed inline in the app's Settings > Updates panel.
   The backend fetches up to 2000 characters of the GitHub release body.
