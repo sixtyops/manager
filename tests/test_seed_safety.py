@@ -73,7 +73,7 @@ def test_seed_refuses_configured_db(tmp_path, configured_sql):
     con.close()
 
     with patch.object(seed, "DB_PATH", db_path):
-        seed.seed()
+        assert seed.seed() is False
 
     con = sqlite3.connect(str(db_path))
     # Refused before seeding: no sample sites inserted, no creds touched.
@@ -94,7 +94,7 @@ def test_fresh_seed_plants_no_credentials(tmp_path):
     with patch.object(database, "DB_PATH", db_path):
         database.init_db()
     with patch.object(seed, "DB_PATH", db_path):
-        seed.seed()
+        assert seed.seed() is True
 
     con = sqlite3.connect(str(db_path))
 
@@ -113,6 +113,60 @@ def test_fresh_seed_plants_no_credentials(tmp_path):
     assert setting("schedule_enabled") == "false"
     assert con.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
     con.close()
+
+    # A later dev.sh run must accept the known sample inventory as seeded.
+    with patch.object(seed, "DB_PATH", db_path):
+        assert seed.seed() is True
+
+
+def test_dev_sh_starts_only_when_seed_script_succeeds(tmp_path):
+    """Seed success starts the app; a refusal exits with --fresh guidance."""
+    import os
+    import subprocess
+
+    root = Path(__file__).resolve().parent.parent
+    work = tmp_path / "work"
+    bin_dir = tmp_path / "bin"
+    work.mkdir()
+    bin_dir.mkdir()
+    (work / "dev.sh").write_text((root / "dev.sh").read_text())
+    (work / "scripts").mkdir()
+    (work / "data").mkdir()
+    python_stub = bin_dir / "python3"
+    python_stub.write_text(
+        '#!/bin/sh\n'
+        'if [ "$1" = "-c" ]; then exit 0; fi\n'
+        'exit "${SEED_RESULT:-0}"\n'
+    )
+    uvicorn_stub = bin_dir / "uvicorn"
+    uvicorn_stub.write_text('#!/bin/sh\nprintf started > "$UVICORN_MARKER"\n')
+    python_stub.chmod(0o755)
+    uvicorn_stub.chmod(0o755)
+
+    def run(seed_result):
+        marker = tmp_path / f"started-{seed_result}"
+        env = os.environ.copy()
+        env.update({
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "SEED_RESULT": str(seed_result),
+            "UVICORN_MARKER": str(marker),
+        })
+        result = subprocess.run(
+            ["bash", "dev.sh"], cwd=work, env=env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+        return result, marker
+
+    # Fresh and already seeded databases both produce seed success.
+    for seed_result in (0,):
+        result, marker = run(seed_result)
+        assert result.returncode == 0
+        assert marker.read_text() == "started"
+
+    result, marker = run(1)  # configured database with real devices
+    assert result.returncode != 0
+    assert "./dev.sh --fresh" in result.stdout
+    assert not marker.exists()
 
 
 def test_seed_addresses_are_documentation_only():

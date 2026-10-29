@@ -20,6 +20,24 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "sixtyops.db"
 
+# The development seed uses only these RFC 5737 documentation addresses. This
+# lets dev.sh recognize its existing sample database without trusting arbitrary
+# configured databases that happen to contain devices.
+DEV_DEVICE_IPS = {
+    "192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.10",
+    "198.51.100.1", "198.51.100.2", "198.51.100.3", "198.51.100.4",
+    "198.51.100.10", "203.0.113.1", "203.0.113.2", "203.0.113.3",
+    "203.0.113.10",
+}
+
+
+def _is_dev_seeded(db) -> bool:
+    try:
+        ips = {row[0] for row in db.execute("SELECT ip FROM devices").fetchall()}
+    except sqlite3.Error:
+        return False
+    return ips == DEV_DEVICE_IPS
+
 
 def _is_configured(db) -> bool:
     """True if the DB shows any sign of a real/configured install.
@@ -59,10 +77,14 @@ def seed():
     # Refuse to seed a configured install — never overwrite a real host's data
     # or credentials (production safety, not just idempotency).
     if _is_configured(db):
+        if _is_dev_seeded(db):
+            print("seed: development database is already seeded")
+            db.close()
+            return True
         print("seed: database is already configured (setup done / admin / devices "
               "present) — refusing to seed")
         db.close()
-        return
+        return False
 
     now = datetime.now(timezone.utc).isoformat()
 
@@ -191,7 +213,9 @@ def seed():
     print(f"seed: inserted {site_count} sites, {dev_count} devices, {cpe_count} CPEs, {tmpl_count} templates, {hist_count} jobs")
     print("seed: no admin created — sign in via first-run setup or the ADMIN_PASSWORD env var")
     db.close()
+    return True
 
 
 if __name__ == "__main__":
-    seed()
+    if seed() is False:
+        raise SystemExit(1)

@@ -25,9 +25,13 @@ PORT="${PORT:-8000}"
 
 # Create the schema, then seed before the app starts. The app creates the
 # admin user on startup, and the seed script refuses a configured database.
-# On an existing database the seed script skips itself.
+# Keep configured databases from reaching the real poller unless they contain
+# the known development seed. Refusals fail closed and explain how to reset.
 python3 -c "import updater.database"
-python3 scripts/seed_dev_data.py
+if ! python3 scripts/seed_dev_data.py; then
+    echo "dev.sh: refusing to start against this database. Use ./dev.sh --fresh to replace it."
+    exit 1
+fi
 
 echo "=== SixtyOps Dev ==="
 echo "Login: ${ADMIN_USERNAME} / ${ADMIN_PASSWORD}"
