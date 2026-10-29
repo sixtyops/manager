@@ -95,3 +95,35 @@ def test_auto_target_does_not_move_backward_from_deployable_current(mock_db, tmp
 
     assert selected == FW_303L_BETA
     assert db.get_setting("selected_firmware_303l", "") == FW_303L_BETA
+
+
+def test_artifact_with_unmatched_vendor_checksum_cannot_be_selected(mock_db, tmp_path):
+    """#301: a recorded vendor checksum without verified_at did not match.
+    The file is not deployable, so auto-select skips it."""
+    (tmp_path / FW_303L_BETA).write_bytes(b"unmatched")
+    sha = "e" * 64
+    db.register_firmware(FW_303L_BETA, source="auto", sha256=sha)
+    mock_db.execute(
+        "UPDATE firmware_artifacts SET vendor_checksum = ? WHERE sha256 = ?",
+        ("0" * 32, sha),
+    )
+    db.set_setting("firmware_channels", json.dumps({FW_303L_BETA: "beta"}))
+
+    health = firmware_file_health(tmp_path, FW_303L_BETA)
+
+    assert health.verified is False
+    assert health.deployable is False
+    assert health.reason == "file_unverified"
+    assert auto_select_platform_target("tna-303l", tmp_path, beta_enabled=True) is None
+
+
+def test_hashed_registry_row_without_artifact_cannot_be_selected(mock_db, tmp_path):
+    """#301: a hashed registry file must have an artifact row (fail closed)."""
+    (tmp_path / FW_303L_BETA).write_bytes(b"no-artifact")
+    db.register_firmware(FW_303L_BETA, source="auto", sha256="e" * 64)
+    mock_db.execute("DELETE FROM firmware_artifacts")
+
+    health = firmware_file_health(tmp_path, FW_303L_BETA)
+
+    assert health.deployable is False
+    assert health.reason == "file_unverified"
