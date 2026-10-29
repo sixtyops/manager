@@ -54,6 +54,9 @@ All notable changes to this project are documented in this file.
   remain unchanged.
 
 ### Fixed
+- Config push jobs retain a sanitized Tachyon error and report whether a device
+  rejected the dry-run or apply request. Passwords, hashes, usernames, and
+  addresses are removed from the recorded device message.
 - Users templates now add missing users and keep every existing device user.
   Preview, push, rollout resume, and auto-enforce reject entries that change
   an existing user or name the Manager login user. Stored password hashes

@@ -7395,7 +7395,7 @@ async def push_config_templates(request: Request, session: dict = Depends(requir
     # Run config push in background with job tracking
     job_id = str(uuid.uuid4())[:8]
     template_names = ", ".join(t["name"] for t in templates)
-    job_info = {"cancelled": False, "success": 0, "failed": 0, "skipped": 0, "total": len(device_list), "done": False}
+    job_info = {"cancelled": False, "success": 0, "failed": 0, "skipped": 0, "total": len(device_list), "done": False, "results": []}
     task = asyncio.create_task(_run_config_push(job_id, device_list, templates, job_info))
     job_info["task"] = task
     _config_push_jobs[job_id] = job_info
@@ -7439,6 +7439,7 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
             return
 
         started_at = datetime.now().isoformat()
+        failed_stage = "connect"
 
         # Acquire push lock for this IP
         async with _config_push_lock:
@@ -7458,6 +7459,7 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                     if login_result is not True:
                         raise RuntimeError(f"Login failed: {login_result}")
 
+                    failed_stage = "read_config"
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "fetching_config"})
 
                     current_config = await client.get_config()
@@ -7465,6 +7467,7 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                         raise RuntimeError("Failed to fetch current config")
 
                     # Safety: save pre-push config snapshot so we have a "before" backup
+                    failed_stage = "snapshot"
                     pre_push_json = _canonical_config_json(current_config)
                     pre_push_hash = _compute_config_hash(current_config)
                     model = device.get("model")
@@ -7472,12 +7475,14 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                     db.save_device_config(ip, pre_push_json, pre_push_hash, model, hardware_id)
 
                     # Merge applicable templates into current config
+                    failed_stage = "template_merge"
                     merged = current_config
                     for t in applicable:
                         merged = merge_template_config(merged, t["fragment"], device["username"])
 
                     # Safety: dry_run first to validate the merged config
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "validating"})
+                    failed_stage = "dry-run"
                     dry_result = await client.apply_config(merged, dry_run=True, preserve_user_passwords=True)
                     if not dry_result.get("success"):
                         error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run validation failed"))
@@ -7485,6 +7490,7 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
 
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "applying"})
 
+                    failed_stage = "apply"
                     result = await client.apply_config(merged, preserve_user_passwords=True)
                     completed_at = datetime.now().isoformat()
                     duration = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()
@@ -7499,6 +7505,11 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                             started_at=started_at, completed_at=completed_at,
                             action="config_push",
                         )
+                        if job_info is not None:
+                            job_info.setdefault("results", []).append({
+                                "ip": ip, "status": "success", "error": None,
+                                "failed_stage": None,
+                            })
                         await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "success"})
                     else:
                         failed_count += 1
@@ -7511,6 +7522,11 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                             started_at=started_at, completed_at=completed_at,
                             action="config_push",
                         )
+                        if job_info is not None:
+                            job_info.setdefault("results", []).append({
+                                "ip": ip, "status": "failed", "error": str(error_msg),
+                                "failed_stage": failed_stage,
+                            })
                         await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "failed", "error": str(error_msg)})
 
                 except Exception as e:
@@ -7520,11 +7536,16 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                     db.save_device_update_history(
                         job_id=job_id, ip=ip, role=device["role"], pass_number=1,
                         status="failed", old_version=None, new_version=None,
-                        model=None, error=str(e), failed_stage="connect",
+                        model=None, error=str(e), failed_stage=failed_stage,
                         stages=[], duration_seconds=duration,
                         started_at=started_at, completed_at=completed_at,
                         action="config_push",
                     )
+                    if job_info is not None:
+                        job_info.setdefault("results", []).append({
+                            "ip": ip, "status": "failed", "error": str(e),
+                            "failed_stage": failed_stage,
+                        })
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "failed", "error": str(e)})
         finally:
             _config_pushing_ips.discard(ip)
@@ -7568,6 +7589,7 @@ async def get_config_push_job(job_id: str, session: dict = Depends(require_auth)
         "skipped": job.get("skipped", 0),
         "cancelled": job["cancelled"],
         "done": job["done"],
+        "results": job.get("results", []),
     }
 
 

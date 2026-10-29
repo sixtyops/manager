@@ -145,7 +145,7 @@ def users_db(mock_db):
 @pytest.fixture
 def transport():
     """Run the real client and vendor driver with synthetic transport replies."""
-    captured = {"posts": [], "logins": 0}
+    captured = {"posts": [], "logins": 0, "failure_response": None}
 
     async def run_curl(args):
         endpoint = args[-1].removeprefix("https://192.0.2.1")
@@ -162,6 +162,10 @@ def transport():
         assert "-d" in args
         payload = json.loads(args[args.index("-d") + 1])
         captured["posts"].append((endpoint, payload))
+        failure = captured["failure_response"]
+        if failure and endpoint.endswith("?dry_run=true") == (failure[0] == "dry-run"):
+            _stage, status, body = failure
+            return 0, body.encode() + f"\n{status}".encode()
         return 0, b'{"success": true}\n200'
 
     with patch("updater.config_write_guard.automatic_config_writes_allowed", return_value=True), \
@@ -276,6 +280,36 @@ async def test_immediate_push_users(users_db, transport, case):
         assert any(("users_existing_user_change" if case == "change" else "users_login_protected")
                    in error for error in errors)
     assert "192.0.2.1" not in app_module._config_pushing_ips
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["dry-run", "apply"])
+async def test_immediate_push_records_sanitized_device_rejection(users_db, transport, stage):
+    transport["failure_response"] = (stage, 400, json.dumps({
+        "error": "Invalid username=manager-login password=synthetic-login at 192.0.2.44",
+    }))
+    messages = AsyncMock()
+    job = {"cancelled": False}
+    device = {"ip": "192.0.2.1", "username": "manager-login",
+              "password": "synthetic-login", "role": "ap"}
+    with patch("updater.app.broadcast", messages), patch("updater.app.get_poller", return_value=None):
+        await app_module._run_config_push("dry-run-failure", [device], [
+            {"id": 1, "name": "Users", "fragment": fragment_for("add")},
+        ], job)
+    error_prefix = "Dry run rejected: " if stage == "dry-run" else ""
+    expected_error = error_prefix + (
+        "Configuration request failed (HTTP 400): "
+        "Invalid username=[redacted] password=[redacted] at [address]"
+    )
+    assert job["results"] == [{
+        "ip": "192.0.2.1", "status": "failed", "error": expected_error,
+        "failed_stage": stage,
+    }]
+    history, total = db.get_device_update_history(action="config_push")
+    assert total == 1
+    assert history[0]["error"] == expected_error
+    assert history[0]["failed_stage"] == stage
+    assert all("synthetic-login" not in str(call.args) for call in messages.await_args_list)
 
 
 @pytest.mark.asyncio

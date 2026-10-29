@@ -247,11 +247,14 @@ async def test_config_failure_does_not_return_reflected_secrets(status, json_bod
     assert result == {
         "success": False,
         "status_code": status,
-        "error": f"Configuration request failed (HTTP {status})",
+        "error": (
+            f"Configuration request failed (HTTP {status})"
+            + (": [redacted]" if json_body else "")
+        ),
     }
     # The poller persists this caller-facing diagnostic after a failed request.
     diagnostic = result.get("error", result.get("raw_response", "Apply failed"))
-    assert diagnostic == f"Configuration request failed (HTTP {status})"
+    assert diagnostic == result["error"]
     assert SECRET not in json.dumps(result)
     request.assert_awaited_once_with(
         "POST", "/cgi.lua/config" + ("?dry_run=true" if dry_run else ""), data=payload
@@ -269,9 +272,29 @@ async def test_config_http_200_error_does_not_return_reflected_secret():
     assert result == {
         "success": False,
         "status_code": 200,
-        "error": "Configuration request failed (HTTP 200)",
+        "error": "Configuration request failed (HTTP 200): Rejected value: [redacted]",
     }
     assert SECRET not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_config_failure_keeps_sanitized_device_message_and_status():
+    client = transport.TachyonClient("192.0.2.1", "admin", "synthetic-login")
+    config = {"system": {"users": [
+        {"username": "device-user", "password": "$1$abcdefgh$" + "a" * 22},
+    ]}}
+    body = json.dumps({
+        "error": "Rejected username=device-user password=synthetic-login "
+                 "hash=$1$abcdefgh$" + "a" * 22 + " at 192.0.2.44",
+    })
+    with patch.object(client, "_curl", AsyncMock(return_value=(400, body))):
+        result = await client.apply_config(config, dry_run=True, preserve_user_passwords=True)
+    assert result == {
+        "success": False,
+        "status_code": 400,
+        "error": "Configuration request failed (HTTP 400): Rejected username=[redacted] "
+                 "password=[redacted] hash=[redacted] at [address]",
+    }
 
 
 @pytest.mark.asyncio
