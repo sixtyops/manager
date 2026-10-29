@@ -273,7 +273,7 @@ def test_users_template_add_only_and_restore(
             "category": "users",
             "config_fragment": {
                 "system": {
-                    "users": [{"username": test_username, "password": test_password, "level": 1}],
+                    "users": [{"username": test_username, "password": test_password, "level": 0}],
                 },
             },
             "description": "Integration test Users add-only template",

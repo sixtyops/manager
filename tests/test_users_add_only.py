@@ -24,7 +24,13 @@ LIVE = {"system": {"users": [
     {"username": "existing-empty", "password": "", "level": 1},
     {"username": "existing-no-password", "level": 1},
 ]}}
-NEW_USER = {"username": "new-user", "password": "$1$ijklmnop$" + "b" * 22, "level": 1}
+NEW_USER = {"username": "new-user", "password": "$1$ijklmnop$" + "b" * 22, "level": 0}
+NEW_DEVICE_USER = {
+    "username": "new-user",
+    "type": "admin",
+    "password_hash": "$1$ijklmnop$" + "b" * 22,
+    "enabled": True,
+}
 
 
 def fragment_for(case):
@@ -40,7 +46,8 @@ def fragment_for(case):
 
 
 def assert_add_only(config, fragment):
-    assert config["system"]["users"] == LIVE["system"]["users"] + [NEW_USER]
+    assert config["system"]["users"][:-1] == LIVE["system"]["users"]
+    assert config["system"]["users"][-1] == NEW_DEVICE_USER
     assert check_config_compliance(config, [{"config_fragment": fragment}])
 
 
@@ -51,8 +58,27 @@ class TestUsersMerge:
         original = deepcopy(fragment)
         merged = merge_template_config(LIVE, fragment, "manager-login")
         assert merged["system"]["users"][:-1] == LIVE["system"]["users"]
-        assert md5_crypt.verify("synthetic-new", merged["system"]["users"][-1]["password"])
+        added = merged["system"]["users"][-1]
+        assert set(added) == {"username", "type", "password_hash", "enabled"}
+        assert added["type"] == "admin" and added["enabled"] is True
+        assert md5_crypt.verify("synthetic-new", added["password_hash"])
+        assert "synthetic-new" not in json.dumps(added)
         assert fragment == original
+
+    def test_read_only_role_maps_to_documented_device_type(self):
+        from passlib.hash import md5_crypt
+        fragment = {"system": {"users": [{
+            "username": "read-only-user",
+            "password": "synthetic-read-only",
+            "level": 9,
+        }]}}
+        merged = merge_template_config(LIVE, fragment, "manager-login")
+        added = merged["system"]["users"][-1]
+        assert set(added) == {"username", "type", "password_hash", "enabled"}
+        assert added["username"] == "read-only-user"
+        assert added["type"] == "read-only" and added["enabled"] is True
+        assert md5_crypt.verify("synthetic-read-only", added["password_hash"])
+        assert merged["system"]["users"][:-1] == LIVE["system"]["users"]
 
     def test_add_preserves_users_inputs_and_compliance(self):
         original = deepcopy(LIVE)
@@ -191,10 +217,11 @@ def check_apply(transport, case):
         elif case == "add_plain":
             from passlib.hash import md5_crypt
             added = apply["system"]["users"][-1]
-            assert md5_crypt.verify("synthetic-new", added["password"])
-            assert {k: v for k, v in added.items() if k != "password"} == {
-                k: v for k, v in NEW_USER.items() if k != "password"
-            }
+            assert set(added) == {"username", "type", "password_hash", "enabled"}
+            assert added["username"] == "new-user"
+            assert added["type"] == "admin" and added["enabled"] is True
+            assert md5_crypt.verify("synthetic-new", added["password_hash"])
+            assert "synthetic-new" not in json.dumps(added)
         else:
             assert apply == LIVE
 

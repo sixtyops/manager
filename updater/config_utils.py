@@ -240,8 +240,11 @@ def _user_lists_compatible(device_users, template_users) -> bool:
     """Per-username comparison for the `system.users` list under the Users
     template. The list is matched by `username` (not by index — devices
     return users in factory order which need not match the template's
-    order). Each per-user field is compared exactly *except* `password`:
-    if both sides hold a valid stored `$1$<salt>$<hash>` value, that's
+    order). Each per-user field is compared exactly except for password
+    hashes and the template UI's numeric `level` role. The UI stores
+    passwords as `password` and levels 0/9; Tachyon returns
+    `password_hash` and `type` on supported firmware. If both password sides
+    hold a valid stored `$1$<salt>$<hash>` value, that's
     treated as compatible regardless of the hash bytes (different salts
     encode the same plaintext but never compare equal as strings, which
     would otherwise flag every fleet as non-compliant immediately after
@@ -265,10 +268,19 @@ def _user_lists_compatible(device_users, template_users) -> bool:
         if du is None:
             return False
         for k, v in tu.items():
-            if k == "password":
-                if _is_stored_user_password_hash(v) and _is_stored_user_password_hash(du.get("password")):
+            if k in ("password", "password_hash"):
+                device_password = du.get("password_hash", du.get("password"))
+                if _is_stored_user_password_hash(v) and _is_stored_user_password_hash(device_password):
                     continue  # both sides have a stored hash; treat as compatible
-                if du.get("password") != v:
+                if device_password != v:
+                    return False
+            elif k == "level":
+                role_by_level = {0: "admin", 9: "read-only"}
+                template_role = role_by_level.get(v)
+                if "type" in du:
+                    if template_role is None or du.get("type") != template_role:
+                        return False
+                elif du.get("level") != v:
                     return False
             elif du.get(k) != v:
                 return False
@@ -279,9 +291,10 @@ def merge_template_config(base: dict, overlay: dict, login_username: str | None)
     """Add template users by username. Preserve all existing user records.
 
     Reject changes to existing users and any entry for the Manager login.
-    Compare stored passwords with the compliance rule. Hash plaintext
-    passwords only for added users. Template applies must preserve these
-    prepared password fields. Other lists use deep_merge replacement.
+    Compare stored passwords with the compliance rule. Convert each added
+    user to Tachyon's `username`, `type`, `password_hash`, and `enabled`
+    record. Hash plaintext passwords before the device request. Existing
+    records stay unchanged. Other lists use deep_merge replacement.
     """
     if "system" not in overlay:
         return deep_merge(base, overlay)
@@ -325,10 +338,28 @@ def merge_template_config(base: dict, overlay: dict, login_username: str | None)
                 raise ValueError(f"users_existing_user_change: template changes existing user '{name}'")
         else:
             added_user = deepcopy(user)
-            password = added_user.get("password")
-            if isinstance(password, str) and password and not password.startswith("$1$"):
-                added_user["password"] = _md5_crypt(password)
-            additions.append(added_user)
+            password = added_user.pop("password_hash", added_user.pop("password", None))
+            if not isinstance(password, str) or not password:
+                raise ValueError(f"users_invalid: added user '{name}' needs a password")
+            password_hash = password if _is_stored_user_password_hash(password) else _md5_crypt(password)
+
+            if "type" in added_user:
+                user_type = added_user["type"]
+            else:
+                level = added_user.pop("level", None)
+                user_type = {0: "admin", 9: "read-only"}.get(level)
+            if user_type not in ("admin", "read-only"):
+                raise ValueError(f"users_invalid: added user '{name}' needs a valid role")
+
+            enabled = added_user.get("enabled", True)
+            if not isinstance(enabled, bool):
+                raise ValueError(f"users_invalid: added user '{name}' needs a boolean enabled value")
+            additions.append({
+                "username": name,
+                "type": user_type,
+                "password_hash": password_hash,
+                "enabled": enabled,
+            })
 
     merged = deep_merge(base, overlay)
     merged["system"]["users"] = deepcopy(live_users + additions)
