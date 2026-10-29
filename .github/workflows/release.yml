@@ -47,10 +47,12 @@ jobs:
           fi
 
   test:
-    runs-on: [self-hosted, linux, x64]
-    timeout-minutes: 10
+    runs-on: [self-hosted, linux, x64, dev-host]
+    timeout-minutes: 90
     if: always() && (needs.validate-dispatch.result == 'success' || needs.validate-dispatch.result == 'skipped')
     needs: [validate-dispatch]
+    env:
+      SIXTYOPS_DEV_HARDWARE_LOCK_FILE: ${{ vars.SIXTYOPS_DEV_HARDWARE_LOCK_FILE }}
     steps:
       - name: Validate release tag
         run: |
@@ -78,6 +80,61 @@ jobs:
           . .venv/bin/activate
           pip install -r requirements.txt
           pytest -v --timeout=60
+
+      - name: Install release validation dependencies
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Validate development instance
+        env:
+          RELEASE_VALIDATION_HOST: ${{ secrets.SIXTYOPS_TEST_URL }}
+          RELEASE_VALIDATION_USERNAME: ${{ secrets.SIXTYOPS_TEST_USER }}
+          RELEASE_VALIDATION_PASSWORD: ${{ secrets.SIXTYOPS_TEST_PASS }}
+          RELEASE_VALIDATION_DEVICE_IP: ${{ secrets.SIXTYOPS_TEST_AP_IP }}
+          RELEASE_VALIDATION_SWITCH_IP: ${{ secrets.SIXTYOPS_TEST_SWITCH_IP }}
+          RELEASE_VALIDATION_SKIP: ${{ secrets.SIXTYOPS_RELEASE_VALIDATION_SKIP }}
+        run: |
+          set -euo pipefail
+          lock_file="${SIXTYOPS_DEV_HARDWARE_LOCK_FILE:-/var/lock/sixtyops-dev-hardware.lock}"
+          if [ ! -e "$lock_file" ]; then
+            (umask 077; : > "$lock_file")
+          fi
+          exec 9>"$lock_file"
+          if ! flock --exclusive --wait 300 9; then
+            echo "::error::Timed out after 5 minutes waiting for the shared dev host lock: $lock_file"
+            exit 1
+          fi
+          echo "Acquired the shared dev host lock."
+
+          missing=()
+          for name in RELEASE_VALIDATION_HOST RELEASE_VALIDATION_USERNAME RELEASE_VALIDATION_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            missing_csv="$(IFS=,; echo "${missing[*]}")"
+            echo "::error::Release validation cannot run. Configure repository secrets: $missing_csv"
+            exit 1
+          fi
+
+          # Mask secret inputs before the validator can print its host or user.
+          for name in \
+            RELEASE_VALIDATION_HOST \
+            RELEASE_VALIDATION_USERNAME \
+            RELEASE_VALIDATION_PASSWORD \
+            RELEASE_VALIDATION_DEVICE_IP \
+            RELEASE_VALIDATION_SWITCH_IP \
+            RELEASE_VALIDATION_SKIP
+          do
+            value="${!name}"
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+          python3 scripts/validate_release.py
 
   release:
     needs: [test]

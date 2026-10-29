@@ -11,10 +11,12 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import date, datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 from time import monotonic
 from typing import Dict, Optional, Set
@@ -136,6 +138,86 @@ DATA_DIR.mkdir(exist_ok=True)
 # Global state
 active_websockets: Set[WebSocket] = set()
 update_jobs: Dict[str, "UpdateJob"] = {}
+# The manager starts one ASGI worker. Keep this owner process-local; multiple
+# workers need a shared owner before they can safely admit firmware jobs.
+_firmware_job_owner_guard = threading.Lock()
+_firmware_job_owner: str | None = None
+
+
+def _claim_firmware_job_owner() -> str:
+    """Reserve the manager-wide firmware write sequence before job setup."""
+    global _firmware_job_owner
+    guard = _firmware_job_owner_guard
+    try:
+        if guard is None:
+            raise RuntimeError("Firmware job ownership is unavailable.")
+        if not guard.acquire(blocking=False):
+            raise HTTPException(409, "Another firmware job is active. Wait for it to complete.")
+        try:
+            if _firmware_job_owner is not None:
+                raise HTTPException(409, "Another firmware job is active. Wait for it to complete.")
+            owner = f"admitting:{uuid.uuid4().hex}"
+            _firmware_job_owner = owner
+            return owner
+        finally:
+            guard.release()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(503, "Firmware job ownership is unavailable; refusing admission.") from exc
+
+
+def _release_firmware_job_owner(owner: str) -> None:
+    """Release only the reservation or job that still owns the write sequence."""
+    global _firmware_job_owner
+    guard = _firmware_job_owner_guard
+    if guard is None:
+        return
+    try:
+        with guard:
+            if _firmware_job_owner == owner:
+                _firmware_job_owner = None
+    except Exception:
+        logger.exception("Could not release firmware job owner %s", owner)
+
+
+def _bind_firmware_job_owner(job: "UpdateJob") -> None:
+    """Transfer a successful admission reservation to its active job."""
+    global _firmware_job_owner
+    guard = _firmware_job_owner_guard
+    if guard is None:
+        raise RuntimeError("Firmware job ownership is unavailable; refusing admission.")
+    try:
+        with guard:
+            if not isinstance(_firmware_job_owner, str) or not _firmware_job_owner.startswith("admitting:"):
+                raise RuntimeError("Firmware job ownership is unavailable; refusing admission.")
+            _firmware_job_owner = job.job_id
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("Firmware job ownership is unavailable; refusing admission.") from exc
+
+
+def _serialize_firmware_job_admission(*, scheduled: bool = False):
+    """Guard every manual and scheduled firmware job admission path."""
+    def decorate(func):
+        @wraps(func)
+        async def wrapped(*args, **kwargs):
+            try:
+                reservation = _claim_firmware_job_owner()
+            except HTTPException as exc:
+                if scheduled:
+                    raise RuntimeError(exc.detail) from exc
+                raise
+            try:
+                result = await func(*args, **kwargs)
+            except BaseException:
+                _release_firmware_job_owner(reservation)
+                raise
+            _release_firmware_job_owner(reservation)
+            return result
+        return wrapped
+    return decorate
 _last_data_housekeeping_day: Optional[str] = None
 _shutting_down = False
 
@@ -4252,10 +4334,12 @@ async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
                 device_statuses=device_statuses,
                 cancel_reason=job.cancel_reason,
             )
+    _release_firmware_job_owner(job.job_id)
 
 
 def _spawn_update_job(job: "UpdateJob", concurrency: int):
     """Spawn update task with crash guard so scheduler state cannot get stuck."""
+    _bind_firmware_job_owner(job)
     task = asyncio.create_task(run_update_job(job, concurrency))
 
     def _on_done(done_task: asyncio.Task):
@@ -4265,7 +4349,14 @@ def _spawn_update_job(job: "UpdateJob", concurrency: int):
             return
         if exc:
             logger.exception(f"Update job {job.job_id} crashed", exc_info=exc)
-            asyncio.create_task(_finalize_crashed_job(job, exc))
+
+            async def finalize_and_release():
+                try:
+                    await _finalize_crashed_job(job, exc)
+                finally:
+                    _release_firmware_job_owner(job.job_id)
+
+            asyncio.create_task(finalize_and_release())
 
     task.add_done_callback(_on_done)
 
@@ -4934,6 +5025,7 @@ def _compare_versions(a: str, b: str) -> int:
     return policy_compare_versions(a, b)
 
 
+@_serialize_firmware_job_admission(scheduled=True)
 async def _start_scheduled_update(
     ap_ips: list[str],
     firmware_file: str,
@@ -5157,6 +5249,7 @@ async def _start_scheduled_update(
 
 
 @app.post("/api/start-update", tags=["jobs"])
+@_serialize_firmware_job_admission()
 async def start_update(
     firmware_file: str = Form(...),
     device_type: str = Form(...),
@@ -5385,6 +5478,7 @@ async def start_update(
 
 
 @app.post("/api/update-device", tags=["jobs"])
+@_serialize_firmware_job_admission()
 async def update_single_device_endpoint(
     ip: str = Form(...),
     firmware_file: str = Form(...),
@@ -6591,6 +6685,9 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         logger.error(f"Email notification failed for job {job.job_id}: {e}")
 
     logger.info(f"Job {job.job_id} completed: {success_count} success, {failed_count} failed, {skipped_count} skipped, {cancelled_count} cancelled")
+
+
+    _release_firmware_job_owner(job.job_id)
 
 
 @app.get("/api/job/{job_id}", tags=["jobs"])
