@@ -415,6 +415,41 @@ def _migrate(db):
     except Exception:
         pass  # Best-effort backfill; new rows will populate correctly
 
+    _migrate_identity(db)
+
+
+def _migrate_identity(db):
+    """Add stable identity storage and preserve legacy device observations."""
+    columns = {row[1] for row in db.execute("PRAGMA table_info(devices)")}
+    for name, definition in (
+        ("uid", "TEXT"),
+        ("uid_source", "TEXT"),
+        ("address_generation", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if name not in columns:
+            db.execute(f"ALTER TABLE devices ADD COLUMN {name} {definition}")
+    db.execute("""CREATE TABLE IF NOT EXISTS device_macs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, device_id INTEGER NOT NULL,
+        mac TEXT NOT NULL, interface TEXT NOT NULL, first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL, FOREIGN KEY (device_id) REFERENCES devices(id))""")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_device_macs_mac ON device_macs(mac)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_device_macs_device ON device_macs(device_id)")
+    db.execute("""CREATE TABLE IF NOT EXISTS identity_conflicts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, value TEXT NOT NULL,
+        device_ids TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'open',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, resolved_at TEXT)""")
+    db.execute("""CREATE INDEX IF NOT EXISTS idx_identity_conflicts_open_value
+        ON identity_conflicts(kind, value, state)""")
+    db.execute("""UPDATE devices SET uid = 'legacy-ip:' || ip, uid_source = 'ip_legacy'
+        WHERE uid IS NULL OR uid = ''""")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_uid ON devices(uid)")
+    db.execute("""INSERT INTO device_macs(device_id, mac, interface, first_seen, last_seen)
+        SELECT d.id, UPPER(d.mac), 'legacy', COALESCE(d.last_seen, d.created_at, CURRENT_TIMESTAMP),
+               COALESCE(d.last_seen, d.created_at, CURRENT_TIMESTAMP)
+        FROM devices d WHERE d.mac IS NOT NULL AND TRIM(d.mac) != ''
+          AND NOT EXISTS (SELECT 1 FROM device_macs m WHERE m.device_id=d.id
+                          AND m.mac=UPPER(d.mac) AND m.interface='legacy')""")
+
 
 def _migrate_to_devices_table(db):
     """One-time migration: copy data from access_points/switches to unified devices table."""
