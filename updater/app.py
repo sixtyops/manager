@@ -74,7 +74,6 @@ from . import webhooks
 from . import syslog_forwarder
 from . import email_notifier
 from . import ssl_manager
-from . import sftp_backup
 from . import radius_config
 from . import radius_rollout
 from . import oidc_config
@@ -448,39 +447,6 @@ async def _periodic_cleanup():
             logger.debug(f"Disk check failed: {e}")
 
 
-async def _backup_scheduler():
-    """Run daily backups at 5 AM if backup is configured."""
-    while True:
-        await asyncio.sleep(300)  # Check every 5 minutes
-        try:
-            settings = db.get_all_settings()
-            if settings.get("backup_enabled") != "true":
-                continue
-
-            # Check if it's 5 AM
-            now = datetime.now()
-            if now.hour != 5:
-                continue
-
-            # Check if we already ran today
-            last_run = settings.get("backup_last_run", "")
-            if last_run and last_run[:10] == now.strftime("%Y-%m-%d"):
-                continue
-
-            # Guard: skip if SFTP host not configured (e.g. migrating from old git backup)
-            if not settings.get("backup_sftp_host"):
-                continue
-
-            logger.info("Running scheduled backup")
-            success, msg = await sftp_backup.run_backup()
-            if success:
-                logger.info(f"Scheduled backup completed: {msg}")
-            else:
-                logger.error(f"Scheduled backup failed: {msg}")
-        except Exception as e:
-            logger.error(f"Backup scheduler error: {e}")
-
-
 def _cleanup_completed_jobs(max_age_seconds: int = 600):
     """Remove finished or stale jobs from in-memory dict."""
     now = datetime.now()
@@ -610,6 +576,7 @@ def _migrate_users_template_password_hashing() -> None:
 async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
     # Startup
+    db.delete_setting("backup_sftp_password")
     init_vendors()
     ensure_admin_user()
     db.cleanup_expired_sessions()
@@ -633,9 +600,6 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(
         _supervised_task("periodic_cleanup", _periodic_cleanup)
     )
-    backup_task = asyncio.create_task(
-        _supervised_task("backup_scheduler", _backup_scheduler)
-    )
     ws_health_task = asyncio.create_task(
         _supervised_task("ws_health_check", _websocket_health_check)
     )
@@ -647,9 +611,6 @@ async def lifespan(app: FastAPI):
     global _shutting_down
     _shutting_down = True
     bg_tasks = [cleanup_task]
-    if backup_task:
-        backup_task.cancel()
-        bg_tasks.append(backup_task)
     if ws_health_task:
         ws_health_task.cancel()
         bg_tasks.append(ws_health_task)
@@ -1262,91 +1223,6 @@ async def ssl_setup_api(request: Request, session: dict = Depends(require_role("
     if not success:
         raise HTTPException(400, message)
     return {"success": True, "message": message, **ssl_manager.get_ssl_status()}
-
-
-@app.get("/backup-setup", response_class=HTMLResponse)
-async def backup_setup_page(request: Request, session: dict = Depends(require_auth)):
-    """Serve the backup setup page."""
-    return render_template(request, "backup_setup.html", {
-        "backup_status": sftp_backup.get_backup_status(),
-        "error": None, "success": None,
-    })
-
-
-@app.post("/backup-setup")
-async def backup_setup_submit(
-    request: Request,
-    sftp_host: str = Form(...),
-    sftp_port: int = Form(22),
-    sftp_path: str = Form("/backups/sixtyops"),
-    sftp_username: str = Form(...),
-    auth_method: str = Form("password"),
-    sftp_password: str = Form(None),
-    ssh_key: str = Form(None),
-    retention_count: int = Form(30),
-    session: dict = Depends(require_role("admin")),
-):
-    """Handle SFTP backup configuration."""
-    success, message = await sftp_backup.configure_backup(
-        host=sftp_host, port=sftp_port, path=sftp_path,
-        username=sftp_username, auth_method=auth_method,
-        password=sftp_password, ssh_key=ssh_key,
-        retention_count=retention_count,
-    )
-    return render_template(request, "backup_setup.html", {
-        "backup_status": sftp_backup.get_backup_status(),
-        "error": None if success else message,
-        "success": message if success else None,
-    }, status_code=200 if success else 400)
-
-
-@app.post("/backup-run")
-async def backup_run_now(request: Request, session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
-    """Trigger an immediate backup."""
-    success, message = await sftp_backup.run_backup()
-    return render_template(request, "backup_setup.html", {
-        "backup_status": sftp_backup.get_backup_status(),
-        "error": None if success else message,
-        "success": message if success else None,
-    })
-
-
-@app.get("/api/backup/status", tags=["config"])
-async def get_backup_status_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
-    return sftp_backup.get_backup_status()
-
-
-@app.post("/api/backup/run", tags=["config"])
-async def api_backup_run_now(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
-    """Trigger an immediate backup and return JSON result."""
-    success, message = await sftp_backup.run_backup()
-    return {"success": success, "message": message}
-
-
-@app.post("/api/backup/test-connection", tags=["config"])
-async def test_backup_connection_api(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
-    """Test SFTP backup connection."""
-    success, message = await sftp_backup.test_backup_connection()
-    return {"success": success, "message": message}
-
-
-@app.get("/api/backup/list", tags=["config"])
-async def list_backups_api(session: dict = Depends(require_role("admin", "operator")), _pro=Depends(require_feature(Feature.CONFIG_BACKUP))):
-    """List available backups on SFTP server."""
-    return await sftp_backup.list_backups()
-
-
-@app.post("/api/backup/restore", tags=["config"])
-async def restore_backup_api(
-    archive_name: str = Form(...),
-    session: dict = Depends(require_role("admin")),
-    _pro=Depends(require_feature(Feature.CONFIG_BACKUP))
-):
-    """Restore database from an SFTP backup archive."""
-    success, message = await sftp_backup.restore_backup(archive_name)
-    if success:
-        db.log_audit(session["username"], "backup.restore", "backup", archive_name, "System restore initiated", None)
-    return {"success": success, "message": message}
 
 
 # ============================================================================

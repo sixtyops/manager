@@ -1116,26 +1116,6 @@ class ReleaseValidator:
     # 13. backup -----------------------------------------------------------
 
     def test_backup(self, r: TestResult) -> None:
-        # POST /api/backup/run
-        try:
-            resp = self._post("/api/backup/run")
-            if resp.status_code == 200:
-                r.record_pass("POST /api/backup/run -> 200")
-            else:
-                r.record_fail("POST /api/backup/run", f"status {resp.status_code}")
-        except Exception as e:
-            r.record_fail("POST /api/backup/run", "request error")
-
-        # GET /api/backup/status
-        try:
-            resp = self._get("/api/backup/status")
-            if resp.status_code == 200:
-                r.record_pass("GET /api/backup/status -> 200")
-            else:
-                r.record_fail("GET /api/backup/status", f"status {resp.status_code}")
-        except Exception as e:
-            r.record_fail("GET /api/backup/status", "request error")
-
         # POST /api/backup/export
         try:
             resp = self._post(

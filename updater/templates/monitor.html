@@ -3376,20 +3376,7 @@
 
                 <div class="system-subpanel" id="systemSub-backup" data-min-role-disable-tree="operator">
                     <div style="margin-bottom:16px;">
-                        <label class="settings-section-title">Backup & Restore</label>
-                        <div id="backupStatusInfo" style="font-size:0.75rem;color:var(--text-muted);padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;">Loading...</div>
-                        <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
-                            <button class="backup-btn" onclick="runBackupNow()">Run Now</button>
-                            <a href="/backup-setup" class="backup-btn u-bg-muted-cta" style="text-decoration:none;text-align:center;">Open SFTP Setup</a>
-                            <span id="backupRunStatus" class="u-text-xs-muted"></span>
-                        </div>
-                        <!-- Remote Backups (SFTP) restore panel hidden until the
-                             feature is finished. The list-and-restore flow
-                             still has rough edges (no auth check, "DANGEROUS"
-                             label was the placeholder). The corresponding
-                             loadRemoteBackups / restoreRemoteBackup JS is left
-                             in place so reviving this panel is a one-line
-                             markup add. -->
+                        <label class="settings-section-title">Device CSV transfer</label>
                     </div>
 
                     <hr class="u-hr">
@@ -7199,7 +7186,6 @@
             const activeName = activateScopedSubtab('systemSubtabs', '.system-subpanel', 'systemSub-', name, 'updates');
             if (activeName === 'updates') loadAppUpdateStatus();
             if (activeName === 'https') loadSslStatus();
-            if (activeName === 'backup') loadBackupStatus();
         }
 
         function switchNotifSubtab(name) {
@@ -10422,108 +10408,6 @@
                 status.textContent = 'Error: ' + e.message;
                 status.style.color = '#ef4444';
             }
-        }
-
-        // ── Backup / Restore ──
-
-        async function loadBackupStatus() {
-            const el = document.getElementById('backupStatusInfo');
-            if (!el) return;
-            try {
-                const resp = await fetch('/api/backup/status');
-                if (!resp.ok) { el.textContent = 'Could not load backup status'; return; }
-                const data = await resp.json();
-                if (!data.enabled) {
-                    el.textContent = 'Scheduled backup is not configured.';
-                } else {
-                    const statusColor = data.last_status === 'success' ? '#10b981' : (data.last_status ? '#dc2626' : '#6b7280');
-                    const statusText = data.last_status || 'never run';
-                    const lastRun = data.last_run || 'Never';
-                    el.innerHTML = `Status: <strong style="color:${statusColor}">${escapeHtml(statusText)}</strong> · Last run: ${escapeHtml(lastRun)}${data.sftp_display ? ` · ${escapeHtml(data.sftp_display)}` : ''}`;
-                    // Remote backups list panel hidden until the feature is
-                    // finished — see the markup note in systemSub-backup.
-                }
-            } catch (e) {
-                el.textContent = 'Could not load backup status';
-            }
-        }
-
-        async function runBackupNow() {
-            const statusEl = document.getElementById('backupRunStatus');
-            statusEl.innerHTML = '<span class="spinner-inline"></span> Running...';
-            statusEl.style.color = '#6b7280';
-            try {
-                const resp = await fetch('/api/backup/run', { method: 'POST' });
-                const data = await resp.json();
-                statusEl.textContent = data.message || (data.success ? 'Backup complete' : 'Backup failed');
-                statusEl.style.color = data.success ? '#10b981' : '#dc2626';
-                await loadBackupStatus();
-            } catch (e) {
-                statusEl.textContent = 'Backup failed: ' + e.message;
-                statusEl.style.color = '#dc2626';
-            }
-        }
-
-        async function loadRemoteBackups() {
-            const listEl = document.getElementById('remoteBackupsList');
-            if (!listEl) return;
-            try {
-                const resp = await fetch('/api/backup/list');
-                if (!resp.ok) { listEl.innerHTML = '<div style="padding:10px;text-align:center;font-size:0.75rem;color:#dc2626;">Error loading backups</div>'; return; }
-                const backups = await resp.json();
-                if (backups.length === 0) {
-                    listEl.innerHTML = '<div style="padding:10px;text-align:center;font-size:0.75rem;color:var(--text-muted);">No backups found on SFTP server.</div>';
-                } else {
-                    listEl.innerHTML = backups.map(b => {
-                        const date = b.mtime ? new Date(b.mtime).toLocaleString() : 'Unknown date';
-                        const size = formatBytes(b.size || 0);
-                        return `
-                            <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-bottom:1px solid var(--border-light);font-size:0.75rem;">
-                                <div style="flex:1;min-width:0;margin-right:8px;">
-                                    <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(b.name)}">${escapeHtml(b.name)}</div>
-                                    <div style="color:var(--text-dim);font-size:0.68rem;">${date} · ${size}</div>
-                                </div>
-                                <button class="action-link" style="color:var(--primary);font-weight:600;" onclick="restoreRemoteBackup('${escapeHtml(b.name)}')">Restore</button>
-                            </div>
-                        `;
-                    }).join('');
-                }
-            } catch (e) {
-                listEl.innerHTML = '<div style="padding:10px;text-align:center;font-size:0.75rem;color:#dc2626;">Failed to fetch backup list</div>';
-            }
-        }
-
-        async function restoreRemoteBackup(name) {
-            confirmDialog(
-                'Restore database from <strong>' + escapeHtml(name) + '</strong>? This will replace all current settings, devices, and history. The system should be restarted after restore.',
-                { title: 'Restore System Backup', confirmText: 'Restore Now', danger: true }
-            ).then(async (confirmed) => {
-                if (!confirmed) return;
-
-                const statusEl = document.getElementById('backupRunStatus');
-                statusEl.innerHTML = '<span class="spinner-inline"></span> Restoring...';
-                statusEl.style.color = 'var(--info)';
-
-                try {
-                    const formData = new FormData();
-                    formData.append('archive_name', name);
-                    const resp = await fetch('/api/backup/restore', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    const data = await resp.json();
-                    if (data.success) {
-                        showToast('Restore successful. Reloading...');
-                        setTimeout(() => location.reload(), 2000);
-                    } else {
-                        throw new Error(data.message || 'Restore failed');
-                    }
-                } catch (e) {
-                    statusEl.textContent = 'Restore failed: ' + e.message;
-                    statusEl.style.color = '#dc2626';
-                    showToast('Restore failed: ' + e.message, 'error');
-                }
-            });
         }
 
         function formatBytes(bytes, decimals = 1) {

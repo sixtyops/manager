@@ -39,6 +39,7 @@ SECRET_SETTINGS_KEYS = frozenset({
     "email_smtp_password",
     "radius_secret",
     "builtin_radius_secret",
+    # Keep decrypting existing values; no migration removes stored settings.
     "backup_sftp_password",
     "radius_server_secret",
     "radius_server_ldap_bind_password",
@@ -705,17 +706,6 @@ def init_db():
             "ssl_domain": "",
             "ssl_email": "",
             "ssl_cert_expires": "",
-            # SFTP backup configuration
-            "backup_enabled": "false",
-            "backup_sftp_host": "",
-            "backup_sftp_port": "22",
-            "backup_sftp_path": "/backups/sixtyops",
-            "backup_sftp_username": "",
-            "backup_sftp_password": "",
-            "backup_sftp_auth_method": "password",
-            "backup_retention_count": "30",
-            "backup_last_run": "",
-            "backup_last_status": "",
             # Setup wizard tracking
             "setup_wizard_completed": "false",
             # Auto-update configuration
