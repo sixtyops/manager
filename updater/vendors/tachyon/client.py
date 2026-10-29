@@ -19,6 +19,7 @@ Security Note:
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import tempfile
@@ -1267,11 +1268,12 @@ class TachyonClient:
         # Check 2: Configuration readable
         try:
             config = await self.get_config()
-            if config is not None:
+            if isinstance(config, dict):
                 result.checks.append({"check": "config_intact", "passed": True, "detail": "Config readable"})
             else:
-                result.warnings.append("Could not read device configuration")
-                result.checks.append({"check": "config_intact", "passed": False, "detail": "Config returned None"})
+                detail = "Config returned no data" if config is None else "Config response was not an object"
+                result.warnings.append(f"Could not read device configuration: {detail}")
+                result.checks.append({"check": "config_intact", "passed": False, "detail": detail})
         except Exception as e:
             result.warnings.append(f"Config check failed: {e}")
             result.checks.append({"check": "config_intact", "passed": False, "detail": str(e)})
@@ -1293,21 +1295,31 @@ class TachyonClient:
 
                 # Check 4: Signal levels on connected CPEs
                 low_signal_cpes = []
+                invalid_signal_cpes = []
                 for cpe in cpes:
                     # Use the same rxPower-first value we display
                     # (CPEInfo.primary_signal, which falls back to
                     # combinedSignal then lastLocalRssi) so a link that reads
                     # healthy in the UI isn't flagged low here.
+                    cpe_ip = getattr(cpe, "ip", "?")
                     signal = getattr(cpe, "primary_signal", None)
-                    if signal is not None and signal != 0:
-                        try:
-                            signal_val = float(signal)
-                            if signal_val < -80:
-                                low_signal_cpes.append(f"{getattr(cpe, 'ip', '?')} ({signal_val}dBm)")
-                        except (ValueError, TypeError):
-                            pass
+                    try:
+                        signal_val = float(signal)
+                    except (ValueError, TypeError):
+                        reason = "missing" if signal is None else "not numeric"
+                        invalid_signal_cpes.append(f"{cpe_ip} ({reason})")
+                        continue
 
-                if low_signal_cpes:
+                    if not math.isfinite(signal_val) or signal_val == 0 or not -120 <= signal_val <= 0:
+                        invalid_signal_cpes.append(f"{cpe_ip} (out of range)")
+                    elif signal_val < -80:
+                        low_signal_cpes.append(f"{cpe_ip} ({signal_val}dBm)")
+
+                if invalid_signal_cpes:
+                    detail = f"Invalid signal data: {', '.join(invalid_signal_cpes)}"
+                    result.warnings.append(f"CPE signal check failed: {detail}")
+                    result.checks.append({"check": "cpe_signal_levels", "passed": False, "detail": detail})
+                elif low_signal_cpes:
                     result.warnings.append(f"Low signal CPEs: {', '.join(low_signal_cpes)}")
                     result.checks.append({"check": "cpe_signal_levels", "passed": False, "detail": f"{len(low_signal_cpes)} CPEs with low signal"})
                 elif cpes and all(getattr(cpe, "primary_signal", None) not in (None, 0) for cpe in cpes):
