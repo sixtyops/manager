@@ -2106,7 +2106,16 @@ def create_rollout(
     created_at = now.strftime("%Y-%m-%d %H:%M:%S")
     duplicate_since = (now - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")
     membership = members is not None
+    encoded_settings_snapshot = None
     if membership:
+        if not isinstance(settings_snapshot, dict):
+            raise ValueError("Rollout membership requires a settings snapshot object")
+        try:
+            encoded_settings_snapshot = json.dumps(
+                settings_snapshot, separators=(",", ":"), allow_nan=False
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Rollout settings snapshot must be valid JSON") from exc
         members = list(members)
         if not members:
             raise ValueError("Rollout membership snapshot must not be empty")
@@ -2166,8 +2175,8 @@ def create_rollout(
                 status,
                 created_at,
                 created_at,
-                json.dumps(settings_snapshot, separators=(",", ":"))
-                if settings_snapshot is not None else None,
+                encoded_settings_snapshot
+                if membership else None,
             ),
         )
         rollout_id = cursor.lastrowid

@@ -158,6 +158,7 @@ def test_create_rollout_rolls_back_when_any_member_insert_fails(mock_db):
                 {"ip": "192.0.2.10", "device_type": "ap"},
                 {"ip": "192.0.2.11", "device_type": "switch"},
             ],
+            settings_snapshot={"bank_mode": "both"},
             now=datetime(2026, 6, 2, 3, 15),
         )
 
@@ -169,14 +170,21 @@ def test_create_rollout_rolls_back_when_any_member_insert_fails(mock_db):
 def test_create_rollout_duplicate_membership_requires_an_exact_snapshot(mock_db):
     fixed_now = datetime(2026, 6, 2, 3, 15)
     original_members = [{"ip": "192.0.2.10", "device_type": "ap"}]
-    rollout_id = db.create_rollout(FW, members=original_members, now=fixed_now)
+    settings = {"bank_mode": "both"}
+    rollout_id = db.create_rollout(
+        FW, members=original_members, settings_snapshot=settings, now=fixed_now
+    )
 
     duplicate_id = db.create_rollout(
-        FW, members=original_members, now=fixed_now + timedelta(seconds=1)
+        FW,
+        members=original_members,
+        settings_snapshot=settings,
+        now=fixed_now + timedelta(seconds=1),
     )
     changed_id = db.create_rollout(
         FW,
         members=original_members + [{"ip": "192.0.2.11", "device_type": "switch"}],
+        settings_snapshot=settings,
         now=fixed_now + timedelta(seconds=2),
     )
 
@@ -188,10 +196,40 @@ def test_create_rollout_duplicate_membership_requires_an_exact_snapshot(mock_db)
 
 def test_create_rollout_rejects_an_empty_membership_snapshot(mock_db):
     with pytest.raises(ValueError, match="must not be empty"):
-        db.create_rollout(FW, members=[], now=datetime(2026, 6, 2, 3, 15))
+        db.create_rollout(
+            FW,
+            members=[],
+            settings_snapshot={"bank_mode": "both"},
+            now=datetime(2026, 6, 2, 3, 15),
+        )
 
     with db.get_db() as conn:
         assert conn.execute("SELECT COUNT(*) FROM rollouts").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "message"),
+    [
+        (None, "requires a settings snapshot"),
+        ({"bank_mode": object()}, "must be valid JSON"),
+    ],
+    ids=["missing", "invalid"],
+)
+def test_create_rollout_rejects_missing_or_invalid_settings_snapshot_without_writes(
+    mock_db, snapshot, message
+):
+    kwargs = {} if snapshot is None else {"settings_snapshot": snapshot}
+    with pytest.raises(ValueError, match=message):
+        db.create_rollout(
+            FW,
+            members=[{"ip": "192.0.2.10", "device_type": "ap"}],
+            now=datetime(2026, 6, 2, 3, 15),
+            **kwargs,
+        )
+
+    with db.get_db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM rollouts").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM rollout_devices").fetchone()[0] == 0
 
 
 def test_empty_wave_reservation_writes_nothing(mock_db):
