@@ -64,6 +64,32 @@ gives no exemption from locks or pacing gates.
    Complete or hold the work with evidence. Append the result and next
    owner/action. Read back each GitHub mutation and durable status append.
 
+## Workspace organization
+
+**Key points:** Each lead organizes its own Paseo workspace and its workers.
+Pins remain the owner's personal shortlist.
+
+**Detail:** Follow the
+[shared workspace SOP](https://github.com/isolson/personal-processes/blob/master/docs/paseo-workspace-organization.md)
+at `~/repos/personal-processes/docs/paseo-workspace-organization.md` on llm01.
+The hub maintains the common tools. Manager keeps its model routing, worker
+permissions, file-overlap schedule, heartbeat ownership, and safety gates.
+
+1. Match the current agent to its exact workspace ID in the full catalog. Name
+   the workspace for its project and task.
+2. Keep `Ongoing` on a lead workspace while a commitment remains open, including
+   a wait for the owner. Keep the owner's pins intact.
+3. Keep the parent-agent relationship when starting a worker. Apply `Worker`
+   only to a workspace used exclusively by workers. A worker in a shared lead
+   workspace must not change its title or labels.
+4. Preview each label change. Apply it only under approval for that metadata
+   write, then read it back. Existing approval for that scope is sufficient.
+5. Check the worker's result and save its durable outcome before cleanup.
+   Use the shared SOP's sweep checks. Keep unfinished work in the lead record.
+
+Until the shared SOP and protected sweep are installed, keep the existing pins
+and cleanup holds. An `Ongoing` label does not protect work from an older sweep.
+
 ## Priority and delegation
 
 **Key points:** System safety and working fleet management come before website
