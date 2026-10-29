@@ -10,6 +10,7 @@ import pytest
 
 from updater import app as app_module, database as db, rollout_gate as gate
 from updater.vendors.base import VendorDeviceInfo, VendorUpdateResult, VendorSmokeTestResult
+from updater.vendors.tachyon.client import DeviceInfo, TachyonClient
 
 IP = "192.0.2.10"
 OTHER_IP = "192.0.2.11"
@@ -179,7 +180,7 @@ async def test_unqualified_job_holds_before_writes(tables, runner, scheduled, re
         db.upsert_switch(IP, "synthetic", "synthetic", model="TNA-301", firmware_version=SOURCE)
     job = make_job(scheduled, reboot, role, bank_mode="both")
     await app_module.run_update_job(job, 2)
-    runner.connect.assert_not_awaited()
+    runner.connect.assert_awaited()
     runner.reboot.assert_not_awaited()
     runner.update_firmware.assert_not_awaited()
     assert job.devices[IP].status == "deferred"
@@ -240,6 +241,175 @@ async def test_qualified_job_reboots_and_flashes(tables, runner, scheduled):
     runner.reboot.assert_awaited_once()
     runner.update_firmware.assert_awaited_once()
     assert job.devices[IP].status == "success"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("live_change,expected_writes", [(None, ["upload", "trigger"]),
+                                                          ("source", []),
+                                                          ("management_vlan", [])])
+async def test_driver_qualification_callback_normalizes_tachyon_info(
+    tables, runner, live_change, expected_writes,
+):
+    qualify()
+    writes = []
+    version = "1.12.3.54970" if live_change != "source" else "1.12.3.54971"
+    vlan = 100 if live_change != "management_vlan" else 200
+
+    async def update_with_live_info(*args, qualification_check, **kwargs):
+        live_info = DeviceInfo(
+            ip=IP, model="TNA-301", current_version=version,
+            management_interface="eth0.100", management_vlan_id=vlan,
+            firmware_sha256=SCOPE["source_sha256"],
+            management_ip_mode=SCOPE["management_ip_mode"],
+        )
+        admitted, reason = await qualification_check(live_info)
+        if not admitted:
+            return VendorUpdateResult(ip=IP, success=False, error=reason)
+        writes.extend(("upload", "trigger"))
+        return VendorUpdateResult(
+            ip=IP, success=True, old_version=SOURCE, new_version=TARGET,
+            model="TNA-301",
+        )
+
+    runner.update_firmware.side_effect = update_with_live_info
+    job = make_job(reboot=False)
+
+    await app_module.run_update_job(job, 1)
+
+    assert writes == expected_writes
+    if live_change is None:
+        assert job.devices[IP].status == "success"
+    else:
+        assert job.devices[IP].status == "deferred"
+        assert "Address-change hold" in job.devices[IP].error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["source_sha256", "management_ip_mode"])
+async def test_pre_reboot_rechecks_fresh_device_info(tables, runner, monkeypatch, change):
+    qualify()
+    changed = dict(OBSERVED)
+    if change == "source_sha256":
+        changed["firmware_sha256"] = "b" * 64
+    else:
+        changed["management_ip_mode"] = "static"
+    initial = VendorDeviceInfo(ip=IP, model="TNA-301", current_version=SOURCE, extra=dict(OBSERVED))
+    boundary = VendorDeviceInfo(ip=IP, model="TNA-301", current_version=SOURCE, extra=changed)
+    runner.get_device_info = AsyncMock(side_effect=[initial, boundary])
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 28, tzinfo=tz)
+    monkeypatch.setattr(app_module, "datetime", FixedDateTime)
+    job = make_job()
+    job.window_key = ("firmware", "2026-10-28")
+
+    await app_module.run_update_job(job, 1)
+
+    runner.reboot.assert_not_awaited()
+    assert job.devices[IP].status == "deferred"
+    assert "Address-change hold" in job.devices[IP].error
+    assert db.get_firmware_window_stop(job.window_key) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["firmware_sha256", "management_ip_mode"])
+async def test_missing_live_qualification_field_holds_before_reboot(tables, runner, field):
+    qualify()
+    initial = VendorDeviceInfo(ip=IP, model="TNA-301", current_version=SOURCE, extra=dict(OBSERVED))
+    missing = dict(OBSERVED)
+    missing.pop(field)
+    boundary = VendorDeviceInfo(ip=IP, model="TNA-301", current_version=SOURCE, extra=missing)
+    runner.get_device_info = AsyncMock(side_effect=[initial, boundary])
+
+    job = make_job()
+    await app_module.run_update_job(job, 1)
+
+    runner.reboot.assert_not_awaited()
+    runner.update_firmware.assert_not_awaited()
+    assert job.devices[IP].status == "deferred"
+    assert "Address-change hold" in job.devices[IP].error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["upload", "upload_retry", "trigger"])
+@pytest.mark.parametrize("field", ["firmware_sha256", "management_ip_mode"])
+async def test_tachyon_rechecks_live_fields_at_each_driver_write_boundary(
+    tables, monkeypatch, tmp_path, boundary, field,
+):
+    import asyncio
+    import updater.vendors.tachyon.client as tachyon_client_module
+
+    client = TachyonClient(IP, "synthetic", "synthetic")
+    client.login = AsyncMock(return_value=True)
+    expected = {
+        "firmware_sha256": SCOPE["source_sha256"],
+        "management_ip_mode": SCOPE["management_ip_mode"],
+    }
+
+    def live_info(changed=False):
+        values = dict(expected)
+        if changed:
+            values[field] = "static" if field == "management_ip_mode" else "b" * 64
+        return DeviceInfo(
+            ip=IP, model="TNA-301", current_version=SOURCE,
+            firmware_sha256=values["firmware_sha256"],
+            management_ip_mode=values["management_ip_mode"],
+        )
+
+    reads = 0
+
+    async def read_info(*args, **kwargs):
+        nonlocal reads
+        reads += 1
+        changed_read = {
+            "upload": 2,
+            "upload_retry": 3,
+            "trigger": 3,
+        }[boundary]
+        return live_info(changed=reads == changed_read)
+
+    client.get_device_info = AsyncMock(side_effect=read_info)
+    qualification_checks = []
+
+    async def qualification_check(info, error=""):
+        qualification_checks.append((info, error))
+        if error:
+            return False, error
+        if (info.firmware_sha256 != expected["firmware_sha256"]
+                or info.management_ip_mode != expected["management_ip_mode"]):
+            return False, "Deferred: live qualification changed"
+        return True, ""
+
+    curl_calls = 0
+
+    async def fake_curl(args):
+        nonlocal curl_calls
+        curl_calls += 1
+        if boundary == "upload_retry" and curl_calls == 1:
+            return 7, b""
+        return 0, b"{}"
+
+    monkeypatch.setattr(tachyon_client_module, "_run_curl", fake_curl)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    client.trigger_update = AsyncMock(return_value=True)
+    client.wait_for_reboot = AsyncMock(return_value=True)
+    monkeypatch.setattr(client, "get_device_info", AsyncMock(side_effect=read_info))
+    fw_path = tmp_path / FW
+    fw_path.write_bytes(ARTIFACT)
+
+    result = await client.update_firmware(str(fw_path), qualification_check=qualification_check)
+
+    assert not result.success
+    assert "live qualification changed" in result.error
+    client.trigger_update.assert_not_awaited()
+    if boundary == "trigger":
+        assert curl_calls == 1
+    elif boundary == "upload":
+        assert curl_calls == 0
+    else:
+        assert curl_calls == 1
+    assert reads == {"upload": 2, "upload_retry": 3, "trigger": 3}[boundary]
 
 
 @pytest.mark.asyncio
@@ -416,7 +586,7 @@ async def test_live_scope_change_holds_before_each_write(tables, runner, schedul
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scheduled", [True, False])
 @pytest.mark.parametrize("field", ["firmware_sha256", "management_vlan", "management_ip_mode"])
-async def test_missing_inventory_scope_holds_before_connect(tables, runner, monkeypatch, scheduled, field):
+async def test_missing_inventory_scope_uses_live_evidence(tables, runner, monkeypatch, scheduled, field):
     qualify()
     read = db.get_access_point
     def missing(ip):
@@ -426,10 +596,11 @@ async def test_missing_inventory_scope_holds_before_connect(tables, runner, monk
     monkeypatch.setattr(db, "get_access_point", missing)
     job = make_job(scheduled)
     await app_module.run_update_job(job, 1)
-    runner.connect.assert_not_awaited()
-    runner.reboot.assert_not_awaited()
-    runner.update_firmware.assert_not_awaited()
-    assert job.devices[IP].status == "deferred"
+    runner.connect.assert_awaited()
+    if job.pre_update_reboot:
+        runner.reboot.assert_awaited_once()
+    runner.update_firmware.assert_awaited_once()
+    assert job.devices[IP].status == "success"
 
 
 @pytest.mark.asyncio

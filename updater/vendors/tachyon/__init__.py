@@ -58,6 +58,8 @@ class TachyonDriver(VendorDriver):
                 "management_interface": info.management_interface,
                 "management_vlan_id": info.management_vlan_id,
                 "management_mac": info.management_mac,
+                "firmware_sha256": info.firmware_sha256,
+                "management_ip_mode": info.management_ip_mode,
             },
         )
 
@@ -81,11 +83,14 @@ class TachyonDriver(VendorDriver):
         reboot_timeout: int = 300,
         bandwidth_limit_kbps: int = 0,
         admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
+        qualification_check=None,
         upload_started_callback: Optional[Callable[[], None]] = None,
     ) -> VendorUpdateResult:
         options = {}
         if admission_check:
             options["admission_check"] = admission_check
+        if qualification_check:
+            options["qualification_check"] = qualification_check
         if upload_started_callback:
             options["upload_started_callback"] = upload_started_callback
         result = await self._client.update_firmware(
