@@ -18,6 +18,8 @@ This repo now has two live-dev validation lanes:
 
 - `dev_blocking`: merge-gating validation against the shared dev host and dedicated lab devices
 - `dev_sso`: separate non-blocking SSO/OIDC validation lane
+- `dev_nonblocking`: live tests that do not gate a merge. The RADIUS rollout
+  test uses this marker while RADIUS remains scheduled for removal.
 
 Set `SIXTYOPS_TEST_URL` to the authorized dev host URL for the authorized dev
 validation lane. Use this lane only with its authorized test devices.
@@ -88,6 +90,10 @@ SIXTYOPS_TEST_OIDC_REDIRECT_URI=<redirect-uri> \
 pytest -m "integration and dev_sso" -v --tb=no -rN
 ```
 
+The RADIUS rollout test is excluded from `dev_blocking`. Select it explicitly
+with `pytest -m "integration and dev_nonblocking"` when you need to run it.
+It is not part of the merge-gating hardware workflow.
+
 These options print each test name with its `PASSED`, `FAILED`, or `SKIPPED`
 status without printing tracebacks or a short summary that could include
 failure reasons or response bodies. Investigate a failure by rerunning only
@@ -135,7 +141,9 @@ does not walk the whole enabled fleet.
 
 ## Workflow Contracts
 
-- `.github/workflows/dev-hardware.yml` runs the merge-gating `dev_blocking` lane on `pull_request`, `workflow_dispatch`, and `schedule`.
+- `.github/workflows/dev-hardware.yml` runs the merge-gating `dev_blocking`
+  lane on `pull_request`, `workflow_dispatch`, and `schedule`. It does not run
+  `dev_nonblocking` tests.
 - The workflow uses a concurrency group per Git ref and keeps `cancel-in-progress` off. A pending run for one pull request cannot replace a pending run for another pull request.
 - `.github/workflows/dev-sso.yml` runs the separate `dev_sso` lane on `workflow_dispatch` and `schedule`.
 - The Actions workflows accept repository variables or secrets for the non-sensitive host and device inputs, and secrets for passwords.

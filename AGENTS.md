@@ -11,7 +11,8 @@ Operational how-to documents do not grant approval to exceed these limits.
 
 - Branch from `main` and target `main`. Never push directly to `main`.
   Use one feature per branch and PR. Use a conventional-commit PR title.
-- Update `CHANGELOG.md` under `Unreleased` for a user-facing change.
+- Add one `changelog.d/<issue-number>.<kind>.md` fragment for each user-facing
+  change. Use `added`, `changed`, `fixed`, `removed`, or `security` as the kind.
   Keep commits focused and atomic. Use conventional commit messages.
 - Run `pytest -v` before committing. All tests must pass. Exclude
   `tests/integration` as shown in Commands.
@@ -64,9 +65,23 @@ export PYTEST_ADDOPTS="--ignore=tests/integration"
 pytest -v
 ```
 
+## Release workflow
+
+Use changelog fragments for user-facing changes. At release time, run
+`python scripts/collect_changelog.py <version> <date>` to move all fragments
+into the version section of `CHANGELOG.md` and remove the fragment files.
+Run `python scripts/collect_changelog.py --check` to validate fragment names.
+
+## Release notes
+
+- Add one or two STE lines to `changelog.d/<issue-number>.<kind>.md` for each
+  user-facing change. Do not edit `CHANGELOG.md` in a pull request.
+- Group release fragments by kind when collecting them into the versioned
+  `CHANGELOG.md` section.
+
 The Release workflow uses `pytest -v --timeout=60`. There is no lint job in CI.
 Live test commands are in the hardware SOP for the operator or an approved lead.
-Run `./dev.sh` for local UI/API development without hardware.
+Run `./dev.sh` for local UI/API development without hardware. It creates the schema, runs `scripts/seed_dev_data.py`, then starts the real poller. Seeded devices use RFC 5737 documentation addresses; connection errors and backoff are expected. The seed script does not mark setup complete.
 
 Create branch work from fetched `origin/main`, without checking out the live clone:
 

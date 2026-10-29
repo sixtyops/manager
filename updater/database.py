@@ -2266,6 +2266,72 @@ def set_rollout_settings_snapshot(rollout_id: int, settings: dict):
         )
 
 
+def reserve_rollout_wave(
+    *,
+    rollout_id: int,
+    phase: str,
+    window_key,
+    assignments: list[tuple[str, str, str]],
+    settings: dict,
+    first_wave_held: bool = False,
+) -> bool:
+    """Commit the window marker, wave assignments, and settings as one unit."""
+    from datetime import date
+    from .rollout_gate import phase_run_decision
+
+    if not isinstance(window_key, (tuple, list)) or len(window_key) != 2:
+        return False
+    schedule_id, start_date = window_key
+    if not (
+        (isinstance(schedule_id, int) and not isinstance(schedule_id, bool) and schedule_id > 0)
+        or (isinstance(schedule_id, str) and bool(schedule_id.strip()))
+    ):
+        return False
+    try:
+        if date.fromisoformat(start_date).isoformat() != start_date:
+            return False
+    except (TypeError, ValueError):
+        return False
+    if not assignments:
+        return False
+
+    encoded_key = json.dumps(list(window_key), separators=(",", ":"))
+    encoded_settings = json.dumps(settings, separators=(",", ":"))
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT id, status, phase, last_phase_window FROM rollouts WHERE id = ?",
+            (rollout_id,),
+        ).fetchone()
+        if not row or row["phase"] != phase:
+            return False
+        allowed, _ = phase_run_decision(
+            dict(row), window_key, first_wave_held=first_wave_held
+        )
+        if not allowed:
+            return False
+
+        # Write the marker first so a failure at any later position proves that
+        # SQLite rolls back the whole reservation.
+        conn.execute(
+            "UPDATE rollouts SET last_phase_window = ?, updated_at = ? WHERE id = ?",
+            (encoded_key, now, rollout_id),
+        )
+        for ip, device_type, assigned_phase in assignments:
+            conn.execute(
+                """INSERT OR IGNORE INTO rollout_devices
+                   (rollout_id, ip, device_type, phase_assigned, status)
+                   VALUES (?, ?, ?, ?, 'pending')""",
+                (rollout_id, ip, device_type, assigned_phase),
+            )
+        conn.execute(
+            "UPDATE rollouts SET settings_json = ? WHERE id = ?",
+            (encoded_settings, rollout_id),
+        )
+    return True
+
+
 def get_rollout_settings_snapshot(rollout_id: int) -> Optional[dict]:
     """Get the settings snapshot for a rollout, or None if not set."""
     import json

@@ -14,14 +14,22 @@ All notable changes to this project are documented in this file.
   switch captures as parser fixtures.
 
 ### Fixed
-- Serialize dev hardware validation with a shared-host file lock. Keep separate
-  pending runs for different Git refs.
+- Recheck address-change qualification at the pre-update reboot, every Tachyon
+  firmware upload attempt, and the install trigger. Denied writes keep a visible
+  deferred hold for the current window without recording a failed-window stop.
+  Use source hash and management IP mode from each live read; hold when either
+  field is missing instead of using stored inventory values.
 - Require release validation against the candidate commit before signing a tag.
   The validator can read its development host and credentials from environment
   variables.
 - Read the release validation password from the environment or a private file.
   Reject password command-line arguments to keep credentials out of process
   listings.
+- Reserve each scheduled rollout wave with its window key, member assignments,
+  and settings snapshot in one transaction. A failed job admission consumes
+  that window, and pending members retry in a later window without advancing
+  the phase. Log and job admission use the bank mode from that reserved
+  settings snapshot.
 - Validate Tachyon peer-list MAC claims before exposing them as CPE identity.
   Include switch management interface, VLAN, and MAC data in normal device info.
 - Firmware updates now stop new device writes after the first failed snapshot,
@@ -69,6 +77,11 @@ All notable changes to this project are documented in this file.
   no runtime behavior.
 
 ### Removed
+- Removed `updater/devmode.py` and `SIXTYOPS_DEV_MODE`. `./dev.sh` now seeds
+  sample devices with `scripts/seed_dev_data.py` and runs the real poller.
+  Seeded devices use RFC 5737 documentation addresses, so the poller cannot
+  reach a real device. Connection errors in the log are expected.
+  After login, the first-run setup page shows once. Local login stays admin/admin.
 - Removed `GET /api/uptime/device` and `GET /api/uptime/events`, plus their
   exclusive database read helpers. Requests that pass unchanged middleware
   return 404, and OpenAPI omits both paths. External API callers are unknown.

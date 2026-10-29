@@ -120,6 +120,7 @@ class VendorDriver(ABC):
         reboot_timeout: int = 300,
         bandwidth_limit_kbps: int = 0,
         admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
+        qualification_check: Optional[Callable[[Optional[VendorDeviceInfo], str], Any]] = None,
     ) -> VendorUpdateResult:
         """Perform the full update cycle: connect, upload, install, verify."""
         ...
