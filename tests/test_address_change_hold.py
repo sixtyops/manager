@@ -511,7 +511,8 @@ async def test_scheduled_hold_keeps_wave_pending(tables, mock_db, monkeypatch):
         rollout["last_job_id"], 0, 0, device_statuses={ip: "deferred" for ip in ips},
     )
     assert db.get_active_rollout()["phase"] == "pct10"
-    assert all(d["status"] == "deferred" for d in db.get_rollout_devices(rollout["id"]))
+    phase_devices = db.get_rollout_devices(rollout["id"], phase="pct10")
+    assert phase_devices and all(d["status"] == "deferred" for d in phase_devices)
     await harness.tick()
     assert start.call_count == 1
 
