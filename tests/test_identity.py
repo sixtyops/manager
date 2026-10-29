@@ -89,9 +89,54 @@ def test_duplicate_mac_holds_both_devices(memory_db):
 
 def test_mac_only_and_missing_serial_are_never_verified(memory_db):
     device_id = _device(memory_db, "192.0.2.8")
+    memory_db.execute(
+        "UPDATE devices SET uid='legacy-ip:192.0.2.8', uid_source='ip_legacy' WHERE id=?",
+        (device_id,),
+    )
+    memory_db.commit()
     record_identity(memory_db, device_id, None, {"eth0": "001122334455"})
+    assert tuple(memory_db.execute(
+        "SELECT uid,uid_source FROM devices WHERE id=?", (device_id,)
+    ).fetchone()) == ("legacy-ip:192.0.2.8", "ip_legacy")
     assert match_observation(memory_db, macs={"eth0": "001122334455"})["status"] == "unverified"
     assert match_observation(memory_db, serial="unknown", macs={})["status"] == "no_match"
+
+
+def test_duplicate_mac_records_conflict_without_changing_either_uid(memory_db):
+    first, second = _device(memory_db, "192.0.2.81"), _device(memory_db, "192.0.2.82")
+    for device_id, ip in ((first, "192.0.2.81"), (second, "192.0.2.82")):
+        memory_db.execute(
+            "UPDATE devices SET uid=?, uid_source='ip_legacy' WHERE id=?",
+            (f"legacy-ip:{ip}", device_id),
+        )
+    memory_db.commit()
+
+    record_identity(memory_db, first, macs={"radio": "001122334455"})
+    result = record_identity(memory_db, second, macs={"eth0": "00:11:22:33:44:55"})
+
+    assert result["status"] == "conflict"
+    assert [tuple(row) for row in memory_db.execute(
+        "SELECT uid,uid_source FROM devices WHERE id IN (?,?) ORDER BY id", (first, second)
+    )] == [
+        ("legacy-ip:192.0.2.81", "ip_legacy"),
+        ("legacy-ip:192.0.2.82", "ip_legacy"),
+    ]
+    conflict = memory_db.execute(
+        "SELECT device_ids FROM identity_conflicts WHERE kind='mac' "
+        "AND value='00:11:22:33:44:55' AND state='open'"
+    ).fetchone()
+    assert json.loads(conflict[0]) == sorted([first, second])
+
+
+def test_serial_observation_sets_uid(memory_db):
+    device_id = _device(memory_db, "192.0.2.83")
+
+    result = record_identity(memory_db, device_id, serial="SN-STABLE")
+
+    assert result["status"] == "unverified"
+    assert tuple(memory_db.execute(
+        "SELECT uid,uid_source FROM devices WHERE id=?", (device_id,)
+    ).fetchone()) == ("SN-STABLE", "serial")
 
 
 def test_failed_conflict_write_rolls_back_claim_and_alias(memory_db):

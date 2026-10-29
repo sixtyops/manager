@@ -148,14 +148,9 @@ def record_identity(db, device_id, serial=None, macs=None, *, now=None):
                     owners.update(ids)
             if owners - {device_id}:
                 held.update(_record_conflict(db, "serial", serial, owners | {device_id}, timestamp))
-            elif row[1] in (None, "ip_legacy", "mac") or row[0] == serial:
+            elif not held and (row[1] in (None, "ip_legacy", "mac") or row[0] == serial):
                 db.execute("UPDATE devices SET uid=?, uid_source='serial' WHERE id=?", (serial, device_id))
 
-        if not serial and not held and aliases and row[1] in (None, "ip_legacy"):
-            first_mac = next(iter(aliases))
-            owner = db.execute("SELECT id FROM devices WHERE uid=?", (first_mac,)).fetchone()
-            if owner is None:
-                db.execute("UPDATE devices SET uid=?, uid_source='mac' WHERE id=?", (first_mac, device_id))
         result = {"device_ids": sorted(held or {device_id}),
                   "status": "conflict" if held else ("unverified" if serial or aliases else "no_match"),
                   "verified": False}
