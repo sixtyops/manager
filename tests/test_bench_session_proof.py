@@ -49,6 +49,8 @@ def test_clean_run_passes_and_reports_link_uptime(monkeypatch, capsys):
     _report(recorder, 1200, has_session_valid=True)
     output = capsys.readouterr().out
     assert "link device=cpe-1 uptime_start_s=1000 uptime_end_s=1180 resets=0" in output
+    assert ("recovery device=cpe-1 forced_renewal=yes reuse_after_forced_renewal=yes "
+            "logout_recovery=yes reuse_after_logout_recovery=yes") in output
     assert "192.0.2.2" not in output
 
 
@@ -83,16 +85,22 @@ def test_age_helper_moves_cached_login_past_ttl():
 
 
 @pytest.mark.asyncio
-async def test_logout_helper_uses_authenticated_device_logout():
+async def test_logout_helper_uses_authenticated_device_logout_only_for_bench_session():
     class Client:
         async def _curl(self, method, endpoint):
             self.request = (method, endpoint)
             return 204, ""
 
     client = Client()
+    recorder = Recorder(0)
+    recorder.login("192.0.2.2", True, client=client)
 
-    assert await _logout_cpe_session(client)
+    assert await _logout_cpe_session(recorder, "192.0.2.2", client)
     assert client.request == ("DELETE", "/cgi.lua/apiv1/login")
+
+    unrelated = Client()
+    assert not await _logout_cpe_session(recorder, "192.0.2.2", unrelated)
+    assert not hasattr(unrelated, "request")
 
 
 @pytest.mark.parametrize(
@@ -163,3 +171,21 @@ def test_login_gap_shorter_than_age_limit_fails(monkeypatch):
     recorder.login_triggers["192.0.2.2"] = [None, None]
 
     assert "login spacing too tight for cpe-1" in _evaluate(recorder, set(), True)
+
+
+def test_summary_reports_every_expected_cpe_recovery_stage(monkeypatch, capsys):
+    recorder = _passing_recorder(monkeypatch)
+    recorder.cpe_poll([
+        {"ip": "192.0.2.2", "link_uptime": 1240},
+        {"ip": "192.0.2.3", "link_uptime": 700},
+    ])
+    from scripts.bench.session_proof import _report
+
+    _report(recorder, 1200, has_session_valid=True)
+    output = capsys.readouterr().out
+    assert ("recovery device=cpe-1 forced_renewal=yes "
+            "reuse_after_forced_renewal=yes logout_recovery=yes "
+            "reuse_after_logout_recovery=yes") in output
+    assert ("recovery device=cpe-2 forced_renewal=no "
+            "reuse_after_forced_renewal=no logout_recovery=no "
+            "reuse_after_logout_recovery=no") in output

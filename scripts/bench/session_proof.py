@@ -50,6 +50,7 @@ class Recorder:
         self.checks: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self.check_events: dict[str, list[tuple[float, str]]] = defaultdict(list)
         self.link_uptime: dict[str, list[int | None]] = defaultdict(list)
+        self.expected_cpes: set[str] = set()
         self.dropped_cpes: set[str] = set()
         self.cpe_poll_count = 0
         self.aged_cpes: set[str] = set()
@@ -60,17 +61,20 @@ class Recorder:
         self.post_logout_logins: set[str] = set()
         self.post_logout_poll_floor: dict[str, int] = {}
         self.post_logout_reuse: set[str] = set()
+        self.bench_opened_sessions: dict[str, list[object]] = defaultdict(list)
         self.order: list[str] = []
 
     def _seen(self, ip: str):
         if ip not in self.order:
             self.order.append(ip)
 
-    def login(self, ip: str, ok: bool):
+    def login(self, ip: str, ok: bool, client=None):
         self._seen(ip)
         self.logins[ip].append((time.time(), ok))
         trigger = self.pending_login_trigger.pop(ip, None)
         self.login_triggers[ip].append(trigger)
+        if ok and client is not None:
+            self.bench_opened_sessions[ip].append(client)
         if ok and trigger == "age":
             self.renewal_logins.add(ip)
         if ok and trigger == "logout":
@@ -98,11 +102,15 @@ class Recorder:
             if uptime is not None and uptime < 0:
                 uptime = None
             current[ip] = uptime
+            self.expected_cpes.add(ip)
             self._seen(ip)
 
         self.dropped_cpes.update(set(self.link_uptime) - set(current))
         for ip, uptime in current.items():
             self.link_uptime[ip].append(uptime)
+
+    def owns_session(self, ip: str, client) -> bool:
+        return any(opened is client for opened in self.bench_opened_sessions.get(ip, []))
 
 
 def _uptime_reset_count(samples: list[int | None]) -> int:
@@ -120,8 +128,10 @@ def _age_cached_cpe_login(poller, cpe_ip: str) -> bool:
     return True
 
 
-async def _logout_cpe_session(client) -> bool:
+async def _logout_cpe_session(recorder: Recorder, ip: str, client) -> bool:
     """End the authenticated device session through the client's request helper."""
+    if not recorder.owns_session(ip, client):
+        return False
     try:
         status, _ = await client._curl("DELETE", "/cgi.lua/apiv1/login")
     except Exception:
@@ -168,8 +178,7 @@ def _labels(order: list[str]) -> dict[str, str]:
 def _evaluate(recorder: Recorder, errors: set[str], has_session_valid: bool) -> list[str]:
     """Return fixed, safe failure reasons for the recorded CPE session events."""
     failures = sorted(errors)
-    ap_ip = os.environ.get("SIXTYOPS_BENCH_AP_IP", "").strip()
-    cpe_ips = [ip for ip in recorder.order if ip != ap_ip]
+    cpe_ips = [ip for ip in recorder.order if ip in recorder.expected_cpes]
     if not cpe_ips:
         failures.append("no CPE was probed")
         return failures
@@ -218,7 +227,7 @@ def _instrument(recorder: Recorder):
 
     async def login(self):
         result = await original_login(self)
-        recorder.login(self.ip, result is True)
+        recorder.login(self.ip, result is True, client=self)
         return result
 
     TachyonClient.login = login
@@ -231,7 +240,7 @@ def _instrument(recorder: Recorder):
             recorder.check(self.ip, state)
             if state == "ok" and self.ip in recorder.renewal_logins and self.ip not in recorder.post_renewal_reuse:
                 recorder.post_renewal_reuse.add(self.ip)
-                if await _logout_cpe_session(self):
+                if await _logout_cpe_session(recorder, self.ip, self):
                     recorder.logout_succeeded.add(self.ip)
                     recorder.pending_login_trigger[self.ip] = "logout"
                 else:
@@ -316,12 +325,10 @@ def _report(recorder: Recorder, end: float, has_session_valid: bool):
             )
             print(
                 f"session-proof: recovery device={labels[ip]} "
-                f"aged={'yes' if ip in recorder.aged_cpes else 'no'} "
-                f"renewal_login={'yes' if ip in recorder.renewal_logins else 'no'} "
-                f"reuse_after_renewal={'yes' if ip in recorder.post_renewal_reuse else 'no'} "
-                f"logout={'yes' if ip in recorder.logout_succeeded else 'no'} "
-                f"login_after_logout={'yes' if ip in recorder.post_logout_logins else 'no'} "
-                f"poll_after_logout={'yes' if ip in recorder.post_logout_reuse else 'no'}"
+                f"forced_renewal={'yes' if ip in recorder.renewal_logins else 'no'} "
+                f"reuse_after_forced_renewal={'yes' if ip in recorder.post_renewal_reuse else 'no'} "
+                f"logout_recovery={'yes' if ip in recorder.post_logout_logins else 'no'} "
+                f"reuse_after_logout_recovery={'yes' if ip in recorder.post_logout_reuse else 'no'}"
             )
 
 
