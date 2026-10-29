@@ -8,6 +8,39 @@ from unittest.mock import patch
 import pytest
 
 from updater import database as db
+from updater.database import _migrate_identity
+
+
+def test_identity_migration_preserves_legacy_rows_and_is_repeatable():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript("""
+        CREATE TABLE devices (
+            id INTEGER PRIMARY KEY, ip TEXT NOT NULL UNIQUE, mac TEXT,
+            username TEXT NOT NULL, password TEXT NOT NULL,
+            created_at TEXT, last_seen TEXT
+        );
+        CREATE TABLE device_update_history (
+            id INTEGER PRIMARY KEY, device_id INTEGER, ip TEXT, status TEXT
+        );
+        INSERT INTO devices VALUES (7, '192.0.2.70', '00:11:22:33:44:55',
+                                    'admin', 'encrypted-value', '2025-01-01', NULL);
+        INSERT INTO device_update_history VALUES (9, 7, '192.0.2.70', 'success');
+    """)
+    _migrate_identity(conn)
+    _migrate_identity(conn)
+    assert tuple(conn.execute(
+        "SELECT id,ip,username,password,uid,uid_source,address_generation FROM devices"
+    ).fetchone()) == (
+        7, "192.0.2.70", "admin", "encrypted-value", "legacy-ip:192.0.2.70", "ip_legacy", 0
+    )
+    assert tuple(conn.execute(
+        "SELECT device_id,ip,status FROM device_update_history"
+    ).fetchone()) == (7, "192.0.2.70", "success")
+    assert tuple(conn.execute(
+        "SELECT device_id,mac,interface FROM device_macs"
+    ).fetchone()) == (7, "00:11:22:33:44:55", "legacy")
+    conn.close()
 
 
 class TestTowerSites:
