@@ -58,7 +58,7 @@ You can also trigger immediate updates on any single AP, CPE, or switch from the
 
 The following features involve untested or high-impact operations — use with care:
 
-- **Configuration backup and restore** — Full database and device configuration snapshots (SFTP push/restore)
+- **Configuration backup and restore** — Device configuration snapshots and CSV import/export
 - **Authentication** — Built-in RADIUS server and SSO / OIDC integration for AP and switch admin credentials
 
 These are marked **DANGEROUS** in the UI and should only be used after testing in a lab environment.
@@ -82,7 +82,7 @@ system.
 Visit `https://your-server` to complete the setup wizard:
 1. Change default password
 2. Configure Let's Encrypt (optional)
-3. Configure SFTP backups (optional)
+3. Back up `./data` and `./firmware` outside the install directory
 
 ### Local Testing
 

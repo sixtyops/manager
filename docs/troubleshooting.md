@@ -189,45 +189,7 @@ Browsers warn about an expired certificate, or **Settings > HTTPS** shows
 
 ---
 
-## 5. SFTP backup failing
-
-### Symptom
-**Settings > Backups** shows `last_status: failed: <error>`
-(`updater/sftp_backup.py:300`), or no recent backup files appear on the
-remote SFTP server.
-
-### Diagnose
-1. Open **Settings > Backups** and click **Test connection**. This calls
-   `test_backup_connection()` in `updater/sftp_backup.py:131` and
-   surfaces the underlying `asyncssh` error verbatim — that error is
-   nearly always sufficient to identify the cause.
-2. Tail Manager logs for backup-related entries:
-   ```bash
-   docker compose logs sixtyops-mgmt --tail=200 | grep -i backup
-   ```
-3. Common causes, in rough order of frequency:
-   - **Password or SSH key mismatch** — re-check the credentials block;
-     keys must include the matching `BEGIN/END` lines.
-   - **Remote path missing or not writable** — the configured path must
-     already exist; the Manager will not `mkdir -p` for you.
-   - **Remote disk full** — `asyncssh` surfaces this as an I/O error
-     part-way through the upload.
-
-### Recover
-- Re-enter credentials in **Settings > Backups** (host / port / path /
-  username / auth method are encrypted in the settings DB at
-  `updater/sftp_backup.py`).
-- Ensure the configured remote path exists and that the SFTP user can
-  write to it. A 30-second `ssh user@host mkdir -p /path` from a
-  workstation is the fastest way to verify both at once.
-- Trigger a manual run from the **Run Now** button in Settings > Backups.
-  Concurrent runs are prevented by `_backup_lock` in
-  `updater/sftp_backup.py`, so you'll get a clean error rather than a
-  half-run if one is already in flight.
-
----
-
-## 6. Update button shows steps instead of updating
+## 5. Update button shows steps instead of updating
 
 ### Symptom
 In **Settings → Updates**, the app shows update steps instead of restarting

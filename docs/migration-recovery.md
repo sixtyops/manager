@@ -1,6 +1,6 @@
 # Migration Recovery
 
-**Bottom line:** if the Manager fails to start because a database migration crashed mid-run, the recovery is (1) restart the container — `init_db()` is idempotent and resumes from a partial state; (2) if it still crashes, restore from the most recent SFTP backup; (3) only as a last resort, repair the schema by hand. Genuine data loss is rare and only happens if the DB file itself is corrupt.
+If the Manager fails to start because a database migration stopped mid-run, restart the container first. `init_db()` resumes safely. If it still fails, restore `./data` from a local backup. Keep `./data/.encryption_key` with the database. Repair the schema by hand only as a last resort.
 
 The migration system in `updater/database.py::init_db` uses `CREATE TABLE IF NOT EXISTS`, `CREATE TRIGGER IF NOT EXISTS`, and a `PRAGMA table_info()` check before every `ALTER TABLE`. Each step is safe to re-run, so a crash partway through leaves a partially-migrated DB that the next app start completes. The contract is locked in by `tests/test_migration_failures.py`.
 
@@ -19,7 +19,7 @@ docker compose exec sixtyops-mgmt sqlite3 /app/data/sixtyops.db "PRAGMA integrit
 docker compose exec sixtyops-mgmt sqlite3 /app/data/sixtyops.db ".schema devices"
 ```
 
-`integrity_check` returning `ok` means the file is structurally fine — the problem is migration state, not corruption, and Path 1 below will resolve it.
+`integrity_check` returning `ok` means the file is structurally fine. The problem is migration state, and Path 1 below should resolve it.
 
 ## Recovery
 
@@ -32,15 +32,13 @@ docker compose logs sixtyops-mgmt --tail=100
 
 `init_db()` runs at every startup and adds whatever columns or triggers are missing. If the restart succeeds and `/healthz` returns 200, the recovery is complete.
 
-### Path 2 — restore from SFTP backup
+### Path 2 — restore a local copy
 
-If Path 1 still crashes, restore from the most recent backup configured under **Settings → Backups → SFTP**:
+Back up `./data` and `./firmware` outside the install directory. To restore a copy, stop the app and replace `./data` with the saved directory. Keep `.encryption_key` with the database.
 
 1. Stop the app: `docker compose stop sixtyops-mgmt`.
-2. Move the broken DB aside: `mv ./data/sixtyops.db ./data/sixtyops.db.broken-$(date +%s)`.
-3. Download the latest backup tarball from the configured SFTP server.
-4. Extract `sixtyops.db` from the tarball into `./data/`.
-5. Start the app: `docker compose up -d sixtyops-mgmt`.
+2. Move the damaged directory aside and copy the saved `data` directory into place.
+3. Start the app: `docker compose up -d sixtyops-mgmt`.
 
 The first start runs `init_db()` against the restored DB and applies any migrations that have shipped since the backup was taken.
 
@@ -60,5 +58,5 @@ The authoritative column list and types live in the `CREATE TABLE` block at the 
 
 ## Prevention
 
-- Verify the most recent SFTP backup completed successfully before triggering an in-app self-update — **Settings → Backups** shows `last_status` and `last_run_at`.
+- Back up `./data` and `./firmware` before maintenance. The data directory includes the encryption key.
 - The `tests/test_migration_failures.py` suite locks in the idempotency, schema-downgrade, and concurrent-writer contracts. Do not relax those tests without a strong reason.
