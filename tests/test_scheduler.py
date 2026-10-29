@@ -356,6 +356,56 @@ class TestSchedulerStartFailure:
         assert scheduler._state == "waiting"
 
     @pytest.mark.asyncio
+    async def test_job_starting_log_uses_reserved_wave_bank_mode(self, mock_db):
+        """The log and admitted job use the bank mode reserved for this wave."""
+        from datetime import datetime as dt
+        from zoneinfo import ZoneInfo
+
+        fw = "tna-30x-1.2.3-r123.bin"
+        db.set_settings({
+            "schedule_enabled": "true",
+            "scheduled_rollout_safety_ready": "true",
+            "selected_firmware_30x": fw,
+            "bank_mode": "both",
+            "timezone": "America/Chicago",
+            "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
+            "schedule_start_hour": "0",
+            "schedule_end_hour": "23",
+        })
+        settings = db.get_all_settings()
+        rollout_id = db.create_rollout(fw)
+        start = AsyncMock(return_value="job-bank-mode")
+        scheduler = AutoUpdateScheduler(AsyncMock(), start)
+
+        def resolve_scope(_settings):
+            # Model a settings update after the scheduler's initial read and
+            # before it builds the immutable settings passed to start_wave.
+            settings["bank_mode"] = "one"
+            return ["10.0.0.10"]
+
+        now = dt(2026, 6, 23, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
+        with patch("updater.scheduler.db.get_all_settings", return_value=settings), \
+             patch("updater.services.validate_time_sources", AsyncMock(return_value=(True, now))), \
+             patch("updater.scheduler.rollout_gate.phase_run_decision", return_value=(True, "ok")), \
+             patch.object(scheduler, "_firmware_changed", return_value=False), \
+             patch.object(scheduler, "_held_families", return_value=(set(), {})), \
+             patch.object(scheduler, "_early_clear_note", return_value=None), \
+             patch.object(scheduler, "_resolve_scope", side_effect=resolve_scope), \
+             patch.object(scheduler, "_resolve_switch_scope", return_value=[]), \
+             patch.object(scheduler, "_get_devices_for_phase", return_value=["10.0.0.10"]), \
+             patch.object(scheduler, "_get_switches_for_phase", return_value=[]), \
+             patch("updater.scheduler.db.log_schedule_event", wraps=db.log_schedule_event) as log_event:
+            await scheduler._check_and_run()
+
+        log_event.assert_any_call(
+            "job_starting",
+            f"Rollout {rollout_id} phase=pct10, 1 APs, 0 switches, bank_mode=one",
+        )
+        start.assert_awaited_once()
+        assert start.await_args.kwargs["bank_mode"] == "one"
+        assert db.get_rollout_devices(rollout_id)[0]["status"] == "pending"
+
+    @pytest.mark.asyncio
     async def test_successful_job_start_assigns_pending_devices(self, mock_db):
         """The happy path still assigns the wave's devices so the completion
         handler can transition them out of pending."""

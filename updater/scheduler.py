@@ -396,7 +396,6 @@ class AutoUpdateScheduler:
         """Main decision logic each tick."""
         settings = db.get_all_settings()
         schedule_enabled = settings.get("schedule_enabled")
-        bank_mode = settings.get("bank_mode", "both")
 
         if schedule_enabled != "true":
             if self._state != "disabled":
@@ -702,6 +701,7 @@ class AutoUpdateScheduler:
             "schedule_days", "schedule_timezone",
         ]
         wave_settings = {key: settings.get(key, "") for key in snapshot_keys}
+        bank_mode = wave_settings.get("bank_mode", "both")
         phase = rollout["phase"]
         db.log_schedule_event(
             "job_starting",
@@ -726,7 +726,6 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
             return
 
-        bank_mode = wave_settings.get("bank_mode", "both")
         concurrency = _as_int(wave_settings.get("parallel_updates", "2"), 2)
 
         try:
