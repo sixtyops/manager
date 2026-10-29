@@ -77,6 +77,7 @@ expected_sha=$1
 shift
 mode=integration
 duration_min=35
+duration_explicit=0
 while [ $# -gt 0 ]; do
   case $1 in
     --mode)
@@ -87,6 +88,7 @@ while [ $# -gt 0 ]; do
     --duration-min)
       [ $# -ge 2 ] || usage
       duration_min=$2
+      duration_explicit=1
       shift
       ;;
     *) refuse "unknown option" ;;
@@ -97,6 +99,9 @@ case $mode in
   integration | local-poll | session-proof | local-switch) ;;
   *) refuse "unknown mode" ;;
 esac
+if [ "$mode" = session-proof ] && [ "$duration_explicit" = 0 ]; then
+  duration_min=3
+fi
 [[ $duration_min =~ ^[1-9][0-9]{0,2}$ ]] || refuse "--duration-min must be a whole number from 1 to 999"
 
 bench_dir=$(physical_dir "$(dirname "$0")")

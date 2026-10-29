@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REQUIRED_ENV = ("SIXTYOPS_BENCH_AP_IP", "SIXTYOPS_BENCH_AP_USER", "SIXTYOPS_BENCH_AP_PASS")
-POLL_INTERVAL_SECONDS = 60
+POLL_INTERVAL_SECONDS = 30
 SESSION_MAX_AGE_SECONDS = 600
 
 
@@ -45,8 +45,21 @@ class Recorder:
     def __init__(self, start: float):
         self.start = start
         self.logins: dict[str, list[tuple[float, bool]]] = defaultdict(list)
+        self.login_triggers: dict[str, list[str | None]] = defaultdict(list)
+        self.pending_login_trigger: dict[str, str] = {}
         self.checks: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self.check_events: dict[str, list[tuple[float, str]]] = defaultdict(list)
+        self.link_uptime: dict[str, list[int | None]] = defaultdict(list)
+        self.dropped_cpes: set[str] = set()
+        self.cpe_poll_count = 0
+        self.aged_cpes: set[str] = set()
+        self.renewal_logins: set[str] = set()
+        self.post_renewal_reuse: set[str] = set()
+        self.logout_succeeded: set[str] = set()
+        self.logout_failed: set[str] = set()
+        self.post_logout_logins: set[str] = set()
+        self.post_logout_poll_floor: dict[str, int] = {}
+        self.post_logout_reuse: set[str] = set()
         self.order: list[str] = []
 
     def _seen(self, ip: str):
@@ -56,11 +69,64 @@ class Recorder:
     def login(self, ip: str, ok: bool):
         self._seen(ip)
         self.logins[ip].append((time.time(), ok))
+        trigger = self.pending_login_trigger.pop(ip, None)
+        self.login_triggers[ip].append(trigger)
+        if ok and trigger == "age":
+            self.renewal_logins.add(ip)
+        if ok and trigger == "logout":
+            self.post_logout_logins.add(ip)
+            self.post_logout_poll_floor[ip] = self.cpe_poll_count
 
     def check(self, ip: str, state: str):
         self._seen(ip)
         self.checks[ip][state] += 1
         self.check_events[ip].append((time.time(), state))
+
+    def cpe_poll(self, cpes):
+        """Record the wireless uptime values from one successful AP poll."""
+        self.cpe_poll_count += 1
+        current = {}
+        for cpe in cpes:
+            ip = cpe.get("ip") if isinstance(cpe, dict) else getattr(cpe, "ip", None)
+            uptime = cpe.get("link_uptime") if isinstance(cpe, dict) else getattr(cpe, "link_uptime", None)
+            if not ip:
+                continue
+            try:
+                uptime = int(uptime) if uptime is not None else None
+            except (TypeError, ValueError):
+                uptime = None
+            if uptime is not None and uptime < 0:
+                uptime = None
+            current[ip] = uptime
+            self._seen(ip)
+
+        self.dropped_cpes.update(set(self.link_uptime) - set(current))
+        for ip, uptime in current.items():
+            self.link_uptime[ip].append(uptime)
+
+
+def _uptime_reset_count(samples: list[int | None]) -> int:
+    values = [value for value in samples if value is not None]
+    return sum(current < previous for previous, current in zip(values, values[1:]))
+
+
+def _age_cached_cpe_login(poller, cpe_ip: str) -> bool:
+    """Age one live cache entry in this bench process, without changing production code."""
+    entry = poller._cpe_clients.get(cpe_ip)
+    if not entry:
+        return False
+    client, _ = entry
+    poller._cpe_clients[cpe_ip] = (client, time.time() - SESSION_MAX_AGE_SECONDS - 1)
+    return True
+
+
+async def _logout_cpe_session(client) -> bool:
+    """End the authenticated device session through the client's request helper."""
+    try:
+        status, _ = await client._curl("DELETE", "/cgi.lua/apiv1/login")
+    except Exception:
+        return False
+    return 200 <= status < 300
 
 
 class RunErrorHandler(logging.Handler):
@@ -116,19 +182,31 @@ def _evaluate(recorder: Recorder, errors: set[str], has_session_valid: bool) -> 
         label = labels[ip]
         login_events = recorder.logins.get(ip, [])
         login_gaps = [b[0] - a[0] for a, b in zip(login_events, login_events[1:])]
-        if any(gap < SESSION_MAX_AGE_SECONDS for gap in login_gaps):
+        triggers = recorder.login_triggers.get(ip, [])
+        if any(gap < SESSION_MAX_AGE_SECONDS and triggers[index + 1] is None
+               for index, gap in enumerate(login_gaps)):
             failures.append(f"login spacing too tight for {label}")
-        logins = [(ts, ok) for ts, ok in login_events if ok]
-        successful_gaps = [b[0] - a[0] for a, b in zip(logins, logins[1:])]
         if not has_session_valid or recorder.checks.get(ip, {}).get("ok", 0) == 0:
             failures.append(f"no session reuse for {label}")
-        renewal_indices = [i for i, gap in enumerate(successful_gaps) if gap >= SESSION_MAX_AGE_SECONDS]
-        if not renewal_indices:
+        if ip not in recorder.aged_cpes:
+            failures.append(f"cached CPE login was not aged for {label}")
+        if ip not in recorder.renewal_logins:
             failures.append(f"no re-login after the 600-second login-age limit for {label}")
-            continue
-        renewed_at = logins[renewal_indices[0] + 1][0]
-        if not any(ts > renewed_at and state == "ok" for ts, state in recorder.check_events.get(ip, [])):
+        if ip not in recorder.post_renewal_reuse:
             failures.append(f"no reuse after re-login for {label}")
+        if ip not in recorder.logout_succeeded:
+            failures.append(f"CPE session logout failed for {label}")
+        if ip not in recorder.post_logout_logins:
+            failures.append(f"no re-login after CPE logout for {label}")
+        if ip not in recorder.post_logout_reuse:
+            failures.append(f"polling did not continue after CPE logout for {label}")
+        samples = recorder.link_uptime.get(ip, [])
+        if not samples or any(value is None for value in samples):
+            failures.append(f"missing wireless link uptime for {label}")
+        if _uptime_reset_count(samples):
+            failures.append(f"wireless link uptime reset for {label}")
+        if ip in recorder.dropped_cpes:
+            failures.append(f"CPE dropped off AP for {label}")
     return failures
 
 
@@ -151,16 +229,43 @@ def _instrument(recorder: Recorder):
         async def session_valid(self):
             state = await original_valid(self)
             recorder.check(self.ip, state)
+            if state == "ok" and self.ip in recorder.renewal_logins and self.ip not in recorder.post_renewal_reuse:
+                recorder.post_renewal_reuse.add(self.ip)
+                if await _logout_cpe_session(self):
+                    recorder.logout_succeeded.add(self.ip)
+                    recorder.pending_login_trigger[self.ip] = "logout"
+                else:
+                    recorder.logout_failed.add(self.ip)
+            elif (
+                state == "ok"
+                and self.ip in recorder.post_logout_logins
+                and recorder.cpe_poll_count > recorder.post_logout_poll_floor.get(self.ip, recorder.cpe_poll_count)
+            ):
+                recorder.post_logout_reuse.add(self.ip)
             return state
 
         TachyonClient.session_valid = session_valid
 
     original_check_cpe_auth = NetworkPoller._check_cpe_auth
+    original_get_connected_cpes = TachyonClient.get_connected_cpes
+
+    async def get_connected_cpes(self):
+        cpes = await original_get_connected_cpes(self)
+        recorder.cpe_poll(cpes)
+        return cpes
+
+    TachyonClient.get_connected_cpes = get_connected_cpes
 
     async def check_cpe_auth(self, cpe_ip, username, password):
+        login_count = len(recorder.logins.get(cpe_ip, []))
         state = await original_check_cpe_auth(self, cpe_ip, username, password)
         if state == "ok":
             recorder.check(cpe_ip, "poll_ok")
+            logged_in_during_poll = len(recorder.logins.get(cpe_ip, [])) > login_count
+            if not logged_in_during_poll and cpe_ip not in recorder.aged_cpes:
+                if _age_cached_cpe_login(self, cpe_ip):
+                    recorder.aged_cpes.add(cpe_ip)
+                    recorder.pending_login_trigger[cpe_ip] = "age"
         return state
 
     NetworkPoller._check_cpe_auth = check_cpe_auth
@@ -176,8 +281,18 @@ def _report(recorder: Recorder, end: float, has_session_valid: bool):
     for ip in recorder.order:
         logins = recorder.logins.get(ip, [])
         checks = recorder.checks.get(ip, {})
-        ok_times = [ts for ts, ok in logins if ok]
-        gaps = [int(b - a) for a, b in zip(ok_times, ok_times[1:])]
+        triggers = recorder.login_triggers.get(ip, [])
+        successful = [
+            (ts, trigger)
+            for (ts, ok), trigger in zip(logins, triggers)
+            if ok
+        ]
+        ok_times = [ts for ts, _ in successful]
+        gaps = [
+            int(successful[index + 1][0] - successful[index][0])
+            for index in range(len(successful) - 1)
+            if successful[index + 1][1] is None
+        ]
         print(
             f"session-proof: device={labels[ip]} "
             f"login_ok={len(ok_times)} login_failed={len(logins) - len(ok_times)} "
@@ -189,6 +304,24 @@ def _report(recorder: Recorder, end: float, has_session_valid: bool):
             print(
                 f"session-proof: login device={labels[ip]} n={i} utc={_utc(ts)} "
                 f"t_plus_s={int(ts - recorder.start)} result={'ok' if ok else 'failed'}"
+            )
+        if ip != os.environ.get("SIXTYOPS_BENCH_AP_IP", "").strip():
+            uptimes = recorder.link_uptime.get(ip, [])
+            valid_uptimes = [value for value in uptimes if value is not None]
+            print(
+                f"session-proof: link device={labels[ip]} "
+                f"uptime_start_s={uptimes[0] if uptimes and uptimes[0] is not None else 'n/a'} "
+                f"uptime_end_s={uptimes[-1] if uptimes and uptimes[-1] is not None else 'n/a'} "
+                f"resets={_uptime_reset_count(valid_uptimes)}"
+            )
+            print(
+                f"session-proof: recovery device={labels[ip]} "
+                f"aged={'yes' if ip in recorder.aged_cpes else 'no'} "
+                f"renewal_login={'yes' if ip in recorder.renewal_logins else 'no'} "
+                f"reuse_after_renewal={'yes' if ip in recorder.post_renewal_reuse else 'no'} "
+                f"logout={'yes' if ip in recorder.logout_succeeded else 'no'} "
+                f"login_after_logout={'yes' if ip in recorder.post_logout_logins else 'no'} "
+                f"poll_after_logout={'yes' if ip in recorder.post_logout_reuse else 'no'}"
             )
 
 
@@ -235,7 +368,7 @@ async def _run(duration_s: int) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True, help="checkout under test")
-    parser.add_argument("--duration-min", type=int, default=35)
+    parser.add_argument("--duration-min", type=int, default=3)
     args = parser.parse_args()
 
     missing = [name for name in REQUIRED_ENV if not os.environ.get(name, "").strip()]
