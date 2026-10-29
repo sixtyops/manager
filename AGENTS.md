@@ -66,7 +66,7 @@ pytest -v
 
 The Release workflow uses `pytest -v --timeout=60`. There is no lint job in CI.
 Live test commands are in the hardware SOP for the operator or an approved lead.
-Run `./dev.sh` for local UI/API development without hardware.
+Run `./dev.sh` for local UI/API development without hardware. It creates the schema, runs `scripts/seed_dev_data.py`, then starts the real poller. Seeded devices use RFC 5737 documentation addresses; connection errors and backoff are expected. The seed script does not mark setup complete.
 
 Create branch work from fetched `origin/main`, without checking out the live clone:
 
