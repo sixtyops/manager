@@ -5793,7 +5793,7 @@ def _address_management_scope(record: dict) -> dict:
 
 async def _address_change_guard(
     job: "UpdateJob", ip: str, *, info=None, pass_number: int = 1,
-    recovery_case: str = "firmware_flash",
+    recovery_case: str = "firmware_flash", qualification_error: str = "",
 ) -> bool:
     """Check transition qualification and persist a visible hold before writes."""
     from .rollout_gate import address_change_decision
@@ -5809,16 +5809,26 @@ async def _address_change_guard(
         record = record or {}
         model, source = record.get("model"), record.get("firmware_version")
     else:
-        model, source = info.model, info.current_version
-        record = info.extra
+        try:
+            model, source = info.model, info.current_version
+            record = info.extra
+        except Exception:
+            qualification_error = qualification_error or "live device information is incomplete"
+            model, source, record = None, None, {}
     fw_path = job.device_firmware_map.get(ip, "")
     target = _extract_version_from_filename(Path(fw_path).name)
-    allowed, reason = address_change_decision(
-        _get_firmware_type_for_model(model), ds.role, source, target,
-        ip=ip, bench_exception=job.address_bench_exception, scheduled=job.is_scheduled,
-        target_sha256=await _address_artifact_sha256(fw_path),
-        recovery_case=recovery_case, **_address_management_scope(record),
-    )
+    if qualification_error:
+        allowed, reason = False, f"Deferred: Address-change qualification unavailable ({qualification_error})"
+    else:
+        try:
+            allowed, reason = address_change_decision(
+                _get_firmware_type_for_model(model), ds.role, source, target,
+                ip=ip, bench_exception=job.address_bench_exception, scheduled=job.is_scheduled,
+                target_sha256=await _address_artifact_sha256(fw_path),
+                recovery_case=recovery_case, **_address_management_scope(record),
+            )
+        except Exception:
+            allowed, reason = False, "Deferred: Address-change qualification unavailable"
     if allowed:
         if reason:
             db.log_schedule_event(
@@ -6132,8 +6142,18 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 admission_denial["reason"] = reason
             return admitted, reason
 
+        async def _driver_qualification_check(info, error=""):
+            admitted = await _address_change_guard(
+                job, ip, info=info, pass_number=pass_number, qualification_error=error,
+            )
+            reason = "" if admitted else (device_status.error or "Deferred: Address-change qualification held")
+            if not admitted:
+                admission_denial["reason"] = reason
+            return admitted, reason
+
         update_options = {
             "admission_check": _driver_admission_check,
+            "qualification_check": _driver_qualification_check,
         }
         if vendor_id == "tachyon":
             update_options["upload_started_callback"] = lambda: setattr(
@@ -6225,6 +6245,19 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         elif smoke_failed:
             _stop_firmware_window(job, ip, "smoke", device_status.error or "Smoke test failed")
     else:
+        if admission_denial["reason"].startswith((
+            "Address-change hold", "Deferred: Address-change qualification",
+        )):
+            device_status.status = "deferred"
+            device_status.error = admission_denial["reason"]
+            device_status.progress_message = admission_denial["reason"]
+            await broadcast({
+                "type": "device_update", "job_id": job.job_id, "ip": ip,
+                "status": device_status.status, "message": device_status.progress_message,
+                "error": device_status.error, "role": device_status.role,
+                "parent_ap": device_status.parent_ap,
+            })
+            return
         if admission_denial["reason"].startswith((
             "Firmware writes are stopped for window",
             "Firmware qualification is held for window",

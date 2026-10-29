@@ -81,11 +81,14 @@ class TachyonDriver(VendorDriver):
         reboot_timeout: int = 300,
         bandwidth_limit_kbps: int = 0,
         admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
+        qualification_check=None,
         upload_started_callback: Optional[Callable[[], None]] = None,
     ) -> VendorUpdateResult:
         options = {}
         if admission_check:
             options["admission_check"] = admission_check
+        if qualification_check:
+            options["qualification_check"] = qualification_check
         if upload_started_callback:
             options["upload_started_callback"] = upload_started_callback
         result = await self._client.update_firmware(

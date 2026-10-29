@@ -243,6 +243,34 @@ async def test_qualified_job_reboots_and_flashes(tables, runner, scheduled):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["source", "management_scope"])
+async def test_pre_reboot_rechecks_fresh_device_info(tables, runner, monkeypatch, change):
+    qualify()
+    changed = dict(OBSERVED)
+    if change == "source":
+        changed["firmware_sha256"] = "b" * 64
+    else:
+        changed["management_vlan"] = 200
+    runner.get_device_info = AsyncMock(return_value=VendorDeviceInfo(
+        ip=IP, model="TNA-301", current_version=SOURCE, extra=changed,
+    ))
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 28, tzinfo=tz)
+    monkeypatch.setattr(app_module, "datetime", FixedDateTime)
+    job = make_job()
+    job.window_key = ("firmware", "2026-10-28")
+
+    await app_module.run_update_job(job, 1)
+
+    runner.reboot.assert_not_awaited()
+    assert job.devices[IP].status == "deferred"
+    assert "Address-change hold" in job.devices[IP].error
+    assert db.get_firmware_window_stop(job.window_key) is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("reboot", [True, False])
 async def test_fresh_unqualified_build_holds_at_write_boundary(tables, runner, reboot):
     qualify()

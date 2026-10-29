@@ -14,6 +14,9 @@ All notable changes to this project are documented in this file.
   switch captures as parser fixtures.
 
 ### Fixed
+- Recheck address-change qualification at the pre-update reboot, every Tachyon
+  firmware upload attempt, and the install trigger. Denied writes keep a visible
+  deferred hold for the current window without recording a failed-window stop.
 - Require release validation against the candidate commit before signing a tag.
   The validator can read its development host and credentials from environment
   variables.
