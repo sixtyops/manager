@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- Serialize manual and scheduled firmware jobs under one process-wide owner.
+  Refuse a second admission with a clear reason and keep ownership through
+  job recovery and finalization.
 - Parse Tachyon serial numbers, per-interface MAC addresses, and the
   management interface and VLAN from status responses. Normalize valid MACs
   and reject invalid identity claims. Add sanitized AP, CPE, peer-list, and
