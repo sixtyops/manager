@@ -2069,7 +2069,32 @@ def get_rollout(rollout_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def create_rollout(firmware_file: str, firmware_file_303l: str = None, firmware_file_tns100: str = None) -> int:
+def _insert_rollout_membership(db, rollout_id: int, members: list[dict]) -> None:
+    """Insert a complete, unassigned rollout membership snapshot."""
+    seen_ips = set()
+    for member in members:
+        ip = member["ip"]
+        device_type = member["device_type"]
+        if not ip or not device_type or ip in seen_ips:
+            raise ValueError("Rollout members require unique IPs and a device type")
+        seen_ips.add(ip)
+        db.execute(
+            """INSERT INTO rollout_devices
+               (rollout_id, ip, device_type, phase_assigned, status)
+               VALUES (?, ?, ?, NULL, 'pending')""",
+            (rollout_id, ip, device_type),
+        )
+
+
+def create_rollout(
+    firmware_file: str,
+    firmware_file_303l: str = None,
+    firmware_file_tns100: str = None,
+    *,
+    members: list[dict] = None,
+    settings_snapshot: dict = None,
+    now: datetime = None,
+) -> int:
     """Create a new rollout. Returns the rollout ID.
 
     If a rollout for the same firmware set was created within the last 60
@@ -2077,31 +2102,87 @@ def create_rollout(firmware_file: str, firmware_file_303l: str = None, firmware_
     Guards against a scheduler tick-loop creating one no-op rollout per tick
     when eligibility checks disagree.
     """
+    now = now or datetime.now()
+    created_at = now.strftime("%Y-%m-%d %H:%M:%S")
+    duplicate_since = (now - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")
+    membership = members is not None
+    encoded_settings_snapshot = None
+    if membership:
+        if not isinstance(settings_snapshot, dict):
+            raise ValueError("Rollout membership requires a settings snapshot object")
+        try:
+            encoded_settings_snapshot = json.dumps(
+                settings_snapshot, separators=(",", ":"), allow_nan=False
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Rollout settings snapshot must be valid JSON") from exc
+        members = list(members)
+        if not members:
+            raise ValueError("Rollout membership snapshot must not be empty")
+        member_keys = [(member["ip"], member["device_type"]) for member in members]
+        if any(not ip or not device_type for ip, device_type in member_keys):
+            raise ValueError("Rollout members require unique IPs and a device type")
+        if len({ip for ip, _ in member_keys}) != len(member_keys):
+            raise ValueError("Rollout members require unique IPs and a device type")
     with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
         existing = db.execute(
             "SELECT id FROM rollouts "
             "WHERE firmware_file = ? "
             "AND COALESCE(firmware_file_303l, '') = COALESCE(?, '') "
             "AND COALESCE(firmware_file_tns100, '') = COALESCE(?, '') "
-            "AND created_at > datetime('now', '-60 seconds') "
+            "AND created_at > ? "
             "ORDER BY id DESC LIMIT 1",
-            (firmware_file, firmware_file_303l, firmware_file_tns100)
+            (firmware_file, firmware_file_303l, firmware_file_tns100, duplicate_since)
         ).fetchone()
-        if existing:
+        if existing and not membership:
             logger.warning(
                 f"create_rollout: duplicate suppressed; returning existing id={existing['id']} "
                 f"for {firmware_file!r}"
             )
             return existing["id"]
-        # Start at pct10 (the first fleet wave). Don't rely on the table default
-        # — existing DBs created before the canary removal still default to
-        # 'canary', which the fail-closed gate would treat as an unknown phase.
+        if existing and membership:
+            existing_members = db.execute(
+                "SELECT ip, device_type FROM rollout_devices WHERE rollout_id = ?",
+                (existing["id"],),
+            ).fetchall()
+            requested_members = set(member_keys)
+            if (
+                len(existing_members) == len(member_keys)
+                and {(row["ip"], row["device_type"]) for row in existing_members} == requested_members
+            ):
+                logger.warning(
+                    f"create_rollout: duplicate suppressed; returning existing id={existing['id']} "
+                    f"for {firmware_file!r}"
+                )
+                return existing["id"]
+        # Membership-backed rollouts wait for B2b to evaluate Firmware Hold.
+        # Calls without a snapshot retain the existing active-rollout behavior.
+        status = "waiting_hold" if membership else "active"
+        # The current schema requires a phase value. `status` keeps this wave
+        # from admission until the hold lifecycle activates the rollout.
+        phase = "pct10"
         cursor = db.execute(
-            "INSERT INTO rollouts (firmware_file, firmware_file_303l, firmware_file_tns100, phase) "
-            "VALUES (?, ?, ?, 'pct10')",
-            (firmware_file, firmware_file_303l, firmware_file_tns100)
+            """INSERT INTO rollouts
+               (firmware_file, firmware_file_303l, firmware_file_tns100,
+                phase, status, created_at, updated_at, settings_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                firmware_file,
+                firmware_file_303l,
+                firmware_file_tns100,
+                phase,
+                status,
+                created_at,
+                created_at,
+                encoded_settings_snapshot
+                if membership else None,
+            ),
         )
-        return cursor.lastrowid
+        rollout_id = cursor.lastrowid
+        if membership:
+            _insert_rollout_membership(db, rollout_id, members)
+        return rollout_id
 
 
 def get_last_rollout_for_firmware(firmware_file: str) -> Optional[dict]:

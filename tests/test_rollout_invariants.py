@@ -117,6 +117,121 @@ def test_wave_reservation_rolls_back_marker_assignments_and_settings(mock_db):
     assert db.get_rollout_devices(rollout_id) == []
 
 
+def test_create_rollout_persists_complete_membership_snapshot(mock_db):
+    fixed_now = datetime(2026, 6, 2, 3, 15)
+    members = [
+        {"ip": "192.0.2.10", "device_type": "ap"},
+        {"ip": "192.0.2.11", "device_type": "switch"},
+    ]
+    settings = {"bank_mode": "both", "allow_downgrade": "false"}
+
+    rollout_id = db.create_rollout(
+        FW, members=members, settings_snapshot=settings, now=fixed_now
+    )
+
+    rollout = db.get_rollout(rollout_id)
+    persisted = db.get_rollout_devices(rollout_id)
+    assert rollout["status"] == "waiting_hold"
+    assert rollout["phase"] == "pct10"
+    assert rollout["firmware_file"] == FW
+    assert rollout["created_at"] == "2026-06-02 03:15:00"
+    assert db.get_rollout_settings_snapshot(rollout_id) == settings
+    assert {(row["ip"], row["device_type"], row["phase_assigned"], row["status"])
+            for row in persisted} == {
+                ("192.0.2.10", "ap", None, "pending"),
+                ("192.0.2.11", "switch", None, "pending"),
+            }
+
+
+def test_create_rollout_rolls_back_when_any_member_insert_fails(mock_db):
+    with db.get_db() as conn:
+        conn.execute(
+            """CREATE TRIGGER reject_rollout_member BEFORE INSERT ON rollout_devices
+               WHEN NEW.ip = '192.0.2.11'
+               BEGIN SELECT RAISE(ABORT, 'injected membership failure'); END"""
+        )
+
+    with pytest.raises(Exception, match="injected membership failure"):
+        db.create_rollout(
+            FW,
+            members=[
+                {"ip": "192.0.2.10", "device_type": "ap"},
+                {"ip": "192.0.2.11", "device_type": "switch"},
+            ],
+            settings_snapshot={"bank_mode": "both"},
+            now=datetime(2026, 6, 2, 3, 15),
+        )
+
+    with db.get_db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM rollouts").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM rollout_devices").fetchone()[0] == 0
+
+
+def test_create_rollout_duplicate_membership_requires_an_exact_snapshot(mock_db):
+    fixed_now = datetime(2026, 6, 2, 3, 15)
+    original_members = [{"ip": "192.0.2.10", "device_type": "ap"}]
+    settings = {"bank_mode": "both"}
+    rollout_id = db.create_rollout(
+        FW, members=original_members, settings_snapshot=settings, now=fixed_now
+    )
+
+    duplicate_id = db.create_rollout(
+        FW,
+        members=original_members,
+        settings_snapshot=settings,
+        now=fixed_now + timedelta(seconds=1),
+    )
+    changed_id = db.create_rollout(
+        FW,
+        members=original_members + [{"ip": "192.0.2.11", "device_type": "switch"}],
+        settings_snapshot=settings,
+        now=fixed_now + timedelta(seconds=2),
+    )
+
+    assert duplicate_id == rollout_id
+    assert changed_id != rollout_id
+    assert len(db.get_rollout_devices(rollout_id)) == 1
+    assert len(db.get_rollout_devices(changed_id)) == 2
+
+
+def test_create_rollout_rejects_an_empty_membership_snapshot(mock_db):
+    with pytest.raises(ValueError, match="must not be empty"):
+        db.create_rollout(
+            FW,
+            members=[],
+            settings_snapshot={"bank_mode": "both"},
+            now=datetime(2026, 6, 2, 3, 15),
+        )
+
+    with db.get_db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM rollouts").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "message"),
+    [
+        (None, "requires a settings snapshot"),
+        ({"bank_mode": object()}, "must be valid JSON"),
+    ],
+    ids=["missing", "invalid"],
+)
+def test_create_rollout_rejects_missing_or_invalid_settings_snapshot_without_writes(
+    mock_db, snapshot, message
+):
+    kwargs = {} if snapshot is None else {"settings_snapshot": snapshot}
+    with pytest.raises(ValueError, match=message):
+        db.create_rollout(
+            FW,
+            members=[{"ip": "192.0.2.10", "device_type": "ap"}],
+            now=datetime(2026, 6, 2, 3, 15),
+            **kwargs,
+        )
+
+    with db.get_db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM rollouts").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM rollout_devices").fetchone()[0] == 0
+
+
 def test_empty_wave_reservation_writes_nothing(mock_db):
     rollout_id = db.create_rollout(FW)
     before = db.get_rollout(rollout_id)
