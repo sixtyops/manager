@@ -5,19 +5,27 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- Serialize manual and scheduled firmware jobs under one process-wide owner.
+  Refuse a second admission with a clear reason and keep ownership through
+  job recovery and finalization.
 - Parse Tachyon serial numbers, per-interface MAC addresses, and the
   management interface and VLAN from status responses. Normalize valid MACs
   and reject invalid identity claims. Add sanitized AP, CPE, peer-list, and
   switch captures as parser fixtures.
 
 ### Fixed
+- Require release validation against the candidate commit before signing a tag.
+  The validator can read its development host and credentials from environment
+  variables.
+- Read the release validation password from the environment or a private file.
+  Reject password command-line arguments to keep credentials out of process
+  listings.
 - Reserve each scheduled rollout wave with its window key, member assignments,
   and settings snapshot in one transaction. A failed job admission consumes
   that window, and pending members retry in a later window without advancing
   the phase.
 - Validate Tachyon peer-list MAC claims before exposing them as CPE identity.
   Include switch management interface, VLAN, and MAC data in normal device info.
-### Fixed
 - Firmware updates now stop new device writes after the first failed snapshot,
   pre-reboot, flash, recovery, or smoke gate, or an unexpected device task
   error. The stop uses the maintenance window instance key and survives manager
