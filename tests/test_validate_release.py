@@ -1,6 +1,7 @@
 """Offline tests for release validator API route checks."""
 
 import importlib
+from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
@@ -8,6 +9,97 @@ from unittest.mock import patch
 from fastapi.routing import APIRoute
 
 from updater.app import app
+
+
+def test_invalid_skip_value_is_not_printed(capsys, monkeypatch) -> None:
+    validate_release = _load_validator_module()
+    secret_skip = "release-validation-secret-value"
+    monkeypatch.setenv("RELEASE_VALIDATION_PASSWORD", "test-password")
+    with patch("sys.argv", [
+        "validate_release.py", "--host", "http://manager.test", "--skip", secret_skip,
+    ]):
+        try:
+            validate_release.main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError("invalid skip value was accepted")
+
+    output = capsys.readouterr().out  # type: ignore[attr-defined]
+    assert "invalid skip value" in output
+    assert secret_skip not in output
+
+
+def _load_validator_module():
+    requests_stub = ModuleType("requests")
+    requests_stub.Response = type("Response", (), {})
+    requests_stub.Session = type("Session", (), {})
+    urllib3_stub = ModuleType("urllib3")
+    urllib3_stub.disable_warnings = lambda warning: None
+    urllib3_stub.exceptions = SimpleNamespace(InsecureRequestWarning=RuntimeWarning)
+    with patch.dict(sys.modules, {"requests": requests_stub, "urllib3": urllib3_stub}):
+        return importlib.import_module("scripts.validate_release")
+
+
+def test_cli_output_does_not_expose_configuration_values(capsys, monkeypatch) -> None:
+    validate_release = _load_validator_module()
+    sample_values = (
+        "manager-secret.example.test",
+        "operator-secret",
+        "password-secret",
+        "192.0.2.41",
+        "192.0.2.42",
+        "radius,backup",
+    )
+
+    for name, value in zip(
+        (
+            "RELEASE_VALIDATION_HOST",
+            "RELEASE_VALIDATION_USERNAME",
+            "RELEASE_VALIDATION_PASSWORD",
+            "RELEASE_VALIDATION_DEVICE_IP",
+            "RELEASE_VALIDATION_SWITCH_IP",
+            "RELEASE_VALIDATION_SKIP",
+        ),
+        sample_values,
+    ):
+        monkeypatch.setenv(name, value)
+
+    with patch("sys.argv", ["validate_release.py", "--dry-run", "--verbose"]):
+        with patch.object(sys, "exit", side_effect=SystemExit) as exit_mock:
+            try:
+                validate_release.main()
+            except SystemExit:
+                pass
+            exit_mock.assert_called_once_with(0)
+
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    output = captured.out + captured.err
+    for value in sample_values:
+        assert value not in output
+
+    assert "Skipping:  2 checks" in output
+
+    validator = validate_release.ReleaseValidator(
+        host=f"https://{sample_values[0]}",
+        username=sample_values[1],
+        password=sample_values[2],
+        device_ip=sample_values[3],
+        switch_ip=sample_values[4],
+    )
+
+    def fail_with_config_in_error(*args: object, **kwargs: object) -> None:
+        raise RuntimeError(" ".join(sample_values))
+
+    validator.session.request = fail_with_config_in_error
+    result = validate_release.TestResult()
+    validator.test_health_auth(result)
+
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    output = captured.out + captured.err
+    assert result.failed > 0
+    for value in sample_values:
+        assert value not in output
 
 
 def test_analytics_checks_match_current_get_routes() -> None:
@@ -22,18 +114,7 @@ def test_analytics_checks_match_current_get_routes() -> None:
         status_code: int
         url: str
 
-    class FakeSession:
-        pass
-
-    requests_stub = ModuleType("requests")
-    requests_stub.Response = FakeResponse
-    requests_stub.Session = FakeSession
-    urllib3_stub = ModuleType("urllib3")
-    urllib3_stub.disable_warnings = lambda warning: None
-    urllib3_stub.exceptions = SimpleNamespace(InsecureRequestWarning=RuntimeWarning)
-
-    with patch.dict(sys.modules, {"requests": requests_stub, "urllib3": urllib3_stub}):
-        validate_release = importlib.import_module("scripts.validate_release")
+    validate_release = _load_validator_module()
     validator = validate_release.ReleaseValidator("http://manager.test")
 
     def fake_request(method: str, url: str, **kwargs: object) -> FakeResponse:
@@ -55,3 +136,98 @@ def test_analytics_checks_match_current_get_routes() -> None:
     assert len(requested_paths) == 4
     assert result.passed == len(requested_paths)
     assert result.failed == 0
+
+
+def test_validator_refuses_password_argument(monkeypatch) -> None:
+    validate_release = _load_validator_module()
+    monkeypatch.setattr(
+        sys, "argv",
+        ["validate_release.py", "--host", "https://manager.test", "--password", "synthetic"],
+    )
+    monkeypatch.setenv("RELEASE_VALIDATION_PASSWORD", "synthetic")
+
+    try:
+        validate_release.main()
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("password command-line argument was accepted")
+
+
+def test_documented_password_file_usage_keeps_password_out_of_argv() -> None:
+    sop = Path("docs/release-sop.md").read_text(encoding="utf-8")
+    validator_command = next(
+        line for line in sop.splitlines()
+        if line.startswith("python scripts/validate_release.py")
+    )
+
+    assert "--password" not in validator_command
+    assert "RELEASE_VALIDATION_PASSWORD_FILE" in sop
+    assert "--host" not in validator_command
+    assert "--username" not in validator_command
+
+
+def test_release_workflow_passes_secret_settings_only_through_environment() -> None:
+    workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    install_step = workflow.split("      - name: Install release validation dependencies\n", 1)[1]
+    install_step = install_step.split("      - name:", 1)[0]
+    assert "env:" not in install_step
+    assert "${{ secrets." not in install_step
+
+    step = workflow.split("      - name: Validate development instance\n", 1)[1]
+    env_block, run_block = step.split("        run: |\n", 1)
+    run_block = run_block.split("\n      - name:", 1)[0]
+
+    secret_bindings = {
+        "RELEASE_VALIDATION_HOST": "SIXTYOPS_TEST_URL",
+        "RELEASE_VALIDATION_USERNAME": "SIXTYOPS_TEST_USER",
+        "RELEASE_VALIDATION_PASSWORD": "SIXTYOPS_TEST_PASS",
+        "RELEASE_VALIDATION_DEVICE_IP": "SIXTYOPS_TEST_AP_IP",
+        "RELEASE_VALIDATION_SWITCH_IP": "SIXTYOPS_TEST_SWITCH_IP",
+        "RELEASE_VALIDATION_SKIP": "SIXTYOPS_RELEASE_VALIDATION_SKIP",
+    }
+    for env_name, secret_name in secret_bindings.items():
+        assert f"{env_name}: ${{{{ secrets.{secret_name} }}}}" in env_block
+
+    before_validation = workflow.split("      - name: Validate development instance\n", 1)[0]
+    assert "${{ secrets." not in before_validation
+
+    assert "${{ secrets." not in run_block
+    assert 'python3 scripts/validate_release.py\n' in run_block
+
+
+def test_cli_reads_release_settings_from_environment_without_printing_password(monkeypatch, capsys) -> None:
+    validate_release = _load_validator_module()
+
+    captured: dict[str, object] = {}
+
+    class FakeValidator:
+        CATEGORIES = validate_release.ReleaseValidator.CATEGORIES
+
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        def run(self) -> bool:
+            return True
+
+    monkeypatch.setenv("RELEASE_VALIDATION_HOST", "https://dev.example.test")
+    monkeypatch.setenv("RELEASE_VALIDATION_USERNAME", "release-check")
+    monkeypatch.setenv("RELEASE_VALIDATION_PASSWORD", "test-password-value")
+    monkeypatch.setenv("RELEASE_VALIDATION_DEVICE_IP", "192.0.2.10")
+    monkeypatch.setenv("RELEASE_VALIDATION_SWITCH_IP", "192.0.2.11")
+    monkeypatch.setenv("RELEASE_VALIDATION_SKIP", "radius,backup")
+    monkeypatch.setattr(validate_release, "ReleaseValidator", FakeValidator)
+    monkeypatch.setattr(sys, "argv", ["validate_release.py"])
+
+    try:
+        validate_release.main()
+    except SystemExit as exc:
+        assert exc.code == 0
+
+    assert captured["host"] == "https://dev.example.test"
+    assert captured["username"] == "release-check"
+    assert captured["password"] == "test-password-value"
+    assert captured["device_ip"] == "192.0.2.10"
+    assert captured["switch_ip"] == "192.0.2.11"
+    assert captured["skip"] == {"radius", "backup"}
+    assert "test-password-value" not in capsys.readouterr().out

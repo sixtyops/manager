@@ -11,9 +11,14 @@ All notable changes to this project are documented in this file.
   switch captures as parser fixtures.
 
 ### Fixed
+- Require release validation against the candidate commit before signing a tag.
+  The validator can read its development host and credentials from environment
+  variables.
+- Read the release validation password from the environment or a private file.
+  Reject password command-line arguments to keep credentials out of process
+  listings.
 - Validate Tachyon peer-list MAC claims before exposing them as CPE identity.
   Include switch management interface, VLAN, and MAC data in normal device info.
-### Fixed
 - Firmware updates now stop new device writes after the first failed snapshot,
   pre-reboot, flash, recovery, or smoke gate, or an unexpected device task
   error. The stop uses the maintenance window instance key and survives manager
