@@ -18,7 +18,7 @@ Issue URL:
 - Waves: <10%, 50%, 100% order and window for each wave>
 
 ## Data recovery plan
-<!-- Keep this section for schema or migration changes. Give each bullet a specific action and read-back. Delete this section when the PR changes no schema. -->
+<!-- Keep this section for schema changes, data-only migrations, and changes to a migration path. Give each bullet a specific action and read-back. Delete this section when none apply. -->
 - Migration: <data change and migration check>
 - Writes: <which actions write data and how to check them>
 - Revert safety: <safe revert steps or recovery action>
