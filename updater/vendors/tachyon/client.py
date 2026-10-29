@@ -26,10 +26,58 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable, List
 
+from ...logging_filter import register_device_token
+
 logger = logging.getLogger(__name__)
 
 # SSL verification for device connections (disabled by default for self-signed certs)
 VERIFY_SSL = os.environ.get("TACHYON_VERIFY_SSL", "").lower() in ("1", "true", "yes")
+
+
+def _curl_config_value(value: str) -> str:
+    """Quote one curl config value without permitting another option."""
+    escapes = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t", "\v": "\\v"}
+    if any(ord(char) < 32 and char not in escapes for char in value) or "\x7f" in value:
+        raise ValueError("Unsupported control character in curl request")
+    return '"' + "".join(escapes.get(char, char) for char in value) + '"'
+
+
+async def _run_curl(args: list[str]) -> tuple[int, bytes]:
+    """Send curl options through a private pipe with fixed process arguments."""
+    options = {
+        "-s": ("silent", False), "-k": ("insecure", False),
+        "-m": ("max-time", True), "-X": ("request", True),
+        "-H": ("header", True), "-c": ("cookie-jar", True),
+        "-d": ("data", True), "-F": ("form", True),
+        "-w": ("write-out", True), "--limit-rate": ("limit-rate", True),
+    }
+    lines = []
+    index = 0
+    # Callers supply the URL last. Its contents never select an option.
+    while index < len(args) - 1:
+        option = options.get(args[index])
+        if option is None:
+            raise ValueError("Unsupported curl request option")
+        name, takes_value = option
+        index += 1
+        if takes_value:
+            if index >= len(args) - 1:
+                raise ValueError("Missing curl request option value")
+            lines.append(f"{name} = {_curl_config_value(args[index])}")
+            index += 1
+        else:
+            lines.append(name)
+    lines.append(f"url = {_curl_config_value(args[-1])}")
+    config = ("\n".join(lines) + "\n").encode("utf-8")
+    proc = await asyncio.create_subprocess_exec(
+        "curl", "--disable", "--config", "-",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _stderr = await proc.communicate(config)
+    # Curl diagnostics can include request values. Expose only its exit code.
+    return proc.returncode, stdout
 
 
 def _normalize_user_passwords(config: dict) -> dict:
@@ -106,6 +154,10 @@ class DeviceInfo:
     model: Optional[str] = None
     serial: Optional[str] = None
     mac: Optional[str] = None
+    macs: Dict[str, str] = field(default_factory=dict)
+    management_interface: Optional[str] = None
+    management_vlan_id: Optional[int] = None
+    management_mac: Optional[str] = None
     current_version: Optional[str] = None
     bank1_version: Optional[str] = None
     bank2_version: Optional[str] = None
@@ -171,6 +223,85 @@ class TachyonClient:
         # for the AP's radio, used by the link-budget UI.
         self.last_radio_params: Optional[Dict[str, Any]] = None
 
+    @staticmethod
+    def _parse_system_status(body: str) -> dict:
+        """Return a system object from a status response, or an empty mapping."""
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        system = data.get("system", data)
+        return system if isinstance(system, dict) else {}
+
+    @staticmethod
+    def _parse_serial(system: dict) -> Optional[str]:
+        """Return a usable serial claim; sanitized or empty values are not claims."""
+        serial = system.get("serial")
+        if not isinstance(serial, str):
+            return None
+        serial = serial.strip()
+        if not serial or re.fullmatch(r"<[^>]+>", serial):
+            return None
+        if serial.lower() in {"unknown", "none", "null", "n/a", "na", "serial"}:
+            return None
+        return serial
+
+    @staticmethod
+    def _parse_interface_macs(body: str) -> Dict[str, str]:
+        """Return every named interface MAC from an interfaces status response."""
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        interfaces = data.get("interfaces") if isinstance(data, dict) else None
+        if not isinstance(interfaces, dict):
+            return {}
+        macs = {}
+        for name, row in interfaces.items():
+            if not isinstance(name, str) or not name or not isinstance(row, dict):
+                continue
+            mac = TachyonClient._normalize_mac(row.get("mac_address"))
+            if mac is not None:
+                macs[name] = mac
+            elif "mac_address" in row:
+                logger.warning("Ignoring invalid MAC for interface %s", name)
+        return macs
+
+    @staticmethod
+    def _normalize_mac(value: Any) -> Optional[str]:
+        """Return a colon-separated uppercase MAC, or None for an invalid claim."""
+        if not isinstance(value, str):
+            return None
+        value = value.strip()
+        if re.fullmatch(r"[0-9A-Fa-f]{12}", value):
+            octets = [value[index:index + 2] for index in range(0, 12, 2)]
+        elif re.fullmatch(r"(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}", value):
+            octets = re.split("[:-]", value)
+        else:
+            return None
+        return ":".join(octet.upper() for octet in octets)
+
+    @staticmethod
+    def _parse_management_zone(body: str) -> tuple[Optional[str], Optional[int]]:
+        """Return the named management interface and VLAN from zone status."""
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            return None, None
+        zones = data.get("zones") if isinstance(data, dict) else None
+        if not isinstance(zones, dict):
+            return None, None
+        for zone in zones.values():
+            if not isinstance(zone, dict):
+                continue
+            interface = zone.get("management_interface")
+            vlan = zone.get("mgmt_vlan_id")
+            if isinstance(interface, str) and interface.strip():
+                return interface.strip(), vlan if isinstance(vlan, int) and not isinstance(vlan, bool) else None
+        return None, None
+
     async def _curl(
         self,
         method: str,
@@ -183,7 +314,7 @@ class TachyonClient:
         """Execute curl command and return (status_code, response_body)."""
         url = f"{self._base_url}{endpoint}"
 
-        cmd = ["curl", "-s", "-m", str(self.timeout)]
+        cmd = ["-s", "-m", str(self.timeout)]
         if not VERIFY_SSL:
             cmd.append("-k")  # Skip certificate verification for self-signed certs
 
@@ -214,15 +345,11 @@ class TachyonClient:
         cmd.extend(["-w", "\n%{http_code}"])
         cmd.append(url)
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
+        returncode, stdout = await _run_curl(cmd)
 
-        if proc.returncode != 0:
-            raise RuntimeError(f"curl failed: {stderr.decode()}")
+        if returncode != 0:
+            detail = ": request timed out" if returncode == 28 else ""
+            raise RuntimeError(f"curl failed{detail} (exit code {returncode})")
 
         output = stdout.decode("utf-8", errors="ignore")
         lines = output.rsplit("\n", 2)
@@ -250,7 +377,7 @@ class TachyonClient:
                 "password": self.password,
             })
 
-            cmd = ["curl", "-s", "-m", str(self.timeout)]
+            cmd = ["-s", "-m", str(self.timeout)]
             if not VERIFY_SSL:
                 cmd.append("-k")
             cmd.extend([
@@ -261,16 +388,10 @@ class TachyonClient:
                 url,
             ])
 
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
+            returncode, stdout = await _run_curl(cmd)
 
-            if proc.returncode != 0:
-                error_msg = stderr.decode().strip()
-                logger.error(f"Login curl failed for {self.ip}: {error_msg}")
+            if returncode != 0:
+                logger.error(f"Login curl failed for {self.ip} (exit code {returncode})")
                 return "Device not reachable"
 
             response = stdout.decode("utf-8", errors="ignore")
@@ -289,7 +410,7 @@ class TachyonClient:
 
             # Check raw response for error messages
             if "Authorization Failed" in response or "Invalid credentials" in response:
-                logger.error(f"Login failed for {self.ip}: {response[:200]}")
+                logger.error(f"Login failed for {self.ip}: Invalid credentials")
                 return "Invalid credentials"
 
             # Extract token from cookie file
@@ -299,6 +420,7 @@ class TachyonClient:
                     if line and not line.startswith("#"):
                         parts = line.split("\t")
                         if len(parts) >= 7 and parts[5] == "token":
+                            register_device_token(self, parts[6])
                             self._token = parts[6]
                             logger.info(f"Logged in to {self.ip}")
                             return True
@@ -347,23 +469,20 @@ class TachyonClient:
             return "expired"
         return "ok" if data.get("system") else "expired"
 
-    async def get_device_info(self) -> DeviceInfo:
+    async def get_device_info(self, include_management: bool = False) -> DeviceInfo:
         """Get device information."""
         info = DeviceInfo(ip=self.ip)
 
         # Get system status
         status, body = await self._curl("GET", "/cgi.lua/status?type=system")
         if status == 200:
-            try:
-                data = json.loads(body)
-                system = data.get("system", data)
-                info.model = system.get("model")
-                info.serial = system.get("serial")
-                version = system.get("version", {})
-                firmux = version.get("firmux", "")
-                info.current_version = self._normalize_version(firmux)
-            except json.JSONDecodeError:
-                pass
+            system = self._parse_system_status(body)
+            info.model = system.get("model")
+            info.serial = self._parse_serial(system)
+            version = system.get("version", {})
+            version = version if isinstance(version, dict) else {}
+            firmux = version.get("firmux", "")
+            info.current_version = self._normalize_version(firmux)
 
         # Get bootbank info
         status, body = await self._curl("GET", "/cgi.lua/bootbank")
@@ -389,13 +508,14 @@ class TachyonClient:
         # Get MAC address
         status, body = await self._curl("GET", "/cgi.lua/status?type=interfaces")
         if status == 200:
-            try:
-                data = json.loads(body)
-                mac = data.get("interfaces", {}).get("eth0", {}).get("mac_address")
-                if mac:
-                    info.mac = mac.upper()
-            except json.JSONDecodeError:
-                pass
+            info.macs = self._parse_interface_macs(body)
+            info.mac = info.macs.get("eth0")
+
+        if include_management:
+            status, body = await self._curl("GET", "/cgi.lua/status?type=zones")
+            if status == 200:
+                info.management_interface, info.management_vlan_id = self._parse_management_zone(body)
+                info.management_mac = info.macs.get(info.management_interface)
 
         return info
 
@@ -457,7 +577,11 @@ class TachyonClient:
         expected = " or ".join(patterns)
         return False, f"Firmware mismatch: model {model} requires firmware with '{expected}' in filename, but got '{filename}'"
 
-    async def upload_firmware(self, firmware_path: str, bandwidth_limit_kbps: int = 0) -> bool:
+    async def upload_firmware(
+        self, firmware_path: str, bandwidth_limit_kbps: int = 0,
+        admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
+        upload_started_callback: Optional[Callable[[], None]] = None,
+    ) -> bool:
         """Upload firmware file to device using PUT.
 
         Args:
@@ -469,6 +593,8 @@ class TachyonClient:
         backoff_delays = [0, 30, 60]  # seconds: no delay, 30s, 60s
 
         for attempt in range(max_attempts):
+            if admission_check and not admission_check()[0]:
+                return False
             if attempt > 0:
                 delay = backoff_delays[attempt]
                 logger.info(f"Retrying firmware upload to {self.ip} in {delay}s (attempt {attempt + 1}/{max_attempts})")
@@ -476,7 +602,7 @@ class TachyonClient:
 
             logger.info(f"Uploading firmware to {self.ip}{f' (attempt {attempt + 1}/{max_attempts})' if attempt > 0 else ''}")
 
-            cmd = ["curl", "-s", "-m", "300"]  # 5 min timeout for upload
+            cmd = ["-s", "-m", "300"]  # 5 min timeout for upload
             if bandwidth_limit_kbps and bandwidth_limit_kbps > 0:
                 cmd.extend(["--limit-rate", f"{bandwidth_limit_kbps}k"])
             if not VERIFY_SSL:
@@ -492,29 +618,28 @@ class TachyonClient:
 
             cmd.append(url)
 
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
+            if admission_check and not admission_check()[0]:
+                return False
 
-            if proc.returncode != 0:
-                logger.error(f"Firmware upload failed for {self.ip}: {stderr.decode()}")
+            if upload_started_callback:
+                upload_started_callback()
+            returncode, stdout = await _run_curl(cmd)
+
+            if returncode != 0:
+                logger.error(f"Firmware upload failed for {self.ip} (exit code {returncode})")
                 # Transport error — retry if attempts remain
                 if attempt < max_attempts - 1:
                     continue
                 return False
 
             response = stdout.decode("utf-8", errors="ignore")
-            logger.debug(f"Upload response from {self.ip}: {response}")
 
             # Check for error in response
             try:
                 data = json.loads(response)
                 if isinstance(data, dict):
                     if data.get("error") or data.get("statusCode", 200) >= 400:
-                        logger.error(f"Upload error from {self.ip}: {data}")
+                        logger.error(f"Firmware upload rejected by {self.ip}")
                         # Device-side rejection — don't retry
                         return False
             except json.JSONDecodeError:
@@ -542,10 +667,10 @@ class TachyonClient:
                     data = json.loads(body)
                     if isinstance(data, dict):
                         if data.get("error"):
-                            logger.error(f"Update trigger error from {self.ip}: {data.get('error')}")
+                            logger.error(f"Update trigger rejected by {self.ip} (HTTP {status})")
                             return False
                         if data.get("statusCode", 200) >= 400:
-                            logger.error(f"Update trigger failed with status: {data}")
+                            logger.error(f"Update trigger rejected by {self.ip} (HTTP {status})")
                             return False
                 except json.JSONDecodeError:
                     pass
@@ -679,6 +804,8 @@ class TachyonClient:
         pass_number: int = 1,
         reboot_timeout: int = 300,
         bandwidth_limit_kbps: int = 0,
+        admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
+        upload_started_callback: Optional[Callable[[], None]] = None,
     ) -> UpdateResult:
         """Perform complete firmware update cycle.
 
@@ -736,11 +863,30 @@ class TachyonClient:
                     progress(f"Firmware validation failed: {error_msg}")
                     return result
 
+            if admission_check:
+                admitted, reason = admission_check()
+                if not admitted:
+                    result.error = reason
+                    return result
+
             # Upload firmware
             progress("Uploading firmware...")
-            if not await self.upload_firmware(firmware_path, bandwidth_limit_kbps=bandwidth_limit_kbps):
+            upload_options = {}
+            if admission_check:
+                upload_options["admission_check"] = admission_check
+            if upload_started_callback:
+                upload_options["upload_started_callback"] = upload_started_callback
+            if not await self.upload_firmware(
+                firmware_path, bandwidth_limit_kbps=bandwidth_limit_kbps, **upload_options
+            ):
                 result.error = "Firmware upload failed"
                 return result
+
+            if admission_check:
+                admitted, reason = admission_check()
+                if not admitted:
+                    result.error = reason
+                    return result
 
             # Trigger update (device reboots)
             progress("Installing firmware...")
@@ -835,9 +981,13 @@ class TachyonClient:
             peers = wireless.get("peers", [])
 
             for peer in peers:
+                raw_mac = peer.get("mac")
+                mac = self._normalize_mac(raw_mac)
+                if raw_mac is not None and mac is None:
+                    logger.warning("Ignoring invalid MAC for peer at %s", peer.get("ipv4", ""))
                 cpe = CPEInfo(
                     ip=peer.get("ipv4", ""),
-                    mac=peer.get("mac"),
+                    mac=mac,
                     system_name=peer.get("system_name"),
                     model=peer.get("model"),
                     firmware_version=peer.get("fw"),
@@ -891,6 +1041,10 @@ class TachyonClient:
         info = {
             "ip": self.ip,
             "mac": None,
+            "macs": {},
+            "management_interface": None,
+            "management_vlan_id": None,
+            "management_mac": None,
             "system_name": None,
             "model": None,
             "firmware_version": None,
@@ -903,54 +1057,47 @@ class TachyonClient:
         # Get system status
         status, body = await self._curl("GET", "/cgi.lua/status?type=system")
         if status == 200:
-            try:
-                data = json.loads(body)
-                system = data.get("system", data)
-                general = system.get("general", {})
+            system = self._parse_system_status(body)
+            general = system.get("general", {})
+            general = general if isinstance(general, dict) else {}
 
-                # Basic info
-                info["model"] = system.get("model")
-                info["serial"] = system.get("serial")
+            # Basic info
+            info["model"] = system.get("model")
+            info["serial"] = self._parse_serial(system)
 
-                # Name/hostname from general section
-                info["system_name"] = general.get("name") or general.get("hostname") or system.get("name")
+            # Name/hostname from general section
+            info["system_name"] = general.get("name") or general.get("hostname") or system.get("name")
 
-                # Firmware version
-                version = system.get("version", {})
-                firmux = version.get("firmux", "")
-                info["firmware_version"] = self._normalize_version(firmux)
+            # Firmware version
+            version = system.get("version", {})
+            version = version if isinstance(version, dict) else {}
+            firmux = version.get("firmux", "")
+            info["firmware_version"] = self._normalize_version(firmux)
 
-                # Location from general section
-                info["location"] = general.get("location") or system.get("location") or system.get("site")
-                info["latitude"] = general.get("latitude") or system.get("latitude")
-                info["longitude"] = general.get("longitude") or system.get("longitude")
-            except json.JSONDecodeError:
-                pass
+            # Location from general section
+            info["location"] = general.get("location") or system.get("location") or system.get("site")
+            info["latitude"] = general.get("latitude") or system.get("latitude")
+            info["longitude"] = general.get("longitude") or system.get("longitude")
 
         # Get zone/location from zones endpoint
         status, body = await self._curl("GET", "/cgi.lua/status?type=zones")
         if status == 200:
             try:
                 data = json.loads(body)
-                zones = data.get("zones", {})
+                zones = data.get("zones", {}) if isinstance(data, dict) else {}
                 # Get the first zone name as the zone identifier
-                if zones:
-                    zone_names = list(zones.keys())
-                    if zone_names:
-                        info["zone"] = zone_names[0]
-            except json.JSONDecodeError:
+                if isinstance(zones, dict) and zones:
+                    info["zone"] = next(iter(zones))
+            except (json.JSONDecodeError, TypeError):
                 pass
+            info["management_interface"], info["management_vlan_id"] = self._parse_management_zone(body)
 
         # Get MAC address
         status, body = await self._curl("GET", "/cgi.lua/status?type=interfaces")
         if status == 200:
-            try:
-                data = json.loads(body)
-                mac = data.get("interfaces", {}).get("eth0", {}).get("mac_address")
-                if mac:
-                    info["mac"] = mac.upper()
-            except json.JSONDecodeError:
-                pass
+            info["macs"] = self._parse_interface_macs(body)
+            info["mac"] = info["macs"].get("eth0")
+            info["management_mac"] = info["macs"].get(info["management_interface"])
 
         return info
 
@@ -1130,12 +1277,23 @@ class TachyonClient:
         if dry_run:
             endpoint += "?dry_run=true"
         status, body = await self._curl("POST", endpoint, data=config)
-        result = {"success": status == 200, "status_code": status}
+        failure = {
+            "success": False,
+            "status_code": status,
+            "error": f"Configuration request failed (HTTP {status})",
+        }
+        # Device errors can reflect the submitted config or authentication cookie.
+        if status != 200:
+            return failure
+        result = {"success": True, "status_code": status}
         try:
             result.update(json.loads(body))
         except json.JSONDecodeError:
             result["raw_response"] = body
-        return result
+        # Some firmware returns HTTP 200 with an error field but no
+        # success=false flag. Treat that response as a failure and keep its
+        # text out of the result because it may echo submitted secrets.
+        return result if result.get("success") and "error" not in result else failure
 
     def get_hardware_id(self, model: str) -> str:
         """Get the CONTROL file hardware ID for a device model."""

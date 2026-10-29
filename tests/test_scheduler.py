@@ -281,6 +281,7 @@ class TestSchedulerCanaries:
 
     @pytest.mark.asyncio
     async def test_manual_canary_job_disables_window_cutoff(self, mock_db, tmp_path):
+        db.set_setting("scheduled_rollout_safety_ready", "true")
         firmware_dir = tmp_path / "firmware"
         firmware_dir.mkdir()
         fw_name = "tna-30x-1.2.3-r123.bin"
@@ -323,6 +324,7 @@ class TestSchedulerStartFailure:
         fw = "tna-30x-1.2.3-r123.bin"
         db.set_settings({
             "schedule_enabled": "true",
+            "scheduled_rollout_safety_ready": "true",
             "selected_firmware_30x": fw,
             "timezone": "America/Chicago",
             "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
@@ -366,6 +368,7 @@ class TestSchedulerStartFailure:
         fw = "tna-30x-1.2.3-r123.bin"
         db.set_settings({
             "schedule_enabled": "true",
+            "scheduled_rollout_safety_ready": "true",
             "selected_firmware_30x": fw,
             "timezone": "America/Chicago",
             "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
@@ -469,6 +472,7 @@ class TestSchedulerSettingsSafety:
         _seed_rollout_devices()
         db.set_settings({
             "schedule_enabled": "true",
+            "scheduled_rollout_safety_ready": "true",
             "timezone": "America/Chicago",
             "selected_firmware_30x": "firmware.bin",
             "weather_check_enabled": "false",

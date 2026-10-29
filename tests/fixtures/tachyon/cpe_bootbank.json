@@ -1,0 +1,36 @@
+{
+  "device": "cpe",
+  "endpoint": "/cgi.lua/bootbank",
+  "reads": [
+    {
+      "captured_at_utc": "2026-10-27T20:56:57.013607Z",
+      "http_status": 200,
+      "read": 1,
+      "response": {
+        "active": {
+          "bootbank": 1,
+          "firmux": "1.15.0 rev 55159"
+        },
+        "backup": {
+          "bootbank": 2,
+          "firmux": "1.15.0 rev 55151"
+        }
+      }
+    },
+    {
+      "captured_at_utc": "2026-10-27T20:59:57.218332Z",
+      "http_status": 200,
+      "read": 2,
+      "response": {
+        "active": {
+          "bootbank": 1,
+          "firmux": "1.15.0 rev 55159"
+        },
+        "backup": {
+          "bootbank": 2,
+          "firmux": "1.15.0 rev 55151"
+        }
+      }
+    }
+  ]
+}

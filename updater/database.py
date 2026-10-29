@@ -635,6 +635,7 @@ def init_db():
         # Insert default settings if not exists
         defaults = {
             "schedule_enabled": "false",
+            "scheduled_rollout_safety_ready": "false",
             "schedule_days": "tue,wed,thu",
             "schedule_start_hour": "3",
             "schedule_end_hour": "4",
@@ -860,6 +861,88 @@ def clear_active_job(job_id: str):
     """Remove an active job after completion or recovery."""
     with get_db() as db:
         db.execute("DELETE FROM active_jobs WHERE job_id = ?", (job_id,))
+
+
+def stop_firmware_window(window_key, job_id: str, device_ip: str, gate: str, reason: str):
+    """Persist the first failed device gate for a maintenance window."""
+    if not window_key:
+        return None
+    key_json = json.dumps(list(window_key), separators=(",", ":"))
+    with get_db() as db:
+        db.execute(
+            "INSERT OR IGNORE INTO firmware_window_stops "
+            "(window_key, job_id, device_ip, gate, reason, stopped_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (key_json, job_id, device_ip, gate, reason, datetime.now().isoformat()),
+        )
+        row = db.execute(
+            "SELECT * FROM firmware_window_stops WHERE window_key = ?", (key_json,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_firmware_window_stop(window_key):
+    """Read the stop record for one maintenance window."""
+    if not window_key:
+        return None
+    key_json = json.dumps(list(window_key), separators=(",", ":"))
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM firmware_window_stops WHERE window_key = ?", (key_json,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def hold_firmware_window(window_key, job_id: str, device_ip: str, reason: str):
+    """Persist a qualification hold without creating an operator failure stop."""
+    if not window_key:
+        return None
+    key_json = json.dumps(list(window_key), separators=(",", ":"))
+    with get_db() as db:
+        db.execute(
+            "INSERT OR IGNORE INTO firmware_window_holds "
+            "(window_key, job_id, device_ip, reason, held_at) VALUES (?, ?, ?, ?, ?)",
+            (key_json, job_id, device_ip, reason, datetime.now().isoformat()),
+        )
+        row = db.execute(
+            "SELECT * FROM firmware_window_holds WHERE window_key = ?", (key_json,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_firmware_window_hold(window_key):
+    """Read the qualification hold for one maintenance window instance."""
+    if not window_key:
+        return None
+    key_json = json.dumps(list(window_key), separators=(",", ":"))
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM firmware_window_holds WHERE window_key = ?", (key_json,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_unresolved_firmware_window_stops():
+    """Return stopped windows that still need an operator resolution record."""
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT * FROM firmware_window_stops WHERE resolved_at IS NULL ORDER BY stopped_at"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def resolve_firmware_window_stop(stop_id: int, username: str, resolution: str):
+    """Record the operator's resolution of a failed maintenance window."""
+    with get_db() as db:
+        db.execute(
+            "UPDATE firmware_window_stops SET resolved_at = ?, resolved_by = ?, resolution = ? "
+            "WHERE id = ? AND resolved_at IS NULL",
+            (datetime.now().isoformat(), username, resolution.strip(), stop_id),
+        )
+        row = db.execute(
+            "SELECT * FROM firmware_window_stops WHERE id = ?", (stop_id,)
+        ).fetchone()
+        return dict(row) if row else None
 
 
 # Tower Site operations
@@ -2153,6 +2236,8 @@ def set_rollout_phase_window(rollout_id: int, window_key: str):
     job. The scheduler refuses to start another phase in the same window, which
     is what guarantees one phase per maintenance window (see rollout_gate)."""
     now = datetime.now().isoformat()
+    if isinstance(window_key, (tuple, list)):
+        window_key = json.dumps(list(window_key), separators=(",", ":"))
     with get_db() as db:
         db.execute(
             "UPDATE rollouts SET last_phase_window = ?, updated_at = ? WHERE id = ?",

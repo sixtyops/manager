@@ -408,6 +408,10 @@ class AutoUpdateScheduler:
         if self._current_job_id is not None:
             return
 
+        if not self._scheduled_admission_allowed():
+            await self._broadcast_status()
+            return
+
         tz_str = settings.get("timezone", "auto")
         if tz_str == "auto":
             tz_str = await services.get_timezone()
@@ -586,6 +590,9 @@ class AutoUpdateScheduler:
                     await self._broadcast_status()
                     return
 
+            if not self._scheduled_admission_allowed():
+                await self._broadcast_status()
+                return
             rollout_id = db.create_rollout(fw_30x, fw_303l if fw_303l else None, fw_tns100 if fw_tns100 else None)
             rollout = db.get_rollout(rollout_id)
             # Snapshot update-relevant settings for rollout consistency
@@ -615,7 +622,17 @@ class AutoUpdateScheduler:
         # attached CPEs) rolls together 10% -> 50% -> 100% with no held firmware
         # slipping out — and the rollout never advances/completes with held work
         # still outstanding.
-        window_key = now.strftime("%Y-%m-%d")
+        window_key = rollout_gate.firmware_window_key({
+            "schedule_days": ",".join(schedule_days),
+            "schedule_start_hour": start_hour,
+            "schedule_end_hour": end_hour,
+            "schedule_timezone": tz_str,
+        }, now)
+        if window_key is None:
+            self._state = "waiting"
+            self._block_reason = "Maintenance window identity is invalid"
+            await self._broadcast_status()
+            return
         held_families, family_holds = self._held_families(settings, rollout)
         first_wave_held = False
         if rollout.get("phase") == "pct10" and held_families:
@@ -676,6 +693,9 @@ class AutoUpdateScheduler:
             # all-or-nothing at the gate (the first wave doesn't run while any
             # family is held), an empty wave here means the work is genuinely done,
             # not held — so completing is correct.
+            if not self._scheduled_admission_allowed():
+                await self._broadcast_status()
+                return
             db.complete_rollout_phase(rollout["id"])
             refreshed = db.get_rollout(rollout["id"])
 
@@ -693,6 +713,9 @@ class AutoUpdateScheduler:
             rollout = refreshed
 
             if not batch_ips and not batch_switches:
+                if not self._scheduled_admission_allowed():
+                    await self._broadcast_status()
+                    return
                 db.complete_rollout_phase(rollout["id"])
                 self._state = "blocked_all_current"
                 self._block_reason = "All devices up to date"
@@ -714,6 +737,10 @@ class AutoUpdateScheduler:
         )
         logger.info(f"Scheduler starting rollout phase {phase}: {len(batch_ips)} APs, {len(batch_switches)} switches")
 
+        if not self._scheduled_admission_allowed():
+            await self._broadcast_status()
+            return
+
         try:
             job_id = await self.start_update_func(
                 ap_ips=batch_ips,
@@ -727,6 +754,7 @@ class AutoUpdateScheduler:
                 end_hour=end_hour,
                 schedule_days=schedule_days,
                 schedule_timezone=tz_str,
+                window_key=window_key,
             )
             # Assign devices to the wave ONLY after the job is created. If
             # start_update_func raised (e.g. a missing-family firmware refusal),
@@ -750,6 +778,16 @@ class AutoUpdateScheduler:
             db.log_schedule_event("job_start_failed", str(e))
             logger.error(f"Scheduler failed to start update: {e}")
             await self._broadcast_status()
+
+    def _scheduled_admission_allowed(self) -> bool:
+        """Check current readiness without yielding before admission."""
+        admitted, reason = rollout_gate.current_scheduled_admission_decision()
+        if not admitted:
+            if self._state != "blocked_safety":
+                db.log_schedule_event("blocked_safety", reason)
+            self._state = "blocked_safety"
+            self._block_reason = reason
+        return admitted
 
     def _target_versions(self, settings: dict, rollout: Optional[dict]) -> dict[str, str]:
         """Build target versions for each firmware family."""
@@ -1177,6 +1215,9 @@ class AutoUpdateScheduler:
                         job_id=job_id,
                     )
                     logger.info(f"Rollout {rollout['id']} wave {rollout['phase']} has {deferred_count} deferred device(s)")
+                elif not self._scheduled_admission_allowed():
+                    self._last_run_result = self._block_reason
+                    db.log_schedule_event("phase_held", self._block_reason, job_id=job_id)
                 else:
                     db.complete_rollout_phase(rollout["id"])
 
@@ -1206,12 +1247,13 @@ class AutoUpdateScheduler:
                 self._last_run_result = f"Success ({success_count} devices)"
                 db.log_schedule_event("job_completed", f"success={success_count}", job_id=job_id)
 
-        self._state = "waiting"
-        self._block_reason = (
-            rollout.get("pause_reason")
-            if rollout and rollout.get("status") == "paused"
-            else "Already ran today"
-        )
+        if self._state != "blocked_safety":
+            self._state = "waiting"
+            self._block_reason = (
+                rollout.get("pause_reason")
+                if rollout and rollout.get("status") == "paused"
+                else "Already ran today"
+            )
         logger.info(f"Scheduler job {job_id} completed: {self._last_run_result}")
 
         task = asyncio.create_task(self._broadcast_status())
@@ -1451,6 +1493,11 @@ class AutoUpdateScheduler:
             return {"auto_update_eligible": False, "next_attempt_iso": None,
                     "reason": "Auto-update is off"}
 
+        admitted, reason = rollout_gate.scheduled_admission_decision(settings)
+        if not admitted:
+            return {"auto_update_eligible": False, "next_attempt_iso": None,
+                    "reason": reason}
+
         schedule_days = settings.get("schedule_days", "")
         start_hour = _as_int(settings.get("schedule_start_hour", "3"), 3)
         end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
@@ -1589,6 +1636,7 @@ class AutoUpdateScheduler:
 
         return {
             "state": self._state,
+            "safety_block_reason": rollout_gate.scheduled_admission_decision(settings)[1],
             "block_reason": self._block_reason,
             "weather": self._weather_info,
             "last_run_result": self._last_run_result,

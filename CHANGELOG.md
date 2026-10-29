@@ -4,6 +4,68 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added
+- Serialize manual and scheduled firmware jobs under one process-wide owner.
+  Refuse a second admission with a clear reason and keep ownership through
+  job recovery and finalization.
+- Parse Tachyon serial numbers, per-interface MAC addresses, and the
+  management interface and VLAN from status responses. Normalize valid MACs
+  and reject invalid identity claims. Add sanitized AP, CPE, peer-list, and
+  switch captures as parser fixtures.
+
+### Fixed
+- Require release validation against the candidate commit before signing a tag.
+  The validator can read its development host and credentials from environment
+  variables.
+- Read the release validation password from the environment or a private file.
+  Reject password command-line arguments to keep credentials out of process
+  listings.
+- Validate Tachyon peer-list MAC claims before exposing them as CPE identity.
+  Include switch management interface, VLAN, and MAC data in normal device info.
+- Firmware updates now stop new device writes after the first failed snapshot,
+  pre-reboot, flash, recovery, or smoke gate, or an unexpected device task
+  error. The stop uses the maintenance window instance key and survives manager
+  restart. Device work runs one complete recovery sequence at a time. An
+  operator records the failure resolution in a later window before the engine
+  admits more firmware writes. Manual stops outside configured windows use a
+  local-day identity and can be resolved on a later day. Resolution compares
+  parsed window start dates and rejects same, earlier, legacy, or malformed
+  window identities. Existing rollouts
+  with a date-only last-wave marker wait for a window whose start date is
+  after the marker date. This also blocks ambiguous overnight markers.
+  Scheduled reboots and flashes recheck current safety readiness and the window
+  after device preparation. The write gate also rechecks the stop record,
+  readiness, and cutoff before upload and install trigger. New markers use the
+  maintenance window instance key. Readiness and cutoff holds before upload
+  leave the device pending without recording a window failure.
+- Extract the bench wrapper's Git archive from a temporary file. This avoids
+  SIGPIPE when macOS `tar` closes the input pipe before `git archive` exits.
+
+### Security
+- Register Tachyon session tokens from the login cookie jar before session use.
+  Keep one registration per live client until replacement or client collection.
+  Collect API-format and registered literal matches before replacement.
+  Redact the full span when matches overlap. Login, session reuse, refresh,
+  and request behavior are unchanged.
+- Pause phased config rollout, auto-enforce, and automatic config rollback
+  on the server for safety. Keep status, history, stop, manual push, restore,
+  snapshots, diff, and drift reports available.
+- Register generated Manager API tokens with the log sanitizer before hashing
+  or storage. Existing output handlers redact these values in diagnostics.
+  Retain at most 100 token literals; a fixed-format fallback redacts older
+  tokens. Inbound Cookie and Bearer credentials are not registered. Token
+  generation, storage, expiry, scopes, authentication, and one-time response
+  behavior are unchanged.
+- Documented current Manager session, API token, OIDC ID token, and Tachyon
+  device session token storage, expiry, refresh behavior, log paths, and
+  `register_secret` coverage. Manager session registration is already in place
+  through [#519](https://github.com/sixtyops/manager/pull/519) for issue
+  [#518](https://github.com/sixtyops/manager/issues/518). Full API-token
+  registration remains open in [#578](https://github.com/sixtyops/manager/issues/578).
+  Tachyon device-token registration remains open in
+  [#579](https://github.com/sixtyops/manager/pull/579). This inventory changes
+  no runtime behavior.
+
 ### Removed
 - Removed `updater/devmode.py` and `SIXTYOPS_DEV_MODE`. `./dev.sh` now seeds
   sample devices with `scripts/seed_dev_data.py` and runs the real poller.
@@ -30,6 +92,21 @@ All notable changes to this project are documented in this file.
   remain unchanged.
 
 ### Fixed
+- Keep scheduled firmware job and wave admission paused until the operator records
+  `scheduled_rollout_safety_ready=true` after the required safety fixes and bench
+  proof. Show the safety reason next to Auto-Update. Keep manual per-device
+  updates available. Read current readiness before scheduled admission and each
+  queued reboot, upload attempt, retry, or install; finish recovery for submitted
+  operations.
+  Count smoke-test warnings and exceptions as device failures
+  and request job cancellation.
+- Hold firmware updates before the pre-update reboot and flash until the exact
+  source and target builds and artifact SHA-256 values are qualified for the
+  device family, role, management VLAN, DHCP/static mode, and recovery case.
+  Missing artifact or management evidence keeps the device held.
+  Scheduled and manual jobs use the same gate. The qualification table starts
+  empty. The device UI shows the hold reason. Approved named bench plans permit
+  only their listed lab devices and transitions on explicit manual requests.
 - Config templates now check credential keys at any depth. A key that ends
   in `password`, `secret`, or `key` accepts only a non-empty string. An empty
   string means "no change": the manager removes that leaf before the merge,
@@ -61,6 +138,12 @@ All notable changes to this project are documented in this file.
   code revert cannot recover deleted rows. Protected rows have no size limit.
 
 ### Security
+- Tachyon curl requests send cookies and request bodies through stdin.
+  Login, config writes, and firmware uploads keep secrets out of process
+  arguments. Curl failures report exit codes without raw stderr or payloads.
+  Config request failures return a fixed error and HTTP status to prevent
+  device responses from exposing submitted secrets. HTTP 200 responses with
+  an `error` field also fail without returning the device error text.
 - Template listing returns an explicit HTTP 409 for malformed stored JSON or
   non-object payloads. It returns row IDs and field names, with no payload or
   partial list. This prevents legacy encoded Users forms from returning

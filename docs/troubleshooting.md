@@ -24,36 +24,43 @@ traceback when something blew up.
 ## 1. Device unreachable
 
 ### Symptom
-A device shows as offline / red on the dashboard, `last_seen` is hours stale,
-or update jobs report status `unreachable` for it.
+An AP shows as offline / red on the dashboard, `last_seen` is hours stale, or
+an update job reports `unreachable`.
 
 ### Diagnose
-1. Confirm the device's IP and credentials in **Devices > row > Edit**. A
-   DHCP renumber or password change on the device side is the most common
-   cause. (MAC-based config-history rebind covers the snapshot side, but the
-   poller still needs the current IP.)
-2. From the Manager container, probe the device directly:
+1. Hover the AP's red offline marker in **Signal vs Distance** or **Rain Fade
+   Tolerance**. The popover shows the AP name, model or IP, and the stored
+   `last_error` value.
+2. Read the stored `last_error`. `Invalid credentials` means the Tachyon login
+   response reported an authentication rejection. `Device not reachable` is
+   stored when the login curl request exits with an error. This value does not
+   identify the exact cause. Use the container check in step 3 to see the
+   connection error.
+3. From the Manager container, check whether the device responds:
    ```bash
    docker compose exec sixtyops-mgmt curl -k -m 5 https://<device-ip>/
    ```
-   If this hangs or returns "connection refused", the issue is network
-   reachability, not the Manager. The Manager polls from inside its
-   container's network namespace, so host-side reachability does not
-   guarantee container-side reachability.
-3. Tail `sixtyops-mgmt` and look for `Device not reachable` — emitted by the
-   Tachyon client at `updater/vendors/tachyon/client.py` (lines 271 and 658)
-   along with a retry count. Repeated retries followed by a final failure
-   confirm it's a connectivity problem and not a transient blip.
+   A timeout or connection refusal suggests a network path problem. Any HTTP
+   response confirms that an HTTPS service answered from the Manager
+   container. This request has no device credentials, so it does not verify
+   the AP identity or its login credentials. The Manager polls from inside
+   its container's network namespace. Host-side reachability does not confirm
+   container-side reachability.
+4. Check `sixtyops-mgmt` logs for `Login curl failed`. This line shows when
+   the login request failed. It usually has no error detail, because the
+   client runs curl in silent mode. The Tachyon client stores
+   `Device not reachable` when this login request fails. It stores
+   `Invalid credentials` when the login response reports an authentication
+   rejection.
 
 ### Recover
-- **IP changed**: edit the device in the UI; the next poll cycle picks up
-  the new address.
-- **Credentials drifted**: re-enter the username / password in the same
-  Edit modal. The save path calls `update_device_credentials` in
-  `updater/database.py` and re-encrypts the stored secret.
-- **Network**: confirm the Manager host can reach the device subnet
-  (firewall, VPN, VLAN). Then re-test from inside the container with the
-  `curl` command above.
+- **Credentials rejected**: credential repair requires an authenticated
+  admin or operator. The current UI has no general credential **Edit** flow.
+  This section covers diagnosis only. It does not document credential repair.
+- **Timeout or unreachable**: confirm the AP IP, route, firewall, VPN, and
+  VLAN from the Manager host. Then repeat the check from inside the container.
+- **Verify recovery**: use the AP row's **Refresh** action. Confirm that the
+  offline marker clears and `last_seen` updates.
 
 ---
 

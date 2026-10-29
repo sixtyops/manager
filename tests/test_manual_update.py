@@ -253,3 +253,25 @@ class TestUpdateDevice:
         assert resp.status_code == 400
         assert MODEL_303L in resp.json()["detail"]
         spawn.assert_not_called()
+
+
+@pytest.mark.parametrize("route", ["/api/start-update", "/api/update-device"])
+def test_manual_update_available_during_safety_and_firmware_holds(
+    authed_client, mock_db, fw_dir, route
+):
+    _seed_303l_ap("1.5.0.54970")
+    db.set_settings({
+        "schedule_enabled": "true",
+        "scheduled_rollout_safety_ready": "false",
+        "firmware_canary_hold_days": "9999",
+    })
+    data = {
+        "ip": AP_IP, "ip_list": AP_IP, "device_type": "mixed",
+        "firmware_file": FW_30X, "firmware_file_303l": FW_303L_BETA2,
+        "bank_mode": "one",
+    }
+    with patch("updater.app._spawn_update_job") as spawn:
+        response = authed_client.post(route, data=data)
+    assert response.status_code == 200, response.text
+    assert response.json()["job_id"]
+    spawn.assert_called_once()

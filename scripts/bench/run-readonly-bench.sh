@@ -4,14 +4,14 @@
 #
 # Usage, from the root of the checkout under test:
 #   /path/to/run-readonly-bench.sh <full-commit-sha> \
-#     [--mode integration|local-poll|session-proof] [--duration-min N]
+#     [--mode integration|local-poll|session-proof|local-switch] [--duration-min N]
 #
 # Run this script from a trusted checkout of main. It tests the checkout in
 # the current directory, so the commit under test does not need to contain it.
 #
 # The owner sets SIXTYOPS_BENCH_ACCESS_FILE to a private access file with
 # "Key: value" lines. This script parses that file in a subshell, runs one
-# fixed mode, redacts all output, and writes a summary outside the
+# fixed mode, limits device output, and writes a summary outside the
 # repository. See docs/dev-hardware-validation.md, "Read-only bench wrapper".
 #
 # Do not add tracing (set -x) or an environment dump to this script.
@@ -55,7 +55,7 @@ refuse() {
 }
 
 usage() {
-  echo "usage: run-readonly-bench.sh <full-commit-sha> [--mode integration|local-poll|session-proof] [--duration-min N]" >&2
+  echo "usage: run-readonly-bench.sh <full-commit-sha> [--mode integration|local-poll|session-proof|local-switch] [--duration-min N]" >&2
   exit 2
 }
 
@@ -94,7 +94,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 case $mode in
-  integration | local-poll | session-proof) ;;
+  integration | local-poll | session-proof | local-switch) ;;
   *) refuse "unknown mode" ;;
 esac
 [[ $duration_min =~ ^[1-9][0-9]{0,2}$ ]] || refuse "--duration-min must be a whole number from 1 to 999"
@@ -117,7 +117,7 @@ git diff --quiet "$base" HEAD -- $PROTECTED_PATHS || refuse "the commit changes 
 # 2. Access file checks. Do not print the path or the contents.
 access_file=${SIXTYOPS_BENCH_ACCESS_FILE:-}
 [ -n "$access_file" ] || refuse "SIXTYOPS_BENCH_ACCESS_FILE is not set"
-[ -f "$access_file" ] && [ -r "$access_file" ] || refuse "the access file is missing or not readable"
+[ ! -L "$access_file" ] && [ -f "$access_file" ] && [ -r "$access_file" ] || refuse "the access file is missing or not readable"
 [ -O "$access_file" ] || refuse "the current user does not own the access file"
 # Try GNU stat first. GNU "stat -f" reports the file system, prints to
 # stdout, and fails, so the BSD form must come second.
@@ -134,7 +134,12 @@ esac
 # 3. Summary location, outside the repository.
 umask 077
 summary_dir=${SIXTYOPS_BENCH_SUMMARY_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/sixtyops-bench}
-mkdir -p "$summary_dir"
+mkdir -p "$summary_dir" 2>/dev/null || refuse "cannot create the summary directory"
+if [ "$mode" = local-switch ]; then
+  [ ! -L "$summary_dir" ] && [ -O "$summary_dir" ] || refuse "the summary directory must belong to the current user and must not be a symlink"
+  summary_mode=$(stat -c %a "$summary_dir" 2>/dev/null || stat -f %Lp "$summary_dir")
+  [ "$summary_mode" = 700 ] || refuse "the summary directory mode must be 700"
+fi
 summary_dir=$(physical_dir "$summary_dir")
 case "$summary_dir/" in
   "$repo"/*) refuse "the summary directory must be outside the repository" ;;
@@ -142,6 +147,15 @@ esac
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-${head_sha:0:12}-$mode"
 log_file="$summary_dir/$run_id.log"
 summary_file="$summary_dir/$run_id.summary.txt"
+
+# Reserve both private output files before the switch reader can log in.
+if [ "$mode" = local-switch ]; then
+  for output_file in "$log_file" "$summary_file"; do
+    (set -o noclobber; : > "$output_file") 2>/dev/null || refuse "cannot reserve a private output file"
+    output_mode=$(stat -c %a "$output_file" 2>/dev/null || stat -f %Lp "$output_file")
+    [ -O "$output_file" ] && [ "$output_mode" = 600 ] || refuse "the output file must be owned by the current user with mode 600"
+  done
+fi
 
 if [ -n "${SIXTYOPS_BENCH_PYTHON:-}" ]; then
   python=$SIXTYOPS_BENCH_PYTHON
@@ -169,9 +183,13 @@ trap cleanup EXIT
 if [ "$mode" != integration ]; then
   work_dir=$(mktemp -d "${TMPDIR:-/tmp}/sixtyops-bench-XXXXXX")
   code_dir="$work_dir/src"
+  archive_file="$work_dir/source.tar"
   mkdir "$code_dir"
-  git archive HEAD | tar -x -C "$code_dir"
-  (cd "$code_dir" && "$python" -c "import updater.poller" >/dev/null 2>&1) || refuse "the commit dependencies are not installed for this Python (set SIXTYOPS_BENCH_PYTHON)"
+  git archive HEAD > "$archive_file"
+  tar -x -f "$archive_file" -C "$code_dir"
+  if [ "$mode" != local-switch ]; then
+    (cd "$code_dir" && "$python" -c "import updater.poller" >/dev/null 2>&1) || refuse "the commit dependencies are not installed for this Python (set SIXTYOPS_BENCH_PYTHON)"
+  fi
 fi
 
 # 4. Parse the access file and run one mode in a subshell. The credential
@@ -179,6 +197,9 @@ fi
 set +e
 (
   set +x
+  if [ "$mode" = local-switch ]; then
+    unset SIXTYOPS_TEST_SWITCH_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS
+  fi
   redact_n=0
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line%$'\r'}
@@ -228,6 +249,7 @@ set +e
   export SIXTYOPS_BENCH_REDACT_HOST="$url_host"
 
   case $mode in
+    local-switch) required="SIXTYOPS_TEST_SWITCH_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS" ;;
     integration) required="SIXTYOPS_TEST_URL SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS SIXTYOPS_TEST_AP_IP SIXTYOPS_TEST_SWITCH_IP" ;;
     *) required="SIXTYOPS_BENCH_AP_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS" ;;
   esac
@@ -264,6 +286,10 @@ set +e
         | "$python" "$bench_dir/redact.py"
       status=${PIPESTATUS[0]}
       ;;
+    local-switch)
+      env "${unset_args[@]}" "$python" "$bench_dir/readonly_switch.py" --repo "$code_dir" 2>/dev/null
+      status=$?
+      ;;
     local-poll)
       echo "== lane: local-poll (checked-out commit, read-only)"
       env "${unset_args[@]}" "$python" "$bench_dir/readonly_poll.py" --repo "$code_dir" 2>&1 \
@@ -278,11 +304,31 @@ set +e
       status=${PIPESTATUS[0]}
       ;;
   esac
-  echo "== lane result: $mode exit=$status"
+  if [ "$mode" != local-switch ]; then
+    echo "== lane result: $mode exit=$status"
+  fi
   exit "$status"
 ) 2>&1 | tee "$log_file"
-run_status=${PIPESTATUS[0]}
+run_statuses=("${PIPESTATUS[@]}")
+run_status=${run_statuses[0]}
+if [ "$mode" = local-switch ] && [ "${run_statuses[1]}" -ne 0 ]; then
+  run_status=1
+fi
 set -e
+
+# The switch reader emits only fixed fields. Keep its summary private.
+if [ "$mode" = local-switch ]; then
+  {
+    echo "commit: $head_sha"
+    cat "$log_file"
+    if [ "$run_status" = 0 ]; then
+      echo "overall: PASS"
+    else
+      echo "overall: FAIL"
+    fi
+  } > "$summary_file"
+  exit "$run_status"
+fi
 
 # 5. Summary. The log is already redacted.
 pytest_line=$(grep -E '^=+ .*(passed|failed|error|skipped|no tests ran|deselected).* =+$' "$log_file" | tail -n 1 || true)

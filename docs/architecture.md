@@ -69,12 +69,32 @@ Key responsibilities:
 
 ### `tachyon.py` - Device Communication
 
-Low-level client for Tachyon hardware. Communicates over HTTPS using `curl` subprocesses (required for device SSL compatibility).
+**Key points:** The Tachyon driver uses HTTPS through curl for device TLS
+compatibility. Its client lives in `updater/vendors/tachyon/client.py`.
+
+**Detail:** Login and authenticated HTTP requests start
+`curl --disable --config -`. A private stdin pipe carries quoted options,
+cookies, login credentials, JSON bodies, and
+firmware multipart fields. Curl does not load the user curl configuration.
+The serializer escapes quotes, backslashes, and supported whitespace. It
+rejects unsupported control characters before the subprocess starts.
+No login or authenticated HTTP request value appears in process arguments.
+Unauthenticated reboot probes carry no credentials. Curl errors expose exit
+codes without raw stderr. Config request failures return a fixed message and
+HTTP status, without the device response body. Login uses a temporary cookie
+jar and removes it in `finally`. No persistent request configuration file
+is written.
+
+The request timeout remains 30 seconds by default. Firmware uploads use
+300 seconds and retry transport failures up to three times, with 30 and 60
+second delays. Device rejection does not retry. `TACHYON_VERIFY_SSL` controls
+certificate verification. This transport needs exact-head AP and switch bench
+proof before merge; offline mock tests do not establish device compatibility.
 
 Update sequence per device:
 1. Login and get session token
 2. Fetch device info (model, firmware version, MAC, bank status)
-3. Upload firmware file via multipart POST
+3. Upload firmware file via multipart PUT
 4. Trigger installation with optional force/reset flags
 5. Wait for reboot (poll until device responds)
 6. Verify new firmware version

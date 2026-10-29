@@ -3,12 +3,27 @@
 **Key points:** Advance actual system functionality first. Delegate bounded work.
 Resume from fresh evidence, not old agent names or a previous green check.
 
-**Detail:** [AGENTS.md](../AGENTS.md#repository-lead-authority-2026-10-02) owns
+**Detail:** [AGENTS.md](../AGENTS.md#agent-rules) owns
 repository authority and rules. This procedure explains how to apply them.
-Latest user intent takes precedence. The owner grants the Manager lead merge
-approval for eligible PRs created by the lead or its delegated workers. Workers
-hand work to review; they do not merge or release. Shared hub procedures do not
-extend Manager authority.
+Latest user intent takes precedence. The loop limits in AGENTS.md apply to
+workers. Operational procedures below require the operator or a lead with
+explicit approval for the named action. Historical grants do not override
+those limits or task-specific restrictions. See the authority history below.
+Workers hand work to review; they do not merge or release. Shared hub
+procedures do not extend Manager authority.
+
+## Authority history
+
+**Key points:** The owner approves merges through the ops bot.
+
+**Detail:** The owner delegated lead duties on 2026-10-02. On 2026-10-14, the
+owner authorized the Manager lead to merge PRs that met sign-off criteria. See
+[Review, merge and development release gates](#review-merge-and-development-release-gates)
+for the current process. This grant does not allow push, deploy, release, or
+production-device actions.
+
+Public-repo rulesets are free. This supersedes the earlier Team-plan
+requirement recorded in [#116](https://github.com/sixtyops/manager/issues/116).
 
 ## Fresh start and hourly wake
 
@@ -28,6 +43,8 @@ gives no exemption from locks or pacing gates.
    Then read this SOP, the task issue, applicable SOPs and named skills.
 2. Read durable lead status. Verify every active task against live agent/job,
    branch/head, queue, lock, budget, cooldown, review and fix-round evidence.
+   Before reporting missing lab access, follow [Private access records](dev-hardware-validation.md#private-access-records).
+   For dev host access, check the recorded SSH alias and private system record before reporting it missing.
    An idle daemon does not prove that an event-started job or worker is idle.
    Check `paseo permit ls` for pending worker requests at each wake. A request
    may not wake the lead. Allow only a task-authorized action, then read back
@@ -43,14 +60,14 @@ gives no exemption from locks or pacing gates.
 4. Select one dependency-ready system slice. Record owner, scope, worktree,
    base/head and next action before building. Use an isolated worktree from
    fetched `origin/main`; keep the shared loop clone and other worktrees intact.
-5. Reuse an available worker or wait for capacity. Send a bounded assignment.
-   Complete or hold it with evidence. Append the result and next owner/action.
-   Read back each GitHub mutation and durable status append.
+5. Follow the review-fix rule in [Priority and delegation](#priority-and-delegation).
+   Complete or hold the work with evidence. Append the result and next
+   owner/action. Read back each GitHub mutation and durable status append.
 
 ## Priority and delegation
 
 **Key points:** System safety and working fleet management come before website
-polish. Keep at most three active build or fix items.
+polish. Run parallel workers when their files do not overlap.
 
 **Detail:** Follow North Star and the one-right-way delivery order. Distinguish
 shipped behavior from target behavior. Fix current defects before new builds.
@@ -61,9 +78,18 @@ Use proven management software and existing architecture before proposing a
 new tool or design. The lead owns the goal, directs the work, and tracks it
 through completion or until every remaining step needs an operator. It
 delegates implementation, investigation, testing, and detailed PR reviews.
+Run as many Luna workers in parallel as have no file overlap. Run workers that
+change the same rollout core file one after another: the `updater/app.py` job
+runner, `updater/scheduler.py`, `updater/rollout_gate.py`, or
+`updater/database.py`. This file-overlap rule replaces the three-active-PR
+limit.
 The lead does not perform these tasks, even for a small change. It must get
 independent review and cannot serve as the designated reviewer for work from
 its own team. If no worker capacity exists, leave the work queued.
+
+The shared review-fix loop stays off for Manager under [#599](https://github.com/sixtyops/manager/pull/599),
+because its shared script starts only Claude workers ([personal-processes #515](https://github.com/isolson/personal-processes/issues/515)).
+Send each review fix to a new Luna worker.
 
 The owner names an agent as lead for a feature, issue, or epic. Every other agent
 is a follower: it completes one bounded assignment, reports evidence and any
@@ -71,19 +97,27 @@ blocker to its lead, and stops. A follower does not create a wake job or
 delegate unless its brief explicitly asks it to. Hold overlapping work if two
 agents claim lead ownership, and report the conflict.
 
-Choose the model by the job when it is installed and supported: Fable
-(`claude-fable-5-1`) and Astra (`gpt-6-astra`) for architecture, planning,
-and audits; follow their recommendations. Opus (`claude-opus-5-5`) and Sol
-for complex code. Luna and Sonnet (`claude-sonnet-5-5`) for easier code.
-Haiku (`claude-haiku-4-5`) for reading large files. Do not give implementation
-work to an architect; give its design to a coding worker.
+When a pre-review, system review or designated review asks for changes, launch
+a new fix worker and name the review report in its brief. If the builder has
+unpushed work, run the fix worker in the builder's workspace and have it verify
+that work first. Reuse a worker only for a follow-up inside its own task, such
+as a test rerun.
 
-Use epic413's model policy. Use GPT-6.1 Sol medium for safety builds, planning,
-and reviews. Use Sol high for safety reviews. Use GPT-6 Luna high for small or
-medium coding tasks outside the safety path. Use xhigh for a harder task.
-Verify installed provider/model/thinking IDs before sending work. Reuse suitable
-workers and preserve active jobs. Give each worker
-a bounded task with evidence. Assign one writer per branch. Honor
+Use Luna as the default worker for nearly all work, including safety-path work
+at high reasoning. Assign docs and small code at low or medium reasoning. Assign
+pre-reviews, re-reviews, designated reviews, and bench or dev-host runs at high
+reasoning. Use Sol at medium only after Luna fails at a named step, or for a
+hard design question named by a reviewer. Use Astra for at most one narrow
+design question at medium; never send a whole review to Astra. A PR escalated to
+Astra also gets a Sol review. For large decisions, meaning major product or
+safety decisions, use the five seats: Astra medium, Sol medium, Luna high, Luna
+medium, and the owner. [AGENTS.md](../AGENTS.md#models) points here for model
+routing and quorum. Only the Manager lead session may use Claude models.
+Do not give implementation work to an architect; give its design to a coding worker.
+Verify installed provider/model/thinking IDs before sending work. Follow the
+review-fix rule in [Priority and delegation](#priority-and-delegation). Preserve
+active jobs. Give each worker a bounded task with evidence. Assign one writer
+per branch. Honor
 the repository skill guidance; use factual copywriter/STE, and frontend-design
 plus UI guides when UI is in scope.
 Run delegated Paseo workers in `auto` permission mode with safety review on.
@@ -166,24 +200,56 @@ access.
 environment before commit, plus scoped checks and documentation verification.
 They push a feature branch normally and open one PR to `main` with issue closure,
 validation, risks/limits and `agent:review`. Never force-push shared history.
+Follow [Slices and reviews](../AGENTS.md#slices-and-reviews) for epic structure,
+slice sizing, engine design notes, review scope and findings, reviewer
+assignment, base updates, and bench proof ownership.
 
 The lead checks that each eligible non-draft PR awaiting review has
 `agent:review`. The trusted-author workflow adds it on open, reopen, or ready
 for review and sends a wake.
 The review loop also runs hourly. Use its normal schedule, locks, budgets,
 cooldowns, and round limits. When the existing review process flags a PR for
-higher-level review, assign Fable or Astra to review its design, plan, and
-risks. Record the result and give any code change to a coding worker. Hold
-merge until this review and all normal review and sign-off gates pass. Use the
-existing `agent:escalated` and `agent:needs-human` states; do not create a new
-review label.
+higher-level review, follow the model policy in [Priority and delegation](#priority-and-delegation).
+An independent Luna worker pre-reviews every PR against the system review
+criteria before it enters review. The pre-review checks that the PR can pass
+on the first round. A final pre-review reports all remaining findings in one
+pass. Record the review result and follow the review-fix rule in [Priority and
+delegation](#priority-and-delegation).
+Hold merge until the review and all normal review and sign-off gates pass. Use
+the existing `agent:escalated` and `agent:needs-human` states; do not create a
+new review label.
+
+The personal-processes ops bot sends the owner a Signal ready ping or digest
+for each Manager PR labeled `agent:ready-for-signoff`, with a ready packet.
+The owner approves by replying `merge` on Signal or reacting to the mapped
+message. The ops bot merges with `gh pr merge --squash --match-head-commit`.
+The lead keeps every gate and uses the 2026-10-14 merge grant only when the
+owner asks. The lead sends no Signal messages. After each
+ops-bot merge, read the merge commit message on `main`. If it contains a
+co-author trailer or a personal name, stop applying `agent:ready-for-signoff`
+to PRs and report the finding to the owner. Manager joins the digest through
+[personal-processes issue #509](https://github.com/isolson/personal-processes/issues/509)
+and [PR #510](https://github.com/isolson/personal-processes/pull/510).
+
+The owner prefers a few larger batches, once or twice a day. Main moves only
+when the owner merges. Keep gated PRs ready between batches. After each batch,
+one worker updates every open PR from `main` in one pass. Then benches run one
+PR at a time, followed by designated approvals. Follow [Squash source checks](#squash-source-checks)
+before applying the ready label.
+
+Before a merge batch, have a worker create a scratch worktree detached at the
+current `origin/main`. In batch order, squash-apply each queued PR at its
+approved head, then run the full offline test suite. The worker pushes nothing
+and removes the worktree when the trial ends. Move a PR to the next batch if
+it conflicts or introduces a test failure. The trial adds no approval; every
+merge gate still applies.
 
 Fetch `origin/main`, then read the current GitHub pull request state and head
 before you report a pull request as open or hand it to another owner. Do not
 reuse an earlier state after a new event.
 
-Before a lead merge, require a current non-draft OPEN head and MERGEABLE/CLEAN
-state. Require the designated independent review and shared review with
+Before the owner approves a bot merge, require a current non-draft OPEN head
+and MERGEABLE/CLEAN state. Require the designated independent review and shared review with
 matching recorded `signoff_head`, `agent:ready-for-signoff`, and a packet for
 that head and issue. Read the formal review record. Record its ID, state, full
 head SHA, submitted time, and assignment source. The designated review must
@@ -210,6 +276,31 @@ that head, duplicate/overlap sweep, acceptance and post-merge check/rollback.
 Engine/driver changes also require named real-device bench evidence on that
 commit. Skips and synthetic tests do not provide bench proof. Missing, stale or
 unreadable evidence holds the action. A changed head needs fresh gates.
+Start the bench worker with `--env LEAD_AP_ACCESS_FILE=<AP lab file>` and
+`--env LEAD_SWITCH_ACCESS_FILE=<switch lab file>`. Use the private paths
+recorded under [Private access records](dev-hardware-validation.md#private-access-records),
+never paths from the repository. State in the brief that lab access is
+authorized and recorded. Use the escalation reason `trusted read-only bench
+wrapper, sanitized output only`. In each head checkout, run
+`git fetch origin +refs/heads/main:refs/remotes/origin/main` first. Then check
+`git merge-base origin/main HEAD`; it must match the current `main` commit.
+The wrapper compares against that checkout's `origin/main` and refuses a
+valid head when the local reference is stale.
+
+### Squash source checks
+
+**Key points:** Check source commit messages, PR titles, and PR bodies before
+the ready label. The ops bot uses GitHub's default squash message and matches
+the approved head.
+
+**Detail:** Workers commit as the bot account. In the 2026-10-27 batch,
+GitHub's default squash message added a co-author trailer for commits authored
+under a personal account; the lead still reads back each merge commit message.
+Before the lead applies `agent:ready-for-signoff`, inspect every source
+commit message, PR title, and PR body for co-author trailers and personal
+names. Ask a worker to remove any such text before the PR enters the sign-off
+batch. The ops bot uses
+GitHub's default squash message and `--match-head-commit`.
 
 Reply `addressed in <sha>` after a fix. Leave threads to their reviewers.
 Never grant your own sign-off, reset counters, or restart a capped cycle.
@@ -217,8 +308,6 @@ Use the shared [reopen procedure](https://github.com/isolson/personal-processes/
 only after an explicit lead decision, recorded history/budget checks and
 readback. Keep maximum rounds/reopens and publication pacing intact.
 
-The lead may merge only a PR created by the lead or its delegated agents. The
-lead must not merge a PR from an outside contributor. Workers do not merge.
 Every merge still requires all applicable review, CI, sign-off, thread,
 duplicate, acceptance, and bench gates above. Follow
 [release-sop.md](release-sop.md) and [self-update-signing.md](self-update-signing.md).
@@ -282,10 +371,17 @@ and [sign-off procedure](https://github.com/isolson/personal-processes/blob/mast
 The supported packet preview is `bash "$hub/scripts/agent-signoff.sh" --config
 "$adapter/dev-host/config/sixtyops-manager-loop.env" --pr "$pr" --dry-run`.
 Set hub/adapter from verified paths. Publication still uses normal gates.
-For reuse, the verified CLI supports `paseo send "$worker_id" --prompt-file
-"$task_file" --no-wait`. For new capacity, inspect `paseo run --help` and provider
-capabilities, then use a bounded prompt and isolated workspace. Do not copy
-stale IDs, spawn a second writer, or use bypass mode. Do not install/restart
+For a follow-up inside a worker's own task, the verified CLI supports `paseo
+send "$worker_id" --prompt-file "$task_file" --no-wait`. For review findings,
+launch a new worker with a brief that names the review report. If the builder
+has unpushed work, use the builder's workspace and require the new worker to
+verify that work first. For new capacity, inspect `paseo run --help` and provider capabilities, then
+use a bounded prompt and isolated workspace. `paseo run` ignores `--cwd`; use
+`--workspace <id>` or `--new-workspace worktree --worktree-mode branch-off|checkout-pr`.
+Pass secrets only through `--env`. Codex workers need escalated sandbox
+permission for network access, including `gh` and `git fetch`; state this in
+every brief. Keep briefs in the lead state folder, not `/tmp`. Do not
+copy stale IDs, spawn a second writer, or use bypass mode. Do not install/restart
 services as part of resuming work.
 
 ## Durable record and fresh-session prompt
@@ -320,7 +416,8 @@ Paste into a fresh lead session:
 > docs/lead-operations-sop.md, North Star, one-right-way, live epic413 and durable
 > lead status. Confirm role ownership. Choose models by job within the Manager
 > safety policy. Verify live agents/jobs, all queue pages, locks/budgets/expiry,
-> worktrees and open PR overlap. Discover IDs; reuse workers. Finish fixes first,
+> worktrees and open PR overlap. Discover IDs. Follow the review-fix rule in
+> [Priority and delegation](#priority-and-delegation). Finish fixes first,
 > WIP3, system functionality before deferred website work. Delegate bounded
 > slices with skills and proof gates. The lead does not implement, investigate,
 > test, or review detailed diffs. Require independent review. Preserve
