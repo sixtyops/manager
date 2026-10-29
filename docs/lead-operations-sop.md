@@ -207,8 +207,10 @@ assignment, base updates, and bench proof ownership.
 The lead checks that each eligible non-draft PR awaiting review has
 `agent:review`. The trusted-author workflow adds it on open, reopen, or ready
 for review and sends a wake.
-The review loop also runs hourly. Use its normal schedule, locks, budgets,
-cooldowns, and round limits. When the existing review process flags a PR for
+The reviewer daemon checks every 120 seconds. It allows up to 20 runs per hour
+and 200 runs per day, with a 60-second cooldown. These limits apply only to
+reviews. Keep the existing locks, generic fix and pickup budgets, and review
+round limits. When the existing review process flags a PR for
 higher-level review, follow the model policy in [Priority and delegation](#priority-and-delegation).
 An independent Luna worker pre-reviews every PR against the system review
 criteria before it enters review. The pre-review checks that the PR can pass
