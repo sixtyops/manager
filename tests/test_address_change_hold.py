@@ -10,6 +10,7 @@ import pytest
 
 from updater import app as app_module, database as db, rollout_gate as gate
 from updater.vendors.base import VendorDeviceInfo, VendorUpdateResult, VendorSmokeTestResult
+from updater.vendors.tachyon.client import DeviceInfo
 
 IP = "192.0.2.10"
 OTHER_IP = "192.0.2.11"
@@ -240,6 +241,45 @@ async def test_qualified_job_reboots_and_flashes(tables, runner, scheduled):
     runner.reboot.assert_awaited_once()
     runner.update_firmware.assert_awaited_once()
     assert job.devices[IP].status == "success"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("live_change,expected_writes", [(None, ["upload", "trigger"]),
+                                                          ("source", []),
+                                                          ("management_vlan", [])])
+async def test_driver_qualification_callback_normalizes_tachyon_info(
+    tables, runner, live_change, expected_writes,
+):
+    qualify()
+    writes = []
+    version = "1.12.3.54970" if live_change != "source" else "1.12.3.54971"
+    vlan = 100 if live_change != "management_vlan" else 200
+
+    async def update_with_live_info(*args, qualification_check, **kwargs):
+        live_info = DeviceInfo(
+            ip=IP, model="TNA-301", current_version=version,
+            management_interface="eth0.100", management_vlan_id=vlan,
+        )
+        admitted, reason = await qualification_check(live_info)
+        if not admitted:
+            return VendorUpdateResult(ip=IP, success=False, error=reason)
+        writes.extend(("upload", "trigger"))
+        return VendorUpdateResult(
+            ip=IP, success=True, old_version=SOURCE, new_version=TARGET,
+            model="TNA-301",
+        )
+
+    runner.update_firmware.side_effect = update_with_live_info
+    job = make_job(reboot=False)
+
+    await app_module.run_update_job(job, 1)
+
+    assert writes == expected_writes
+    if live_change is None:
+        assert job.devices[IP].status == "success"
+    else:
+        assert job.devices[IP].status == "deferred"
+        assert "Address-change hold" in job.devices[IP].error
 
 
 @pytest.mark.asyncio

@@ -5791,6 +5791,42 @@ def _address_management_scope(record: dict) -> dict:
     }
 
 
+def _normalize_address_qualification_info(info, ip: str, role: str):
+    """Map live Tachyon info to the vendor-neutral qualification shape."""
+    if info is None or hasattr(info, "extra"):
+        return info
+
+    if role == "ap":
+        record = db.get_access_point(ip)
+    elif role == "switch":
+        record = db.get_switch(ip)
+    else:
+        record = db.get_cpe_by_ip(ip)
+    record = record or {}
+    from .vendors.base import VendorDeviceInfo
+
+    return VendorDeviceInfo(
+        ip=getattr(info, "ip", ip),
+        vendor="tachyon",
+        model=getattr(info, "model", None),
+        serial=getattr(info, "serial", None),
+        mac=getattr(info, "mac", None),
+        current_version=getattr(info, "current_version", None),
+        bank1_version=getattr(info, "bank1_version", None),
+        bank2_version=getattr(info, "bank2_version", None),
+        active_bank=getattr(info, "active_bank", None),
+        extra={
+            "macs": getattr(info, "macs", {}),
+            "management_interface": getattr(info, "management_interface", None),
+            "management_vlan_id": getattr(info, "management_vlan_id", None),
+            "management_mac": getattr(info, "management_mac", None),
+            "firmware_sha256": record.get("firmware_sha256", ""),
+            "management_vlan": getattr(info, "management_vlan_id", None),
+            "management_ip_mode": record.get("management_ip_mode", ""),
+        },
+    )
+
+
 async def _address_change_guard(
     job: "UpdateJob", ip: str, *, info=None, pass_number: int = 1,
     recovery_case: str = "firmware_flash", qualification_error: str = "",
@@ -6143,6 +6179,9 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             return admitted, reason
 
         async def _driver_qualification_check(info, error=""):
+            info = _normalize_address_qualification_info(
+                info, ip, device_status.role,
+            )
             admitted = await _address_change_guard(
                 job, ip, info=info, pass_number=pass_number, qualification_error=error,
             )
