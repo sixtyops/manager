@@ -31,6 +31,7 @@ markers = [
     "integration: tests that run against real hardware (requires SIXTYOPS_TEST_URL)",
     "dev_blocking: merge-gating live dev validation against dedicated test devices",
     "dev_sso: separate non-blocking live SSO/OIDC validation lane",
+    "dev_nonblocking: live dev tests that do not gate a merge",
     "slow: tests that take a long time (e.g. firmware update with reboot)",
     "loopback: tests that require loopback UDP socket access",
 ]
