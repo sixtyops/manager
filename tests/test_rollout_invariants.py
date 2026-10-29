@@ -21,6 +21,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from updater import database as db
+from updater.core import engine
+from updater.core.gates import MaintenanceSchedule, window_instance_key
 from tests.fixtures.fleet import make_fleet, set_version, set_health, confirm
 from updater import rollout_gate
 from updater.scheduler import AutoUpdateScheduler
@@ -90,6 +92,251 @@ def _make_scheduler():
     start_update = AsyncMock(side_effect=lambda **kw: f"job-{start_update.call_count}")
     scheduler = AutoUpdateScheduler(AsyncMock(), start_update)
     return scheduler, start_update
+
+
+def test_wave_reservation_rolls_back_marker_assignments_and_settings(mock_db):
+    rollout_id = db.create_rollout(FW)
+    db.set_rollout_settings_snapshot(rollout_id, {"old": "snapshot"})
+    with db.get_db() as conn:
+        conn.execute(
+            """CREATE TRIGGER reject_wave_assignment BEFORE INSERT ON rollout_devices
+               BEGIN SELECT RAISE(ABORT, 'injected assignment failure'); END"""
+        )
+
+    with pytest.raises(Exception, match="injected assignment failure"):
+        engine.start_wave(
+            db.get_rollout(rollout_id),
+            {"ap_ips": ["10.0.0.1"], "switch_ips": []},
+            {"bank_mode": "single"},
+            (1, "2026-06-02"),
+        )
+
+    rollout = db.get_rollout(rollout_id)
+    assert rollout["last_phase_window"] is None
+    assert db.get_rollout_settings_snapshot(rollout_id) == {"old": "snapshot"}
+    assert db.get_rollout_devices(rollout_id) == []
+
+
+def test_create_rollout_persists_complete_membership_snapshot(mock_db):
+    fixed_now = datetime(2026, 6, 2, 3, 15)
+    members = [
+        {"ip": "192.0.2.10", "device_type": "ap"},
+        {"ip": "192.0.2.11", "device_type": "switch"},
+    ]
+    settings = {"bank_mode": "both", "allow_downgrade": "false"}
+
+    rollout_id = db.create_rollout(
+        FW, members=members, settings_snapshot=settings, now=fixed_now
+    )
+
+    rollout = db.get_rollout(rollout_id)
+    persisted = db.get_rollout_devices(rollout_id)
+    assert rollout["status"] == "waiting_hold"
+    assert rollout["phase"] == "pct10"
+    assert rollout["firmware_file"] == FW
+    assert rollout["created_at"] == "2026-06-02 03:15:00"
+    assert db.get_rollout_settings_snapshot(rollout_id) == settings
+    assert {(row["ip"], row["device_type"], row["phase_assigned"], row["status"])
+            for row in persisted} == {
+                ("192.0.2.10", "ap", None, "pending"),
+                ("192.0.2.11", "switch", None, "pending"),
+            }
+
+
+def test_create_rollout_rolls_back_when_any_member_insert_fails(mock_db):
+    with db.get_db() as conn:
+        conn.execute(
+            """CREATE TRIGGER reject_rollout_member BEFORE INSERT ON rollout_devices
+               WHEN NEW.ip = '192.0.2.11'
+               BEGIN SELECT RAISE(ABORT, 'injected membership failure'); END"""
+        )
+
+    with pytest.raises(Exception, match="injected membership failure"):
+        db.create_rollout(
+            FW,
+            members=[
+                {"ip": "192.0.2.10", "device_type": "ap"},
+                {"ip": "192.0.2.11", "device_type": "switch"},
+            ],
+            settings_snapshot={"bank_mode": "both"},
+            now=datetime(2026, 6, 2, 3, 15),
+        )
+
+    with db.get_db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM rollouts").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM rollout_devices").fetchone()[0] == 0
+
+
+def test_create_rollout_duplicate_membership_requires_an_exact_snapshot(mock_db):
+    fixed_now = datetime(2026, 6, 2, 3, 15)
+    original_members = [{"ip": "192.0.2.10", "device_type": "ap"}]
+    settings = {"bank_mode": "both"}
+    rollout_id = db.create_rollout(
+        FW, members=original_members, settings_snapshot=settings, now=fixed_now
+    )
+
+    duplicate_id = db.create_rollout(
+        FW,
+        members=original_members,
+        settings_snapshot=settings,
+        now=fixed_now + timedelta(seconds=1),
+    )
+    changed_id = db.create_rollout(
+        FW,
+        members=original_members + [{"ip": "192.0.2.11", "device_type": "switch"}],
+        settings_snapshot=settings,
+        now=fixed_now + timedelta(seconds=2),
+    )
+
+    assert duplicate_id == rollout_id
+    assert changed_id != rollout_id
+    assert len(db.get_rollout_devices(rollout_id)) == 1
+    assert len(db.get_rollout_devices(changed_id)) == 2
+
+
+def test_create_rollout_rejects_an_empty_membership_snapshot(mock_db):
+    with pytest.raises(ValueError, match="must not be empty"):
+        db.create_rollout(
+            FW,
+            members=[],
+            settings_snapshot={"bank_mode": "both"},
+            now=datetime(2026, 6, 2, 3, 15),
+        )
+
+    with db.get_db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM rollouts").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "message"),
+    [
+        (None, "requires a settings snapshot"),
+        ({"bank_mode": object()}, "must be valid JSON"),
+    ],
+    ids=["missing", "invalid"],
+)
+def test_create_rollout_rejects_missing_or_invalid_settings_snapshot_without_writes(
+    mock_db, snapshot, message
+):
+    kwargs = {} if snapshot is None else {"settings_snapshot": snapshot}
+    with pytest.raises(ValueError, match=message):
+        db.create_rollout(
+            FW,
+            members=[{"ip": "192.0.2.10", "device_type": "ap"}],
+            now=datetime(2026, 6, 2, 3, 15),
+            **kwargs,
+        )
+
+    with db.get_db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM rollouts").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM rollout_devices").fetchone()[0] == 0
+
+
+def test_empty_wave_reservation_writes_nothing(mock_db):
+    rollout_id = db.create_rollout(FW)
+    before = db.get_rollout(rollout_id)
+
+    assert not engine.start_wave(
+        before,
+        {"ap_ips": [], "switch_ips": []},
+        {"bank_mode": "single"},
+        (1, "2026-06-02"),
+    )
+    after = db.get_rollout(rollout_id)
+    assert after["last_phase_window"] == before["last_phase_window"]
+    assert after["settings_json"] == before["settings_json"]
+    assert db.get_rollout_devices(rollout_id) == []
+
+
+def test_concurrent_wave_reservations_admit_one_batch(mock_db, monkeypatch, tmp_path):
+    import sqlite3
+    from contextlib import contextmanager
+    from concurrent.futures import ThreadPoolExecutor
+
+    path = tmp_path / "wave-reservation.db"
+    persisted = sqlite3.connect(path)
+    mock_db.backup(persisted)
+    persisted.close()
+
+    @contextmanager
+    def file_db():
+        conn = sqlite3.connect(path, timeout=5)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    monkeypatch.setattr(db, "get_db", file_db)
+    rollout_id = db.create_rollout(FW)
+    rollout = db.get_rollout(rollout_id)
+    key = ("firmware", "2026-06-02")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(
+            lambda ip: engine.start_wave(
+                rollout, {"ap_ips": [ip], "switch_ips": []}, {"bank_mode": "both"}, key
+            ),
+            ("10.0.0.1", "10.0.0.2"),
+        ))
+
+    assert sorted(results) == [False, True]
+    assert len(db.get_rollout_devices(rollout_id)) == 1
+    assert db.get_rollout(rollout_id)["last_phase_window"] == '["firmware","2026-06-02"]'
+
+
+def test_reserved_pending_ap_retries_after_scheduler_restart(mock_db, monkeypatch):
+    _seed_aps(1)
+    db.set_settings(_settings(hold_days=0))
+    db.create_rollout(FW)
+    rollout = db.get_active_rollout()
+    engine.start_wave(
+        rollout,
+        {"ap_ips": ["192.0.2.10"], "switch_ips": []},
+        {"bank_mode": "both"},
+        ("firmware", "2026-06-02"),
+    )
+
+    retry_scheduler, retry_start = _make_scheduler()
+    h = _Harness(retry_scheduler, monkeypatch)
+    async def restart_ticks():
+        await h.tick(day=2)
+        assert retry_start.call_count == 0
+        await h.tick(day=3)
+
+    asyncio.run(restart_ticks())
+    assert retry_start.call_count == 1
+    assert db.get_rollout_devices(rollout["id"])[0]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_empty_scheduler_batch_does_not_advance_phase(mock_db, monkeypatch):
+    _seed_aps(1)
+    db.set_settings(_settings(hold_days=0))
+    rollout_id = db.create_rollout(FW)
+    set_version(db.get_all_access_points_dict(enabled_only=False)["192.0.2.10"], "1.12.3.55002")
+    scheduler, start_update = _make_scheduler()
+    h = _Harness(scheduler, monkeypatch)
+
+    await h.tick()
+
+    rollout = db.get_rollout(rollout_id)
+    assert rollout["phase"] == "pct10"
+    assert rollout["last_phase_window"] is None
+    assert start_update.call_count == 0
+
+
+def test_overnight_window_keeps_its_start_date_key():
+    schedule = MaintenanceSchedule(
+        schedule_id=7, days=frozenset({0}), start_hour=23, end_hour=2, tz="UTC"
+    )
+    before_midnight = datetime(2026, 6, 1, 23, 30, tzinfo=timezone.utc)
+    after_midnight = datetime(2026, 6, 2, 1, 30, tzinfo=timezone.utc)
+    assert window_instance_key(schedule, before_midnight) == (7, "2026-06-01")
+    assert window_instance_key(schedule, after_midnight) == (7, "2026-06-01")
 
 
 class _Harness:
@@ -392,6 +639,21 @@ def test_create_rollout_starts_at_pct10(mock_db):
     """New rollouts start at the first fleet wave, not the removed canary phase."""
     rid = db.create_rollout(FW)
     assert db.get_rollout(rid)["phase"] == "pct10"
+
+
+def test_firmware_window_key_uses_schedule_zone_for_naive_scheduler_time():
+    """A naive injected time represents schedule-local time on every host zone."""
+    key = rollout_gate.firmware_window_key(
+        {
+            "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
+            "schedule_start_hour": 3,
+            "schedule_end_hour": 4,
+            "schedule_timezone": "America/Chicago",
+        },
+        datetime(2026, 6, 2, 3, 15),
+    )
+
+    assert key == ("firmware", "2026-06-02")
 
 # Current-schema managed confirmation boundaries. Freeze both clocks used by
 # the real Hold path: scheduler health freshness and database release age.

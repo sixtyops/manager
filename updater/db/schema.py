@@ -30,6 +30,9 @@ def build_schema(db: sqlite3.Connection) -> None:
             system_name TEXT,
             model TEXT,
             mac TEXT,
+            uid TEXT UNIQUE,
+            uid_source TEXT,
+            address_generation INTEGER NOT NULL DEFAULT 0,
             firmware_version TEXT,
             location TEXT,
             last_seen TEXT,
@@ -49,6 +52,31 @@ def build_schema(db: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_devices_vendor ON devices(vendor);
         CREATE INDEX IF NOT EXISTS idx_devices_role ON devices(role);
         CREATE INDEX IF NOT EXISTS idx_devices_site ON devices(tower_site_id);
+
+        CREATE TABLE IF NOT EXISTS device_macs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            device_id INTEGER NOT NULL,
+            mac TEXT NOT NULL,
+            interface TEXT NOT NULL,
+            first_seen TEXT NOT NULL,
+            last_seen TEXT NOT NULL,
+            FOREIGN KEY (device_id) REFERENCES devices(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_device_macs_mac ON device_macs(mac);
+        CREATE INDEX IF NOT EXISTS idx_device_macs_device ON device_macs(device_id);
+
+        CREATE TABLE IF NOT EXISTS identity_conflicts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            value TEXT NOT NULL,
+            device_ids TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'open',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            resolved_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_identity_conflicts_open_value
+            ON identity_conflicts(kind, value, state);
 
         CREATE TABLE IF NOT EXISTS access_points (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,6 +223,27 @@ def build_schema(db: sqlite3.Connection) -> None:
             last_job_id TEXT,
             last_phase_window TEXT,
             canary_completed_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS firmware_window_stops (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            window_key TEXT NOT NULL UNIQUE,
+            job_id TEXT NOT NULL,
+            device_ip TEXT NOT NULL,
+            gate TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            stopped_at TEXT NOT NULL,
+            resolved_at TEXT,
+            resolved_by TEXT,
+            resolution TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS firmware_window_holds (
+            window_key TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            device_ip TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            held_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS rollout_devices (

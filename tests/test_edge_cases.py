@@ -231,7 +231,7 @@ class TestCredentialStateMismatch:
 
 
 # =========================================================================
-# EC9: Setup wizard partial/failed SSL + backup
+# EC9: Setup wizard replacement and SSL setup
 # =========================================================================
 
 class TestSetupWizardReplacement:
@@ -242,8 +242,7 @@ class TestSetupWizardReplacement:
         from updater import database as db
         db.set_setting("setup_wizard_completed", "false")
 
-        with patch("updater.ssl_manager.get_ssl_status", return_value={"enabled": False}), \
-             patch("updater.sftp_backup.get_backup_status", return_value={"enabled": False}):
+        with patch("updater.ssl_manager.get_ssl_status", return_value={"enabled": False}):
             resp = authed_client.get("/")
         assert resp.status_code == 200
         # The template should have the first-run auto-open JS

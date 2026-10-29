@@ -43,7 +43,7 @@ Set or change admin password.
 - **Validation**: Minimum 8 characters, passwords must match
 
 ### `GET /setup-wizard`
-Multi-step setup wizard for SSL and backup configuration. Auth required.
+Legacy setup URL. Auth required.
 
 ### `POST /api/setup-wizard/complete`
 Mark the initial setup wizard as completed. Requires admin role.
@@ -238,17 +238,6 @@ Request a Let's Encrypt certificate.
 
 - **Body**: `domain` (form), `email` (form)
 
-### `GET /backup-setup`
-SFTP backup configuration page.
-
-### `POST /backup-setup`
-Configure SFTP backup server.
-
-- **Body**: `host` (form), `port` (form), `path` (form), `username` (form), `auth_method` (form), `password` (form, optional), `ssh_key` (form, optional)
-
-### `POST /backup-run`
-Trigger an immediate SFTP backup.
-
 ## WebSocket
 
 ### `WebSocket /ws`
@@ -409,13 +398,26 @@ Get scheduler state including: status (`idle`, `running`, `blocked_weather`, etc
 Get the active or paused rollout with device progress counts.
 
 ### `POST /api/rollout/{rollout_id}/resume`
-Resume a paused rollout. Only works if status is `paused`.
+Resume a paused rollout after the failed window has an operator resolution record.
+The stopped window stays closed.
 
 ### `POST /api/rollout/{rollout_id}/cancel`
 Cancel an active or paused rollout.
 
 ### `POST /api/rollout/{rollout_id}/reset`
 Reset a paused rollout — cancels it so a fresh rollout starts next maintenance window.
+
+### `GET /api/firmware-window-stops`
+List stopped firmware windows that still need an operator resolution record.
+Requires admin or operator role.
+
+### `POST /api/firmware-window-stops/{stop_id}/resolve`
+Record the resolution of a failed firmware window from a later maintenance
+window. Requires admin or operator role.
+
+- **Body** (form): `resolution` (required operator note)
+- **Errors**: `404` if the stop is not unresolved, `409` if the current window
+  is stopped or no later window is open
 
 ## Firmware Files
 
@@ -476,23 +478,6 @@ Request cancellation of an active update job. Requires admin or operator role.
 - **Errors**: `404` if the job is unknown, `400` if it already completed
 
 ## Backup & Restore
-
-### `GET /api/backup/status`
-Get SFTP backup configuration and status. Classified as a dangerous feature.
-
-### `POST /api/backup/run`
-Trigger an immediate SFTP backup. Classified as a dangerous feature.
-
-### `POST /api/backup/test-connection`
-Test connectivity to the configured SFTP server. Classified as a dangerous feature.
-
-### `GET /api/backup/list`
-List available backup archives on the SFTP server. Classified as a dangerous feature.
-
-### `POST /api/backup/restore`
-Restore the management database from an SFTP backup archive. Classified as a dangerous feature.
-
-- **Body** (form): `archive_name`
 
 ### `POST /api/backup/export`
 Export device inventory as CSV with encrypted passwords.

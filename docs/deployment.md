@@ -92,19 +92,13 @@ HTTPS works out of the box with a self-signed certificate, which is recommended 
 
 <!-- screenshot: HTTPS certificate wizard step -->
 
-**4. Configure SFTP backups (optional)**
-
-Point to an SFTP server for automatic configuration backups.
-
-<!-- screenshot: SFTP backup wizard step -->
-
-**5. Add tower sites and devices**
+**4. Add tower sites and devices**
 
 Add your tower sites, then add APs by IP address with their credentials.
 
 <!-- screenshot: add tower site / AP screen -->
 
-**6. Upload firmware**
+**5. Upload firmware**
 
 Upload firmware files on the Firmware tab. The system auto-detects which device models each file applies to.
 
@@ -185,7 +179,10 @@ sudo chown 1500:1500 data firmware backups nginx/conf.d
 sudo chmod 700 data
 ```
 
-Back up `./data` and `./firmware` to preserve your database, device inventory, and firmware files.
+Back up `./data` and `./firmware` outside the install directory. The `./data`
+directory contains the database and the encryption key returned by
+`updater.crypto.key_path()` (`./data/.encryption_key`). Keep the key with the
+database so the Manager can read saved credentials after a restore.
 
 ## Environment Variables
 

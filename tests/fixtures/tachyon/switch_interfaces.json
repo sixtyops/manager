@@ -1,0 +1,31 @@
+{
+  "interfaces": {
+    "br-wan": {
+      "mac_address": "<MAC_SWITCH_001>"
+    },
+    "br-wan.12": {
+      "mac_address": "<MAC_SWITCH_001>"
+    },
+    "eth0": {
+      "mac_address": "<MAC_SWITCH_001>"
+    },
+    "eth1": {
+      "mac_address": "<MAC_SWITCH_002>"
+    },
+    "eth2": {
+      "mac_address": "<MAC_SWITCH_003>"
+    },
+    "eth3": {
+      "mac_address": "<MAC_SWITCH_004>"
+    },
+    "eth4": {
+      "mac_address": "<MAC_SWITCH_005>"
+    },
+    "eth5": {
+      "mac_address": "<MAC_SWITCH_006>"
+    },
+    "lo": {
+      "mac_address": "<MAC_SWITCH_007>"
+    }
+  }
+}

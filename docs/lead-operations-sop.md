@@ -207,8 +207,10 @@ assignment, base updates, and bench proof ownership.
 The lead checks that each eligible non-draft PR awaiting review has
 `agent:review`. The trusted-author workflow adds it on open, reopen, or ready
 for review and sends a wake.
-The review loop also runs hourly. Use its normal schedule, locks, budgets,
-cooldowns, and round limits. When the existing review process flags a PR for
+The reviewer daemon checks every 120 seconds. It allows up to 20 runs per hour
+and 200 runs per day, with a 60-second cooldown. These limits apply only to
+reviews. Keep the existing locks, generic fix and pickup budgets, and review
+round limits. When the existing review process flags a PR for
 higher-level review, follow the model policy in [Priority and delegation](#priority-and-delegation).
 An independent Luna worker pre-reviews every PR against the system review
 criteria before it enters review. The pre-review checks that the PR can pass
@@ -266,6 +268,15 @@ and evidence. A missing or late review record does not by itself require an
 automatic code rollback. The lead delegates code and release-impact review,
 evaluates the returned evidence, and records a separate rollback decision. A
 later review does not change the pre-merge timeline.
+
+After the review loop passes a head and posts the sign-off packet, keep the
+labels unchanged. Review a new head without changing labels; a manual relabel
+starts another round and counts toward the round and reopen limits.
+
+At the reopen limit, close the PR and open a replacement from the same branch
+and head. Note the replacement in both PRs and leave loop state unchanged. When
+the head matches, the designated reviewer posts approval on the replacement PR,
+and bench evidence for that exact head still applies.
 
 A denied or failed command may still run. Read live PR, repository, or device
 state before retrying a merge or write. Record the observed effect and the
@@ -333,6 +344,21 @@ identity. Read scripts/help first; status commands do not authorize a run.
 `lead-status.md`, `state.json`, `pickup/state.json`, `codex-review/state.json`,
 and `lock`, `pickup/lock`, `codex-review/lock` when present. Read effective
 configuration and each loop status; do not dump credential files or environments.
+
+### Dev host runs
+
+Use the same shared lock as CI for each dev host run from the lead host. Keep
+one background, non-interactive holder with
+`ssh <dev host alias> 'exec flock -w 300 /var/lock/sixtyops-dev-hardware.lock sleep <seconds>'`;
+use one background, non-interactive process under a non-root account, and
+release the lock at the end.
+
+Before any device write, save and verify the device config snapshot through
+Manager so a restore can be proved by comparison.
+
+Run integration tests with `pytest tests/integration -v --tb=no -rN` for the
+shared record. Keep full failure output only in a private mode-600 file; have
+the worker read it, summarize only sanitized details, and delete it.
 
 Run these observations in the discovered adapter clone:
 
