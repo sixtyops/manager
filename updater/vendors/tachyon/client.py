@@ -165,6 +165,15 @@ class DeviceInfo:
 
 
 @dataclass
+class BootBankRead:
+    """Validated boot bank observation and a safe failure reason."""
+    bank1_version: Optional[str] = None
+    bank2_version: Optional[str] = None
+    active_bank: Optional[int] = None
+    warning: Optional[str] = None
+
+
+@dataclass
 class UpdateResult:
     """Result of a firmware update."""
     ip: str
@@ -361,6 +370,9 @@ class TachyonClient:
             body = output
             status_code = 200
 
+        if endpoint == "/cgi.lua/bootbank":
+            self._last_bootbank_read = self._parse_bootbank_response(status_code, body)
+
         return status_code, body
 
     async def login(self) -> bool:
@@ -518,6 +530,46 @@ class TachyonClient:
                 info.management_mac = info.macs.get(info.management_interface)
 
         return info
+
+    async def get_bootbank_info(self) -> BootBankRead:
+        """Return the latest validated boot bank read, or read it once."""
+        cached = getattr(self, "_last_bootbank_read", None)
+        if cached is not None:
+            del self._last_bootbank_read
+            return cached
+        try:
+            status, body = await self._curl("GET", "/cgi.lua/bootbank")
+        except Exception as exc:
+            return BootBankRead(warning=f"Boot bank read failed ({type(exc).__name__})")
+        cached = getattr(self, "_last_bootbank_read", None)
+        if cached is not None:
+            del self._last_bootbank_read
+            return cached
+        return self._parse_bootbank_response(status, body)
+
+    def _parse_bootbank_response(self, status: int, body: str) -> BootBankRead:
+        """Validate a boot bank response and keep its failure reason private."""
+        if status != 200:
+            return BootBankRead(warning=f"Boot bank read failed (HTTP {status})")
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, TypeError) as exc:
+            return BootBankRead(warning=f"Boot bank read failed ({type(exc).__name__})")
+        if not isinstance(data, dict):
+            return BootBankRead(warning="Boot bank read failed (invalid response shape)")
+        active, backup = data.get("active"), data.get("backup")
+        if not isinstance(active, dict) or not isinstance(backup, dict):
+            return BootBankRead(warning="Boot bank read failed (invalid response shape)")
+        active_bank = active.get("bootbank")
+        if isinstance(active_bank, bool) or active_bank not in (1, 2):
+            return BootBankRead(warning="Boot bank read failed (invalid active bank)")
+        active_ver = self._normalize_version(active.get("firmux", ""))
+        backup_ver = self._normalize_version(backup.get("firmux", ""))
+        if not active_ver or not backup_ver:
+            return BootBankRead(warning="Boot bank read failed (missing firmware version)")
+        if active_bank == 1:
+            return BootBankRead(active_ver, backup_ver, active_bank)
+        return BootBankRead(backup_ver, active_ver, active_bank)
 
     def _normalize_version(self, version_str: str) -> str:
         """Normalize version string: '1.12.3 rev 54970' -> '1.12.3.54970'"""

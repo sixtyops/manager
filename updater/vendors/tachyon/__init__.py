@@ -61,6 +61,10 @@ class TachyonDriver(VendorDriver):
             },
         )
 
+    async def get_bootbank_info(self):
+        """Read boot bank state for the poller's separately reported outcome."""
+        return await self._client.get_bootbank_info()
+
     async def upload_firmware(self, firmware_path: str, bandwidth_limit_kbps: int = 0) -> bool:
         return await self._client.upload_firmware(firmware_path, bandwidth_limit_kbps)
 
