@@ -969,6 +969,10 @@ class TachyonClient:
                 return result
 
             new_info = await self.get_device_info()
+            admitted, reason = await check_qualification(new_info)
+            if not admitted:
+                result.error = reason or "Recovery qualification failed after firmware reboot"
+                return result
             result.new_version = new_info.current_version
             result.bank1_version = new_info.bank1_version
             result.bank2_version = new_info.bank2_version
@@ -1306,8 +1310,13 @@ class TachyonClient:
                 if low_signal_cpes:
                     result.warnings.append(f"Low signal CPEs: {', '.join(low_signal_cpes)}")
                     result.checks.append({"check": "cpe_signal_levels", "passed": False, "detail": f"{len(low_signal_cpes)} CPEs with low signal"})
-                elif cpes:
+                elif cpes and all(getattr(cpe, "primary_signal", None) not in (None, 0) for cpe in cpes):
                     result.checks.append({"check": "cpe_signal_levels", "passed": True, "detail": "All signals OK"})
+                elif not cpes:
+                    result.checks.append({"check": "cpe_signal_levels", "passed": True, "detail": "No connected CPEs"})
+                else:
+                    result.warnings.append("CPE signal data is unavailable")
+                    result.checks.append({"check": "cpe_signal_levels", "passed": False, "detail": "Signal data is unavailable"})
             except Exception as e:
                 result.warnings.append(f"CPE connectivity check failed: {e}")
                 result.checks.append({"check": "cpe_connectivity", "passed": False, "detail": str(e)})

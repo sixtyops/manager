@@ -197,6 +197,13 @@ shipped failure handling does not enforce every target stop rule.
 
 ## Failed-window stop
 
+Every update runs the pre-update reboot and requires authenticated recovery on
+the expected serial with the original firmware version. After flashing, the
+engine requires the expected serial, target firmware version, and every
+role-specific smoke check with no warnings. Missing or failed proof holds the
+device and stops the firmware window. Resolve the hold before retrying in a
+later window. Stored settings cannot disable reboot or smoke proof.
+
 **Key points:** Store the first failed device gate under the maintenance window
 instance key. Keep that window closed to new jobs and device actions. Run one
 device through recovery before starting another device.

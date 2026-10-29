@@ -206,7 +206,7 @@ async def test_smoke_tests_cpe_connectivity_exception():
 
 @pytest.mark.asyncio
 async def test_smoke_tests_signal_none_values():
-    """CPEs with None signal values are silently skipped."""
+    """Missing CPE signal evidence fails the smoke proof."""
     client = TachyonClient("10.0.0.1", "admin", "pass")
     client._token = "fake"
     client.get_device_info = AsyncMock(return_value=DeviceInfo(ip="10.0.0.1", current_version="2.5.1"))
@@ -218,11 +218,11 @@ async def test_smoke_tests_signal_none_values():
     client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
-    assert result.passed is True  # No signal warning when values are None
-    # Signal check shows OK since no bad signals detected
+    assert result.passed is False
+    assert any("signal data is unavailable" in warning.lower() for warning in result.warnings)
     signal_checks = [c for c in result.checks if c["check"] == "cpe_signal_levels"]
     assert len(signal_checks) == 1
-    assert signal_checks[0]["passed"] is True
+    assert signal_checks[0]["passed"] is False
 
 
 @pytest.mark.asyncio
@@ -366,7 +366,7 @@ async def test_smoke_tests_signal_unparseable_string():
 
 @pytest.mark.asyncio
 async def test_smoke_tests_signal_zero_treated_as_no_data():
-    """Signal value 0 is treated as 'no reading' and skipped."""
+    """Signal value 0 does not prove CPE signal health."""
     client = TachyonClient("10.0.0.1", "admin", "pass")
     client._token = "fake"
     client.get_device_info = AsyncMock(return_value=DeviceInfo(ip="10.0.0.1", current_version="2.5.1"))
@@ -378,7 +378,8 @@ async def test_smoke_tests_signal_zero_treated_as_no_data():
     client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
-    assert result.passed is True  # 0 treated as no data, not as a real signal
+    assert result.passed is False
+    assert any("signal data is unavailable" in warning.lower() for warning in result.warnings)
 
 
 @pytest.mark.asyncio

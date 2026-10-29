@@ -19,6 +19,7 @@ class _DeviceClient:
 
     def __init__(self, ip, username, password):
         self.ip = ip
+        self.updated = False
         self.calls.setdefault(ip, []).append("client")
 
     async def connect(self):
@@ -39,7 +40,11 @@ class _DeviceClient:
         return {"system": {"name": "test"}}
 
     async def get_device_info(self):
-        return SimpleNamespace(model="TNA-301")
+        return SimpleNamespace(
+            model="TNA-301", serial="SYNTHETIC-SERIAL",
+            current_version="2.0.0.1" if self.updated else "1.0.0.100",
+            extra={},
+        )
 
     def get_hardware_id(self, model):
         return "test-hardware"
@@ -61,14 +66,21 @@ class _DeviceClient:
         if self.ip == "192.0.2.1" and self.fail_at in ("flash", "recovery"):
             error = "Upload failed" if self.fail_at == "flash" else "Device did not come back online"
             return app_module.UpdateResult(ip=self.ip, success=False, error=error)
-        return app_module.UpdateResult(ip=self.ip, success=True, old_version="1", new_version="2")
+        self.updated = True
+        return app_module.UpdateResult(ip=self.ip, success=True, old_version="1.0.0.100", new_version="2.0.0.1")
 
     async def run_smoke_tests(self, **kwargs):
         self.calls[self.ip].append("smoke")
         if self.ip == "192.0.2.1" and self.fail_at == "smoke_exception":
             raise RuntimeError("smoke runner failed")
         passed = not (self.ip == "192.0.2.1" and self.fail_at == "smoke")
-        return SimpleNamespace(passed=passed, warnings=[] if passed else ["traffic missing"], checks=[])
+        checks = [
+            {"check": "device_responsive", "passed": passed},
+            {"check": "config_intact", "passed": passed},
+            {"check": "cpe_connectivity", "passed": passed},
+            {"check": "cpe_signal_levels", "passed": passed},
+        ]
+        return SimpleNamespace(passed=passed, warnings=[] if passed else ["traffic missing"], checks=checks)
 
 
 @pytest.fixture
@@ -118,7 +130,7 @@ async def test_first_device_failure_stops_all_second_device_writes(
 
     job = app_module.UpdateJob(
         job_id=f"test-{failure}",
-        device_firmware_map={"192.0.2.1": "/tmp/test.bin", "192.0.2.2": "/tmp/test.bin"},
+        device_firmware_map={"192.0.2.1": "/tmp/tna-30x-2.0.0-r1.bin", "192.0.2.2": "/tmp/tna-30x-2.0.0-r1.bin"},
         credentials={"192.0.2.1": ("u", "p"), "192.0.2.2": ("u", "p")},
         device_roles={"192.0.2.1": "ap", "192.0.2.2": "ap"},
         devices={
@@ -174,7 +186,7 @@ async def test_unexpected_device_task_error_stops_window_before_next_device(tmp_
     window_key = ("firmware", "2026-10-27")
     job = app_module.UpdateJob(
         job_id="test-unexpected-device-error",
-        device_firmware_map={"192.0.2.1": "/tmp/test.bin", "192.0.2.2": "/tmp/test.bin"},
+        device_firmware_map={"192.0.2.1": "/tmp/tna-30x-2.0.0-r1.bin", "192.0.2.2": "/tmp/tna-30x-2.0.0-r1.bin"},
         credentials={"192.0.2.1": ("u", "p"), "192.0.2.2": ("u", "p")},
         device_roles={"192.0.2.1": "ap", "192.0.2.2": "ap"},
         devices={
@@ -241,7 +253,7 @@ async def test_queued_device_action_stays_pending_when_window_closes(mock_db, mo
     monkeypatch.setattr(app_module, "_minutes_until_window_end", lambda *args: next(cutoff_checks_iter))
     monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: ("firmware", "2026-10-27"))
     job = app_module.UpdateJob(
-        job_id="cutoff", device_firmware_map={"192.0.2.1": "/tmp/test.bin"},
+        job_id="cutoff", device_firmware_map={"192.0.2.1": "/tmp/tna-30x-2.0.0-r1.bin"},
         credentials={"192.0.2.1": ("u", "p")}, device_roles={"192.0.2.1": "ap"},
         devices={"192.0.2.1": app_module.DeviceStatus(ip="192.0.2.1", role="ap", model="TNA-301")},
         is_scheduled=True, start_hour=0, end_hour=23,
@@ -375,7 +387,7 @@ async def test_manual_local_day_stop_survives_reopen_and_blocks_manual_routes(
 
     job = app_module.UpdateJob(
         job_id="manual-local-day-failure",
-        device_firmware_map={"192.0.2.1": "/tmp/test.bin"},
+        device_firmware_map={"192.0.2.1": "/tmp/tna-30x-2.0.0-r1.bin"},
         credentials={"192.0.2.1": ("u", "p")},
         device_roles={"192.0.2.1": "ap"},
         devices={"192.0.2.1": app_module.DeviceStatus(ip="192.0.2.1", role="ap", model="TNA-301")},
@@ -536,7 +548,7 @@ async def test_manual_fallback_job_does_not_bypass_scheduled_one_wave_gate(
         assert manual_key != configured_key
         manual_job = app_module.UpdateJob(
             job_id="manual-fallback-before-rollout",
-            device_firmware_map={"192.0.2.1": "/tmp/test.bin"},
+            device_firmware_map={"192.0.2.1": "/tmp/tna-30x-2.0.0-r1.bin"},
             credentials={"192.0.2.1": ("u", "p")},
             device_roles={"192.0.2.1": "ap"},
             devices={"192.0.2.1": app_module.DeviceStatus(ip="192.0.2.1", role="ap", model="TNA-301")},
@@ -628,7 +640,7 @@ async def test_current_admission_after_connect_blocks_scheduled_writes(
     )
     job = app_module.UpdateJob(
         job_id="admission-closes-during-connect",
-        device_firmware_map={"192.0.2.1": "/tmp/test.bin"},
+        device_firmware_map={"192.0.2.1": "/tmp/tna-30x-2.0.0-r1.bin"},
         credentials={"192.0.2.1": ("u", "p")}, device_roles={"192.0.2.1": "ap"},
         devices={"192.0.2.1": app_module.DeviceStatus(ip="192.0.2.1", role="ap", model="TNA-301")},
         is_scheduled=scheduled, pre_update_reboot=boundary == "pre_reboot",
@@ -695,7 +707,7 @@ async def test_driver_login_rechecks_write_gate_before_upload_and_trigger(
     monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: key)
     job = app_module.UpdateJob(
         job_id=f"driver-login-{closure}",
-        device_firmware_map={"192.0.2.1": "/tmp/test.bin"},
+        device_firmware_map={"192.0.2.1": "/tmp/tna-30x-2.0.0-r1.bin"},
         credentials={"192.0.2.1": ("u", "p")},
         device_roles={"192.0.2.1": "ap"},
         devices={"192.0.2.1": app_module.DeviceStatus(ip="192.0.2.1", role="ap", model="TNA-301")},
@@ -737,7 +749,7 @@ async def test_driver_login_device_failure_still_stops_window(mock_db, monkeypat
     monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: key)
     job = app_module.UpdateJob(
         job_id="driver-login-real-failure",
-        device_firmware_map={"192.0.2.1": "/tmp/test.bin"},
+        device_firmware_map={"192.0.2.1": "/tmp/tna-30x-2.0.0-r1.bin"},
         credentials={"192.0.2.1": ("u", "p")},
         device_roles={"192.0.2.1": "ap"},
         devices={"192.0.2.1": app_module.DeviceStatus(ip="192.0.2.1", role="ap")},
