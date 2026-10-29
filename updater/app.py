@@ -5795,14 +5795,6 @@ def _normalize_address_qualification_info(info, ip: str, role: str):
     """Map live Tachyon info to the vendor-neutral qualification shape."""
     if info is None or hasattr(info, "extra"):
         return info
-
-    if role == "ap":
-        record = db.get_access_point(ip)
-    elif role == "switch":
-        record = db.get_switch(ip)
-    else:
-        record = db.get_cpe_by_ip(ip)
-    record = record or {}
     from .vendors.base import VendorDeviceInfo
 
     return VendorDeviceInfo(
@@ -5820,9 +5812,9 @@ def _normalize_address_qualification_info(info, ip: str, role: str):
             "management_interface": getattr(info, "management_interface", None),
             "management_vlan_id": getattr(info, "management_vlan_id", None),
             "management_mac": getattr(info, "management_mac", None),
-            "firmware_sha256": record.get("firmware_sha256", ""),
+            "firmware_sha256": getattr(info, "firmware_sha256", None),
             "management_vlan": getattr(info, "management_vlan_id", None),
-            "management_ip_mode": record.get("management_ip_mode", ""),
+            "management_ip_mode": getattr(info, "management_ip_mode", None),
         },
     )
 
@@ -5836,14 +5828,8 @@ async def _address_change_guard(
 
     ds = job.devices[ip]
     if info is None:
-        if ds.role == "ap":
-            record = db.get_access_point(ip)
-        elif ds.role == "switch":
-            record = db.get_switch(ip)
-        else:
-            record = db.get_cpe_by_ip(ip)
-        record = record or {}
-        model, source = record.get("model"), record.get("firmware_version")
+        qualification_error = qualification_error or "live device information is unavailable"
+        model, source, record = None, None, {}
     else:
         try:
             model, source = info.model, info.current_version
@@ -5917,16 +5903,6 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         device_status.status = "cancelled"
         device_status.error = _firmware_stop_message(stop)
         device_status.progress_message = device_status.error
-        return
-
-    first_recovery_case = (
-        "pre_update_reboot"
-        if job.pre_update_reboot and pass_number == 1
-        else "firmware_flash"
-    )
-    if not await _address_change_guard(
-        job, ip, pass_number=pass_number, recovery_case=first_recovery_case,
-    ):
         return
 
     # Graceful shutdown: skip pending devices when shutting down
@@ -6078,6 +6054,25 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     if driver_cls:
         username, password = job.credentials[ip]
         client = driver_cls(ip, username, password)
+
+        if not is_feature_enabled(Feature.CONFIG_BACKUP):
+            try:
+                login_result = await client.connect()
+                info = await client.get_device_info() if login_result is True else None
+                qualification_error = "" if info is not None else "live device information could not be read"
+            except Exception:
+                info = None
+                qualification_error = "live device information could not be read"
+            if not await _address_change_guard(
+                job, ip, info=info, pass_number=pass_number,
+                recovery_case=(
+                    "pre_update_reboot"
+                    if job.pre_update_reboot and pass_number == 1
+                    else "firmware_flash"
+                ),
+                qualification_error=qualification_error,
+            ):
+                return
 
         # Pre-update config backup (Pro feature)
         if is_feature_enabled(Feature.CONFIG_BACKUP):

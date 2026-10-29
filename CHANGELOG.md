@@ -17,6 +17,8 @@ All notable changes to this project are documented in this file.
 - Recheck address-change qualification at the pre-update reboot, every Tachyon
   firmware upload attempt, and the install trigger. Denied writes keep a visible
   deferred hold for the current window without recording a failed-window stop.
+  Use source hash and management IP mode from each live read; hold when either
+  field is missing instead of using stored inventory values.
 - Require release validation against the candidate commit before signing a tag.
   The validator can read its development host and credentials from environment
   variables.

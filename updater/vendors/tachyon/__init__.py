@@ -58,6 +58,8 @@ class TachyonDriver(VendorDriver):
                 "management_interface": info.management_interface,
                 "management_vlan_id": info.management_vlan_id,
                 "management_mac": info.management_mac,
+                "firmware_sha256": info.firmware_sha256,
+                "management_ip_mode": info.management_ip_mode,
             },
         )
 

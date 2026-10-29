@@ -162,6 +162,8 @@ class DeviceInfo:
     bank1_version: Optional[str] = None
     bank2_version: Optional[str] = None
     active_bank: Optional[int] = None
+    firmware_sha256: Optional[str] = None
+    management_ip_mode: Optional[str] = None
 
 
 @dataclass
@@ -301,6 +303,23 @@ class TachyonClient:
             if isinstance(interface, str) and interface.strip():
                 return interface.strip(), vlan if isinstance(vlan, int) and not isinstance(vlan, bool) else None
         return None, None
+
+    @staticmethod
+    def _parse_management_ip_mode(body: str) -> Optional[str]:
+        """Return the live management IP mode when zone status reports it."""
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        zones = data.get("zones") if isinstance(data, dict) else None
+        if not isinstance(zones, dict):
+            return None
+        for zone in zones.values():
+            if not isinstance(zone, dict) or not zone.get("management_interface"):
+                continue
+            mode = zone.get("management_ip_mode")
+            return mode if isinstance(mode, str) else None
+        return None
 
     async def _curl(
         self,
@@ -478,6 +497,7 @@ class TachyonClient:
         if status == 200:
             system = self._parse_system_status(body)
             info.model = system.get("model")
+            info.firmware_sha256 = system.get("firmware_sha256")
             info.serial = self._parse_serial(system)
             version = system.get("version", {})
             version = version if isinstance(version, dict) else {}
@@ -516,6 +536,7 @@ class TachyonClient:
             if status == 200:
                 info.management_interface, info.management_vlan_id = self._parse_management_zone(body)
                 info.management_mac = info.macs.get(info.management_interface)
+                info.management_ip_mode = self._parse_management_ip_mode(body)
 
         return info
 
