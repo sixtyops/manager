@@ -564,6 +564,42 @@ async def test_unheld_member_families_activate_and_empty_family_is_ignored(
 
 
 @pytest.mark.asyncio
+async def test_attached_cpe_family_keeps_waiting_rollout_held(
+    mock_db, monkeypatch, hold_clock
+):
+    fleet = make_fleet(sites=1, aps_per_site=1, cpes_per_ap=1,
+                       switches_per_site=0, ap_models=("TNA-301",))
+    cpe = {**fleet["cpes"][0], "model": "TNA-303L", "auth_status": "ok"}
+    db.upsert_cpe(cpe["ap_ip"], cpe)
+    settings = _settings(
+        hold_days=6,
+        firmware="tna-30x-1.12.3-r55002-20260501-x.bin",
+    )
+    settings["selected_firmware_303l"] = "tna-303l-1.12.4-r7782-20260601-x.bin"
+    db.set_settings(settings)
+    scheduler, start_update = _make_scheduler()
+    harness = _Harness(scheduler, monkeypatch)
+
+    await harness.tick(day=2)
+
+    rollout = db.get_active_rollout()
+    assert rollout["status"] == "waiting_hold"
+    held_families, _ = scheduler._held_families(settings, rollout)
+    assert held_families == {"tna-303l"}
+    assert start_update.call_count == 0
+
+    monkeypatch.setattr(
+        db,
+        "get_firmware_hold_info",
+        lambda filename, hold_days: {"cleared": True, "clears_at": None},
+    )
+    await harness.tick(day=3)
+
+    assert db.get_rollout(rollout["id"])["status"] == "active"
+    assert start_update.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_confirmed_member_family_activates_waiting_rollout(mock_db, monkeypatch, hold_clock):
     fleet = make_fleet(aps_per_site=2, switches_per_site=0, ap_models=("TNA-301", "TNA-303L"))
     settings = _settings(hold_days=6, firmware="tna-30x-1.12.3-r55002-20260501-x.bin")

@@ -915,6 +915,7 @@ class AutoUpdateScheduler:
                     raise ValueError("held rollout has no saved members")
                 ap_dict = db.get_all_access_points_dict(enabled_only=False)
                 switch_dict = db.get_all_switches_dict(enabled_only=False)
+                cpes_by_ap = db.get_all_cpes_grouped()
                 member_families = set()
                 for member in members:
                     devices = ap_dict if member["device_type"] == "ap" else switch_dict
@@ -923,6 +924,16 @@ class AutoUpdateScheduler:
                     if family not in files or not files[family]:
                         raise ValueError(f"cannot resolve saved member family for {member['ip']}")
                     member_families.add(family)
+                    if member["device_type"] == "ap":
+                        for cpe in cpes_by_ap.get(member["ip"], []):
+                            if cpe.get("auth_status") != "ok":
+                                continue
+                            cpe_family = _firmware_type_for_model(cpe.get("model"))
+                            if cpe_family not in files or not files[cpe_family]:
+                                raise ValueError(
+                                    f"cannot resolve attached CPE family for {cpe.get('ip')}"
+                                )
+                            member_families.add(cpe_family)
                 files = {family: filename for family, filename in files.items() if family in member_families}
             except Exception as e:
                 logger.warning(f"Saved rollout family check failed; holding: {e}")
