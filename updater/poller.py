@@ -91,7 +91,6 @@ class NetworkPoller:
         # credentials change, the token check fails, or a fresh-login check is due.
         self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, cached_at)
         self._cpe_fresh_login_periods: dict[str, object] = {}
-        self._cpe_precheck_success_periods: dict[str, object] = {}
         self._last_config_poll: Optional[datetime] = None
         self._last_config_poll_hydrated = False
         self._poll_in_progress = False
@@ -693,29 +692,21 @@ class NetworkPoller:
 
     def record_cpe_fresh_login_check(self, cpe_ip: str, settings: dict = None,
                                      now: datetime = None):
-        """Record that this CPE was checked during its current auth period."""
+        """Record a successful fresh login for this CPE and auth period."""
         period = self._cpe_auth_check_period(settings, now)
         if period is not None:
             self._cpe_fresh_login_periods[cpe_ip] = period
 
-    def record_cpe_precheck_success(self, cpe_ip: str, settings: dict = None,
-                                    now: datetime = None):
-        """Record a successful scheduler precheck for this CPE and window."""
+    def has_successful_cpe_fresh_login(self, cpe_ip: str, settings: dict = None,
+                                       now: datetime = None) -> bool:
+        """Return whether this CPE logged in successfully during this period."""
         period = self._cpe_auth_check_period(settings, now)
-        if period is not None:
-            self._cpe_precheck_success_periods[cpe_ip] = period
-
-    def has_cpe_precheck_success(self, cpe_ip: str, settings: dict = None,
-                                 now: datetime = None) -> bool:
-        """Return whether this CPE passed a scheduler precheck in this window."""
-        period = self._cpe_auth_check_period(settings, now)
-        return period is not None and self._cpe_precheck_success_periods.get(cpe_ip) == period
+        return period is not None and self._cpe_fresh_login_periods.get(cpe_ip) == period
 
     def invalidate_cpe_clients(self):
         """Drop all CPE sessions after credentials shared by CPEs change."""
         self._cpe_clients.clear()
         self._cpe_fresh_login_periods.clear()
-        self._cpe_precheck_success_periods.clear()
 
     async def _maybe_fetch_cpe_banks(self, ap_ip: str, cpe_ip: str,
                                       username: str, password: str):

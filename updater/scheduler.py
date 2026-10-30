@@ -805,7 +805,7 @@ class AutoUpdateScheduler:
                     status = "missing_ip"
                 elif ap and poller is not None:
                     try:
-                        if poller.has_cpe_precheck_success(cpe_ip, settings, now):
+                        if poller.has_successful_cpe_fresh_login(cpe_ip, settings, now):
                             status = "ok"
                         else:
                             status = await poller._check_cpe_auth(
@@ -813,7 +813,7 @@ class AutoUpdateScheduler:
                                 force_fresh_login=True,
                             )
                             if status == "ok":
-                                poller.record_cpe_precheck_success(cpe_ip, settings, now)
+                                poller.record_cpe_fresh_login_check(cpe_ip, settings, now)
                         db.update_cpe_auth_status(parent_ip, cpe_ip, status)
                     except Exception:
                         logger.exception("CPE credential precheck failed for %s", cpe_ip)

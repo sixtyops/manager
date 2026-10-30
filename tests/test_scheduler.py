@@ -92,6 +92,10 @@ class TestCpeCredentialAdmission:
                 assert await scheduler._precheck_cpe_credentials(
                     [parent_ip], settings, first_window
                 ) == ()
+                assert await poller._probe_cpe_auth(
+                    cpe_ip, "root", "current-password", settings, first_window
+                ) == "ok"
+                assert client.connect.await_count == 1
                 assert await scheduler._precheck_cpe_credentials(
                     [parent_ip], settings, first_window
                 ) == ()
@@ -140,12 +144,6 @@ class TestCpeCredentialAdmission:
             "schedule_end_hour": "4",
             "schedule_timezone": "America/Chicago",
         }
-        # Simulate an earlier fresh login in this period. Wave admission must
-        # still perform its own current-window precheck instead of trusting
-        # this marker or the stored auth_status.
-        poller.record_cpe_fresh_login_check(cpe_ip, settings, now)
-        assert not poller._fresh_cpe_login_due(cpe_ip, settings, now)
-
         set_poller(poller)
         try:
             with patch("updater.poller.get_driver", return_value=fresh_driver), \
