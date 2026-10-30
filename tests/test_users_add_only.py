@@ -98,8 +98,8 @@ class TestUsersMerge:
         assert merge_template_config(LIVE, fragment_for("same"), "manager-login") == LIVE
 
     @pytest.mark.parametrize("case, error", [
-        ("change", "users_existing_user_change.*existing"),
-        ("login", "users_login_protected.*manager-login"),
+        ("change", "users_existing_user_change"),
+        ("login", "users_login_protected"),
     ])
     def test_named_rejection_keeps_inputs(self, case, error):
         original = deepcopy(LIVE)
@@ -113,7 +113,7 @@ class TestUsersMerge:
     ])
     def test_each_changed_field_is_rejected(self, fields):
         fragment = {"system": {"users": [{"username": "existing", **fields}]}}
-        with pytest.raises(ValueError, match="users_existing_user_change.*existing"):
+        with pytest.raises(ValueError, match="users_existing_user_change"):
             merge_template_config(LIVE, fragment, "manager-login")
 
     def test_other_lists_still_replace(self):
@@ -147,7 +147,7 @@ class TestUsersMerge:
         assert merge_template_config(LIVE, {"services": {}}, None) == {**LIVE, "services": {}}
 
     def test_login_entry_is_rejected_even_when_missing_from_live_config(self):
-        with pytest.raises(ValueError, match="users_login_protected.*manager-login"):
+        with pytest.raises(ValueError, match="users_login_protected"):
             merge_template_config({}, fragment_for("login"), "manager-login")
 
     def test_empty_list_preserves_every_user(self):
@@ -155,7 +155,7 @@ class TestUsersMerge:
 
     def test_conflicting_templates_cannot_change_a_new_user(self):
         first = merge_template_config(LIVE, fragment_for("add"), "manager-login")
-        with pytest.raises(ValueError, match="users_existing_user_change.*new-user"):
+        with pytest.raises(ValueError, match="users_existing_user_change"):
             merge_template_config(first, {"system": {"users": [
                 {"username": "new-user", "level": 15},
             ]}}, "manager-login")
@@ -175,7 +175,7 @@ def users_db(mock_db):
 @pytest.fixture
 def transport():
     """Run the real client and vendor driver with synthetic transport replies."""
-    captured = {"posts": [], "logins": 0, "failure_response": None}
+    captured = {"posts": [], "logins": 0, "failure_response": None, "config": LIVE}
 
     async def run_curl(args):
         endpoint = args[-1].removeprefix("https://192.0.2.1")
@@ -186,7 +186,7 @@ def transport():
             cookie_path.write_text("device.test\tFALSE\t/\tFALSE\t0\ttoken\tsynthetic-token\n")
             return 0, b'{"auth": true}'
         if endpoint == "/cgi.lua/config" and method == "GET":
-            return 0, json.dumps(LIVE).encode() + b"\n200"
+            return 0, json.dumps(captured["config"]).encode() + b"\n200"
         assert endpoint in ("/cgi.lua/config?dry_run=true", "/cgi.lua/config")
         assert method == "POST"
         assert "-d" in args
@@ -264,7 +264,6 @@ def test_preview_users(operator_client, users_db, case):
         assert response.status_code == 400, response.text
         code = "users_existing_user_change" if case == "change" else "users_login_protected"
         assert code in response.json()["detail"]
-        assert ("existing" if case == "change" else "manager-login") in response.json()["detail"]
     else:
         assert response.status_code == 200, response.text
         if case == "add":
@@ -313,6 +312,52 @@ async def test_immediate_push_users(users_db, transport, case):
         assert any(("users_existing_user_change" if case == "change" else "users_login_protected")
                    in error for error in errors)
     assert "192.0.2.1" not in app_module._config_pushing_ips
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case, username", [("change", "existing"), ("login", "manager-login")])
+async def test_rejected_template_username_is_absent_from_stored_and_broadcast_errors(
+    users_db, transport, case, username
+):
+    if case == "change":
+        username = "private-account-492"
+        live = deepcopy(LIVE)
+        live["system"]["users"].append({
+            "username": username,
+            "password": "$1$abcdefgh$" + "d" * 22,
+            "level": 9,
+            "enabled": True,
+            "first_login": False,
+        })
+        fragment = {"system": {"users": [{"username": username, "level": 0}]}}
+    else:
+        live = LIVE
+        fragment = fragment_for(case)
+    db.save_device_config("192.0.2.1", json.dumps(live), "synthetic-hash", None, None)
+    users_db.commit()
+    transport["config"] = live
+
+    messages = AsyncMock()
+    job = {"cancelled": False}
+    device = {"ip": "192.0.2.1", "username": "manager-login",
+              "password": "synthetic-login", "role": "ap"}
+    with patch("updater.app.broadcast", messages), patch("updater.app.get_poller", return_value=None):
+        await app_module._run_config_push("privacy-job", [device], [
+            {"id": 1, "name": "Users", "fragment": fragment},
+        ], job)
+
+    code = "users_existing_user_change" if case == "change" else "users_login_protected"
+    stored_errors = [job["results"][0]["error"]]
+    history, total = db.get_device_update_history(action="config_push")
+    assert total == 1
+    stored_errors.append(history[0]["error"])
+    broadcast_errors = [
+        call.args[0]["error"] for call in messages.await_args_list
+        if "error" in call.args[0]
+    ]
+    assert len(broadcast_errors) == 1
+    assert all(code in error for error in stored_errors + broadcast_errors)
+    assert all(username not in error for error in stored_errors + broadcast_errors)
 
 
 @pytest.mark.asyncio

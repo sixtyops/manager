@@ -329,31 +329,37 @@ def merge_template_config(base: dict, overlay: dict, login_username: str | None)
         if not isinstance(users, list):
             raise ValueError(f"users_invalid: {source} system.users must be a list")
         result = {}
-        for user in users:
+        for position, user in enumerate(users, start=1):
             if not isinstance(user, dict):
                 raise ValueError(f"users_invalid: {source} user must be an object")
             name = user.get("username")
             if not isinstance(name, str) or not name.strip():
                 raise ValueError(f"users_invalid: {source} user needs a username")
             if name in result:
-                raise ValueError(f"users_invalid: {source} has duplicate username '{name}'")
+                raise ValueError(
+                    f"users_invalid: {source} has duplicate username at entry {position}"
+                )
             result[name] = user
         return result
 
     live_by_name = by_username(live_users, "device")
     template_by_name = by_username(template_users, "template")
     additions = []
-    for name, user in template_by_name.items():
+    for position, (name, user) in enumerate(template_by_name.items(), start=1):
         if name == login_username:
-            raise ValueError(f"users_login_protected: template names Manager login user '{name}'")
+            raise ValueError(
+                f"users_login_protected: template entry {position} names the Manager login user"
+            )
         if name in live_by_name:
             if not _user_lists_compatible([live_by_name[name]], [user]):
-                raise ValueError(f"users_existing_user_change: template changes existing user '{name}'")
+                raise ValueError(
+                    f"users_existing_user_change: template changes a device account at entry {position}"
+                )
         else:
             added_user = deepcopy(user)
             password = added_user.pop("password", added_user.pop("password_hash", None))
             if not isinstance(password, str) or not password:
-                raise ValueError(f"users_invalid: added user '{name}' needs a password")
+                raise ValueError(f"users_invalid: added user at entry {position} needs a password")
             password_hash = password if _is_stored_user_password_hash(password) else _md5_crypt(password)
 
             if "level" in added_user:
@@ -362,7 +368,7 @@ def merge_template_config(base: dict, overlay: dict, login_username: str | None)
                 role_by_type = {"admin": 0, "read-only": 9}
                 level = role_by_type.get(added_user.pop("type", None))
             if type(level) is not int or level not in (0, 9):
-                raise ValueError(f"users_invalid: added user '{name}' needs a valid role")
+                raise ValueError(f"users_invalid: added user at entry {position} needs a valid role")
 
             additions.append({
                 "username": name,
