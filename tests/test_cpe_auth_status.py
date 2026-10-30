@@ -268,6 +268,37 @@ class TestCheckCpeAuthCaching:
         assert fresh_factory.call_count == 1
         fresh_factory.return_value.connect.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_unreachable_then_token_ok_still_requires_window_fresh_login(self, mock_db):
+        poller = NetworkPoller()
+        cpe_ip = "10.0.0.11"
+        settings = {
+            "schedule_enabled": "true", "schedule_days": "tue",
+            "schedule_start_hour": "3", "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+        now = datetime(2026, 10, 27, 2, 50, tzinfo=ZoneInfo("America/Chicago"))
+        cached = MagicMock()
+        cached.session_valid = AsyncMock(side_effect=["unreachable", "ok", "ok"])
+        poller._cache_cpe_client(cpe_ip, cached)
+        fresh_factory = _driver_returning(True)
+
+        with patch("updater.poller.get_driver", return_value=fresh_factory), \
+             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+            assert await poller._probe_cpe_auth(
+                cpe_ip, "root", "ap-pass", settings, now
+            ) == "unreachable"
+            assert await poller._check_cpe_auth(cpe_ip, "root", "ap-pass") == "ok"
+            assert poller._fresh_cpe_login_due(cpe_ip, settings, now)
+
+            assert await poller._probe_cpe_auth(
+                cpe_ip, "root", "ap-pass", settings, now
+            ) == "ok"
+
+        assert cached.session_valid.await_count == 3
+        assert fresh_factory.return_value.connect.await_count == 1
+        assert not poller._fresh_cpe_login_due(cpe_ip, settings, now)
+
     def test_daily_fresh_login_check_runs_once_per_day(self, mock_db):
         poller = NetworkPoller()
         settings = {"schedule_enabled": "false"}

@@ -548,13 +548,9 @@ class NetworkPoller:
 
                 async def probe_cpe(cpe_ip):
                     async with cpe_sem:
-                        fresh_login_due = self._fresh_cpe_login_due(cpe_ip)
-                        status = await self._check_cpe_auth(
-                            cpe_ip, ap["username"], ap["password"],
-                            force_fresh_login=fresh_login_due,
+                        status = await self._probe_cpe_auth(
+                            cpe_ip, ap["username"], ap["password"]
                         )
-                        if fresh_login_due:
-                            self.record_cpe_fresh_login_check(cpe_ip)
                         db.update_cpe_auth_status(ip, cpe_ip, status)
 
                         # Fetch bank info if auth OK and not fetched recently
@@ -682,6 +678,17 @@ class NetworkPoller:
         except Exception as e:
             logger.debug(f"CPE auth probe failed for {cpe_ip}: {e}")
             return "unreachable"
+
+    async def _probe_cpe_auth(self, cpe_ip: str, username: str, password: str,
+                              settings: dict = None, now: datetime = None) -> str:
+        """Check a CPE and record a due period only after fresh login succeeds."""
+        fresh_login_due = self._fresh_cpe_login_due(cpe_ip, settings, now)
+        status = await self._check_cpe_auth(
+            cpe_ip, username, password, force_fresh_login=fresh_login_due
+        )
+        if fresh_login_due and status == "ok":
+            self.record_cpe_fresh_login_check(cpe_ip, settings, now)
+        return status
 
     def record_cpe_fresh_login_check(self, cpe_ip: str, settings: dict = None,
                                      now: datetime = None):
