@@ -24,6 +24,7 @@ def build_schema(db: sqlite3.Connection) -> None:
             ip TEXT NOT NULL UNIQUE,
             vendor TEXT NOT NULL DEFAULT 'tachyon',
             role TEXT NOT NULL DEFAULT 'ap',
+            parent_device_id INTEGER,
             tower_site_id INTEGER,
             username TEXT NOT NULL,
             password TEXT NOT NULL,
@@ -41,13 +42,16 @@ def build_schema(db: sqlite3.Connection) -> None:
             bank1_version TEXT,
             bank2_version TEXT,
             active_bank INTEGER,
+            bank_last_fetched TEXT,
             last_firmware_update TEXT,
             notes TEXT,
             last_config_poll_at TEXT,
             last_config_poll_status TEXT,
             last_config_poll_error TEXT,
+            auth_status TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
+            FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id),
+            FOREIGN KEY (parent_device_id) REFERENCES devices(id)
         );
         CREATE INDEX IF NOT EXISTS idx_devices_vendor ON devices(vendor);
         CREATE INDEX IF NOT EXISTS idx_devices_role ON devices(role);
@@ -168,6 +172,21 @@ def build_schema(db: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_cpe_ap ON cpe_cache(ap_ip);
         CREATE INDEX IF NOT EXISTS idx_cpe_ip ON cpe_cache(ip);
+
+        CREATE TABLE IF NOT EXISTS link_metrics (
+            device_id INTEGER PRIMARY KEY,
+            link_distance REAL, rx_power REAL, combined_signal REAL,
+            last_local_rssi REAL, tx_rate REAL, rx_rate REAL, mcs INTEGER,
+            link_uptime INTEGER, signal_health TEXT, target_rssi_dbm REAL,
+            snr_db REAL, sector_tx INTEGER, sector_rx INTEGER,
+            antenna_kit TEXT, max_rain_mm_hr REAL,
+            FOREIGN KEY (device_id) REFERENCES devices(id)
+        );
+        CREATE TABLE IF NOT EXISTS cpe_migration_map (
+            old_cpe_id INTEGER PRIMARY KEY,
+            device_id INTEGER NOT NULL UNIQUE,
+            FOREIGN KEY (device_id) REFERENCES devices(id)
+        );
 
         CREATE TABLE IF NOT EXISTS sessions (
             session_id TEXT PRIMARY KEY,
@@ -580,7 +599,7 @@ def build_schema(db: sqlite3.Connection) -> None:
 
         -- Reverse sync: devices → legacy tables (for Tachyon vendor only)
         CREATE TRIGGER IF NOT EXISTS trg_devices_to_legacy_insert AFTER INSERT ON devices
-        WHEN NEW.vendor = 'tachyon'
+        WHEN NEW.vendor = 'tachyon' AND NEW.role IN ('ap', 'switch')
         BEGIN
             INSERT OR IGNORE INTO access_points (ip, tower_site_id, username, password,
                 system_name, model, mac, firmware_version, location, last_seen, last_error,
