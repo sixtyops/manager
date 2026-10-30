@@ -91,6 +91,9 @@ def _settings(hold_days: int = 0, firmware: str = FW) -> dict:
 def _make_scheduler():
     start_update = AsyncMock(side_effect=lambda **kw: f"job-{start_update.call_count}")
     scheduler = AutoUpdateScheduler(AsyncMock(), start_update)
+    # These wave-gate tests use synthetic CPE inventory without a poller. The
+    # dedicated scheduler admission tests cover the fresh-login result path.
+    scheduler._precheck_cpe_credentials = AsyncMock(return_value=())
     return scheduler, start_update
 
 

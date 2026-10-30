@@ -57,6 +57,71 @@ class TestSchedulerCompletionHandling:
         )
 
 
+class TestCpeCredentialAdmission:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("login_result", "expected"), [
+        ("Invalid credentials", "auth_failed"),
+        (True, "ok"),
+    ])
+    async def test_fresh_login_result_controls_parent_wave_admission(
+        self, mock_db, login_result, expected
+    ):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from updater import rollout_gate
+        from updater.poller import NetworkPoller, set_poller
+
+        parent_ip = "10.0.0.10"
+        cpe_ip = "10.0.0.20"
+        db.upsert_access_point(parent_ip, "root", "current-password", enabled=True)
+        db.upsert_cpe(parent_ip, {"ip": cpe_ip, "auth_status": "ok"})
+
+        poller = NetworkPoller()
+        cached = MagicMock()
+        cached.session_valid = AsyncMock(return_value="ok")
+        poller._cache_cpe_client(cpe_ip, cached)
+        fresh_client = MagicMock()
+        fresh_client.connect = AsyncMock(return_value=login_result)
+        fresh_driver = MagicMock(return_value=fresh_client)
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        now = datetime(2026, 6, 23, 3, 0, tzinfo=ZoneInfo("America/Chicago"))
+        settings = {
+            "schedule_enabled": "true",
+            "schedule_days": "tue",
+            "schedule_start_hour": "3",
+            "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+
+        set_poller(poller)
+        try:
+            with patch("updater.poller.get_driver", return_value=fresh_driver), \
+                 patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+                failures = await scheduler._precheck_cpe_credentials(
+                    [parent_ip], settings, now
+                )
+        finally:
+            set_poller(None)
+
+        may_run, reason = rollout_gate.phase_run_decision(
+            {
+                "status": "active", "phase": "pct10", "last_phase_window": None,
+                "cpe_auth_failures": failures,
+            },
+            ("firmware", "2026-06-23"),
+        )
+        assert cached.session_valid.await_count == 1
+        assert fresh_client.connect.await_count == 1
+        assert db.get_cpe_by_ip(cpe_ip)["auth_status"] == expected
+        if expected == "ok":
+            assert may_run is True
+            assert reason is None
+        else:
+            assert may_run is False
+            assert reason == f"cpe_auth_failed:{parent_ip}:{cpe_ip}:auth_failed"
+
+
 class TestSchedulerBankModeFiltering:
     def test_device_already_on_target_is_skipped(self):
         scheduler = AutoUpdateScheduler(broadcast_func=None, start_update_func=None)
