@@ -46,6 +46,7 @@ def scheduled_job():
 @pytest.mark.parametrize("action", ["reboot", "flash"])
 async def test_queued_action_stops_while_submitted_action_recovers(runtime_mocks, monkeypatch, action):
     job = scheduled_job()
+    job.device_firmware_map["192.0.2.1"] = "/tmp/tna-30x-1.2.3-r200.bin"
     second = _make_job("192.0.2.2")
     for attribute in ("devices", "credentials", "device_roles", "device_vendor_map", "device_firmware_map"):
         getattr(job, attribute).update(getattr(second, attribute))
@@ -56,28 +57,41 @@ async def test_queued_action_stops_while_submitted_action_recovers(runtime_mocks
     class Client:
         def __init__(self, ip, *args):
             self.ip = ip
+            self.updated = False
 
         def get_reboot_timeout(self, role): return 5
         def get_update_timeout(self, role): return 5
         async def connect(self): return True
-        async def get_device_info(self): return None
+        async def get_device_info(self):
+            return SimpleNamespace(
+                ip=self.ip, model="TNA-301", serial=f"SERIAL-{self.ip}",
+                current_version="1.2.3.200" if self.updated else "1.0.0.100",
+                extra={},
+            )
 
-        async def recover(self):
-            writes.append(self.ip)
-            started.set()
-            await release.wait()
-            recovered.set()
+        async def recover(self, *, block=True):
+            if block:
+                writes.append(self.ip)
+                started.set()
+                await release.wait()
+                recovered.set()
 
         async def reboot(self, **kwargs):
-            await self.recover()
+            await self.recover(block=action == "reboot")
             return True
 
         async def update_firmware(self, *args, **kwargs):
-            await self.recover()
-            return UpdateResult(ip=self.ip, success=True, new_version="1.2.3")
+            await self.recover(block=True)
+            self.updated = True
+            return UpdateResult(ip=self.ip, success=True, old_version="1.0.0.100", new_version="1.2.3.200")
 
         async def run_smoke_tests(self, **kwargs):
-            return SmokeTestResult()
+            return SmokeTestResult(checks=[
+                {"check": "device_responsive", "passed": True},
+                {"check": "config_intact", "passed": True},
+                {"check": "cpe_connectivity", "passed": True},
+                {"check": "cpe_signal_levels", "passed": True},
+            ])
 
     monkeypatch.setattr(app_module, "get_driver", lambda *a: Client)
     task = asyncio.create_task(app_module.run_update_job(job, concurrency=1))
@@ -221,7 +235,7 @@ async def test_upload_admission_denial_after_progress_stays_pending(runtime_mock
     job = scheduled_job()
     job.window_key = ("firmware", "2026-06-02T03:00:00Z")
     job.pre_update_reboot = False
-    job.device_firmware_map["192.0.2.1"] = "/tmp/tna-30x-1.2.3.bin"
+    job.device_firmware_map["192.0.2.1"] = "/tmp/tna-30x-1.2.3-r200.bin"
     driver_clients = []
     progress_messages = []
     run_curl = AsyncMock()
@@ -233,9 +247,12 @@ async def test_upload_admission_denial_after_progress_stays_pending(runtime_mock
         driver_clients.append(client)
         monkeypatch.setattr(client, "login", AsyncMock(return_value=True))
         monkeypatch.setattr(client, "get_device_info", AsyncMock(return_value=SimpleNamespace(
-            ip="192.0.2.1", model="TNA-301", current_version="1.2.3",
+                ip="192.0.2.1", model="TNA-301", serial="SERIAL-1", current_version="1.2.3.100",
             bank1_version="1.2.3", bank2_version="1.0.0", active_bank=1,
+            mac=None, macs={}, management_interface=None, management_vlan_id=100,
+            management_mac=None, firmware_sha256="a" * 64, management_ip_mode="dhcp",
         )))
+        monkeypatch.setattr(client, "reboot", AsyncMock(return_value=True))
         original_update = client.update_firmware
 
         async def update_with_progress(path, progress, *args, **kwargs):
@@ -253,7 +270,7 @@ async def test_upload_admission_denial_after_progress_stays_pending(runtime_mock
     monkeypatch.setattr(app_module, "get_driver", lambda *_: make_driver)
     await app_module._update_single_device(job, "192.0.2.1")
 
-    assert "Uploading firmware..." in progress_messages
+    assert "Uploading firmware..." in progress_messages, (job.devices["192.0.2.1"].status, job.devices["192.0.2.1"].error)
     assert len(driver_clients) == 1
     assert job.devices["192.0.2.1"].status == "pending"
     assert job.devices["192.0.2.1"].error is None

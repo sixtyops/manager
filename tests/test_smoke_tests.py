@@ -206,7 +206,7 @@ async def test_smoke_tests_cpe_connectivity_exception():
 
 @pytest.mark.asyncio
 async def test_smoke_tests_signal_none_values():
-    """CPEs with None signal values are silently skipped."""
+    """Missing CPE signal evidence fails the smoke proof."""
     client = TachyonClient("10.0.0.1", "admin", "pass")
     client._token = "fake"
     client.get_device_info = AsyncMock(return_value=DeviceInfo(ip="10.0.0.1", current_version="2.5.1"))
@@ -218,11 +218,11 @@ async def test_smoke_tests_signal_none_values():
     client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
-    assert result.passed is True  # No signal warning when values are None
-    # Signal check shows OK since no bad signals detected
+    assert result.passed is False
+    assert any("missing" in warning.lower() for warning in result.warnings)
     signal_checks = [c for c in result.checks if c["check"] == "cpe_signal_levels"]
     assert len(signal_checks) == 1
-    assert signal_checks[0]["passed"] is True
+    assert signal_checks[0]["passed"] is False
 
 
 @pytest.mark.asyncio
@@ -347,8 +347,12 @@ async def test_smoke_tests_get_device_info_returns_none():
 
 
 @pytest.mark.asyncio
-async def test_smoke_tests_signal_unparseable_string():
-    """Signal value 'N/A' or other non-numeric string is silently skipped."""
+@pytest.mark.parametrize(
+    ("signal", "reason"),
+    [("N/A", "not numeric"), ("", "not numeric"), (None, "missing"), (-121, "out of range")],
+)
+async def test_smoke_tests_invalid_signal_fails_proof(signal, reason):
+    """Missing, unparseable, or out-of-range RSSI cannot prove link health."""
     client = TachyonClient("10.0.0.1", "admin", "pass")
     client._token = "fake"
     client.get_device_info = AsyncMock(return_value=DeviceInfo(ip="10.0.0.1", current_version="2.5.1"))
@@ -356,17 +360,35 @@ async def test_smoke_tests_signal_unparseable_string():
 
     mock_cpe = MagicMock()
     mock_cpe.ip = "10.0.0.100"
-    mock_cpe.primary_signal = "N/A"
+    mock_cpe.primary_signal = signal
     client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
-    # No signal warning — unparseable values are skipped
-    assert not any("signal" in w.lower() for w in result.warnings)
+    assert result.passed is False
+    assert any(reason in warning.lower() for warning in result.warnings)
+    signal_check = next(c for c in result.checks if c["check"] == "cpe_signal_levels")
+    assert signal_check["passed"] is False
+    assert reason in signal_check["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_smoke_tests_config_non_object_fails_proof():
+    """A JSON value with the wrong shape cannot prove that config is readable."""
+    client = TachyonClient("10.0.0.1", "admin", "pass")
+    client._token = "fake"
+    client.get_device_info = AsyncMock(return_value=DeviceInfo(ip="10.0.0.1", current_version="2.5.1"))
+    client.get_config = AsyncMock(return_value=[])
+
+    result = await client.run_smoke_tests(role="switch")
+    assert result.passed is False
+    assert any("not an object" in warning.lower() for warning in result.warnings)
+    config_check = next(c for c in result.checks if c["check"] == "config_intact")
+    assert config_check["passed"] is False
 
 
 @pytest.mark.asyncio
 async def test_smoke_tests_signal_zero_treated_as_no_data():
-    """Signal value 0 is treated as 'no reading' and skipped."""
+    """Signal value 0 does not prove CPE signal health."""
     client = TachyonClient("10.0.0.1", "admin", "pass")
     client._token = "fake"
     client.get_device_info = AsyncMock(return_value=DeviceInfo(ip="10.0.0.1", current_version="2.5.1"))
@@ -378,7 +400,8 @@ async def test_smoke_tests_signal_zero_treated_as_no_data():
     client.get_connected_cpes = AsyncMock(return_value=[mock_cpe])
 
     result = await client.run_smoke_tests(role="ap", pre_update_cpe_count=1)
-    assert result.passed is True  # 0 treated as no data, not as a real signal
+    assert result.passed is False
+    assert any("out of range" in warning.lower() for warning in result.warnings)
 
 
 @pytest.mark.asyncio

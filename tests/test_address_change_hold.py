@@ -136,13 +136,27 @@ def runner(mock_db, monkeypatch, tmp_path):
     client = TachyonDriver(IP, "synthetic", "synthetic")
     client.connect = AsyncMock(return_value=True)
     client.get_device_info = AsyncMock(return_value=VendorDeviceInfo(
-        ip=IP, model="TNA-301", current_version=SOURCE, extra=dict(OBSERVED),
+        ip=IP, model="TNA-301", serial="SYNTHETIC-SERIAL",
+        current_version=SOURCE, extra=dict(OBSERVED),
     ))
     client.reboot = AsyncMock(return_value=True)
     client.update_firmware = AsyncMock(return_value=VendorUpdateResult(
         ip=IP, success=True, old_version=SOURCE, new_version=TARGET, model="TNA-301",
     ))
-    client.run_smoke_tests = AsyncMock(return_value=VendorSmokeTestResult())
+    client.run_smoke_tests = AsyncMock(return_value=VendorSmokeTestResult(checks=[
+        {"check": "device_responsive", "passed": True},
+        {"check": "config_intact", "passed": True},
+        {"check": "cpe_connectivity", "passed": True},
+        {"check": "cpe_signal_levels", "passed": True},
+    ]))
+    async def device_info(*args, **kwargs):
+        source = client.get_device_info.return_value
+        current = TARGET if client.update_firmware.await_count else source.current_version
+        return VendorDeviceInfo(
+            ip=IP, model="TNA-301", serial="SYNTHETIC-SERIAL",
+            current_version=current, extra=dict(source.extra),
+        )
+    client.get_device_info.side_effect = device_info
     monkeypatch.setattr(app_module, "get_driver", lambda vendor: lambda *args: client)
     monkeypatch.setattr(app_module, "_get_firmware_type_for_model",
                         lambda model: "tna-30x" if model == "TNA-301" else None)
@@ -257,7 +271,7 @@ async def test_driver_qualification_callback_normalizes_tachyon_info(
 
     async def update_with_live_info(*args, qualification_check, **kwargs):
         live_info = DeviceInfo(
-            ip=IP, model="TNA-301", current_version=version,
+            ip=IP, model="TNA-301", serial="SYNTHETIC-SERIAL", current_version=version,
             management_interface="eth0.100", management_vlan_id=vlan,
             firmware_sha256=SCOPE["source_sha256"],
             management_ip_mode=SCOPE["management_ip_mode"],
@@ -293,8 +307,8 @@ async def test_pre_reboot_rechecks_fresh_device_info(tables, runner, monkeypatch
         changed["firmware_sha256"] = "b" * 64
     else:
         changed["management_ip_mode"] = "static"
-    initial = VendorDeviceInfo(ip=IP, model="TNA-301", current_version=SOURCE, extra=dict(OBSERVED))
-    boundary = VendorDeviceInfo(ip=IP, model="TNA-301", current_version=SOURCE, extra=changed)
+    initial = VendorDeviceInfo(ip=IP, model="TNA-301", serial="SYNTHETIC-SERIAL", current_version=SOURCE, extra=dict(OBSERVED))
+    boundary = VendorDeviceInfo(ip=IP, model="TNA-301", serial="SYNTHETIC-SERIAL", current_version=SOURCE, extra=changed)
     runner.get_device_info = AsyncMock(side_effect=[initial, boundary])
     class FixedDateTime(datetime):
         @classmethod
@@ -316,10 +330,10 @@ async def test_pre_reboot_rechecks_fresh_device_info(tables, runner, monkeypatch
 @pytest.mark.parametrize("field", ["firmware_sha256", "management_ip_mode"])
 async def test_missing_live_qualification_field_holds_before_reboot(tables, runner, field):
     qualify()
-    initial = VendorDeviceInfo(ip=IP, model="TNA-301", current_version=SOURCE, extra=dict(OBSERVED))
+    initial = VendorDeviceInfo(ip=IP, model="TNA-301", serial="SYNTHETIC-SERIAL", current_version=SOURCE, extra=dict(OBSERVED))
     missing = dict(OBSERVED)
     missing.pop(field)
-    boundary = VendorDeviceInfo(ip=IP, model="TNA-301", current_version=SOURCE, extra=missing)
+    boundary = VendorDeviceInfo(ip=IP, model="TNA-301", serial="SYNTHETIC-SERIAL", current_version=SOURCE, extra=missing)
     runner.get_device_info = AsyncMock(side_effect=[initial, boundary])
 
     job = make_job()

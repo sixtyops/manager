@@ -5881,6 +5881,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     pre_update_cpe_count = len(job.ap_cpe_map.get(ip, [])) if device_status.role == "ap" else 0
 
     client = None
+    expected_serial = None
+    expected_version = None
     admission_denial = {"reason": ""}
     vendor_id = job.device_vendor_map.get(ip, "tachyon")
     try:
@@ -5917,6 +5919,9 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 login_result = await client.connect()
                 info = await client.get_device_info() if login_result is True else None
                 qualification_error = "" if info is not None else "live device information could not be read"
+                if info is not None:
+                    expected_serial = getattr(info, "serial", None)
+                    expected_version = getattr(info, "current_version", None)
             except Exception:
                 info = None
                 qualification_error = "live device information could not be read"
@@ -5924,7 +5929,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 job, ip, info=info, pass_number=pass_number,
                 recovery_case=(
                     "pre_update_reboot"
-                    if job.pre_update_reboot and pass_number == 1
+                    if pass_number == 1
                     else "firmware_flash"
                 ),
                 qualification_error=qualification_error,
@@ -5974,7 +5979,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 })
                 return
 
-        if job.pre_update_reboot and pass_number == 1:
+        if pass_number == 1:
             try:
                 progress_callback(ip, "Pre-update reboot...")
                 login_result = await client.connect()
@@ -5982,6 +5987,14 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     reason = login_result if isinstance(login_result, str) else "Login failed"
                     raise RuntimeError(reason)
                 info = await client.get_device_info()
+                current_serial = getattr(info, "serial", None)
+                current_version = getattr(info, "current_version", None)
+                if expected_serial and current_serial != expected_serial:
+                    raise RuntimeError("Expected serial changed before pre-update reboot")
+                expected_serial = expected_serial or current_serial
+                expected_version = expected_version or current_version
+                if not expected_serial or not expected_version:
+                    raise RuntimeError("Expected serial or current firmware version is unavailable")
                 if not await _address_change_guard(
                     job, ip, info=info, pass_number=pass_number,
                     recovery_case="pre_update_reboot",
@@ -5992,6 +6005,18 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     return
                 if not await client.reboot(timeout=reboot_timeout):
                     raise RuntimeError("Device did not come back online after pre-update reboot")
+                if await client.connect() is not True:
+                    raise RuntimeError("Authentication failed after pre-update reboot")
+                recovered_info = await client.get_device_info()
+                if getattr(recovered_info, "serial", None) != expected_serial:
+                    raise RuntimeError("Expected serial did not match after pre-update reboot")
+                if _normalize_version(getattr(recovered_info, "current_version", None)) != _normalize_version(expected_version):
+                    raise RuntimeError("Firmware version changed after pre-update reboot")
+                if not await _address_change_guard(
+                    job, ip, info=recovered_info, pass_number=pass_number,
+                    recovery_case="pre_update_reboot",
+                ):
+                    return
             except Exception as e:
                 device_status.status = "failed"
                 device_status.error = f"Pre-update reboot failed: {e}"
@@ -6034,6 +6059,14 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             info = _normalize_address_qualification_info(
                 info, ip, device_status.role,
             )
+            if expected_serial and getattr(info, "serial", None) != expected_serial:
+                error = error or "expected serial did not match during recovery"
+            target = _extract_version_from_filename(Path(fw_path).name)
+            if (
+                not error and expected_serial
+                and _normalize_version(getattr(info, "current_version", None)) == _normalize_version(target)
+            ):
+                return True, ""
             admitted = await _address_change_guard(
                 job, ip, info=info, pass_number=pass_number, qualification_error=error,
             )
@@ -6059,6 +6092,9 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 info = None
             if info is None:
                 info = VendorDeviceInfo(ip=ip)
+            if not expected_serial:
+                expected_serial = getattr(info, "serial", None)
+                expected_version = getattr(info, "current_version", None)
             if not await _address_change_guard(job, ip, info=info, pass_number=pass_number):
                 return
             if not _firmware_write_gate(job, ip)[0]:
@@ -6078,6 +6114,24 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     device_status.bank2_version = result.bank2_version
     device_status.active_bank = result.active_bank
     device_status.model = result.model
+
+    if result.success and not result.skipped:
+        try:
+            if client is None or await client.connect() is not True:
+                raise RuntimeError("Authentication failed after firmware reboot")
+            recovered_info = await client.get_device_info()
+            target = _extract_version_from_filename(Path(fw_path).name)
+            if not expected_serial or getattr(recovered_info, "serial", None) != expected_serial:
+                raise RuntimeError("Expected serial did not match after firmware reboot")
+            if not target or _normalize_version(getattr(recovered_info, "current_version", None)) != _normalize_version(target):
+                raise RuntimeError("Target firmware version was not confirmed after firmware reboot")
+        except Exception as e:
+            result.success = False
+            result.error = f"Post-flash recovery failed: {e}"
+            device_status.status = "failed"
+            device_status.error = result.error
+            device_status.progress_message = result.error
+            _stop_firmware_window(job, ip, "recovery", result.error)
 
     if result.skipped:
         device_status.status = "skipped"
@@ -6102,10 +6156,28 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     pre_update_cpe_count=pre_update_cpe_count,
                 )
                 device_status.smoke_checks = smoke_result.checks
-                if not smoke_result.passed or smoke_result.warnings:
+                required_checks = {"device_responsive", "config_intact"}
+                if device_status.role == "ap":
+                    required_checks.update({"cpe_connectivity", "cpe_signal_levels"})
+                checks = {
+                    check.get("check"): check
+                    for check in (smoke_result.checks or [])
+                    if isinstance(check, dict) and check.get("check")
+                }
+                missing_checks = required_checks - checks.keys()
+                failed_checks = {
+                    name for name in required_checks
+                    if name in checks and checks[name].get("passed") is not True
+                }
+                if not smoke_result.passed or smoke_result.warnings or missing_checks or failed_checks:
                     smoke_failed = True
                     device_status.smoke_warnings = smoke_result.warnings
-                    warning_summary = "; ".join(smoke_result.warnings[:3]) or "Required check failed"
+                    reasons = list(smoke_result.warnings[:3])
+                    if missing_checks:
+                        reasons.append(f"Missing checks: {', '.join(sorted(missing_checks))}")
+                    if failed_checks:
+                        reasons.append(f"Failed checks: {', '.join(sorted(failed_checks))}")
+                    warning_summary = "; ".join(reasons) or "Required check failed"
                     if len(warning_summary) > 200:
                         warning_summary = warning_summary[:197] + "..."
                     device_status.status = "failed"
