@@ -112,6 +112,12 @@ Finish active fixes first.
 Prioritize system functionality under North Star and one-right-way; defer website work.
 Keep durable lead status, task owners, evidence, and the next action current.
 
+Each lead owns workspace organization for itself and its workers. Follow
+[Workspace organization](docs/lead-operations-sop.md#workspace-organization)
+and the shared SOP at
+`~/repos/personal-processes/docs/paseo-workspace-organization.md` on llm01.
+Keep this repository's lead structure, model routing, and safety rules.
+
 Read fresh `gh` state before reporting or acting on a PR. After a denied or
 failed command, read back state before retrying; the command may have changed it.
 Do not resolve another reviewer's thread. Engine and driver changes need bench
