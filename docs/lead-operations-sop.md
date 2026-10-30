@@ -353,6 +353,10 @@ configuration and each loop status; do not dump credential files or environments
 
 ### Dev host runs
 
+The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
+may run these procedures. A worker may run them only when the lead assigns the
+worker a named run.
+
 Use the same shared lock as CI for each dev host run from the lead host. Keep
 one background, non-interactive holder with
 `ssh <dev host alias> 'exec flock -w 300 /var/lock/sixtyops-dev-hardware.lock sleep <seconds>'`;

@@ -1,8 +1,9 @@
 # Dev Hardware Validation
 
-**Key points:** This procedure is for the operator or a lead with explicit
-approval for the named host, devices, and tests. Loop workers must not run
-`tests/integration` or touch live hardware, a dev host, or a production install.
+**Key points:** The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
+may run this procedure. A worker may run it only when the lead assigns the
+worker a named run. Loop workers must not run `tests/integration` or touch live
+hardware, a dev host, or a production install outside that assigned run.
 
 **Detail:** Commands and reference tables below do not grant access. Follow
 [Agent rules](../AGENTS.md#agent-rules). Use existing private credentials
@@ -44,7 +45,10 @@ several roles; its write tests then run one at a time.
 
 ### Dev host run procedure
 
-Run dev host procedures on the dev host over the recorded SSH alias. Use the
+The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
+may run dev host procedures. A worker may run a procedure only when the lead
+assigns that worker a named run. Run procedures on the dev host over the
+recorded SSH alias. Use the
 approved backup, verify, and restore commands with `sudo -n`; do not run
 `sudo` on the lead host. Read command arguments and paths from the approved
 `sixtyops-manager-loop.env` file without copying its values into Git. Before a
