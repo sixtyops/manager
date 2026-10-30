@@ -1520,6 +1520,7 @@ async def add_device(
 @app.put("/api/aps/{ip}", tags=["devices"])
 async def update_ap(
     ip: str,
+    request: Request,
     username: str = Form(None),
     password: str = Form(None),
     tower_site_id: int = Form(None),
@@ -1528,6 +1529,11 @@ async def update_ap(
     session: dict = Depends(require_role("admin", "operator")),
 ):
     """Update an access point."""
+    form = await request.form()
+    recognized_fields = {"username", "password", "tower_site_id", "enabled", "notes"}
+    if not recognized_fields.intersection(form.keys()):
+        raise HTTPException(400, "Provide at least one recognized AP update field")
+
     ap = db.get_access_point(ip)
     if not ap:
         raise HTTPException(404, f"AP not found: {ip}")
@@ -1644,6 +1650,7 @@ async def add_switch(
 @app.put("/api/switches/{ip}", tags=["devices"])
 async def update_switch(
     ip: str,
+    request: Request,
     username: str = Form(None),
     password: str = Form(None),
     tower_site_id: int = Form(None),
@@ -1652,6 +1659,11 @@ async def update_switch(
     session: dict = Depends(require_role("admin", "operator")),
 ):
     """Update a switch."""
+    form = await request.form()
+    recognized_fields = {"username", "password", "tower_site_id", "enabled", "notes"}
+    if not recognized_fields.intersection(form.keys()):
+        raise HTTPException(400, "Provide at least one recognized switch update field")
+
     sw = db.get_switch(ip)
     if not sw:
         raise HTTPException(404, f"Switch not found: {ip}")

@@ -61,6 +61,22 @@ class TestAPsAPI:
         resp = authed_client.delete("/api/aps/10.0.0.3")
         assert resp.status_code == 200
 
+    def test_update_ap_rejects_json_and_form_update_reads_back(self, authed_client):
+        db.upsert_access_point("10.0.0.7", "root", "pass")
+
+        resp = authed_client.put("/api/aps/10.0.0.7", json={"enabled": False, "notes": "JSON update"})
+        assert resp.status_code == 400
+        assert "recognized AP update field" in resp.json()["detail"]
+        ap = next(item for item in authed_client.get("/api/aps").json()["aps"] if item["ip"] == "10.0.0.7")
+        assert ap["enabled"] == 1
+        assert ap["notes"] in (None, "")
+
+        resp = authed_client.put("/api/aps/10.0.0.7", data={"enabled": "false", "notes": "form update"})
+        assert resp.status_code == 200
+        ap = next(item for item in authed_client.get("/api/aps").json()["aps"] if item["ip"] == "10.0.0.7")
+        assert ap["enabled"] == 0
+        assert ap["notes"] == "form update"
+
     def test_update_ap_reprobes_ap_and_cpes_when_credentials_change(self, authed_client):
         db.upsert_access_point("10.0.0.4", "root", "oldpass")
 
@@ -111,6 +127,22 @@ class TestAPsAPI:
         assert "Cannot connect" in resp.json()["detail"]
         refreshed = db.get_access_point("10.0.0.5")
         assert refreshed["password"] == "oldpass"
+
+
+class TestSwitchesAPI:
+    def test_update_switch_rejects_json_and_form_update_reads_back(self, authed_client):
+        db.upsert_switch("10.0.0.8", "root", "pass")
+
+        resp = authed_client.put("/api/switches/10.0.0.8", json={"enabled": False})
+        assert resp.status_code == 400
+        assert "recognized switch update field" in resp.json()["detail"]
+        switch = next(item for item in authed_client.get("/api/switches").json()["switches"] if item["ip"] == "10.0.0.8")
+        assert switch["enabled"] == 1
+
+        resp = authed_client.put("/api/switches/10.0.0.8", data={"enabled": "false"})
+        assert resp.status_code == 200
+        switch = next(item for item in authed_client.get("/api/switches").json()["switches"] if item["ip"] == "10.0.0.8")
+        assert switch["enabled"] == 0
 
 
 class TestSettingsAPI:
