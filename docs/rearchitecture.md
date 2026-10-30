@@ -83,7 +83,7 @@ The specific problems this plan fixes:
 | Area | Reason |
 |---|---|
 | RADIUS (server, users, LDAP, rollout, push, UI, 5 tables, docs) | Restricted mode doesn't restrict; rollout has no snapshot/lock/verify/persistence and overwrites the manager's fallback device credentials on success. Device-admin auth has better homes elsewhere. |
-| Config auto-enforce + phased config-push rollout | In-process four-phase loops that bypass the gate; auto-rollback is unlocked and unverified. Normalization returns later as a strategy on the shared engine. |
+| ~~Config auto-enforce + phased config-push rollout~~ **Removed** | In-process four-phase loops that bypass the gate; auto-rollback is unlocked and unverified. Normalization returns later as a strategy on the shared engine. |
 | Self-update **apply** path | Docker-socket container recreate, client-side GPG verification, repo mount, `entrypoint.sh` socket/ownership prep (the entrypoint's `SEED_DATA` seeding and privilege drop to `appuser` must be preserved). `docker-compose.yml` uses `build: .` with no `image:`, so the replacement upgrade procedure requires choosing a distribution model first: pinned GHCR image + `image:` in compose (`docker compose pull && up -d`), or git checkout + `up -d --build`. Release-side tag signing in `release.yml` stays; the trusted key moves out of `updater/trusted_keys/`. |
 | SFTP off-box backup | Archive ships the SQLite file plus the encryption key. Replace with "back up `./data`" docs. |
 | SNMP traps, generic webhooks, syslog forwarding | NOC integrations; Slack + email suffice. |

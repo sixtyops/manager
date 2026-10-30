@@ -2991,12 +2991,9 @@
                             onchange="updateEnforceHour(this.value)" onclick="event.stopPropagation();"
                             data-min-role-disable="operator"></select>
                 </div>
-                <div class="status-bar-section status-bar-rollout u-ml-auto" id="configRolloutSection">
-                    <div class="status-bar-phases" id="configEnforcePhases" style="display:none;"></div>
-                    <span class="status-bar-muted" id="configEnforceProgress" style="display:none;"></span>
+                <div class="status-bar-section u-ml-auto">
                     <div class="status-bar-actions">
                         <button class="btn btn-sm btn-secondary" id="checkComplianceBtn" onclick="checkCompliance();event.stopPropagation();" data-min-role="operator">Check Compliance</button>
-                        <button class="btn btn-sm btn-primary hidden" id="configPushBtn" onclick="showConfigPushDialog();event.stopPropagation();" data-min-role="operator">Push to Devices</button>
                     </div>
                 </div>
             </div>
@@ -11000,9 +10997,6 @@
             const enabled = configTemplates.filter(t => t.enabled);
             badge.textContent = `${enabled.length} enforced`;
 
-            const pushBtn = document.getElementById('configPushBtn');
-            setHidden(pushBtn, enabled.length === 0);
-
             for (const cat of CONFIG_CATEGORIES) {
                 const statusEl = document.getElementById(`cfgStatus-${cat}`);
                 if (!statusEl) continue;
@@ -11562,8 +11556,6 @@
                     const badge = document.getElementById('configTemplateBadge');
                     const enabled = configTemplates.filter(t => t.enabled);
                     badge.textContent = `${enabled.length} enforced`;
-                    const pushBtn = document.getElementById('configPushBtn');
-                    setHidden(pushBtn, enabled.length === 0);
                     // Update section accent and status badge
                     const section = document.getElementById(`cfgSection-${cat}`);
                     if (section) section.classList.toggle('enforced', newEnabled);
@@ -11643,85 +11635,6 @@
 
             if (errors.length) {
                 alert('Some sections failed to save:\n' + errors.join('\n'));
-            }
-        }
-
-        // Config Push
-        function showConfigPushDialog() {
-            const enabled = configTemplates.filter(t => t.enabled);
-            if (!enabled.length) { showToast('No config policies enabled. Save and enable at least one section first.'); return; }
-
-            // Check if rollout is already active
-
-            const templateList = enabled.map(t =>
-                `<label style="display:block;margin-bottom:4px;"><input type="checkbox" class="push-tpl" value="${t.id}" checked> ${escapeHtml(t.name)}</label>`
-            ).join('');
-
-            const modal = document.createElement('div');
-            modal.className = 'backup-overlay open';
-            modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
-            modal.innerHTML = `
-                <div class="backup-modal" style="width:400px;">
-                    <h3 style="margin:0 0 12px;">Push Config Policies</h3>
-                    <p style="font-size:0.8rem;color:#6b7280;margin:0 0 12px;">Phased config rollout is paused for safety. Use manual push for selected devices.</p>
-                    <div style="margin-bottom:12px;">
-                        <label style="font-size:0.8rem;font-weight:500;display:block;margin-bottom:6px;">Policies to push:</label>
-                        ${templateList}
-                    </div>
-                    <div style="margin-bottom:12px;">
-                        <label style="font-size:0.8rem;font-weight:500;display:block;margin-bottom:6px;">Push to:</label>
-                        <select id="pushScope" class="u-w-full">
-                            <option value="all_aps">All APs</option>
-                            <option value="all_switches">All Switches</option>
-                            <option value="all_cpes">All CPEs</option>
-                            <option value="all">All Devices</option>
-                        </select>
-                    </div>
-                    <div style="display:flex;gap:8px;justify-content:flex-end;">
-                        <button class="btn btn-sm btn-ghost" onclick="this.closest('.backup-overlay').remove()">Cancel</button>
-                        <button class="btn btn-sm btn-ghost" onclick="previewConfigPush(this.closest('.backup-overlay'))">Preview</button>
-                        <button class="btn btn-sm btn-primary" disabled>Rollout paused for safety</button>
-                    </div>
-                </div>`;
-            document.body.appendChild(modal);
-        }
-
-        async function previewConfigPush(modal) {
-            const templateIds = [...modal.querySelectorAll('.push-tpl:checked')].map(c => parseInt(c.value));
-            if (!templateIds.length) { showToast('Select at least one policy.'); return; }
-
-            // Pick first device from topology as preview target
-            let previewIp = null;
-            const scope = modal.querySelector('#pushScope').value;
-            if (topology) {
-                for (const site of (topology.sites || [])) {
-                    if (previewIp) break;
-                    if (scope === 'all' || scope === 'all_aps') {
-                        for (const ap of walkSiteAPs(site)) { if (ap.ip) { previewIp = ap.ip; break; } }
-                    }
-                    if (!previewIp && (scope === 'all' || scope === 'all_switches') && site.switches) {
-                        for (const sw of site.switches) { if (sw.ip) { previewIp = sw.ip; break; } }
-                    }
-                }
-            }
-            if (!previewIp) { showToast('No devices found to preview against.'); return; }
-
-            try {
-                const resp = await fetch('/api/config-push/preview', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ip: previewIp, template_ids: templateIds}),
-                });
-                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || 'Preview failed'); }
-                const data = await resp.json();
-                const skippedCount = Array.isArray(data.skipped_templates) ? data.skipped_templates.length : 0;
-                if (!data.changed && skippedCount === 0) {
-                    showToast('No changes for ' + previewIp + '. Config already matches.');
-                    return;
-                }
-                showDiffModal(previewIp + ' (preview)', data);
-            } catch (e) {
-                showToast('Preview failed: ' + e.message);
             }
         }
 
@@ -11887,31 +11800,12 @@
 
         function updateEnforceStatusUI(data) {
             const badge = document.getElementById('configEnforceStatusBadge');
-            const phases = document.getElementById('configEnforcePhases');
-            const progress = document.getElementById('configEnforceProgress');
             if (!badge) return;
 
             if (data.running) {
                 badge.style.display = '';
-                badge.textContent = data.phase ? `Phase: ${data.phase}` : 'Running';
+                badge.textContent = 'Running';
                 badge.className = 'status-badge status-badge-info';
-
-                if (data.phase && phases) {
-                    const PHASES = ['canary', 'pct10', 'pct50', 'pct100'];
-                    const phaseIdx = PHASES.indexOf(data.phase);
-                    phases.style.display = 'flex';
-                    phases.innerHTML = PHASES.map((p, i) => {
-                        let cls = 'bar-phase-dot';
-                        if (i < phaseIdx) cls += ' completed';
-                        else if (i === phaseIdx) cls += ' active';
-                        return `<span class="${cls}" title="${p}"></span>`;
-                    }).join('');
-                }
-
-                if (progress && data.completed !== undefined) {
-                    progress.style.display = '';
-                    progress.textContent = `${data.completed}/${data.total}`;
-                }
             } else if (data.enabled) {
                 if (data.failure_count) {
                     badge.style.display = '';
@@ -11920,12 +11814,8 @@
                 } else {
                     badge.style.display = 'none';
                 }
-                if (phases) phases.style.display = 'none';
-                if (progress) progress.style.display = 'none';
             } else {
                 badge.style.display = 'none';
-                if (phases) phases.style.display = 'none';
-                if (progress) progress.style.display = 'none';
             }
         }
 
