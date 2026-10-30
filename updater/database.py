@@ -2132,10 +2132,10 @@ def cleanup_old_config_enforce_log(max_age_days: int = 90):
 
 # Rollout operations
 def get_active_rollout() -> Optional[dict]:
-    """Get the current active or paused rollout."""
+    """Get the current open rollout."""
     with get_db() as db:
         row = db.execute(
-            "SELECT * FROM rollouts WHERE status IN ('active', 'paused') ORDER BY id DESC LIMIT 1"
+            "SELECT * FROM rollouts WHERE status IN ('waiting_hold', 'active', 'paused') ORDER BY id DESC LIMIT 1"
         ).fetchone()
         return dict(row) if row else None
 
@@ -2270,6 +2270,33 @@ def create_rollout(
         if membership:
             _insert_rollout_membership(db, rollout_id, members)
         return rollout_id
+
+
+def activate_rollout_if_unheld(
+    rollout_id: int, member_families: set[str], held_families: set[str]
+) -> bool:
+    """Atomically activate a saved rollout after every member family clears Hold."""
+    if not member_families or member_families.intersection(held_families):
+        return False
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT status FROM rollouts WHERE id = ?", (rollout_id,)
+        ).fetchone()
+        if not row or row["status"] != "waiting_hold":
+            return False
+        member = conn.execute(
+            "SELECT 1 FROM rollout_devices WHERE rollout_id = ? LIMIT 1", (rollout_id,)
+        ).fetchone()
+        if not member:
+            return False
+        cursor = conn.execute(
+            "UPDATE rollouts SET status = 'active', updated_at = ? "
+            "WHERE id = ? AND status = 'waiting_hold'",
+            (now, rollout_id),
+        )
+        return cursor.rowcount == 1
 
 
 def get_last_rollout_for_firmware(firmware_file: str) -> Optional[dict]:
@@ -2492,6 +2519,12 @@ def reserve_rollout_wave(
                    (rollout_id, ip, device_type, phase_assigned, status)
                    VALUES (?, ?, ?, ?, 'pending')""",
                 (rollout_id, ip, device_type, assigned_phase),
+            )
+            conn.execute(
+                """UPDATE rollout_devices SET phase_assigned = ?
+                   WHERE rollout_id = ? AND ip = ? AND device_type = ?
+                     AND phase_assigned IS NULL AND status = 'pending'""",
+                (assigned_phase, rollout_id, ip, device_type),
             )
         conn.execute(
             "UPDATE rollouts SET settings_json = ? WHERE id = ?",
