@@ -178,6 +178,14 @@ def _as_float(value, default: float) -> float:
         return default
 
 
+def _cpe_auth_block_reason(parent_ip: str, cpe_ip: str, status: str) -> str:
+    """Build the operator-visible hold reason from structured CPE details."""
+    return (
+        f"CPE {cpe_ip} under AP {parent_ip} failed the fresh login check "
+        f"({status}); this wave is held"
+    )
+
+
 _scheduler: Optional["AutoUpdateScheduler"] = None
 
 
@@ -662,11 +670,8 @@ class AutoUpdateScheduler:
                 self._block_reason = new_reason
             else:
                 if gate_reason and gate_reason.startswith("cpe_auth_failed:"):
-                    _, parent_ip, cpe_ip, status = gate_reason.split(":", 3)
-                    new_reason = (
-                        f"CPE {cpe_ip} under AP {parent_ip} failed the fresh login check "
-                        f"({status}); this wave is held"
-                    )
+                    parent_ip, cpe_ip, status = cpe_auth_failures[0]
+                    new_reason = _cpe_auth_block_reason(parent_ip, cpe_ip, status)
                     if self._block_reason != new_reason:
                         db.log_schedule_event("cpe_auth_held", new_reason)
                 else:
@@ -802,7 +807,8 @@ class AutoUpdateScheduler:
                                 cpe_ip, ap["username"], ap["password"],
                                 force_fresh_login=True,
                             )
-                            poller.record_cpe_fresh_login_check(cpe_ip, settings, now)
+                            if status == "ok":
+                                poller.record_cpe_fresh_login_check(cpe_ip, settings, now)
                             db.update_cpe_auth_status(parent_ip, cpe_ip, status)
                         else:
                             status = cpe.get("auth_status") or "unknown"

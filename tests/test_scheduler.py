@@ -9,7 +9,7 @@ import pytest
 
 from updater import app as app_module
 from updater import database as db
-from updater.scheduler import AutoUpdateScheduler
+from updater.scheduler import AutoUpdateScheduler, _cpe_auth_block_reason
 
 
 def _seed_rollout_devices():
@@ -120,6 +120,50 @@ class TestCpeCredentialAdmission:
         else:
             assert may_run is False
             assert reason == f"cpe_auth_failed:{parent_ip}:{cpe_ip}:auth_failed"
+
+    @pytest.mark.asyncio
+    async def test_unreachable_fresh_login_does_not_mark_period_checked(self, mock_db):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from updater.poller import NetworkPoller, set_poller
+
+        parent_ip = "10.0.0.10"
+        cpe_ip = "10.0.0.20"
+        db.upsert_access_point(parent_ip, "root", "current-password", enabled=True)
+        db.upsert_cpe(parent_ip, {"ip": cpe_ip, "auth_status": "ok"})
+
+        poller = NetworkPoller()
+        cached = MagicMock()
+        cached.session_valid = AsyncMock(return_value="unreachable")
+        poller._cache_cpe_client(cpe_ip, cached)
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        now = datetime(2026, 6, 23, 3, 0, tzinfo=ZoneInfo("America/Chicago"))
+        settings = {
+            "schedule_enabled": "true",
+            "schedule_days": "tue",
+            "schedule_start_hour": "3",
+            "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+
+        set_poller(poller)
+        try:
+            failures = await scheduler._precheck_cpe_credentials([parent_ip], settings, now)
+        finally:
+            set_poller(None)
+
+        assert failures == ((parent_ip, cpe_ip, "unreachable"),)
+        assert db.get_cpe_by_ip(cpe_ip)["auth_status"] == "unreachable"
+        assert poller._fresh_cpe_login_due(cpe_ip, settings, now)
+
+    def test_cpe_auth_block_reason_preserves_ipv6_addresses(self):
+        assert _cpe_auth_block_reason(
+            "2001:db8::10", "2001:db8::20", "unreachable"
+        ) == (
+            "CPE 2001:db8::20 under AP 2001:db8::10 failed the fresh login check "
+            "(unreachable); this wave is held"
+        )
 
 
 class TestSchedulerBankModeFiltering:
