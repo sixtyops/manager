@@ -126,7 +126,6 @@ def runner(mock_db, monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda feature: False)
     monkeypatch.setattr(app_module, "get_scheduler", lambda: None)
     for module, name in [(app_module.services, "get_timezone"),
-                         (app_module.telemetry, "send_telemetry_background"),
                          (app_module.slack, "notify_job_completed"),
                          (app_module.snmp, "notify_job_completed"),
                          (app_module.webhooks, "notify_job_completed"),

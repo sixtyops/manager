@@ -13,7 +13,7 @@ from . import config_write_guard
 from . import database as db
 from . import radius_config
 from .config_utils import (
-    deep_merge,
+    merge_template_config,
     fragment_matches,
     check_config_compliance,
     validate_fragment_safety,
@@ -1620,12 +1620,12 @@ class NetworkPoller:
                 for t in templates:
                     frag = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
                     validate_fragment_safety(frag)
-                    merged = deep_merge(merged, frag)
+                    merged = merge_template_config(merged, frag, device["username"])
 
                 # Dry-run validation
                 if not config_write_guard.automatic_config_writes_allowed():
                     return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, pre_snapshot_id)
-                dry_result = await client.apply_config(merged, dry_run=True)
+                dry_result = await client.apply_config(merged, dry_run=True, preserve_user_passwords=True)
                 if not dry_result.get("success"):
                     error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run failed"))
                     raise PolicyEnforceError(f"Dry run rejected: {error_msg}")
@@ -1633,7 +1633,7 @@ class NetworkPoller:
                 # Apply
                 if not config_write_guard.automatic_config_writes_allowed():
                     return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, pre_snapshot_id)
-                result = await client.apply_config(merged)
+                result = await client.apply_config(merged, preserve_user_passwords=True)
                 if not result.get("success"):
                     error_msg = result.get("error", result.get("raw_response", "Apply failed"))
                     raise PolicyEnforceError(f"Apply failed: {error_msg}")

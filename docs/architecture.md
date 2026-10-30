@@ -4,8 +4,8 @@
 > cut back to the firmware core (North Star v2, epic
 > [#316](https://github.com/sixtyops/manager/issues/316)). The target module layout is
 > in [rearchitecture.md](rearchitecture.md#target-layout). Modules marked
-> **(being removed)** below are deleted by that plan: RADIUS, telemetry, SNMP traps,
-> webhooks, syslog forwarding, the self-update apply path, the vendor
+> **(being removed)** below are deleted by that plan: RADIUS, SNMP traps,
+> webhooks, syslog forwarding, SFTP backup, the self-update apply path, the vendor
 > abstraction, feature gating, and the removed dummy poller.
 
 ## Overview
@@ -141,16 +141,6 @@ Pydantic models for API validation: `Device`, `CPEInfo`, `APWithCPEs`, `NetworkT
 ### `services.py` - External Integrations
 
 Helpers for IP geolocation, weather forecasts (weather.gov), timezone detection, and NTP time validation.
-
-### `telemetry.py` - Anonymous Usage Telemetry (being removed)
-
-Sends anonymized job statistics to an AWS Lambda endpoint after each update job completes. Runs as a fire-and-forget background task that never blocks the main flow.
-
-**What is sent:** event type, timestamp, anonymous install ID (hashed), device counts (success/failed/skipped/cancelled), success rate, duration, bank mode, scheduled vs manual, device model distribution, categorized error counts (timeout, connection, auth, upload, install, reboot, verification), and per-role (AP/CPE/switch) breakdowns.
-
-**What is never sent:** IP addresses, MAC addresses, hostnames, credentials, location, or raw error messages.
-
-**Disabling telemetry:** Set the `DISABLE_TELEMETRY=1` environment variable (e.g., in `docker-compose.yml`), then restart the app.
 
 ### `slack.py` - Slack Notifications
 

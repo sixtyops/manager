@@ -41,7 +41,7 @@ The specific problems this plan fixes:
 | Question | Decision |
 |---|---|
 | Approach | **Strangler in place.** Same repo, same package, PR by PR, tests green throughout. |
-| Order | **Delete first where there is no shared seam, then extract.** Clean deletions (RADIUS, enforce, self-update apply, SFTP, telemetry, dead endpoints, and gating) go first. Deletions that touch the update engine (notification channels, vendor abstraction, manual bulk) follow the extraction PR that creates their seam, so the engine is edited once. |
+| Order | **Delete first where there is no shared seam, then extract.** Clean deletions (RADIUS, enforce, self-update apply, SFTP, telemetry, dead endpoints, gating, and API tokens) go first. Deletions that touch the update engine (notification channels, vendor abstraction, manual bulk) follow the extraction PR that creates their seam, so the engine is edited once. |
 | Database compatibility | **Staged schema, then a bridge release.** A shared schema builder first reproduces the current schema and tests use it; identity and rollout tables are added by the issues that need them; legacy tables, dead canary columns, and the migration chain are dropped last. Before that drop, one final self-applying **bridge release** ships a full export (devices, users, settings, config snapshots, firmware confirmations, job history, and the Fernet key), refuses to auto-apply anything newer, and tells the operator to reinstall and import. |
 | Distribution | **Pinned GHCR image.** `docker-compose.yml` gains `image: ghcr.io/sixtyops/manager:vX.Y.Z`; `install.sh` stops cloning source; upgrade is "edit the tag, `docker compose pull && up -d`". Release-side signed-tag verification stays in CI. |
 | Frontend | **Split into modules, still vanilla.** No framework, no build step. Separate JS/CSS files per area. |
@@ -86,7 +86,6 @@ The specific problems this plan fixes:
 | Config auto-enforce + phased config-push rollout | In-process four-phase loops that bypass the gate; auto-rollback is unlocked and unverified. Normalization returns later as a strategy on the shared engine. |
 | Self-update **apply** path | Docker-socket container recreate, client-side GPG verification, repo mount, `entrypoint.sh` socket/ownership prep (the entrypoint's `SEED_DATA` seeding and privilege drop to `appuser` must be preserved). `docker-compose.yml` uses `build: .` with no `image:`, so the replacement upgrade procedure requires choosing a distribution model first: pinned GHCR image + `image:` in compose (`docker compose pull && up -d`), or git checkout + `up -d --build`. Release-side tag signing in `release.yml` stays; the trusted key moves out of `updater/trusted_keys/`. |
 | SFTP off-box backup | Archive ships the SQLite file plus the encryption key. Replace with "back up `./data`" docs. |
-| Anonymous telemetry | Not needed for the core. |
 | SNMP traps, generic webhooks, syslog forwarding | NOC integrations; Slack + email suffice. |
 | Vendor driver abstraction, Mikrotik/Cambium stubs | Unearned. |
 | Device groups, analytics endpoints, 3 of 4 report endpoints, quick-add | No UI; dead. |
@@ -277,7 +276,7 @@ updater/
 ```
 
 Not in the final tree: `app.py` (or a one-line shim), `scheduler.py`,
-`tachyon.py`, `vendors/`, `radius_*`, `sftp_backup.py`, `telemetry.py`,
+`tachyon.py`, `vendors/`, `radius_*`, `sftp_backup.py`,
 `snmp.py`, `webhooks.py`, `syslog_forwarder.py`, `devmode.py`,
 `features.py`, `license.py`, the apply path of `release_checker.py`.
 
@@ -376,7 +375,6 @@ original findings are kept for the record:
    credentials from `radius_config.py` (used by the poller, `poller.py:595-615`)
    and remove `SIXTYOPS_TEST_RADIUS_AP_IP` from `dev-hardware.yml`; A6 must
    rewrite `release.yml:98` in the same PR; A8 contradicts the north-star's
-   telemetry-based "active design partner" metric.
 7. **Rule 22 overstates the gate.** `phase_run_decision` checks status,
    window, and hold only; weather, NTP, freeze, buffer, membership, and
    topology live elsewhere. Rephrase as a composed `evaluate_wave_start`

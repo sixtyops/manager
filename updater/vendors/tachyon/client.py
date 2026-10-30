@@ -121,6 +121,61 @@ def _normalize_user_passwords(config: dict) -> dict:
     return config
 
 
+def _sanitize_device_error(message: str, config: dict) -> str:
+    """Remove credential-like values before exposing a Tachyon error."""
+    value = str(message)
+    sensitive_values = set()
+
+    def collect(node, key=""):
+        if isinstance(node, dict):
+            for child_key, child in node.items():
+                collect(child, str(child_key))
+        elif isinstance(node, list):
+            for child in node:
+                collect(child, key)
+        elif isinstance(node, str) and re.search(
+            r"(?i)(password|secret|token|credential|api[_ -]?key|username|user[_ -]?name|^ip$|address|^mac$|hash)", key
+        ):
+            if node:
+                sensitive_values.add(node)
+
+    collect(config)
+    for sensitive in sorted(sensitive_values, key=len, reverse=True):
+        value = value.replace(sensitive, "[redacted]")
+    value = re.sub(r"\$[A-Za-z0-9]+\$[^\s,;\"']+", "[redacted]", value)
+    value = re.sub(r"\b[a-fA-F0-9]{32,128}\b", "[redacted]", value)
+    value = re.sub(
+        r"(?i)(password|secret|token|credential|api[_ -]?key)(\s*[=:]\s*)([^\s,;\"'}]+)",
+        r"\1\2[redacted]", value,
+    )
+    value = re.sub(
+        r"(?i)(username|user[_ -]?name)(\s*[=:]\s*)([^\s,;\"'}]+)",
+        r"\1\2[redacted]", value,
+    )
+    value = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "[address]", value)
+    value = re.sub(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b", "[address]", value)
+    value = re.sub(r"\b(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f:]{1,4}\b", "[address]", value)
+    return value[:500]
+
+
+def _device_error_message(body: str) -> str:
+    """Extract a device error field without returning an arbitrary response body."""
+    try:
+        parsed = json.loads(body)
+    except (TypeError, json.JSONDecodeError):
+        # Do not expose transport echoes or serialized config fragments as an
+        # error message. Plain device text remains useful to the operator.
+        if re.search(r"(?i)(cookie|token\s*[=:]|\{[^}]*['\"]?(?:config|system|radius)['\"]?\s*:)", body):
+            return ""
+        return body.strip()
+    if isinstance(parsed, dict):
+        for key in ("error", "message", "detail", "reason"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
 def _extract_version_from_firmware(firmware_path: str) -> str:
     """Extract normalized version from firmware filename.
 
@@ -1390,31 +1445,36 @@ class TachyonClient:
 
         return result
 
-    async def apply_config(self, config: dict, dry_run: bool = False) -> dict:
+    async def apply_config(
+        self, config: dict, dry_run: bool = False, *, preserve_user_passwords: bool = False,
+    ) -> dict:
         """Apply full config to device via POST /cgi.lua/config.
 
-        Plaintext `system.users[*].password` values are MD5-crypt hashed
-        in place before send (see `_normalize_user_passwords`); the
-        validator rejects plaintext for users that don't already exist
-        on the device, so always hashing means the manager doesn't need
-        to track per-device user state.
+        By default, hash plaintext user passwords in place before send.
+        Template callers set preserve_user_passwords after the shared merge
+        helper hashes added users. Existing user fields then stay unchanged.
 
         Args:
-            config: Full device configuration dict. Mutated in place.
+            config: Full device configuration dict.
             dry_run: If True, validate without applying.
+            preserve_user_passwords: Send prepared password fields unchanged.
+                Use only after merge_template_config for template applies.
 
         Returns:
             Dict with 'success' bool and response details.
         """
-        config = _normalize_user_passwords(config)
+        if not preserve_user_passwords:
+            config = _normalize_user_passwords(config)
         endpoint = "/cgi.lua/config"
         if dry_run:
             endpoint += "?dry_run=true"
         status, body = await self._curl("POST", endpoint, data=config)
+        device_error = _sanitize_device_error(_device_error_message(body), config)
         failure = {
             "success": False,
             "status_code": status,
-            "error": f"Configuration request failed (HTTP {status})",
+            "error": f"Configuration request failed (HTTP {status})"
+            + (f": {device_error}" if device_error else ""),
         }
         # Device errors can reflect the submitted config or authentication cookie.
         if status != 200:
