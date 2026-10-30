@@ -1133,12 +1133,15 @@ class AutoUpdateScheduler:
 
         existing_devices = db.get_rollout_devices(rollout_id)
         already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "failed")}
+        member_ips = {
+            d["ip"] for d in existing_devices if d["device_type"] == "ap"
+        }
 
-        ap_dict = db.get_all_access_points_dict(enabled_only=False)
+        ap_dict = db.get_all_access_points_dict(enabled_only=True)
         cpes_by_ap = db.get_all_cpes_grouped()
         candidates = []
         for ip in scope_ips:
-            if ip in already_done:
+            if ip not in member_ips or ip in already_done:
                 continue
             ap = ap_dict.get(ip)
             if not ap:
@@ -1169,11 +1172,14 @@ class AutoUpdateScheduler:
 
         existing_devices = db.get_rollout_devices(rollout_id)
         already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "failed")}
+        member_ips = {
+            d["ip"] for d in existing_devices if d["device_type"] == "switch"
+        }
 
-        switch_dict = db.get_all_switches_dict(enabled_only=False)
+        switch_dict = db.get_all_switches_dict(enabled_only=True)
         candidates = []
         for ip in scope_ips:
-            if ip in already_done:
+            if ip not in member_ips or ip in already_done:
                 continue
             switch = switch_dict.get(ip)
             if not switch:

@@ -94,6 +94,66 @@ def _make_scheduler():
     return scheduler, start_update
 
 
+def _saved_rollout(members):
+    return db.get_rollout(db.create_rollout(
+        FW, members=members, settings_snapshot={}
+    ))
+
+
+def test_wave_selects_only_saved_members(mock_db):
+    fleet = make_fleet(sites=1, aps_per_site=1, switches_per_site=0,
+                       ap_models=("TNA-301",))
+    saved_ip = fleet["aps"][0]["ip"]
+    rollout = _saved_rollout([{"ip": saved_ip, "device_type": "ap"}])
+    added_ip = "192.0.2.99"
+    db.upsert_access_point(
+        added_ip, "fixture-user", "synthetic-password", model="TNA-301",
+        firmware_version="1.0.0", enabled=True,
+    )
+
+    scheduler, _ = _make_scheduler()
+    selected = scheduler._get_devices_for_phase(
+        rollout, [saved_ip, added_ip], settings={"selected_firmware_30x": FW}
+    )
+
+    assert selected == [saved_ip]
+
+
+def test_wave_skips_disabled_saved_members(mock_db):
+    fleet = make_fleet(sites=1, aps_per_site=2, switches_per_site=0,
+                       ap_models=("TNA-301",))
+    disabled_ip, enabled_ip = (device["ip"] for device in fleet["aps"])
+    rollout = _saved_rollout([
+        {"ip": disabled_ip, "device_type": "ap"},
+        {"ip": enabled_ip, "device_type": "ap"},
+    ])
+    db.upsert_access_point(
+        disabled_ip, "fixture-user", "synthetic-password", model="TNA-301",
+        firmware_version="1.0.0", enabled=False,
+    )
+
+    scheduler, _ = _make_scheduler()
+    selected = scheduler._get_devices_for_phase(
+        rollout, [disabled_ip, enabled_ip], settings={"selected_firmware_30x": FW}
+    )
+
+    assert selected == [enabled_ip]
+
+
+def test_wave_selects_eligible_saved_members(mock_db):
+    fleet = make_fleet(sites=1, aps_per_site=1, switches_per_site=0,
+                       ap_models=("TNA-301",))
+    saved_ip = fleet["aps"][0]["ip"]
+    rollout = _saved_rollout([{"ip": saved_ip, "device_type": "ap"}])
+
+    scheduler, _ = _make_scheduler()
+    selected = scheduler._get_devices_for_phase(
+        rollout, [saved_ip], settings={"selected_firmware_30x": FW}
+    )
+
+    assert selected == [saved_ip]
+
+
 def test_wave_reservation_rolls_back_marker_assignments_and_settings(mock_db):
     rollout_id = db.create_rollout(FW)
     db.set_rollout_settings_snapshot(rollout_id, {"old": "snapshot"})
