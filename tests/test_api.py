@@ -79,6 +79,31 @@ class TestAPsAPI:
         mock_poller.invalidate_client.assert_called_once_with("10.0.0.4")
         mock_poller.poll_ap_now.assert_awaited_once_with("10.0.0.4")
 
+    def test_global_device_credentials_invalidate_cpe_sessions(self, authed_client):
+        mock_poller = MagicMock()
+        with patch("updater.app.get_poller", return_value=mock_poller):
+            resp = authed_client.put("/api/auth/device-defaults", json={
+                "enabled": True, "username": "default", "password": "new-pass",
+            })
+
+        assert resp.status_code == 200
+        mock_poller.invalidate_cpe_clients.assert_called_once_with()
+
+    def test_csv_update_import_invalidates_cpe_sessions(self, authed_client):
+        mock_poller = MagicMock()
+        mock_poller._poll_all_aps = AsyncMock()
+        result = {"devices": {"updated": 1}}
+        with patch("updater.app.process_csv_import", return_value=result), \
+             patch("updater.app.get_poller", return_value=mock_poller):
+            resp = authed_client.post(
+                "/api/backup/import",
+                data={"passphrase": "valid-passphrase", "conflict_mode": "update"},
+                files={"file": ("devices.csv", "fixture", "text/csv")},
+            )
+
+        assert resp.status_code == 200
+        mock_poller.invalidate_cpe_clients.assert_called_once_with()
+
     def test_update_ap_reports_failed_reprobe_after_save(self, authed_client):
         db.upsert_access_point("10.0.0.6", "root", "oldpass")
 

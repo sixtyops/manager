@@ -1457,6 +1457,7 @@ async def add_ap(
     # Trigger immediate poll
     poller = get_poller()
     if poller:
+        poller.invalidate_client(ip)
         await poller.poll_ap_now(ip)
 
     # Broadcast updated scheduler status so predictions reflect the new device
@@ -1506,6 +1507,7 @@ async def add_device(
         device_id = db.upsert_access_point(ip, username, password, tower_site_id)
         device_type = "ap"
         if poller:
+            poller.invalidate_client(ip)
             await poller.poll_ap_now(ip)
 
     # Broadcast updated scheduler status so predictions reflect the new device
@@ -3107,6 +3109,9 @@ async def update_device_auth_config(request: Request, session: dict = Depends(re
         config.password = existing.password
 
     radius_config.set_device_auth_config(config)
+    poller = get_poller()
+    if poller:
+        poller.invalidate_cpe_clients()
     return {"success": True}
 
 
@@ -3998,6 +4003,8 @@ async def import_backup(
     # Trigger a poll so new devices appear in the UI
     poller = get_poller()
     if poller:
+        if conflict_mode == "update" and results.get("devices", {}).get("updated", 0):
+            poller.invalidate_cpe_clients()
         asyncio.create_task(poller._poll_all_aps())
 
     return results
@@ -8930,6 +8937,10 @@ async def _push_radius_to_device(rollout_id: int, device: dict, fragment: dict, 
 
         if device["role"] in ("ap", "switch"):
             db.update_device_credentials(device["role"], ip, service_username, service_password)
+            if device["role"] == "ap":
+                poller = get_poller()
+                if poller:
+                    poller.invalidate_client(ip)
         radius_rollout.mark_rollout_device(rollout_id, ip, "updated")
         return True, ""
     except Exception as exc:
