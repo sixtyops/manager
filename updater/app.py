@@ -67,7 +67,6 @@ from . import services
 from . import rollout_gate
 from .auth import require_auth, require_auth_ws, require_role, require_write_scope, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user, generate_api_token
 from .backup import build_csv_export, process_csv_import
-from . import telemetry
 from . import slack
 from . import snmp
 from . import webhooks
@@ -2159,7 +2158,6 @@ _SETTINGS_WRITABLE = {
     "snmp_traps_enabled", "snmp_trap_host", "snmp_trap_port",
     "snmp_trap_community", "snmp_trap_version",
     "autoupdate_enabled", "release_channel",
-    "telemetry_enabled", "telemetry_prompt_seen",
     "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
     "pre_update_reboot",
     "smoke_test_strict",
@@ -6542,19 +6540,6 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         )
     except Exception as e:
         logger.error(f"Failed to persist job history for {job.job_id}: {e}")
-
-    # Send anonymized telemetry (non-blocking background task)
-    asyncio.create_task(telemetry.send_telemetry_background(
-        job_id=job.job_id,
-        success_count=success_count,
-        failed_count=failed_count,
-        skipped_count=skipped_count,
-        cancelled_count=cancelled_count,
-        duration_seconds=(job.completed_at - job.started_at).total_seconds(),
-        bank_mode=job.bank_mode,
-        is_scheduled=job.is_scheduled,
-        devices=devices_dict,
-    ))
 
     # Send Slack notification (non-blocking)
     rollout_info = None

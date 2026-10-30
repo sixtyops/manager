@@ -27,7 +27,6 @@ def runtime_mocks(mock_db, monkeypatch):
     ))
     for module in (app_module.slack, app_module.snmp, app_module.webhooks, app_module.email_notifier):
         monkeypatch.setattr(module, "notify_job_completed", AsyncMock())
-    monkeypatch.setattr(app_module.telemetry, "send_telemetry_background", AsyncMock())
     monkeypatch.setattr(app_module.syslog_forwarder, "send_event", MagicMock())
 
 

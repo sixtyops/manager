@@ -81,7 +81,6 @@ async def test_owner_is_released_after_job_completion_or_failure(
     monkeypatch.setattr(app_module, "_scheduled_job_guard", AsyncMock(return_value=(True, None)))
     monkeypatch.setattr(app_module, "broadcast", AsyncMock())
     monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value="UTC"))
-    monkeypatch.setattr(app_module.telemetry, "send_telemetry_background", AsyncMock())
     monkeypatch.setattr(app_module.slack, "notify_job_completed", AsyncMock())
     monkeypatch.setattr(app_module.snmp, "notify_job_completed", AsyncMock())
     monkeypatch.setattr(app_module.webhooks, "notify_job_completed", AsyncMock())
