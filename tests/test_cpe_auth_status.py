@@ -24,6 +24,17 @@ def _driver_returning(connect_result):
     return factory
 
 
+class FakeClock:
+    def __init__(self, now):
+        self.now = now
+
+    def time(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
 class TestCheckCpeAuth:
     @pytest.mark.asyncio
     async def test_invalid_credentials_maps_to_auth_failed(self, mock_db):
@@ -154,27 +165,50 @@ class TestCheckCpeAuthCaching:
         assert poller._cpe_clients["10.0.0.11"][0] is not stale
 
     @pytest.mark.asyncio
-    async def test_active_session_expires_ten_minutes_after_login(self, mock_db):
+    async def test_active_session_expires_at_exactly_600_seconds(self, mock_db):
         poller = NetworkPoller()
         cached = MagicMock()
         cached.session_valid = AsyncMock(return_value="ok")
-        logged_in_at = 1000.0
+        clock = FakeClock(1000.0)
+        logged_in_at = clock.time()
         poller._cpe_clients["10.0.0.11"] = (cached, logged_in_at)
         factory = _driver_returning(True)
         fresh = factory.return_value
-        with patch("updater.poller.get_driver", return_value=factory) as get_driver_mock:
-            for elapsed in range(60, _CLIENT_TTL_SECONDS, 60):
-                with patch("updater.poller.time.time", return_value=logged_in_at + elapsed):
-                    assert await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass") == "ok"
-                    assert poller._get_cached_cpe_client("10.0.0.11") is cached
-                assert poller._cpe_clients["10.0.0.11"][1] == logged_in_at
+        with patch("updater.poller.time.time", clock.time), \
+             patch("updater.poller.get_driver", return_value=factory) as get_driver_mock:
+            clock.advance(_CLIENT_TTL_SECONDS - 1)
+            assert await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass") == "ok"
+            assert poller._get_cached_cpe_client("10.0.0.11") is cached
+            assert poller._cpe_clients["10.0.0.11"][1] == logged_in_at
             get_driver_mock.assert_not_called()
-            expires_at = logged_in_at + _CLIENT_TTL_SECONDS
-            with patch("updater.poller.time.time", return_value=expires_at):
-                assert await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass") == "ok"
-        get_driver_mock.assert_called_once()
+            clock.advance(1)
+            assert await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass") == "ok"
+            get_driver_mock.assert_called_once()
         fresh.connect.assert_awaited_once()
-        assert poller._cpe_clients["10.0.0.11"] == (fresh, expires_at)
+        assert poller._cpe_clients["10.0.0.11"] == (fresh, clock.time())
+
+    @pytest.mark.asyncio
+    async def test_repeated_session_renewals_with_fake_clock(self, mock_db):
+        poller = NetworkPoller()
+        clock = FakeClock(2000.0)
+        clients = [_driver_returning(True).return_value for _ in range(4)]
+        for client in clients:
+            client.connect = AsyncMock(return_value=True)
+        factory = MagicMock(side_effect=clients)
+
+        with patch("updater.poller.time.time", clock.time), \
+             patch("updater.poller.get_driver", return_value=factory):
+            for index in range(4):
+                assert await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass") == "ok"
+                assert poller._cpe_clients["10.0.0.11"][0] is clients[index]
+                assert poller._cpe_clients["10.0.0.11"][1] == clock.time()
+                if index < 3:
+                    clock.advance(_CLIENT_TTL_SECONDS)
+
+        assert factory.call_count == 4
+        for client in clients:
+            client.connect.assert_awaited_once()
+        assert _CLIENT_TTL_SECONDS == 600
 
     def test_cpe_eviction_expires_at_login_time_limit(self):
         poller = NetworkPoller()

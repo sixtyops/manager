@@ -233,7 +233,8 @@ Modes:
   CPE, the count of `login()` calls, the count of reused sessions, and the
   time of each new login. It runs the poller only, not the web app, so it
   does not download firmware, check for self-updates, or open the RADIUS
-  port.
+  port. The proof logs out only sessions that its own login instrumentation
+  opened.
 
 For `local-switch`, the wrapper also requires an owner-only output directory
 with mode `700`. It creates a new log and summary with mode `600` before
