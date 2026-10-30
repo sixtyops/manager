@@ -76,19 +76,7 @@
           <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.2 Device & Network Data</h3>
           <p>SixtyOps manages your Tachyon wireless devices. The appliance stores device IP addresses, MAC addresses, firmware versions, configuration snapshots, signal metrics, and geographic coordinates locally in an SQLite database on your appliance. <strong>This data is never transmitted to us.</strong></p>
 
-          <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.3 Telemetry (Opt-In)</h3>
-          <p>Telemetry is off by default. After an administrator opts in, SixtyOps sends anonymized, aggregate job statistics after firmware update jobs complete. This includes:</p>
-          <ul class="list-disc list-inside mt-2 space-y-1 text-sm">
-            <li>An anonymous install ID (SHA-256 hash, not personally identifiable)</li>
-            <li>Device counts and models (e.g., "TNA-301: 12")</li>
-            <li>Success, failure, and skip counts</li>
-            <li>Error categories (timeout, connection, auth, etc.)</li>
-            <li>Job duration and scheduling method</li>
-          </ul>
-          <p class="mt-3">Telemetry <strong>never</strong> includes IP addresses, MAC addresses, serial numbers, hostnames, credentials, locations, or any personally identifiable information.</p>
-          <p class="mt-2">The separate environment kill switch <code class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">DISABLE_TELEMETRY=1</code> disables telemetry even if an administrator opts in. Set it on your appliance and restart the app.</p>
-
-          <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.4 Website Data</h3>
+          <h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">2.3 Website Data</h3>
           <p>When you visit sixtyops.net, our hosting provider may collect standard web server logs (IP address, browser type, pages visited). We do not use third-party analytics or advertising trackers on our website.</p>
         </section>
 
@@ -102,7 +90,6 @@
         <section>
           <h2 class="text-lg font-semibold text-slate-900 mb-3">4. How We Use Information</h2>
           <ul class="list-disc list-inside space-y-1 text-sm">
-            <li>Telemetry data: to improve product reliability, identify common failure modes, and prioritize device compatibility</li>
             <li>Website logs: to maintain site security and availability</li>
           </ul>
           <p class="mt-3">We do not sell, rent, or share your data with third parties for advertising or marketing purposes.</p>
@@ -154,7 +141,6 @@
           <ul class="list-disc list-inside mt-2 space-y-1 text-sm">
             <li>Admin passwords are bcrypt-hashed and never stored in plaintext</li>
             <li>Device credentials are encrypted at rest on your appliance</li>
-            <li>All external communications (telemetry) use HTTPS/TLS</li>
             <li>Login attempts are rate-limited to prevent brute-force attacks</li>
           </ul>
           <p class="mt-3">No method of electronic transmission or storage is 100% secure. We cannot guarantee absolute security, but we strive to use commercially reasonable protections.</p>
@@ -164,12 +150,6 @@
         <section>
           <h2 class="text-lg font-semibold text-slate-900 mb-3">9. Your Rights</h2>
           <p>Since your device and network data is stored entirely on your own appliance, you have direct access to, and control over, all of it.</p>
-          <p class="mt-2">For data we process externally (telemetry, license validation), you may:</p>
-          <ul class="list-disc list-inside mt-2 space-y-1 text-sm">
-            <li>Request access to your telemetry records</li>
-            <li>Request deletion of your telemetry data</li>
-            <li>Opt out of telemetry at any time</li>
-          </ul>
           <p class="mt-3">Contact us at <a href="mailto:support@sixtyops.net" class="text-brand-700 hover:text-brand-800">support@sixtyops.net</a> for any privacy-related requests.</p>
         </section>
 

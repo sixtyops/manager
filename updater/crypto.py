@@ -45,7 +45,7 @@ def key_path() -> Path:
 
     This key decrypts every stored device password / RADIUS secret. Losing it
     makes those credentials unrecoverable, so backup/restore must keep it with
-    the database (see updater/sftp_backup.py).
+    the database.
     """
     return _KEY_PATH
 

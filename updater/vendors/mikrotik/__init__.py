@@ -28,13 +28,13 @@ class MikroTikDriver(VendorDriver):
     ]
 
     async def connect(self):
-        raise NotImplementedError("MikroTik driver not yet implemented — SSH via asyncssh planned")
+        raise NotImplementedError("MikroTik driver not yet implemented — SSH support planned")
 
     async def get_device_info(self) -> VendorDeviceInfo:
         raise NotImplementedError("MikroTik driver not yet implemented")
 
     async def upload_firmware(self, firmware_path: str, bandwidth_limit_kbps: int = 0) -> bool:
-        raise NotImplementedError("MikroTik driver not yet implemented — SFTP upload planned")
+        raise NotImplementedError("MikroTik driver not yet implemented — file upload planned")
 
     async def trigger_update(self) -> bool:
         raise NotImplementedError("MikroTik driver not yet implemented")

@@ -39,6 +39,7 @@ SECRET_SETTINGS_KEYS = frozenset({
     "email_smtp_password",
     "radius_secret",
     "builtin_radius_secret",
+    # Keep decrypting existing values; no migration removes stored settings.
     "backup_sftp_password",
     "radius_server_secret",
     "radius_server_ldap_bind_password",
@@ -90,6 +91,66 @@ def _backfill_firmware_sha256(db, firmware_dir: Path) -> None:
             "UPDATE firmware_registry SET sha256 = ? WHERE filename = ? AND sha256 IS NULL",
             (h.hexdigest(), filename),
         )
+
+
+def _migrate_cpe_rows(db):
+    """Copy every legacy CPE row and its current metrics atomically."""
+    if db.in_transaction:
+        raise RuntimeError("CPE migration requires a clean transaction")
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(devices)")}
+        for name, definition in (("parent_device_id", "INTEGER REFERENCES devices(id)"), ("auth_status", "TEXT"),
+                                 ("bank_last_fetched", "TEXT")):
+            if name not in columns:
+                db.execute(f"ALTER TABLE devices ADD COLUMN {name} {definition}")
+        metric_names = ("link_distance", "rx_power", "combined_signal", "last_local_rssi",
+                        "tx_rate", "rx_rate", "mcs", "link_uptime", "signal_health",
+                        "target_rssi_dbm", "snr_db", "sector_tx", "sector_rx", "antenna_kit",
+                        "max_rain_mm_hr")
+        source_columns = {row[1] for row in db.execute("PRAGMA table_info(cpe_cache)")}
+        for row in db.execute("SELECT * FROM cpe_cache ORDER BY id").fetchall():
+            old_id = row["id"]
+            if db.execute("SELECT 1 FROM cpe_migration_map WHERE old_cpe_id=?", (old_id,)).fetchone():
+                continue
+            parent = db.execute("SELECT id,username,password FROM devices WHERE ip=? AND role='ap'",
+                                (row["ap_ip"],)).fetchone()
+            if not parent:
+                raise ValueError(f"CPE migration row {old_id} has no AP parent at {row['ap_ip']}")
+            owner = db.execute("SELECT id,role FROM devices WHERE ip=?", (row["ip"],)).fetchone()
+            if owner:
+                prior = db.execute(
+                    "SELECT old_cpe_id,device_id FROM cpe_migration_map WHERE device_id=?",
+                    (owner["id"],),
+                ).fetchone()
+                raise ValueError(
+                    f"CPE migration collision rows {prior['old_cpe_id'] if prior else 'existing'} "
+                    f"and {old_id}; parent device IDs {owner['id']} and {parent['id']}; IP {row['ip']}"
+                )
+            values = {name: row[name] for name in source_columns}
+            cursor = db.execute("""INSERT INTO devices (
+                ip,vendor,role,parent_device_id,username,password,system_name,model,mac,
+                firmware_version,last_seen,enabled,bank1_version,bank2_version,active_bank,
+                bank_last_fetched,last_config_poll_at,last_config_poll_status,
+                last_config_poll_error,auth_status,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (row["ip"], values.get("vendor") or "tachyon", "cpe", parent["id"],
+                 parent["username"], parent["password"], row["system_name"], row["model"],
+                 row["mac"], row["firmware_version"], values.get("last_updated"), 1,
+                 values.get("bank1_version"), values.get("bank2_version"),
+                 values.get("active_bank"), values.get("bank_last_fetched"),
+                 values.get("last_config_poll_at"), values.get("last_config_poll_status"),
+                 values.get("last_config_poll_error"), values.get("auth_status"),
+                 values.get("last_updated")))
+            device_id = cursor.lastrowid
+            db.execute(f"INSERT INTO link_metrics(device_id,{','.join(metric_names)}) "
+                       f"VALUES ({','.join('?' for _ in range(len(metric_names)+1))})",
+                       (device_id, *(values.get(name) for name in metric_names)))
+            db.execute("INSERT INTO cpe_migration_map VALUES (?,?)", (old_id, device_id))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _migrate(db):
@@ -415,6 +476,43 @@ def _migrate(db):
     except Exception:
         pass  # Best-effort backfill; new rows will populate correctly
 
+    _migrate_identity(db)
+    db.commit()
+    _migrate_cpe_rows(db)
+
+
+def _migrate_identity(db):
+    """Add stable identity storage and preserve legacy device observations."""
+    columns = {row[1] for row in db.execute("PRAGMA table_info(devices)")}
+    for name, definition in (
+        ("uid", "TEXT"),
+        ("uid_source", "TEXT"),
+        ("address_generation", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if name not in columns:
+            db.execute(f"ALTER TABLE devices ADD COLUMN {name} {definition}")
+    db.execute("""CREATE TABLE IF NOT EXISTS device_macs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, device_id INTEGER NOT NULL,
+        mac TEXT NOT NULL, interface TEXT NOT NULL, first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL, FOREIGN KEY (device_id) REFERENCES devices(id))""")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_device_macs_mac ON device_macs(mac)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_device_macs_device ON device_macs(device_id)")
+    db.execute("""CREATE TABLE IF NOT EXISTS identity_conflicts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, value TEXT NOT NULL,
+        device_ids TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'open',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, resolved_at TEXT)""")
+    db.execute("""CREATE INDEX IF NOT EXISTS idx_identity_conflicts_open_value
+        ON identity_conflicts(kind, value, state)""")
+    db.execute("""UPDATE devices SET uid = 'legacy-ip:' || ip, uid_source = 'ip_legacy'
+        WHERE uid IS NULL OR uid = ''""")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_uid ON devices(uid)")
+    db.execute("""INSERT INTO device_macs(device_id, mac, interface, first_seen, last_seen)
+        SELECT d.id, UPPER(d.mac), 'legacy', COALESCE(d.last_seen, d.created_at, CURRENT_TIMESTAMP),
+               COALESCE(d.last_seen, d.created_at, CURRENT_TIMESTAMP)
+        FROM devices d WHERE d.mac IS NOT NULL AND TRIM(d.mac) != ''
+          AND NOT EXISTS (SELECT 1 FROM device_macs m WHERE m.device_id=d.id
+                          AND m.mac=UPPER(d.mac) AND m.interface='legacy')""")
+
 
 def _migrate_to_devices_table(db):
     """One-time migration: copy data from access_points/switches to unified devices table."""
@@ -622,7 +720,7 @@ def init_db():
 
     with get_db() as db:
         # Pre-schema migration: drop tables with incompatible schemas (pre-release)
-        for _tbl, _req in [("audit_log", {"username"}), ("api_tokens", {"user_id"})]:
+        for _tbl, _req in [("audit_log", {"username"})]:
             _cols = {r[1] for r in db.execute(f"PRAGMA table_info({_tbl})").fetchall()}
             if _cols and not _req.issubset(_cols):
                 db.execute(f"DROP TABLE {_tbl}")
@@ -635,6 +733,7 @@ def init_db():
         # Insert default settings if not exists
         defaults = {
             "schedule_enabled": "false",
+            "scheduled_rollout_safety_ready": "false",
             "schedule_days": "tue,wed,thu",
             "schedule_start_hour": "3",
             "schedule_end_hour": "4",
@@ -704,17 +803,6 @@ def init_db():
             "ssl_domain": "",
             "ssl_email": "",
             "ssl_cert_expires": "",
-            # SFTP backup configuration
-            "backup_enabled": "false",
-            "backup_sftp_host": "",
-            "backup_sftp_port": "22",
-            "backup_sftp_path": "/backups/sixtyops",
-            "backup_sftp_username": "",
-            "backup_sftp_password": "",
-            "backup_sftp_auth_method": "password",
-            "backup_retention_count": "30",
-            "backup_last_run": "",
-            "backup_last_status": "",
             # Setup wizard tracking
             "setup_wizard_completed": "false",
             # Auto-update configuration
@@ -860,6 +948,88 @@ def clear_active_job(job_id: str):
     """Remove an active job after completion or recovery."""
     with get_db() as db:
         db.execute("DELETE FROM active_jobs WHERE job_id = ?", (job_id,))
+
+
+def stop_firmware_window(window_key, job_id: str, device_ip: str, gate: str, reason: str):
+    """Persist the first failed device gate for a maintenance window."""
+    if not window_key:
+        return None
+    key_json = json.dumps(list(window_key), separators=(",", ":"))
+    with get_db() as db:
+        db.execute(
+            "INSERT OR IGNORE INTO firmware_window_stops "
+            "(window_key, job_id, device_ip, gate, reason, stopped_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (key_json, job_id, device_ip, gate, reason, datetime.now().isoformat()),
+        )
+        row = db.execute(
+            "SELECT * FROM firmware_window_stops WHERE window_key = ?", (key_json,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_firmware_window_stop(window_key):
+    """Read the stop record for one maintenance window."""
+    if not window_key:
+        return None
+    key_json = json.dumps(list(window_key), separators=(",", ":"))
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM firmware_window_stops WHERE window_key = ?", (key_json,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def hold_firmware_window(window_key, job_id: str, device_ip: str, reason: str):
+    """Persist a qualification hold without creating an operator failure stop."""
+    if not window_key:
+        return None
+    key_json = json.dumps(list(window_key), separators=(",", ":"))
+    with get_db() as db:
+        db.execute(
+            "INSERT OR IGNORE INTO firmware_window_holds "
+            "(window_key, job_id, device_ip, reason, held_at) VALUES (?, ?, ?, ?, ?)",
+            (key_json, job_id, device_ip, reason, datetime.now().isoformat()),
+        )
+        row = db.execute(
+            "SELECT * FROM firmware_window_holds WHERE window_key = ?", (key_json,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_firmware_window_hold(window_key):
+    """Read the qualification hold for one maintenance window instance."""
+    if not window_key:
+        return None
+    key_json = json.dumps(list(window_key), separators=(",", ":"))
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM firmware_window_holds WHERE window_key = ?", (key_json,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_unresolved_firmware_window_stops():
+    """Return stopped windows that still need an operator resolution record."""
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT * FROM firmware_window_stops WHERE resolved_at IS NULL ORDER BY stopped_at"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def resolve_firmware_window_stop(stop_id: int, username: str, resolution: str):
+    """Record the operator's resolution of a failed maintenance window."""
+    with get_db() as db:
+        db.execute(
+            "UPDATE firmware_window_stops SET resolved_at = ?, resolved_by = ?, resolution = ? "
+            "WHERE id = ? AND resolved_at IS NULL",
+            (datetime.now().isoformat(), username, resolution.strip(), stop_id),
+        )
+        row = db.execute(
+            "SELECT * FROM firmware_window_stops WHERE id = ?", (stop_id,)
+        ).fetchone()
+        return dict(row) if row else None
 
 
 # Tower Site operations
@@ -1986,7 +2156,32 @@ def get_rollout(rollout_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def create_rollout(firmware_file: str, firmware_file_303l: str = None, firmware_file_tns100: str = None) -> int:
+def _insert_rollout_membership(db, rollout_id: int, members: list[dict]) -> None:
+    """Insert a complete, unassigned rollout membership snapshot."""
+    seen_ips = set()
+    for member in members:
+        ip = member["ip"]
+        device_type = member["device_type"]
+        if not ip or not device_type or ip in seen_ips:
+            raise ValueError("Rollout members require unique IPs and a device type")
+        seen_ips.add(ip)
+        db.execute(
+            """INSERT INTO rollout_devices
+               (rollout_id, ip, device_type, phase_assigned, status)
+               VALUES (?, ?, ?, NULL, 'pending')""",
+            (rollout_id, ip, device_type),
+        )
+
+
+def create_rollout(
+    firmware_file: str,
+    firmware_file_303l: str = None,
+    firmware_file_tns100: str = None,
+    *,
+    members: list[dict] = None,
+    settings_snapshot: dict = None,
+    now: datetime = None,
+) -> int:
     """Create a new rollout. Returns the rollout ID.
 
     If a rollout for the same firmware set was created within the last 60
@@ -1994,31 +2189,87 @@ def create_rollout(firmware_file: str, firmware_file_303l: str = None, firmware_
     Guards against a scheduler tick-loop creating one no-op rollout per tick
     when eligibility checks disagree.
     """
+    now = now or datetime.now()
+    created_at = now.strftime("%Y-%m-%d %H:%M:%S")
+    duplicate_since = (now - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")
+    membership = members is not None
+    encoded_settings_snapshot = None
+    if membership:
+        if not isinstance(settings_snapshot, dict):
+            raise ValueError("Rollout membership requires a settings snapshot object")
+        try:
+            encoded_settings_snapshot = json.dumps(
+                settings_snapshot, separators=(",", ":"), allow_nan=False
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Rollout settings snapshot must be valid JSON") from exc
+        members = list(members)
+        if not members:
+            raise ValueError("Rollout membership snapshot must not be empty")
+        member_keys = [(member["ip"], member["device_type"]) for member in members]
+        if any(not ip or not device_type for ip, device_type in member_keys):
+            raise ValueError("Rollout members require unique IPs and a device type")
+        if len({ip for ip, _ in member_keys}) != len(member_keys):
+            raise ValueError("Rollout members require unique IPs and a device type")
     with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
         existing = db.execute(
             "SELECT id FROM rollouts "
             "WHERE firmware_file = ? "
             "AND COALESCE(firmware_file_303l, '') = COALESCE(?, '') "
             "AND COALESCE(firmware_file_tns100, '') = COALESCE(?, '') "
-            "AND created_at > datetime('now', '-60 seconds') "
+            "AND created_at > ? "
             "ORDER BY id DESC LIMIT 1",
-            (firmware_file, firmware_file_303l, firmware_file_tns100)
+            (firmware_file, firmware_file_303l, firmware_file_tns100, duplicate_since)
         ).fetchone()
-        if existing:
+        if existing and not membership:
             logger.warning(
                 f"create_rollout: duplicate suppressed; returning existing id={existing['id']} "
                 f"for {firmware_file!r}"
             )
             return existing["id"]
-        # Start at pct10 (the first fleet wave). Don't rely on the table default
-        # — existing DBs created before the canary removal still default to
-        # 'canary', which the fail-closed gate would treat as an unknown phase.
+        if existing and membership:
+            existing_members = db.execute(
+                "SELECT ip, device_type FROM rollout_devices WHERE rollout_id = ?",
+                (existing["id"],),
+            ).fetchall()
+            requested_members = set(member_keys)
+            if (
+                len(existing_members) == len(member_keys)
+                and {(row["ip"], row["device_type"]) for row in existing_members} == requested_members
+            ):
+                logger.warning(
+                    f"create_rollout: duplicate suppressed; returning existing id={existing['id']} "
+                    f"for {firmware_file!r}"
+                )
+                return existing["id"]
+        # Membership-backed rollouts wait for B2b to evaluate Firmware Hold.
+        # Calls without a snapshot retain the existing active-rollout behavior.
+        status = "waiting_hold" if membership else "active"
+        # The current schema requires a phase value. `status` keeps this wave
+        # from admission until the hold lifecycle activates the rollout.
+        phase = "pct10"
         cursor = db.execute(
-            "INSERT INTO rollouts (firmware_file, firmware_file_303l, firmware_file_tns100, phase) "
-            "VALUES (?, ?, ?, 'pct10')",
-            (firmware_file, firmware_file_303l, firmware_file_tns100)
+            """INSERT INTO rollouts
+               (firmware_file, firmware_file_303l, firmware_file_tns100,
+                phase, status, created_at, updated_at, settings_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                firmware_file,
+                firmware_file_303l,
+                firmware_file_tns100,
+                phase,
+                status,
+                created_at,
+                created_at,
+                encoded_settings_snapshot
+                if membership else None,
+            ),
         )
-        return cursor.lastrowid
+        rollout_id = cursor.lastrowid
+        if membership:
+            _insert_rollout_membership(db, rollout_id, members)
+        return rollout_id
 
 
 def get_last_rollout_for_firmware(firmware_file: str) -> Optional[dict]:
@@ -2153,6 +2404,8 @@ def set_rollout_phase_window(rollout_id: int, window_key: str):
     job. The scheduler refuses to start another phase in the same window, which
     is what guarantees one phase per maintenance window (see rollout_gate)."""
     now = datetime.now().isoformat()
+    if isinstance(window_key, (tuple, list)):
+        window_key = json.dumps(list(window_key), separators=(",", ":"))
     with get_db() as db:
         db.execute(
             "UPDATE rollouts SET last_phase_window = ?, updated_at = ? WHERE id = ?",
@@ -2179,6 +2432,72 @@ def set_rollout_settings_snapshot(rollout_id: int, settings: dict):
             "UPDATE rollouts SET settings_json = ? WHERE id = ?",
             (json.dumps(settings), rollout_id)
         )
+
+
+def reserve_rollout_wave(
+    *,
+    rollout_id: int,
+    phase: str,
+    window_key,
+    assignments: list[tuple[str, str, str]],
+    settings: dict,
+    first_wave_held: bool = False,
+) -> bool:
+    """Commit the window marker, wave assignments, and settings as one unit."""
+    from datetime import date
+    from .rollout_gate import phase_run_decision
+
+    if not isinstance(window_key, (tuple, list)) or len(window_key) != 2:
+        return False
+    schedule_id, start_date = window_key
+    if not (
+        (isinstance(schedule_id, int) and not isinstance(schedule_id, bool) and schedule_id > 0)
+        or (isinstance(schedule_id, str) and bool(schedule_id.strip()))
+    ):
+        return False
+    try:
+        if date.fromisoformat(start_date).isoformat() != start_date:
+            return False
+    except (TypeError, ValueError):
+        return False
+    if not assignments:
+        return False
+
+    encoded_key = json.dumps(list(window_key), separators=(",", ":"))
+    encoded_settings = json.dumps(settings, separators=(",", ":"))
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT id, status, phase, last_phase_window FROM rollouts WHERE id = ?",
+            (rollout_id,),
+        ).fetchone()
+        if not row or row["phase"] != phase:
+            return False
+        allowed, _ = phase_run_decision(
+            dict(row), window_key, first_wave_held=first_wave_held
+        )
+        if not allowed:
+            return False
+
+        # Write the marker first so a failure at any later position proves that
+        # SQLite rolls back the whole reservation.
+        conn.execute(
+            "UPDATE rollouts SET last_phase_window = ?, updated_at = ? WHERE id = ?",
+            (encoded_key, now, rollout_id),
+        )
+        for ip, device_type, assigned_phase in assignments:
+            conn.execute(
+                """INSERT OR IGNORE INTO rollout_devices
+                   (rollout_id, ip, device_type, phase_assigned, status)
+                   VALUES (?, ?, ?, ?, 'pending')""",
+                (rollout_id, ip, device_type, assigned_phase),
+            )
+        conn.execute(
+            "UPDATE rollouts SET settings_json = ? WHERE id = ?",
+            (encoded_settings, rollout_id),
+        )
+    return True
 
 
 def get_rollout_settings_snapshot(rollout_id: int) -> Optional[dict]:
@@ -3487,22 +3806,6 @@ def cleanup_old_audit_log(max_age_days: int = 90):
 
 
 # ---------------------------------------------------------------------------
-# API tokens
-# ---------------------------------------------------------------------------
-
-def create_api_token(name: str, token_hash: str, token_prefix: str,
-                     user_id: int, scopes: str = "read", expires_at: str = None) -> int:
-    """Create a new API token. Returns the token ID."""
-    with get_db() as conn:
-        cursor = conn.execute(
-            """INSERT INTO api_tokens (name, token_hash, token_prefix, user_id, scopes, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (name, token_hash, token_prefix, user_id, scopes, expires_at),
-        )
-        return cursor.lastrowid
-
-
-# ---------------------------------------------------------------------------
 # Device groups
 # ---------------------------------------------------------------------------
 
@@ -3530,15 +3833,6 @@ def create_freeze_window(name: str, start_date: str, end_date: str,
             (name, start_date, end_date, reason),
         )
         return cursor.lastrowid
-
-
-def get_api_token_by_hash(token_hash: str) -> Optional[dict]:
-    """Look up a token by its hash."""
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM api_tokens WHERE token_hash = ?", (token_hash,)
-        ).fetchone()
-        return dict(row) if row else None
 
 
 def list_freeze_windows() -> list[dict]:
@@ -3575,51 +3869,6 @@ def get_device_group(group_id: int) -> Optional[dict]:
             "SELECT * FROM device_groups WHERE id = ?", (group_id,)
         ).fetchone()
         return dict(row) if row else None
-
-
-def list_api_tokens(user_id: int = None) -> list[dict]:
-    """List API tokens, optionally filtered by user."""
-    with get_db() as conn:
-        if user_id is not None:
-            rows = conn.execute(
-                "SELECT id, name, token_prefix, user_id, scopes, created_at, last_used_at, expires_at FROM api_tokens WHERE user_id = ? ORDER BY created_at DESC",
-                (user_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id, name, token_prefix, user_id, scopes, created_at, last_used_at, expires_at FROM api_tokens ORDER BY created_at DESC"
-            ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def update_api_token_last_used(token_id: int):
-    """Update the last_used_at timestamp for a token."""
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE api_tokens SET last_used_at = ? WHERE id = ?",
-            (datetime.now().isoformat(), token_id),
-        )
-
-
-def delete_api_token(token_id: int, user_id: int = None) -> bool:
-    """Delete an API token. If user_id is provided, only delete if owned by that user."""
-    with get_db() as conn:
-        if user_id is not None:
-            cursor = conn.execute(
-                "DELETE FROM api_tokens WHERE id = ? AND user_id = ?", (token_id, user_id)
-            )
-        else:
-            cursor = conn.execute("DELETE FROM api_tokens WHERE id = ?", (token_id,))
-        return cursor.rowcount > 0
-
-
-def cleanup_expired_api_tokens():
-    """Delete expired API tokens."""
-    with get_db() as conn:
-        conn.execute(
-            "DELETE FROM api_tokens WHERE expires_at IS NOT NULL AND expires_at < ?",
-            (datetime.now().isoformat(),),
-        )
 
 
 def update_freeze_window(window_id: int, **kwargs) -> bool:

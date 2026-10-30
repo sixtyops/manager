@@ -4,9 +4,9 @@
 > cut back to the firmware core (North Star v2, epic
 > [#316](https://github.com/sixtyops/manager/issues/316)). The target module layout is
 > in [rearchitecture.md](rearchitecture.md#target-layout). Modules marked
-> **(being removed)** below are deleted by that plan: RADIUS, telemetry, SNMP traps,
+> **(being removed)** below are deleted by that plan: RADIUS, SNMP traps,
 > webhooks, syslog forwarding, SFTP backup, the self-update apply path, the vendor
-> abstraction, feature gating, and `devmode.py`.
+> abstraction, feature gating, and the removed dummy poller.
 
 ## Overview
 
@@ -69,12 +69,32 @@ Key responsibilities:
 
 ### `tachyon.py` - Device Communication
 
-Low-level client for Tachyon hardware. Communicates over HTTPS using `curl` subprocesses (required for device SSL compatibility).
+**Key points:** The Tachyon driver uses HTTPS through curl for device TLS
+compatibility. Its client lives in `updater/vendors/tachyon/client.py`.
+
+**Detail:** Login and authenticated HTTP requests start
+`curl --disable --config -`. A private stdin pipe carries quoted options,
+cookies, login credentials, JSON bodies, and
+firmware multipart fields. Curl does not load the user curl configuration.
+The serializer escapes quotes, backslashes, and supported whitespace. It
+rejects unsupported control characters before the subprocess starts.
+No login or authenticated HTTP request value appears in process arguments.
+Unauthenticated reboot probes carry no credentials. Curl errors expose exit
+codes without raw stderr. Config request failures return a fixed message and
+HTTP status, without the device response body. Login uses a temporary cookie
+jar and removes it in `finally`. No persistent request configuration file
+is written.
+
+The request timeout remains 30 seconds by default. Firmware uploads use
+300 seconds and retry transport failures up to three times, with 30 and 60
+second delays. Device rejection does not retry. `TACHYON_VERIFY_SSL` controls
+certificate verification. This transport needs exact-head AP and switch bench
+proof before merge; offline mock tests do not establish device compatibility.
 
 Update sequence per device:
 1. Login and get session token
 2. Fetch device info (model, firmware version, MAC, bank status)
-3. Upload firmware file via multipart POST
+3. Upload firmware file via multipart PUT
 4. Trigger installation with optional force/reset flags
 5. Wait for reboot (poll until device responds)
 6. Verify new firmware version
@@ -122,29 +142,9 @@ Pydantic models for API validation: `Device`, `CPEInfo`, `APWithCPEs`, `NetworkT
 
 Helpers for IP geolocation, weather forecasts (weather.gov), timezone detection, and NTP time validation.
 
-### `telemetry.py` - Anonymous Usage Telemetry (being removed)
-
-Sends anonymized job statistics to an AWS Lambda endpoint after each update job completes. Runs as a fire-and-forget background task that never blocks the main flow.
-
-**What is sent:** event type, timestamp, anonymous install ID (hashed), device counts (success/failed/skipped/cancelled), success rate, duration, bank mode, scheduled vs manual, device model distribution, categorized error counts (timeout, connection, auth, upload, install, reboot, verification), and per-role (AP/CPE/switch) breakdowns.
-
-**What is never sent:** IP addresses, MAC addresses, hostnames, credentials, location, or raw error messages.
-
-**Disabling telemetry:** Set the `DISABLE_TELEMETRY=1` environment variable (e.g., in `docker-compose.yml`), then restart the app.
-
 ### `slack.py` - Slack Notifications
 
 Sends rich webhook notifications on job completion with success/failure counts, failed device details, rollout phase progress, and next scheduled job info. Configured via `slack_webhook_url` in settings.
-
-### `sftp_backup.py` - System Backup & Restore (being removed)
-
-SFTP-based backup system for the management database, settings, and device configurations.
-
-Key responsibilities:
-- **Scheduled Backups**: Creates a compressed `tar.gz` archive containing the SQLite database, device inventory, and configuration snapshots.
-- **Remote Storage**: Uploads backups to a configured SFTP server with support for password or SSH key authentication.
-- **Retention**: Automatically prunes older backups based on a configurable retention count.
-- **Restore Flow**: Provides an API to list remote backups and restore the local database from a selected archive (requires system restart).
 
 ### `features.py` - Feature Classification (being removed)
 
@@ -196,7 +196,6 @@ Six HTML templates rendered by Jinja2:
 - `monitor.html` - Main UI with firmware, update, auto-update, and network topology
 - `setup.html` - Initial site configuration
 - `setup_wizard.html` - Guided first-run setup
-- `backup_setup.html` - Backup configuration
 - `ssl_setup.html` - SSL certificate setup
 
 JavaScript in `static/js/` handles WebSocket connections and real-time DOM updates. No build step or framework dependencies.

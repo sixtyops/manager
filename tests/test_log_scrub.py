@@ -20,9 +20,9 @@ USERINFO_REDACTED = "https://[REDACTED]@receiver.example.test:8443/hook?mode=tes
 
 @pytest.fixture(autouse=True)
 def isolated_registry(monkeypatch):
+    monkeypatch.setattr(scrub, "_device_tokens", {})
     monkeypatch.setattr(scrub, "_secrets", set())
     monkeypatch.setattr(scrub, "_pattern", None)
-
 
 @pytest.fixture
 def application_output(monkeypatch):
@@ -965,7 +965,7 @@ def test_session_unknown_and_expired_reads_do_not_register(session_hooks):
 
 
 @pytest.mark.asyncio
-async def test_session_unknown_cookie_and_bearer_auth_do_not_register(session_hooks):
+async def test_session_unknown_cookie_and_bearer_are_unauthenticated(session_hooks):
     from fastapi import HTTPException
     from starlette.requests import Request
 

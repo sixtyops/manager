@@ -2952,10 +2952,10 @@
             <!-- Firmware/Updates bar (shown when firmware mode active) -->
             <div class="drawer-handle-half active" id="drawerHandleLeft">
                 <div class="status-bar-section">
-                    <button class="toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-pressed="false" onclick="toggleAutoSchedule(event)" data-min-role-disable="operator"></button>
+                    <button class="toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-describedby="barBlockReason" aria-pressed="false" onclick="toggleAutoSchedule(event)" data-min-role-disable="operator"></button>
                     <span class="status-bar-label">Auto-Update</span>
                     <span class="status-badge status-bar-badge" id="barStateBadge">Off</span>
-                    <span class="status-bar-reason" id="barBlockReason"></span>
+                    <span class="status-bar-reason" id="barBlockReason" role="status"></span>
                 </div>
                 <div class="status-bar-section hidden" id="barDeviceCountSection">
                     <span class="status-bar-count" id="barBehindCount"></span>
@@ -2976,15 +2976,14 @@
             <!-- Config bar (shown when config mode active) -->
             <div class="drawer-handle-half" id="drawerHandleRight">
                 <div class="status-bar-section">
-                    <span class="status-bar-label">Config Policies</span>
+                    <span class="status-bar-label" title="Phased config rollout is paused for safety. Use manual push for selected devices.">Config Policies (rollout paused for safety)</span>
                     <span class="status-badge status-bar-badge" id="configTemplateBadge">0 enforced</span>
                 </div>
                 <div class="status-bar-section">
-                    <button class="toggle" id="configAutoEnforceToggle" type="button"
+                    <button class="toggle" id="configAutoEnforceToggle" type="button" disabled
                             aria-label="Toggle auto-enforce" aria-pressed="false"
-                            onclick="toggleConfigAutoEnforce(!this.classList.contains('active'));event.stopPropagation();"
-                            data-min-role-disable="operator"></button>
-                    <span class="status-bar-label" title="Checks compliance and pushes corrections daily">Auto-Enforce</span>
+                            onclick="toggleConfigAutoEnforce(!this.classList.contains('active'));event.stopPropagation();"></button>
+                    <span class="status-bar-label" title="Use manual push or restore for selected devices.">Auto-enforce paused for safety</span>
                     <span class="status-badge" id="configEnforceStatusBadge" style="display:none;"></span>
                     <span id="configEnforceAtLabel" class="u-text-xxs-dim" style="display:none;">daily at</span>
                     <select id="configEnforceHour" name="configEnforceHour" class="u-w-64" style="display:none;font-size:var(--text-xs);"
@@ -3377,20 +3376,7 @@
 
                 <div class="system-subpanel" id="systemSub-backup" data-min-role-disable-tree="operator">
                     <div style="margin-bottom:16px;">
-                        <label class="settings-section-title">Backup & Restore</label>
-                        <div id="backupStatusInfo" style="font-size:0.75rem;color:var(--text-muted);padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;">Loading...</div>
-                        <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
-                            <button class="backup-btn" onclick="runBackupNow()">Run Now</button>
-                            <a href="/backup-setup" class="backup-btn u-bg-muted-cta" style="text-decoration:none;text-align:center;">Open SFTP Setup</a>
-                            <span id="backupRunStatus" class="u-text-xs-muted"></span>
-                        </div>
-                        <!-- Remote Backups (SFTP) restore panel hidden until the
-                             feature is finished. The list-and-restore flow
-                             still has rough edges (no auth check, "DANGEROUS"
-                             label was the placeholder). The corresponding
-                             loadRemoteBackups / restoreRemoteBackup JS is left
-                             in place so reviving this panel is a one-line
-                             markup add. -->
+                        <label class="settings-section-title">Device CSV transfer</label>
                     </div>
 
                     <hr class="u-hr">
@@ -5542,6 +5528,10 @@
                 return '<span class="update-spinner" title="Updating..."></span>';
             }
             const vs = versionStatus(ip);
+            const addressHold = holdInfo(ip);
+            if (addressHold?.code === 'address_change_hold') {
+                return `<span class="status-icon-cell" tabindex="0" aria-label="${escapeHtml(addressHold.reason)}" title="${escapeHtml(addressHold.reason)}" style="color:var(--warning);">&#9201;</span>`;
+            }
             if (vs === 'current') {
                 return '<span class="status-current" title="Current">&#10003;</span>';
             }
@@ -7102,39 +7092,6 @@
             if (target.tab === 'access' && target.subtab === 'users') loadUsers();
         }
 
-        async function maybePromptTelemetryOptIn() {
-            try {
-                // Verify admin role server-side so non-admins never see a
-                // dialog whose save would fail with 403.
-                const meResp = await fetch('/api/users/me');
-                if (!meResp.ok) return;
-                const me = await meResp.json();
-                if (me.role !== 'admin') return;
-
-                const resp = await fetch('/api/settings');
-                const data = await resp.json();
-                if (data.settings?.telemetry_prompt_seen === 'true') return;
-
-                const accepted = await showConfirmDialog(
-                    'Share anonymous update results with SixtyOps?\n\nThis includes counts, device models, timing, and error categories. It never includes IP addresses, names, locations, or passwords.',
-                    { title: 'Share Update Results', confirmText: 'Share' }
-                );
-                const putResp = await fetch('/api/settings', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        telemetry_enabled: accepted ? 'true' : 'false',
-                        telemetry_prompt_seen: 'true',
-                    }),
-                });
-                if (!putResp.ok) {
-                    throw new Error('Failed to persist telemetry choice: ' + putResp.status);
-                }
-            } catch (e) {
-                console.warn('Telemetry opt-in prompt failed:', e);
-            }
-        }
-
         function handleAppSettingsKeydown(event) {
             const overlay = document.getElementById('appSettingsOverlay');
             if (!overlay.classList.contains('open')) return;
@@ -7196,7 +7153,6 @@
             const activeName = activateScopedSubtab('systemSubtabs', '.system-subpanel', 'systemSub-', name, 'updates');
             if (activeName === 'updates') loadAppUpdateStatus();
             if (activeName === 'https') loadSslStatus();
-            if (activeName === 'backup') loadBackupStatus();
         }
 
         function switchNotifSubtab(name) {
@@ -8719,7 +8675,8 @@
 
             if (barToggle) setToggleActive(barToggle, autoUpdateEnabled);
             badge.className = 'status-badge status-bar-badge';
-            reason.textContent = '';
+            reason.textContent = status.safety_block_reason || '';
+            reason.title = status.safety_block_reason || '';
 
             if (state === 'disabled') {
                 badge.innerHTML = '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>Off';
@@ -8741,6 +8698,7 @@
                 idle:                { label: 'Scheduled', cls: 'idle',    icon: SCHEDULED_ICON },
                 waiting:             { label: 'Scheduled', cls: 'idle',    icon: SCHEDULED_ICON },
                 running:             { label: 'Updating',  cls: 'running', icon: RUNNING_ICON },
+                blocked_safety:      { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_weather:     { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_time:        { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_no_firmware: { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
@@ -8797,7 +8755,8 @@
             if (status.hold_clear_reason) {
                 subtitle = status.hold_clear_reason;
             }
-            reason.textContent = subtitle;
+            reason.textContent = status.safety_block_reason || subtitle;
+            reason.title = reason.textContent;
 
             // Track state changes for UI updates
             const prevState = lastAutoState;
@@ -9789,12 +9748,8 @@
             window._firstRunSetup = true;
             setTimeout(async () => {
                 await openAppSettingsModal('system', 'https');
-                maybePromptTelemetryOptIn();
             }, 500);
             {% else %}
-            // Upgraders never trigger the first-run modal, so surface the
-            // telemetry opt-in here after the role/auth handshake completes.
-            setTimeout(() => { maybePromptTelemetryOptIn(); }, 1500);
             {% endif %}
 
             const filterQueryEl = document.getElementById('deviceFilterQuery');
@@ -10416,108 +10371,6 @@
                 status.textContent = 'Error: ' + e.message;
                 status.style.color = '#ef4444';
             }
-        }
-
-        // ── Backup / Restore ──
-
-        async function loadBackupStatus() {
-            const el = document.getElementById('backupStatusInfo');
-            if (!el) return;
-            try {
-                const resp = await fetch('/api/backup/status');
-                if (!resp.ok) { el.textContent = 'Could not load backup status'; return; }
-                const data = await resp.json();
-                if (!data.enabled) {
-                    el.textContent = 'Scheduled backup is not configured.';
-                } else {
-                    const statusColor = data.last_status === 'success' ? '#10b981' : (data.last_status ? '#dc2626' : '#6b7280');
-                    const statusText = data.last_status || 'never run';
-                    const lastRun = data.last_run || 'Never';
-                    el.innerHTML = `Status: <strong style="color:${statusColor}">${escapeHtml(statusText)}</strong> · Last run: ${escapeHtml(lastRun)}${data.sftp_display ? ` · ${escapeHtml(data.sftp_display)}` : ''}`;
-                    // Remote backups list panel hidden until the feature is
-                    // finished — see the markup note in systemSub-backup.
-                }
-            } catch (e) {
-                el.textContent = 'Could not load backup status';
-            }
-        }
-
-        async function runBackupNow() {
-            const statusEl = document.getElementById('backupRunStatus');
-            statusEl.innerHTML = '<span class="spinner-inline"></span> Running...';
-            statusEl.style.color = '#6b7280';
-            try {
-                const resp = await fetch('/api/backup/run', { method: 'POST' });
-                const data = await resp.json();
-                statusEl.textContent = data.message || (data.success ? 'Backup complete' : 'Backup failed');
-                statusEl.style.color = data.success ? '#10b981' : '#dc2626';
-                await loadBackupStatus();
-            } catch (e) {
-                statusEl.textContent = 'Backup failed: ' + e.message;
-                statusEl.style.color = '#dc2626';
-            }
-        }
-
-        async function loadRemoteBackups() {
-            const listEl = document.getElementById('remoteBackupsList');
-            if (!listEl) return;
-            try {
-                const resp = await fetch('/api/backup/list');
-                if (!resp.ok) { listEl.innerHTML = '<div style="padding:10px;text-align:center;font-size:0.75rem;color:#dc2626;">Error loading backups</div>'; return; }
-                const backups = await resp.json();
-                if (backups.length === 0) {
-                    listEl.innerHTML = '<div style="padding:10px;text-align:center;font-size:0.75rem;color:var(--text-muted);">No backups found on SFTP server.</div>';
-                } else {
-                    listEl.innerHTML = backups.map(b => {
-                        const date = b.mtime ? new Date(b.mtime).toLocaleString() : 'Unknown date';
-                        const size = formatBytes(b.size || 0);
-                        return `
-                            <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-bottom:1px solid var(--border-light);font-size:0.75rem;">
-                                <div style="flex:1;min-width:0;margin-right:8px;">
-                                    <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(b.name)}">${escapeHtml(b.name)}</div>
-                                    <div style="color:var(--text-dim);font-size:0.68rem;">${date} · ${size}</div>
-                                </div>
-                                <button class="action-link" style="color:var(--primary);font-weight:600;" onclick="restoreRemoteBackup('${escapeHtml(b.name)}')">Restore</button>
-                            </div>
-                        `;
-                    }).join('');
-                }
-            } catch (e) {
-                listEl.innerHTML = '<div style="padding:10px;text-align:center;font-size:0.75rem;color:#dc2626;">Failed to fetch backup list</div>';
-            }
-        }
-
-        async function restoreRemoteBackup(name) {
-            confirmDialog(
-                'Restore database from <strong>' + escapeHtml(name) + '</strong>? This will replace all current settings, devices, and history. The system should be restarted after restore.',
-                { title: 'Restore System Backup', confirmText: 'Restore Now', danger: true }
-            ).then(async (confirmed) => {
-                if (!confirmed) return;
-
-                const statusEl = document.getElementById('backupRunStatus');
-                statusEl.innerHTML = '<span class="spinner-inline"></span> Restoring...';
-                statusEl.style.color = 'var(--info)';
-
-                try {
-                    const formData = new FormData();
-                    formData.append('archive_name', name);
-                    const resp = await fetch('/api/backup/restore', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    const data = await resp.json();
-                    if (data.success) {
-                        showToast('Restore successful. Reloading...');
-                        setTimeout(() => location.reload(), 2000);
-                    } else {
-                        throw new Error(data.message || 'Restore failed');
-                    }
-                } catch (e) {
-                    statusEl.textContent = 'Restore failed: ' + e.message;
-                    statusEl.style.color = '#dc2626';
-                    showToast('Restore failed: ' + e.message, 'error');
-                }
-            });
         }
 
         function formatBytes(bytes, decimals = 1) {
@@ -11827,7 +11680,7 @@
             modal.innerHTML = `
                 <div class="backup-modal" style="width:400px;">
                     <h3 style="margin:0 0 12px;">Push Config Policies</h3>
-                    <p style="font-size:0.8rem;color:#6b7280;margin:0 0 12px;">Pushes in phases: Canary (1 device) → 10% → 50% → 100%. You advance each phase manually.</p>
+                    <p style="font-size:0.8rem;color:#6b7280;margin:0 0 12px;">Phased config rollout is paused for safety. Use manual push for selected devices.</p>
                     <div style="margin-bottom:12px;">
                         <label style="font-size:0.8rem;font-weight:500;display:block;margin-bottom:6px;">Policies to push:</label>
                         ${templateList}
@@ -11844,7 +11697,7 @@
                     <div style="display:flex;gap:8px;justify-content:flex-end;">
                         <button class="btn btn-sm btn-ghost" onclick="this.closest('.backup-overlay').remove()">Cancel</button>
                         <button class="btn btn-sm btn-ghost" onclick="previewConfigPush(this.closest('.backup-overlay'))">Preview</button>
-                        <button class="btn btn-sm btn-primary" onclick="startConfigPushRollout(this.closest('.backup-overlay'))">Start Rollout</button>
+                        <button class="btn btn-sm btn-primary" disabled>Rollout paused for safety</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
@@ -12044,7 +11897,7 @@
             if (pushBtn && isActive) pushBtn.style.display = 'none';
             else if (pushBtn && !isActive) { /* let loadConfigTemplateUI control visibility */ }
             if (cancelBtn) cancelBtn.style.display = isActive ? '' : 'none';
-            if (resumeBtn) resumeBtn.style.display = (r && r.status === 'paused') ? '' : 'none';
+            if (resumeBtn) resumeBtn.style.display = 'none';
 
             // Only render phase pills while a rollout is in flight. Once it
             // completes (or is cancelled), the toast already announced the
@@ -12072,7 +11925,7 @@
             const currentPhaseDevices = devices.filter(d => d.phase_assigned === r.phase);
             const currentPhaseDone = currentPhaseDevices.length > 0 &&
                 currentPhaseDevices.every(d => d.status !== 'pending');
-            const awaitingAdvance = (r.status === 'active' && currentPhaseDone);
+            const awaitingAdvance = false;
             let nextActionableIdx = -1;
             if (awaitingAdvance) {
                 for (let j = currentIdx + 1; j < CONFIG_PUSH_PHASES.length; j++) {
@@ -12205,35 +12058,8 @@
 
         async function toggleConfigAutoEnforce(enabled) {
             const toggle = document.getElementById('configAutoEnforceToggle');
-            // Guard: confirm before enabling auto-enforce
-            if (enabled) {
-                const confirmed = await showConfirmDialog(
-                    'Auto-enforce will automatically push config corrections to non-compliant devices daily at the scheduled time. Continue?',
-                    {title: 'Enable Auto-Enforce', confirmText: 'Enable'}
-                );
-                if (!confirmed) {
-                    if (toggle) setToggleActive(toggle, false);
-                    return;
-                }
-            }
-            // Flip the toggle's visual state immediately so the click feels
-            // responsive. Roll back if the PUT fails — leaving the toggle
-            // visually "on" while the server thinks it's off would be worse
-            // than the click appearing to do nothing.
-            if (toggle) setToggleActive(toggle, enabled);
-            try {
-                const resp = await fetch('/api/settings', {
-                    method: 'PUT',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({config_auto_enforce: enabled ? 'true' : 'false'}),
-                });
-                if (!resp.ok) throw new Error('HTTP ' + resp.status);
-                showToast(enabled ? 'Auto-enforce enabled' : 'Auto-enforce disabled');
-                updateEnforceStatusUI({enabled, running: false});
-            } catch (e) {
-                if (toggle) setToggleActive(toggle, !enabled);
-                showToast('Failed to toggle auto-enforce: ' + e.message);
-            }
+            if (toggle) { toggle.disabled = true; setToggleActive(toggle, false); }
+            showToast('Auto-enforce is paused for safety. Use manual push or restore for selected devices.');
         }
 
         async function loadEnforceStatus() {
@@ -12241,7 +12067,7 @@
                 const resp = await fetch('/api/config-enforce/status');
                 const data = await resp.json();
                 const toggle = document.getElementById('configAutoEnforceToggle');
-                if (toggle) setToggleActive(toggle, data.enabled);
+                if (toggle) { setToggleActive(toggle, false); toggle.disabled = true; }
                 updateEnforceStatusUI(data);
                 // Show/hide enforce controls based on enabled state
                 const show = data.enabled ? '' : 'none';

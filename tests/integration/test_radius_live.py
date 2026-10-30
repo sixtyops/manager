@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-pytestmark = [pytest.mark.integration, pytest.mark.dev_blocking]
+pytestmark = pytest.mark.integration
 
 
 def _radius_template_payload(name: str, advertised_address: str, auth_port: int, shared_secret: str) -> dict:
@@ -49,6 +49,7 @@ def _wait_for_radius_rollout(session, rollout_id: int, timeout: int = 300) -> di
     pytest.fail(f"Timed out waiting for RADIUS rollout {rollout_id}")
 
 
+@pytest.mark.dev_blocking
 def test_radius_config_user_client_and_defaults_roundtrip(session, unique_name):
     radius_config = session.get("/api/auth/radius").json()
     assert "enabled" in radius_config
@@ -126,6 +127,7 @@ def test_radius_config_user_client_and_defaults_roundtrip(session, unique_name):
             session.delete(f"/api/auth/radius/users/{created_user}")
 
 
+@pytest.mark.dev_nonblocking
 def test_targeted_radius_rollout_and_restore(session, radius_ap, portal_credentials, request_with_retry, unique_name):
     active = session.get("/api/auth/radius/rollout").json()["rollout"]
     if active and active["status"] in ("active", "paused"):

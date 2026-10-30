@@ -64,6 +64,10 @@ def _make_scheduler():
 
 
 class TestComputeNextAttempt:
+    @pytest.fixture(autouse=True)
+    def safety_ready(self, mock_db):
+        db.set_setting("scheduled_rollout_safety_ready", "true")
+
     def test_returns_off_when_scheduler_disabled(self, mock_db):
         mock_db.execute("UPDATE settings SET value = 'false' WHERE key = 'schedule_enabled'")
         mock_db.commit()

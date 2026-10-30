@@ -9,10 +9,11 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
+from . import config_write_guard
 from . import database as db
 from . import radius_config
 from .config_utils import (
-    deep_merge,
+    merge_template_config,
     fragment_matches,
     check_config_compliance,
     validate_fragment_safety,
@@ -404,20 +405,33 @@ class NetworkPoller:
 
             # Fetch bank info for AP
             bank_kwargs = {}
+            bank_warning = None
             try:
                 device_info = await client.get_device_info()
-                bank_kwargs = {
-                    "bank1_version": device_info.bank1_version,
-                    "bank2_version": device_info.bank2_version,
-                    "active_bank": device_info.active_bank,
-                }
+                if hasattr(client, "get_bootbank_info"):
+                    bank_read = await client.get_bootbank_info()
+                    bank_warning = bank_read.warning
+                    if not bank_warning:
+                        bank_kwargs = {
+                            "bank1_version": bank_read.bank1_version,
+                            "bank2_version": bank_read.bank2_version,
+                            "active_bank": bank_read.active_bank,
+                        }
+                else:
+                    bank_kwargs = {
+                        "bank1_version": device_info.bank1_version,
+                        "bank2_version": device_info.bank2_version,
+                        "active_bank": device_info.active_bank,
+                    }
             except Exception as e:
-                logger.debug(f"Failed to get bank info for AP {ip}: {e}")
+                bank_warning = f"Boot bank read failed ({type(e).__name__})"
+            if bank_warning:
+                logger.warning("AP boot bank read warning: %s", bank_warning)
 
             db.update_ap_status(
                 ip,
                 last_seen=datetime.now().isoformat(),
-                last_error=None,
+                last_error=bank_warning,
                 system_name=ap_info.get("system_name"),
                 model=ap_info.get("model"),
                 mac=ap_info.get("mac"),
@@ -948,7 +962,8 @@ class NetworkPoller:
                         stale_for,
                     )
                     await self.poll_all_configs()
-                    if db.get_setting("config_auto_enforce", "false") == "true":
+                    if (config_write_guard.automatic_config_writes_allowed()
+                            and db.get_setting("config_auto_enforce", "false") == "true"):
                         await self._auto_enforce_compliance()
                     return
 
@@ -968,7 +983,8 @@ class NetworkPoller:
             await self.poll_all_configs()
 
             # After polling, check if auto-enforce is enabled
-            if db.get_setting("config_auto_enforce", "false") == "true":
+            if (config_write_guard.automatic_config_writes_allowed()
+                    and db.get_setting("config_auto_enforce", "false") == "true"):
                 await self._auto_enforce_compliance()
         except Exception as e:
             logger.error(f"Error checking config poll schedule: {e}")
@@ -1163,6 +1179,8 @@ class NetworkPoller:
 
     async def _auto_enforce_compliance(self):
         """Detect non-compliant devices and push corrections in phases."""
+        if not config_write_guard.automatic_config_writes_allowed():
+            return
         if self._enforce_running:
             logger.debug("Config enforce: already running, skipping")
             return
@@ -1177,6 +1195,8 @@ class NetworkPoller:
 
     async def _run_enforce_phases(self):
         """Core enforce loop: find non-compliant devices, push in phases."""
+        if not config_write_guard.automatic_config_writes_allowed():
+            return
         # Skip if a manual config push rollout is active
         active_rollout = db.get_active_config_push_rollout()
         if active_rollout:
@@ -1271,6 +1291,9 @@ class NetworkPoller:
         for phase in PHASE_ORDER:
             if not remaining:
                 break
+
+            if not config_write_guard.automatic_config_writes_allowed():
+                return
 
             # Check if auto-enforce was toggled off
             if db.get_setting("config_auto_enforce", "false") != "true":
@@ -1488,6 +1511,8 @@ class NetworkPoller:
         *entry* while a push is in flight, and a rollback that finishes what
         enforce started is the safer of the two paths to finish first.
         """
+        if not config_write_guard.automatic_config_writes_allowed():
+            return False
         try:
             snapshot = db.get_device_config_by_id(snapshot_id)
             if not snapshot or not snapshot.get("config_json"):
@@ -1505,12 +1530,16 @@ class NetworkPoller:
             if login_result is not True:
                 raise RuntimeError(f"Login failed: {login_result}")
 
+            if not config_write_guard.automatic_config_writes_allowed():
+                return False
             dry = await client.apply_config(rollback_cfg, dry_run=True)
             if not dry.get("success"):
                 raise RuntimeError(
                     f"Dry run rejected: {dry.get('error') or dry.get('raw_response')}"
                 )
 
+            if not config_write_guard.automatic_config_writes_allowed():
+                return False
             result = await client.apply_config(rollback_cfg)
             if not result.get("success"):
                 raise RuntimeError(
@@ -1555,6 +1584,8 @@ class NetworkPoller:
         """
         pre_snapshot_id: Optional[int] = None
         async with sem:
+            if not config_write_guard.automatic_config_writes_allowed():
+                return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, None)
             try:
                 # Get device credentials
                 device = db.get_access_point(ip)
@@ -1589,16 +1620,20 @@ class NetworkPoller:
                 for t in templates:
                     frag = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
                     validate_fragment_safety(frag)
-                    merged = deep_merge(merged, frag)
+                    merged = merge_template_config(merged, frag, device["username"])
 
                 # Dry-run validation
-                dry_result = await client.apply_config(merged, dry_run=True)
+                if not config_write_guard.automatic_config_writes_allowed():
+                    return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, pre_snapshot_id)
+                dry_result = await client.apply_config(merged, dry_run=True, preserve_user_passwords=True)
                 if not dry_result.get("success"):
                     error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run failed"))
                     raise PolicyEnforceError(f"Dry run rejected: {error_msg}")
 
                 # Apply
-                result = await client.apply_config(merged)
+                if not config_write_guard.automatic_config_writes_allowed():
+                    return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, pre_snapshot_id)
+                result = await client.apply_config(merged, preserve_user_passwords=True)
                 if not result.get("success"):
                     error_msg = result.get("error", result.get("raw_response", "Apply failed"))
                     raise PolicyEnforceError(f"Apply failed: {error_msg}")

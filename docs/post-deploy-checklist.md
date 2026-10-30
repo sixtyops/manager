@@ -86,17 +86,12 @@ for errors and escalate.
 <!-- TODO(#136): replace this step with a UI walkthrough once the in-UI
      audit-log panel ships. -->
 
-## 8. Decide on backups (don't leave this unanswered)
+## 8. Back up the install data
 
-**Do:** Settings → Backups. Either configure an SFTP target (host, port,
-path, username, auth) and click **Test connection**, or explicitly note
-in your runbook that you're running without backups for now.
-**Confirm:** If configured, **Test connection** returns green and
-**Run Now** produces a fresh archive on the remote host. If skipped,
-write down the conscious decision — leaving Backups in its default
-unconfigured state silently means *no off-host disaster recovery*. SFTP
-failure modes are in
-[troubleshooting §5](troubleshooting.md#5-sftp-backup-failing).
+**Do:** Copy `./data` and `./firmware` to storage outside the install
+directory. Keep `./data/.encryption_key` with the database.
+**Confirm:** The copy includes `./data/sixtyops.db`,
+`./data/.encryption_key`, and the firmware files.
 
 ## 9. Verify HTTPS
 

@@ -20,6 +20,24 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "sixtyops.db"
 
+# The development seed uses only these RFC 5737 documentation addresses. This
+# lets dev.sh recognize its existing sample database without trusting arbitrary
+# configured databases that happen to contain devices.
+DEV_DEVICE_IPS = {
+    "192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.10",
+    "198.51.100.1", "198.51.100.2", "198.51.100.3", "198.51.100.4",
+    "198.51.100.10", "203.0.113.1", "203.0.113.2", "203.0.113.3",
+    "203.0.113.10",
+}
+
+
+def _is_dev_seeded(db) -> bool:
+    try:
+        ips = {row[0] for row in db.execute("SELECT ip FROM devices").fetchall()}
+    except sqlite3.Error:
+        return False
+    return ips == DEV_DEVICE_IPS
+
 
 def _is_configured(db) -> bool:
     """True if the DB shows any sign of a real/configured install.
@@ -59,10 +77,14 @@ def seed():
     # Refuse to seed a configured install — never overwrite a real host's data
     # or credentials (production safety, not just idempotency).
     if _is_configured(db):
+        if _is_dev_seeded(db):
+            print("seed: development database is already seeded")
+            db.close()
+            return True
         print("seed: database is already configured (setup done / admin / devices "
               "present) — refusing to seed")
         db.close()
-        return
+        return False
 
     now = datetime.now(timezone.utc).isoformat()
 
@@ -82,23 +104,25 @@ def seed():
     site_ids = {r[0]: r[1] for r in db.execute("SELECT name, id FROM tower_sites").fetchall()}
 
     # ── Devices (APs + Switches) ──
+    # All seed addresses come from the RFC 5737 documentation ranges. No real
+    # device uses them, so the real poller in dev.sh cannot reach a LAN device.
     devices = [
         # Hilltop Tower
-        ("10.0.1.1", "tachyon", "ap", "Hilltop Tower", "admin", "seedpass", "HT-AP-01", "TNA-301", "AA:BB:CC:01:01:01", "1.12.2", now, None, 1, "1.12.2", "1.11.0", 1, "Primary AP"),
-        ("10.0.1.2", "tachyon", "ap", "Hilltop Tower", "admin", "seedpass", "HT-AP-02", "TNA-301", "AA:BB:CC:01:01:02", "1.12.3", now, None, 1, "1.12.3", "1.12.2", 1, "Recently updated"),
-        ("10.0.1.3", "tachyon", "ap", "Hilltop Tower", "admin", "seedpass", "HT-AP-03", "TNA-303L", "AA:BB:CC:01:01:03", "1.11.0", now, None, 1, "1.11.0", "1.10.5", 1, "Needs update"),
-        ("10.0.1.10", "tachyon", "switch", "Hilltop Tower", "admin", "seedpass", "HT-SW-01", "TNS-100", "AA:BB:CC:01:02:01", "2.3.1", now, None, 1, "2.3.1", "2.2.0", 1, "Tower switch"),
+        ("192.0.2.1", "tachyon", "ap", "Hilltop Tower", "admin", "seedpass", "HT-AP-01", "TNA-301", "AA:BB:CC:01:01:01", "1.12.2", now, None, 1, "1.12.2", "1.11.0", 1, "Primary AP"),
+        ("192.0.2.2", "tachyon", "ap", "Hilltop Tower", "admin", "seedpass", "HT-AP-02", "TNA-301", "AA:BB:CC:01:01:02", "1.12.3", now, None, 1, "1.12.3", "1.12.2", 1, "Recently updated"),
+        ("192.0.2.3", "tachyon", "ap", "Hilltop Tower", "admin", "seedpass", "HT-AP-03", "TNA-303L", "AA:BB:CC:01:01:03", "1.11.0", now, None, 1, "1.11.0", "1.10.5", 1, "Needs update"),
+        ("192.0.2.10", "tachyon", "switch", "Hilltop Tower", "admin", "seedpass", "HT-SW-01", "TNS-100", "AA:BB:CC:01:02:01", "2.3.1", now, None, 1, "2.3.1", "2.2.0", 1, "Tower switch"),
         # Downtown Tower
-        ("10.0.2.1", "tachyon", "ap", "Downtown Tower", "admin", "seedpass", "DT-AP-01", "TNA-301", "AA:BB:CC:02:01:01", "1.12.3", now, None, 1, "1.12.3", "1.12.2", 1, None),
-        ("10.0.2.2", "tachyon", "ap", "Downtown Tower", "admin", "seedpass", "DT-AP-02", "TNA-301", "AA:BB:CC:02:01:02", "1.12.2", now, None, 1, "1.12.2", "1.11.0", 1, None),
-        ("10.0.2.3", "tachyon", "ap", "Downtown Tower", "admin", "seedpass", "DT-AP-03", "TNA-303L", "AA:BB:CC:02:01:03", "1.12.3", now, None, 1, "1.12.3", "1.12.2", 1, None),
-        ("10.0.2.4", "tachyon", "ap", "Downtown Tower", "admin", "seedpass", "DT-AP-04", "TNA-301", "AA:BB:CC:02:01:04", "1.10.5", None, "Connection refused", 1, "1.10.5", "1.10.0", 1, "Offline since Tuesday"),
-        ("10.0.2.10", "tachyon", "switch", "Downtown Tower", "admin", "seedpass", "DT-SW-01", "TNS-100", "AA:BB:CC:02:02:01", "2.3.1", now, None, 1, "2.3.1", "2.3.0", 1, None),
+        ("198.51.100.1", "tachyon", "ap", "Downtown Tower", "admin", "seedpass", "DT-AP-01", "TNA-301", "AA:BB:CC:02:01:01", "1.12.3", now, None, 1, "1.12.3", "1.12.2", 1, None),
+        ("198.51.100.2", "tachyon", "ap", "Downtown Tower", "admin", "seedpass", "DT-AP-02", "TNA-301", "AA:BB:CC:02:01:02", "1.12.2", now, None, 1, "1.12.2", "1.11.0", 1, None),
+        ("198.51.100.3", "tachyon", "ap", "Downtown Tower", "admin", "seedpass", "DT-AP-03", "TNA-303L", "AA:BB:CC:02:01:03", "1.12.3", now, None, 1, "1.12.3", "1.12.2", 1, None),
+        ("198.51.100.4", "tachyon", "ap", "Downtown Tower", "admin", "seedpass", "DT-AP-04", "TNA-301", "AA:BB:CC:02:01:04", "1.10.5", None, "Connection refused", 1, "1.10.5", "1.10.0", 1, "Offline since Tuesday"),
+        ("198.51.100.10", "tachyon", "switch", "Downtown Tower", "admin", "seedpass", "DT-SW-01", "TNS-100", "AA:BB:CC:02:02:01", "2.3.1", now, None, 1, "2.3.1", "2.3.0", 1, None),
         # Lakeside Tower
-        ("10.0.3.1", "tachyon", "ap", "Lakeside Tower", "admin", "seedpass", "LS-AP-01", "TNA-301", "AA:BB:CC:03:01:01", "1.12.2", now, None, 1, "1.12.2", "1.11.0", 1, None),
-        ("10.0.3.2", "tachyon", "ap", "Lakeside Tower", "admin", "seedpass", "LS-AP-02", "TNA-303L", "AA:BB:CC:03:01:02", "1.11.0", now, None, 1, "1.11.0", "1.10.5", 1, "Long range unit"),
-        ("10.0.3.3", "tachyon", "ap", "Lakeside Tower", "admin", "seedpass", "LS-AP-03", "TNA-301", "AA:BB:CC:03:01:03", "1.12.3", now, None, 1, "1.12.3", "1.12.2", 1, None),
-        ("10.0.3.10", "tachyon", "switch", "Lakeside Tower", "admin", "seedpass", "LS-SW-01", "TNS-100", "AA:BB:CC:03:02:01", "2.2.0", now, None, 1, "2.2.0", "2.1.0", 1, "Needs update"),
+        ("203.0.113.1", "tachyon", "ap", "Lakeside Tower", "admin", "seedpass", "LS-AP-01", "TNA-301", "AA:BB:CC:03:01:01", "1.12.2", now, None, 1, "1.12.2", "1.11.0", 1, None),
+        ("203.0.113.2", "tachyon", "ap", "Lakeside Tower", "admin", "seedpass", "LS-AP-02", "TNA-303L", "AA:BB:CC:03:01:02", "1.11.0", now, None, 1, "1.11.0", "1.10.5", 1, "Long range unit"),
+        ("203.0.113.3", "tachyon", "ap", "Lakeside Tower", "admin", "seedpass", "LS-AP-03", "TNA-301", "AA:BB:CC:03:01:03", "1.12.3", now, None, 1, "1.12.3", "1.12.2", 1, None),
+        ("203.0.113.10", "tachyon", "switch", "Lakeside Tower", "admin", "seedpass", "LS-SW-01", "TNS-100", "AA:BB:CC:03:02:01", "2.2.0", now, None, 1, "2.2.0", "2.1.0", 1, "Needs update"),
     ]
     for d in devices:
         ip, vendor, role, site_name, user, pw, sname, model, mac, fw, seen, err, enabled, b1, b2, ab, notes = d
@@ -115,11 +139,11 @@ def seed():
 
     # ── CPEs ──
     cpes = [
-        ("10.0.1.1", "10.0.1.101", "AA:BB:CC:01:03:01", "HT-CPE-01", "TNA-301", "1.12.2", 2.3, -55.0, -52.0, -48.0, 300.0, 250.0, 9, 86400, "green"),
-        ("10.0.1.1", "10.0.1.102", "AA:BB:CC:01:03:02", "HT-CPE-02", "TNA-301", "1.11.0", 5.1, -68.0, -65.0, -62.0, 150.0, 120.0, 5, 43200, "yellow"),
-        ("10.0.2.1", "10.0.2.101", "AA:BB:CC:02:03:01", "DT-CPE-01", "TNA-301", "1.12.3", 0.8, -42.0, -40.0, -38.0, 450.0, 400.0, 11, 172800, "green"),
-        ("10.0.2.1", "10.0.2.102", "AA:BB:CC:02:03:02", "DT-CPE-02", "TNA-303L", "1.10.5", 12.4, -75.0, -72.0, -70.0, 80.0, 60.0, 3, 3600, "red"),
-        ("10.0.3.1", "10.0.3.101", "AA:BB:CC:03:03:01", "LS-CPE-01", "TNA-301", "1.12.2", 3.7, -58.0, -55.0, -52.0, 280.0, 230.0, 8, 259200, "green"),
+        ("192.0.2.1", "192.0.2.101", "AA:BB:CC:01:03:01", "HT-CPE-01", "TNA-301", "1.12.2", 2.3, -55.0, -52.0, -48.0, 300.0, 250.0, 9, 86400, "green"),
+        ("192.0.2.1", "192.0.2.102", "AA:BB:CC:01:03:02", "HT-CPE-02", "TNA-301", "1.11.0", 5.1, -68.0, -65.0, -62.0, 150.0, 120.0, 5, 43200, "yellow"),
+        ("198.51.100.1", "198.51.100.101", "AA:BB:CC:02:03:01", "DT-CPE-01", "TNA-301", "1.12.3", 0.8, -42.0, -40.0, -38.0, 450.0, 400.0, 11, 172800, "green"),
+        ("198.51.100.1", "198.51.100.102", "AA:BB:CC:02:03:02", "DT-CPE-02", "TNA-303L", "1.10.5", 12.4, -75.0, -72.0, -70.0, 80.0, 60.0, 3, 3600, "red"),
+        ("203.0.113.1", "203.0.113.101", "AA:BB:CC:03:03:01", "LS-CPE-01", "TNA-301", "1.12.2", 3.7, -58.0, -55.0, -52.0, 280.0, 230.0, 8, 259200, "green"),
     ]
     for ap_ip, ip, mac, sname, model, fw, dist, rx, combined, rssi, tx_rate, rx_rate, mcs, uptime, health in cpes:
         db.execute(
@@ -135,7 +159,7 @@ def seed():
     templates = [
         ("SNMP Community", "snmp", {"services": {"snmp": {"v2_ro_community": "public", "v2_rw_community": "private"}}}, "Standard SNMP v2c community strings", 1),
         ("NTP Servers", "ntp", {"services": {"ntp": {"servers": ["pool.ntp.org", "time.google.com"]}}}, "Default NTP server config", 1),
-        ("Syslog Remote", "syslog", {"services": {"syslog": {"remote_host": "10.0.0.100", "port": 514}}}, "Remote syslog forwarding", 0),
+        ("Syslog Remote", "syslog", {"services": {"syslog": {"remote_host": "192.0.2.200", "port": 514}}}, "Remote syslog forwarding", 0),
     ]
     for name, cat, frag, desc, enabled in templates:
         db.execute(
@@ -148,9 +172,9 @@ def seed():
 
     # ── Job History ──
     jobs = [
-        (["10.0.1.1", "10.0.1.2", "10.0.1.3"], 3, 0),
-        (["10.0.2.1", "10.0.2.2", "10.0.2.4"], 2, 1),
-        (["10.0.3.1", "10.0.3.2", "10.0.3.3", "10.0.3.10"], 3, 1),
+        (["192.0.2.1", "192.0.2.2", "192.0.2.3"], 3, 0),
+        (["198.51.100.1", "198.51.100.2", "198.51.100.4"], 2, 1),
+        (["203.0.113.1", "203.0.113.2", "203.0.113.3", "203.0.113.10"], 3, 1),
     ]
     for i, (ips, sc, fc) in enumerate(jobs):
         job_id = str(uuid.uuid4())
@@ -189,7 +213,9 @@ def seed():
     print(f"seed: inserted {site_count} sites, {dev_count} devices, {cpe_count} CPEs, {tmpl_count} templates, {hist_count} jobs")
     print("seed: no admin created — sign in via first-run setup or the ADMIN_PASSWORD env var")
     db.close()
+    return True
 
 
 if __name__ == "__main__":
-    seed()
+    if seed() is False:
+        raise SystemExit(1)

@@ -64,7 +64,7 @@ def pytest_collection_modifyitems(config, items):
         return
     skip = pytest.mark.skip(reason="SIXTYOPS_TEST_URL not set")
     for item in items:
-        if "integration" in item.keywords:
+        if item.get_closest_marker("integration"):
             item.add_marker(skip)
 
 
@@ -73,6 +73,14 @@ def _require_env(name: str) -> str:
     if not value:
         pytest.skip(f"{name} is required for this live integration test")
     return value
+
+
+def _set_request_origin(request: httpx.Request, base_url: str) -> None:
+    """Set the configured site origin on state-changing requests."""
+    if request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return
+    origin = str(httpx.URL(base_url).copy_with(path="/", query=None, fragment=None)).rstrip("/")
+    request.headers["Origin"] = origin
 
 
 def _topology_from_session(session: httpx.Client) -> dict:
@@ -154,6 +162,7 @@ def session(base_url):
         verify=ssl_ctx,
         timeout=60.0,
         follow_redirects=True,
+        event_hooks={"request": [lambda request: _set_request_origin(request, base_url)]},
     )
 
     resp = client.post("/login", data={"username": username, "password": password})

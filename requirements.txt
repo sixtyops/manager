@@ -17,6 +17,5 @@ cryptography>=41.0.0
 packaging>=23.0
 pyrad>=2.4,<3.0
 ldap3>=2.9.0,<3.0
-asyncssh>=2.14.0
 pysnmp==7.1.30
 pyasn1>=0.6.4

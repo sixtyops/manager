@@ -1,0 +1,28 @@
+{
+  "device": "cpe",
+  "endpoint": "/cgi.lua/status?type=system",
+  "reads": [
+    {
+      "captured_at_utc": "2026-10-27T20:56:56.956840Z",
+      "http_status": 200,
+      "read": 1,
+      "response": {
+        "system": {
+          "model": "TNA-303X",
+          "serial": "<SERIAL_CPE>"
+        }
+      }
+    },
+    {
+      "captured_at_utc": "2026-10-27T20:59:57.158401Z",
+      "http_status": 200,
+      "read": 2,
+      "response": {
+        "system": {
+          "model": "TNA-303X",
+          "serial": "<SERIAL_CPE>"
+        }
+      }
+    }
+  ]
+}

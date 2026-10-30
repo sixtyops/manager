@@ -119,6 +119,8 @@ class VendorDriver(ABC):
         pass_number: int = 1,
         reboot_timeout: int = 300,
         bandwidth_limit_kbps: int = 0,
+        admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
+        qualification_check: Optional[Callable[[Optional[VendorDeviceInfo], str], Any]] = None,
     ) -> VendorUpdateResult:
         """Perform the full update cycle: connect, upload, install, verify."""
         ...
@@ -172,8 +174,10 @@ class VendorDriver(ABC):
             return None, "unknown", "get_config returned None"
         return config, "ok", None
 
-    async def apply_config(self, config: dict, dry_run: bool = False) -> dict:
-        """Apply configuration to device."""
+    async def apply_config(
+        self, config: dict, dry_run: bool = False, *, preserve_user_passwords: bool = False,
+    ) -> dict:
+        """Apply config. Template callers preserve prepared user password fields."""
         return {"success": False, "error": f"Config push not supported by {self.VENDOR_NAME}"}
 
     # --- Firmware metadata ---

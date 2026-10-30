@@ -14,6 +14,7 @@ Usage:
 import argparse
 import io
 import json
+import os
 import sys
 import time
 from datetime import datetime, timedelta
@@ -185,7 +186,7 @@ class ReleaseValidator:
         timeout: int = 30,
     ) -> requests.Response:
         s = session or self.session
-        self._log(f"{method.upper()} {path}")
+        self._log(f"{method.upper()} request")
         resp = s.request(
             method,
             self.url(path),
@@ -245,7 +246,7 @@ class ReleaseValidator:
         try:
             fn(result)
         except Exception as exc:
-            result.record_fail(f"{name} (uncaught exception)", str(exc))
+            result.record_fail(f"{name} (uncaught exception)", "check error")
 
         cat.passed = result.passed - before_pass
         cat.failed = result.failed - before_fail
@@ -256,12 +257,8 @@ class ReleaseValidator:
 
     def run(self) -> bool:
         print(f"\n{C.BOLD}SixtyOps Release Validator{C.RESET}")
-        print(f"  Host:      {self.host}")
-        print(f"  User:      {self.username}")
-        print(f"  Device IP: {self.device_ip or 'none'}")
-        print(f"  Switch IP: {self.switch_ip or 'none'}")
         if self.skip:
-            print(f"  Skipping:  {', '.join(sorted(self.skip))}")
+            print(f"  Skipping:  {len(self.skip)} checks")
         if self.dry_run:
             print(f"  {C.YELLOW}DRY-RUN MODE — no API calls will be made{C.RESET}")
 
@@ -329,7 +326,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /healthz", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /healthz", str(e))
+            r.record_fail("GET /healthz", "request error")
 
         # POST /login (valid)
         try:
@@ -343,7 +340,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("POST /login", f"unexpected status {resp.status_code}")
         except Exception as e:
-            r.record_fail("POST /login", str(e))
+            r.record_fail("POST /login", "request error")
 
         # GET /api/users/me
         try:
@@ -354,7 +351,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/users/me", "missing 'username' field")
         except Exception as e:
-            r.record_fail("GET /api/users/me", str(e))
+            r.record_fail("GET /api/users/me", "request error")
 
         # GET /api/auth/config
         try:
@@ -365,7 +362,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/auth/config", f"expected dict, got {type(body).__name__}")
         except Exception as e:
-            r.record_fail("GET /api/auth/config", str(e))
+            r.record_fail("GET /api/auth/config", "request error")
 
         # POST /login with bad password (separate session)
         try:
@@ -384,7 +381,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("POST /login with bad password", "bad creds were accepted")
         except Exception as e:
-            r.record_fail("POST /login with bad password", str(e))
+            r.record_fail("POST /login with bad password", "request error")
 
         # GET /api/audit-log
         try:
@@ -395,7 +392,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/audit-log", f"expected list, got {type(body).__name__}")
         except Exception as e:
-            r.record_fail("GET /api/audit-log", str(e))
+            r.record_fail("GET /api/audit-log", "request error")
 
     # 2. license_system ----------------------------------------------------
 
@@ -409,7 +406,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/license", "missing 'status' and 'tier'")
         except Exception as e:
-            r.record_fail("GET /api/license", str(e))
+            r.record_fail("GET /api/license", "request error")
 
         # GET /api/license/instance-id
         try:
@@ -419,19 +416,18 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/license/instance-id", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /api/license/instance-id", str(e))
+            r.record_fail("GET /api/license/instance-id", "request error")
 
         # GET /api/system/info
         try:
             resp = self._get("/api/system/info")
             body = self._json_ok(resp)
             if "version" in body:
-                self._log(f"version: {body['version']}")
-                r.record_pass(f"GET /api/system/info -> version {body['version']}")
+                r.record_pass("GET /api/system/info -> version available")
             else:
                 r.record_fail("GET /api/system/info", "missing 'version'")
         except Exception as e:
-            r.record_fail("GET /api/system/info", str(e))
+            r.record_fail("GET /api/system/info", "request error")
 
         # GET /api/time
         try:
@@ -441,7 +437,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/time", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /api/time", str(e))
+            r.record_fail("GET /api/time", "request error")
 
         # GET /api/settings
         try:
@@ -452,7 +448,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/settings", f"expected dict, got {type(body).__name__}")
         except Exception as e:
-            r.record_fail("GET /api/settings", str(e))
+            r.record_fail("GET /api/settings", "request error")
 
     # 3. sites -------------------------------------------------------------
 
@@ -469,7 +465,7 @@ class ReleaseValidator:
                 else:
                     r.record_fail("POST /api/sites", "missing 'id'")
             except Exception as e:
-                r.record_fail("POST /api/sites", str(e))
+                r.record_fail("POST /api/sites", "request error")
 
             # GET /api/sites
             try:
@@ -481,7 +477,7 @@ class ReleaseValidator:
                 else:
                     r.record_fail("GET /api/sites", "__test_site not found")
             except Exception as e:
-                r.record_fail("GET /api/sites", str(e))
+                r.record_fail("GET /api/sites", "request error")
 
             # PUT /api/sites/{id}
             if site_id:
@@ -492,7 +488,7 @@ class ReleaseValidator:
                     else:
                         r.record_fail(f"PUT /api/sites/{site_id}", f"status {resp.status_code}")
                 except Exception as e:
-                    r.record_fail(f"PUT /api/sites/{site_id}", str(e))
+                    r.record_fail(f"PUT /api/sites/{site_id}", "request error")
         finally:
             # DELETE /api/sites/{id}
             if site_id:
@@ -503,7 +499,7 @@ class ReleaseValidator:
                     else:
                         r.record_fail(f"DELETE /api/sites/{site_id}", f"status {resp.status_code}")
                 except Exception as e:
-                    r.record_fail(f"DELETE /api/sites/{site_id}", str(e))
+                    r.record_fail(f"DELETE /api/sites/{site_id}", "request error")
 
     # 4. devices -----------------------------------------------------------
 
@@ -521,7 +517,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/aps", f"expected list, got {type(body).__name__}")
         except Exception as e:
-            r.record_fail("GET /api/aps", str(e))
+            r.record_fail("GET /api/aps", "request error")
 
         # GET /api/switches
         try:
@@ -532,7 +528,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/switches", f"expected list")
         except Exception as e:
-            r.record_fail("GET /api/switches", str(e))
+            r.record_fail("GET /api/switches", "request error")
 
         # GET /api/cpes
         try:
@@ -542,17 +538,17 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/cpes", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /api/cpes", str(e))
+            r.record_fail("GET /api/cpes", "request error")
 
         # POST /api/aps/{device_ip}/poll
         try:
             resp = self._post(f"/api/aps/{self.device_ip}/poll")
             if resp.status_code == 200:
-                r.record_pass(f"POST /api/aps/{self.device_ip}/poll -> 200")
+                r.record_pass("POST AP poll -> 200")
             else:
-                r.record_fail(f"POST /api/aps/{self.device_ip}/poll", f"status {resp.status_code}")
+                r.record_fail("POST AP poll", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail(f"POST /api/aps/{self.device_ip}/poll", str(e))
+            r.record_fail("POST AP poll", "request error")
 
         # GET /api/topology
         try:
@@ -562,7 +558,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/topology", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /api/topology", str(e))
+            r.record_fail("GET /api/topology", "request error")
 
         # GET /api/vendors
         try:
@@ -573,7 +569,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/vendors", "expected list")
         except Exception as e:
-            r.record_fail("GET /api/vendors", str(e))
+            r.record_fail("GET /api/vendors", "request error")
 
         # Device groups CRUD
         group_id: Optional[int] = None
@@ -595,7 +591,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("POST /api/device-groups", "missing 'id'")
         except Exception as e:
-            r.record_fail("device-groups CRUD", str(e))
+            r.record_fail("device-groups CRUD", "request error")
         finally:
             if group_id:
                 try:
@@ -605,7 +601,7 @@ class ReleaseValidator:
                     else:
                         r.record_fail(f"DELETE /api/device-groups/{group_id}", f"status {resp.status_code}")
                 except Exception as e:
-                    r.record_fail(f"DELETE /api/device-groups/{group_id}", str(e))
+                    r.record_fail(f"DELETE /api/device-groups/{group_id}", "request error")
 
     # 5. firmware_files ----------------------------------------------------
 
@@ -619,7 +615,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/firmware-files", "expected list")
         except Exception as e:
-            r.record_fail("GET /api/firmware-files", str(e))
+            r.record_fail("GET /api/firmware-files", "request error")
 
         # POST /api/upload-firmware (dummy file)
         try:
@@ -633,7 +629,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("POST /api/upload-firmware", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("POST /api/upload-firmware", str(e))
+            r.record_fail("POST /api/upload-firmware", "request error")
 
         # DELETE /api/firmware-files/__test_dummy.bin
         try:
@@ -643,7 +639,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("DELETE /api/firmware-files/__test_dummy.bin", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("DELETE /api/firmware-files/__test_dummy.bin", str(e))
+            r.record_fail("DELETE /api/firmware-files/__test_dummy.bin", "request error")
 
         # POST /api/firmware-fetch (start fetch)
         try:
@@ -653,7 +649,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("POST /api/firmware-fetch", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("POST /api/firmware-fetch", str(e))
+            r.record_fail("POST /api/firmware-fetch", "request error")
 
         # GET /api/firmware-fetch/status
         try:
@@ -663,7 +659,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/firmware-fetch/status", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /api/firmware-fetch/status", str(e))
+            r.record_fail("GET /api/firmware-fetch/status", "request error")
 
     # 6. firmware_update ---------------------------------------------------
 
@@ -687,13 +683,12 @@ class ReleaseValidator:
                 r.record_skip("firmware_update", "no firmware files available")
                 return
         except Exception as e:
-            r.record_fail("firmware_update pre-check", str(e))
+            r.record_fail("firmware_update pre-check", "request error")
             return
 
         firmware_file = files[0] if isinstance(files[0], str) else files[0].get("filename", files[0].get("name", ""))
 
-        print(f"  {C.YELLOW}WARNING: Starting firmware update on {self.device_ip} "
-              f"with {firmware_file}{C.RESET}")
+        print(f"  {C.YELLOW}WARNING: Starting firmware update{C.RESET}")
 
         job_id: Optional[str] = None
 
@@ -711,12 +706,12 @@ class ReleaseValidator:
             body = self._json_ok(resp)
             job_id = body.get("job_id") or body.get("id")
             if job_id:
-                r.record_pass(f"POST /api/start-update -> job_id={job_id}")
+                r.record_pass("POST firmware update -> job started")
             else:
                 r.record_fail("POST /api/start-update", "missing job_id")
                 return
         except Exception as e:
-            r.record_fail("POST /api/start-update", str(e))
+            r.record_fail("POST /api/start-update", "request error")
             return
 
         # Poll job status
@@ -727,7 +722,7 @@ class ReleaseValidator:
                 resp = self._get(f"/api/job/{job_id}")
                 body = self._json_ok(resp)
                 status = body.get("status", "unknown")
-                self._log(f"Job {job_id} status: {status}")
+                self._log("Firmware update status received")
                 if status in ("completed", "done", "finished", "success"):
                     final_status = "success"
                     break
@@ -739,11 +734,11 @@ class ReleaseValidator:
             time.sleep(10)
 
         if final_status == "success":
-            r.record_pass(f"Firmware update job {job_id} completed")
+            r.record_pass("Firmware update -> completed")
         elif final_status == "failed":
-            r.record_fail(f"Firmware update job {job_id}", "job failed")
+            r.record_fail("Firmware update", "job failed")
         else:
-            r.record_fail(f"Firmware update job {job_id}", "timed out after 600s")
+            r.record_fail("Firmware update", "timed out after 600s")
 
         # GET /api/job-history
         try:
@@ -754,7 +749,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/job-history", "empty or non-list")
         except Exception as e:
-            r.record_fail("GET /api/job-history", str(e))
+            r.record_fail("GET /api/job-history", "request error")
 
         # GET /api/device-history
         try:
@@ -764,7 +759,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/device-history", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /api/device-history", str(e))
+            r.record_fail("GET /api/device-history", "request error")
 
     # 7. rollout -----------------------------------------------------------
 
@@ -778,7 +773,7 @@ class ReleaseValidator:
                 # 404 is acceptable if no rollout is active
                 r.record_pass(f"GET /api/rollout/current -> {resp.status_code} (no active rollout)")
         except Exception as e:
-            r.record_fail("GET /api/rollout/current", str(e))
+            r.record_fail("GET /api/rollout/current", "request error")
 
     # 8. config_management -------------------------------------------------
 
@@ -791,11 +786,11 @@ class ReleaseValidator:
         try:
             resp = self._post(f"/api/configs/{self.device_ip}/poll")
             if resp.status_code == 200:
-                r.record_pass(f"POST /api/configs/{self.device_ip}/poll -> 200")
+                r.record_pass("POST device config poll -> 200")
             else:
-                r.record_fail(f"POST /api/configs/{self.device_ip}/poll", f"status {resp.status_code}")
+                r.record_fail("POST device config poll", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail(f"POST /api/configs/{self.device_ip}/poll", str(e))
+            r.record_fail("POST device config poll", "request error")
 
         # GET /api/configs
         try:
@@ -805,17 +800,17 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/configs", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /api/configs", str(e))
+            r.record_fail("GET /api/configs", "request error")
 
         # GET /api/configs/{device_ip}/latest
         try:
             resp = self._get(f"/api/configs/{self.device_ip}/latest")
             if resp.status_code in (200, 404):
-                r.record_pass(f"GET /api/configs/{self.device_ip}/latest -> {resp.status_code}")
+                r.record_pass(f"GET latest device config -> {resp.status_code}")
             else:
-                r.record_fail(f"GET /api/configs/{self.device_ip}/latest", f"status {resp.status_code}")
+                r.record_fail("GET latest device config", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail(f"GET /api/configs/{self.device_ip}/latest", str(e))
+            r.record_fail("GET latest device config", "request error")
 
         # Config templates CRUD
         template_id: Optional[int] = None
@@ -859,7 +854,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/config-compliance", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("config-templates CRUD", str(e))
+            r.record_fail("config-templates CRUD", "request error")
         finally:
             if template_id:
                 try:
@@ -869,7 +864,7 @@ class ReleaseValidator:
                     else:
                         r.record_fail(f"DELETE /api/config-templates/{template_id}", f"status {resp.status_code}")
                 except Exception as e:
-                    r.record_fail(f"DELETE /api/config-templates/{template_id}", str(e))
+                    r.record_fail(f"DELETE /api/config-templates/{template_id}", "request error")
 
     # 9. config_push_rollout -----------------------------------------------
 
@@ -887,7 +882,7 @@ class ReleaseValidator:
                 else:
                     r.record_fail(f"{method} {path}", f"status {resp.status_code}")
             except Exception as e:
-                r.record_fail(f"{method} {path}", str(e))
+                r.record_fail(f"{method} {path}", "request error")
 
     # 10. radius -----------------------------------------------------------
 
@@ -900,7 +895,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/auth/radius", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /api/auth/radius", str(e))
+            r.record_fail("GET /api/auth/radius", "request error")
 
         # RADIUS users CRUD
         user_id: Optional[int] = None
@@ -924,7 +919,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/auth/radius/users", "__test_raduser not found")
         except Exception as e:
-            r.record_fail("RADIUS users CRUD", str(e))
+            r.record_fail("RADIUS users CRUD", "request error")
         finally:
             if user_id:
                 try:
@@ -934,7 +929,7 @@ class ReleaseValidator:
                     else:
                         r.record_fail(f"DELETE /api/auth/radius/users/{user_id}", f"status {resp.status_code}")
                 except Exception as e:
-                    r.record_fail(f"DELETE /api/auth/radius/users/{user_id}", str(e))
+                    r.record_fail(f"DELETE /api/auth/radius/users/{user_id}", "request error")
 
         # RADIUS clients CRUD
         client_id: Optional[int] = None
@@ -957,7 +952,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/auth/radius/clients", "expected list")
         except Exception as e:
-            r.record_fail("RADIUS clients CRUD", str(e))
+            r.record_fail("RADIUS clients CRUD", "request error")
         finally:
             if client_id:
                 try:
@@ -967,7 +962,7 @@ class ReleaseValidator:
                     else:
                         r.record_fail(f"DELETE /api/auth/radius/clients/{client_id}", f"status {resp.status_code}")
                 except Exception as e:
-                    r.record_fail(f"DELETE /api/auth/radius/clients/{client_id}", str(e))
+                    r.record_fail(f"DELETE /api/auth/radius/clients/{client_id}", "request error")
 
         # GET /api/auth/radius/stats
         try:
@@ -977,7 +972,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/auth/radius/stats", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /api/auth/radius/stats", str(e))
+            r.record_fail("GET /api/auth/radius/stats", "request error")
 
         # GET /api/auth/radius/auth-log
         try:
@@ -987,7 +982,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/auth/radius/auth-log", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /api/auth/radius/auth-log", str(e))
+            r.record_fail("GET /api/auth/radius/auth-log", "request error")
 
     # 11. users ------------------------------------------------------------
 
@@ -1027,7 +1022,7 @@ class ReleaseValidator:
                 else:
                     r.record_fail(f"PUT /api/users/{user_id}", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("users CRUD", str(e))
+            r.record_fail("users CRUD", "request error")
         finally:
             if user_id:
                 try:
@@ -1037,65 +1032,7 @@ class ReleaseValidator:
                     else:
                         r.record_fail(f"DELETE /api/users/{user_id}", f"status {resp.status_code}")
                 except Exception as e:
-                    r.record_fail(f"DELETE /api/users/{user_id}", str(e))
-
-        # API tokens CRUD
-        token_id: Optional[int] = None
-        token_value: Optional[str] = None
-        try:
-            # POST /api/tokens
-            resp = self._post(
-                "/api/tokens",
-                json_body={"name": "__test_token", "scopes": "read"},
-            )
-            body = self._json_ok(resp)
-            if "token" in body:
-                token_value = body["token"]
-                token_id = body.get("id")
-                r.record_pass("POST /api/tokens -> has token")
-            else:
-                r.record_fail("POST /api/tokens", "missing 'token'")
-
-            # Test bearer token auth
-            if token_value:
-                token_session = requests.Session()
-                token_session.verify = False
-                resp = self._get(
-                    "/api/aps",
-                    session=token_session,
-                    headers={"Authorization": f"Bearer {token_value}"},
-                )
-                if resp.status_code == 200:
-                    r.record_pass("GET /api/aps with Bearer token -> 200")
-                else:
-                    r.record_fail("GET /api/aps with Bearer token", f"status {resp.status_code}")
-
-            # GET /api/tokens
-            resp = self._get("/api/tokens")
-            body = self._json_ok(resp)
-            names = [t.get("name", "") for t in body] if isinstance(body, list) else []
-            if "__test_token" in names:
-                r.record_pass("GET /api/tokens -> contains __test_token")
-                # Find the id if we didn't get it from creation
-                if not token_id:
-                    for t in body:
-                        if t.get("name") == "__test_token":
-                            token_id = t.get("id")
-                            break
-            else:
-                r.record_fail("GET /api/tokens", "__test_token not found")
-        except Exception as e:
-            r.record_fail("tokens CRUD", str(e))
-        finally:
-            if token_id:
-                try:
-                    resp = self._delete(f"/api/tokens/{token_id}")
-                    if resp.status_code == 200:
-                        r.record_pass(f"DELETE /api/tokens/{token_id} -> 200")
-                    else:
-                        r.record_fail(f"DELETE /api/tokens/{token_id}", f"status {resp.status_code}")
-                except Exception as e:
-                    r.record_fail(f"DELETE /api/tokens/{token_id}", str(e))
+                    r.record_fail(f"DELETE /api/users/{user_id}", "request error")
 
     # 12. notifications ----------------------------------------------------
 
@@ -1116,31 +1053,11 @@ class ReleaseValidator:
                 else:
                     r.record_fail(f"POST {path}", f"status {resp.status_code}")
             except Exception as e:
-                r.record_fail(f"POST {path}", str(e))
+                r.record_fail(f"POST {path}", "request error")
 
     # 13. backup -----------------------------------------------------------
 
     def test_backup(self, r: TestResult) -> None:
-        # POST /api/backup/run
-        try:
-            resp = self._post("/api/backup/run")
-            if resp.status_code == 200:
-                r.record_pass("POST /api/backup/run -> 200")
-            else:
-                r.record_fail("POST /api/backup/run", f"status {resp.status_code}")
-        except Exception as e:
-            r.record_fail("POST /api/backup/run", str(e))
-
-        # GET /api/backup/status
-        try:
-            resp = self._get("/api/backup/status")
-            if resp.status_code == 200:
-                r.record_pass("GET /api/backup/status -> 200")
-            else:
-                r.record_fail("GET /api/backup/status", f"status {resp.status_code}")
-        except Exception as e:
-            r.record_fail("GET /api/backup/status", str(e))
-
         # POST /api/backup/export
         try:
             resp = self._post(
@@ -1154,7 +1071,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("POST /api/backup/export", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("POST /api/backup/export", str(e))
+            r.record_fail("POST /api/backup/export", "request error")
 
     # 14. freeze_windows ---------------------------------------------------
 
@@ -1190,7 +1107,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/freeze-windows", "__test_freeze not found")
         except Exception as e:
-            r.record_fail("freeze-windows CRUD", str(e))
+            r.record_fail("freeze-windows CRUD", "request error")
         finally:
             if freeze_id:
                 try:
@@ -1200,7 +1117,7 @@ class ReleaseValidator:
                     else:
                         r.record_fail(f"DELETE /api/freeze-windows/{freeze_id}", f"status {resp.status_code}")
                 except Exception as e:
-                    r.record_fail(f"DELETE /api/freeze-windows/{freeze_id}", str(e))
+                    r.record_fail(f"DELETE /api/freeze-windows/{freeze_id}", "request error")
 
     # 15. analytics --------------------------------------------------------
 
@@ -1219,7 +1136,7 @@ class ReleaseValidator:
                 else:
                     r.record_fail(f"GET {path}", f"status {resp.status_code}")
             except Exception as e:
-                r.record_fail(f"GET {path}", str(e))
+                r.record_fail(f"GET {path}", "request error")
 
     # 16. scheduler --------------------------------------------------------
 
@@ -1232,7 +1149,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/scheduler/status", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /api/scheduler/status", str(e))
+            r.record_fail("GET /api/scheduler/status", "request error")
 
         # PUT /api/settings (enable scheduler)
         try:
@@ -1250,7 +1167,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("PUT /api/settings (enable scheduler)", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("PUT /api/settings (enable scheduler)", str(e))
+            r.record_fail("PUT /api/settings (enable scheduler)", "request error")
 
         # GET /api/scheduler/status (verify enabled)
         try:
@@ -1261,7 +1178,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/scheduler/status (post-enable)", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /api/scheduler/status (post-enable)", str(e))
+            r.record_fail("GET /api/scheduler/status (post-enable)", "request error")
 
         # PUT /api/settings (disable scheduler - cleanup)
         try:
@@ -1271,7 +1188,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("PUT /api/settings (disable scheduler)", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("PUT /api/settings (disable scheduler)", str(e))
+            r.record_fail("PUT /api/settings (disable scheduler)", "request error")
 
     # 17. self_update ------------------------------------------------------
 
@@ -1284,7 +1201,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("POST /api/updates/check", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("POST /api/updates/check", str(e))
+            r.record_fail("POST /api/updates/check", "request error")
 
         # GET /api/updates
         try:
@@ -1294,7 +1211,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/updates", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /api/updates", str(e))
+            r.record_fail("GET /api/updates", "request error")
 
     # 18. ssl --------------------------------------------------------------
 
@@ -1306,7 +1223,7 @@ class ReleaseValidator:
             else:
                 r.record_fail("GET /api/ssl/status", f"status {resp.status_code}")
         except Exception as e:
-            r.record_fail("GET /api/ssl/status", str(e))
+            r.record_fail("GET /api/ssl/status", "request error")
 
     # 19. websocket --------------------------------------------------------
 
@@ -1318,7 +1235,7 @@ class ReleaseValidator:
         try:
             ws_url = self.host.replace("https://", "wss://").replace("http://", "ws://")
             ws_url = f"{ws_url}/ws"
-            self._log(f"Connecting to {ws_url}")
+            self._log("Connecting to WebSocket")
 
             # Extract cookies from session for WS auth
             cookie_str = "; ".join(
@@ -1338,7 +1255,7 @@ class ReleaseValidator:
             finally:
                 conn.close()
         except Exception as e:
-            r.record_fail("WebSocket connection", str(e))
+            r.record_fail("WebSocket connection", "request error")
 
 
 # ---------------------------------------------------------------------------
@@ -1356,12 +1273,27 @@ def main() -> None:
             "  %(prog)s --host http://localhost:8000 --skip radius,backup --dry-run\n"
         ),
     )
-    parser.add_argument("--host", required=True, help="Base URL (e.g. http://localhost:8000)")
-    parser.add_argument("--username", default="admin", help="Login username (default: admin)")
-    parser.add_argument("--password", default="admin", help="Login password (default: admin)")
-    parser.add_argument("--skip", default="", help="Comma-separated categories to skip")
-    parser.add_argument("--device-ip", default=None, help="AP IP for device-specific tests")
-    parser.add_argument("--switch-ip", default=None, help="Switch IP for switch-specific tests")
+    parser.add_argument(
+        "--host", default=os.environ.get("RELEASE_VALIDATION_HOST"),
+        required="RELEASE_VALIDATION_HOST" not in os.environ,
+        help="Base URL (or RELEASE_VALIDATION_HOST)",
+    )
+    parser.add_argument(
+        "--username", default=os.environ.get("RELEASE_VALIDATION_USERNAME", "admin"),
+        help="Login username (or RELEASE_VALIDATION_USERNAME; default: admin)",
+    )
+    parser.add_argument(
+        "--skip", default=os.environ.get("RELEASE_VALIDATION_SKIP", ""),
+        help="Comma-separated categories to skip (or RELEASE_VALIDATION_SKIP)",
+    )
+    parser.add_argument(
+        "--device-ip", default=os.environ.get("RELEASE_VALIDATION_DEVICE_IP"),
+        help="AP IP for device-specific tests (or RELEASE_VALIDATION_DEVICE_IP)",
+    )
+    parser.add_argument(
+        "--switch-ip", default=os.environ.get("RELEASE_VALIDATION_SWITCH_IP"),
+        help="Switch IP for switch-specific tests (or RELEASE_VALIDATION_SWITCH_IP)",
+    )
     parser.add_argument("--verbose", action="store_true", help="Print request/response details")
     parser.add_argument("--dry-run", action="store_true", help="Print what would be tested without calling APIs")
     parser.add_argument(
@@ -1372,6 +1304,19 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    password = os.environ.get("RELEASE_VALIDATION_PASSWORD")
+    password_file = os.environ.get("RELEASE_VALIDATION_PASSWORD_FILE")
+    if password is not None and password_file:
+        parser.error("set only one of RELEASE_VALIDATION_PASSWORD or RELEASE_VALIDATION_PASSWORD_FILE")
+    if password_file:
+        try:
+            with open(password_file, encoding="utf-8") as password_stream:
+                password = password_stream.read().rstrip("\r\n")
+        except OSError:
+            parser.error("password file unreadable")
+    if not password:
+        parser.error("set RELEASE_VALIDATION_PASSWORD or RELEASE_VALIDATION_PASSWORD_FILE")
+
     skip_set: set[str] = set()
     if args.skip:
         skip_set = {s.strip() for s in args.skip.split(",") if s.strip()}
@@ -1380,14 +1325,14 @@ def main() -> None:
     valid_cats = set(ReleaseValidator.CATEGORIES)
     invalid = skip_set - valid_cats
     if invalid:
-        print(f"{C.RED}Unknown categories to skip: {', '.join(sorted(invalid))}{C.RESET}")
+        print(f"{C.RED}invalid skip value{C.RESET}")
         print(f"Valid categories: {', '.join(sorted(valid_cats))}")
         sys.exit(2)
 
     validator = ReleaseValidator(
         host=args.host,
         username=args.username,
-        password=args.password,
+        password=password,
         skip=skip_set,
         device_ip=args.device_ip,
         switch_ip=args.switch_ip,

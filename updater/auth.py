@@ -1,10 +1,8 @@
-"""Authentication module: local + OIDC SSO, API tokens, session management, RBAC."""
+"""Authentication module: local + OIDC SSO, session management, RBAC."""
 
-import hashlib
 import hmac
 import logging
 import os
-import secrets
 import threading
 import uuid
 from datetime import datetime, timedelta
@@ -301,90 +299,13 @@ def _enrich_session_with_role(session: dict) -> dict:
     return session
 
 
-def hash_api_token(token: str) -> str:
-    """Hash an API token for storage."""
-    return hashlib.sha256(token.encode()).hexdigest()
-
-
-def generate_api_token() -> tuple[str, str, str]:
-    """Generate a new API token. Returns (full_token, token_hash, token_prefix)."""
-    token = f"tach_{secrets.token_urlsafe(32)}"
-    token_hash = hash_api_token(token)
-    token_prefix = token[:9] + "..."
-    return token, token_hash, token_prefix
-
-
-def _authenticate_bearer(request: Request) -> Optional[dict]:
-    """Check for Bearer token in Authorization header. Returns session-like dict or None."""
-    auth_header = request.headers.get("authorization", "")
-    if not auth_header.startswith("Bearer "):
-        return None
-
-    token = auth_header[7:]
-    token_hash = hash_api_token(token)
-    token_row = db.get_api_token_by_hash(token_hash)
-    if not token_row:
-        return None
-
-    # Check expiry
-    if token_row["expires_at"]:
-        if token_row["expires_at"] < datetime.now().isoformat():
-            return None
-
-    # Look up the owning user
-    user = db.get_user_by_id(token_row["user_id"])
-    if not user or not user["enabled"]:
-        return None
-
-    # Update last used (fire-and-forget, don't block auth)
-    try:
-        db.update_api_token_last_used(token_row["id"])
-    except Exception:
-        pass
-
-    return {
-        "username": user["username"],
-        "role": user["role"],
-        "user_id": user["id"],
-        "auth_method": "api_token",
-        "token_id": token_row["id"],
-        "token_scopes": token_row.get("scopes", "read"),
-    }
-
-
-# API tokens without the "write" scope may only call these HTTP methods;
-# everything else (POST/PUT/DELETE/PATCH/...) is a write and is rejected.
-_READ_SCOPE_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-
-
 async def require_auth(request: Request) -> dict:
-    """Dependency that enforces authentication on every route.
-
-    Checks (in order): session cookie, Bearer token.
-    - Page requests (Accept: text/html) -> redirect to /login
-    - API requests -> 401
-    """
-    # 1. Session cookie
+    """Require a valid cookie session for the request."""
     session_id = request.cookies.get(SESSION_COOKIE_NAME)
     if session_id:
         session = db.get_session(session_id)
         if session:
             return _enrich_session_with_role(session)
-
-    # 2. Bearer token
-    token_session = _authenticate_bearer(request)
-    if token_session:
-        # Enforce token scope: a read-only token may not perform writes.
-        # token_scopes is "read" or "read,write"; reject unsafe methods when
-        # the write scope is absent. Method-based and fail-closed, so every
-        # route that depends on require_auth is covered in one place.
-        scopes = {s.strip() for s in token_session.get("token_scopes", "read").split(",")}
-        if "write" not in scopes and request.method.upper() not in _READ_SCOPE_SAFE_METHODS:
-            raise HTTPException(
-                status_code=403,
-                detail="This API token is read-only (write scope required).",
-            )
-        return token_session
 
     accept = request.headers.get("accept", "")
     if "text/html" in accept:
@@ -404,28 +325,6 @@ def require_role(*allowed_roles: str):
             raise HTTPException(status_code=403, detail="Insufficient permissions")
         return session
     return _check
-
-
-def require_write_scope(session: dict) -> None:
-    """Reject read-only API tokens for a state-changing action reached via an
-    otherwise-safe HTTP method.
-
-    require_auth already blocks read-only tokens from unsafe methods
-    (POST/PUT/DELETE/...), but a few GET endpoints mutate state — e.g.
-    ?refresh=true that polls the whole fleet. Call this inside the write branch
-    of such a handler so a read-only token can't trigger the side effect.
-
-    Cookie/session auth carries no `token_scopes` and passes through (normal
-    role checks still apply); only tokens lacking the write scope are rejected.
-    """
-    scopes = session.get("token_scopes")
-    if scopes is None:
-        return
-    if "write" not in {s.strip() for s in scopes.split(",")}:
-        raise HTTPException(
-            status_code=403,
-            detail="This API token is read-only (write scope required).",
-        )
 
 
 async def require_auth_ws(websocket: WebSocket) -> Optional[dict]:

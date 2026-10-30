@@ -7,6 +7,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 WRAPPER = REPO / "scripts" / "bench" / "run-readonly-bench.sh"
 
@@ -119,6 +121,14 @@ def test_wrapper_has_no_tracing_or_environment_dump():
         assert not re.search(r"(^|[|;&]\s*)env\s*($|[|;&])", line.strip()), line
 
 
+def test_wrapper_extracts_archive_from_file_not_pipe():
+    source = WRAPPER.read_text()
+
+    assert 'git archive HEAD > "$archive_file"' in source
+    assert 'tar -x -f "$archive_file" -C "$code_dir"' in source
+    assert 'git archive HEAD | tar' not in source
+
+
 def test_wrapper_parses_access_file_and_never_sources_it():
     source = WRAPPER.read_text()
     assert not re.search(r"^\s*(\.|source)\s+\"?\$access_file", source, re.MULTILINE)
@@ -176,3 +186,46 @@ def test_wrapper_refuses_short_access_value(tmp_path):
     assert "== lane:" not in output
     assert "q7" not in output
     assert "bench-user" not in output
+
+
+@pytest.mark.parametrize(("duration_args", "expected"), [([], "3"), (["--duration-min", "9"], "9")])
+def test_session_proof_duration_defaults_short_and_keeps_override(tmp_path, duration_args, expected):
+    base_env = {"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "HOME": str(tmp_path)}
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README").write_text("bench\n")
+    for cmd in (
+        ["git", "init", "-q"],
+        ["git", "add", "README"],
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false",
+         "commit", "-q", "-m", "init"],
+        ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+    ):
+        subprocess.run(cmd, cwd=repo, env=base_env, check=True, capture_output=True)
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=base_env,
+                          capture_output=True, text=True, check=True).stdout.strip()
+    access = tmp_path / "access.env"
+    access.write_text("AP IP: 192.0.2.20\nShared device username: bench-user\n"
+                      "Shared device password: bench-password\n")
+    access.chmod(0o600)
+    calls = tmp_path / "python-calls.txt"
+    stub = tmp_path / "python"
+    stub.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$BENCH_CALLS_FILE\"\n"
+                    "case \"$1\" in\n"
+                    "  *redact.py) cat ;;\n"
+                    "  *session_proof.py) echo 'session-proof: DONE' ;;\n"
+                    "esac\nexit 0\n")
+    stub.chmod(0o755)
+
+    result = subprocess.run(
+        [str(WRAPPER), head, "--mode", "session-proof", *duration_args],
+        cwd=repo,
+        env={**base_env, "SIXTYOPS_BENCH_ACCESS_FILE": str(access),
+             "SIXTYOPS_BENCH_SUMMARY_DIR": str(tmp_path / "out"),
+             "SIXTYOPS_BENCH_PYTHON": str(stub), "BENCH_CALLS_FILE": str(calls)},
+        capture_output=True, text=True, timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    session_call = next(line for line in calls.read_text().splitlines() if "session_proof.py" in line)
+    assert f"--duration-min {expected}" in session_call

@@ -1,6 +1,6 @@
 # API Reference
 
-All API endpoints require authentication unless noted. Requests authenticate with either the `session_id` session cookie or an `Authorization: Bearer <api-token>` header (see [API Tokens](#api-tokens)). Unauthenticated API requests return `401`; unauthenticated page requests redirect to `/login`. The only routes reachable without a session are the health check (`GET /healthz`), the login and first-run setup pages, and the OIDC login/callback flow — all rate-limited or first-run-gated as noted below.
+All API endpoints require authentication unless noted. Requests authenticate with the `session_id` session cookie. Unauthenticated API requests return `401`; unauthenticated page requests redirect to `/login`. The only routes reachable without a session are the health check (`GET /healthz`), the login and first-run setup pages, and the OIDC login/callback flow — all rate-limited or first-run-gated as noted below.
 
 Interactive API docs (Swagger UI and ReDoc) are served at `/docs` and `/redoc`, backed by the schema at `/openapi.json`. All three require a valid session — the API surface is not anonymously discoverable.
 
@@ -43,7 +43,7 @@ Set or change admin password.
 - **Validation**: Minimum 8 characters, passwords must match
 
 ### `GET /setup-wizard`
-Multi-step setup wizard for SSL and backup configuration. Auth required.
+Legacy setup URL. Auth required.
 
 ### `POST /api/setup-wizard/complete`
 Mark the initial setup wizard as completed. Requires admin role.
@@ -238,17 +238,6 @@ Request a Let's Encrypt certificate.
 
 - **Body**: `domain` (form), `email` (form)
 
-### `GET /backup-setup`
-SFTP backup configuration page.
-
-### `POST /backup-setup`
-Configure SFTP backup server.
-
-- **Body**: `host` (form), `port` (form), `path` (form), `username` (form), `auth_method` (form), `password` (form, optional), `ssh_key` (form, optional)
-
-### `POST /backup-run`
-Trigger an immediate SFTP backup.
-
 ## WebSocket
 
 ### `WebSocket /ws`
@@ -409,13 +398,26 @@ Get scheduler state including: status (`idle`, `running`, `blocked_weather`, etc
 Get the active or paused rollout with device progress counts.
 
 ### `POST /api/rollout/{rollout_id}/resume`
-Resume a paused rollout. Only works if status is `paused`.
+Resume a paused rollout after the failed window has an operator resolution record.
+The stopped window stays closed.
 
 ### `POST /api/rollout/{rollout_id}/cancel`
 Cancel an active or paused rollout.
 
 ### `POST /api/rollout/{rollout_id}/reset`
 Reset a paused rollout — cancels it so a fresh rollout starts next maintenance window.
+
+### `GET /api/firmware-window-stops`
+List stopped firmware windows that still need an operator resolution record.
+Requires admin or operator role.
+
+### `POST /api/firmware-window-stops/{stop_id}/resolve`
+Record the resolution of a failed firmware window from a later maintenance
+window. Requires admin or operator role.
+
+- **Body** (form): `resolution` (required operator note)
+- **Errors**: `404` if the stop is not unresolved, `409` if the current window
+  is stopped or no later window is open
 
 ## Firmware Files
 
@@ -476,23 +478,6 @@ Request cancellation of an active update job. Requires admin or operator role.
 - **Errors**: `404` if the job is unknown, `400` if it already completed
 
 ## Backup & Restore
-
-### `GET /api/backup/status`
-Get SFTP backup configuration and status. Classified as a dangerous feature.
-
-### `POST /api/backup/run`
-Trigger an immediate SFTP backup. Classified as a dangerous feature.
-
-### `POST /api/backup/test-connection`
-Test connectivity to the configured SFTP server. Classified as a dangerous feature.
-
-### `GET /api/backup/list`
-List available backup archives on the SFTP server. Classified as a dangerous feature.
-
-### `POST /api/backup/restore`
-Restore the management database from an SFTP backup archive. Classified as a dangerous feature.
-
-- **Body** (form): `archive_name`
 
 ### `POST /api/backup/export`
 Export device inventory as CSV with encrypted passwords.
@@ -626,24 +611,6 @@ Get feature state. Backward-compatible shape — all features are unlocked.
 Get the persistent instance ID. Requires admin role.
 
 - **Response**: `{ "instance_id": "..." }`
-
-## API Tokens
-
-Pass a token as `Authorization: Bearer <token>`. **Scope is enforced:** a `read`-scoped token may call only safe methods (`GET`/`HEAD`/`OPTIONS`); any write (`POST`/`PUT`/`DELETE`/...) returns `403`, regardless of the owning user's role. A few side-effecting `GET`s also require write scope — e.g. `GET /api/config-compliance?refresh=true`, which polls the fleet before returning. Use a `read`-scoped token for reporting/monitoring integrations. Only admins can mint `read,write` tokens; admin/operator can mint `read` tokens.
-
-### `GET /api/tokens`
-List API tokens for the current user (admins see all tokens).
-
-- **Response**: `{ "tokens": [...] }`
-
-### `POST /api/tokens`
-Create a new API token. The token value is returned only once.
-
-- **Body** (JSON): `name`, `scopes` (optional, `"read"` (default) or `"read,write"`), `expires_days` (optional, 1–365)
-- **Response**: `{ "id", "token", "prefix", "name" }`
-
-### `DELETE /api/tokens/{token_id}`
-Delete an API token. Admin or token owner only.
 
 ## Audit Log
 

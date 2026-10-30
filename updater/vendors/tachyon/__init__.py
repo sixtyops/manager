@@ -42,7 +42,7 @@ class TachyonDriver(VendorDriver):
         return await self._client.session_valid()
 
     async def get_device_info(self) -> VendorDeviceInfo:
-        info = await self._client.get_device_info()
+        info = await self._client.get_device_info(include_management=True)
         return VendorDeviceInfo(
             ip=info.ip,
             vendor="tachyon",
@@ -53,7 +53,19 @@ class TachyonDriver(VendorDriver):
             bank1_version=info.bank1_version,
             bank2_version=info.bank2_version,
             active_bank=info.active_bank,
+            extra={
+                "macs": info.macs,
+                "management_interface": info.management_interface,
+                "management_vlan_id": info.management_vlan_id,
+                "management_mac": info.management_mac,
+                "firmware_sha256": info.firmware_sha256,
+                "management_ip_mode": info.management_ip_mode,
+            },
         )
+
+    async def get_bootbank_info(self):
+        """Read boot bank state for the poller's separately reported outcome."""
+        return await self._client.get_bootbank_info()
 
     async def upload_firmware(self, firmware_path: str, bandwidth_limit_kbps: int = 0) -> bool:
         return await self._client.upload_firmware(firmware_path, bandwidth_limit_kbps)
@@ -74,9 +86,20 @@ class TachyonDriver(VendorDriver):
         pass_number: int = 1,
         reboot_timeout: int = 300,
         bandwidth_limit_kbps: int = 0,
+        admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
+        qualification_check=None,
+        upload_started_callback: Optional[Callable[[], None]] = None,
     ) -> VendorUpdateResult:
+        options = {}
+        if admission_check:
+            options["admission_check"] = admission_check
+        if qualification_check:
+            options["qualification_check"] = qualification_check
+        if upload_started_callback:
+            options["upload_started_callback"] = upload_started_callback
         result = await self._client.update_firmware(
-            firmware_path, progress_callback, pass_number, reboot_timeout, bandwidth_limit_kbps
+            firmware_path, progress_callback, pass_number, reboot_timeout, bandwidth_limit_kbps,
+            **options,
         )
         return VendorUpdateResult(
             ip=result.ip,
@@ -116,7 +139,11 @@ class TachyonDriver(VendorDriver):
     async def get_bridge_table(self) -> List[Dict[str, str]]:
         return await self._client.get_bridge_table()
 
-    async def apply_config(self, config: dict, dry_run: bool = False) -> dict:
+    async def apply_config(
+        self, config: dict, dry_run: bool = False, *, preserve_user_passwords: bool = False,
+    ) -> dict:
+        if preserve_user_passwords:
+            return await self._client.apply_config(config, dry_run, preserve_user_passwords=True)
         return await self._client.apply_config(config, dry_run)
 
     def get_firmware_types(self) -> List[Dict[str, str]]:

@@ -184,7 +184,6 @@ Same profile, larger fleets: 1000–5000 devices. Probably requires Postgres mig
 |------|--------------|
 | Structured error reporting | Manual log-tailing fine for 3–5 customers; instrument once volume justifies |
 | Load test poller at 50+ devices concurrent | Design partners unlikely to hit limits in Phase 1; instrument and learn |
-| SFTP backup restore round-trip integration test | Manual validation suffices pre-launch |
 | Code coverage threshold in CI | Hygiene, not launch-blocking |
 | Chaos tests (network failures, stuck reboots) | Auto-pause handles most cases today |
 | Multi-tenancy QA | Phase 4 — build the feature first |

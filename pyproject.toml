@@ -8,7 +8,7 @@ version = "1.4.1.dev5"
 description = "Web-based firmware update tool for Tachyon devices"
 readme = "README.md"
 # Matches the Dockerfile (python:3.12-slim) and uses features only available
-# in 3.12+ — notably tarfile.extract(filter="data") in updater/sftp_backup.py.
+# in 3.12+ — notably tarfile.extract(filter="data").
 requires-python = ">=3.12"
 license = {file = "LICENSE"}
 dependencies = [
@@ -31,7 +31,9 @@ markers = [
     "integration: tests that run against real hardware (requires SIXTYOPS_TEST_URL)",
     "dev_blocking: merge-gating live dev validation against dedicated test devices",
     "dev_sso: separate non-blocking live SSO/OIDC validation lane",
+    "dev_nonblocking: live dev tests that do not gate a merge",
     "slow: tests that take a long time (e.g. firmware update with reboot)",
+    "loopback: tests that require loopback UDP socket access",
 ]
 
 [tool.setuptools.packages.find]
