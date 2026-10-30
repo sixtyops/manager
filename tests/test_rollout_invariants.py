@@ -437,11 +437,14 @@ async def test_held_phase_logs_event(mock_db, monkeypatch):
     _seed_aps(10)
     db.set_settings(_settings(hold_days=0))
     scheduler, start_update = _make_scheduler()
+    precheck = scheduler._precheck_cpe_credentials
     h = _Harness(scheduler, monkeypatch)
 
     await h.tick()
     h.complete_job()
-    await h.tick()  # same window -> held
+    for _ in range(3):
+        await h.tick()  # same window -> held
+    assert precheck.await_count == 1
 
     with db.get_db() as conn:
         rows = conn.execute(
@@ -459,10 +462,13 @@ async def test_release_date_hold_gates_first_wave(mock_db, monkeypatch):
     _seed_aps(10)
     db.set_settings(_settings(hold_days=6, firmware=FW_HELD))
     scheduler, start_update = _make_scheduler()
+    precheck = scheduler._precheck_cpe_credentials
     h = _Harness(scheduler, monkeypatch)
 
-    await h.tick(day=2)  # release 2026-06-01 + 6 days clears 06-07; today is 06-02
+    for _ in range(3):
+        await h.tick(day=2)  # release 2026-06-01 + 6 days clears 06-07; today is 06-02
     assert start_update.call_count == 0
+    precheck.assert_not_awaited()
     assert scheduler._state == "blocked_firmware_hold"
     rollout = db.get_active_rollout()
     assert rollout["phase"] == "pct10"

@@ -59,6 +59,53 @@ class TestSchedulerCompletionHandling:
 
 class TestCpeCredentialAdmission:
     @pytest.mark.asyncio
+    async def test_successful_login_is_reused_only_for_its_window(self, mock_db):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from updater.poller import NetworkPoller, set_poller
+
+        parent_ip = "10.0.0.10"
+        cpe_ip = "10.0.0.20"
+        db.upsert_access_point(parent_ip, "root", "current-password", enabled=True)
+        db.upsert_cpe(parent_ip, {"ip": cpe_ip, "auth_status": "ok"})
+        poller = NetworkPoller()
+        client = MagicMock()
+        client.connect = AsyncMock(return_value=True)
+        client.session_valid = AsyncMock(return_value="ok")
+        driver = MagicMock(return_value=client)
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        settings = {
+            "schedule_enabled": "true",
+            "schedule_days": "tue,wed",
+            "schedule_start_hour": "3",
+            "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+        first_window = datetime(2026, 6, 23, 3, 0, tzinfo=ZoneInfo("America/Chicago"))
+        next_window = datetime(2026, 6, 24, 3, 0, tzinfo=ZoneInfo("America/Chicago"))
+
+        set_poller(poller)
+        try:
+            with patch("updater.poller.get_driver", return_value=driver), \
+                 patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+                assert await scheduler._precheck_cpe_credentials(
+                    [parent_ip], settings, first_window
+                ) == ()
+                assert await scheduler._precheck_cpe_credentials(
+                    [parent_ip], settings, first_window
+                ) == ()
+                assert client.connect.await_count == 1
+
+                assert await scheduler._precheck_cpe_credentials(
+                    [parent_ip], settings, next_window
+                ) == ()
+        finally:
+            set_poller(None)
+
+        assert client.connect.await_count == 2
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(("login_result", "expected"), [
         ("Invalid credentials", "auth_failed"),
         (True, "ok"),

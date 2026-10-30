@@ -653,13 +653,17 @@ class AutoUpdateScheduler:
         switch_scope = self._resolve_switch_scope(settings)
         batch_ips = self._get_devices_for_phase(rollout, scope_ips, allow_downgrade, settings)
         batch_switches = self._get_switches_for_phase(rollout, switch_scope, allow_downgrade, settings)
-        cpe_auth_failures = await self._precheck_cpe_credentials(batch_ips, settings, now)
-
-        gate_rollout = dict(rollout)
-        gate_rollout["cpe_auth_failures"] = cpe_auth_failures
         may_run, gate_reason = rollout_gate.phase_run_decision(
-            gate_rollout, window_key, first_wave_held=first_wave_held
+            rollout, window_key, first_wave_held=first_wave_held
         )
+        cpe_auth_failures = ()
+        if may_run:
+            cpe_auth_failures = await self._precheck_cpe_credentials(batch_ips, settings, now)
+            gate_rollout = dict(rollout)
+            gate_rollout["cpe_auth_failures"] = cpe_auth_failures
+            may_run, gate_reason = rollout_gate.phase_run_decision(
+                gate_rollout, window_key, first_wave_held=first_wave_held
+            )
         if not may_run:
             self._hold_clear_reason = None
             if gate_reason == "firmware_hold":
@@ -801,12 +805,15 @@ class AutoUpdateScheduler:
                     status = "missing_ip"
                 elif ap and poller is not None:
                     try:
-                        status = await poller._check_cpe_auth(
-                            cpe_ip, ap["username"], ap["password"],
-                            force_fresh_login=True,
-                        )
-                        if status == "ok":
-                            poller.record_cpe_fresh_login_check(cpe_ip, settings, now)
+                        if poller.has_cpe_precheck_success(cpe_ip, settings, now):
+                            status = "ok"
+                        else:
+                            status = await poller._check_cpe_auth(
+                                cpe_ip, ap["username"], ap["password"],
+                                force_fresh_login=True,
+                            )
+                            if status == "ok":
+                                poller.record_cpe_precheck_success(cpe_ip, settings, now)
                         db.update_cpe_auth_status(parent_ip, cpe_ip, status)
                     except Exception:
                         logger.exception("CPE credential precheck failed for %s", cpe_ip)
