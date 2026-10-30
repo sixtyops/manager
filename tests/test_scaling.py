@@ -163,11 +163,40 @@ class TestCircuitBreaker:
             poller._record_poll_failure("10.0.0.1")
         ap = {"ip": "10.0.0.1", "last_error": None}
         monkeypatch.setattr(poller_module.db, "get_access_point", lambda ip: ap)
-        poller._poll_ap = AsyncMock()
+
+        async def successful_poll(_ap):
+            poller._record_poll_success("10.0.0.1")
+
+        poller._poll_ap = AsyncMock(side_effect=successful_poll)
 
         assert await poller.poll_ap_now("10.0.0.1")
         assert not poller._is_backed_off("10.0.0.1")
+        assert "10.0.0.1" not in poller._failure_counts
         poller._poll_ap.assert_awaited_once_with(ap)
+
+    @pytest.mark.asyncio
+    async def test_failed_manual_ap_poll_keeps_count_and_resumes_backoff(self, monkeypatch):
+        from unittest.mock import AsyncMock, Mock
+        from updater import poller as poller_module
+        from updater.poller import NetworkPoller
+
+        poller = NetworkPoller(poll_interval=60)
+        ip = "10.0.0.1"
+        for _ in range(3):
+            poller._record_poll_failure(ip)
+        ap = {"ip": ip, "username": "operator", "password": "unused", "last_error": None}
+
+        def update_ap_status(_ip, **fields):
+            ap.update(fields)
+
+        monkeypatch.setattr(poller_module.db, "get_access_point", lambda _ip: ap)
+        monkeypatch.setattr(poller_module.db, "update_ap_status", update_ap_status)
+        monkeypatch.setattr(poller, "_get_client", AsyncMock(return_value=(None, "Login failed")))
+        monkeypatch.setattr(poller, "_check_uptime_transition", Mock())
+
+        assert not await poller.poll_ap_now(ip)
+        assert poller._failure_counts[ip] == 4
+        assert poller._is_backed_off(ip)
 
     def test_invalidate_client_clears_failure_and_backoff_state(self):
         from updater.poller import NetworkPoller

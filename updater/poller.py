@@ -237,8 +237,7 @@ class NetworkPoller:
         }
 
     def _clear_poll_backoff(self, ip: str):
-        """Allow the next poll to run and start its failure count fresh."""
-        self._failure_counts.pop(ip, None)
+        """End the current backoff wait without resetting failure history."""
         self._backoff_until.pop(ip, None)
 
     def _record_poll_failure(self, ip: str):
@@ -383,6 +382,7 @@ class NetworkPoller:
             if not client:
                 db.update_ap_status(ip, last_error=error)
                 self._check_uptime_transition(ip, "ap", prev_error, error)
+                self._record_poll_failure(ip)
                 return
 
             # Get AP info
@@ -398,6 +398,7 @@ class NetworkPoller:
                 if not client:
                     db.update_ap_status(ip, last_error=error)
                     self._check_uptime_transition(ip, "ap", prev_error, error)
+                    self._record_poll_failure(ip)
                     return
                 ap_info = await client.get_ap_info()
             location = ap_info.get("location")  # Don't fall back to zone
@@ -694,6 +695,7 @@ class NetworkPoller:
         """Remove cached client (e.g., when credentials change)."""
         self._remove_cached_client(ip)
         self._clear_poll_backoff(ip)
+        self._failure_counts.pop(ip, None)
         # CPE sessions are keyed by CPE IP, but credentials usually change on the
         # parent AP (whose creds the CPEs inherit) — and we don't have the AP→CPE
         # mapping here. A cached CPE session keeps authenticating on its old
@@ -708,8 +710,8 @@ class NetworkPoller:
         if not ap:
             return False
 
-        # A manual request must make a fresh device read even when scheduled
-        # polling has paused this device after repeated failures.
+        # A manual request ends the wait, but keeps the count so another failed
+        # request resumes backoff instead of repeatedly bypassing the threshold.
         self._clear_poll_backoff(ip)
         await self._poll_ap(ap)
         refreshed = db.get_access_point(ip)
