@@ -630,6 +630,27 @@ async def test_rollout_with_only_terminal_members_closes(mock_db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_all_saved_members_excluded_from_empty_scope_closes_rollout(
+    mock_db, monkeypatch
+):
+    _seed_aps(1)
+    ip = db.get_access_points()[0]["ip"]
+    settings = _settings(hold_days=0)
+    settings.update(schedule_scope="aps", schedule_scope_data="")
+    db.set_settings(settings)
+    rollout_id = db.create_rollout(
+        FW, members=[{"ip": ip, "device_type": "ap"}], settings_snapshot={}
+    )
+    scheduler, start_update = _make_scheduler()
+
+    await _Harness(scheduler, monkeypatch).tick(day=2)
+
+    assert db.get_rollout_devices(rollout_id)[0]["status"] == "removed (scope)"
+    assert db.get_rollout(rollout_id)["status"] == "completed"
+    start_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_saved_member_back_in_scope_before_wave_is_processed_normally(
     mock_db, monkeypatch
 ):

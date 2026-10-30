@@ -740,12 +740,6 @@ class AutoUpdateScheduler:
             return
 
 
-        if not scope_ips and not switch_scope:
-            self._state = "idle"
-            self._block_reason = "No devices in scope"
-            await self._broadcast_status()
-            return
-
         batch_ips = self._get_devices_for_phase(rollout, scope_ips, allow_downgrade, settings)
         batch_switches = self._get_switches_for_phase(rollout, switch_scope, allow_downgrade, settings)
 
@@ -779,6 +773,12 @@ class AutoUpdateScheduler:
                 self._state = "idle"
                 self._block_reason = None
                 db.log_schedule_event("rollout_completed", f"Rollout {rollout['id']} completed")
+                await self._broadcast_status()
+                return
+
+            if not scope_ips and not switch_scope:
+                self._state = "idle"
+                self._block_reason = "No devices in scope"
                 await self._broadcast_status()
                 return
 
