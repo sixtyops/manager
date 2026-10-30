@@ -255,6 +255,7 @@ async def test_upload_admission_denial_after_progress_stays_pending(runtime_mock
             management_mac=None, firmware_sha256="a" * 64, management_ip_mode="dhcp",
         )))
         monkeypatch.setattr(client, "get_connected_cpes", AsyncMock(return_value=[]))
+        client.last_connected_cpes_valid = True
         monkeypatch.setattr(client, "get_bridge_table", AsyncMock(return_value=[]))
         monkeypatch.setattr(client, "reboot", AsyncMock(return_value=True))
         original_update = client.update_firmware

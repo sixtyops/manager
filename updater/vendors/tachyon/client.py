@@ -289,6 +289,7 @@ class TachyonClient:
         # Set as a side-effect by get_connected_cpes() — channel/BW/freq/kit
         # for the AP's radio, used by the link-budget UI.
         self.last_radio_params: Optional[Dict[str, Any]] = None
+        self.last_connected_cpes_valid = False
 
     @staticmethod
     def _parse_system_status(body: str) -> dict:
@@ -1141,6 +1142,7 @@ class TachyonClient:
 
         cpes: List[CPEInfo] = []
         self.last_radio_params = None  # reset on each call
+        self.last_connected_cpes_valid = False
 
         status, body = await self._curl("GET", "/cgi.lua/status?type=wireless,zones")
 
@@ -1150,8 +1152,12 @@ class TachyonClient:
 
         try:
             data = json.loads(body)
-            wireless = data.get("wireless", {})
-            peers = wireless.get("peers", [])
+            wireless = data.get("wireless") if isinstance(data, dict) else None
+            peers = wireless.get("peers") if isinstance(wireless, dict) else None
+            if not isinstance(peers, list):
+                logger.error("Wireless peer data is unavailable from %s", self.ip)
+                return cpes
+            self.last_connected_cpes_valid = True
 
             for peer in peers:
                 raw_mac = peer.get("mac")

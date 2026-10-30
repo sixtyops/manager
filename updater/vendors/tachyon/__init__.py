@@ -35,6 +35,10 @@ class TachyonDriver(VendorDriver):
         every CPE's rain tolerance came out null."""
         return self._client.last_radio_params
 
+    @property
+    def last_connected_cpes_valid(self):
+        return self._client.last_connected_cpes_valid
+
     async def connect(self):
         return await self._client.login()
 

@@ -135,6 +135,7 @@ def runner(mock_db, monkeypatch, tmp_path):
     client = TachyonDriver(IP, "synthetic", "synthetic")
     client.connect = AsyncMock(return_value=True)
     client.get_connected_cpes = AsyncMock(return_value=[])
+    client._client.last_connected_cpes_valid = True
     client.get_bridge_table = AsyncMock(return_value=[])
     client.get_eth0_byte_counters = AsyncMock(return_value=(None, None))
     client.get_device_info = AsyncMock(return_value=VendorDeviceInfo(

@@ -147,6 +147,19 @@ async def test_peer_list_fixture_rejects_invalid_cpe_radio_mac(caplog):
 
 
 @pytest.mark.asyncio
+async def test_peer_list_validity_distinguishes_empty_from_unreadable():
+    client = TachyonClient("placeholder", "user", "password")
+    client._curl = AsyncMock(side_effect=[
+        (503, ""), (200, json.dumps({"wireless": {"peers": []}})),
+    ])
+
+    assert await client.get_connected_cpes() == []
+    assert client.last_connected_cpes_valid is False
+    assert await client.get_connected_cpes() == []
+    assert client.last_connected_cpes_valid is True
+
+
+@pytest.mark.asyncio
 async def test_eth0_byte_counters_parse_captured_interface_shape():
     client = TachyonClient("placeholder", "user", "password")
     client._curl = AsyncMock(return_value=(200, json.dumps({

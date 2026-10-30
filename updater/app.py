@@ -4052,6 +4052,8 @@ async def _capture_ap_customer_recovery(job, ap_ip, ap_client, expected_macs=Non
     """Capture original CPE customer MACs and eth0 counters around an AP reboot."""
     baseline_capture = expected_macs is None
     cpes = await ap_client.get_connected_cpes()
+    if getattr(ap_client, "last_connected_cpes_valid", True) is not True:
+        raise RuntimeError("The AP peer list could not be read for customer recovery evidence")
     peers = {
         str(cpe.mac).upper(): cpe for cpe in cpes
         if getattr(cpe, "mac", None) and getattr(cpe, "ip", None)
