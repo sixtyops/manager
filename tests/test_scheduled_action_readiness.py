@@ -61,6 +61,9 @@ async def test_queued_action_stops_while_submitted_action_recovers(runtime_mocks
         def get_reboot_timeout(self, role): return 5
         def get_update_timeout(self, role): return 5
         async def connect(self): return True
+        async def get_connected_cpes(self): return []
+        async def get_bridge_table(self): return []
+        async def get_eth0_byte_counters(self): return None, None
         async def get_device_info(self):
             return SimpleNamespace(
                 ip=self.ip, model="TNA-301", serial=f"SERIAL-{self.ip}",
@@ -251,6 +254,8 @@ async def test_upload_admission_denial_after_progress_stays_pending(runtime_mock
             mac=None, macs={}, management_interface=None, management_vlan_id=100,
             management_mac=None, firmware_sha256="a" * 64, management_ip_mode="dhcp",
         )))
+        monkeypatch.setattr(client, "get_connected_cpes", AsyncMock(return_value=[]))
+        monkeypatch.setattr(client, "get_bridge_table", AsyncMock(return_value=[]))
         monkeypatch.setattr(client, "reboot", AsyncMock(return_value=True))
         original_update = client.update_firmware
 

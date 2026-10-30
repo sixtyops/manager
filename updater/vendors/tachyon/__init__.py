@@ -139,6 +139,9 @@ class TachyonDriver(VendorDriver):
     async def get_bridge_table(self) -> List[Dict[str, str]]:
         return await self._client.get_bridge_table()
 
+    async def get_eth0_byte_counters(self):
+        return await self._client.get_eth0_byte_counters()
+
     async def apply_config(
         self, config: dict, dry_run: bool = False, *, preserve_user_passwords: bool = False,
     ) -> dict:

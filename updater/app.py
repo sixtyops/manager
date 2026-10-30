@@ -4048,6 +4048,79 @@ def _stop_firmware_window(job: "UpdateJob", ip: str, gate: str, reason: str):
     return stop
 
 
+async def _capture_ap_customer_recovery(job, ap_ip, ap_client, expected_macs=None):
+    """Capture original CPE customer MACs and eth0 counters around an AP reboot."""
+    baseline_capture = expected_macs is None
+    cpes = await ap_client.get_connected_cpes()
+    peers = {
+        str(cpe.mac).upper(): cpe for cpe in cpes
+        if getattr(cpe, "mac", None) and getattr(cpe, "ip", None)
+    }
+    if not peers and job.ap_cpe_map.get(ap_ip):
+        raise RuntimeError("The AP peer list is unavailable for customer recovery evidence")
+    if expected_macs is None:
+        expected_macs = set(peers)
+    else:
+        expected_macs = set(expected_macs)
+    upstream = await ap_client.get_bridge_table()
+    if not isinstance(upstream, list):
+        raise RuntimeError("AP upstream bridge data is unavailable")
+    saved = {}
+    for radio_mac in expected_macs:
+        peer = peers.get(radio_mac)
+        if peer is None:
+            continue
+        credentials = job.credentials.get(peer.ip) or job.credentials.get(ap_ip)
+        if not credentials:
+            raise RuntimeError(f"Credentials are unavailable for CPE {radio_mac}")
+        cpe_client = get_driver("tachyon")(peer.ip, *credentials)
+        if await cpe_client.connect() is not True:
+            raise RuntimeError(f"CPE {radio_mac} is not reachable for customer recovery evidence")
+        info = await cpe_client.get_device_info()
+        macs = getattr(info, "extra", {}).get("macs", {})
+        eth0_mac = str(macs.get("eth0", "")).upper()
+        if not eth0_mac:
+            raise RuntimeError(f"CPE {radio_mac} eth0 MAC is unavailable")
+        lan = await cpe_client.get_bridge_table()
+        customer_macs = sorted({
+            str(row.get("mac", "")).upper() for row in lan
+            if row.get("port") == "eth0" and row.get("mac") and str(row.get("mac")).upper() != eth0_mac
+        })
+        if not customer_macs:
+            raise RuntimeError(f"CPE {radio_mac} has no customer MAC on eth0")
+        rx_bytes, tx_bytes = await cpe_client.get_eth0_byte_counters()
+        if baseline_capture and (type(rx_bytes) is not int or type(tx_bytes) is not int):
+            raise RuntimeError(f"CPE {radio_mac} eth0 byte counters are unavailable")
+        if expected_macs == set(peers) and any(
+            not any(row.get("mac") == customer and row.get("port") == "prs0" for row in upstream)
+            for customer in customer_macs
+        ):
+            raise RuntimeError(f"CPE {radio_mac} customer MAC is missing from AP upstream port prs0")
+        saved[radio_mac] = {
+            "customer_macs": customer_macs,
+            "rx_bytes": rx_bytes,
+            "tx_bytes": tx_bytes,
+            "lan": lan,
+            "bytes": (rx_bytes, tx_bytes),
+        }
+    if expected_macs and set(saved) != expected_macs:
+        raise RuntimeError("One or more original CPEs are missing from the AP peer list")
+    return {"peers": saved, "upstream": upstream}
+
+
+async def _check_ap_customer_recovery(job, ap_ip, ap_client, baseline):
+    from . import rollout_gate
+
+    expected_macs = set(baseline.get("peers", {}))
+    if not expected_macs:
+        return True, ""
+    try:
+        current = await _capture_ap_customer_recovery(job, ap_ip, ap_client, expected_macs)
+    except Exception as exc:
+        return False, str(exc)
+    return rollout_gate.ap_customer_recovery_decision(baseline.get("peers"), current)
+
+
 async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
     """Finalize a job if its task crashes unexpectedly."""
     if job.status == "completed":
@@ -5806,6 +5879,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
 
     # Capture pre-update CPE count for smoke test comparison
     pre_update_cpe_count = len(job.ap_cpe_map.get(ip, [])) if device_status.role == "ap" else 0
+    pre_reboot_customer_baseline = None
+    flash_customer_baseline = None
 
     client = None
     expected_serial = None
@@ -5930,6 +6005,10 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 reboot_timeout = client.get_reboot_timeout(device_status.role)
                 if not _firmware_write_gate(job, ip)[0]:
                     return
+                if device_status.role == "ap" and vendor_id == "tachyon":
+                    pre_reboot_customer_baseline = await _capture_ap_customer_recovery(
+                        job, ip, client
+                    )
                 if not await client.reboot(timeout=reboot_timeout):
                     raise RuntimeError("Device did not come back online after pre-update reboot")
                 if await client.connect() is not True:
@@ -5944,6 +6023,12 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     recovery_case="pre_update_reboot",
                 ):
                     return
+                if pre_reboot_customer_baseline is not None:
+                    passed, reason = await _check_ap_customer_recovery(
+                        job, ip, client, pre_reboot_customer_baseline
+                    )
+                    if not passed:
+                        raise RuntimeError(f"AP customer recovery failed: {reason}")
             except Exception as e:
                 device_status.status = "failed"
                 device_status.error = f"Pre-update reboot failed: {e}"
@@ -6024,6 +6109,10 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 expected_version = getattr(info, "current_version", None)
             if not await _address_change_guard(job, ip, info=info, pass_number=pass_number):
                 return
+            if device_status.role == "ap" and vendor_id == "tachyon":
+                flash_customer_baseline = await _capture_ap_customer_recovery(
+                    job, ip, client
+                )
             if not _firmware_write_gate(job, ip)[0]:
                 return
             result = await asyncio.wait_for(
@@ -6052,6 +6141,12 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 raise RuntimeError("Expected serial did not match after firmware reboot")
             if not target or _normalize_version(getattr(recovered_info, "current_version", None)) != _normalize_version(target):
                 raise RuntimeError("Target firmware version was not confirmed after firmware reboot")
+            if flash_customer_baseline is not None:
+                passed, reason = await _check_ap_customer_recovery(
+                    job, ip, client, flash_customer_baseline
+                )
+                if not passed:
+                    raise RuntimeError(f"AP customer recovery failed: {reason}")
         except Exception as e:
             result.success = False
             result.error = f"Post-flash recovery failed: {e}"

@@ -63,6 +63,69 @@ def _seed_aps(n: int):
                ap_models=("TNA-301",))
 
 
+def _ap_customer_signals(rx=101, tx=202, *, peer=True, lan=True, upstream=True):
+    radio = "02:00:00:00:00:01"
+    customer = "02:00:00:00:00:02"
+    return {
+        "peers": ({radio: {
+            "lan": ([{"mac": customer, "port": "eth0"}] if lan else []),
+            "bytes": (rx, tx),
+        }} if peer else {}),
+        "upstream": ([{"mac": customer, "port": "prs0"}] if upstream else []),
+    }
+
+
+def test_ap_customer_recovery_requires_original_peer_and_bridge_paths():
+    customer = "02:00:00:00:00:02"
+    baseline = {"02:00:00:00:00:01": {
+        "customer_macs": [customer], "rx_bytes": 100, "tx_bytes": 200,
+    }}
+
+    assert rollout_gate.ap_customer_recovery_decision(baseline, _ap_customer_signals()) == (True, "")
+    assert "peer list" in rollout_gate.ap_customer_recovery_decision(
+        baseline, _ap_customer_signals(peer=False)
+    )[1]
+    assert "eth0" in rollout_gate.ap_customer_recovery_decision(
+        baseline, _ap_customer_signals(lan=False)
+    )[1]
+    assert "upstream" in rollout_gate.ap_customer_recovery_decision(
+        baseline, _ap_customer_signals(upstream=False)
+    )[1]
+
+
+@pytest.mark.parametrize("rx,tx", [(101, 200), (100, 202), (100, 200), (99, 202)])
+def test_ap_customer_recovery_requires_positive_two_way_deltas(rx, tx):
+    customer = "02:00:00:00:00:02"
+    baseline = {"02:00:00:00:00:01": {
+        "customer_macs": [customer], "rx_bytes": 100, "tx_bytes": 200,
+    }}
+
+    passed, reason = rollout_gate.ap_customer_recovery_decision(
+        baseline, _ap_customer_signals(rx, tx)
+    )
+
+    assert passed is (rx > 100 and tx > 200)
+    if not passed:
+        assert "both directions" in reason or "reset" in reason
+
+
+def test_ap_customer_recovery_does_not_require_traffic_when_baseline_is_zero():
+    customer = "02:00:00:00:00:02"
+    baseline = {"02:00:00:00:00:01": {
+        "customer_macs": [customer], "rx_bytes": 0, "tx_bytes": 0,
+    }}
+
+    assert rollout_gate.ap_customer_recovery_decision(
+        baseline, _ap_customer_signals(0, 0)
+    ) == (True, "")
+
+
+def test_ap_customer_recovery_allows_a_valid_empty_peer_scope():
+    assert rollout_gate.ap_customer_recovery_decision(
+        {}, {"peers": {}, "upstream": []}
+    ) == (True, "")
+
+
 def _seed_confirmed(ip: str, version: str, *, model: str = None):
     """Seed an enabled, healthy AP confirmed working on `version` (on-version, no
     error, seen now, plus a recorded confirmation event)."""

@@ -1308,6 +1308,26 @@ class TachyonClient:
             entries.append({"mac": mac, "port": port})
         return entries
 
+    async def get_eth0_byte_counters(self) -> tuple[Optional[int], Optional[int]]:
+        """Read the observed eth0 RX/TX byte counters from interface status."""
+        status, body = await self._curl("GET", "/cgi.lua/status?type=interfaces")
+        if status != 200:
+            return None, None
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            return None, None
+        interfaces = data.get("interfaces") if isinstance(data, dict) else None
+        eth0 = interfaces.get("eth0") if isinstance(interfaces, dict) else None
+        if not isinstance(eth0, dict):
+            return None, None
+
+        def counter(name: str) -> Optional[int]:
+            value = eth0.get(name)
+            return value if type(value) is int and value >= 0 else None
+
+        return counter("rx_bytes"), counter("tx_bytes")
+
     async def fetch_config(self) -> tuple[Optional[dict], str, Optional[str]]:
         """Download full device config and return (config, status, error_msg).
 

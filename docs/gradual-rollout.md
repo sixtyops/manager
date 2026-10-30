@@ -204,6 +204,16 @@ role-specific smoke check with no warnings. Missing or failed proof holds the
 device and stops the firmware window. Resolve the hold before retrying in a
 later window. Stored settings cannot disable reboot or smoke proof.
 
+AP updates also snapshot each connected CPE's radio MAC, customer MACs on
+`eth0`, and `eth0` byte counters before each AP reboot. Before the next write,
+the same radio MAC must return, each saved customer MAC must appear on CPE
+`eth0` and AP bridge port `prs0`, and a CPE with two-way baseline traffic must
+show positive byte deltas in both directions. A zero counter baseline does not
+prove traffic and does not fail this traffic check. The gate checks after the
+pre-update reboot before flashing and after the firmware reboot. Negotiated
+speed and duplex are unavailable from the observed device API and are not
+checked. A failed check stops the window through `rollout_gate.py`.
+
 **Key points:** Store the first failed device gate under the maintenance window
 instance key. Keep that window closed to new jobs and device actions. Run one
 device through recovery before starting another device.
