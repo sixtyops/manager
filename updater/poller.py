@@ -225,6 +225,22 @@ class NetworkPoller:
         self._failure_counts.pop(ip, None)
         self._backoff_until.pop(ip, None)
 
+    def get_backoff_state(self, ip: str) -> dict:
+        """Return the current backoff state for an API device row."""
+        until = self._backoff_until.get(ip)
+        active_until = None
+        if until is not None and until > time.time():
+            active_until = datetime.fromtimestamp(until, timezone.utc).isoformat()
+        return {
+            "consecutive_failures": self._failure_counts.get(ip, 0),
+            "backoff_until": active_until,
+        }
+
+    def _clear_poll_backoff(self, ip: str):
+        """Allow the next poll to run and start its failure count fresh."""
+        self._failure_counts.pop(ip, None)
+        self._backoff_until.pop(ip, None)
+
     def _record_poll_failure(self, ip: str):
         """Increment failure count and set backoff if threshold exceeded."""
         count = self._failure_counts.get(ip, 0) + 1
@@ -677,6 +693,7 @@ class NetworkPoller:
     def invalidate_client(self, ip: str):
         """Remove cached client (e.g., when credentials change)."""
         self._remove_cached_client(ip)
+        self._clear_poll_backoff(ip)
         # CPE sessions are keyed by CPE IP, but credentials usually change on the
         # parent AP (whose creds the CPEs inherit) — and we don't have the AP→CPE
         # mapping here. A cached CPE session keeps authenticating on its old
@@ -691,6 +708,9 @@ class NetworkPoller:
         if not ap:
             return False
 
+        # A manual request must make a fresh device read even when scheduled
+        # polling has paused this device after repeated failures.
+        self._clear_poll_backoff(ip)
         await self._poll_ap(ap)
         refreshed = db.get_access_point(ip)
 

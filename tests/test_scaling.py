@@ -152,6 +152,38 @@ class TestCircuitBreaker:
         assert not poller._is_backed_off("10.0.0.1")
         assert "10.0.0.1" not in poller._failure_counts
 
+    @pytest.mark.asyncio
+    async def test_manual_ap_poll_clears_backoff_and_runs_fresh_poll(self, monkeypatch):
+        from unittest.mock import AsyncMock
+        from updater import poller as poller_module
+        from updater.poller import NetworkPoller
+
+        poller = NetworkPoller(poll_interval=60)
+        for _ in range(3):
+            poller._record_poll_failure("10.0.0.1")
+        ap = {"ip": "10.0.0.1", "last_error": None}
+        monkeypatch.setattr(poller_module.db, "get_access_point", lambda ip: ap)
+        poller._poll_ap = AsyncMock()
+
+        assert await poller.poll_ap_now("10.0.0.1")
+        assert not poller._is_backed_off("10.0.0.1")
+        poller._poll_ap.assert_awaited_once_with(ap)
+
+    def test_invalidate_client_clears_failure_and_backoff_state(self):
+        from updater.poller import NetworkPoller
+
+        poller = NetworkPoller(poll_interval=60)
+        for _ in range(3):
+            poller._record_poll_failure("10.0.0.1")
+
+        poller.invalidate_client("10.0.0.1")
+
+        assert not poller._is_backed_off("10.0.0.1")
+        assert poller.get_backoff_state("10.0.0.1") == {
+            "consecutive_failures": 0,
+            "backoff_until": None,
+        }
+
     def test_backoff_escalation(self):
         from updater.poller import NetworkPoller
 

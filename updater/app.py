@@ -1429,11 +1429,23 @@ def _strip_credentials(devices: list[dict]) -> list[dict]:
     return devices
 
 
+def _include_backoff_state(devices: list[dict]) -> list[dict]:
+    """Add poller backoff state to AP and switch API rows."""
+    current_poller = get_poller()
+    for device in devices:
+        state = current_poller.get_backoff_state(device["ip"]) if current_poller else {}
+        device.update({
+            "consecutive_failures": state.get("consecutive_failures", 0),
+            "backoff_until": state.get("backoff_until"),
+        })
+    return devices
+
+
 @app.get("/api/aps", tags=["devices"])
 async def list_aps(site_id: int = None, session: dict = Depends(require_auth)):
     """List access points (credentials redacted)."""
     aps = db.get_access_points(tower_site_id=site_id, enabled_only=False)
-    return {"aps": _strip_credentials(aps)}
+    return {"aps": _include_backoff_state(_strip_credentials(aps))}
 
 
 @app.post("/api/aps", tags=["devices"])
@@ -1615,7 +1627,7 @@ async def poll_ap(ip: str, session: dict = Depends(require_role("admin", "operat
 async def list_switches(site_id: int = None, session: dict = Depends(require_auth)):
     """List switches (credentials redacted)."""
     switches = db.get_switches(tower_site_id=site_id, enabled_only=False)
-    return {"switches": _strip_credentials(switches)}
+    return {"switches": _include_backoff_state(_strip_credentials(switches))}
 
 
 @app.post("/api/switches", tags=["devices"])
