@@ -795,23 +795,19 @@ class AutoUpdateScheduler:
             ap = db.get_access_point(parent_ip)
             cpes = db.get_cpes_for_ap(parent_ip)
             for cpe in cpes:
-                cpe_ip = cpe.get("ip")
-                if not cpe_ip:
-                    continue
+                cpe_ip = cpe.get("ip") or "unknown"
                 status = "precheck_unavailable"
-                if ap and poller is not None:
+                if cpe_ip == "unknown":
+                    status = "missing_ip"
+                elif ap and poller is not None:
                     try:
-                        fresh_due = poller._fresh_cpe_login_due(cpe_ip, settings, now)
-                        if fresh_due:
-                            status = await poller._check_cpe_auth(
-                                cpe_ip, ap["username"], ap["password"],
-                                force_fresh_login=True,
-                            )
-                            if status == "ok":
-                                poller.record_cpe_fresh_login_check(cpe_ip, settings, now)
-                            db.update_cpe_auth_status(parent_ip, cpe_ip, status)
-                        else:
-                            status = cpe.get("auth_status") or "unknown"
+                        status = await poller._check_cpe_auth(
+                            cpe_ip, ap["username"], ap["password"],
+                            force_fresh_login=True,
+                        )
+                        if status == "ok":
+                            poller.record_cpe_fresh_login_check(cpe_ip, settings, now)
+                        db.update_cpe_auth_status(parent_ip, cpe_ip, status)
                     except Exception:
                         logger.exception("CPE credential precheck failed for %s", cpe_ip)
                         status = "precheck_unavailable"

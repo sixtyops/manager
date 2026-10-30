@@ -93,6 +93,11 @@ class TestCpeCredentialAdmission:
             "schedule_end_hour": "4",
             "schedule_timezone": "America/Chicago",
         }
+        # Simulate an earlier fresh login in this period. Wave admission must
+        # still perform its own current-window precheck instead of trusting
+        # this marker or the stored auth_status.
+        poller.record_cpe_fresh_login_check(cpe_ip, settings, now)
+        assert not poller._fresh_cpe_login_due(cpe_ip, settings, now)
 
         set_poller(poller)
         try:
