@@ -129,14 +129,13 @@ def _age_cached_cpe_login(poller, cpe_ip: str) -> bool:
 
 
 async def _logout_cpe_session(recorder: Recorder, ip: str, client) -> bool:
-    """End the authenticated device session through the client's request helper."""
+    """Invalidate this bench-owned cached token so the next poll logs in again."""
     if not recorder.owns_session(ip, client):
         return False
-    try:
-        status, _ = await client._curl("DELETE", "/cgi.lua/apiv1/login")
-    except Exception:
+    if not getattr(client, "_token", None):
         return False
-    return 200 <= status < 300
+    client._token = None
+    return True
 
 
 class RunErrorHandler(logging.Handler):

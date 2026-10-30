@@ -85,22 +85,20 @@ def test_age_helper_moves_cached_login_past_ttl():
 
 
 @pytest.mark.asyncio
-async def test_logout_helper_uses_authenticated_device_logout_only_for_bench_session():
+async def test_logout_helper_invalidates_only_bench_owned_cached_token():
     class Client:
-        async def _curl(self, method, endpoint):
-            self.request = (method, endpoint)
-            return 204, ""
+        _token = "bench-session-token"
 
     client = Client()
     recorder = Recorder(0)
     recorder.login("192.0.2.2", True, client=client)
 
     assert await _logout_cpe_session(recorder, "192.0.2.2", client)
-    assert client.request == ("DELETE", "/cgi.lua/apiv1/login")
+    assert client._token is None
 
     unrelated = Client()
     assert not await _logout_cpe_session(recorder, "192.0.2.2", unrelated)
-    assert not hasattr(unrelated, "request")
+    assert unrelated._token == "bench-session-token"
 
 
 @pytest.mark.parametrize(
