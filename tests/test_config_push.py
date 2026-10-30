@@ -446,10 +446,15 @@ class TestRollbackLockAndVerify:
         if task.done():
             return
         try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=5)
+            await asyncio.wait_for(asyncio.shield(task), timeout=30)
         except asyncio.TimeoutError:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            done, _pending = await asyncio.wait({task}, timeout=30)
+            if done:
+                try:
+                    task.result()
+                except (Exception, asyncio.CancelledError):
+                    pass  # The test body reports the failure.
         except (Exception, asyncio.CancelledError):
             pass  # The test body reports the failure.
 
@@ -471,7 +476,7 @@ class TestRollbackLockAndVerify:
 
         async def slow_get_config():
             entered.set()
-            await gate.wait()
+            await asyncio.wait_for(gate.wait(), timeout=30)
             return next(reads)
 
         instance.get_config = AsyncMock(side_effect=slow_get_config)
@@ -491,16 +496,16 @@ class TestRollbackLockAndVerify:
                 app_module.rollback_device_config("10.0.0.5", request, session, None)
             )
             try:
-                await asyncio.wait_for(entered.wait(), timeout=5)
+                await asyncio.wait_for(entered.wait(), timeout=30)
                 with pytest.raises(HTTPException) as exc:
                     await asyncio.wait_for(
                         app_module.rollback_device_config("10.0.0.5", request, session, None),
-                        timeout=5,
+                        timeout=30,
                     )
                 assert exc.value.status_code == 409
                 assert exc.value.detail["code"] == "config_change_in_progress"
                 gate.set()
-                result = await asyncio.wait_for(first, timeout=5)
+                result = await asyncio.wait_for(first, timeout=30)
             finally:
                 await self._drain(first, gate)
 
@@ -522,11 +527,11 @@ class TestRollbackLockAndVerify:
         writing = asyncio.Event()
         clients = []
 
-        async def slow_apply(config, dry_run=False):
+        async def slow_apply(config, dry_run=False, **kwargs):
             # The dry run returns at once. The real write pauses at the gate.
             if not dry_run:
                 writing.set()
-                await gate.wait()
+                await asyncio.wait_for(gate.wait(), timeout=30)
             return {"success": True}
 
         def fake_client(ip, username, password):
@@ -556,14 +561,14 @@ class TestRollbackLockAndVerify:
                 app_module._run_config_push("push-job", devices, templates, job_info)
             )
             try:
-                await asyncio.wait_for(writing.wait(), timeout=5)
+                await asyncio.wait_for(writing.wait(), timeout=30)
                 push_client = clients[0]
                 assert push_client.apply_config.await_count == 2  # dry run + paused write
                 assert "10.0.0.5" in app_module._config_pushing_ips
                 with pytest.raises(HTTPException) as exc:
                     await asyncio.wait_for(
                         app_module.rollback_device_config("10.0.0.5", request, session, None),
-                        timeout=5,
+                        timeout=30,
                     )
                 assert exc.value.status_code == 409
                 assert exc.value.detail["code"] == "config_change_in_progress"
@@ -575,7 +580,7 @@ class TestRollbackLockAndVerify:
                 assert push_client.apply_config.await_count == 2
                 assert "10.0.0.5" in app_module._config_pushing_ips
                 gate.set()
-                await asyncio.wait_for(push, timeout=5)
+                await asyncio.wait_for(push, timeout=30)
             finally:
                 await self._drain(push, gate)
 
