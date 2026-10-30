@@ -405,20 +405,33 @@ class NetworkPoller:
 
             # Fetch bank info for AP
             bank_kwargs = {}
+            bank_warning = None
             try:
                 device_info = await client.get_device_info()
-                bank_kwargs = {
-                    "bank1_version": device_info.bank1_version,
-                    "bank2_version": device_info.bank2_version,
-                    "active_bank": device_info.active_bank,
-                }
+                if hasattr(client, "get_bootbank_info"):
+                    bank_read = await client.get_bootbank_info()
+                    bank_warning = bank_read.warning
+                    if not bank_warning:
+                        bank_kwargs = {
+                            "bank1_version": bank_read.bank1_version,
+                            "bank2_version": bank_read.bank2_version,
+                            "active_bank": bank_read.active_bank,
+                        }
+                else:
+                    bank_kwargs = {
+                        "bank1_version": device_info.bank1_version,
+                        "bank2_version": device_info.bank2_version,
+                        "active_bank": device_info.active_bank,
+                    }
             except Exception as e:
-                logger.debug(f"Failed to get bank info for AP {ip}: {e}")
+                bank_warning = f"Boot bank read failed ({type(e).__name__})"
+            if bank_warning:
+                logger.warning("AP boot bank read warning: %s", bank_warning)
 
             db.update_ap_status(
                 ip,
                 last_seen=datetime.now().isoformat(),
-                last_error=None,
+                last_error=bank_warning,
                 system_name=ap_info.get("system_name"),
                 model=ap_info.get("model"),
                 mac=ap_info.get("mac"),
