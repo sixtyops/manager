@@ -532,7 +532,7 @@ async def test_phases_progress_one_per_window(mock_db, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("exclusion", ["disabled", "scope"])
+@pytest.mark.parametrize("exclusion", ["disabled", "scope", "missing"])
 async def test_disabled_saved_member_is_terminal_and_rollout_completes(
     mock_db, monkeypatch, exclusion
 ):
@@ -551,6 +551,9 @@ async def test_disabled_saved_member_is_terminal_and_rollout_completes(
     if exclusion == "disabled":
         assert db.bulk_set_enabled("ap", [disabled_ip], False) == 1
         terminal_status = "disabled"
+    elif exclusion == "missing":
+        db.delete_access_point(disabled_ip)
+        terminal_status = "removed (archived)"
     else:
         settings = db.get_all_settings()
         settings.update(
@@ -573,6 +576,57 @@ async def test_disabled_saved_member_is_terminal_and_rollout_completes(
 
     assert start_update.call_count == 3
     assert db.get_rollout(rollout_id)["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_empty_phase_advances_through_gate_and_waits_for_next_window(
+    mock_db, monkeypatch
+):
+    _seed_aps(2)
+    db.set_settings(_settings(hold_days=0))
+    ips = [device["ip"] for device in db.get_access_points()]
+    rollout_id = db.create_rollout(
+        FW,
+        members=[{"ip": ip, "device_type": "ap"} for ip in ips],
+        settings_snapshot={},
+    )
+    scheduler, start_update = _make_scheduler()
+    harness = _Harness(scheduler, monkeypatch)
+
+    def candidates_for_phase(rollout, *_args):
+        return [ips[0]] if rollout["phase"] == "pct50" else []
+
+    monkeypatch.setattr(scheduler, "_get_devices_for_phase", candidates_for_phase)
+    monkeypatch.setattr(scheduler, "_get_switches_for_phase", lambda *_args: [])
+
+    await harness.tick(day=2)
+
+    advanced = db.get_rollout(rollout_id)
+    assert advanced["phase"] == "pct50"
+    assert advanced["last_phase_window"]
+    start_update.assert_not_awaited()
+
+    await harness.tick(day=2)
+    assert db.get_rollout(rollout_id)["phase"] == "pct50"
+    start_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rollout_with_only_terminal_members_closes(mock_db, monkeypatch):
+    _seed_aps(1)
+    db.set_settings(_settings(hold_days=0))
+    ip = db.get_access_points()[0]["ip"]
+    rollout_id = db.create_rollout(
+        FW, members=[{"ip": ip, "device_type": "ap"}], settings_snapshot={}
+    )
+    db.mark_rollout_device(rollout_id, ip, "removed (archived)")
+    scheduler, start_update = _make_scheduler()
+    harness = _Harness(scheduler, monkeypatch)
+
+    await harness.tick(day=2)
+
+    assert db.get_rollout(rollout_id)["status"] == "completed"
+    start_update.assert_not_awaited()
 
 
 @pytest.mark.asyncio

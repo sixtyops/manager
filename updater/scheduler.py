@@ -753,6 +753,57 @@ class AutoUpdateScheduler:
             if not self._scheduled_admission_allowed():
                 await self._broadcast_status()
                 return
+            try:
+                members = db.get_rollout_devices(rollout["id"])
+            except Exception as exc:
+                logger.warning("Could not read rollout members after an empty phase: %s", exc)
+                self._state = "waiting"
+                self._block_reason = "Could not read rollout members; retry next tick"
+                await self._broadcast_status()
+                return
+
+            unfinished = [
+                member for member in members
+                if member["status"] not in {
+                    "updated", "failed", "disabled", "removed (scope)",
+                    "removed (archived)", "removed (no_target)", "skipped_current",
+                }
+            ]
+            if members and not unfinished:
+                # Reuse the rollout completion path. No device work remains, so
+                # advance its state to the same terminal phase used after a job.
+                while rollout["phase"] != db.PHASE_ORDER[-1]:
+                    db.complete_rollout_phase(rollout["id"])
+                    rollout = db.get_rollout(rollout["id"])
+                db.complete_rollout_phase(rollout["id"])
+                self._state = "idle"
+                self._block_reason = None
+                db.log_schedule_event("rollout_completed", f"Rollout {rollout['id']} completed")
+                await self._broadcast_status()
+                return
+
+            # A phase can be empty after a prior wave reserved later members.
+            # Advance one phase only when a later phase has eligible candidates.
+            later_candidates = False
+            current_index = db.PHASE_ORDER.index(rollout["phase"])
+            for phase in db.PHASE_ORDER[current_index + 1:]:
+                later_rollout = {**rollout, "phase": phase}
+                if (
+                    self._get_devices_for_phase(later_rollout, scope_ips, allow_downgrade, settings)
+                    or self._get_switches_for_phase(later_rollout, switch_scope, allow_downgrade, settings)
+                ):
+                    later_candidates = True
+                    break
+            if later_candidates:
+                # phase_run_decision above is the shared gate; save its window
+                # marker before advancing so the next phase waits for a new one.
+                db.set_rollout_phase_window(rollout["id"], window_key)
+                db.complete_rollout_phase(rollout["id"])
+                self._state = "waiting"
+                self._block_reason = "Empty phase advanced; next phase waits for the next window"
+                await self._broadcast_status()
+                return
+
             self._state = "waiting"
             self._block_reason = "No schedulable devices; retry this wave in a later window"
             await self._broadcast_status()
@@ -1236,6 +1287,9 @@ class AutoUpdateScheduler:
             device_type = member["device_type"]
             device = inventories.get(device_type, {}).get(member["ip"])
             if device is None:
+                db.mark_rollout_device(
+                    rollout["id"], member["ip"], "removed (archived)"
+                )
                 continue
             if not device.get("enabled"):
                 db.mark_rollout_device(rollout["id"], member["ip"], "disabled")
