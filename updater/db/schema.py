@@ -516,21 +516,6 @@ def build_schema(db: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(username, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
 
-        CREATE TABLE IF NOT EXISTS api_tokens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            token_hash TEXT NOT NULL UNIQUE,
-            token_prefix TEXT NOT NULL,
-            user_id INTEGER NOT NULL,
-            scopes TEXT DEFAULT 'read',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            last_used_at TEXT,
-            expires_at TEXT,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
-        CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
-
         CREATE TABLE IF NOT EXISTS freeze_windows (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,

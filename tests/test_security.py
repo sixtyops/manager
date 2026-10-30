@@ -724,11 +724,15 @@ class TestCSRFMiddleware:
         assert resp.status_code == 403
         assert "csrf" in resp.text.lower()
 
-    def test_bearer_token_skips_csrf(self, client, mock_db):
-        """API-token auth has no cookie credential, so CSRF doesn't apply.
-        We just verify the middleware doesn't reject before auth runs."""
-        # No real token registered — we just check the response is NOT a
-        # CSRF 403 ("missing origin/referer..."). Auth will 401 instead.
+    def test_api_token_routes_are_removed(self, authed_client):
+        assert authed_client.get("/api/tokens").status_code == 404
+        assert authed_client.post("/api/tokens", json={"name": "retired"},
+                                  headers={"Origin": "http://testserver"}).status_code == 404
+        assert authed_client.delete("/api/tokens/1",
+                                     headers={"Origin": "http://testserver"}).status_code == 404
+
+    def test_bearer_header_does_not_authenticate(self, client, mock_db):
+        """A Bearer header without a session does not authenticate."""
         resp = client.post(
             "/api/aps",
             data={"ip": "10.0.0.54", "username": "root", "password": "x" * 8},

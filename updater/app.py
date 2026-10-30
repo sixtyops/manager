@@ -65,7 +65,7 @@ from .firmware_policy import (
 from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
 from . import services
 from . import rollout_gate
-from .auth import require_auth, require_auth_ws, require_role, require_write_scope, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user, generate_api_token
+from .auth import require_auth, require_auth_ws, require_role, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user
 from .backup import build_csv_export, process_csv_import
 from . import slack
 from . import snmp
@@ -363,7 +363,6 @@ def _run_daily_data_housekeeping():
     if os.environ.get("SIXTYOPS_APPLIANCE") == "1":
         _run_backup_git_gc()
     db.cleanup_old_audit_log()
-    db.cleanup_expired_api_tokens()
     _last_data_housekeeping_day = today
 
 
@@ -709,7 +708,6 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
     Skipped:
     - Safe methods (GET/HEAD/OPTIONS/TRACE).
-    - Bearer-token auth: no cookie credential, can't be forged from HTML.
     - Requests without a session cookie: nothing to forge.
     """
 
@@ -717,9 +715,6 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request, call_next):
         if request.method in self.SAFE_METHODS:
-            return await call_next(request)
-
-        if request.headers.get("authorization", "").lower().startswith("bearer "):
             return await call_next(request)
 
         if not request.cookies.get(SESSION_COOKIE_NAME):
@@ -3594,84 +3589,6 @@ async def get_audit_log_api(
     entries = db.get_audit_log(limit=limit, offset=offset, username=username, action=action)
     total = db.get_audit_log_count(username=username, action=action)
     return {"entries": entries, "total": total}
-
-
-# ---------------------------------------------------------------------------
-# API token management
-# ---------------------------------------------------------------------------
-
-@app.get("/api/tokens", tags=["auth"])
-async def list_tokens_api(session: dict = Depends(require_auth)):
-    """List API tokens for the current user (admins see all)."""
-    if session.get("role") == "admin":
-        tokens = db.list_api_tokens()
-    else:
-        tokens = db.list_api_tokens(user_id=session.get("user_id"))
-    return {"tokens": tokens}
-
-
-@app.post("/api/tokens", tags=["auth"])
-async def create_token_api(request: Request, session: dict = Depends(require_role("admin", "operator"))):
-    """Create a new API token. Returns the token value (shown only once).
-
-    Restricted to admin/operator: tokens can carry write scope and survive
-    session revocation, so viewers must not be able to mint them.
-    """
-    data = await request.json()
-    name = data.get("name", "").strip()
-    if not name:
-        raise HTTPException(400, "Token name is required")
-    if len(name) > 100:
-        raise HTTPException(400, "Token name too long")
-
-    scopes = data.get("scopes", "read")
-    if scopes not in ("read", "read,write"):
-        raise HTTPException(400, "Scopes must be 'read' or 'read,write'")
-    # Only admins can mint write-scoped tokens.
-    if scopes == "read,write" and session.get("role") != "admin":
-        raise HTTPException(403, "Only admins can create write-scoped tokens")
-
-    # Reject the synthetic env-fallback admin (user_id=0): tokens must be
-    # owned by a real user row so revocation/audit ties back to a person.
-    user_id = session.get("user_id", 0)
-    if not user_id:
-        raise HTTPException(403, "Token creation requires a real user account")
-
-    expires_days = data.get("expires_days")
-    expires_at = None
-    if expires_days:
-        expires_days = int(expires_days)
-        if expires_days < 1 or expires_days > 365:
-            raise HTTPException(400, "expires_days must be 1-365")
-        expires_at = (datetime.now() + timedelta(days=expires_days)).isoformat()
-
-    token, token_hash, token_prefix = generate_api_token()
-    token_id = db.create_api_token(
-        name=name,
-        token_hash=token_hash,
-        token_prefix=token_prefix,
-        user_id=user_id,
-        scopes=scopes,
-        expires_at=expires_at,
-    )
-    db.log_audit(session["username"], "token.create", "api_token", str(token_id),
-                 f"Created token '{name}'", _client_ip(request))
-    return {"id": token_id, "token": token, "prefix": token_prefix, "name": name}
-
-
-@app.delete("/api/tokens/{token_id}", tags=["auth"])
-async def delete_token_api(token_id: int, request: Request, session: dict = Depends(require_auth)):
-    """Delete an API token."""
-    # Admins can delete any token; others can only delete their own
-    if session.get("role") == "admin":
-        deleted = db.delete_api_token(token_id)
-    else:
-        deleted = db.delete_api_token(token_id, user_id=session.get("user_id"))
-    if not deleted:
-        raise HTTPException(404, "Token not found")
-    db.log_audit(session["username"], "token.delete", "api_token", str(token_id),
-                 None, _client_ip(request))
-    return {"ok": True}
 
 
 @app.get("/api/time", tags=["system"])
@@ -7331,9 +7248,7 @@ async def get_config_compliance(
     """
     polled = 0
     if refresh:
-        # refresh=true polls the whole fleet and writes config state — a write
-        # action reached via GET, so read-only tokens must not trigger it.
-        require_write_scope(session)
+        # refresh=true polls the whole fleet and writes config state.
         poller = get_poller()
         if poller:
             ap_ips = list(db.get_all_access_points_dict(enabled_only=True).keys())

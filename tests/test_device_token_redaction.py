@@ -6,7 +6,6 @@ import json
 import logging
 import sys
 import weakref
-from collections import OrderedDict
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -25,7 +24,6 @@ def isolated_device_registry(monkeypatch):
     monkeypatch.setattr(scrub, "_device_tokens", {})
     monkeypatch.setattr(scrub, "_secrets", set())
     monkeypatch.setattr(scrub, "_pattern", None)
-    monkeypatch.setattr(scrub, "_generated_api_tokens", OrderedDict())
 
 
 @pytest.fixture
@@ -272,27 +270,6 @@ def test_longer_ordinary_secret_and_shorter_device_token_share_one_pass(
     assert "synthetic-private-suffix" not in stream.getvalue()
 
 
-@pytest.mark.parametrize("device_first", [True, False])
-@pytest.mark.parametrize("device_longer", [True, False])
-@pytest.mark.parametrize("form", [str, repr, json.dumps])
-def test_api_and_device_literals_share_one_pass(
-        output, token_owner, monkeypatch, device_first, device_longer, form):
-    monkeypatch.setattr(scrub, "_generated_api_tokens", OrderedDict())
-    shorter = 'synthetic-quote"backslash\\token'
-    longer = shorter + "-synthetic-private-suffix"
-    device_token, api_token = (longer, shorter) if device_longer else (shorter, longer)
-    registrations = [
-        lambda: scrub.register_device_token(token_owner, device_token),
-        lambda: scrub.register_generated_api_token(api_token),
-    ]
-    for register in registrations if device_first else reversed(registrations):
-        register()
-    driver.logger.warning("diagnostic=%s", form(longer))
-    stream, _ = output
-    assert "diagnostic=" + form("[REDACTED]") in stream.getvalue()
-    assert "synthetic-private-suffix" not in stream.getvalue()
-
-
 @pytest.mark.parametrize("prefix", ["", "synthetic-device-prefix-"])
 @pytest.mark.parametrize("form", [str, repr, json.dumps])
 def test_device_token_with_api_shaped_substring_redacts_full_span(
@@ -305,25 +282,6 @@ def test_device_token_with_api_shaped_substring_redacts_full_span(
     assert "device=" + form("[REDACTED]") + "\n" in stream.getvalue()
     assert "device-private-suffix" not in stream.getvalue()
     assert "synthetic-device-prefix" not in stream.getvalue()
-
-
-@pytest.mark.parametrize("form", [str, repr, json.dumps])
-def test_full_device_span_and_evicted_api_span_survive_shorter_prefix(
-        output, token_owner, monkeypatch, form):
-    monkeypatch.setattr(scrub, "_GENERATED_API_TOKEN_LIMIT", 1)
-    api_shape = "tach_" + "Q" * 43
-    scrub.register_generated_api_token(api_shape)
-    scrub.register_generated_api_token("tach_" + "R" * 43)
-    assert api_shape not in scrub._generated_api_tokens
-    device_token = "synthetic-device-prefix-" + api_shape + "-device-private-suffix"
-    scrub.register_device_token(token_owner, device_token)
-    scrub.register_secret("tach_")
-    driver.logger.warning("device=%s api=%s prefix=%s", form(device_token), form(api_shape), "tach_")
-    stream, _ = output
-    expected = "device=" + form("[REDACTED]") + " api=" + form("[REDACTED]") + " prefix=[REDACTED]\n"
-    assert expected in stream.getvalue()
-    assert "device-private-suffix" not in stream.getvalue()
-    assert "Q" * 43 not in stream.getvalue()
 
 
 @pytest.mark.parametrize("device_first", [True, False])

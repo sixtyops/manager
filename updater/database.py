@@ -720,7 +720,7 @@ def init_db():
 
     with get_db() as db:
         # Pre-schema migration: drop tables with incompatible schemas (pre-release)
-        for _tbl, _req in [("audit_log", {"username"}), ("api_tokens", {"user_id"})]:
+        for _tbl, _req in [("audit_log", {"username"})]:
             _cols = {r[1] for r in db.execute(f"PRAGMA table_info({_tbl})").fetchall()}
             if _cols and not _req.issubset(_cols):
                 db.execute(f"DROP TABLE {_tbl}")
@@ -3806,22 +3806,6 @@ def cleanup_old_audit_log(max_age_days: int = 90):
 
 
 # ---------------------------------------------------------------------------
-# API tokens
-# ---------------------------------------------------------------------------
-
-def create_api_token(name: str, token_hash: str, token_prefix: str,
-                     user_id: int, scopes: str = "read", expires_at: str = None) -> int:
-    """Create a new API token. Returns the token ID."""
-    with get_db() as conn:
-        cursor = conn.execute(
-            """INSERT INTO api_tokens (name, token_hash, token_prefix, user_id, scopes, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (name, token_hash, token_prefix, user_id, scopes, expires_at),
-        )
-        return cursor.lastrowid
-
-
-# ---------------------------------------------------------------------------
 # Device groups
 # ---------------------------------------------------------------------------
 
@@ -3849,15 +3833,6 @@ def create_freeze_window(name: str, start_date: str, end_date: str,
             (name, start_date, end_date, reason),
         )
         return cursor.lastrowid
-
-
-def get_api_token_by_hash(token_hash: str) -> Optional[dict]:
-    """Look up a token by its hash."""
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM api_tokens WHERE token_hash = ?", (token_hash,)
-        ).fetchone()
-        return dict(row) if row else None
 
 
 def list_freeze_windows() -> list[dict]:
@@ -3894,51 +3869,6 @@ def get_device_group(group_id: int) -> Optional[dict]:
             "SELECT * FROM device_groups WHERE id = ?", (group_id,)
         ).fetchone()
         return dict(row) if row else None
-
-
-def list_api_tokens(user_id: int = None) -> list[dict]:
-    """List API tokens, optionally filtered by user."""
-    with get_db() as conn:
-        if user_id is not None:
-            rows = conn.execute(
-                "SELECT id, name, token_prefix, user_id, scopes, created_at, last_used_at, expires_at FROM api_tokens WHERE user_id = ? ORDER BY created_at DESC",
-                (user_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id, name, token_prefix, user_id, scopes, created_at, last_used_at, expires_at FROM api_tokens ORDER BY created_at DESC"
-            ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def update_api_token_last_used(token_id: int):
-    """Update the last_used_at timestamp for a token."""
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE api_tokens SET last_used_at = ? WHERE id = ?",
-            (datetime.now().isoformat(), token_id),
-        )
-
-
-def delete_api_token(token_id: int, user_id: int = None) -> bool:
-    """Delete an API token. If user_id is provided, only delete if owned by that user."""
-    with get_db() as conn:
-        if user_id is not None:
-            cursor = conn.execute(
-                "DELETE FROM api_tokens WHERE id = ? AND user_id = ?", (token_id, user_id)
-            )
-        else:
-            cursor = conn.execute("DELETE FROM api_tokens WHERE id = ?", (token_id,))
-        return cursor.rowcount > 0
-
-
-def cleanup_expired_api_tokens():
-    """Delete expired API tokens."""
-    with get_db() as conn:
-        conn.execute(
-            "DELETE FROM api_tokens WHERE expires_at IS NOT NULL AND expires_at < ?",
-            (datetime.now().isoformat(),),
-        )
 
 
 def update_freeze_window(window_id: int, **kwargs) -> bool:
