@@ -733,6 +733,12 @@ class AutoUpdateScheduler:
         scope_ips = self._resolve_scope(settings)
         switch_scope = self._resolve_switch_scope(settings)
 
+        if not self._mark_excluded_rollout_members(rollout, scope_ips, switch_scope):
+            self._state = "waiting"
+            self._block_reason = "Could not read rollout eligibility; retry next tick"
+            await self._broadcast_status()
+            return
+
 
         if not scope_ips and not switch_scope:
             self._state = "idle"
@@ -1132,7 +1138,13 @@ class AutoUpdateScheduler:
         cooldown_days = _as_int(actual_settings.get("firmware_update_cooldown_days", "30"), 30)
 
         existing_devices = db.get_rollout_devices(rollout_id)
-        already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "failed")}
+        already_done = {
+            d["ip"] for d in existing_devices
+            if d["status"] in (
+                "updated", "failed", "disabled", "removed (scope)",
+                "removed (archived)", "removed (no_target)", "skipped_current",
+            )
+        }
         member_ips = {
             d["ip"] for d in existing_devices if d["device_type"] == "ap"
         }
@@ -1171,7 +1183,13 @@ class AutoUpdateScheduler:
         cooldown_days = _as_int(actual_settings.get("firmware_update_cooldown_days", "30"), 30)
 
         existing_devices = db.get_rollout_devices(rollout_id)
-        already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "failed")}
+        already_done = {
+            d["ip"] for d in existing_devices
+            if d["status"] in (
+                "updated", "failed", "disabled", "removed (scope)",
+                "removed (archived)", "removed (no_target)", "skipped_current",
+            )
+        }
         member_ips = {
             d["ip"] for d in existing_devices if d["device_type"] == "switch"
         }
@@ -1195,6 +1213,37 @@ class AutoUpdateScheduler:
                 candidates.append(ip)
 
         return self._select_phase_batch(phase, candidates)
+
+    def _mark_excluded_rollout_members(
+        self, rollout: dict, scope_ips: list[str], switch_scope: list[str]
+    ) -> bool:
+        """Mark excluded members terminal; return false when eligibility is unknown."""
+        try:
+            ap_inventory = db.get_all_access_points_dict(enabled_only=False)
+            switch_inventory = db.get_all_switches_dict(enabled_only=False)
+            members = db.get_rollout_devices(rollout["id"])
+        except Exception as exc:
+            logger.warning(
+                "Could not read rollout eligibility; saved members remain pending: %s", exc
+            )
+            return False
+
+        scopes = {"ap": set(scope_ips), "switch": set(switch_scope)}
+        inventories = {"ap": ap_inventory, "switch": switch_inventory}
+        for member in members:
+            if member["status"] not in ("pending", "deferred"):
+                continue
+            device_type = member["device_type"]
+            device = inventories.get(device_type, {}).get(member["ip"])
+            if device is None:
+                continue
+            if not device.get("enabled"):
+                db.mark_rollout_device(rollout["id"], member["ip"], "disabled")
+            elif member["ip"] not in scopes.get(device_type, set()):
+                db.mark_rollout_device(
+                    rollout["id"], member["ip"], "removed (scope)"
+                )
+        return True
 
     def _select_phase_batch(self, phase: str, candidates: list[str]) -> list[str]:
         """Select the devices for a rollout wave (pct10 -> pct50 -> pct100)."""

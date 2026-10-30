@@ -532,6 +532,76 @@ async def test_phases_progress_one_per_window(mock_db, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("exclusion", ["disabled", "scope"])
+async def test_disabled_saved_member_is_terminal_and_rollout_completes(
+    mock_db, monkeypatch, exclusion
+):
+    _seed_aps(10)
+    db.set_settings(_settings(hold_days=0))
+    scheduler, start_update = _make_scheduler()
+    h = _Harness(scheduler, monkeypatch)
+
+    await h.tick(day=2)
+    rollout = db.get_active_rollout()
+    rollout_id = rollout["id"]
+    h.complete_job()
+
+    devices = db.get_access_points()
+    disabled_ip = devices[-1]["ip"]
+    if exclusion == "disabled":
+        assert db.bulk_set_enabled("ap", [disabled_ip], False) == 1
+        terminal_status = "disabled"
+    else:
+        settings = db.get_all_settings()
+        settings.update(
+            schedule_scope="aps",
+            schedule_scope_data=",".join(device["ip"] for device in devices[:-1]),
+        )
+        db.set_settings(settings)
+        terminal_status = "removed (scope)"
+
+    await h.tick(day=3)
+    member = next(
+        row for row in db.get_rollout_devices(rollout_id)
+        if row["ip"] == disabled_ip
+    )
+    assert member["status"] == terminal_status
+    h.complete_job()
+
+    await h.tick(day=4)
+    h.complete_job()
+
+    assert start_update.call_count == 3
+    assert db.get_rollout(rollout_id)["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_saved_member_back_in_scope_before_wave_is_processed_normally(
+    mock_db, monkeypatch
+):
+    fleet = make_fleet(sites=1, aps_per_site=2, switches_per_site=0,
+                       ap_models=("TNA-301",))
+    saved_ip = fleet["aps"][1]["ip"]
+    settings = _settings(hold_days=0)
+    settings.update(schedule_scope="aps", schedule_scope_data=fleet["aps"][0]["ip"])
+    db.set_settings(settings)
+    rollout_id = db.create_rollout(
+        FW,
+        members=[{"ip": saved_ip, "device_type": "ap"}],
+        settings_snapshot={},
+    )
+
+    settings["schedule_scope_data"] = saved_ip
+    db.set_settings(settings)
+    scheduler, start_update = _make_scheduler()
+    await _Harness(scheduler, monkeypatch).tick()
+
+    assert start_update.call_count == 1
+    assert start_update.call_args.kwargs["ap_ips"] == [saved_ip]
+    assert db.get_rollout_devices(rollout_id)[0]["status"] == "pending"
+
+
+@pytest.mark.asyncio
 async def test_held_phase_logs_event(mock_db, monkeypatch):
     """Holding the next wave for the window rule emits an observable event."""
     _seed_aps(10)
