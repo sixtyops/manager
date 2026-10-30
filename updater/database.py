@@ -283,14 +283,6 @@ def _migrate(db):
     if "canary_completed_at" not in rollout_columns:
         db.execute("ALTER TABLE rollouts ADD COLUMN canary_completed_at TEXT")
 
-    # Add templates_snapshot to config_push_rollouts
-    try:
-        cpr_columns = [row[1] for row in db.execute("PRAGMA table_info(config_push_rollouts)").fetchall()]
-        if cpr_columns and "templates_snapshot" not in cpr_columns:
-            db.execute("ALTER TABLE config_push_rollouts ADD COLUMN templates_snapshot TEXT")
-    except Exception:
-        pass  # Table may not exist yet
-
     # Add target_ips_json to radius_rollouts
     try:
         rr_columns = [row[1] for row in db.execute("PRAGMA table_info(radius_rollouts)").fetchall()]
@@ -3361,125 +3353,6 @@ def delete_config_template(template_id: int):
         db.execute("DELETE FROM config_templates WHERE id = ?", (template_id,))
 
 
-# ---------------------------------------------------------------------------
-# Config push rollouts
-# ---------------------------------------------------------------------------
-
-CONFIG_PUSH_PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
-
-
-def create_config_push_rollout(template_ids_json: str, template_names: str, templates_snapshot: str = None) -> int:
-    now = datetime.now().isoformat()
-    with get_db() as conn:
-        cursor = conn.execute(
-            """INSERT INTO config_push_rollouts
-               (template_ids, template_names, templates_snapshot, phase, status, created_at, updated_at)
-               VALUES (?, ?, ?, 'canary', 'active', ?, ?)""",
-            (template_ids_json, template_names, templates_snapshot, now, now),
-        )
-        return cursor.lastrowid
-
-
-def get_active_config_push_rollout() -> Optional[dict]:
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM config_push_rollouts WHERE status IN ('active', 'paused') ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        return dict(row) if row else None
-
-
-def get_current_config_push_rollout() -> Optional[dict]:
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM config_push_rollouts ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        return dict(row) if row else None
-
-
-def get_config_push_rollout(rollout_id: int) -> Optional[dict]:
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM config_push_rollouts WHERE id = ?", (rollout_id,)
-        ).fetchone()
-        return dict(row) if row else None
-
-
-def update_config_push_rollout_status(rollout_id: int, status: str, pause_reason: str = ""):
-    now = datetime.now().isoformat()
-    completed_at = now if status == "completed" else None
-    with get_db() as conn:
-        conn.execute(
-            """UPDATE config_push_rollouts
-               SET status = ?, pause_reason = ?, updated_at = ?,
-                   completed_at = COALESCE(?, completed_at)
-               WHERE id = ?""",
-            (status, pause_reason or None, now, completed_at, rollout_id),
-        )
-
-
-def advance_config_push_rollout_phase(rollout_id: int):
-    """Advance to next phase or mark completed if on last phase."""
-    rollout = get_config_push_rollout(rollout_id)
-    if not rollout:
-        return
-    now = datetime.now().isoformat()
-    current = rollout["phase"]
-    if current in CONFIG_PUSH_PHASE_ORDER:
-        idx = CONFIG_PUSH_PHASE_ORDER.index(current)
-        if idx + 1 < len(CONFIG_PUSH_PHASE_ORDER):
-            next_phase = CONFIG_PUSH_PHASE_ORDER[idx + 1]
-            with get_db() as conn:
-                conn.execute(
-                    """UPDATE config_push_rollouts
-                       SET phase = ?, last_phase_completed_at = ?, updated_at = ?
-                       WHERE id = ?""",
-                    (next_phase, now, now, rollout_id),
-                )
-            return
-    # Last phase — mark completed
-    update_config_push_rollout_status(rollout_id, "completed")
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE config_push_rollouts SET last_phase_completed_at = ?, updated_at = ? WHERE id = ?",
-            (now, now, rollout_id),
-        )
-
-
-def assign_config_push_device(rollout_id: int, ip: str, device_type: str, phase: str):
-    with get_db() as conn:
-        conn.execute(
-            """INSERT OR IGNORE INTO config_push_rollout_devices
-               (rollout_id, ip, device_type, phase_assigned, status)
-               VALUES (?, ?, ?, ?, 'pending')""",
-            (rollout_id, ip, device_type, phase),
-        )
-
-
-def mark_config_push_device(rollout_id: int, ip: str, status: str, error: str = ""):
-    with get_db() as conn:
-        conn.execute(
-            """UPDATE config_push_rollout_devices
-               SET status = ?, error = ?, updated_at = ?
-               WHERE rollout_id = ? AND ip = ?""",
-            (status, error or None, datetime.now().isoformat(), rollout_id, ip),
-        )
-
-
-def get_config_push_rollout_devices(rollout_id: int, phase: str = None) -> list[dict]:
-    with get_db() as conn:
-        if phase:
-            rows = conn.execute(
-                "SELECT * FROM config_push_rollout_devices WHERE rollout_id = ? AND phase_assigned = ? ORDER BY ip",
-                (rollout_id, phase),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM config_push_rollout_devices WHERE rollout_id = ? ORDER BY ip",
-                (rollout_id,),
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-
 def get_config_templates_for_device(ip: str, site_id: int = None) -> list[dict]:
     """Return effective templates for a device: global + site overrides (site wins per category)."""
     with get_db() as db:
@@ -3576,40 +3449,6 @@ def get_config_enforce_log(ip: str = None, limit: int = 50) -> list[dict]:
                 (limit,)
             ).fetchall()
         return [dict(row) for row in rows]
-
-
-def get_config_push_rollout_progress(rollout_id: int) -> dict:
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT status, COUNT(*) AS count FROM config_push_rollout_devices WHERE rollout_id = ? GROUP BY status",
-            (rollout_id,),
-        ).fetchall()
-    result = {"total": 0, "pending": 0, "updated": 0, "failed": 0, "skipped": 0}
-    for row in rows:
-        status = row["status"] or "pending"
-        count = row["count"] or 0
-        result["total"] += count
-        result[status] = count
-    return result
-
-
-def get_config_push_unassigned_count(rollout_id: int) -> int:
-    """Count devices targeted by this rollout that haven't been assigned to a phase yet."""
-    with get_db() as conn:
-        # Total devices = all APs + switches + authenticated CPEs
-        # Assigned = those in config_push_rollout_devices
-        assigned = conn.execute(
-            "SELECT COUNT(*) FROM config_push_rollout_devices WHERE rollout_id = ?",
-            (rollout_id,),
-        ).fetchone()[0]
-        rollout = get_config_push_rollout(rollout_id)
-        if not rollout:
-            return 0
-        total = conn.execute(
-            "SELECT COUNT(*) FROM config_push_rollout_devices WHERE rollout_id = ? AND phase_assigned IS NOT NULL",
-            (rollout_id,),
-        ).fetchone()[0]
-    return 0  # Devices are assigned on-demand in the execution loop
 
 
 def get_enforce_failures(since_hours: int = 24) -> list[dict]:

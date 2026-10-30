@@ -96,14 +96,6 @@ class TestRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_viewer_cannot_resume_config_push_rollout(self, viewer_client):
-        resp = viewer_client.post("/api/config-push/rollout/1/resume")
-        assert resp.status_code == 403
-
-    def test_viewer_cannot_cancel_config_push_rollout(self, viewer_client):
-        resp = viewer_client.post("/api/config-push/rollout/1/cancel")
-        assert resp.status_code == 403
-
     def test_viewer_cannot_restore_recycle_bin(self, viewer_client):
         resp = viewer_client.post("/api/configs/recycle-bin/10.0.0.1/restore")
         assert resp.status_code == 403

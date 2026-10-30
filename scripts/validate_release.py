@@ -123,7 +123,6 @@ class ReleaseValidator:
         "firmware_update",
         "rollout",
         "config_management",
-        "config_push_rollout",
         "radius",
         "users",
         "notifications",
@@ -866,25 +865,7 @@ class ReleaseValidator:
                 except Exception as e:
                     r.record_fail(f"DELETE /api/config-templates/{template_id}", "request error")
 
-    # 9. config_push_rollout -----------------------------------------------
-
-    def test_config_push_rollout(self, r: TestResult) -> None:
-        endpoints = [
-            ("GET", "/api/config-push/rollout", [200, 404]),
-            ("GET", "/api/config-enforce/status", [200]),
-            ("GET", "/api/config-enforce/log", [200]),
-        ]
-        for method, path, ok_codes in endpoints:
-            try:
-                resp = self._request(method, path)
-                if resp.status_code in ok_codes:
-                    r.record_pass(f"{method} {path} -> {resp.status_code}")
-                else:
-                    r.record_fail(f"{method} {path}", f"status {resp.status_code}")
-            except Exception as e:
-                r.record_fail(f"{method} {path}", "request error")
-
-    # 10. radius -----------------------------------------------------------
+    # 9. radius -----------------------------------------------------------
 
     def test_radius(self, r: TestResult) -> None:
         # GET /api/auth/radius

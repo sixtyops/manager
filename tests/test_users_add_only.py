@@ -392,36 +392,6 @@ async def test_immediate_push_records_sanitized_device_rejection(users_db, trans
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", ["add", "add_plain", "same", "change", "login"])
-async def test_rollout_resume_users(users_db, transport, case):
-    snapshot = [{"id": 1, "name": "Users", "fragment": fragment_for(case)}]
-    cursor = users_db.execute(
-        "INSERT INTO config_push_rollouts "
-        "(template_ids, template_names, templates_snapshot, phase, status) VALUES (?, ?, ?, ?, ?)",
-        ("[1]", "Users", json.dumps(snapshot), "canary", "paused"),
-    )
-    rid = cursor.lastrowid
-    users_db.execute(
-        "INSERT INTO config_push_rollout_devices "
-        "(rollout_id, ip, device_type, phase_assigned, status) VALUES (?, ?, ?, ?, ?)",
-        (rid, "192.0.2.1", "ap", "canary", "failed"),
-    )
-    users_db.commit()
-    with patch("updater.app.broadcast", AsyncMock()), patch("updater.app.get_poller", return_value=None):
-        result = await app_module.resume_config_push_rollout(rid, session={"role": "operator"})
-        assert result == {"status": "resumed"}
-        await app_module._config_push_rollout_task
-    assert transport["logins"] == 1
-    check_apply(transport, case)
-    row = db.get_config_push_rollout_devices(rid)[0]
-    assert row["status"] == ("failed" if case in ("change", "login") else "updated")
-    if row["status"] == "failed":
-        assert ("users_existing_user_change" if case == "change" else "users_login_protected") in row["error"]
-        assert db.get_config_push_rollout(rid)["status"] == "paused"
-    assert "192.0.2.1" not in app_module._config_pushing_ips
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["add", "add_plain", "same", "change", "login"])
 async def test_auto_enforce_users(users_db, transport, case):
     result = await NetworkPoller()._enforce_device("192.0.2.1", "ap", [
         {"id": 1, "config_fragment": json.dumps(fragment_for(case))},
