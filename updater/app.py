@@ -6831,6 +6831,7 @@ from .config_utils import (
     validate_fragment_safety as _validate_fragment_safety,
     validate_ping_watchdog_safety as _validate_ping_watchdog_safety,
     deep_merge,
+    merge_template_config,
     generate_config_diff,
     check_config_compliance as _check_config_compliance,
     fragment_matches as _fragment_matches,
@@ -7616,10 +7617,20 @@ async def preview_config_merge(request: Request, session: dict = Depends(require
 
     original = json.loads(stored["config_json"]) if isinstance(stored["config_json"], str) else stored["config_json"]
 
+    device = db.get_access_point(ip) or db.get_switch(ip)
+    if not device:
+        cpe = db.get_cpe_by_ip(ip)
+        if cpe:
+            device = db.get_access_point(cpe["ap_ip"])
+    login_username = device.get("username") if device else None
+
     # Apply only the templates that match this device's type
     merged = original
     for t in applicable:
-        merged = deep_merge(merged, t["fragment"])
+        try:
+            merged = merge_template_config(merged, t["fragment"], login_username)
+        except ValueError as e:
+            raise HTTPException(400, f"Template '{t['name']}' rejected for {ip}: {e}")
 
     diff_lines = generate_config_diff(original, merged, label_a="current", label_b="after merge")
 
@@ -7725,7 +7736,7 @@ async def push_config_templates(request: Request, session: dict = Depends(requir
     # Run config push in background with job tracking
     job_id = str(uuid.uuid4())[:8]
     template_names = ", ".join(t["name"] for t in templates)
-    job_info = {"cancelled": False, "success": 0, "failed": 0, "skipped": 0, "total": len(device_list), "done": False}
+    job_info = {"cancelled": False, "success": 0, "failed": 0, "skipped": 0, "total": len(device_list), "done": False, "results": []}
     task = asyncio.create_task(_run_config_push(job_id, device_list, templates, job_info))
     job_info["task"] = task
     _config_push_jobs[job_id] = job_info
@@ -7769,6 +7780,7 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
             return
 
         started_at = datetime.now().isoformat()
+        failed_stage = "connect"
 
         # Acquire push lock for this IP
         async with _config_push_lock:
@@ -7788,6 +7800,7 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                     if login_result is not True:
                         raise RuntimeError(f"Login failed: {login_result}")
 
+                    failed_stage = "read_config"
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "fetching_config"})
 
                     current_config = await client.get_config()
@@ -7795,6 +7808,7 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                         raise RuntimeError("Failed to fetch current config")
 
                     # Safety: save pre-push config snapshot so we have a "before" backup
+                    failed_stage = "snapshot"
                     pre_push_json = _canonical_config_json(current_config)
                     pre_push_hash = _compute_config_hash(current_config)
                     model = device.get("model")
@@ -7802,20 +7816,23 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                     db.save_device_config(ip, pre_push_json, pre_push_hash, model, hardware_id)
 
                     # Merge applicable templates into current config
+                    failed_stage = "template_merge"
                     merged = current_config
                     for t in applicable:
-                        merged = deep_merge(merged, t["fragment"])
+                        merged = merge_template_config(merged, t["fragment"], device["username"])
 
                     # Safety: dry_run first to validate the merged config
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "validating"})
-                    dry_result = await client.apply_config(merged, dry_run=True)
+                    failed_stage = "dry-run"
+                    dry_result = await client.apply_config(merged, dry_run=True, preserve_user_passwords=True)
                     if not dry_result.get("success"):
                         error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run validation failed"))
                         raise RuntimeError(f"Dry run rejected: {error_msg}")
 
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "applying"})
 
-                    result = await client.apply_config(merged)
+                    failed_stage = "apply"
+                    result = await client.apply_config(merged, preserve_user_passwords=True)
                     completed_at = datetime.now().isoformat()
                     duration = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()
 
@@ -7829,6 +7846,11 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                             started_at=started_at, completed_at=completed_at,
                             action="config_push",
                         )
+                        if job_info is not None:
+                            job_info.setdefault("results", []).append({
+                                "ip": ip, "status": "success", "error": None,
+                                "failed_stage": None,
+                            })
                         await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "success"})
                     else:
                         failed_count += 1
@@ -7841,6 +7863,11 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                             started_at=started_at, completed_at=completed_at,
                             action="config_push",
                         )
+                        if job_info is not None:
+                            job_info.setdefault("results", []).append({
+                                "ip": ip, "status": "failed", "error": str(error_msg),
+                                "failed_stage": failed_stage,
+                            })
                         await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "failed", "error": str(error_msg)})
 
                 except Exception as e:
@@ -7850,11 +7877,16 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                     db.save_device_update_history(
                         job_id=job_id, ip=ip, role=device["role"], pass_number=1,
                         status="failed", old_version=None, new_version=None,
-                        model=None, error=str(e), failed_stage="connect",
+                        model=None, error=str(e), failed_stage=failed_stage,
                         stages=[], duration_seconds=duration,
                         started_at=started_at, completed_at=completed_at,
                         action="config_push",
                     )
+                    if job_info is not None:
+                        job_info.setdefault("results", []).append({
+                            "ip": ip, "status": "failed", "error": str(e),
+                            "failed_stage": failed_stage,
+                        })
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "failed", "error": str(e)})
         finally:
             _config_pushing_ips.discard(ip)
@@ -7898,6 +7930,7 @@ async def get_config_push_job(job_id: str, session: dict = Depends(require_auth)
         "skipped": job.get("skipped", 0),
         "cancelled": job["cancelled"],
         "done": job["done"],
+        "results": job.get("results", []),
     }
 
 
@@ -8460,7 +8493,7 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
                 # Merge applicable templates only
                 merged = current_config
                 for t in applicable:
-                    merged = deep_merge(merged, t["fragment"])
+                    merged = merge_template_config(merged, t["fragment"], creds["username"])
 
                 # Defense-in-depth: even when each template individually
                 # cleared `_validate_ping_watchdog_safety`, the deep_merge
@@ -8479,7 +8512,7 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
                 await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "validating", "phase": phase})
                 if not config_write_guard.automatic_config_writes_allowed():
                     return
-                dry_result = await client.apply_config(merged, dry_run=True)
+                dry_result = await client.apply_config(merged, dry_run=True, preserve_user_passwords=True)
                 if not dry_result.get("success"):
                     error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run validation failed"))
                     raise RuntimeError(f"Dry run rejected: {error_msg}")
@@ -8491,7 +8524,7 @@ async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: 
                 current = db.get_config_push_rollout(rollout_id)
                 if not current or current["status"] != "active":
                     return
-                result = await client.apply_config(merged)
+                result = await client.apply_config(merged, preserve_user_passwords=True)
                 completed_at = datetime.now().isoformat()
                 duration = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()
 

@@ -64,7 +64,7 @@ def pytest_collection_modifyitems(config, items):
         return
     skip = pytest.mark.skip(reason="SIXTYOPS_TEST_URL not set")
     for item in items:
-        if "integration" in item.keywords:
+        if item.get_closest_marker("integration"):
             item.add_marker(skip)
 
 

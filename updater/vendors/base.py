@@ -174,8 +174,10 @@ class VendorDriver(ABC):
             return None, "unknown", "get_config returned None"
         return config, "ok", None
 
-    async def apply_config(self, config: dict, dry_run: bool = False) -> dict:
-        """Apply configuration to device."""
+    async def apply_config(
+        self, config: dict, dry_run: bool = False, *, preserve_user_passwords: bool = False,
+    ) -> dict:
+        """Apply config. Template callers preserve prepared user password fields."""
         return {"success": False, "error": f"Config push not supported by {self.VENDOR_NAME}"}
 
     # --- Firmware metadata ---
