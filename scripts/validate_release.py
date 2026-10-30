@@ -1034,64 +1034,6 @@ class ReleaseValidator:
                 except Exception as e:
                     r.record_fail(f"DELETE /api/users/{user_id}", "request error")
 
-        # API tokens CRUD
-        token_id: Optional[int] = None
-        token_value: Optional[str] = None
-        try:
-            # POST /api/tokens
-            resp = self._post(
-                "/api/tokens",
-                json_body={"name": "__test_token", "scopes": "read"},
-            )
-            body = self._json_ok(resp)
-            if "token" in body:
-                token_value = body["token"]
-                token_id = body.get("id")
-                r.record_pass("POST /api/tokens -> has token")
-            else:
-                r.record_fail("POST /api/tokens", "missing 'token'")
-
-            # Test bearer token auth
-            if token_value:
-                token_session = requests.Session()
-                token_session.verify = False
-                resp = self._get(
-                    "/api/aps",
-                    session=token_session,
-                    headers={"Authorization": f"Bearer {token_value}"},
-                )
-                if resp.status_code == 200:
-                    r.record_pass("GET /api/aps with Bearer token -> 200")
-                else:
-                    r.record_fail("GET /api/aps with Bearer token", f"status {resp.status_code}")
-
-            # GET /api/tokens
-            resp = self._get("/api/tokens")
-            body = self._json_ok(resp)
-            names = [t.get("name", "") for t in body] if isinstance(body, list) else []
-            if "__test_token" in names:
-                r.record_pass("GET /api/tokens -> contains __test_token")
-                # Find the id if we didn't get it from creation
-                if not token_id:
-                    for t in body:
-                        if t.get("name") == "__test_token":
-                            token_id = t.get("id")
-                            break
-            else:
-                r.record_fail("GET /api/tokens", "__test_token not found")
-        except Exception as e:
-            r.record_fail("tokens CRUD", "request error")
-        finally:
-            if token_id:
-                try:
-                    resp = self._delete(f"/api/tokens/{token_id}")
-                    if resp.status_code == 200:
-                        r.record_pass(f"DELETE /api/tokens/{token_id} -> 200")
-                    else:
-                        r.record_fail(f"DELETE /api/tokens/{token_id}", f"status {resp.status_code}")
-                except Exception as e:
-                    r.record_fail(f"DELETE /api/tokens/{token_id}", "request error")
-
     # 12. notifications ----------------------------------------------------
 
     def test_notifications(self, r: TestResult) -> None:

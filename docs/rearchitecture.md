@@ -41,7 +41,7 @@ The specific problems this plan fixes:
 | Question | Decision |
 |---|---|
 | Approach | **Strangler in place.** Same repo, same package, PR by PR, tests green throughout. |
-| Order | **Delete first where there is no shared seam, then extract.** Clean deletions (RADIUS, enforce, self-update apply, SFTP, telemetry, dead endpoints, gating, API tokens) go first. Deletions that touch the update engine (notification channels, vendor abstraction, manual bulk) follow the extraction PR that creates their seam, so the engine is edited once. |
+| Order | **Delete first where there is no shared seam, then extract.** Clean deletions (RADIUS, enforce, self-update apply, SFTP, telemetry, dead endpoints, and gating) go first. Deletions that touch the update engine (notification channels, vendor abstraction, manual bulk) follow the extraction PR that creates their seam, so the engine is edited once. |
 | Database compatibility | **Staged schema, then a bridge release.** A shared schema builder first reproduces the current schema and tests use it; identity and rollout tables are added by the issues that need them; legacy tables, dead canary columns, and the migration chain are dropped last. Before that drop, one final self-applying **bridge release** ships a full export (devices, users, settings, config snapshots, firmware confirmations, job history, and the Fernet key), refuses to auto-apply anything newer, and tells the operator to reinstall and import. |
 | Distribution | **Pinned GHCR image.** `docker-compose.yml` gains `image: ghcr.io/sixtyops/manager:vX.Y.Z`; `install.sh` stops cloning source; upgrade is "edit the tag, `docker compose pull && up -d`". Release-side signed-tag verification stays in CI. |
 | Frontend | **Split into modules, still vanilla.** No framework, no build step. Separate JS/CSS files per area. |
@@ -88,7 +88,6 @@ The specific problems this plan fixes:
 | SFTP off-box backup | Archive ships the SQLite file plus the encryption key. Replace with "back up `./data`" docs. |
 | Anonymous telemetry | Not needed for the core. |
 | SNMP traps, generic webhooks, syslog forwarding | NOC integrations; Slack + email suffice. |
-| API tokens | No UI, no consumers. |
 | Vendor driver abstraction, Mikrotik/Cambium stubs | Unearned. |
 | Device groups, analytics endpoints, 3 of 4 report endpoints, quick-add | No UI; dead. |
 | Feature-gating scaffold (`features.py`, `license.py`, `require_feature`/`require_pro` on ~60 routes) | No-op since the open-source conversion. |

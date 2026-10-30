@@ -2,8 +2,7 @@
 
 Call register_secret(value) before logging a secret. Then call
 install_sanitizer(handler) on each output handler. Registration lasts for
-the process lifetime for ordinary secrets. Generated API token literals use a
-bounded registry and a fixed-format fallback. Credential sources are not
+the process lifetime for ordinary secrets. Credential sources are not
 registered here. Device token registrations follow the owning client lifetime.
 """
 
@@ -16,7 +15,6 @@ import sys
 import threading
 import traceback
 import weakref
-from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -28,14 +26,9 @@ import httpx
 _device_tokens: dict[weakref.ReferenceType, str] = {}
 
 _secrets: set[str] = set()
-_generated_api_tokens: OrderedDict[str, None] = OrderedDict()
-_GENERATED_API_TOKEN_LIMIT = 100
 _pattern: re.Pattern[str] | None = None
 # Client collection can retire tokens while a literal pattern is being built.
 _registry_lock = threading.RLock()
-# Generated tokens use token_urlsafe(32): a fixed prefix and 43 URL-safe chars.
-# This keeps evicted tokens redactable without retaining their literal values.
-_generated_api_token_pattern = re.compile(r"tach_[A-Za-z0-9_-]{43}")
 # Match canonical capability URLs up to ordinary log delimiters. The fixed
 # prefix and single character class also cover encoded paths, queries and fragments.
 _slack_webhook = re.compile(
@@ -142,22 +135,10 @@ def register_secret(value: str | None) -> None:
         _rebuild_secret_pattern()
 
 
-def register_generated_api_token(value: str | None) -> None:
-    """Register a generated API token in a bounded registry of recent values."""
-    if not value:
-        return
-    with _registry_lock:
-        _generated_api_tokens.pop(value, None)
-        _generated_api_tokens[value] = None
-        while len(_generated_api_tokens) > _GENERATED_API_TOKEN_LIMIT:
-            _generated_api_tokens.popitem(last=False)
-        _rebuild_secret_pattern()
-
-
 def _rebuild_secret_pattern() -> None:
     """Compile one longest-first pattern for all registered literal forms."""
     global _pattern
-    secrets = _secrets | set(_generated_api_tokens) | set(_device_tokens.values())
+    secrets = _secrets | set(_device_tokens.values())
     forms = {form for secret in secrets for form in (
         secret, repr(secret)[1:-1], json.dumps(secret)[1:-1],
         json.dumps(secret, ensure_ascii=False)[1:-1],
@@ -182,7 +163,7 @@ class _SanitizingFormatter(logging.Formatter):
 def _redact_token_spans(output: str, pattern: re.Pattern[str] | None) -> str:
     """Collect format and literal matches before replacing overlapping spans."""
     spans = []
-    for matcher in (_generated_api_token_pattern, pattern):
+    for matcher in (pattern,):
         if matcher is None:
             continue
         position = 0
