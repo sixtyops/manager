@@ -335,177 +335,19 @@ class TestRollbackSafetySnapshot:
         assert json.loads(latest["config_json"]) == {"v": "current"}
 
 
-class TestConfigPushRolloutAdvance:
-    """`/api/config-push/rollout/{id}/advance` should walk past any empty
-    phases in a single click. With small rollouts (1–3 devices), the
-    canary always consumes the first device and per-phase batch math
-    leaves pct10/pct50/pct100 unfilled; the operator should not have to
-    cancel and restart to finish the rollout."""
 
-    @pytest.fixture(autouse=True)
-    def exercise_retained_rollout(self, monkeypatch):
-        """Exercise retained internals with the safety capability mocked on."""
-        monkeypatch.setattr("updater.config_write_guard.automatic_config_writes_allowed", lambda: True)
 
-    @staticmethod
-    def _seed_rollout(db_conn, devices_by_phase: dict, status: str = "active",
-                      phase: str = "canary") -> int:
-        """Insert a rollout row and assigned devices.
-
-        `devices_by_phase` maps phase name -> list of (ip, device_type,
-        device_status) tuples. Empty list / missing phase -> phase has no
-        assigned devices (the empty-phase case under test).
-        """
-        cur = db_conn.execute(
-            """INSERT INTO config_push_rollouts
-               (template_ids, template_names, templates_snapshot, phase, status)
-               VALUES (?, ?, ?, ?, ?)""",
-            ("[1]", "T1", json.dumps([{"id": 1, "name": "T1", "fragment": {}}]),
-             phase, status),
-        )
-        rollout_id = cur.lastrowid
-        for ph, devs in devices_by_phase.items():
-            for ip, dtype, dev_status in devs:
-                db_conn.execute(
-                    """INSERT INTO config_push_rollout_devices
-                       (rollout_id, ip, device_type, phase_assigned, status)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (rollout_id, ip, dtype, ph, dev_status),
-                )
-        db_conn.commit()
-        return rollout_id
-
-    def test_single_device_rollout_completes_in_one_advance(self, authed_client, mock_db):
-        """1 device in canary, 0 in pct10/50/100 — advance should walk all
-        the way through to status='completed' rather than 400-ing on the
-        first empty phase. This reproduces the smoke-test failure mode."""
-        rid = self._seed_rollout(mock_db, {
-            "canary": [("10.0.0.1", "ap", "updated")],
-        })
-        resp = authed_client.post(f"/api/config-push/rollout/{rid}/advance")
-        assert resp.status_code == 200, resp.text
-        assert resp.json() == {"status": "completed"}
-        row = mock_db.execute(
-            "SELECT phase, status FROM config_push_rollouts WHERE id = ?",
-            (rid,),
-        ).fetchone()
-        assert row["status"] == "completed"
-        # Phase walked off the end (or sits on pct100); either way the
-        # status is what callers care about.
-        assert row["phase"] in ("pct100", "pct50", "pct10", "canary")
-
-    def test_advance_kicks_off_next_phase_when_non_empty(self, authed_client, mock_db):
-        """2 devices: canary (1, updated) and pct10 (1, pending). One advance
-        should move us into pct10 with status='active', not 'completed'.
-        The phase task is patched out — we only assert the response shape
-        and the rollout's new state."""
-        rid = self._seed_rollout(mock_db, {
-            "canary": [("10.0.0.1", "ap", "updated")],
-            "pct10":  [("10.0.0.2", "ap", "pending")],
-        })
-        with patch("updater.app._run_config_push_phase", new=AsyncMock()):
-            resp = authed_client.post(f"/api/config-push/rollout/{rid}/advance")
-        assert resp.status_code == 200, resp.text
-        assert resp.json() == {"status": "advanced", "phase": "pct10"}
-        row = mock_db.execute(
-            "SELECT phase, status FROM config_push_rollouts WHERE id = ?",
-            (rid,),
-        ).fetchone()
-        assert row["phase"] == "pct10"
-        assert row["status"] == "active"
-
-    def test_non_empty_phase_with_no_updated_devices_still_blocks(self, authed_client, mock_db):
-        """Gap-7 guard must still fire when the phase has devices but none
-        succeeded — empty-phase tolerance must not regress this."""
-        rid = self._seed_rollout(mock_db, {
-            "canary": [("10.0.0.1", "ap", "failed")],
-        })
-        resp = authed_client.post(f"/api/config-push/rollout/{rid}/advance")
-        assert resp.status_code == 400, resp.text
-        assert "no devices succeeded" in resp.json()["detail"]
-
-    def test_pending_devices_in_current_phase_still_block(self, authed_client, mock_db):
-        """Pre-existing guard: phase with pending devices can't be advanced
-        regardless of the empty-phase tolerance."""
-        rid = self._seed_rollout(mock_db, {
-            "canary": [
-                ("10.0.0.1", "ap", "updated"),
-                ("10.0.0.2", "ap", "pending"),
-            ],
-        })
-        resp = authed_client.post(f"/api/config-push/rollout/{rid}/advance")
-        assert resp.status_code == 400, resp.text
-        assert "pending" in resp.json()["detail"]
-
-    def test_advance_rejects_snapshot_with_unsafe_watchdog(self, authed_client, mock_db):
-        """A rollout created before the #167 ping_watchdog floor landed
-        can still sit paused on disk with an unsafe snapshot. Advance/
-        resume must refuse to push it. (#167 follow-up.)"""
-        unsafe = [{
-            "id": 99, "name": "Old Watchdog",
-            "fragment": {"services": {"ping_watchdog": {
-                "enabled": True, "interval": 300, "failure": 3,
-                "addresses": ["8.8.8.8"],
-            }}},
-            "device_types": None,
-        }]
-        cur = mock_db.execute(
-            """INSERT INTO config_push_rollouts
-               (template_ids, template_names, templates_snapshot, phase, status)
-               VALUES (?, ?, ?, ?, ?)""",
-            ("[99]", "Old Watchdog", json.dumps(unsafe), "canary", "active"),
-        )
-        rid = cur.lastrowid
-        mock_db.execute(
-            """INSERT INTO config_push_rollout_devices
-               (rollout_id, ip, device_type, phase_assigned, status)
-               VALUES (?, ?, ?, ?, ?)""",
-            (rid, "10.0.0.1", "ap", "canary", "updated"),
-        )
-        mock_db.commit()
-        resp = authed_client.post(f"/api/config-push/rollout/{rid}/advance")
-        assert resp.status_code == 400, resp.text
-        assert "unsafe" in resp.json()["detail"].lower()
-        assert "ping_watchdog" in resp.json()["detail"]
-
-    def test_resume_rejects_snapshot_with_unsafe_watchdog(self, authed_client, mock_db):
-        """Same gate on the resume path."""
-        unsafe = [{
-            "id": 99, "name": "Old Watchdog",
-            "fragment": {"services": {"ping_watchdog": {
-                "enabled": True, "interval": 60, "failure": 1,
-            }}},
-            "device_types": None,
-        }]
-        cur = mock_db.execute(
-            """INSERT INTO config_push_rollouts
-               (template_ids, template_names, templates_snapshot, phase, status)
-               VALUES (?, ?, ?, ?, ?)""",
-            ("[99]", "Old Watchdog", json.dumps(unsafe), "canary", "paused"),
-        )
-        rid = cur.lastrowid
-        mock_db.commit()
-        resp = authed_client.post(f"/api/config-push/rollout/{rid}/resume")
-        assert resp.status_code == 400, resp.text
-        assert "unsafe" in resp.json()["detail"].lower()
-
-    def test_validate_ping_watchdog_safety_catches_merged_unsafe(self):
-        """Defense-in-depth: two individually-safe fragments can deep_merge
-        into an unsafe combo (one sets `enabled=true`, another lowers
-        `failure`). The merged config is rechecked before the device
-        dry-run. (#167 follow-up, run_config_push_phase merge check.)"""
-        import pytest
-        from updater.config_utils import (
-            validate_ping_watchdog_safety, deep_merge,
-        )
-        a = {"services": {"ping_watchdog": {
-            "enabled": True, "interval": 300, "failure": 6,
-        }}}
-        b = {"services": {"ping_watchdog": {"failure": 3}}}
-        # Each in isolation passes.
-        validate_ping_watchdog_safety(a)
-        validate_ping_watchdog_safety(b)
-        # Merge produces enabled=True, interval=300, failure=3 → 900s, unsafe.
-        merged = deep_merge(a, b)
-        with pytest.raises(ValueError, match="900s"):
-            validate_ping_watchdog_safety(merged)
+def test_phased_rollout_routes_are_removed(operator_client):
+    paths = [
+        ("GET", "/api/config-push/rollout"),
+        ("POST", "/api/config-push/rollout/start"),
+        ("POST", "/api/config-push/rollout/1/advance"),
+        ("POST", "/api/config-push/rollout/1/resume"),
+        ("POST", "/api/config-push/rollout/1/cancel"),
+    ]
+    openapi = operator_client.get("/openapi.json").json()["paths"]
+    assert not any(path.startswith("/api/config-push/rollout") for path in openapi)
+    for method, path in paths:
+        request = getattr(operator_client, method.lower())
+        response = request(path, json={}) if method == "POST" else request(path)
+        assert response.status_code == 404, path

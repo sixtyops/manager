@@ -443,32 +443,6 @@ def build_schema(db: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_radius_auth_client_ip ON radius_auth_log(client_ip);
         CREATE INDEX IF NOT EXISTS idx_radius_auth_username ON radius_auth_log(username);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_radius_auth_unique ON radius_auth_log(occurred_at, username, client_ip, outcome);
-        CREATE TABLE IF NOT EXISTS config_push_rollouts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            template_ids TEXT NOT NULL,
-            template_names TEXT,
-            templates_snapshot TEXT,
-            phase TEXT NOT NULL DEFAULT 'canary',
-            status TEXT NOT NULL DEFAULT 'active',
-            pause_reason TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            last_phase_completed_at TEXT,
-            completed_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS config_push_rollout_devices (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            rollout_id INTEGER NOT NULL,
-            ip TEXT NOT NULL,
-            device_type TEXT NOT NULL,
-            phase_assigned TEXT,
-            status TEXT DEFAULT 'pending',
-            error TEXT,
-            updated_at TEXT,
-            FOREIGN KEY (rollout_id) REFERENCES config_push_rollouts(id),
-            UNIQUE(rollout_id, ip)
-        );
-
         CREATE TABLE IF NOT EXISTS device_uptime_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ip TEXT NOT NULL,
