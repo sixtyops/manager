@@ -1197,12 +1197,6 @@ class NetworkPoller:
         """Core enforce loop: find non-compliant devices, push in phases."""
         if not config_write_guard.automatic_config_writes_allowed():
             return
-        # Skip if a manual config push rollout is active
-        active_rollout = db.get_active_config_push_rollout()
-        if active_rollout:
-            logger.info("Config enforce: skipping — a config push rollout is active")
-            return
-
         # Skip if an immediate (non-rollout) /api/config-push is in flight —
         # cached compliance reads would race against the operator's push and
         # the next enforce pass would clobber what the operator just changed.

@@ -3320,14 +3320,6 @@ def delete_config_template(template_id: int):
         db.execute("DELETE FROM config_templates WHERE id = ?", (template_id,))
 
 
-def get_active_config_push_rollout() -> Optional[dict]:
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM config_push_rollouts WHERE status IN ('active', 'paused') ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        return dict(row) if row else None
-
-
 def get_config_templates_for_device(ip: str, site_id: int = None) -> list[dict]:
     """Return effective templates for a device: global + site overrides (site wins per category)."""
     with get_db() as db:
