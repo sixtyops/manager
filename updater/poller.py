@@ -91,6 +91,7 @@ class NetworkPoller:
         # credentials change, the token check fails, or a fresh-login check is due.
         self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, cached_at)
         self._cpe_fresh_login_periods: dict[str, object] = {}
+        self._cpe_auth_locks: dict[str, asyncio.Lock] = {}
         self._last_config_poll: Optional[datetime] = None
         self._last_config_poll_hydrated = False
         self._poll_in_progress = False
@@ -683,12 +684,36 @@ class NetworkPoller:
                               settings: dict = None, now: datetime = None) -> str:
         """Check a CPE and record a due period only after fresh login succeeds."""
         fresh_login_due = self._fresh_cpe_login_due(cpe_ip, settings, now)
-        status = await self._check_cpe_auth(
-            cpe_ip, username, password, force_fresh_login=fresh_login_due
+        return await self.check_cpe_auth_for_period(
+            cpe_ip, username, password, settings, now,
+            force_fresh_login=fresh_login_due,
+            validate_cached_session=True,
         )
-        if fresh_login_due and status == "ok":
-            self.record_cpe_fresh_login_check(cpe_ip, settings, now)
-        return status
+
+    async def check_cpe_auth_for_period(
+        self, cpe_ip: str, username: str, password: str,
+        settings: dict = None, now: datetime = None, *,
+        force_fresh_login: bool, validate_cached_session: bool,
+    ) -> str:
+        """Serialize CPE login checks and reuse a fresh login for this period."""
+        lock = self._cpe_auth_locks.get(cpe_ip)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._cpe_auth_locks[cpe_ip] = lock
+        async with lock:
+            if self.has_successful_cpe_fresh_login(cpe_ip, settings, now):
+                if not validate_cached_session:
+                    return "ok"
+                return await self._check_cpe_auth(
+                    cpe_ip, username, password, force_fresh_login=False
+                )
+
+            status = await self._check_cpe_auth(
+                cpe_ip, username, password, force_fresh_login=force_fresh_login
+            )
+            if force_fresh_login and status == "ok":
+                self.record_cpe_fresh_login_check(cpe_ip, settings, now)
+            return status
 
     def record_cpe_fresh_login_check(self, cpe_ip: str, settings: dict = None,
                                      now: datetime = None):

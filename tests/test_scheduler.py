@@ -59,6 +59,61 @@ class TestSchedulerCompletionHandling:
 
 class TestCpeCredentialAdmission:
     @pytest.mark.asyncio
+    async def test_concurrent_precheck_and_poll_share_one_fresh_login(self, mock_db):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from updater.poller import NetworkPoller, set_poller
+
+        parent_ip = "10.0.0.10"
+        cpe_ip = "10.0.0.20"
+        db.upsert_access_point(parent_ip, "root", "current-password", enabled=True)
+        db.upsert_cpe(parent_ip, {"ip": cpe_ip, "auth_status": "ok"})
+        poller = NetworkPoller()
+        login_started = asyncio.Event()
+        finish_login = asyncio.Event()
+        client = MagicMock()
+
+        async def connect_once():
+            login_started.set()
+            await finish_login.wait()
+            return True
+
+        client.connect = AsyncMock(side_effect=connect_once)
+        client.session_valid = AsyncMock(return_value="ok")
+        driver = MagicMock(return_value=client)
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        settings = {
+            "schedule_enabled": "true",
+            "schedule_days": "tue",
+            "schedule_start_hour": "3",
+            "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+        now = datetime(2026, 6, 23, 3, 0, tzinfo=ZoneInfo("America/Chicago"))
+
+        set_poller(poller)
+        try:
+            with patch("updater.poller.get_driver", return_value=driver), \
+                 patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+                precheck = asyncio.create_task(
+                    scheduler._precheck_cpe_credentials([parent_ip], settings, now)
+                )
+                await login_started.wait()
+                poll = asyncio.create_task(
+                    poller._probe_cpe_auth(cpe_ip, "root", "current-password", settings, now)
+                )
+                await asyncio.sleep(0)
+                finish_login.set()
+                assert await precheck == ()
+                assert await poll == "ok"
+        finally:
+            set_poller(None)
+
+        assert client.connect.await_count == 1
+        assert client.session_valid.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_successful_login_is_reused_only_for_its_window(self, mock_db):
         from datetime import datetime
         from zoneinfo import ZoneInfo
