@@ -5,7 +5,7 @@ Add one file for each user-facing change. Name it
 `removed`, or `security`. Write one or two STE lines in the file. Do not edit
 `CHANGELOG.md` in a pull request.
 
-Example: `123.fixed.md`
+Example: `123.fixed.md`. Use one fragment per issue and add more lines to it.
 
 At release time, run `python scripts/collect_changelog.py 1.2.0 2026-10-29`.
 The script groups all fragments by kind under the version header in
