@@ -90,7 +90,7 @@ class NetworkPoller:
         # CPE tokens can remain valid after a password change. Keep them until
         # credentials change, the token check fails, or a fresh-login check is due.
         self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, cached_at)
-        self._cpe_fresh_login_periods: dict[str, object] = {}
+        self._cpe_fresh_login_periods: dict[str, set[object]] = {}
         self._cpe_auth_locks: dict[str, asyncio.Lock] = {}
         self._last_config_poll: Optional[datetime] = None
         self._last_config_poll_hydrated = False
@@ -235,7 +235,7 @@ class NetworkPoller:
                              now: datetime = None) -> bool:
         """Check each CPE once before a window or daily when no window applies."""
         period = self._cpe_auth_check_period(settings, now)
-        return period is not None and self._cpe_fresh_login_periods.get(cpe_ip) != period
+        return period is not None and not self._has_cpe_fresh_login_period(cpe_ip, period)
 
     def _get_cached_client(self, ip: str) -> Optional[VendorDriver]:
         """Get a cached client, updating its last-used timestamp."""
@@ -719,16 +719,45 @@ class NetworkPoller:
 
     def record_cpe_fresh_login_check(self, cpe_ip: str, settings: dict = None,
                                      now: datetime = None):
-        """Record a successful fresh login for this CPE and auth period."""
+        """Record a successful login for this CPE's window and daily periods."""
         period = self._cpe_auth_check_period(settings, now)
         if period is not None:
-            self._cpe_fresh_login_periods[cpe_ip] = period
+            day_key = period[1] if isinstance(period, tuple) else period
+            markers = self._cpe_fresh_login_periods.setdefault(cpe_ip, set())
+            markers.difference_update(
+                {
+                    marker for marker in markers
+                    if (marker[1] if isinstance(marker, tuple) else marker) != day_key
+                }
+            )
+            markers.add(period)
+            markers.add(day_key)
 
     def has_successful_cpe_fresh_login(self, cpe_ip: str, settings: dict = None,
                                        now: datetime = None) -> bool:
         """Return whether this CPE logged in successfully during this period."""
         period = self._cpe_auth_check_period(settings, now)
-        return period is not None and self._cpe_fresh_login_periods.get(cpe_ip) == period
+        return period is not None and self._has_cpe_fresh_login_period(cpe_ip, period)
+
+    def _has_cpe_fresh_login_period(self, cpe_ip: str, period: object) -> bool:
+        """Match daily and window markers without reusing across distinct windows."""
+        markers = self._cpe_fresh_login_periods.get(cpe_ip, set())
+        if period in markers:
+            return True
+
+        # A daily login cannot satisfy a window precheck: admission requires a
+        # fresh login during that window. A successful window login can satisfy
+        # the daily check later that day, avoiding an immediate second login.
+        if isinstance(period, tuple):
+            return False
+
+        day_key = period
+        day_windows = {
+            marker for marker in markers
+            if isinstance(marker, tuple) and marker[1] == day_key
+        }
+        # A successful window login also satisfies the daily poller check.
+        return bool(day_windows)
 
     def invalidate_cpe_clients(self):
         """Drop all CPE sessions after credentials shared by CPEs change."""

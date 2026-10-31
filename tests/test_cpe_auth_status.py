@@ -352,4 +352,26 @@ class TestCheckCpeAuthCaching:
         poller.record_cpe_fresh_login_check("10.0.0.11", settings, before_window)
         assert not poller._fresh_cpe_login_due("10.0.0.11", settings, before_window)
         assert poller._fresh_cpe_login_due("10.0.0.11", settings, next_window)
-        assert poller._fresh_cpe_login_due("10.0.0.11", settings, too_early)
+        assert not poller._fresh_cpe_login_due("10.0.0.11", settings, too_early)
+
+    def test_daily_window_daily_markers_require_window_login_only_once(self, mock_db):
+        poller = NetworkPoller()
+        daily_settings = {"schedule_enabled": "false"}
+        window_settings = {
+            "schedule_enabled": "true", "schedule_days": "tue",
+            "schedule_start_hour": "3", "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+        zone = ZoneInfo("America/Chicago")
+        early = datetime(2026, 10, 27, 2, 44, tzinfo=zone)
+        in_window = datetime(2026, 10, 27, 3, 15, tzinfo=zone)
+        later = datetime(2026, 10, 27, 12, 0, tzinfo=zone)
+        cpe_ip = "10.0.0.11"
+
+        assert poller._fresh_cpe_login_due(cpe_ip, daily_settings, early)
+        poller.record_cpe_fresh_login_check(cpe_ip, daily_settings, early)
+        # The outside-window login cannot admit the wave. Require and record a
+        # fresh window login, then reuse it for the daily check later that day.
+        assert poller._fresh_cpe_login_due(cpe_ip, window_settings, in_window)
+        poller.record_cpe_fresh_login_check(cpe_ip, window_settings, in_window)
+        assert not poller._fresh_cpe_login_due(cpe_ip, daily_settings, later)
