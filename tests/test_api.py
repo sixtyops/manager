@@ -56,6 +56,20 @@ class TestAPsAPI:
         assert resp.status_code == 200
         assert len(resp.json()["aps"]) >= 1
 
+    def test_ap_rows_include_poller_backoff_state(self, authed_client):
+        db.upsert_access_point("10.0.0.22", "root", "pass")
+        mock_poller = MagicMock()
+        mock_poller.get_backoff_state.return_value = {
+            "consecutive_failures": 4,
+            "backoff_until": "2026-10-30T12:00:00+00:00",
+        }
+        with patch("updater.app.get_poller", return_value=mock_poller):
+            rows = authed_client.get("/api/aps").json()["aps"]
+
+        ap = next(row for row in rows if row["ip"] == "10.0.0.22")
+        assert ap["consecutive_failures"] == 4
+        assert ap["backoff_until"] == "2026-10-30T12:00:00+00:00"
+
     def test_delete_ap(self, authed_client):
         authed_client.post("/api/aps", data={"ip": "10.0.0.3", "username": "root", "password": "pass"})
         resp = authed_client.delete("/api/aps/10.0.0.3")
@@ -80,7 +94,11 @@ class TestAPsAPI:
     def test_update_ap_reprobes_ap_and_cpes_when_credentials_change(self, authed_client):
         db.upsert_access_point("10.0.0.4", "root", "oldpass")
 
-        mock_poller = MagicMock()
+        from updater.poller import NetworkPoller
+
+        mock_poller = NetworkPoller()
+        for _ in range(3):
+            mock_poller._record_poll_failure("10.0.0.4")
         mock_poller.poll_ap_now = AsyncMock(return_value=True)
 
         mock_client = MagicMock()
@@ -88,12 +106,17 @@ class TestAPsAPI:
         mock_client.get_ap_info = AsyncMock(return_value={"model": "TNA-301"})
 
         with patch("updater.app.get_poller", return_value=mock_poller), \
-             patch("updater.app.TachyonClient", return_value=mock_client):
+             patch("updater.app.TachyonClient", return_value=mock_client), \
+             patch.object(mock_poller, "invalidate_client", wraps=mock_poller.invalidate_client) as invalidate:
             resp = authed_client.put("/api/aps/10.0.0.4", data={"password": "newpass"})
 
         assert resp.status_code == 200
-        mock_poller.invalidate_client.assert_called_once_with("10.0.0.4")
+        invalidate.assert_called_once_with("10.0.0.4")
         mock_poller.poll_ap_now.assert_awaited_once_with("10.0.0.4")
+        assert mock_poller.get_backoff_state("10.0.0.4") == {
+            "consecutive_failures": 0,
+            "backoff_until": None,
+        }
 
     def test_update_ap_reports_failed_reprobe_after_save(self, authed_client):
         db.upsert_access_point("10.0.0.6", "root", "oldpass")
@@ -114,6 +137,30 @@ class TestAPsAPI:
         refreshed = db.get_access_point("10.0.0.6")
         assert refreshed["password"] == "newpass"
 
+    def test_manual_poll_reports_failure_instead_of_success(self, authed_client):
+        db.upsert_access_point("10.0.0.23", "root", "pass")
+        mock_poller = MagicMock()
+        mock_poller.poll_ap_now = AsyncMock(return_value=False)
+        with patch("updater.app.get_poller", return_value=mock_poller):
+            response = authed_client.post("/api/aps/10.0.0.23/poll")
+
+        assert response.status_code == 502
+        assert "Failed to poll 10.0.0.23" in response.json()["detail"]
+
+    def test_manual_poll_reports_bootbank_warning_as_failure(self, authed_client):
+        ip = "10.0.0.24"
+        warning = "Boot bank read failed (HTTP 503)"
+        db.upsert_access_point(ip, "root", "pass")
+        db.update_ap_status(ip, last_error=warning)
+        mock_poller = MagicMock()
+        mock_poller.poll_ap_now = AsyncMock(return_value=False)
+
+        with patch("updater.app.get_poller", return_value=mock_poller):
+            response = authed_client.post(f"/api/aps/{ip}/poll")
+
+        assert response.status_code == 502
+        assert response.json()["detail"] == warning
+
     def test_update_ap_rejects_bad_credentials_before_save(self, authed_client):
         db.upsert_access_point("10.0.0.5", "root", "oldpass")
 
@@ -130,6 +177,20 @@ class TestAPsAPI:
 
 
 class TestSwitchesAPI:
+    def test_switch_rows_include_poller_backoff_state(self, authed_client):
+        db.upsert_switch("10.0.0.24", "root", "pass")
+        mock_poller = MagicMock()
+        mock_poller.get_backoff_state.return_value = {
+            "consecutive_failures": 3,
+            "backoff_until": "2026-10-30T12:00:00+00:00",
+        }
+        with patch("updater.app.get_poller", return_value=mock_poller):
+            rows = authed_client.get("/api/switches").json()["switches"]
+
+        switch = next(row for row in rows if row["ip"] == "10.0.0.24")
+        assert switch["consecutive_failures"] == 3
+        assert switch["backoff_until"] == "2026-10-30T12:00:00+00:00"
+
     def test_update_switch_rejects_json_and_form_update_reads_back(self, authed_client):
         db.upsert_switch("10.0.0.8", "root", "pass")
 

@@ -51,9 +51,14 @@ async def test_bootbank_parser_reports_status_and_parse_class(status, body, warn
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "warning", ["Boot bank read failed (HTTP 503)", "Boot bank read failed (JSONDecodeError)"]
+    "warning",
+    [
+        "Boot bank read failed (HTTP 503)",
+        "Boot bank read failed (JSONDecodeError)",
+        None,
+    ],
 )
-async def test_ap_poll_records_warning_and_preserves_last_good_bank(monkeypatch, warning):
+async def test_manual_ap_poll_outcome_matches_bank_read_and_failure_count(monkeypatch, warning):
     import updater.poller as poller_module
 
     writes = []
@@ -63,22 +68,47 @@ async def test_ap_poll_records_warning_and_preserves_last_good_bank(monkeypatch,
             bank1_version=None, bank2_version=None, active_bank=None,
         )),
         get_bootbank_info=AsyncMock(return_value=SimpleNamespace(
-            bank1_version=None, bank2_version=None, active_bank=None, warning=warning,
+            bank1_version="1.15.0.55159" if warning is None else None,
+            bank2_version="1.15.0.55151" if warning is None else None,
+            active_bank=1 if warning is None else None,
+            warning=warning,
         )),
         get_connected_cpes=AsyncMock(return_value=[]),
         last_radio_params=None,
     )
     poller = NetworkPoller()
+    for _ in range(2):
+        poller._record_poll_failure(IP)
+    ap = {
+        "ip": IP,
+        "username": "user",
+        "password": "password",
+        "last_error": None,
+    }
     poller._get_client = AsyncMock(return_value=(client, None))
-    monkeypatch.setattr(poller_module.db, "update_ap_status", lambda ip, **kwargs: writes.append(kwargs))
+
+    def update_ap_status(_ip, **kwargs):
+        writes.append(kwargs)
+        ap.update(kwargs)
+
+    monkeypatch.setattr(poller_module.db, "get_access_point", lambda _ip: ap)
+    monkeypatch.setattr(poller_module.db, "update_ap_status", update_ap_status)
     monkeypatch.setattr(poller_module.db, "update_ap_radio_params", lambda *args, **kwargs: None)
     monkeypatch.setattr(poller_module.db, "prune_stale_cpes", lambda *args: None)
     monkeypatch.setattr(poller, "_check_uptime_transition", lambda *args: None)
 
-    await poller._poll_ap({
-        "ip": IP, "username": "user", "password": "password", "last_error": None,
-    })
+    succeeded = await poller.poll_ap_now(IP)
 
     update = writes[0]
     assert update["last_error"] == warning
-    assert not {"bank1_version", "bank2_version", "active_bank"} & update.keys()
+    assert succeeded is (warning is None)
+    if warning:
+        assert not {"bank1_version", "bank2_version", "active_bank"} & update.keys()
+        assert poller._failure_counts[IP] == 3
+        assert poller._is_backed_off(IP)
+    else:
+        assert update["bank1_version"] == "1.15.0.55159"
+        assert update["bank2_version"] == "1.15.0.55151"
+        assert update["active_bank"] == 1
+        assert IP not in poller._failure_counts
+        assert not poller._is_backed_off(IP)

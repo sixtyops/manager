@@ -225,6 +225,21 @@ class NetworkPoller:
         self._failure_counts.pop(ip, None)
         self._backoff_until.pop(ip, None)
 
+    def get_backoff_state(self, ip: str) -> dict:
+        """Return the current backoff state for an API device row."""
+        until = self._backoff_until.get(ip)
+        active_until = None
+        if until is not None and until > time.time():
+            active_until = datetime.fromtimestamp(until, timezone.utc).isoformat()
+        return {
+            "consecutive_failures": self._failure_counts.get(ip, 0),
+            "backoff_until": active_until,
+        }
+
+    def _clear_poll_backoff(self, ip: str):
+        """End the current backoff wait without resetting failure history."""
+        self._backoff_until.pop(ip, None)
+
     def _record_poll_failure(self, ip: str):
         """Increment failure count and set backoff if threshold exceeded."""
         count = self._failure_counts.get(ip, 0) + 1
@@ -367,6 +382,7 @@ class NetworkPoller:
             if not client:
                 db.update_ap_status(ip, last_error=error)
                 self._check_uptime_transition(ip, "ap", prev_error, error)
+                self._record_poll_failure(ip)
                 return
 
             # Get AP info
@@ -382,6 +398,7 @@ class NetworkPoller:
                 if not client:
                     db.update_ap_status(ip, last_error=error)
                     self._check_uptime_transition(ip, "ap", prev_error, error)
+                    self._record_poll_failure(ip)
                     return
                 ap_info = await client.get_ap_info()
             location = ap_info.get("location")  # Don't fall back to zone
@@ -440,7 +457,6 @@ class NetworkPoller:
                 **bank_kwargs,
             )
             self._check_uptime_transition(ip, "ap", prev_error, None)
-            self._record_poll_success(ip)
 
             # Get connected CPEs
             cpes = await client.get_connected_cpes()
@@ -525,6 +541,13 @@ class NetworkPoller:
                     *[probe_cpe(cpe_ip) for cpe_ip in cpe_ips_to_probe],
                     return_exceptions=True,
                 )
+
+            # A failed boot bank read makes this poll a failure. Keep the last
+            # good bank values, report its warning, and let backoff count it.
+            if bank_warning:
+                self._record_poll_failure(ip)
+            else:
+                self._record_poll_success(ip)
 
         except Exception as e:
             logger.error(f"Error polling {ip}: {e}")
@@ -677,6 +700,8 @@ class NetworkPoller:
     def invalidate_client(self, ip: str):
         """Remove cached client (e.g., when credentials change)."""
         self._remove_cached_client(ip)
+        self._clear_poll_backoff(ip)
+        self._failure_counts.pop(ip, None)
         # CPE sessions are keyed by CPE IP, but credentials usually change on the
         # parent AP (whose creds the CPEs inherit) — and we don't have the AP→CPE
         # mapping here. A cached CPE session keeps authenticating on its old
@@ -691,6 +716,9 @@ class NetworkPoller:
         if not ap:
             return False
 
+        # A manual request ends the wait, but keeps the count so another failed
+        # request resumes backoff instead of repeatedly bypassing the threshold.
+        self._clear_poll_backoff(ip)
         await self._poll_ap(ap)
         refreshed = db.get_access_point(ip)
 
