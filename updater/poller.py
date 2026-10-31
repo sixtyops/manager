@@ -189,7 +189,7 @@ class NetworkPoller:
         self._cpe_clients.pop(ip, None)
 
     def _cpe_auth_check_period(self, settings: dict = None, now: datetime = None):
-        """Return a near maintenance-window key, or a daily key without a window."""
+        """Return an active/near window key, or a daily key outside that window."""
         settings = settings if settings is not None else db.get_all_settings()
         if settings.get("schedule_enabled") == "true":
             days = {day.strip().lower()[:3] for day in settings.get("schedule_days", "").split(",")}
@@ -223,7 +223,9 @@ class NetworkPoller:
                         )
                         if now <= window_start <= now + _CPE_FRESH_LOGIN_LEAD:
                             return ("firmware", window_date.isoformat())
-                    return None
+                    # The poller also runs without the scheduler. Keep its
+                    # once-daily fresh-login check active between windows.
+                    return now.date().isoformat()
                 except (KeyError, TypeError, ValueError):
                     pass
         now = now or datetime.now().astimezone()

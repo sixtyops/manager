@@ -299,6 +299,36 @@ class TestCheckCpeAuthCaching:
         assert fresh_factory.return_value.connect.await_count == 1
         assert not poller._fresh_cpe_login_due(cpe_ip, settings, now)
 
+    @pytest.mark.asyncio
+    async def test_poller_without_scheduler_fresh_logs_in_and_reuses_session(self, mock_db):
+        """The poller keeps daily auth checks when no scheduler window applies."""
+        poller = NetworkPoller()
+        settings = {
+            "schedule_enabled": "true", "schedule_days": "tue",
+            "schedule_start_hour": "3", "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+        now = datetime(2026, 10, 27, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
+        old_client = MagicMock()
+        old_client.session_valid = AsyncMock(return_value="ok")
+        poller._cache_cpe_client("10.0.0.11", old_client)
+
+        fresh_factory = _driver_returning(True)
+        fresh_factory.return_value.session_valid = AsyncMock(return_value="ok")
+        with patch("updater.poller.get_driver", return_value=fresh_factory), \
+             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+            first = await poller._probe_cpe_auth(
+                "10.0.0.11", "root", "ap-pass", settings, now
+            )
+            second = await poller._probe_cpe_auth(
+                "10.0.0.11", "root", "ap-pass", settings, now
+            )
+
+        assert (first, second) == ("ok", "ok")
+        assert fresh_factory.return_value.connect.await_count == 1
+        assert old_client.session_valid.await_count == 1
+        assert fresh_factory.return_value.session_valid.await_count == 1
+
     def test_daily_fresh_login_check_runs_once_per_day(self, mock_db):
         poller = NetworkPoller()
         settings = {"schedule_enabled": "false"}
@@ -322,4 +352,4 @@ class TestCheckCpeAuthCaching:
         poller.record_cpe_fresh_login_check("10.0.0.11", settings, before_window)
         assert not poller._fresh_cpe_login_due("10.0.0.11", settings, before_window)
         assert poller._fresh_cpe_login_due("10.0.0.11", settings, next_window)
-        assert not poller._fresh_cpe_login_due("10.0.0.11", settings, too_early)
+        assert poller._fresh_cpe_login_due("10.0.0.11", settings, too_early)
