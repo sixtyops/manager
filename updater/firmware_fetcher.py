@@ -7,6 +7,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -31,6 +32,87 @@ FRESHDESK_PAGES = {
     "tna-303l": "https://tachyon-networks.freshdesk.com/support/solutions/articles/67000745898-tna-303l-firmware-releases",
     "tns-100": "https://tachyon-networks.freshdesk.com/support/solutions/articles/67000719270-tns-100-firmware-releases",
 }
+FIRMWARE_INDEX_URL = "https://tachyon-networks.freshdesk.com/support/solutions/articles/67000714399"
+
+
+class _FamilyIndexParser(HTMLParser):
+    """Read family rows from Tachyon's public firmware index table."""
+
+    def __init__(self):
+        super().__init__()
+        self.rows: list[tuple[str, str]] = []
+        self._table_depth = 0
+        self._row_text: list[str] | None = None
+        self._row_url: str | None = None
+        self._in_anchor = False
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "table":
+            self._table_depth += 1
+        elif tag == "tr" and self._table_depth:
+            self._row_text = []
+            self._row_url = None
+        elif tag == "a" and self._row_text is not None:
+            self._in_anchor = True
+            href = attrs.get("href", "")
+            if "solutions/articles/" in href:
+                self._row_url = href
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            self._in_anchor = False
+        elif tag == "tr" and self._row_text is not None:
+            if self._row_url:
+                self.rows.append((" ".join(self._row_text), self._row_url))
+            self._row_text = None
+            self._row_url = None
+        elif tag == "table" and self._table_depth:
+            self._table_depth -= 1
+
+    def handle_data(self, data):
+        if self._row_text is not None and data.strip():
+            self._row_text.append(data.strip())
+
+
+def _platform_for_family_row(text: str) -> Optional[str]:
+    """Map a vendor family row to a Manager-supported firmware platform."""
+    normalized = text.upper()
+    if "TNA-303L" in normalized:
+        return "tna-303l"
+    if any(model in normalized for model in ("TNA-301", "TNA-302", "TNA-303X")):
+        return "tna-30x"
+    if "TNS-100" in normalized:
+        return "tns-100"
+    return None
+
+
+def _discover_family_pages(html: str) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """Return supported (platform, url, family row) entries and parse errors."""
+    parser = _FamilyIndexParser()
+    parser.feed(html)
+    pages = []
+    errors = []
+    seen_platforms = set()
+    for row, url in parser.rows:
+        platform = _platform_for_family_row(row)
+        if not platform:
+            if re.search(r"TNA|TNS", row, re.IGNORECASE):
+                errors.append(f"Firmware family is not supported by Manager: {row}")
+            continue
+        if platform in seen_platforms:
+            errors.append(f"Firmware index lists more than one family page for {platform}: {url}")
+            continue
+        seen_platforms.add(platform)
+        if url.startswith("/"):
+            if url.startswith("/a/solutions/articles/"):
+                url = url.replace("/a/solutions/articles/", "/support/solutions/articles/", 1)
+            url = "https://tachyon-networks.freshdesk.com" + url
+        pages.append((platform, url, row))
+    for platform in PLATFORM_SETTING_KEYS:
+        if platform not in seen_platforms:
+            errors.append(f"Firmware index has no family page for supported platform {platform}")
+    return pages, errors
 
 # Regex: extract "Latest stable" / "Latest beta" version from the summary table.
 # Handles inline <span> tags and &nbsp; in the version cell, and tolerates a
@@ -168,21 +250,24 @@ class FirmwareFetcher:
         auto_fetched = self._get_auto_fetched_list()
         channel_map = self._get_channel_map()
 
-        for platform, url in FRESHDESK_PAGES.items():
+        family_pages, index_errors = await self._discover_pages()
+        errors.extend(index_errors)
+
+        for platform, url, family in family_pages:
             try:
                 releases, warnings = await self._scrape_page(platform, url)
                 all_releases.extend(releases)
-                errors.extend(warnings)
+                errors.extend(f"{family}: {warning}" for warning in warnings)
             except Exception as e:
                 # Retry once after a brief delay
-                logger.warning(f"Scrape {platform} failed, retrying: {e}")
+                logger.warning(f"Scrape family {family} failed, retrying: {e}")
                 await asyncio.sleep(5)
                 try:
                     releases, warnings = await self._scrape_page(platform, url)
                     all_releases.extend(releases)
-                    errors.extend(warnings)
+                    errors.extend(f"{family}: {warning}" for warning in warnings)
                 except Exception as e2:
-                    msg = f"Failed to scrape {platform}: {e2}"
+                    msg = f"Failed to scrape firmware family {family} ({url}): {e2}"
                     logger.error(msg)
                     errors.append(msg)
                     continue
@@ -246,6 +331,9 @@ class FirmwareFetcher:
 
             # Auto-select for this platform
             self._auto_select(platform, releases, beta_enabled)
+
+        if not family_pages and not errors:
+            errors.append(f"No supported firmware family pages found at {FIRMWARE_INDEX_URL}")
 
         # Persist channel metadata (filename -> "stable"/"beta")
         channel_map = self._get_channel_map()
@@ -366,12 +454,25 @@ class FirmwareFetcher:
                 f"but no matching download link was found"
             )
 
-        if not releases:
-            logger.warning(f"No firmware releases found on {url}")
+        if not releases and not warnings:
+            warnings.append(
+                f"{platform}: no stable or beta firmware download could be parsed from {url}"
+            )
         for w in warnings:
             logger.warning(w)
 
         return releases, warnings
+
+    async def _discover_pages(self) -> tuple[list[tuple[str, str, str]], list[str]]:
+        """Fetch Tachyon's public index and map its family rows to supported platforms."""
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                response = await client.get(FIRMWARE_INDEX_URL)
+                response.raise_for_status()
+            pages, errors = _discover_family_pages(response.text)
+            return pages, errors
+        except Exception as e:
+            return [], [f"Failed to parse Tachyon firmware family index {FIRMWARE_INDEX_URL}: {e}"]
 
     def _suspect_truncated_size(self, filename: str, size_bytes: int) -> Optional[str]:
         """Return a reason string if `size_bytes` is implausibly small versus
