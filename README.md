@@ -1,5 +1,24 @@
 # SixtyOps Manager
 
+## Road to safe scheduled rollouts
+
+Manager updates Tachyon firmware in waves of 10%, 50% and 100%, one wave per maintenance window. Scheduled rollouts stay off until every safety slice below is done and proven on hardware.
+
+```text
+Overall                   ████████████░░░░░░░░  ~60%
+Write safety              ██████████████████░░  4.5 of 5
+  Stop at first failure ✓  One writer at a time ✓  Recheck at each write ✓
+  Reboot recovery proof ✓  Customer recovery check: in review
+Waves and windows         ███████████████░░░░░  3 of 4
+  One wave per window ✓  Saved rollout membership ✓  Stragglers join the final wave: in review  Wave sizing: next
+Proof and release         ██████░░░░░░░░░░░░░░  1.5 of 5
+  Read-only bench ✓  Dev host proof: user write ✓, firmware test next  Qualification record  Dev release  Go-live review
+Device identity           ████████░░░░░░░░░░░░  serial, MAC aliases, CPE device rows done; poller cutover next
+Simplification            █████░░░░░░░░░░░░░░░  devmode, telemetry, SFTP backup, API tokens, phased config push removed
+```
+
+Updated 2026-10-31. Track the work in [issue #604](https://github.com/sixtyops/manager/issues/604).
+
 Automated firmware updates for Tachyon wireless networks — handles scheduling, gradual rollouts, and safety checks so you don't have to update APs manually.
 
 A firmware cycle means logging into each AP and every attached CPE, uploading the image, selecting the right bank, and waiting for the reboot. One device at a time. In the middle of the night. With hundreds of devices across dozens of sites, it's a lot of work — and it tends to get skipped. SixtyOps handles it automatically: add your APs once with credentials, set a maintenance window, and the system updates your fleet over 4 consecutive nights with safety checks at each step. Setup takes 15 minutes.
