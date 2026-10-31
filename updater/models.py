@@ -60,6 +60,8 @@ class CPEInfo(BaseModel):
 
     # Connection info
     link_uptime: Optional[int] = Field(None, description="Link uptime in seconds")
+    rx_bytes: Optional[int] = Field(None, description="AP-reported bytes received from this CPE")
+    tx_bytes: Optional[int] = Field(None, description="AP-reported bytes sent to this CPE")
 
     # Link-budget telemetry the AP already reports (used by the dynamic
     # signal-health UI; all optional so legacy rows + tests keep working).

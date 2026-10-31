@@ -1177,6 +1177,8 @@ class TachyonClient:
                     sector_tx=peer.get("txSector"),
                     sector_rx=peer.get("rxSector"),
                     antenna_kit=peer.get("antenna_kit"),
+                    rx_bytes=self._counter(peer.get("rxBytes")),
+                    tx_bytes=self._counter(peer.get("txBytes")),
                 )
                 cpes.append(cpe)
 
@@ -1204,6 +1206,81 @@ class TachyonClient:
             logger.error(f"Failed to parse wireless status from {self.ip}: {e}")
 
         return cpes
+
+    @staticmethod
+    def _counter(value: Any) -> Optional[int]:
+        """Return a non-negative integer counter, rejecting booleans and floats."""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int) and value >= 0:
+            return value
+        if isinstance(value, str) and re.fullmatch(r"\d+", value.strip()):
+            return int(value)
+        return None
+
+    async def get_eth0_recovery_state(self) -> Dict[str, Any]:
+        """Read eth0 counters and any reported link/rate fields for recovery checks."""
+        status, body = await self._curl("GET", "/cgi.lua/status?type=interfaces")
+        if status != 200:
+            raise RuntimeError(f"Failed to read eth0 state from {self.ip}: HTTP {status}")
+        try:
+            data = json.loads(body)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Failed to parse eth0 state from {self.ip}") from exc
+        interfaces = data.get("interfaces") if isinstance(data, dict) else None
+        eth0 = interfaces.get("eth0") if isinstance(interfaces, dict) else None
+        if not isinstance(eth0, dict):
+            raise RuntimeError(f"Missing eth0 state from {self.ip}")
+
+        reported_keys = (
+            "link", "state", "status", "operstate", "carrier", "link_state",
+            "link_status", "speed", "speed_mbps", "link_speed", "rate", "duplex",
+        )
+        reported = {key: eth0[key] for key in reported_keys if key in eth0}
+        link_up = None
+        for key in ("link", "state", "status", "operstate", "carrier", "link_state", "link_status"):
+            if key not in eth0:
+                continue
+            link_value = eth0[key]
+            if isinstance(link_value, bool):
+                link_up = link_value
+            elif isinstance(link_value, (int, str)):
+                normalized = str(link_value).strip().lower()
+                if normalized in {"up", "yes", "true", "1", "connected", "running"}:
+                    link_up = True
+                elif normalized in {"down", "no", "false", "0", "disconnected", "notpresent"}:
+                    link_up = False
+            if link_up is not None:
+                break
+
+        rate_value = next((eth0[key] for key in (
+            "speed_mbps", "speed", "link_speed", "rate"
+        ) if key in eth0), None)
+        link_rate_mbps = self._rate_mbps(rate_value)
+        return {
+            "link_up": link_up,
+            "link_rate_mbps": link_rate_mbps,
+            "reported": reported,
+            "rx_bytes": self._counter(eth0.get("rx_bytes")),
+            "tx_bytes": self._counter(eth0.get("tx_bytes")),
+        }
+
+    @staticmethod
+    def _rate_mbps(value: Any) -> Optional[float]:
+        """Normalize an explicitly reported interface rate to Mbps."""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return float(value) if math.isfinite(value) and value >= 0 else None
+        if not isinstance(value, str):
+            return None
+        match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(mbps|gbps)?\s*", value, re.IGNORECASE)
+        if not match:
+            return None
+        rate = float(match.group(1))
+        if match.group(2) and match.group(2).lower() == "gbps":
+            rate *= 1000
+        return rate if math.isfinite(rate) else None
 
     async def get_ap_info(self) -> Dict[str, Any]:
         """Get AP information including system name, model, and location.
