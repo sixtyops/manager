@@ -9,6 +9,9 @@ Follow this file. These rules match `AGENT_LOOP_REPO_RULES` in
 `dev-host/config/sixtyops-manager-loop.env`. They bind loop workers.
 Operational how-to documents do not grant approval to exceed these limits.
 
+- Design Manager as a standalone Tachyon product. Use Manager's data and the
+  device APIs it calls; never require an outside system.
+
 - Branch from `main` and target `main`. Never push directly to `main`.
   Use one feature per branch and PR. Use a conventional-commit PR title.
 - Add one `changelog.d/<issue-number>.<kind>.md` fragment for each user-facing
@@ -135,7 +138,8 @@ owner approves on Signal. Follow [the lead operations SOP](docs/lead-operations-
   changed lines of engine code.
 - For each engine slice, ask a Luna worker at high reasoning to write a one-page
   design note. The note lists every write boundary, every state, and the
-  fail-closed rule for each. Send one narrow hard open question to Astra at
+  fail-closed rule for each. Require the design to use only Manager's data and
+  the device APIs it calls. Send one narrow hard open question to Astra at
   medium reasoning. Ask the reviewer to check the code against the note.
 - Require the first review to list every finding at once and mark each one
   `BLOCKING` or `NON-BLOCKING`. Treat wording, link, and test-name findings as
