@@ -42,8 +42,9 @@ def _utc(ts: float) -> str:
 class Recorder:
     """Record login and session-check calls per device IP."""
 
-    def __init__(self, start: float):
+    def __init__(self, start: float, max_age_seconds: int | None = SESSION_MAX_AGE_SECONDS):
         self.start = start
+        self.max_age_seconds = max_age_seconds
         self.logins: dict[str, list[tuple[float, bool]]] = defaultdict(list)
         self.login_triggers: dict[str, list[str | None]] = defaultdict(list)
         self.pending_login_trigger: dict[str, str] = {}
@@ -118,18 +119,23 @@ def _uptime_reset_count(samples: list[int | None]) -> int:
     return sum(current < previous for previous, current in zip(values, values[1:]))
 
 
-def _age_cached_cpe_login(poller, cpe_ip: str) -> bool:
+def _age_cached_cpe_login(poller, cpe_ip: str, max_age_seconds: int = SESSION_MAX_AGE_SECONDS) -> bool:
     """Age one live cache entry in this bench process, without changing production code."""
     entry = poller._cpe_clients.get(cpe_ip)
     if not entry:
         return False
     client, _ = entry
-    poller._cpe_clients[cpe_ip] = (client, time.time() - SESSION_MAX_AGE_SECONDS - 1)
+    poller._cpe_clients[cpe_ip] = (client, time.time() - max_age_seconds - 1)
     return True
 
 
 async def _logout_cpe_session(recorder: Recorder, ip: str, client) -> bool:
     """Invalidate this bench-owned cached token so the next poll logs in again."""
+    # Cache entries can contain a raw client or a vendor driver, with or
+    # without a timestamp. Only mutate the client whose login we recorded.
+    if isinstance(client, tuple):
+        client = client[0]
+    client = getattr(client, "_client", client)
     if not recorder.owns_session(ip, client):
         return False
     if not getattr(client, "_token", None):
@@ -191,17 +197,20 @@ def _evaluate(recorder: Recorder, errors: set[str], has_session_valid: bool) -> 
         login_events = recorder.logins.get(ip, [])
         login_gaps = [b[0] - a[0] for a, b in zip(login_events, login_events[1:])]
         triggers = recorder.login_triggers.get(ip, [])
-        if any(gap < SESSION_MAX_AGE_SECONDS and triggers[index + 1] is None
-               for index, gap in enumerate(login_gaps)):
+        if recorder.max_age_seconds is not None and any(
+            gap < recorder.max_age_seconds and triggers[index + 1] is None
+            for index, gap in enumerate(login_gaps)
+        ):
             failures.append(f"login spacing too tight for {label}")
         if not has_session_valid or recorder.checks.get(ip, {}).get("ok", 0) == 0:
             failures.append(f"no session reuse for {label}")
-        if ip not in recorder.aged_cpes:
-            failures.append(f"cached CPE login was not aged for {label}")
-        if ip not in recorder.renewal_logins:
-            failures.append(f"no re-login after the 600-second login-age limit for {label}")
-        if ip not in recorder.post_renewal_reuse:
-            failures.append(f"no reuse after re-login for {label}")
+        if recorder.max_age_seconds is not None:
+            if ip not in recorder.aged_cpes:
+                failures.append(f"cached CPE login was not aged for {label}")
+            if ip not in recorder.renewal_logins:
+                failures.append(f"no re-login after the {recorder.max_age_seconds}-second login-age limit for {label}")
+            if ip not in recorder.post_renewal_reuse:
+                failures.append(f"no reuse after re-login for {label}")
         if ip not in recorder.logout_succeeded:
             failures.append(f"CPE session logout failed for {label}")
         if ip not in recorder.post_logout_logins:
@@ -218,9 +227,28 @@ def _evaluate(recorder: Recorder, errors: set[str], has_session_valid: bool) -> 
     return failures
 
 
+def _cpe_session_max_age(poller_module) -> int | None:
+    """Require a declared policy or the legacy ten-minute cap marker."""
+    policy = getattr(poller_module, "CPE_SESSION_POLICY", None)
+    cap = getattr(poller_module, "_CLIENT_TTL_SECONDS", None)
+    legacy_cap = type(cap) is int and cap == SESSION_MAX_AGE_SECONDS
+    if policy == "login_age" or (not hasattr(poller_module, "CPE_SESSION_POLICY") and legacy_cap):
+        if legacy_cap:
+            return cap
+        raise ValueError("capped CPE session policy lacks the 600-second cap marker")
+    if policy == "credential_change":
+        if hasattr(poller_module, "_CLIENT_TTL_SECONDS"):
+            raise ValueError("conflicting CPE session policy markers")
+        return None
+    raise ValueError("missing or unknown CPE session policy marker")
+
+
 def _instrument(recorder: Recorder):
+    from updater import poller as poller_module
     from updater.poller import NetworkPoller
     from updater.vendors.tachyon.client import TachyonClient
+
+    recorder.max_age_seconds = _cpe_session_max_age(poller_module)
 
     original_login = TachyonClient.login
 
@@ -237,19 +265,27 @@ def _instrument(recorder: Recorder):
         async def session_valid(self):
             state = await original_valid(self)
             recorder.check(self.ip, state)
-            if state == "ok" and self.ip in recorder.renewal_logins and self.ip not in recorder.post_renewal_reuse:
-                recorder.post_renewal_reuse.add(self.ip)
-                if await _logout_cpe_session(recorder, self.ip, self):
-                    recorder.logout_succeeded.add(self.ip)
-                    recorder.pending_login_trigger[self.ip] = "logout"
-                else:
-                    recorder.logout_failed.add(self.ip)
-            elif (
-                state == "ok"
-                and self.ip in recorder.post_logout_logins
-                and recorder.cpe_poll_count > recorder.post_logout_poll_floor.get(self.ip, recorder.cpe_poll_count)
-            ):
-                recorder.post_logout_reuse.add(self.ip)
+            if state == "ok":
+                ready_for_logout = recorder.max_age_seconds is None
+                if self.ip in recorder.renewal_logins:
+                    recorder.post_renewal_reuse.add(self.ip)
+                    ready_for_logout = True
+                if (
+                    ready_for_logout
+                    and self.ip in recorder.expected_cpes
+                    and self.ip not in recorder.logout_succeeded
+                    and self.ip not in recorder.logout_failed
+                ):
+                    if await _logout_cpe_session(recorder, self.ip, self):
+                        recorder.logout_succeeded.add(self.ip)
+                        recorder.pending_login_trigger[self.ip] = "logout"
+                    else:
+                        recorder.logout_failed.add(self.ip)
+                elif (
+                    self.ip in recorder.post_logout_logins
+                    and recorder.cpe_poll_count > recorder.post_logout_poll_floor.get(self.ip, recorder.cpe_poll_count)
+                ):
+                    recorder.post_logout_reuse.add(self.ip)
             return state
 
         TachyonClient.session_valid = session_valid
@@ -264,14 +300,15 @@ def _instrument(recorder: Recorder):
 
     TachyonClient.get_connected_cpes = get_connected_cpes
 
-    async def check_cpe_auth(self, cpe_ip, username, password):
+    async def check_cpe_auth(self, cpe_ip, username, password, *args, **kwargs):
         login_count = len(recorder.logins.get(cpe_ip, []))
-        state = await original_check_cpe_auth(self, cpe_ip, username, password)
+        state = await original_check_cpe_auth(self, cpe_ip, username, password, *args, **kwargs)
         if state == "ok":
             recorder.check(cpe_ip, "poll_ok")
             logged_in_during_poll = len(recorder.logins.get(cpe_ip, [])) > login_count
-            if not logged_in_during_poll and cpe_ip not in recorder.aged_cpes:
-                if _age_cached_cpe_login(self, cpe_ip):
+            if (recorder.max_age_seconds is not None
+                    and not logged_in_during_poll and cpe_ip not in recorder.aged_cpes):
+                if _age_cached_cpe_login(self, cpe_ip, recorder.max_age_seconds):
                     recorder.aged_cpes.add(cpe_ip)
                     recorder.pending_login_trigger[cpe_ip] = "age"
         return state
@@ -285,6 +322,7 @@ def _report(recorder: Recorder, end: float, has_session_valid: bool):
     print(f"session-proof: started={_utc(recorder.start)} finished={_utc(end)} "
           f"duration_s={int(end - recorder.start)} poll_interval_s={POLL_INTERVAL_SECONDS}")
     print(f"session-proof: commit_has_session_valid={'yes' if has_session_valid else 'no'}")
+    print(f"session-proof: cpe_session_max_age_s={recorder.max_age_seconds if recorder.max_age_seconds is not None else 'none'}")
     print(f"session-proof: devices_seen={len(recorder.order)}")
     for ip in recorder.order:
         logins = recorder.logins.get(ip, [])
@@ -322,10 +360,14 @@ def _report(recorder: Recorder, end: float, has_session_valid: bool):
                 f"uptime_end_s={uptimes[-1] if uptimes and uptimes[-1] is not None else 'n/a'} "
                 f"resets={_uptime_reset_count(valid_uptimes)}"
             )
+            renewal = 'yes' if ip in recorder.renewal_logins else 'no'
+            renewal_reuse = 'yes' if ip in recorder.post_renewal_reuse else 'no'
+            if recorder.max_age_seconds is None:
+                renewal = renewal_reuse = 'not_applicable'
             print(
                 f"session-proof: recovery device={labels[ip]} "
-                f"forced_renewal={'yes' if ip in recorder.renewal_logins else 'no'} "
-                f"reuse_after_forced_renewal={'yes' if ip in recorder.post_renewal_reuse else 'no'} "
+                f"forced_renewal={renewal} "
+                f"reuse_after_forced_renewal={renewal_reuse} "
                 f"logout_recovery={'yes' if ip in recorder.post_logout_logins else 'no'} "
                 f"reuse_after_logout_recovery={'yes' if ip in recorder.post_logout_reuse else 'no'}"
             )
@@ -344,7 +386,11 @@ async def _run(duration_s: int) -> int:
         return 1
     init_vendors()
     recorder = Recorder(time.time())
-    has_session_valid = _instrument(recorder)
+    try:
+        has_session_valid = _instrument(recorder)
+    except ValueError as error:
+        print(f"session-proof: FAIL: {error}")
+        return 1
     error_handler = RunErrorHandler()
     root_logger = logging.getLogger()
     root_logger.addHandler(error_handler)

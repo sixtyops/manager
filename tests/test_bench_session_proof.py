@@ -187,3 +187,93 @@ def test_summary_reports_every_expected_cpe_recovery_stage(monkeypatch, capsys):
     assert ("recovery device=cpe-2 forced_renewal=no "
             "reuse_after_forced_renewal=no logout_recovery=no "
             "reuse_after_logout_recovery=no") in output
+
+
+@pytest.mark.parametrize("shape", ["raw", "driver", "raw_tuple", "driver_tuple"])
+@pytest.mark.asyncio
+async def test_logout_helper_handles_cache_shapes_and_checks_underlying_owner(shape):
+    client = SimpleNamespace(_token="bench-token")
+    driver = SimpleNamespace(_client=client)
+    shapes = {"raw": client, "driver": driver,
+              "raw_tuple": (client, 0), "driver_tuple": (driver, 0)}
+    recorder = Recorder(0)
+    assert not await _logout_cpe_session(recorder, "192.0.2.2", shapes[shape])
+    assert client._token == "bench-token"
+    recorder.login("192.0.2.2", True, client=client)
+    assert await _logout_cpe_session(recorder, "192.0.2.2", shapes[shape])
+    assert client._token is None
+
+
+@pytest.mark.parametrize("stage", ["logout_succeeded", "post_logout_logins", "post_logout_reuse"])
+def test_uncapped_policy_still_requires_every_logout_step(monkeypatch, stage):
+    recorder = _passing_recorder(monkeypatch)
+    recorder.max_age_seconds = None
+    recorder.aged_cpes.clear()
+    recorder.renewal_logins.clear()
+    recorder.post_renewal_reuse.clear()
+    assert _evaluate(recorder, set(), True) == []
+    getattr(recorder, stage).clear()
+    assert _evaluate(recorder, set(), True)
+
+
+def test_uncapped_report_marks_age_steps_not_applicable(monkeypatch, capsys):
+    from scripts.bench.session_proof import _report
+
+    recorder = _passing_recorder(monkeypatch)
+    recorder.max_age_seconds = None
+    _report(recorder, 180, True)
+    output = capsys.readouterr().out
+    assert "cpe_session_max_age_s=none" in output
+    assert "forced_renewal=not_applicable reuse_after_forced_renewal=not_applicable" in output
+    assert "logout_recovery=yes reuse_after_logout_recovery=yes" in output
+
+
+@pytest.mark.parametrize(
+    ("markers", "expected"),
+    [
+        ({"_CLIENT_TTL_SECONDS": 600}, 600),
+        ({"CPE_SESSION_POLICY": "login_age", "_CLIENT_TTL_SECONDS": 600}, 600),
+        ({"CPE_SESSION_POLICY": "credential_change", "_CLIENT_IDLE_TTL_SECONDS": 600}, None),
+    ],
+)
+def test_policy_detection_requires_positive_evidence(markers, expected):
+    from scripts.bench.session_proof import _cpe_session_max_age
+
+    assert _cpe_session_max_age(SimpleNamespace(**markers)) == expected
+
+
+@pytest.mark.parametrize(
+    "markers",
+    [
+        {},
+        {"_CLIENT_IDLE_TTL_SECONDS": 600},
+        {"CPE_SESSION_POLICY": "unknown"},
+        {"CPE_SESSION_POLICY": "unknown", "_CLIENT_TTL_SECONDS": 600},
+        {"CPE_SESSION_POLICY": None, "_CLIENT_TTL_SECONDS": 600},
+        {"CPE_SESSION_POLICY": "login_age"},
+        {"CPE_SESSION_POLICY": "credential_change", "_CLIENT_TTL_SECONDS": 600},
+        {"_CLIENT_TTL_SECONDS": 0},
+        {"_CLIENT_TTL_SECONDS": "600"},
+    ],
+)
+def test_missing_unknown_or_conflicting_policy_fails(markers):
+    from scripts.bench.session_proof import _cpe_session_max_age
+
+    with pytest.raises(ValueError, match="CPE session policy"):
+        _cpe_session_max_age(SimpleNamespace(**markers))
+
+
+@pytest.mark.asyncio
+async def test_missing_policy_stops_proof_before_polling(mock_db, monkeypatch, capsys):
+    from unittest.mock import Mock
+    from scripts.bench.session_proof import _run
+    from updater import poller
+
+    monkeypatch.setenv("SIXTYOPS_BENCH_AP_IP", "192.0.2.1")
+    monkeypatch.delattr(poller, "CPE_SESSION_POLICY", raising=False)
+    monkeypatch.delattr(poller, "_CLIENT_TTL_SECONDS", raising=False)
+    init = Mock()
+    monkeypatch.setattr(poller, "init_poller", init)
+    assert await _run(0) == 1
+    init.assert_not_called()
+    assert "session-proof: FAIL: missing or unknown CPE session policy marker" in capsys.readouterr().out
