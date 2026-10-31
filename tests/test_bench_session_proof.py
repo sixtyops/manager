@@ -187,3 +187,42 @@ def test_summary_reports_every_expected_cpe_recovery_stage(monkeypatch, capsys):
     assert ("recovery device=cpe-2 forced_renewal=no "
             "reuse_after_forced_renewal=no logout_recovery=no "
             "reuse_after_logout_recovery=no") in output
+
+
+@pytest.mark.parametrize("shape", ["raw", "driver", "raw_tuple", "driver_tuple"])
+@pytest.mark.asyncio
+async def test_logout_helper_handles_cache_shapes_and_checks_underlying_owner(shape):
+    client = SimpleNamespace(_token="bench-token")
+    driver = SimpleNamespace(_client=client)
+    shapes = {"raw": client, "driver": driver,
+              "raw_tuple": (client, 0), "driver_tuple": (driver, 0)}
+    recorder = Recorder(0)
+    assert not await _logout_cpe_session(recorder, "192.0.2.2", shapes[shape])
+    assert client._token == "bench-token"
+    recorder.login("192.0.2.2", True, client=client)
+    assert await _logout_cpe_session(recorder, "192.0.2.2", shapes[shape])
+    assert client._token is None
+
+
+@pytest.mark.parametrize("stage", ["logout_succeeded", "post_logout_logins", "post_logout_reuse"])
+def test_uncapped_policy_still_requires_every_logout_step(monkeypatch, stage):
+    recorder = _passing_recorder(monkeypatch)
+    recorder.max_age_seconds = None
+    recorder.aged_cpes.clear()
+    recorder.renewal_logins.clear()
+    recorder.post_renewal_reuse.clear()
+    assert _evaluate(recorder, set(), True) == []
+    getattr(recorder, stage).clear()
+    assert _evaluate(recorder, set(), True)
+
+
+def test_uncapped_report_marks_age_steps_not_applicable(monkeypatch, capsys):
+    from scripts.bench.session_proof import _report
+
+    recorder = _passing_recorder(monkeypatch)
+    recorder.max_age_seconds = None
+    _report(recorder, 180, True)
+    output = capsys.readouterr().out
+    assert "cpe_session_max_age_s=none" in output
+    assert "forced_renewal=not_applicable reuse_after_forced_renewal=not_applicable" in output
+    assert "logout_recovery=yes reuse_after_logout_recovery=yes" in output
