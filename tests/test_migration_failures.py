@@ -86,6 +86,48 @@ class TestPartialMigrationRecovery:
         database.init_db()
         assert "last_config_poll_at" in _column_names(fresh_db, "devices")
 
+    def test_replaces_old_ap_bank_sync_trigger(self, fresh_db):
+        database.init_db()
+        database.upsert_device(
+            "192.0.2.31", "cpe", "fixture-user", "fixture-password",
+            model="CPE-101",
+        )
+        database.update_device_status("192.0.2.31", bank1_version="cpe-bank")
+        conn = sqlite3.connect(str(fresh_db))
+        try:
+            conn.execute("DROP TRIGGER trg_devices_to_legacy_update")
+            conn.executescript("""
+                CREATE TRIGGER trg_devices_to_legacy_update AFTER UPDATE ON devices
+                WHEN NEW.vendor = 'tachyon'
+                BEGIN
+                    UPDATE access_points SET firmware_version=NEW.firmware_version
+                    WHERE ip=NEW.ip AND NEW.role='ap';
+                    UPDATE switches SET firmware_version=NEW.firmware_version
+                    WHERE ip=NEW.ip AND NEW.role='switch';
+                END;
+            """)
+            conn.commit()
+        finally:
+            conn.close()
+
+        database.init_db()
+
+        conn = sqlite3.connect(str(fresh_db))
+        try:
+            trigger_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                "AND name='trg_devices_to_legacy_update'"
+            ).fetchone()[0]
+            cpe = conn.execute(
+                "SELECT role,bank1_version FROM devices WHERE ip='192.0.2.31'"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert "bank1_version=NEW.bank1_version" in trigger_sql
+        assert "bank2_version=NEW.bank2_version" in trigger_sql
+        assert "active_bank=NEW.active_bank" in trigger_sql
+        assert cpe == ("cpe", "cpe-bank")
+
     def test_resume_restores_multiple_dropped_columns(self, fresh_db):
         database.init_db()
         # SQLite refuses to drop columns referenced by triggers, so drop the
