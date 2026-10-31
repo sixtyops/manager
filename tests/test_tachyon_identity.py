@@ -146,6 +146,45 @@ async def test_peer_list_fixture_rejects_invalid_cpe_radio_mac(caplog):
     assert "Ignoring invalid MAC for peer" in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_peer_list_validity_distinguishes_empty_from_unreadable():
+    client = TachyonClient("placeholder", "user", "password")
+    client._curl = AsyncMock(side_effect=[
+        (503, ""), (200, json.dumps({"wireless": {"peers": []}})),
+    ])
+
+    assert await client.get_connected_cpes() == []
+    assert client.last_connected_cpes_valid is False
+    assert await client.get_connected_cpes() == []
+    assert client.last_connected_cpes_valid is True
+
+
+@pytest.mark.asyncio
+async def test_eth0_byte_counters_parse_captured_interface_shape():
+    client = TachyonClient("placeholder", "user", "password")
+    client._curl = AsyncMock(return_value=(200, json.dumps({
+        "interfaces": {"eth0": {
+            "rx_bytes": 4100, "tx_bytes": 82000,
+            "rx_packets": 40, "tx_packets": 520,
+        }}
+    })))
+
+    assert await client.get_eth0_byte_counters() == (4100, 82000)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row,expected", [
+    ({"rx_bytes": -1, "tx_bytes": 2}, (None, 2)),
+    ({"rx_bytes": "2", "tx_bytes": 2}, (None, 2)),
+    ({"rx_bytes": 2}, (2, None)),
+])
+async def test_eth0_byte_counters_reject_invalid_values(row, expected):
+    client = TachyonClient("placeholder", "user", "password")
+    client._curl = AsyncMock(return_value=(200, json.dumps({"interfaces": {"eth0": row}})))
+
+    assert await client.get_eth0_byte_counters() == expected
+
+
 @pytest.mark.parametrize("serial", [None, "", "  ", "<SERIAL>", "unknown", [], {}])
 def test_invalid_serial_claims_are_rejected(serial):
     assert TachyonClient._parse_serial({"serial": serial}) is None

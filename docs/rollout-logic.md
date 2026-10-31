@@ -515,6 +515,16 @@ record a failure and stop the window. Let the current flash finish. Do not
 start another device sequence until the current device passes every recovery
 check. If it does not pass, no next write starts in that window.
 
+For AP recovery, compare the CPE `eth0` state before and after the reboot.
+Require link up after recovery and do not accept a lower reported link rate.
+Require the saved customer MAC on CPE `eth0` and upstream. Require two-way
+counter deltas where the baseline had two-way traffic. These passive counters
+can include other management or device traffic. Such traffic could make a
+customer-only forwarding fault look healthy. The API does not expose speed or
+duplex on every device. If a bridge row has no learning age, record its
+freshness as unproven; a row alone does not prove that it was learned after
+the reboot.
+
 *(Today a login failure before the reboot is recorded as `failed` and pauses
 the rollout. `deferred` means the window ran out. Snapshot failure is
 non-fatal. These shipped behaviors do not satisfy the target.)*

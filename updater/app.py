@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import threading
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
@@ -3968,6 +3968,7 @@ class DeviceStatus:
     # Smoke test results
     smoke_warnings: Optional[list] = None
     smoke_checks: Optional[list] = None
+    customer_recovery_evidence: list = field(default_factory=list)
 
 
 @dataclass
@@ -4058,6 +4059,293 @@ def _stop_firmware_window(job: "UpdateJob", ip: str, gate: str, reason: str):
         "device_ip": ip, "gate": gate, "reason": reason,
     }))
     return stop
+
+
+async def _capture_ap_customer_recovery(job, ap_ip, ap_client, expected_macs=None):
+    """Read one AP/CPE recovery sample, retaining only reported evidence."""
+    cpes = await ap_client.get_connected_cpes()
+    if getattr(ap_client, "last_connected_cpes_valid", True) is not True:
+        raise RuntimeError("The AP peer list could not be read for customer recovery evidence")
+    peers = _index_recovery_peers(cpes)
+    if not peers and job.ap_cpe_map.get(ap_ip):
+        raise RuntimeError("The AP peer list is unavailable for customer recovery evidence")
+    if expected_macs is None:
+        expected_macs = set(peers)
+    else:
+        expected_macs = set(expected_macs)
+    upstream = await ap_client.get_bridge_table()
+    if not isinstance(upstream, list):
+        raise RuntimeError("AP upstream bridge data is unavailable")
+    saved = {}
+    for radio_mac in expected_macs:
+        peer = peers.get(radio_mac)
+        if peer is None:
+            raise RuntimeError(f"CPE {radio_mac} is missing from the AP peer list")
+        credentials = job.credentials.get(peer.ip) or job.credentials.get(ap_ip)
+        if not credentials:
+            raise RuntimeError(f"Credentials are unavailable for CPE {radio_mac}")
+        cpe_client = get_driver("tachyon")(peer.ip, *credentials)
+        if await cpe_client.connect() is not True:
+            raise RuntimeError(f"CPE {radio_mac} is not reachable for customer recovery evidence")
+        info = await cpe_client.get_device_info()
+        macs = getattr(info, "extra", {}).get("macs", {})
+        eth0_mac = str(macs.get("eth0", "")).upper()
+        if not _usable_recovery_mac(eth0_mac):
+            raise RuntimeError(f"CPE {radio_mac} eth0 MAC is unavailable")
+        lan = await cpe_client.get_bridge_table()
+        if not isinstance(lan, list):
+            raise RuntimeError(f"CPE {radio_mac} bridge data is unavailable")
+        customer_macs = sorted({
+            str(row.get("mac", "")).upper() for row in lan if isinstance(row, dict)
+            and row.get("port") == "eth0" and _usable_recovery_mac(str(row.get("mac", "")).upper())
+            and str(row.get("mac")).upper() != eth0_mac
+        })
+        if not customer_macs:
+            raise RuntimeError(f"CPE {radio_mac} has no customer MAC on eth0")
+        state_reader = getattr(cpe_client, "get_eth0_recovery_state", None)
+        if not callable(state_reader):
+            raise RuntimeError(f"CPE {radio_mac} eth0 recovery read is unavailable")
+        state = await state_reader()
+        if not isinstance(state, dict) or state.get("read_state") != "ok":
+            reason = state.get("reason") if isinstance(state, dict) else None
+            raise RuntimeError(f"CPE {radio_mac} eth0 recovery read is unknown: {reason or 'missing evidence'}")
+        rx_bytes, tx_bytes = state.get("rx_bytes"), state.get("tx_bytes")
+        ap_rx, ap_tx = getattr(peer, "rx_bytes", None), getattr(peer, "tx_bytes", None)
+        if any(type(value) is not int or value < 0 for value in (rx_bytes, tx_bytes, ap_rx, ap_tx)):
+            raise RuntimeError(f"CPE {radio_mac} eth0 byte counters are unavailable")
+        link_state = _eth0_link_up(state)
+        if link_state is None:
+            raise RuntimeError(f"CPE {radio_mac} eth0 link state is unavailable")
+        if any(not _has_bridge_row(upstream, customer, "prs0") for customer in customer_macs):
+            raise RuntimeError(f"CPE {radio_mac} customer MAC is missing from AP upstream port prs0")
+        saved[radio_mac] = {
+            "ip": peer.ip,
+            "customer_macs": customer_macs,
+            "eth0_state": state,
+            "eth0_link_up": link_state,
+            "ap_bytes": (ap_rx, ap_tx),
+            "eth0_bytes": (rx_bytes, tx_bytes),
+            "lan": lan,
+        }
+    if expected_macs and set(saved) != expected_macs:
+        raise RuntimeError("One or more original CPEs are missing from the AP peer list")
+    return {"peers": saved, "upstream": upstream}
+
+
+async def _capture_ap_customer_baseline(job, ap_ip, ap_client):
+    """Save stable peer, bridge, eth0 state, and counter baselines before reboot."""
+    cpes = await ap_client.get_connected_cpes()
+    if getattr(ap_client, "last_connected_cpes_valid", True) is not True:
+        raise RuntimeError("The AP peer list could not be read for customer recovery evidence")
+    peers = _index_recovery_peers(cpes)
+    ips = [peer.ip for peer in peers.values()]
+    poller = get_poller()
+    async with AsyncExitStack() as stack:
+        for peer_ip in ips:
+            await stack.enter_async_context(poller.pause_cpe_requests(peer_ip))
+        first = await _capture_ap_customer_recovery(job, ap_ip, ap_client)
+        if not first["peers"]:
+            return first
+        await asyncio.sleep(10)
+        second = await _capture_ap_customer_recovery(job, ap_ip, ap_client, set(first["peers"]))
+    for mac, before in first["peers"].items():
+        after = second["peers"].get(mac)
+        if not after:
+            raise RuntimeError(f"CPE {mac} baseline evidence is missing")
+        for counter_set in ("ap_bytes", "eth0_bytes"):
+            old, new = before[counter_set], after[counter_set]
+            if new[0] < old[0] or new[1] < old[1]:
+                raise RuntimeError(f"CPE {mac} {counter_set} counters reset before update")
+        before["two_way"] = all(
+            second["peers"][mac][name][0] > before[name][0]
+            and second["peers"][mac][name][1] > before[name][1]
+            for name in ("ap_bytes", "eth0_bytes")
+        )
+    first["baseline_second_sample"] = second
+    return first
+
+
+def _index_recovery_peers(cpes):
+    """Validate every listed peer; never drop an unusable identity."""
+    peers = {}
+    for cpe in cpes:
+        radio_mac = str(getattr(cpe, "mac", "") or "").upper()
+        peer_ip = getattr(cpe, "ip", None)
+        if not _usable_recovery_mac(radio_mac):
+            raise RuntimeError("An AP peer has an unusable MAC address")
+        if not isinstance(peer_ip, str):
+            raise RuntimeError("An AP peer has an unusable IP address")
+        try:
+            address = ipaddress.ip_address(peer_ip)
+        except (ValueError, TypeError):
+            raise RuntimeError("An AP peer has an unusable IP address")
+        if address.is_unspecified or address.is_multicast or address.is_loopback or address.is_link_local:
+            raise RuntimeError("An AP peer has an unusable IP address")
+        if radio_mac in peers:
+            raise RuntimeError("The AP peer list contains a duplicate CPE MAC")
+        peers[radio_mac] = cpe
+    return peers
+
+
+def _usable_recovery_mac(mac):
+    if not isinstance(mac, str) or not re.fullmatch(r"(?:[0-9A-F]{2}:){5}[0-9A-F]{2}", mac):
+        return False
+    octets = bytes.fromhex(mac.replace(":", ""))
+    return any(octets) and octets != b"\xff" * 6 and not octets[0] & 1
+
+
+def _has_bridge_row(rows, mac, port):
+    return isinstance(rows, list) and any(
+        isinstance(row, dict) and row.get("mac") == mac and row.get("port") == port
+        for row in rows
+    )
+
+
+def _eth0_link_up(state):
+    return state.get("link_up") if isinstance(state, dict) and type(state.get("link_up")) is bool else None
+
+
+def _eth0_rate(state):
+    value = state.get("link_rate_mbps") if isinstance(state, dict) else None
+    return float(value) if type(value) in (int, float) and value >= 0 else None
+
+
+def _bridge_age_is_fresh(before_rows, after_rows, mac, port):
+    before = next((row for row in before_rows if row.get("mac") == mac and row.get("port") == port), {})
+    after = next((row for row in after_rows if row.get("mac") == mac and row.get("port") == port), {})
+    old_age, new_age = before.get("learning_age_seconds"), after.get("learning_age_seconds")
+    if old_age is None and new_age is None:
+        return True
+    return type(old_age) is int and type(new_age) is int and 0 <= new_age < old_age
+
+
+def _ap_customer_recovery_decision(baseline, first, second):
+    """Require identity, bridge paths, ethernet state and same-run deltas."""
+    if not all(isinstance(item, dict) for item in (baseline, first, second)):
+        return False, "AP customer recovery evidence is incomplete"
+    baseline_peers = baseline.get("peers")
+    first_peers = first.get("peers")
+    second_peers = second.get("peers")
+    if not all(isinstance(item, dict) for item in (baseline_peers, first_peers, second_peers)):
+        return False, "AP customer recovery peer evidence is missing"
+    for radio_mac, before in baseline_peers.items():
+        if not isinstance(before, dict):
+            return False, f"CPE {radio_mac} baseline evidence is missing"
+        a, b = first_peers.get(radio_mac), second_peers.get(radio_mac)
+        if not isinstance(a, dict) or not isinstance(b, dict):
+            return False, f"CPE {radio_mac} is missing from the AP peer list"
+        if not before.get("customer_macs"):
+            return False, f"CPE {radio_mac} has no saved customer MAC on eth0"
+        if type(before.get("two_way")) is not bool:
+            return False, f"CPE {radio_mac} traffic baseline is missing"
+        for customer in before["customer_macs"]:
+            before_lan = before.get("lan", [])
+            second_lan = b.get("lan", [])
+            baseline_upstream = baseline.get("upstream", [])
+            if not _has_bridge_row(before_lan, customer, "eth0"):
+                return False, f"Customer MAC {customer} baseline on CPE {radio_mac} eth0 is missing"
+            if not _has_bridge_row(baseline_upstream, customer, "prs0"):
+                return False, f"Customer MAC {customer} baseline upstream evidence is missing"
+            if not _has_bridge_row(second_lan, customer, "eth0"):
+                return False, f"Customer MAC {customer} is missing from CPE {radio_mac} eth0"
+            second_upstream = second.get("upstream", [])
+            if not _has_bridge_row(second_upstream, customer, "prs0"):
+                return False, f"Customer MAC {customer} is missing from AP upstream port prs0"
+            if not _bridge_age_is_fresh(before_lan, second_lan, customer, "eth0"):
+                return False, f"Customer MAC {customer} CPE bridge learning is not fresh"
+            if not _bridge_age_is_fresh(baseline_upstream, second_upstream, customer, "prs0"):
+                return False, f"Customer MAC {customer} upstream bridge learning is not fresh"
+        if not a.get("eth0_link_up") or not b.get("eth0_link_up"):
+            return False, f"CPE {radio_mac} eth0 link is down"
+        before_rates = [_eth0_rate(before.get("eth0_state"))]
+        baseline_second = baseline.get("baseline_second_sample", {})
+        baseline_second_peer = (
+            baseline_second.get("peers", {}).get(radio_mac)
+            if isinstance(baseline_second, dict)
+            and isinstance(baseline_second.get("peers"), dict)
+            else None
+        )
+        if isinstance(baseline_second_peer, dict):
+            before_rates.append(_eth0_rate(baseline_second_peer.get("eth0_state")))
+        before_rate = max((rate for rate in before_rates if rate is not None), default=None)
+        for recovered in (a, b):
+            after_rate = _eth0_rate(recovered.get("eth0_state"))
+            if before_rate is not None and (after_rate is None or after_rate < before_rate):
+                return False, f"CPE {radio_mac} eth0 link rate decreased or is unavailable"
+        for name in ("ap_bytes", "eth0_bytes"):
+            old, new_a, new_b = before.get(name), a.get(name), b.get(name)
+            if not all(isinstance(value, (list, tuple)) and len(value) == 2 for value in (old, new_a, new_b)):
+                return False, f"CPE {radio_mac} {name} evidence is unavailable"
+            if any(type(value) is not int or value < 0 for pair in (old, new_a, new_b) for value in pair):
+                return False, f"CPE {radio_mac} {name} evidence is unavailable"
+            before_counters = old
+            if isinstance(baseline_second_peer, dict):
+                saved_second = baseline_second_peer.get(name)
+                if isinstance(saved_second, (list, tuple)) and len(saved_second) == 2:
+                    if any(type(value) is not int or value < 0 for value in saved_second):
+                        return False, f"CPE {radio_mac} {name} evidence is unavailable"
+                    before_counters = saved_second
+            below_baseline = any(
+                value < saved
+                for pair in (new_a, new_b)
+                for value, saved in zip(pair, before_counters)
+            )
+            if below_baseline:
+                return False, f"CPE {radio_mac} {name} counters reset"
+            if new_b[0] < new_a[0] or new_b[1] < new_a[1]:
+                return False, f"CPE {radio_mac} {name} counters reset"
+            if before.get("two_way") and (new_b[0] == new_a[0] or new_b[1] == new_a[1]):
+                return False, f"CPE {radio_mac} traffic did not resume in both directions"
+    return True, ""
+
+
+async def _check_ap_customer_recovery(job, ap_ip, ap_client, baseline, deadline):
+    expected = set(baseline.get("peers", {}))
+    if not expected:
+        return True, {"peers": {}, "upstream": [], "learning_freshness": "not_applicable"}
+    if type(deadline) not in (int, float):
+        return False, {"reason": "A4 recovery deadline is unavailable"}
+    poller = get_poller()
+    async with AsyncExitStack() as stack:
+        for saved in baseline["peers"].values():
+            await stack.enter_async_context(poller.pause_cpe_requests(saved["ip"]))
+        first = None
+        while monotonic() < deadline:
+            try:
+                current = await _capture_ap_customer_recovery(job, ap_ip, ap_client, expected)
+                if monotonic() > deadline:
+                    reason = "A4 recovery deadline expired before the sample completed"
+                    break
+                if first is None:
+                    first = current
+                else:
+                    passed, reason = _ap_customer_recovery_decision(baseline, first, current)
+                    if passed:
+                        age_pairs = []
+                        for mac, saved in baseline["peers"].items():
+                            recovered = current["peers"][mac]
+                            for customer in saved["customer_macs"]:
+                                for before_rows, after_rows, port in (
+                                    (saved["lan"], recovered["lan"], "eth0"),
+                                    (baseline["upstream"], current["upstream"], "prs0"),
+                                ):
+                                    old = next((row for row in before_rows if row.get("mac") == customer and row.get("port") == port), {})
+                                    new = next((row for row in after_rows if row.get("mac") == customer and row.get("port") == port), {})
+                                    age_pairs.append((old.get("learning_age_seconds"), new.get("learning_age_seconds")))
+                        age_seen = bool(age_pairs) and all(old is not None and new is not None for old, new in age_pairs)
+                        evidence = {
+                            "first": first, "second": current,
+                            "learning_freshness": "age_compared" if age_seen else "unproven",
+                        }
+                        return True, evidence
+                    first = current
+            except Exception as exc:
+                first = None
+                reason = str(exc)
+            remaining = deadline - monotonic()
+            if remaining > 0:
+                await asyncio.sleep(min(10, remaining))
+        return False, {"reason": reason if 'reason' in locals() else "A4 recovery deadline expired"}
 
 
 async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
@@ -5818,6 +6106,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
 
     # Capture pre-update CPE count for smoke test comparison
     pre_update_cpe_count = len(job.ap_cpe_map.get(ip, [])) if device_status.role == "ap" else 0
+    pre_reboot_customer_baseline = None
+    flash_customer_baseline = None
 
     client = None
     expected_serial = None
@@ -5942,6 +6232,10 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 reboot_timeout = client.get_reboot_timeout(device_status.role)
                 if not _firmware_write_gate(job, ip)[0]:
                     return
+                if device_status.role == "ap" and vendor_id == "tachyon":
+                    pre_reboot_customer_baseline = await _capture_ap_customer_baseline(
+                        job, ip, client
+                    )
                 if not await client.reboot(timeout=reboot_timeout):
                     raise RuntimeError("Device did not come back online after pre-update reboot")
                 if await client.connect() is not True:
@@ -5956,6 +6250,14 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     recovery_case="pre_update_reboot",
                 ):
                     return
+                if pre_reboot_customer_baseline is not None:
+                    passed, evidence = await _check_ap_customer_recovery(
+                        job, ip, client, pre_reboot_customer_baseline,
+                        getattr(client, "last_reboot_deadline", None),
+                    )
+                    if not passed:
+                        raise RuntimeError(f"AP customer recovery failed: {evidence.get('reason', 'missing evidence')}")
+                    device_status.customer_recovery_evidence.append(evidence)
             except Exception as e:
                 device_status.status = "failed"
                 device_status.error = f"Pre-update reboot failed: {e}"
@@ -6036,6 +6338,10 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 expected_version = getattr(info, "current_version", None)
             if not await _address_change_guard(job, ip, info=info, pass_number=pass_number):
                 return
+            if device_status.role == "ap" and vendor_id == "tachyon":
+                flash_customer_baseline = await _capture_ap_customer_baseline(
+                    job, ip, client
+                )
             if not _firmware_write_gate(job, ip)[0]:
                 return
             result = await asyncio.wait_for(
@@ -6064,6 +6370,14 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 raise RuntimeError("Expected serial did not match after firmware reboot")
             if not target or _normalize_version(getattr(recovered_info, "current_version", None)) != _normalize_version(target):
                 raise RuntimeError("Target firmware version was not confirmed after firmware reboot")
+            if flash_customer_baseline is not None:
+                passed, evidence = await _check_ap_customer_recovery(
+                    job, ip, client, flash_customer_baseline,
+                    getattr(client, "last_reboot_deadline", None),
+                )
+                if not passed:
+                    raise RuntimeError(f"AP customer recovery failed: {evidence.get('reason', 'missing evidence')}")
+                device_status.customer_recovery_evidence.append(evidence)
         except Exception as e:
             result.success = False
             result.error = f"Post-flash recovery failed: {e}"
@@ -6072,6 +6386,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             device_status.progress_message = result.error
             _stop_firmware_window(job, ip, "recovery", result.error)
 
+    smoke_clean_pass = False
     if result.skipped:
         device_status.status = "skipped"
         device_status.progress_message = f"{prefix}Already on {result.new_version}"
@@ -6086,7 +6401,6 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
 
         # Post-update smoke tests
         smoke_failed = False
-        smoke_clean_pass = False  # smoke ran AND passed cleanly (no warnings, no error)
         if client:
             try:
                 progress_callback(ip, "Smoke testing...")
@@ -6135,16 +6449,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 device_status.progress_message = f"{prefix}{device_status.error}"
                 logger.warning(f"Smoke test error for {ip}: {e}")
 
-        # Record Firmware Hold proof after a clean smoke pass.
         # Request job cancellation after each smoke failure.
-        if smoke_clean_pass and result.new_version:
-            try:
-                db.mark_device_firmware_confirmed(
-                    ip, result.new_version, datetime.now(timezone.utc).isoformat()
-                )
-            except Exception as e:
-                logger.warning(f"Failed to record firmware confirmation for {ip}: {e}")
-        elif smoke_failed:
+        if smoke_failed:
             _stop_firmware_window(job, ip, "smoke", device_status.error or "Smoke test failed")
     else:
         if admission_denial["reason"].startswith((
@@ -6241,8 +6547,15 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             stage["smoke_warnings"] = device_status.smoke_warnings or []
             stage["has_warnings"] = bool(device_status.smoke_warnings)
             break
+    if device_status.customer_recovery_evidence:
+        device_status.stage_history.append({
+            "stage": "customer_recovery",
+            "success": device_status.status in ("success", "skipped"),
+            "evidence": device_status.customer_recovery_evidence,
+        })
 
     duration_secs = (now - device_start_time).total_seconds()
+    history_saved = False
     try:
         db.save_device_update_history(
             job_id=job.job_id, ip=ip, role=device_status.role,
@@ -6253,8 +6566,21 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             duration_seconds=duration_secs,
             started_at=device_start_time.isoformat(), completed_at=now_iso,
         )
+        history_saved = True
     except Exception as e:
         logger.warning(f"Failed to save device update history for {ip}: {e}")
+        if smoke_clean_pass:
+            device_status.status = "failed"
+            device_status.error = "Recovery evidence could not be saved; firmware was not confirmed"
+            device_status.progress_message = device_status.error
+            _stop_firmware_window(job, ip, "recovery_evidence", device_status.error)
+    if smoke_clean_pass and result.new_version and history_saved:
+        try:
+            db.mark_device_firmware_confirmed(
+                ip, result.new_version, datetime.now(timezone.utc).isoformat()
+            )
+        except Exception as e:
+            logger.warning(f"Failed to record firmware confirmation for {ip}: {e}")
 
 
 async def run_update_job(job: UpdateJob, concurrency: int):

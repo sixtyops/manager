@@ -33,6 +33,15 @@ class _DeviceClient:
             raise RuntimeError("reconnect failed")
         return True
 
+    async def get_connected_cpes(self):
+        return []
+
+    async def get_bridge_table(self):
+        return []
+
+    async def get_eth0_byte_counters(self):
+        return None, None
+
     async def get_config(self):
         self.calls[self.ip].append("snapshot")
         if self.ip == "192.0.2.1" and self.fail_at == "snapshot":
@@ -153,6 +162,43 @@ async def test_first_device_failure_stops_all_second_device_writes(
     assert stop["device_ip"] == "192.0.2.1"
     assert stop["gate"] == expected_gate
     assert stop["reason"]
+
+
+@pytest.mark.asyncio
+async def test_history_save_failure_withholds_firmware_confirmation(mock_db, monkeypatch):
+    _DeviceClient.calls = {}
+    _DeviceClient.connect_calls = {}
+    _DeviceClient.fail_at = None
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
+    monkeypatch.setattr(app_module, "_address_change_guard", AsyncMock(return_value=True))
+    monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
+    monkeypatch.setattr(app_module, "_shutting_down", False)
+    monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(db, "save_device_duration", lambda *args, **kwargs: None)
+    monkeypatch.setattr(db, "save_device_update_history", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+    confirmations = []
+    monkeypatch.setattr(db, "mark_device_firmware_confirmed", lambda *args, **kwargs: confirmations.append(args))
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value="UTC"))
+    monkeypatch.setattr(app_module.asyncio, "sleep", AsyncMock())
+    db.set_setting("smoke_test_strict", "true")
+    ip = "192.0.2.1"
+    job = app_module.UpdateJob(
+        job_id="history-save-failure",
+        device_firmware_map={ip: "/tmp/tna-30x-2.0.0-r1.bin"},
+        credentials={ip: ("u", "p")}, device_roles={ip: "ap"},
+        devices={ip: app_module.DeviceStatus(ip=ip, role="ap", model="TNA-301")},
+        bank_mode="one", pre_update_reboot=True,
+        window_key=("firmware", "2026-10-27"),
+        started_at=datetime.now(),
+    )
+
+    await app_module.run_update_job(job, concurrency=1)
+
+    assert confirmations == []
+    assert job.devices[ip].status == "failed"
+    stop = db.get_firmware_window_stop(job.window_key)
+    assert stop["gate"] == "recovery_evidence"
 
 
 @pytest.mark.asyncio
