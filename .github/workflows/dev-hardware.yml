@@ -8,13 +8,13 @@ on:
     - cron: "17 6 * * *"
 
 concurrency:
-  group: dev-hardware-${{ github.ref }}
-  cancel-in-progress: true
+  group: dev-hardware-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   dev-blocking:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, x64]
+    runs-on: [self-hosted, linux, x64, dev-host]
     timeout-minutes: 90
     env:
       SIXTYOPS_TEST_URL: ${{ vars.SIXTYOPS_TEST_URL || secrets.SIXTYOPS_TEST_URL }}
@@ -25,12 +25,23 @@ jobs:
       SIXTYOPS_TEST_FIRMWARE_AP_IP: ${{ vars.SIXTYOPS_TEST_FIRMWARE_AP_IP || secrets.SIXTYOPS_TEST_FIRMWARE_AP_IP }}
       SIXTYOPS_TEST_CONFIG_AP_IP: ${{ vars.SIXTYOPS_TEST_CONFIG_AP_IP || secrets.SIXTYOPS_TEST_CONFIG_AP_IP }}
       SIXTYOPS_TEST_RADIUS_AP_IP: ${{ vars.SIXTYOPS_TEST_RADIUS_AP_IP || secrets.SIXTYOPS_TEST_RADIUS_AP_IP }}
+      SIXTYOPS_DEV_HARDWARE_LOCK_FILE: ${{ vars.SIXTYOPS_DEV_HARDWARE_LOCK_FILE }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate required live-dev inputs
-        id: validate_inputs
+      - name: Lock shared dev host and run validation
         run: |
+          lock_file="${SIXTYOPS_DEV_HARDWARE_LOCK_FILE:-/var/lock/sixtyops-dev-hardware.lock}"
+          if [ ! -e "$lock_file" ]; then
+            (umask 077; : > "$lock_file")
+          fi
+          exec 9>"$lock_file"
+          if ! flock --exclusive --wait 300 9; then
+            echo "::error::Timed out after 5 minutes waiting for the shared dev host lock: $lock_file"
+            exit 1
+          fi
+
+          echo "Acquired the shared dev host lock."
           missing=()
           for name in \
             SIXTYOPS_TEST_URL \
@@ -48,35 +59,20 @@ jobs:
           done
 
           if [ "${#missing[@]}" -eq 0 ]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-            exit 0
+            python3 -m venv .venv
+            . .venv/bin/activate
+            pip install -r requirements.txt
+            pytest -m "integration and dev_blocking" -v --timeout=900
+          else
+            missing_csv="$(IFS=,; echo "${missing[*]}")"
+            echo "::warning::Skipping live-dev validation because required inputs are not configured: $missing_csv"
+            {
+              echo "### Dev Hardware Validation skipped"
+              echo
+              echo "Required live-dev inputs are not configured for this repository or environment."
+              echo
+              echo "Missing inputs: \`$missing_csv\`"
+              echo
+              echo "Live-dev validation is soft-skipped until the live-dev secrets or variables are wired (tracked in issue #117). Re-run after secrets are populated."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
-
-          missing_csv="$(IFS=,; echo "${missing[*]}")"
-          echo "ready=false" >> "$GITHUB_OUTPUT"
-          echo "missing=$missing_csv" >> "$GITHUB_OUTPUT"
-
-          echo "::warning::Skipping live-dev validation because required inputs are not configured: $missing_csv"
-          {
-            echo "### Dev Hardware Validation skipped"
-            echo
-            echo "Required live-dev inputs are not configured for this repository or environment."
-            echo
-            echo "Missing inputs: \`$missing_csv\`"
-            echo
-            echo "Live-dev validation is soft-skipped until the live-dev secrets or variables are wired (tracked in issue #117). Re-run after secrets are populated."
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 0
-
-      - name: Install test dependencies
-        if: steps.validate_inputs.outputs.ready == 'true'
-        run: |
-          python3 -m venv .venv
-          . .venv/bin/activate
-          pip install -r requirements.txt
-
-      - name: Run merge-gating live-dev validation
-        if: steps.validate_inputs.outputs.ready == 'true'
-        run: |
-          . .venv/bin/activate
-          pytest -m "integration and dev_blocking" -v --timeout=900

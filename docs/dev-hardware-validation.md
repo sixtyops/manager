@@ -9,6 +9,12 @@ hardware, a dev host, or a production install outside that assigned run.
 [Agent rules](../AGENTS.md#agent-rules). Use existing private credentials
 without putting secret values on a command line.
 
+Write lanes must run on the single self-hosted runner labelled `dev-host` on
+the dev host. The hardware workflow also takes a bounded host-wide lock at
+`/var/lock/sixtyops-dev-hardware.lock` so separate workspaces cannot write to
+the lab at the same time. Set `SIXTYOPS_DEV_HARDWARE_LOCK_FILE` to another
+shared host path only when every runner that can reach the lab uses that path.
+
 This repo now has two live-dev validation lanes:
 
 - `dev_blocking`: merge-gating validation against the shared dev host and dedicated lab devices
@@ -173,10 +179,20 @@ does not walk the whole enabled fleet.
 - `.github/workflows/dev-hardware.yml` runs the merge-gating `dev_blocking`
   lane on `pull_request`, `workflow_dispatch`, and `schedule`. It does not run
   `dev_nonblocking` tests.
+- The workflow uses a concurrency group per Git ref and keeps `cancel-in-progress` off. A pending run for one pull request cannot replace a pending run for another pull request.
 - `.github/workflows/dev-sso.yml` runs the separate `dev_sso` lane on `workflow_dispatch` and `schedule`.
 - The Actions workflows accept repository variables or secrets for the non-sensitive host and device inputs, and secrets for passwords.
 - On `pull_request`, `Dev Hardware Validation` soft-skips with a warning if the live-dev inputs are not configured yet.
 - On `workflow_dispatch` and `schedule`, missing live-dev inputs are still treated as hard failures.
+
+Both self-hosted validation jobs take the shared exclusive `flock` lock before
+checking inputs or contacting the dev host or lab devices. The lock file
+defaults to `/var/lock/sixtyops-dev-hardware.lock`; set the
+`SIXTYOPS_DEV_HARDWARE_LOCK_FILE` repository variable to use another path. Each
+job waits up to 5 minutes. If the lock stays busy, the job fails with a timeout
+message. The lock stays held through dependency installation and validation,
+then the job releases it when the step exits. The release validation workflow
+uses the same lock while it validates the dev instance.
 
 ## UI checks
 

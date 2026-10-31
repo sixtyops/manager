@@ -47,10 +47,12 @@ jobs:
           fi
 
   test:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: [self-hosted, linux, x64, dev-host]
     timeout-minutes: 90
     if: always() && (needs.validate-dispatch.result == 'success' || needs.validate-dispatch.result == 'skipped')
     needs: [validate-dispatch]
+    env:
+      SIXTYOPS_DEV_HARDWARE_LOCK_FILE: ${{ vars.SIXTYOPS_DEV_HARDWARE_LOCK_FILE }}
     steps:
       - name: Validate release tag
         run: |
@@ -95,6 +97,17 @@ jobs:
           RELEASE_VALIDATION_SKIP: ${{ secrets.SIXTYOPS_RELEASE_VALIDATION_SKIP }}
         run: |
           set -euo pipefail
+          lock_file="${SIXTYOPS_DEV_HARDWARE_LOCK_FILE:-/var/lock/sixtyops-dev-hardware.lock}"
+          if [ ! -e "$lock_file" ]; then
+            (umask 077; : > "$lock_file")
+          fi
+          exec 9>"$lock_file"
+          if ! flock --exclusive --wait 300 9; then
+            echo "::error::Timed out after 5 minutes waiting for the shared dev host lock: $lock_file"
+            exit 1
+          fi
+          echo "Acquired the shared dev host lock."
+
           missing=()
           for name in RELEASE_VALIDATION_HOST RELEASE_VALIDATION_USERNAME RELEASE_VALIDATION_PASSWORD; do
             if [ -z "${!name}" ]; then
