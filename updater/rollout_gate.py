@@ -205,6 +205,4 @@ def address_change_decision(
     )
 
 
-from .core.gates import phase_run_decision
-
 __all__ = ["firmware_window_key", "phase_run_decision", "window_instance_key", "address_change_decision"]

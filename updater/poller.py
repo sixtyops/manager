@@ -47,8 +47,10 @@ class PolicyEnforceError(RuntimeError):
 
 logger = logging.getLogger(__name__)
 
+CPE_SESSION_POLICY = "credential_change"
 _MAX_CLIENT_CACHE = 500
-_CLIENT_TTL_SECONDS = 600  # 10 minutes
+_CLIENT_IDLE_TTL_SECONDS = 600  # 10 minutes since last use, for APs and switches
+_CPE_FRESH_LOGIN_LEAD = timedelta(minutes=15)
 _BACKOFF_THRESHOLD = 3  # consecutive failures before backoff
 _MAX_BACKOFF_CYCLES = 16
 
@@ -87,12 +89,12 @@ class NetworkPoller:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._clients: dict[str, tuple[VendorDriver, float]] = {}  # IP -> (client, last_used)
-        # CPEs aren't in the `devices` table, so they get their own client cache
-        # (keyed by CPE IP) that's evicted purely by TTL. Reusing the cached,
-        # already-authenticated session across poll cycles avoids re-logging in
-        # to every CPE every cycle — which otherwise floods each device's audit
-        # log with a "management authentication" event per minute.
-        self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, logged_in_at)
+        # CPE tokens can remain valid after a password change. Keep them until
+        # credentials change, the token check fails, or a fresh-login check is due.
+        self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, cached_at)
+        self._cpe_fresh_login_periods: dict[str, set[object]] = {}
+        self._cpe_auth_locks: dict[str, asyncio.Lock] = {}
+        self._cpe_forced_login_checks: set[str] = set()
         self._paused_cpe_ips: set[str] = set()
         self._cpe_request_locks: dict[str, asyncio.Lock] = {}
         self._last_config_poll: Optional[datetime] = None
@@ -149,7 +151,7 @@ class NetworkPoller:
         now = time.time()
         stale = []
         for ip, (client, last_used) in self._clients.items():
-            if ip not in known_ips or (now - last_used) > _CLIENT_TTL_SECONDS:
+            if ip not in known_ips or (now - last_used) > _CLIENT_IDLE_TTL_SECONDS:
                 stale.append(ip)
         for ip in stale:
             del self._clients[ip]
@@ -164,13 +166,9 @@ class NetworkPoller:
             logger.info(f"Evicted {len(stale)} stale client(s) from cache")
         self._evict_stale_cpe_clients(now)
 
-    def _evict_stale_cpe_clients(self, now: float):
-        """Evict CPE clients past the TTL (age-only — CPEs aren't in the
-        devices table, and stale topology entries simply age out)."""
-        stale = [ip for ip, (_, logged_in_at) in self._cpe_clients.items()
-                 if (now - logged_in_at) >= _CLIENT_TTL_SECONDS]
-        for ip in stale:
-            del self._cpe_clients[ip]
+    def _evict_stale_cpe_clients(self, now: float = None):
+        """Enforce the CPE cache size limit without expiring sessions by age."""
+        stale = []
         if len(self._cpe_clients) > _MAX_CLIENT_CACHE:
             sorted_by_age = sorted(self._cpe_clients.items(), key=lambda x: x[1][1])
             excess = len(self._cpe_clients) - _MAX_CLIENT_CACHE
@@ -181,14 +179,10 @@ class NetworkPoller:
             logger.debug(f"Evicted {len(stale)} stale CPE client(s) from cache")
 
     def _get_cached_cpe_client(self, ip: str) -> Optional[VendorDriver]:
-        """Return a CPE session for at most ten minutes after login."""
+        """Return a cached CPE session, regardless of its age."""
         entry = self._cpe_clients.get(ip)
         if entry:
-            client, logged_in_at = entry
-            if time.time() - logged_in_at >= _CLIENT_TTL_SECONDS:
-                self._remove_cached_cpe_client(ip)
-                return None
-            return client
+            return entry[0]
         return None
 
     def _cache_cpe_client(self, ip: str, client: VendorDriver):
@@ -198,6 +192,55 @@ class NetworkPoller:
     def _remove_cached_cpe_client(self, ip: str):
         """Remove a CPE client from the cache."""
         self._cpe_clients.pop(ip, None)
+
+    def _cpe_auth_check_period(self, settings: dict = None, now: datetime = None):
+        """Return an active/near window key, or a daily key outside that window."""
+        settings = settings if settings is not None else db.get_all_settings()
+        if settings.get("schedule_enabled") == "true":
+            days = {day.strip().lower()[:3] for day in settings.get("schedule_days", "").split(",")}
+            active_days = days.intersection({"mon", "tue", "wed", "thu", "fri", "sat", "sun"})
+            if active_days:
+                from zoneinfo import ZoneInfo
+                from .rollout_gate import firmware_window_key
+
+                timezone_name = settings.get("schedule_timezone") or settings.get("timezone")
+                try:
+                    zone = ZoneInfo(timezone_name) if timezone_name and timezone_name != "auto" else None
+                    if now is None:
+                        now = datetime.now(zone) if zone else datetime.now().astimezone()
+                    elif zone and now.tzinfo is None:
+                        now = now.replace(tzinfo=zone)
+                    elif zone:
+                        now = now.astimezone(zone)
+                    elif now.tzinfo is None:
+                        now = now.astimezone()
+                    active_key = firmware_window_key(settings, now)
+                    if active_key:
+                        return active_key
+
+                    start_hour = int(settings["schedule_start_hour"])
+                    for offset in range(8):
+                        window_date = now.date() + timedelta(days=offset)
+                        if window_date.strftime("%a").lower()[:3] not in active_days:
+                            continue
+                        window_start = datetime.combine(
+                            window_date, datetime.min.time().replace(hour=start_hour), tzinfo=now.tzinfo
+                        )
+                        if now <= window_start <= now + _CPE_FRESH_LOGIN_LEAD:
+                            return ("firmware", window_date.isoformat())
+                    # The poller also runs without the scheduler. Keep its
+                    # once-daily fresh-login check active between windows.
+                    return now.date().isoformat()
+                except (KeyError, TypeError, ValueError):
+                    pass
+        now = now or datetime.now().astimezone()
+        return now.date().isoformat()
+
+    def _fresh_cpe_login_due(self, cpe_ip: str, settings: dict = None,
+                             now: datetime = None) -> bool:
+        """Check each CPE once before a window or daily when no window applies."""
+        period = self._cpe_auth_check_period(settings, now)
+        return period is not None and not self._has_cpe_fresh_login_period(cpe_ip, period)
 
     @asynccontextmanager
     async def pause_cpe_requests(self, ip: str):
@@ -551,7 +594,7 @@ class NetworkPoller:
                         async with lock:
                             if cpe_ip in self._paused_cpe_ips:
                                 return
-                            status = await self._check_cpe_auth(
+                            status = await self._probe_cpe_auth(
                                 cpe_ip, ap["username"], ap["password"]
                             )
                             db.update_cpe_auth_status(ip, cpe_ip, status)
@@ -621,7 +664,8 @@ class NetworkPoller:
             logger.error(f"Failed to create site {location}: {e}")
             return None
 
-    async def _check_cpe_auth(self, cpe_ip: str, username: str, password: str) -> str:
+    async def _check_cpe_auth(self, cpe_ip: str, username: str, password: str,
+                              force_fresh_login: bool = False) -> str:
         """Check if we can authenticate to a CPE.
 
         Tries authentication in order:
@@ -630,12 +674,11 @@ class NetworkPoller:
 
         Returns "ok", "auth_failed", or "unreachable".
 
-        Reuses a cached, already-authenticated session when one exists: a single
-        lightweight authenticated call verifies the token still works instead of
-        re-logging in every poll cycle (a fresh login per CPE per minute floods
-        each device's audit log). A full login only happens on the first probe,
-        after the cached session expires, or when the token stops working.
+        A lightweight authenticated call checks the cached token on every poll.
+        A fresh login also runs once per active maintenance window, or once a
+        day when no maintenance window applies.
         """
+        force_fresh_login = force_fresh_login or cpe_ip in self._cpe_forced_login_checks
         # Fast path: a cached session we authenticated on an earlier cycle.
         cached = self._get_cached_cpe_client(cpe_ip)
         if cached:
@@ -645,7 +688,9 @@ class NetworkPoller:
                 logger.debug(f"CPE session check failed for {cpe_ip}: {e}")
                 state = "unreachable"
             if state == "ok":
-                return "ok"
+                if not force_fresh_login:
+                    return "ok"
+                self._remove_cached_cpe_client(cpe_ip)
             if state == "unreachable":
                 # Don't re-login a device that's currently offline; report it and
                 # keep the cached client so we can revalidate once it's back.
@@ -686,6 +731,91 @@ class NetworkPoller:
             logger.debug(f"CPE auth probe failed for {cpe_ip}: {e}")
             return "unreachable"
 
+    async def _probe_cpe_auth(self, cpe_ip: str, username: str, password: str,
+                              settings: dict = None, now: datetime = None) -> str:
+        """Check a CPE and record a due period only after fresh login succeeds."""
+        fresh_login_due = self._fresh_cpe_login_due(cpe_ip, settings, now)
+        return await self.check_cpe_auth_for_period(
+            cpe_ip, username, password, settings, now,
+            force_fresh_login=fresh_login_due,
+            validate_cached_session=True,
+        )
+
+    async def check_cpe_auth_for_period(
+        self, cpe_ip: str, username: str, password: str,
+        settings: dict = None, now: datetime = None, *,
+        force_fresh_login: bool, validate_cached_session: bool,
+    ) -> str:
+        """Serialize CPE login checks and reuse a fresh login for this period."""
+        lock = self._cpe_auth_locks.get(cpe_ip)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._cpe_auth_locks[cpe_ip] = lock
+        async with lock:
+            if self.has_successful_cpe_fresh_login(cpe_ip, settings, now):
+                if not validate_cached_session:
+                    return "ok"
+                return await self._check_cpe_auth(cpe_ip, username, password)
+
+            # Keep the three-argument hook used by the trusted session proof.
+            # The per-CPE lock owns this flag until the auth check completes.
+            if force_fresh_login:
+                self._cpe_forced_login_checks.add(cpe_ip)
+            try:
+                status = await self._check_cpe_auth(cpe_ip, username, password)
+            finally:
+                self._cpe_forced_login_checks.discard(cpe_ip)
+            if force_fresh_login and status == "ok":
+                self.record_cpe_fresh_login_check(cpe_ip, settings, now)
+            return status
+
+    def record_cpe_fresh_login_check(self, cpe_ip: str, settings: dict = None,
+                                     now: datetime = None):
+        """Record a successful login for this CPE's window and daily periods."""
+        period = self._cpe_auth_check_period(settings, now)
+        if period is not None:
+            day_key = period[1] if isinstance(period, tuple) else period
+            markers = self._cpe_fresh_login_periods.setdefault(cpe_ip, set())
+            markers.difference_update(
+                {
+                    marker for marker in markers
+                    if (marker[1] if isinstance(marker, tuple) else marker) != day_key
+                }
+            )
+            markers.add(period)
+            markers.add(day_key)
+
+    def has_successful_cpe_fresh_login(self, cpe_ip: str, settings: dict = None,
+                                       now: datetime = None) -> bool:
+        """Return whether this CPE logged in successfully during this period."""
+        period = self._cpe_auth_check_period(settings, now)
+        return period is not None and self._has_cpe_fresh_login_period(cpe_ip, period)
+
+    def _has_cpe_fresh_login_period(self, cpe_ip: str, period: object) -> bool:
+        """Match daily and window markers without reusing across distinct windows."""
+        markers = self._cpe_fresh_login_periods.get(cpe_ip, set())
+        if period in markers:
+            return True
+
+        # A daily login cannot satisfy a window precheck: admission requires a
+        # fresh login during that window. A successful window login can satisfy
+        # the daily check later that day, avoiding an immediate second login.
+        if isinstance(period, tuple):
+            return False
+
+        day_key = period
+        day_windows = {
+            marker for marker in markers
+            if isinstance(marker, tuple) and marker[1] == day_key
+        }
+        # A successful window login also satisfies the daily poller check.
+        return bool(day_windows)
+
+    def invalidate_cpe_clients(self):
+        """Drop all CPE sessions after credentials shared by CPEs change."""
+        self._cpe_clients.clear()
+        self._cpe_fresh_login_periods.clear()
+
     async def _maybe_fetch_cpe_banks(self, ap_ip: str, cpe_ip: str,
                                       username: str, password: str):
         """Fetch CPE bank info if newly discovered or >24h since last fetch."""
@@ -725,13 +855,8 @@ class NetworkPoller:
         self._remove_cached_client(ip)
         self._clear_poll_backoff(ip)
         self._failure_counts.pop(ip, None)
-        # CPE sessions are keyed by CPE IP, but credentials usually change on the
-        # parent AP (whose creds the CPEs inherit) — and we don't have the AP→CPE
-        # mapping here. A cached CPE session keeps authenticating on its old
-        # device-side token, so it would mask a credential change until the token
-        # expired on its own. Credential changes are rare; drop the whole CPE
-        # cache so every CPE re-authenticates with the new creds next cycle.
-        self._cpe_clients.clear()
+        # CPE sessions are keyed by CPE IP but inherit credentials from APs.
+        self.invalidate_cpe_clients()
 
     async def poll_ap_now(self, ip: str) -> bool:
         """Trigger immediate poll of a specific AP."""

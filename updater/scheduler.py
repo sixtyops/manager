@@ -178,6 +178,14 @@ def _as_float(value, default: float) -> float:
         return default
 
 
+def _cpe_auth_block_reason(parent_ip: str, cpe_ip: str, status: str) -> str:
+    """Build the operator-visible hold reason from structured CPE details."""
+    return (
+        f"CPE {cpe_ip} under AP {parent_ip} failed the fresh login check "
+        f"({status}); this wave is held"
+    )
+
+
 _scheduler: Optional["AutoUpdateScheduler"] = None
 
 
@@ -702,9 +710,21 @@ class AutoUpdateScheduler:
             )
             first_wave_held = has_held
 
+        scope_ips = self._resolve_scope(settings)
+        switch_scope = self._resolve_switch_scope(settings)
+        batch_ips = self._get_devices_for_phase(rollout, scope_ips, allow_downgrade, settings)
+        batch_switches = self._get_switches_for_phase(rollout, switch_scope, allow_downgrade, settings)
         may_run, gate_reason = rollout_gate.phase_run_decision(
             rollout, window_key, first_wave_held=first_wave_held
         )
+        cpe_auth_failures = ()
+        if may_run:
+            cpe_auth_failures = await self._precheck_cpe_credentials(batch_ips, settings, now)
+            gate_rollout = dict(rollout)
+            gate_rollout["cpe_auth_failures"] = cpe_auth_failures
+            may_run, gate_reason = rollout_gate.phase_run_decision(
+                gate_rollout, window_key, first_wave_held=first_wave_held
+            )
         if not may_run:
             self._hold_clear_reason = None
             if gate_reason == "firmware_hold":
@@ -714,9 +734,16 @@ class AutoUpdateScheduler:
                 self._state = "blocked_firmware_hold"
                 self._block_reason = new_reason
             else:
-                new_reason = "One wave per maintenance window — next wave next window"
+                if gate_reason and gate_reason.startswith("cpe_auth_failed:"):
+                    parent_ip, cpe_ip, status = cpe_auth_failures[0]
+                    new_reason = _cpe_auth_block_reason(parent_ip, cpe_ip, status)
+                    if self._block_reason != new_reason:
+                        db.log_schedule_event("cpe_auth_held", new_reason)
+                else:
+                    new_reason = "One wave per maintenance window — next wave next window"
                 if self._block_reason != new_reason:
-                    db.log_schedule_event("phase_held", f"Rollout {rollout['id']}: {gate_reason}")
+                    if not (gate_reason and gate_reason.startswith("cpe_auth_failed:")):
+                        db.log_schedule_event("phase_held", f"Rollout {rollout['id']}: {gate_reason}")
                 self._state = "waiting"
                 self._block_reason = new_reason
             await self._broadcast_status()
@@ -730,18 +757,12 @@ class AutoUpdateScheduler:
             db.log_schedule_event("firmware_hold_cleared", f"Rollout {rollout['id']}: {clear_note}")
         self._hold_clear_reason = clear_note
 
-        scope_ips = self._resolve_scope(settings)
-        switch_scope = self._resolve_switch_scope(settings)
-
         if not self._mark_excluded_rollout_members(rollout, scope_ips, switch_scope):
             self._state = "waiting"
             self._block_reason = "Could not read rollout eligibility; retry next tick"
             await self._broadcast_status()
             return
 
-
-        batch_ips = self._get_devices_for_phase(rollout, scope_ips, allow_downgrade, settings)
-        batch_switches = self._get_switches_for_phase(rollout, switch_scope, allow_downgrade, settings)
 
         if not batch_ips and not batch_switches:
             if not self._scheduled_admission_allowed():
@@ -881,6 +902,40 @@ class AutoUpdateScheduler:
             self._state = "blocked_safety"
             self._block_reason = reason
         return admitted
+
+    async def _precheck_cpe_credentials(
+        self, parent_ap_ips: list[str], settings: dict, now: datetime
+    ) -> tuple[tuple[str, str, str], ...]:
+        """Fresh-check CPE credentials for APs in this candidate wave."""
+        if not parent_ap_ips:
+            return ()
+
+        from .poller import get_poller
+
+        poller = get_poller()
+        failures = []
+        for parent_ip in parent_ap_ips:
+            ap = db.get_access_point(parent_ip)
+            cpes = db.get_cpes_for_ap(parent_ip)
+            for cpe in cpes:
+                cpe_ip = cpe.get("ip") or "unknown"
+                status = "precheck_unavailable"
+                if cpe_ip == "unknown":
+                    status = "missing_ip"
+                elif ap and poller is not None:
+                    try:
+                        status = await poller.check_cpe_auth_for_period(
+                            cpe_ip, ap["username"], ap["password"], settings, now,
+                            force_fresh_login=True,
+                            validate_cached_session=False,
+                        )
+                        db.update_cpe_auth_status(parent_ip, cpe_ip, status)
+                    except Exception:
+                        logger.exception("CPE credential precheck failed for %s", cpe_ip)
+                        status = "precheck_unavailable"
+                if status != "ok":
+                    failures.append((parent_ip, cpe_ip, status))
+        return tuple(failures)
 
     def _target_versions(self, settings: dict, rollout: Optional[dict]) -> dict[str, str]:
         """Build target versions for each firmware family."""

@@ -9,7 +9,7 @@ import pytest
 
 from updater import app as app_module
 from updater import database as db
-from updater.scheduler import AutoUpdateScheduler
+from updater.scheduler import AutoUpdateScheduler, _cpe_auth_block_reason
 
 
 def _seed_rollout_devices():
@@ -54,6 +54,220 @@ class TestSchedulerCompletionHandling:
             "job_deferred",
             "Outside maintenance window",
             job_id="job123",
+        )
+
+
+class TestCpeCredentialAdmission:
+    @pytest.mark.asyncio
+    async def test_concurrent_precheck_and_poll_share_one_fresh_login(self, mock_db):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from updater.poller import NetworkPoller, set_poller
+
+        parent_ip = "10.0.0.10"
+        cpe_ip = "10.0.0.20"
+        db.upsert_access_point(parent_ip, "root", "current-password", enabled=True)
+        db.upsert_cpe(parent_ip, {"ip": cpe_ip, "auth_status": "ok"})
+        poller = NetworkPoller()
+        login_started = asyncio.Event()
+        finish_login = asyncio.Event()
+        client = MagicMock()
+
+        async def connect_once():
+            login_started.set()
+            await finish_login.wait()
+            return True
+
+        client.connect = AsyncMock(side_effect=connect_once)
+        client.session_valid = AsyncMock(return_value="ok")
+        driver = MagicMock(return_value=client)
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        settings = {
+            "schedule_enabled": "true",
+            "schedule_days": "tue",
+            "schedule_start_hour": "3",
+            "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+        now = datetime(2026, 6, 23, 3, 0, tzinfo=ZoneInfo("America/Chicago"))
+
+        set_poller(poller)
+        try:
+            with patch("updater.poller.get_driver", return_value=driver), \
+                 patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+                precheck = asyncio.create_task(
+                    scheduler._precheck_cpe_credentials([parent_ip], settings, now)
+                )
+                await login_started.wait()
+                poll = asyncio.create_task(
+                    poller._probe_cpe_auth(cpe_ip, "root", "current-password", settings, now)
+                )
+                await asyncio.sleep(0)
+                finish_login.set()
+                assert await precheck == ()
+                assert await poll == "ok"
+        finally:
+            set_poller(None)
+
+        assert client.connect.await_count == 1
+        assert client.session_valid.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_successful_login_is_reused_only_for_its_window(self, mock_db):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from updater.poller import NetworkPoller, set_poller
+
+        parent_ip = "10.0.0.10"
+        cpe_ip = "10.0.0.20"
+        db.upsert_access_point(parent_ip, "root", "current-password", enabled=True)
+        db.upsert_cpe(parent_ip, {"ip": cpe_ip, "auth_status": "ok"})
+        poller = NetworkPoller()
+        client = MagicMock()
+        client.connect = AsyncMock(return_value=True)
+        client.session_valid = AsyncMock(return_value="ok")
+        driver = MagicMock(return_value=client)
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        settings = {
+            "schedule_enabled": "true",
+            "schedule_days": "tue,wed",
+            "schedule_start_hour": "3",
+            "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+        first_window = datetime(2026, 6, 23, 3, 0, tzinfo=ZoneInfo("America/Chicago"))
+        next_window = datetime(2026, 6, 24, 3, 0, tzinfo=ZoneInfo("America/Chicago"))
+
+        set_poller(poller)
+        try:
+            with patch("updater.poller.get_driver", return_value=driver), \
+                 patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+                assert await scheduler._precheck_cpe_credentials(
+                    [parent_ip], settings, first_window
+                ) == ()
+                assert await poller._probe_cpe_auth(
+                    cpe_ip, "root", "current-password", settings, first_window
+                ) == "ok"
+                assert client.connect.await_count == 1
+                assert await scheduler._precheck_cpe_credentials(
+                    [parent_ip], settings, first_window
+                ) == ()
+                assert client.connect.await_count == 1
+
+                assert await scheduler._precheck_cpe_credentials(
+                    [parent_ip], settings, next_window
+                ) == ()
+        finally:
+            set_poller(None)
+
+        assert client.connect.await_count == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("login_result", "expected"), [
+        ("Invalid credentials", "auth_failed"),
+        (True, "ok"),
+    ])
+    async def test_fresh_login_result_controls_parent_wave_admission(
+        self, mock_db, login_result, expected
+    ):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from updater import rollout_gate
+        from updater.poller import NetworkPoller, set_poller
+
+        parent_ip = "10.0.0.10"
+        cpe_ip = "10.0.0.20"
+        db.upsert_access_point(parent_ip, "root", "current-password", enabled=True)
+        db.upsert_cpe(parent_ip, {"ip": cpe_ip, "auth_status": "ok"})
+
+        poller = NetworkPoller()
+        cached = MagicMock()
+        cached.session_valid = AsyncMock(return_value="ok")
+        poller._cache_cpe_client(cpe_ip, cached)
+        fresh_client = MagicMock()
+        fresh_client.connect = AsyncMock(return_value=login_result)
+        fresh_driver = MagicMock(return_value=fresh_client)
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        now = datetime(2026, 6, 23, 3, 0, tzinfo=ZoneInfo("America/Chicago"))
+        settings = {
+            "schedule_enabled": "true",
+            "schedule_days": "tue",
+            "schedule_start_hour": "3",
+            "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+        set_poller(poller)
+        try:
+            with patch("updater.poller.get_driver", return_value=fresh_driver), \
+                 patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+                failures = await scheduler._precheck_cpe_credentials(
+                    [parent_ip], settings, now
+                )
+        finally:
+            set_poller(None)
+
+        may_run, reason = rollout_gate.phase_run_decision(
+            {
+                "status": "active", "phase": "pct10", "last_phase_window": None,
+                "cpe_auth_failures": failures,
+            },
+            ("firmware", "2026-06-23"),
+        )
+        assert cached.session_valid.await_count == 1
+        assert fresh_client.connect.await_count == 1
+        assert db.get_cpe_by_ip(cpe_ip)["auth_status"] == expected
+        if expected == "ok":
+            assert may_run is True
+            assert reason is None
+        else:
+            assert may_run is False
+            assert reason == f"cpe_auth_failed:{parent_ip}:{cpe_ip}:auth_failed"
+
+    @pytest.mark.asyncio
+    async def test_unreachable_fresh_login_does_not_mark_period_checked(self, mock_db):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from updater.poller import NetworkPoller, set_poller
+
+        parent_ip = "10.0.0.10"
+        cpe_ip = "10.0.0.20"
+        db.upsert_access_point(parent_ip, "root", "current-password", enabled=True)
+        db.upsert_cpe(parent_ip, {"ip": cpe_ip, "auth_status": "ok"})
+
+        poller = NetworkPoller()
+        cached = MagicMock()
+        cached.session_valid = AsyncMock(return_value="unreachable")
+        poller._cache_cpe_client(cpe_ip, cached)
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        now = datetime(2026, 6, 23, 3, 0, tzinfo=ZoneInfo("America/Chicago"))
+        settings = {
+            "schedule_enabled": "true",
+            "schedule_days": "tue",
+            "schedule_start_hour": "3",
+            "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+
+        set_poller(poller)
+        try:
+            failures = await scheduler._precheck_cpe_credentials([parent_ip], settings, now)
+        finally:
+            set_poller(None)
+
+        assert failures == ((parent_ip, cpe_ip, "unreachable"),)
+        assert db.get_cpe_by_ip(cpe_ip)["auth_status"] == "unreachable"
+        assert poller._fresh_cpe_login_due(cpe_ip, settings, now)
+
+    def test_cpe_auth_block_reason_preserves_ipv6_addresses(self):
+        assert _cpe_auth_block_reason(
+            "2001:db8::10", "2001:db8::20", "unreachable"
+        ) == (
+            "CPE 2001:db8::20 under AP 2001:db8::10 failed the fresh login check "
+            "(unreachable); this wave is held"
         )
 
 

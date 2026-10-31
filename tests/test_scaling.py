@@ -263,13 +263,13 @@ class TestClientCache:
         assert poller._get_cached_client("10.0.0.1") is None
 
     def test_evict_stale_by_ttl(self):
-        from updater.poller import NetworkPoller, _CLIENT_TTL_SECONDS
+        from updater.poller import NetworkPoller, _CLIENT_IDLE_TTL_SECONDS
         from unittest.mock import MagicMock
 
         poller = NetworkPoller()
         # Cache a client with old timestamp
         mock_client = MagicMock()
-        poller._clients["10.0.0.1"] = (mock_client, time.time() - _CLIENT_TTL_SECONDS - 10)
+        poller._clients["10.0.0.1"] = (mock_client, time.time() - _CLIENT_IDLE_TTL_SECONDS - 10)
 
         with patch("updater.database.get_all_device_ips", return_value={"10.0.0.1"}):
             poller._evict_stale_clients()
