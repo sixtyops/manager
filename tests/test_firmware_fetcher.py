@@ -12,11 +12,14 @@ from updater import database as db
 from updater.firmware_fetcher import (
     FirmwareFetcher,
     FirmwareRelease,
+    _discover_family_pages,
     RE_TABLE_MD5,
     RE_VERSION_TABLE,
     _normalize_version,
     _parse_table_md5s,
 )
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "tachyon_firmware"
 
 
 class TestNormalizeVersion:
@@ -195,6 +198,49 @@ class TestScrapePage:
         assert channels["beta"].md5 == "ea3e1c6f657ec8dc5624feabd1ce40ff"
         # Healthy parse → no warnings
         assert warnings == []
+
+
+class TestFamilyPageDiscovery(TestScrapePage):
+    def test_discovers_supported_families_and_reports_unsupported_successor(self):
+        html = (FIXTURE_DIR / "family_index.html").read_text()
+        pages, errors = _discover_family_pages(html)
+
+        assert {platform for platform, _, _ in pages} == {"tna-30x", "tna-303l", "tns-100"}
+        assert any(family.startswith("TNA-301, TNA-302, TNA-303X") for _, _, family in pages)
+        assert any(family.startswith("TNA-303L-65, TNA-303L-65-LIB, TNA-303L") for _, _, family in pages)
+        assert any(family.startswith("TNS-100") for _, _, family in pages)
+        assert any("TNA-305X, TNA-305A" in error for error in errors)
+        assert all("TNA-305" not in url for _, url, _ in pages)
+
+    def test_missing_supported_family_is_a_parse_error(self):
+        pages, errors = _discover_family_pages(
+            '<table><tr><td>TNA-301, TNA-302, TNA-303X</td>'
+            '<td><a href="/support/solutions/articles/1">TNA-300</a></td></tr></table>'
+        )
+        assert len(pages) == 1
+        assert any("tna-303l" in error for error in errors)
+        assert any("tns-100" in error for error in errors)
+
+    def test_tachyon_current_family_shapes_parse_releases(self, tmp_path):
+        fetcher = FirmwareFetcher(tmp_path, AsyncMock())
+        fixtures = {
+            "tna-30x": "tna_300.html",
+            "tna-303l": "tna_303l.html",
+            "tns-100": "tns_100.html",
+        }
+        for platform, fixture in fixtures.items():
+            html = (FIXTURE_DIR / fixture).read_text()
+            with patch(
+                "updater.firmware_fetcher.httpx.AsyncClient",
+                return_value=TestScrapePage()._make_mock_client(html),
+            ):
+                releases, warnings = asyncio.run(
+                    fetcher._scrape_page(platform, f"https://example/{platform}")
+                )
+            assert releases, f"{fixture} did not yield a release"
+            assert releases[0].platform == platform
+            assert releases[0].channel == "stable"
+            assert warnings == []
 
     def test_scrape_without_md5_column_yields_none(self, fetcher):
         """A summary table predating the MD5 column → md5 is None on every
@@ -492,7 +538,11 @@ class TestCheckAndDownloadHashing:
 
     @pytest.fixture
     def fetcher(self, tmp_path):
-        return FirmwareFetcher(firmware_dir=tmp_path, broadcast_func=AsyncMock())
+        fetcher = FirmwareFetcher(firmware_dir=tmp_path, broadcast_func=AsyncMock())
+        fetcher._discover_pages = AsyncMock(return_value=(
+            [("tna-30x", "https://example/tna-30x", "TNA-300 Series")], []
+        ))
+        return fetcher
 
     def _release(self, md5="ea3e1c6f657ec8dc5624feabd1ce40ff"):
         return FirmwareRelease(
