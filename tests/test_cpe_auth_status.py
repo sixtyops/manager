@@ -152,12 +152,78 @@ class TestCheckCpeAuthCaching:
             await started.wait()
             poller.invalidate_cpe_clients()
             finish_login.set()
-            assert await login == "ok"
+            assert await login == "unreachable"
 
         assert "10.0.0.11" not in poller._cpe_clients
         assert not poller.has_successful_cpe_fresh_login(
             "10.0.0.11", settings, now
         )
+
+    @pytest.mark.asyncio
+    async def test_invalidation_during_auth_does_not_start_bank_fallback_with_old_credentials(
+        self, mock_db,
+    ):
+        poller = NetworkPoller()
+        cpe_ip = "10.0.0.11"
+        generation = poller._cpe_credentials_generation
+        started = asyncio.Event()
+        finish_login = asyncio.Event()
+        stale_client = MagicMock()
+
+        async def connect():
+            started.set()
+            await finish_login.wait()
+            return True
+
+        stale_client.connect = AsyncMock(side_effect=connect)
+        factory = MagicMock(return_value=stale_client)
+        with patch("updater.poller.get_driver", return_value=factory):
+            status_task = asyncio.create_task(poller._check_cpe_auth(
+                cpe_ip, "root", "old-ap-password",
+                credential_generation=generation,
+            ))
+            await started.wait()
+            poller.invalidate_cpe_clients()
+            finish_login.set()
+            assert await status_task == "unreachable"
+
+            # The poll path must carry the generation captured before it read
+            # AP credentials. It must not snapshot the new generation here.
+            with patch("updater.poller.db.get_cpe_bank_last_fetched") as bank_fetch:
+                await poller._maybe_fetch_cpe_banks(
+                    "10.0.0.1", cpe_ip, "root", "old-ap-password",
+                    credential_generation=generation,
+                )
+                bank_fetch.assert_not_called()
+
+        assert cpe_ip not in poller._cpe_clients
+        factory.assert_called_once_with(cpe_ip, "root", "old-ap-password", timeout=10)
+
+    @pytest.mark.asyncio
+    async def test_invalidation_during_ap_login_does_not_cache_old_client(self, mock_db):
+        poller = NetworkPoller()
+        started = asyncio.Event()
+        finish_login = asyncio.Event()
+        client = MagicMock()
+
+        async def connect():
+            started.set()
+            await finish_login.wait()
+            return True
+
+        client.connect = AsyncMock(side_effect=connect)
+        with patch("updater.poller.get_driver", return_value=MagicMock(return_value=client)):
+            login = asyncio.create_task(poller._get_client(
+                "10.0.0.1", "root", "old-password", generation=0
+            ))
+            await started.wait()
+            poller.invalidate_client("10.0.0.1")
+            finish_login.set()
+            result, error = await login
+
+        assert result is None
+        assert error == "Credentials changed during login"
+        assert "10.0.0.1" not in poller._clients
 
     @pytest.mark.asyncio
     async def test_auth_failed_is_not_cached(self, mock_db):
