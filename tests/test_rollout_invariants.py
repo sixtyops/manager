@@ -154,6 +154,126 @@ def test_wave_selects_eligible_saved_members(mock_db):
     assert selected == [saved_ip]
 
 
+def test_pct100_scheduler_selects_new_saved_family_stragglers(mock_db):
+    fleet = make_fleet(sites=1, aps_per_site=1, switches_per_site=0,
+                       ap_models=("TNA-301",))
+    saved_ip = fleet["aps"][0]["ip"]
+    rollout = _saved_rollout([{"ip": saved_ip, "device_type": "ap"}])
+    rollout["phase"] = "pct100"
+    new_ip = "192.0.2.99"
+    db.upsert_access_point(
+        new_ip, "fixture-user", "synthetic-password", model="TNA-301",
+        firmware_version="1.0.0", enabled=True,
+    )
+
+    scheduler, _ = _make_scheduler()
+    selected = scheduler._get_devices_for_phase(
+        rollout, [saved_ip, new_ip], settings={"allow_downgrade": "false"}
+    )
+
+    assert selected == [saved_ip, new_ip]
+
+
+@pytest.mark.parametrize("current_version", ["1.12.3.55002"])
+def test_pct100_scheduler_excludes_current_or_out_of_scope_stragglers(
+    mock_db, current_version
+):
+    fleet = make_fleet(sites=1, aps_per_site=1, switches_per_site=0,
+                       ap_models=("TNA-301",))
+    saved_ip = fleet["aps"][0]["ip"]
+    rollout = _saved_rollout([{"ip": saved_ip, "device_type": "ap"}])
+    rollout["phase"] = "pct100"
+    current_ip, out_of_scope_ip = "192.0.2.98", "192.0.2.99"
+    for ip in (current_ip, out_of_scope_ip):
+        db.upsert_access_point(
+            ip, "fixture-user", "synthetic-password", model="TNA-301",
+            firmware_version=current_version if ip == current_ip else "1.0.0",
+            enabled=True,
+        )
+
+    scheduler, _ = _make_scheduler()
+    selected = scheduler._get_devices_for_phase(
+        rollout, [saved_ip, current_ip], settings={"allow_downgrade": "false"}
+    )
+
+    assert selected == [saved_ip]
+
+
+def test_pct100_scheduler_excludes_existing_members_disabled_archived_and_unknown_family(
+    mock_db, monkeypatch
+):
+    fleet = make_fleet(sites=1, aps_per_site=2, switches_per_site=0,
+                       ap_models=("TNA-301", "TNA-301"))
+    saved_ip, existing_ip = (device["ip"] for device in fleet["aps"])
+    rollout = _saved_rollout([
+        {"ip": saved_ip, "device_type": "ap"},
+        {"ip": existing_ip, "device_type": "ap"},
+    ])
+    rollout["phase"] = "pct100"
+    disabled_ip, archived_ip, unknown_ip = (
+        "192.0.2.97", "192.0.2.98", "192.0.2.99"
+    )
+    db.upsert_access_point(
+        disabled_ip, "fixture-user", "synthetic-password", model="TNA-301",
+        firmware_version="1.0.0", enabled=False,
+    )
+    db.upsert_access_point(
+        archived_ip, "fixture-user", "synthetic-password", model="TNA-301",
+        firmware_version="1.0.0", enabled=True,
+    )
+    db.upsert_access_point(
+        unknown_ip, "fixture-user", "synthetic-password", model="UNLISTED",
+        firmware_version="1.0.0", enabled=True,
+    )
+    inventory = db.get_all_access_points_dict(enabled_only=False)
+    inventory[disabled_ip]["enabled"] = 0
+    inventory[archived_ip]["archived_at"] = "2026-10-01T00:00:00"
+    monkeypatch.setattr(
+        db,
+        "get_all_access_points_dict",
+        lambda enabled_only=True: {
+            ip: device for ip, device in inventory.items()
+            if not enabled_only or device["enabled"]
+        },
+    )
+
+    scheduler, _ = _make_scheduler()
+    selected = scheduler._get_devices_for_phase(
+        rollout,
+        [saved_ip, existing_ip, disabled_ip, archived_ip, unknown_ip],
+        settings={"allow_downgrade": "false"},
+    )
+
+    assert selected == [saved_ip, existing_ip]
+
+
+def test_pct100_scheduler_fails_closed_when_straggler_discovery_fails(
+    mock_db, monkeypatch
+):
+    fleet = make_fleet(sites=1, aps_per_site=1, switches_per_site=0,
+                       ap_models=("TNA-301",))
+    saved_ip = fleet["aps"][0]["ip"]
+    rollout = _saved_rollout([{"ip": saved_ip, "device_type": "ap"}])
+    rollout["phase"] = "pct100"
+    new_ip = "192.0.2.99"
+    db.upsert_access_point(
+        new_ip, "fixture-user", "synthetic-password", model="TNA-301",
+        firmware_version="1.0.0", enabled=True,
+    )
+    monkeypatch.setattr(
+        db, "get_rollout_settings_snapshot", lambda _rollout_id: (_ for _ in ()).throw(
+            RuntimeError("injected discovery failure")
+        )
+    )
+
+    scheduler, _ = _make_scheduler()
+    selected = scheduler._get_devices_for_phase(
+        rollout, [saved_ip, new_ip], settings={"allow_downgrade": "false"}
+    )
+
+    assert selected == [saved_ip]
+
+
 def test_wave_reservation_rolls_back_marker_assignments_and_settings(mock_db):
     rollout_id = db.create_rollout(FW)
     db.set_rollout_settings_snapshot(rollout_id, {"old": "snapshot"})
@@ -769,6 +889,49 @@ async def test_rejected_wave_reservation_does_not_start_job(mock_db, monkeypatch
     await _Harness(scheduler, monkeypatch).tick()
 
     start_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_reserves_final_wave_straggler_and_rejects_late_addition(
+    mock_db, monkeypatch
+):
+    _seed_aps(1)
+    db.set_settings(_settings(hold_days=0))
+    saved_ip = "192.0.2.10"
+    new_ip = "192.0.2.99"
+    later_ip = "192.0.2.98"
+    rollout_id = db.create_rollout(
+        FW,
+        members=[{"ip": saved_ip, "device_type": "ap"}],
+        settings_snapshot={"allow_downgrade": "false"},
+    )
+    with db.get_db() as conn:
+        conn.execute(
+            "UPDATE rollouts SET status = 'active', phase = 'pct100' WHERE id = ?",
+            (rollout_id,),
+        )
+    db.upsert_access_point(
+        new_ip, "fixture-user", "synthetic-password", model="TNA-301",
+        firmware_version="1.0.0", enabled=True,
+    )
+    scheduler, start_update = _make_scheduler()
+    harness = _Harness(scheduler, monkeypatch)
+
+    await harness.tick(day=2)
+
+    admitted = {row["ip"]: row for row in db.get_rollout_devices(rollout_id)}
+    assert admitted[new_ip]["is_straggler"] == 1
+    assert admitted[new_ip]["phase_assigned"] == "pct100"
+    start_update.assert_awaited_once()
+
+    db.upsert_access_point(
+        later_ip, "fixture-user", "synthetic-password", model="TNA-301",
+        firmware_version="1.0.0", enabled=True,
+    )
+    await harness.tick(day=3)
+
+    assert later_ip not in {row["ip"] for row in db.get_rollout_devices(rollout_id)}
+    assert start_update.await_count == 1
 
 
 def test_overnight_window_keeps_its_start_date_key():
