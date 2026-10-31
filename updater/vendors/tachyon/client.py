@@ -1220,17 +1220,24 @@ class TachyonClient:
 
     async def get_eth0_recovery_state(self) -> Dict[str, Any]:
         """Read eth0 counters and any reported link/rate fields for recovery checks."""
-        status, body = await self._curl("GET", "/cgi.lua/status?type=interfaces")
+        try:
+            status, body = await self._curl("GET", "/cgi.lua/status?type=interfaces")
+        except Exception:
+            return self._unknown_eth0_recovery_state("request_failed")
         if status != 200:
-            raise RuntimeError(f"Failed to read eth0 state from {self.ip}: HTTP {status}")
+            return self._unknown_eth0_recovery_state(f"http_status_{status}")
         try:
             data = json.loads(body)
-        except (TypeError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"Failed to parse eth0 state from {self.ip}") from exc
-        interfaces = data.get("interfaces") if isinstance(data, dict) else None
-        eth0 = interfaces.get("eth0") if isinstance(interfaces, dict) else None
+        except (TypeError, ValueError):
+            return self._unknown_eth0_recovery_state("invalid_json")
+        if not isinstance(data, dict) or "interfaces" not in data:
+            return self._unknown_eth0_recovery_state("missing_interfaces")
+        interfaces = data["interfaces"]
+        if not isinstance(interfaces, dict):
+            return self._unknown_eth0_recovery_state("invalid_interfaces")
+        eth0 = interfaces.get("eth0")
         if not isinstance(eth0, dict):
-            raise RuntimeError(f"Missing eth0 state from {self.ip}")
+            return self._unknown_eth0_recovery_state("missing_eth0")
 
         reported_keys = (
             "link", "state", "status", "operstate", "carrier", "link_state",
@@ -1258,11 +1265,26 @@ class TachyonClient:
         ) if key in eth0), None)
         link_rate_mbps = self._rate_mbps(rate_value)
         return {
+            "read_state": "ok",
+            "reason": None,
             "link_up": link_up,
             "link_rate_mbps": link_rate_mbps,
             "reported": reported,
             "rx_bytes": self._counter(eth0.get("rx_bytes")),
             "tx_bytes": self._counter(eth0.get("tx_bytes")),
+        }
+
+    @staticmethod
+    def _unknown_eth0_recovery_state(reason: str) -> Dict[str, Any]:
+        """Return a fail-closed observation when the eth0 read is unavailable."""
+        return {
+            "read_state": "unknown",
+            "reason": reason,
+            "link_up": None,
+            "link_rate_mbps": None,
+            "reported": {},
+            "rx_bytes": None,
+            "tx_bytes": None,
         }
 
     @staticmethod

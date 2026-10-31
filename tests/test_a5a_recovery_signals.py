@@ -40,6 +40,8 @@ async def test_cpe_eth0_state_parses_counters_and_only_reported_link_fields():
     state = await client.get_eth0_recovery_state()
 
     assert state == {
+        "read_state": "ok",
+        "reason": None,
         "link_up": True,
         "link_rate_mbps": 1000.0,
         "reported": {"status": "up", "speed_mbps": 1000},
@@ -58,6 +60,8 @@ async def test_captured_eth0_without_link_fields_does_not_infer_carrier_from_dis
     state = await client.get_eth0_recovery_state()
 
     assert state["link_up"] is None
+    assert state["read_state"] == "ok"
+    assert state["reason"] is None
     assert state["link_rate_mbps"] is None
     assert state["rx_bytes"] is None
     assert state["tx_bytes"] is None
@@ -74,12 +78,48 @@ def test_link_rate_parser_normalizes_supported_units(value, expected):
 
 
 @pytest.mark.asyncio
-async def test_missing_eth0_fails_closed_for_recovery_state_read():
+@pytest.mark.parametrize(("body", "reason"), [
+    ("not json", "invalid_json"),
+    ('{"status": "ok"}', "missing_interfaces"),
+    ('{"interfaces": {}}', "missing_eth0"),
+    ('{"interfaces": null}', "invalid_interfaces"),
+])
+async def test_unavailable_eth0_state_returns_unknown_with_reason(body, reason):
     client = TachyonClient("192.0.2.10", "user", "password")
-    client._curl = AsyncMock(return_value=(200, '{"interfaces": {}}'))
+    client._curl = AsyncMock(return_value=(200, body))
 
-    with pytest.raises(RuntimeError, match="Missing eth0"):
-        await client.get_eth0_recovery_state()
+    state = await client.get_eth0_recovery_state()
+
+    assert state["read_state"] == "unknown"
+    assert state["reason"] == reason
+    assert state["link_up"] is None
+    assert state["rx_bytes"] is None
+    assert state["tx_bytes"] is None
+
+
+@pytest.mark.asyncio
+async def test_non_200_eth0_state_read_returns_unknown_with_status_reason():
+    client = TachyonClient("192.0.2.10", "user", "password")
+    client._curl = AsyncMock(return_value=(503, "unavailable"))
+
+    state = await client.get_eth0_recovery_state()
+
+    assert state["read_state"] == "unknown"
+    assert state["reason"] == "http_status_503"
+    assert state["link_up"] is None
+    assert state["rx_bytes"] is None
+
+
+@pytest.mark.asyncio
+async def test_transport_exception_returns_unknown_with_reason():
+    client = TachyonClient("192.0.2.10", "user", "password")
+    client._curl = AsyncMock(side_effect=TimeoutError)
+
+    state = await client.get_eth0_recovery_state()
+
+    assert state["read_state"] == "unknown"
+    assert state["reason"] == "request_failed"
+    assert state["link_up"] is None
 
 
 @pytest.mark.asyncio
