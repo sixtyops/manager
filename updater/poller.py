@@ -46,6 +46,7 @@ class PolicyEnforceError(RuntimeError):
 
 logger = logging.getLogger(__name__)
 
+CPE_SESSION_POLICY = "credential_change"
 _MAX_CLIENT_CACHE = 500
 _CLIENT_IDLE_TTL_SECONDS = 600  # 10 minutes since last use, for APs and switches
 _CPE_FRESH_LOGIN_LEAD = timedelta(minutes=15)
