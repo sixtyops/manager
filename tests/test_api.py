@@ -147,6 +147,20 @@ class TestAPsAPI:
         assert response.status_code == 502
         assert "Failed to poll 10.0.0.23" in response.json()["detail"]
 
+    def test_manual_poll_reports_bootbank_warning_as_failure(self, authed_client):
+        ip = "10.0.0.24"
+        warning = "Boot bank read failed (HTTP 503)"
+        db.upsert_access_point(ip, "root", "pass")
+        db.update_ap_status(ip, last_error=warning)
+        mock_poller = MagicMock()
+        mock_poller.poll_ap_now = AsyncMock(return_value=False)
+
+        with patch("updater.app.get_poller", return_value=mock_poller):
+            response = authed_client.post(f"/api/aps/{ip}/poll")
+
+        assert response.status_code == 502
+        assert response.json()["detail"] == warning
+
     def test_update_ap_rejects_bad_credentials_before_save(self, authed_client):
         db.upsert_access_point("10.0.0.5", "root", "oldpass")
 

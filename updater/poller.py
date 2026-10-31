@@ -457,7 +457,6 @@ class NetworkPoller:
                 **bank_kwargs,
             )
             self._check_uptime_transition(ip, "ap", prev_error, None)
-            self._record_poll_success(ip)
 
             # Get connected CPEs
             cpes = await client.get_connected_cpes()
@@ -542,6 +541,13 @@ class NetworkPoller:
                     *[probe_cpe(cpe_ip) for cpe_ip in cpe_ips_to_probe],
                     return_exceptions=True,
                 )
+
+            # A failed boot bank read makes this poll a failure. Keep the last
+            # good bank values, report its warning, and let backoff count it.
+            if bank_warning:
+                self._record_poll_failure(ip)
+            else:
+                self._record_poll_success(ip)
 
         except Exception as e:
             logger.error(f"Error polling {ip}: {e}")
