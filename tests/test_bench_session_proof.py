@@ -9,7 +9,7 @@ import pytest
 from scripts.bench.session_proof import (
     Recorder,
     RunErrorHandler,
-    _drop_cached_cpe_session,
+    _age_cached_cpe_login,
     _evaluate,
     _logout_cpe_session,
 )
@@ -20,13 +20,13 @@ def _passing_recorder(monkeypatch):
     recorder = Recorder(0)
     recorder.order.extend(["192.0.2.1", "192.0.2.2"])
     recorder.logins["192.0.2.2"] = [(0, True), (30, True), (90, True)]
-    recorder.login_triggers["192.0.2.2"] = [None, "forced_cache_drop", "logout"]
+    recorder.login_triggers["192.0.2.2"] = [None, "age", "logout"]
     recorder.checks["192.0.2.2"]["ok"] = 3
     recorder.check_events["192.0.2.2"] = [
         (30, "ok"), (31, "poll_ok"), (90, "ok"), (91, "poll_ok"),
         (150, "ok"), (151, "poll_ok"), (180, "ok"), (181, "poll_ok"),
     ]
-    recorder.forced_cache_drops.add("192.0.2.2")
+    recorder.aged_cpes.add("192.0.2.2")
     recorder.renewal_logins.add("192.0.2.2")
     recorder.post_renewal_reuse.add("192.0.2.2")
     recorder.logout_succeeded.add("192.0.2.2")
@@ -74,15 +74,14 @@ def test_cpe_drop_from_ap_poll_fails(monkeypatch):
     assert "CPE dropped off AP for cpe-1" in _evaluate(recorder, set(), True)
 
 
-def test_drop_helper_removes_cached_session():
+def test_age_helper_moves_cached_login_past_ttl():
     client = object()
-    poller = SimpleNamespace(
-        _cpe_clients={"192.0.2.2": (client, time.time())},
-        _remove_cached_cpe_client=lambda ip: poller._cpe_clients.pop(ip, None),
-    )
+    poller = SimpleNamespace(_cpe_clients={"192.0.2.2": (client, time.time())})
 
-    assert _drop_cached_cpe_session(poller, "192.0.2.2")
-    assert "192.0.2.2" not in poller._cpe_clients
+    assert _age_cached_cpe_login(poller, "192.0.2.2")
+    cached_client, logged_in_at = poller._cpe_clients["192.0.2.2"]
+    assert cached_client is client
+    assert time.time() - logged_in_at > 600
 
 
 @pytest.mark.asyncio
@@ -105,8 +104,8 @@ async def test_logout_helper_invalidates_only_bench_owned_cached_token():
 @pytest.mark.parametrize(
     ("stage", "failure"),
     [
-        ("forced_cache_drops", "cached CPE session was not dropped"),
-        ("renewal_logins", "no fresh login after forced cache drop"),
+        ("aged_cpes", "cached CPE login was not aged"),
+        ("renewal_logins", "no re-login after the 600-second login-age limit"),
         ("post_renewal_reuse", "no reuse after re-login"),
         ("logout_succeeded", "CPE session logout failed"),
         ("post_logout_logins", "no re-login after CPE logout"),
@@ -150,11 +149,11 @@ def test_no_session_reuse_fails(monkeypatch):
     assert "no session reuse for cpe-1" in _evaluate(recorder, set(), True)
 
 
-def test_no_relogin_after_forced_drop_fails(monkeypatch):
+def test_no_relogin_after_age_limit_fails(monkeypatch):
     recorder = _passing_recorder(monkeypatch)
     recorder.renewal_logins.discard("192.0.2.2")
 
-    assert "no fresh login after forced cache drop for cpe-1" in _evaluate(recorder, set(), True)
+    assert "no re-login after the 600-second login-age limit for cpe-1" in _evaluate(recorder, set(), True)
 
 
 def test_no_reuse_after_relogin_fails(monkeypatch):
@@ -164,12 +163,12 @@ def test_no_reuse_after_relogin_fails(monkeypatch):
     assert "no reuse after re-login for cpe-1" in _evaluate(recorder, set(), True)
 
 
-def test_unexpected_fresh_login_fails(monkeypatch):
+def test_login_gap_shorter_than_age_limit_fails(monkeypatch):
     recorder = _passing_recorder(monkeypatch)
-    recorder.logins["192.0.2.2"] = [(0, True), (30, True)]
+    recorder.logins["192.0.2.2"] = [(0, True), (599, True)]
     recorder.login_triggers["192.0.2.2"] = [None, None]
 
-    assert "unexpected fresh login for cpe-1" in _evaluate(recorder, set(), True)
+    assert "login spacing too tight for cpe-1" in _evaluate(recorder, set(), True)
 
 
 def test_summary_reports_every_expected_cpe_recovery_stage(monkeypatch, capsys):

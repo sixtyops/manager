@@ -32,6 +32,7 @@ from pathlib import Path
 
 REQUIRED_ENV = ("SIXTYOPS_BENCH_AP_IP", "SIXTYOPS_BENCH_AP_USER", "SIXTYOPS_BENCH_AP_PASS")
 POLL_INTERVAL_SECONDS = 30
+SESSION_MAX_AGE_SECONDS = 600
 
 
 def _utc(ts: float) -> str:
@@ -52,7 +53,7 @@ class Recorder:
         self.expected_cpes: set[str] = set()
         self.dropped_cpes: set[str] = set()
         self.cpe_poll_count = 0
-        self.forced_cache_drops: set[str] = set()
+        self.aged_cpes: set[str] = set()
         self.renewal_logins: set[str] = set()
         self.post_renewal_reuse: set[str] = set()
         self.logout_succeeded: set[str] = set()
@@ -74,7 +75,7 @@ class Recorder:
         self.login_triggers[ip].append(trigger)
         if ok and client is not None:
             self.bench_opened_sessions[ip].append(client)
-        if ok and trigger == "forced_cache_drop":
+        if ok and trigger == "age":
             self.renewal_logins.add(ip)
         if ok and trigger == "logout":
             self.post_logout_logins.add(ip)
@@ -117,11 +118,13 @@ def _uptime_reset_count(samples: list[int | None]) -> int:
     return sum(current < previous for previous, current in zip(values, values[1:]))
 
 
-def _drop_cached_cpe_session(poller, cpe_ip: str) -> bool:
-    """Drop one live cached session to prove a fresh login without aging it."""
-    if cpe_ip not in poller._cpe_clients:
+def _age_cached_cpe_login(poller, cpe_ip: str) -> bool:
+    """Age one live cache entry in this bench process, without changing production code."""
+    entry = poller._cpe_clients.get(cpe_ip)
+    if not entry:
         return False
-    poller._remove_cached_cpe_client(cpe_ip)
+    client, _ = entry
+    poller._cpe_clients[cpe_ip] = (client, time.time() - SESSION_MAX_AGE_SECONDS - 1)
     return True
 
 
@@ -188,14 +191,15 @@ def _evaluate(recorder: Recorder, errors: set[str], has_session_valid: bool) -> 
         login_events = recorder.logins.get(ip, [])
         login_gaps = [b[0] - a[0] for a, b in zip(login_events, login_events[1:])]
         triggers = recorder.login_triggers.get(ip, [])
-        if any(triggers[index + 1] is None for index, _ in enumerate(login_gaps)):
-            failures.append(f"unexpected fresh login for {label}")
+        if any(gap < SESSION_MAX_AGE_SECONDS and triggers[index + 1] is None
+               for index, gap in enumerate(login_gaps)):
+            failures.append(f"login spacing too tight for {label}")
         if not has_session_valid or recorder.checks.get(ip, {}).get("ok", 0) == 0:
             failures.append(f"no session reuse for {label}")
-        if ip not in recorder.forced_cache_drops:
-            failures.append(f"cached CPE session was not dropped for {label}")
+        if ip not in recorder.aged_cpes:
+            failures.append(f"cached CPE login was not aged for {label}")
         if ip not in recorder.renewal_logins:
-            failures.append(f"no fresh login after forced cache drop for {label}")
+            failures.append(f"no re-login after the 600-second login-age limit for {label}")
         if ip not in recorder.post_renewal_reuse:
             failures.append(f"no reuse after re-login for {label}")
         if ip not in recorder.logout_succeeded:
@@ -260,18 +264,16 @@ def _instrument(recorder: Recorder):
 
     TachyonClient.get_connected_cpes = get_connected_cpes
 
-    async def check_cpe_auth(self, cpe_ip, username, password, force_fresh_login=False):
+    async def check_cpe_auth(self, cpe_ip, username, password):
         login_count = len(recorder.logins.get(cpe_ip, []))
-        state = await original_check_cpe_auth(
-            self, cpe_ip, username, password, force_fresh_login=force_fresh_login
-        )
+        state = await original_check_cpe_auth(self, cpe_ip, username, password)
         if state == "ok":
             recorder.check(cpe_ip, "poll_ok")
             logged_in_during_poll = len(recorder.logins.get(cpe_ip, [])) > login_count
-            if not logged_in_during_poll and cpe_ip not in recorder.forced_cache_drops:
-                if _drop_cached_cpe_session(self, cpe_ip):
-                    recorder.forced_cache_drops.add(cpe_ip)
-                    recorder.pending_login_trigger[cpe_ip] = "forced_cache_drop"
+            if not logged_in_during_poll and cpe_ip not in recorder.aged_cpes:
+                if _age_cached_cpe_login(self, cpe_ip):
+                    recorder.aged_cpes.add(cpe_ip)
+                    recorder.pending_login_trigger[cpe_ip] = "age"
         return state
 
     NetworkPoller._check_cpe_auth = check_cpe_auth

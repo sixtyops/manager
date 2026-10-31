@@ -92,6 +92,7 @@ class NetworkPoller:
         self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, cached_at)
         self._cpe_fresh_login_periods: dict[str, set[object]] = {}
         self._cpe_auth_locks: dict[str, asyncio.Lock] = {}
+        self._cpe_forced_login_checks: set[str] = set()
         self._last_config_poll: Optional[datetime] = None
         self._last_config_poll_hydrated = False
         self._poll_in_progress = False
@@ -653,6 +654,7 @@ class NetworkPoller:
         A fresh login also runs once per active maintenance window, or once a
         day when no maintenance window applies.
         """
+        force_fresh_login = force_fresh_login or cpe_ip in self._cpe_forced_login_checks
         # Fast path: a cached session we authenticated on an earlier cycle.
         cached = self._get_cached_cpe_client(cpe_ip)
         if cached:
@@ -729,13 +731,16 @@ class NetworkPoller:
             if self.has_successful_cpe_fresh_login(cpe_ip, settings, now):
                 if not validate_cached_session:
                     return "ok"
-                return await self._check_cpe_auth(
-                    cpe_ip, username, password, force_fresh_login=False
-                )
+                return await self._check_cpe_auth(cpe_ip, username, password)
 
-            status = await self._check_cpe_auth(
-                cpe_ip, username, password, force_fresh_login=force_fresh_login
-            )
+            # Keep the three-argument hook used by the trusted session proof.
+            # The per-CPE lock owns this flag until the auth check completes.
+            if force_fresh_login:
+                self._cpe_forced_login_checks.add(cpe_ip)
+            try:
+                status = await self._check_cpe_auth(cpe_ip, username, password)
+            finally:
+                self._cpe_forced_login_checks.discard(cpe_ip)
             if force_fresh_login and status == "ok":
                 self.record_cpe_fresh_login_check(cpe_ip, settings, now)
             return status
