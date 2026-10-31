@@ -5,10 +5,10 @@
 Manager updates Tachyon firmware in waves of 10%, 50% and 100%, one wave per maintenance window. Scheduled rollouts stay off until every safety slice below is done and proven on hardware.
 
 ```text
-Overall                   ██████████░░░░░░░░░░  7 of 14 slices merged
-Write safety              ████████████████░░░░  4 of 5 slices merged
+Overall                   ██████████░░░░░░░░░░  8 of 15 slices merged
+Write safety              ████████████████░░░░  5 of 6 slices merged
   Stop at first failure ✓  One writer at a time ✓  Recheck at each write ✓
-  Reboot recovery proof ✓  Customer recovery check: open; exact-head bench proof is on hold
+  Reboot recovery proof ✓  CPE link state, counters, and polling pause ✓  Customer recovery check: open; exact-head bench proof is on hold
 Waves and windows         ██████████░░░░░░░░░░  2 of 4 slices merged
   One wave per window ✓  Saved rollout membership ✓
   Stragglers: #655 and #659 merged; #663 open and blocked for human review after the deploy-risk check  Wave sizing: Not started
