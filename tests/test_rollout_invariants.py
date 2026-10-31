@@ -174,6 +174,36 @@ def test_pct100_scheduler_selects_new_saved_family_stragglers(mock_db):
     assert selected == [saved_ip, new_ip]
 
 
+def test_pct100_scheduler_excludes_stragglers_inside_update_cooldown(mock_db):
+    fleet = make_fleet(sites=1, aps_per_site=1, switches_per_site=0,
+                       ap_models=("TNA-301",))
+    saved_ip = fleet["aps"][0]["ip"]
+    rollout = _saved_rollout([{"ip": saved_ip, "device_type": "ap"}])
+    rollout["phase"] = "pct100"
+    new_ip = "192.0.2.99"
+    db.upsert_access_point(
+        new_ip, "fixture-user", "synthetic-password", model="TNA-301",
+        firmware_version="1.0.0", enabled=True,
+    )
+    with db.get_db() as conn:
+        conn.execute(
+            "UPDATE devices SET last_firmware_update = ? WHERE ip = ?",
+            (datetime.now().isoformat(), new_ip),
+        )
+
+    scheduler, _ = _make_scheduler()
+    selected = scheduler._get_devices_for_phase(
+        rollout,
+        [saved_ip, new_ip],
+        settings={
+            "allow_downgrade": "false",
+            "firmware_update_cooldown_days": "30",
+        },
+    )
+
+    assert selected == [saved_ip]
+
+
 @pytest.mark.parametrize("current_version", ["1.12.3.55002"])
 def test_pct100_scheduler_excludes_current_or_out_of_scope_stragglers(
     mock_db, current_version

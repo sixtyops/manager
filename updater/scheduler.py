@@ -1239,7 +1239,7 @@ class AutoUpdateScheduler:
 
         if phase == "pct100":
             candidates.extend(self._get_straggler_candidates(
-                rollout, scope_ips, "ap", existing_devices
+                rollout, scope_ips, "ap", existing_devices, cooldown_days
             ))
 
         return self._select_phase_batch(phase, candidates)
@@ -1250,6 +1250,7 @@ class AutoUpdateScheduler:
         scope_ips: list[str],
         device_type: str,
         existing_devices: list[dict],
+        cooldown_days: int,
     ) -> list[str]:
         """Return new, enabled devices that still need a saved rollout target.
 
@@ -1287,7 +1288,7 @@ class AutoUpdateScheduler:
             "tns-100": ("firmware_file_tns100", "target_version_tns100"),
         }
         allow_downgrade = str(settings_snapshot.get("allow_downgrade", "false")).lower() == "true"
-        from .firmware_policy import classify_device_version, extract_version_from_filename
+        from .firmware_policy import extract_version_from_filename
 
         candidates = []
         for ip in scope_ips:
@@ -1304,9 +1305,13 @@ class AutoUpdateScheduler:
             target = rollout.get(version_field) or extract_version_from_filename(filename or "")
             if not filename or not target:
                 continue
-            if classify_device_version(
-                device.get("firmware_version"), target, allow_downgrade
-            ).needs_update:
+            if _device_needs_update(
+                device.get("firmware_version", ""),
+                target,
+                allow_downgrade,
+                last_update_iso=device.get("last_firmware_update"),
+                cooldown_days=cooldown_days,
+            ):
                 candidates.append(ip)
         return candidates
 
@@ -1358,7 +1363,7 @@ class AutoUpdateScheduler:
 
         if phase == "pct100":
             candidates.extend(self._get_straggler_candidates(
-                rollout, scope_ips, "switch", existing_devices
+                rollout, scope_ips, "switch", existing_devices, cooldown_days
             ))
 
         return self._select_phase_batch(phase, candidates)
