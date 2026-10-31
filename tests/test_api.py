@@ -530,6 +530,21 @@ class TestFirmwareAPI:
         assert resp.status_code == 200
         assert "files" in resp.json()
 
+    def test_unhashed_image_is_marked_unverified(self, authed_client, mock_db, tmp_path):
+        from updater import database as db
+
+        name = "tna-303l-1.15.0-r8515-20260609-sysupgrade.bin"
+        (tmp_path / name).write_bytes(b"legacy-image")
+        db.register_firmware(name, source="legacy", sha256=None)
+        with patch("updater.app.FIRMWARE_DIR", tmp_path):
+            response = authed_client.get("/api/firmware-files")
+
+        assert response.status_code == 200
+        image = next(item for item in response.json()["files"] if item["name"] == name)
+        assert image["verified"] is False
+        assert image["deployable"] is False
+        assert image["health_reason"] == "file_unverified"
+
 
 class TestAutoUpdateAPI:
     def test_get_update_status(self, authed_client):

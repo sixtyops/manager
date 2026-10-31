@@ -34,34 +34,25 @@ def test_missing_registered_firmware_is_not_deployable(mock_db, tmp_path):
     assert health.reason == "file_missing"
 
 
-def test_legacy_file_without_registry_row_is_deployable(mock_db, tmp_path):
-    """A manual/legacy file on disk with no registry row stays usable (the
-    grandfather path) — it must not be treated as unverified."""
+def test_file_without_recorded_hash_is_unverified(mock_db, tmp_path):
     (tmp_path / FW_303L_STABLE).write_bytes(b"legacy")
 
     health = firmware_file_health(tmp_path, FW_303L_STABLE)
 
-    assert health.verified is True
-    assert health.deployable is True
+    assert health.verified is False
+    assert health.deployable is False
+    assert health.reason == "file_unverified"
 
 
-def test_registered_unhashed_file_becomes_deployable_after_backfill(mock_db, tmp_path):
-    """An upgraded install backfills legacy registry rows WITHOUT a hash, which
-    made on-disk files unverified -> excluded from auto-select and blanked in
-    fleet status. The sha256 backfill restores them to deployable."""
+def test_registered_unhashed_file_stays_unverified(mock_db, tmp_path):
     (tmp_path / FW_303L_STABLE).write_bytes(b"legacy-on-disk")
     db.register_firmware(FW_303L_STABLE, source="legacy", sha256=None)
 
-    before = firmware_file_health(tmp_path, FW_303L_STABLE)
-    assert before.deployable is False
-    assert before.reason == "file_unverified"
-
-    db._backfill_firmware_sha256(mock_db, tmp_path)
-
-    assert db.get_firmware_sha256(FW_303L_STABLE) is not None
-    after = firmware_file_health(tmp_path, FW_303L_STABLE)
-    assert after.verified is True
-    assert after.deployable is True
+    health = firmware_file_health(tmp_path, FW_303L_STABLE)
+    assert db.get_firmware_sha256(FW_303L_STABLE) is None
+    assert health.verified is False
+    assert health.deployable is False
+    assert health.reason == "file_unverified"
 
 
 def test_auto_target_uses_highest_deployable_version(mock_db, tmp_path):

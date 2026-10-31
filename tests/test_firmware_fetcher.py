@@ -241,10 +241,34 @@ class TestFamilyPageDiscovery(TestScrapePage):
             assert releases[0].platform == platform
             assert releases[0].channel == "stable"
             assert warnings == []
+            if platform == "tns-100":
+                assert releases[0].md5 == "33333333333333333333333333333333"
+
+    def test_sha256_table_checksum_is_parsed(self, tmp_path):
+        html = """
+        <table>
+          <tr><th>Type</th><th>File</th><th>SHA-256</th><th>MD5</th></tr>
+          <tr><td><strong>Latest stable</strong></td>
+            <td><a href="https://tachyon-networks.com/fw/tna-30x/2.0.0/tna-30x-2.0.0.bin">v2.0.0</a></td>
+            <td>aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</td>
+            <td>bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</td></tr>
+        </table>
+        <a href="https://tachyon-networks.com/fw/tna-30x/2.0.0/tna-30x-2.0.0.bin">Version 2.0.0</a>
+        """
+        fetcher = FirmwareFetcher(tmp_path, AsyncMock())
+        with patch(
+            "updater.firmware_fetcher.httpx.AsyncClient",
+            return_value=TestScrapePage()._make_mock_client(html),
+        ):
+            releases, warnings = asyncio.run(
+                fetcher._scrape_page("tna-30x", "https://example/tna-30x")
+            )
+        assert warnings == []
+        assert releases[0].sha256 == "a" * 64
+        assert releases[0].md5 == "b" * 32
 
     def test_scrape_without_md5_column_yields_none(self, fetcher):
-        """A summary table predating the MD5 column → md5 is None on every
-        release and fetching still works (size guards carry the integrity)."""
+        """A summary table predating checksums leaves each release unverified."""
         html = """
         <table>
           <tr><td><strong>Latest stable</strong></td><td>v1.12.3 - notes</td></tr>
@@ -363,6 +387,8 @@ class TestAutoSelectPin:
             self.STABLE_30X: "stable",
             self.BETA_30X: "beta",
         }))
+        db.register_firmware(self.STABLE_30X, source="auto", sha256="a" * 64)
+        db.register_firmware(self.BETA_30X, source="auto", sha256="b" * 64)
 
     def test_unpinned_family_advances_to_newest_beta(self, fetcher, mock_db):
         self._register_channels()
@@ -427,12 +453,12 @@ class TestDownloadIntegrity:
     def fetcher(self, tmp_path):
         return FirmwareFetcher(firmware_dir=tmp_path, broadcast_func=AsyncMock())
 
-    def _release(self, md5=None):
+    def _release(self, md5=None, sha256=None):
         name = "tna-30x-1.15.0-r55142-20260521-tn-110-prs-squashfs-sysupgrade.bin"
         return FirmwareRelease(
             platform="tna-30x", version="1.15.0",
             download_url=f"https://tachyon-networks.com/fw/{name}",
-            channel="beta", filename=name, md5=md5,
+            channel="beta", filename=name, md5=md5, sha256=sha256,
         )
 
     def _patch_stream(self, body: bytes, content_length):
@@ -455,7 +481,7 @@ class TestDownloadIntegrity:
 
     def test_good_download_accepted(self, fetcher, tmp_path):
         body = b"x" * 1000
-        rel = self._release()
+        rel = self._release(md5=hashlib.md5(body).hexdigest())
         with self._patch_stream(body, content_length=1000):
             ok, sha = asyncio.run(fetcher._download_firmware(rel))
         assert ok is True
@@ -464,20 +490,23 @@ class TestDownloadIntegrity:
         assert sha == hashlib.sha256(body).hexdigest()
 
     def test_content_length_mismatch_rejected(self, fetcher, tmp_path):
-        rel = self._release()
-        with self._patch_stream(b"x" * 600, content_length=1000):  # truncated
+        body = b"x" * 600
+        rel = self._release(md5=hashlib.md5(body).hexdigest())
+        with self._patch_stream(body, content_length=1000):  # truncated
             ok, sha = asyncio.run(fetcher._download_firmware(rel))
         assert ok is False
         assert sha is None
         assert not (tmp_path / rel.filename).exists()
+        assert "Download rejected" in fetcher._download_warning
         assert list(tmp_path.glob("*.downloading")) == []
 
     def test_size_outlier_rejected(self, fetcher, tmp_path):
         # No Content-Length advertised, but far smaller than an existing sibling.
         sib = "tna-30x-1.12.3-r55002-20260219-tn-110-prs-squashfs-sysupgrade.bin"
         (tmp_path / sib).write_bytes(b"x" * 1000)
-        rel = self._release()
-        with self._patch_stream(b"x" * 100, content_length=None):
+        body = b"x" * 100
+        rel = self._release(md5=hashlib.md5(body).hexdigest())
+        with self._patch_stream(body, content_length=None):
             ok, sha = asyncio.run(fetcher._download_firmware(rel))
         assert ok is False
         assert sha is None
@@ -507,15 +536,46 @@ class TestDownloadIntegrity:
         assert ok is False
         assert sha is None
         assert not (tmp_path / rel.filename).exists()
+        assert "Published checksum mismatch" in fetcher._download_warning
+        assert "Published checksum mismatch" in fetcher._download_warning
         assert list(tmp_path.glob("*.downloading")) == []
 
-    def test_md5_absent_good_download_accepted(self, fetcher, tmp_path):
+    def test_missing_checksum_rejects_download(self, fetcher, tmp_path):
         body = b"x" * 1000
         rel = self._release(md5=None)
         with self._patch_stream(body, content_length=1000):
             ok, sha = asyncio.run(fetcher._download_firmware(rel))
+        assert ok is False
+        assert sha is None
+        assert not (tmp_path / rel.filename).exists()
+        assert fetcher._download_warning == f"No published checksum for {rel.filename}"
+
+    def test_sha256_is_preferred_when_both_checksums_exist(self, fetcher, tmp_path):
+        body = b"firmware-with-published-sha"
+        rel = self._release(md5="0" * 32, sha256=hashlib.sha256(body).hexdigest())
+        with self._patch_stream(body, content_length=len(body)):
+            ok, sha = asyncio.run(fetcher._download_firmware(rel))
         assert ok is True
         assert sha == hashlib.sha256(body).hexdigest()
+
+    def test_mismatch_is_visible_and_does_not_register(self, fetcher, tmp_path, mock_db):
+        body = b"wrong firmware payload"
+        release = self._release(md5="0" * 32)
+        async def fake_download(rel):
+            fetcher._download_warning = (
+                f"Published checksum mismatch for {rel.filename}: expected "
+                f"{rel.md5}, got {hashlib.md5(body).hexdigest()}"
+            )
+            return False, None
+        fetcher._discover_pages = AsyncMock(return_value=(
+            [("tna-30x", "https://example/tna-30x", "TNA-300 Series")], []
+        ))
+        with patch.object(fetcher, "_scrape_page", AsyncMock(return_value=([release], []))), \
+             patch.object(fetcher, "_download_firmware", AsyncMock(side_effect=fake_download)):
+            result = asyncio.run(fetcher.check_and_download())
+        assert result["downloaded"] == []
+        assert "Published checksum mismatch" in result["errors"][0]
+        assert db.get_firmware_sha256(release.filename) is None
 
     def test_md5_absent_does_not_bypass_size_guard(self, fetcher, tmp_path):
         # A missing published MD5 must not weaken the existing truncation guard.
@@ -530,9 +590,8 @@ class TestDownloadIntegrity:
 
 class TestCheckAndDownloadHashing:
     """check_and_download stores a SHA256 for auto-fetched firmware so the
-    pre-flash integrity check (skipped when no hash is stored) also covers
-    auto files — on fresh download, and for an existing file only after it
-    passes the vendor MD5 (or when no MD5 is published)."""
+    pre-flash integrity check also covers auto-fetched files after their
+    published checksum passes."""
 
     BETA = "tna-30x-1.15.0-r55151-20260609-tn-110-prs-squashfs-sysupgrade.bin"
 
@@ -572,9 +631,9 @@ class TestCheckAndDownloadHashing:
 
         assert db.get_firmware_sha256(self.BETA) == sha
 
-    def test_backfills_sha256_when_no_vendor_md5(self, fetcher, tmp_path, mock_db):
-        # No published MD5 (fail-open): an existing file is backfilled from its
-        # local bytes so it still gets the pre-flash re-check.
+    def test_missing_published_checksum_does_not_register_existing_file(
+        self, fetcher, tmp_path, mock_db
+    ):
         body = b"already-on-disk-firmware"
         (tmp_path / self.BETA).write_bytes(body)
         db.register_firmware(self.BETA, source="auto")  # pre-feature: no hash
@@ -585,7 +644,9 @@ class TestCheckAndDownloadHashing:
                           AsyncMock(side_effect=self._scrape_only_30x(rel))):
             asyncio.run(fetcher.check_and_download())
 
-        assert db.get_firmware_sha256(self.BETA) == hashlib.sha256(body).hexdigest()
+        assert db.get_firmware_sha256(self.BETA) is None
+        assert self.BETA not in fetcher._get_auto_fetched_list()
+        assert "no published MD5 or SHA-256" in db.get_setting("firmware_last_check_error", "")
 
     def test_existing_file_matching_vendor_md5_is_trusted(self, fetcher, tmp_path, mock_db):
         # Existing file whose bytes match the vendor MD5 → trusted, SHA256
