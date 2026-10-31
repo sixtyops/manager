@@ -4,6 +4,10 @@
 fast. "Keep my fleet current" is the primary action. This is the target contract,
 not a claim about the current engine. The owner set this direction on 2026-09-30.
 
+**Detail:** Manager is a standalone product for Tachyon networks. Use Manager's
+data and the device APIs it calls for every design and safety check. Do not
+require an outside system.
+
 ## Built-in behavior
 
 **Key points:** Every update uses one engine. Safety gates have no off switch.
