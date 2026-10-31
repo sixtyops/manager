@@ -24,6 +24,7 @@ def build_schema(db: sqlite3.Connection) -> None:
             ip TEXT NOT NULL UNIQUE,
             vendor TEXT NOT NULL DEFAULT 'tachyon',
             role TEXT NOT NULL DEFAULT 'ap',
+            parent_device_id INTEGER,
             tower_site_id INTEGER,
             username TEXT NOT NULL,
             password TEXT NOT NULL,
@@ -41,13 +42,16 @@ def build_schema(db: sqlite3.Connection) -> None:
             bank1_version TEXT,
             bank2_version TEXT,
             active_bank INTEGER,
+            bank_last_fetched TEXT,
             last_firmware_update TEXT,
             notes TEXT,
             last_config_poll_at TEXT,
             last_config_poll_status TEXT,
             last_config_poll_error TEXT,
+            auth_status TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id)
+            FOREIGN KEY (tower_site_id) REFERENCES tower_sites(id),
+            FOREIGN KEY (parent_device_id) REFERENCES devices(id)
         );
         CREATE INDEX IF NOT EXISTS idx_devices_vendor ON devices(vendor);
         CREATE INDEX IF NOT EXISTS idx_devices_role ON devices(role);
@@ -169,6 +173,21 @@ def build_schema(db: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_cpe_ap ON cpe_cache(ap_ip);
         CREATE INDEX IF NOT EXISTS idx_cpe_ip ON cpe_cache(ip);
 
+        CREATE TABLE IF NOT EXISTS link_metrics (
+            device_id INTEGER PRIMARY KEY,
+            link_distance REAL, rx_power REAL, combined_signal REAL,
+            last_local_rssi REAL, tx_rate REAL, rx_rate REAL, mcs INTEGER,
+            link_uptime INTEGER, signal_health TEXT, target_rssi_dbm REAL,
+            snr_db REAL, sector_tx INTEGER, sector_rx INTEGER,
+            antenna_kit TEXT, max_rain_mm_hr REAL,
+            FOREIGN KEY (device_id) REFERENCES devices(id)
+        );
+        CREATE TABLE IF NOT EXISTS cpe_migration_map (
+            old_cpe_id INTEGER PRIMARY KEY,
+            device_id INTEGER NOT NULL UNIQUE,
+            FOREIGN KEY (device_id) REFERENCES devices(id)
+        );
+
         CREATE TABLE IF NOT EXISTS sessions (
             session_id TEXT PRIMARY KEY,
             username TEXT NOT NULL,
@@ -251,6 +270,7 @@ def build_schema(db: sqlite3.Connection) -> None:
             rollout_id INTEGER NOT NULL,
             ip TEXT NOT NULL,
             device_type TEXT NOT NULL DEFAULT 'ap',
+            model_family TEXT,
             phase_assigned TEXT,
             status TEXT DEFAULT 'pending',
             updated_at TEXT,
@@ -424,32 +444,6 @@ def build_schema(db: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_radius_auth_client_ip ON radius_auth_log(client_ip);
         CREATE INDEX IF NOT EXISTS idx_radius_auth_username ON radius_auth_log(username);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_radius_auth_unique ON radius_auth_log(occurred_at, username, client_ip, outcome);
-        CREATE TABLE IF NOT EXISTS config_push_rollouts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            template_ids TEXT NOT NULL,
-            template_names TEXT,
-            templates_snapshot TEXT,
-            phase TEXT NOT NULL DEFAULT 'canary',
-            status TEXT NOT NULL DEFAULT 'active',
-            pause_reason TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            last_phase_completed_at TEXT,
-            completed_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS config_push_rollout_devices (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            rollout_id INTEGER NOT NULL,
-            ip TEXT NOT NULL,
-            device_type TEXT NOT NULL,
-            phase_assigned TEXT,
-            status TEXT DEFAULT 'pending',
-            error TEXT,
-            updated_at TEXT,
-            FOREIGN KEY (rollout_id) REFERENCES config_push_rollouts(id),
-            UNIQUE(rollout_id, ip)
-        );
-
         CREATE TABLE IF NOT EXISTS device_uptime_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ip TEXT NOT NULL,
@@ -496,21 +490,6 @@ def build_schema(db: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(username, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
-
-        CREATE TABLE IF NOT EXISTS api_tokens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            token_hash TEXT NOT NULL UNIQUE,
-            token_prefix TEXT NOT NULL,
-            user_id INTEGER NOT NULL,
-            scopes TEXT DEFAULT 'read',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            last_used_at TEXT,
-            expires_at TEXT,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
-        CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
 
         CREATE TABLE IF NOT EXISTS freeze_windows (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -580,7 +559,7 @@ def build_schema(db: sqlite3.Connection) -> None:
 
         -- Reverse sync: devices → legacy tables (for Tachyon vendor only)
         CREATE TRIGGER IF NOT EXISTS trg_devices_to_legacy_insert AFTER INSERT ON devices
-        WHEN NEW.vendor = 'tachyon'
+        WHEN NEW.vendor = 'tachyon' AND NEW.role IN ('ap', 'switch')
         BEGIN
             INSERT OR IGNORE INTO access_points (ip, tower_site_id, username, password,
                 system_name, model, mac, firmware_version, location, last_seen, last_error,

@@ -137,6 +137,12 @@ Each assignment names intent, issue, exact files, dependencies, acceptance,
 required instructions, tests, forbidden actions, evidence path and handoff.
 Require progress updates and completion through a reviewable PR or a concrete
 blocker. Keep detailed logs outside lead context and summaries concise.
+For dev host runs, assign the worker to run the approved backup, verify, and
+restore commands on the dev host over SSH with non-interactive `sudo -n`.
+Require a backup listing and test extraction before deploy, and sandbox
+escalation for each HTTPS call to the dev host or lab devices. A worker
+`URLError` usually means the sandbox blocked the request; have the worker
+request escalation before diagnosing the endpoint.
 Reuse issues. Size each slice S/M; split L work before pickup. Mark `agent:ready`
 only after scope and dependencies are verified, including required hardware or
 access proof. A closed dependency alone is insufficient if acceptance proof is
@@ -346,6 +352,10 @@ and `lock`, `pickup/lock`, `codex-review/lock` when present. Read effective
 configuration and each loop status; do not dump credential files or environments.
 
 ### Dev host runs
+
+The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
+may run these procedures. A worker may run them only when the lead assigns the
+worker a named run.
 
 Use the same shared lock as CI for each dev host run from the lead host. Keep
 one background, non-interactive holder with

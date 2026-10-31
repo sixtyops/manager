@@ -301,6 +301,8 @@ class TestRollbackSafetySnapshot:
         self, operator_client, rollback_db
     ):
         ctx, instance = self._patch_client(get_config_raises=RuntimeError("boom"))
+        # First read (safety snapshot) fails; the post-apply read-back matches.
+        instance.get_config.side_effect = [RuntimeError("boom"), {"v": "old"}]
         with ctx:
             resp = operator_client.post(
                 "/api/config-push/rollback/10.0.0.5", json={"force": True}
@@ -325,187 +327,279 @@ class TestRollbackSafetySnapshot:
     ):
         from updater import database as db
         ctx, instance = self._patch_client(get_config_result={"v": "current"})
+        instance.get_config.side_effect = [{"v": "current"}, {"v": "old"}]
         with ctx:
             resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["safety_snapshot_saved"] is True
+        assert body["rollback_verified"] is True
         # The pre-rollback snapshot landed in device_configs (DAL decrypts on read)
         latest = db.get_latest_device_config("10.0.0.5")
         assert json.loads(latest["config_json"]) == {"v": "current"}
 
 
-class TestConfigPushRolloutAdvance:
-    """`/api/config-push/rollout/{id}/advance` should walk past any empty
-    phases in a single click. With small rollouts (1–3 devices), the
-    canary always consumes the first device and per-phase batch math
-    leaves pct10/pct50/pct100 unfilled; the operator should not have to
-    cancel and restart to finish the rollout."""
+class TestRollbackLockAndVerify:
+    """Rollback takes the per-IP config push lock and verifies the result by
+    reading the config back (issue #311, closes #37 and #39)."""
 
-    @pytest.fixture(autouse=True)
-    def exercise_retained_rollout(self, monkeypatch):
-        """Exercise retained internals with the safety capability mocked on."""
-        monkeypatch.setattr("updater.config_write_guard.automatic_config_writes_allowed", lambda: True)
+    @pytest.fixture
+    def rollback_db(self, mock_db):
+        mock_db.execute(
+            "INSERT INTO access_points (ip, username, password, enabled) "
+            "VALUES ('10.0.0.5', 'admin', 'pass', 1)"
+        )
+        mock_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.5", json.dumps({"v": "old"}), "h-old", "2026-01-01T00:00:00"),
+        )
+        mock_db.execute(
+            "INSERT INTO device_configs (ip, config_json, config_hash, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("10.0.0.5", json.dumps({"v": "new"}), "h-new", "2026-01-02T00:00:00"),
+        )
+        mock_db.commit()
+        return mock_db
+
+    def _patch_client(self, read_back):
+        from contextlib import ExitStack
+        from unittest.mock import MagicMock
+        instance = MagicMock()
+        instance.login = AsyncMock(return_value=True)
+        # First read is the safety snapshot; second is the post-apply read-back.
+        instance.get_config = AsyncMock(side_effect=[{"v": "new"}, read_back])
+        instance.apply_config = AsyncMock(return_value={"success": True})
+        instance.get_hardware_id = MagicMock(return_value="tn-110")
+        poller_stub = MagicMock()
+        poller_stub.poll_configs_for_ips = AsyncMock(return_value=None)
+        stack = ExitStack()
+        stack.enter_context(patch("updater.app.TachyonClient", return_value=instance))
+        stack.enter_context(patch("updater.app.get_poller", return_value=poller_stub))
+        return stack, instance
+
+    def test_success_reports_verified_and_releases_lock(self, operator_client, rollback_db):
+        from updater import app as app_module
+        from updater.app import _compute_config_hash
+        ctx, instance = self._patch_client(read_back={"v": "old"})
+        with ctx:
+            resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] == "success"
+        assert body["rollback_verified"] is True
+        assert body["config_hash"] == _compute_config_hash({"v": "old"})
+        assert "10.0.0.5" not in app_module._config_pushing_ips
+
+    def test_hash_mismatch_is_reported_not_success(self, operator_client, rollback_db):
+        from updater import app as app_module
+        # Device accepted the apply but dropped a field.
+        ctx, instance = self._patch_client(read_back={})
+        instance.get_config.side_effect = [{"v": "new"}, {"v": "old", "extra": 1}]
+        with ctx:
+            resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
+        assert resp.status_code == 502, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "rollback_not_verified"
+        assert detail["rollback_verified"] is False
+        assert detail["expected_hash"] != detail["actual_hash"]
+        assert "not verified" in detail["message"]
+        row = rollback_db.execute(
+            "SELECT target_id FROM audit_log WHERE action = 'config.rollback.unverified'"
+        ).fetchone()
+        assert row is not None and row["target_id"] == "10.0.0.5"
+        assert "10.0.0.5" not in app_module._config_pushing_ips
+
+    def test_read_back_failure_is_reported_not_success(self, operator_client, rollback_db):
+        ctx, instance = self._patch_client(read_back=None)
+        with ctx:
+            resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
+        assert resp.status_code == 502, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "rollback_not_verified"
+        assert detail["actual_hash"] is None
+        assert "empty config" in detail["message"]
+
+    def test_rollback_refused_while_push_or_rollback_holds_lock(self, operator_client, rollback_db):
+        from updater import app as app_module
+        ctx, instance = self._patch_client(read_back={"v": "old"})
+        app_module._config_pushing_ips.add("10.0.0.5")
+        try:
+            with ctx:
+                resp = operator_client.post("/api/config-push/rollback/10.0.0.5", json={})
+            assert resp.status_code == 409, resp.text
+            assert resp.json()["detail"]["code"] == "config_change_in_progress"
+            # Fail closed: no device contact at all.
+            instance.login.assert_not_awaited()
+            instance.apply_config.assert_not_awaited()
+            # The refused request must not release the other writer's lock.
+            assert "10.0.0.5" in app_module._config_pushing_ips
+        finally:
+            app_module._config_pushing_ips.discard("10.0.0.5")
 
     @staticmethod
-    def _seed_rollout(db_conn, devices_by_phase: dict, status: str = "active",
-                      phase: str = "canary") -> int:
-        """Insert a rollout row and assigned devices.
+    async def _drain(task, gate):
+        """Release the gate and finish the task, so that a failed assertion
+        does not leave the task blocked while it holds the IP lock."""
+        import asyncio
+        gate.set()
+        if task.done():
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=30)
+        except asyncio.TimeoutError:
+            task.cancel()
+            done, _pending = await asyncio.wait({task}, timeout=30)
+            if done:
+                try:
+                    task.result()
+                except (Exception, asyncio.CancelledError):
+                    pass  # The test body reports the failure.
+        except (Exception, asyncio.CancelledError):
+            pass  # The test body reports the failure.
 
-        `devices_by_phase` maps phase name -> list of (ip, device_type,
-        device_status) tuples. Empty list / missing phase -> phase has no
-        assigned devices (the empty-phase case under test).
-        """
-        cur = db_conn.execute(
-            """INSERT INTO config_push_rollouts
-               (template_ids, template_names, templates_snapshot, phase, status)
-               VALUES (?, ?, ?, ?, ?)""",
-            ("[1]", "T1", json.dumps([{"id": 1, "name": "T1", "fragment": {}}]),
-             phase, status),
-        )
-        rollout_id = cur.lastrowid
-        for ph, devs in devices_by_phase.items():
-            for ip, dtype, dev_status in devs:
-                db_conn.execute(
-                    """INSERT INTO config_push_rollout_devices
-                       (rollout_id, ip, device_type, phase_assigned, status)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (rollout_id, ip, dtype, ph, dev_status),
-                )
-        db_conn.commit()
-        return rollout_id
+    @pytest.mark.asyncio
+    async def test_concurrent_rollbacks_on_one_ip_serialize(self, rollback_db):
+        """Two rollbacks race on one IP: one applies, the other is refused
+        before it touches the device."""
+        import asyncio
+        from unittest.mock import MagicMock
+        from fastapi import HTTPException
+        from updater import app as app_module
 
-    def test_single_device_rollout_completes_in_one_advance(self, authed_client, mock_db):
-        """1 device in canary, 0 in pct10/50/100 — advance should walk all
-        the way through to status='completed' rather than 400-ing on the
-        first empty phase. This reproduces the smoke-test failure mode."""
-        rid = self._seed_rollout(mock_db, {
-            "canary": [("10.0.0.1", "ap", "updated")],
-        })
-        resp = authed_client.post(f"/api/config-push/rollout/{rid}/advance")
-        assert resp.status_code == 200, resp.text
-        assert resp.json() == {"status": "completed"}
-        row = mock_db.execute(
-            "SELECT phase, status FROM config_push_rollouts WHERE id = ?",
-            (rid,),
-        ).fetchone()
-        assert row["status"] == "completed"
-        # Phase walked off the end (or sits on pct100); either way the
-        # status is what callers care about.
-        assert row["phase"] in ("pct100", "pct50", "pct10", "canary")
+        gate = asyncio.Event()
+        entered = asyncio.Event()
+        instance = MagicMock()
+        instance.login = AsyncMock(return_value=True)
+        instance.get_hardware_id = MagicMock(return_value="tn-110")
+        reads = iter([{"v": "new"}, {"v": "old"}])
 
-    def test_advance_kicks_off_next_phase_when_non_empty(self, authed_client, mock_db):
-        """2 devices: canary (1, updated) and pct10 (1, pending). One advance
-        should move us into pct10 with status='active', not 'completed'.
-        The phase task is patched out — we only assert the response shape
-        and the rollout's new state."""
-        rid = self._seed_rollout(mock_db, {
-            "canary": [("10.0.0.1", "ap", "updated")],
-            "pct10":  [("10.0.0.2", "ap", "pending")],
-        })
-        with patch("updater.app._run_config_push_phase", new=AsyncMock()):
-            resp = authed_client.post(f"/api/config-push/rollout/{rid}/advance")
-        assert resp.status_code == 200, resp.text
-        assert resp.json() == {"status": "advanced", "phase": "pct10"}
-        row = mock_db.execute(
-            "SELECT phase, status FROM config_push_rollouts WHERE id = ?",
-            (rid,),
-        ).fetchone()
-        assert row["phase"] == "pct10"
-        assert row["status"] == "active"
+        async def slow_get_config():
+            entered.set()
+            await asyncio.wait_for(gate.wait(), timeout=30)
+            return next(reads)
 
-    def test_non_empty_phase_with_no_updated_devices_still_blocks(self, authed_client, mock_db):
-        """Gap-7 guard must still fire when the phase has devices but none
-        succeeded — empty-phase tolerance must not regress this."""
-        rid = self._seed_rollout(mock_db, {
-            "canary": [("10.0.0.1", "ap", "failed")],
-        })
-        resp = authed_client.post(f"/api/config-push/rollout/{rid}/advance")
-        assert resp.status_code == 400, resp.text
-        assert "no devices succeeded" in resp.json()["detail"]
+        instance.get_config = AsyncMock(side_effect=slow_get_config)
+        instance.apply_config = AsyncMock(return_value={"success": True})
+        poller_stub = MagicMock()
+        poller_stub.poll_configs_for_ips = AsyncMock(return_value=None)
 
-    def test_pending_devices_in_current_phase_still_block(self, authed_client, mock_db):
-        """Pre-existing guard: phase with pending devices can't be advanced
-        regardless of the empty-phase tolerance."""
-        rid = self._seed_rollout(mock_db, {
-            "canary": [
-                ("10.0.0.1", "ap", "updated"),
-                ("10.0.0.2", "ap", "pending"),
-            ],
-        })
-        resp = authed_client.post(f"/api/config-push/rollout/{rid}/advance")
-        assert resp.status_code == 400, resp.text
-        assert "pending" in resp.json()["detail"]
+        request = MagicMock()
+        request.json = AsyncMock(return_value={})
+        request.headers = {}
+        request.client = None
+        session = {"username": "op"}
 
-    def test_advance_rejects_snapshot_with_unsafe_watchdog(self, authed_client, mock_db):
-        """A rollout created before the #167 ping_watchdog floor landed
-        can still sit paused on disk with an unsafe snapshot. Advance/
-        resume must refuse to push it. (#167 follow-up.)"""
-        unsafe = [{
-            "id": 99, "name": "Old Watchdog",
-            "fragment": {"services": {"ping_watchdog": {
-                "enabled": True, "interval": 300, "failure": 3,
-                "addresses": ["8.8.8.8"],
-            }}},
-            "device_types": None,
-        }]
-        cur = mock_db.execute(
-            """INSERT INTO config_push_rollouts
-               (template_ids, template_names, templates_snapshot, phase, status)
-               VALUES (?, ?, ?, ?, ?)""",
-            ("[99]", "Old Watchdog", json.dumps(unsafe), "canary", "active"),
-        )
-        rid = cur.lastrowid
-        mock_db.execute(
-            """INSERT INTO config_push_rollout_devices
-               (rollout_id, ip, device_type, phase_assigned, status)
-               VALUES (?, ?, ?, ?, ?)""",
-            (rid, "10.0.0.1", "ap", "canary", "updated"),
-        )
-        mock_db.commit()
-        resp = authed_client.post(f"/api/config-push/rollout/{rid}/advance")
-        assert resp.status_code == 400, resp.text
-        assert "unsafe" in resp.json()["detail"].lower()
-        assert "ping_watchdog" in resp.json()["detail"]
+        with patch("updater.app.TachyonClient", return_value=instance), \
+                patch("updater.app.get_poller", return_value=poller_stub):
+            first = asyncio.create_task(
+                app_module.rollback_device_config("10.0.0.5", request, session, None)
+            )
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=30)
+                with pytest.raises(HTTPException) as exc:
+                    await asyncio.wait_for(
+                        app_module.rollback_device_config("10.0.0.5", request, session, None),
+                        timeout=30,
+                    )
+                assert exc.value.status_code == 409
+                assert exc.value.detail["code"] == "config_change_in_progress"
+                gate.set()
+                result = await asyncio.wait_for(first, timeout=30)
+            finally:
+                await self._drain(first, gate)
 
-    def test_resume_rejects_snapshot_with_unsafe_watchdog(self, authed_client, mock_db):
-        """Same gate on the resume path."""
-        unsafe = [{
-            "id": 99, "name": "Old Watchdog",
-            "fragment": {"services": {"ping_watchdog": {
-                "enabled": True, "interval": 60, "failure": 1,
-            }}},
-            "device_types": None,
-        }]
-        cur = mock_db.execute(
-            """INSERT INTO config_push_rollouts
-               (template_ids, template_names, templates_snapshot, phase, status)
-               VALUES (?, ?, ?, ?, ?)""",
-            ("[99]", "Old Watchdog", json.dumps(unsafe), "canary", "paused"),
-        )
-        rid = cur.lastrowid
-        mock_db.commit()
-        resp = authed_client.post(f"/api/config-push/rollout/{rid}/resume")
-        assert resp.status_code == 400, resp.text
-        assert "unsafe" in resp.json()["detail"].lower()
+        assert result["rollback_verified"] is True
+        assert instance.login.await_count == 1
+        assert instance.apply_config.await_count == 2  # dry-run + apply, once
+        assert "10.0.0.5" not in app_module._config_pushing_ips
 
-    def test_validate_ping_watchdog_safety_catches_merged_unsafe(self):
-        """Defense-in-depth: two individually-safe fragments can deep_merge
-        into an unsafe combo (one sets `enabled=true`, another lowers
-        `failure`). The merged config is rechecked before the device
-        dry-run. (#167 follow-up, run_config_push_phase merge check.)"""
-        import pytest
-        from updater.config_utils import (
-            validate_ping_watchdog_safety, deep_merge,
-        )
-        a = {"services": {"ping_watchdog": {
-            "enabled": True, "interval": 300, "failure": 6,
-        }}}
-        b = {"services": {"ping_watchdog": {"failure": 3}}}
-        # Each in isolation passes.
-        validate_ping_watchdog_safety(a)
-        validate_ping_watchdog_safety(b)
-        # Merge produces enabled=True, interval=300, failure=3 → 900s, unsafe.
-        merged = deep_merge(a, b)
-        with pytest.raises(ValueError, match="900s"):
-            validate_ping_watchdog_safety(merged)
+    @pytest.mark.asyncio
+    async def test_rollback_refused_during_config_push_write(self, rollback_db):
+        """A config push holds the lock on one IP during the device write.
+        A rollback on that IP gets HTTP 409 and does not contact the device."""
+        import asyncio
+        from unittest.mock import MagicMock
+        from fastapi import HTTPException
+        from updater import app as app_module
+
+        gate = asyncio.Event()
+        writing = asyncio.Event()
+        clients = []
+
+        async def slow_apply(config, dry_run=False, **kwargs):
+            # The dry run returns at once. The real write pauses at the gate.
+            if not dry_run:
+                writing.set()
+                await asyncio.wait_for(gate.wait(), timeout=30)
+            return {"success": True}
+
+        def fake_client(ip, username, password):
+            instance = MagicMock()
+            instance.login = AsyncMock(return_value=True)
+            instance.get_config = AsyncMock(return_value={"v": "new"})
+            instance.apply_config = AsyncMock(side_effect=slow_apply)
+            instance.get_hardware_id = MagicMock(return_value="tn-110")
+            clients.append(instance)
+            return instance
+
+        templates = [{"id": 1, "name": "T", "fragment": {"v": "pushed"}, "device_types": None}]
+        devices = [{"ip": "10.0.0.5", "role": "ap", "username": "admin",
+                    "password": "pass", "model": None}]
+        job_info = {"cancelled": False, "success": 0, "failed": 0, "skipped": 0,
+                    "total": 1, "done": False}
+
+        request = MagicMock()
+        request.json = AsyncMock(return_value={})
+        request.headers = {}
+        request.client = None
+        session = {"username": "op"}
+
+        with patch("updater.app.TachyonClient", side_effect=fake_client), \
+                patch("updater.app.broadcast", new=AsyncMock()):
+            push = asyncio.create_task(
+                app_module._run_config_push("push-job", devices, templates, job_info)
+            )
+            try:
+                await asyncio.wait_for(writing.wait(), timeout=30)
+                push_client = clients[0]
+                assert push_client.apply_config.await_count == 2  # dry run + paused write
+                assert "10.0.0.5" in app_module._config_pushing_ips
+                with pytest.raises(HTTPException) as exc:
+                    await asyncio.wait_for(
+                        app_module.rollback_device_config("10.0.0.5", request, session, None),
+                        timeout=30,
+                    )
+                assert exc.value.status_code == 409
+                assert exc.value.detail["code"] == "config_change_in_progress"
+                # Fail closed: the rollback made no client, made no device
+                # call, and kept the push lock.
+                assert len(clients) == 1
+                assert push_client.login.await_count == 1
+                assert push_client.get_config.await_count == 1
+                assert push_client.apply_config.await_count == 2
+                assert "10.0.0.5" in app_module._config_pushing_ips
+                gate.set()
+                await asyncio.wait_for(push, timeout=30)
+            finally:
+                await self._drain(push, gate)
+
+        assert job_info["success"] == 1
+        assert clients[0].apply_config.await_count == 2  # push dry run + write only
+        assert "10.0.0.5" not in app_module._config_pushing_ips
+
+
+def test_phased_rollout_routes_are_removed(operator_client):
+    paths = [
+        ("GET", "/api/config-push/rollout"),
+        ("POST", "/api/config-push/rollout/start"),
+        ("POST", "/api/config-push/rollout/1/advance"),
+        ("POST", "/api/config-push/rollout/1/resume"),
+        ("POST", "/api/config-push/rollout/1/cancel"),
+    ]
+    openapi = operator_client.get("/openapi.json").json()["paths"]
+    assert not any(path.startswith("/api/config-push/rollout") for path in openapi)
+    for method, path in paths:
+        request = getattr(operator_client, method.lower())
+        response = request(path, json={}) if method == "POST" else request(path)
+        assert response.status_code == 404, path

@@ -1,8 +1,9 @@
 # Dev Hardware Validation
 
-**Key points:** This procedure is for the operator or a lead with explicit
-approval for the named host, devices, and tests. Loop workers must not run
-`tests/integration` or touch live hardware, a dev host, or a production install.
+**Key points:** The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
+may run this procedure. A worker may run it only when the lead assigns the
+worker a named run. Loop workers must not run `tests/integration` or touch live
+hardware, a dev host, or a production install outside that assigned run.
 
 **Detail:** Commands and reference tables below do not grant access. Follow
 [Agent rules](../AGENTS.md#agent-rules). Use existing private credentials
@@ -41,6 +42,40 @@ Docker, within these boundaries:
 
 When the lab has fewer devices than test roles, one dedicated lab AP can fill
 several roles; its write tests then run one at a time.
+
+### Dev host run procedure
+
+The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
+may run dev host procedures. A worker may run a procedure only when the lead
+assigns that worker a named run. Run procedures on the dev host over the
+recorded SSH alias. Use the
+approved backup, verify, and restore commands with `sudo -n`; do not run
+`sudo` on the lead host. Read command arguments and paths from the approved
+`sixtyops-manager-loop.env` file without copying its values into Git. Before a
+deploy, list the backup and test-extract it into a temporary directory.
+
+Use these command forms with the approved paths and flags:
+
+```bash
+sudo -n <approved-backup-command> <approved-paths-and-flags>
+sudo -n <approved-backup-list-command> <backup-path> <approved-flags>
+sudo -n <approved-backup-extract-command> <backup-path> <temporary-directory> <approved-flags>
+sudo -n <approved-restore-command> <backup-path> <approved-paths-and-flags>
+```
+
+For AP and switch update routes, send `enabled=true` as form data, then read
+the record back to confirm the value. Match each lab inventory record by
+comparing the access file's `address` field with the API list's `ip` key. The
+switch is optional for an AP-only run. Workers must request sandbox escalation
+for every HTTPS call to the dev host or a lab device. A worker `URLError`
+usually means the sandbox blocked the request.
+
+On Tachyon TNA-30x firmware 1.15.1, each user record has `username`,
+`password`, `level`, `enabled`, and `first_login` fields. The password field
+stores a 34-character MD5-crypt hash. Dry-run rejects plaintext passwords.
+Set `first_login=false` for a new user that must log in. The published API
+documentation shows different field names. A Tachyon session stays valid
+after a password change.
 
 ## Manual Commands
 
@@ -167,7 +202,9 @@ before merge. Only the owner names bench devices.
 **Detail:** Record the tested models, firmware, recovery evidence, and exact
 commit in the pull request. Re-run bench proof after any change to the pull
 request head. This is a target merge requirement. This documentation change
-does not claim hardware proof.
+does not claim hardware proof. Use
+[Expected Tachyon CPE and AP behavior](tachyon-expected-behavior.md) for the
+read-only customer-router signals and their current limits.
 
 ## Read-only bench wrapper
 

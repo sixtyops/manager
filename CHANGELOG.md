@@ -102,6 +102,15 @@ All notable changes to this project are documented in this file.
   remain unchanged.
 
 ### Fixed
+- Config push jobs retain a sanitized Tachyon error and report whether a device
+  rejected the dry-run or apply request. Passwords, hashes, usernames, and
+  addresses are removed from the recorded device message.
+- Users templates now add missing users and keep every existing device user.
+  Preview, push, rollout resume, and auto-enforce reject entries that change
+  an existing user or name the Manager login user. Stored password hashes
+  use the compliance comparison rule. The merge hashes only added users.
+  Template applies preserve existing password fields, including plaintext,
+  through the device client. Password rotation stays out of scope.
 - Keep scheduled firmware job and wave admission paused until the operator records
   `scheduled_rollout_safety_ready=true` after the required safety fixes and bench
   proof. Show the safety reason next to Auto-Update. Keep manual per-device

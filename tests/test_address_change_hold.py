@@ -126,7 +126,6 @@ def runner(mock_db, monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda feature: False)
     monkeypatch.setattr(app_module, "get_scheduler", lambda: None)
     for module, name in [(app_module.services, "get_timezone"),
-                         (app_module.telemetry, "send_telemetry_background"),
                          (app_module.slack, "notify_job_completed"),
                          (app_module.snmp, "notify_job_completed"),
                          (app_module.webhooks, "notify_job_completed"),
@@ -525,7 +524,8 @@ async def test_scheduled_hold_keeps_wave_pending(tables, mock_db, monkeypatch):
         rollout["last_job_id"], 0, 0, device_statuses={ip: "deferred" for ip in ips},
     )
     assert db.get_active_rollout()["phase"] == "pct10"
-    assert all(d["status"] == "deferred" for d in db.get_rollout_devices(rollout["id"]))
+    phase_devices = db.get_rollout_devices(rollout["id"], phase="pct10")
+    assert phase_devices and all(d["status"] == "deferred" for d in phase_devices)
     await harness.tick()
     assert start.call_count == 1
 

@@ -65,9 +65,8 @@ from .firmware_policy import (
 from .release_checker import init_checker, get_checker, apply_update, verify_update_on_startup
 from . import services
 from . import rollout_gate
-from .auth import require_auth, require_auth_ws, require_role, require_write_scope, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user, generate_api_token
+from .auth import require_auth, require_auth_ws, require_role, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user
 from .backup import build_csv_export, process_csv_import
-from . import telemetry
 from . import slack
 from . import snmp
 from . import webhooks
@@ -364,7 +363,6 @@ def _run_daily_data_housekeeping():
     if os.environ.get("SIXTYOPS_APPLIANCE") == "1":
         _run_backup_git_gc()
     db.cleanup_old_audit_log()
-    db.cleanup_expired_api_tokens()
     _last_data_housekeeping_day = today
 
 
@@ -710,7 +708,6 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
     Skipped:
     - Safe methods (GET/HEAD/OPTIONS/TRACE).
-    - Bearer-token auth: no cookie credential, can't be forged from HTML.
     - Requests without a session cookie: nothing to forge.
     """
 
@@ -718,9 +715,6 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request, call_next):
         if request.method in self.SAFE_METHODS:
-            return await call_next(request)
-
-        if request.headers.get("authorization", "").lower().startswith("bearer "):
             return await call_next(request)
 
         if not request.cookies.get(SESSION_COOKIE_NAME):
@@ -1435,11 +1429,23 @@ def _strip_credentials(devices: list[dict]) -> list[dict]:
     return devices
 
 
+def _include_backoff_state(devices: list[dict]) -> list[dict]:
+    """Add poller backoff state to AP and switch API rows."""
+    current_poller = get_poller()
+    for device in devices:
+        state = current_poller.get_backoff_state(device["ip"]) if current_poller else {}
+        device.update({
+            "consecutive_failures": state.get("consecutive_failures", 0),
+            "backoff_until": state.get("backoff_until"),
+        })
+    return devices
+
+
 @app.get("/api/aps", tags=["devices"])
 async def list_aps(site_id: int = None, session: dict = Depends(require_auth)):
     """List access points (credentials redacted)."""
     aps = db.get_access_points(tower_site_id=site_id, enabled_only=False)
-    return {"aps": _strip_credentials(aps)}
+    return {"aps": _include_backoff_state(_strip_credentials(aps))}
 
 
 @app.post("/api/aps", tags=["devices"])
@@ -1523,6 +1529,7 @@ async def add_device(
 @app.put("/api/aps/{ip}", tags=["devices"])
 async def update_ap(
     ip: str,
+    request: Request,
     username: str = Form(None),
     password: str = Form(None),
     tower_site_id: int = Form(None),
@@ -1531,6 +1538,11 @@ async def update_ap(
     session: dict = Depends(require_role("admin", "operator")),
 ):
     """Update an access point."""
+    form = await request.form()
+    recognized_fields = {"username", "password", "tower_site_id", "enabled", "notes"}
+    if not recognized_fields.intersection(form.keys()):
+        raise HTTPException(400, "Provide at least one recognized AP update field")
+
     ap = db.get_access_point(ip)
     if not ap:
         raise HTTPException(404, f"AP not found: {ip}")
@@ -1617,7 +1629,7 @@ async def poll_ap(ip: str, session: dict = Depends(require_role("admin", "operat
 async def list_switches(site_id: int = None, session: dict = Depends(require_auth)):
     """List switches (credentials redacted)."""
     switches = db.get_switches(tower_site_id=site_id, enabled_only=False)
-    return {"switches": _strip_credentials(switches)}
+    return {"switches": _include_backoff_state(_strip_credentials(switches))}
 
 
 @app.post("/api/switches", tags=["devices"])
@@ -1647,6 +1659,7 @@ async def add_switch(
 @app.put("/api/switches/{ip}", tags=["devices"])
 async def update_switch(
     ip: str,
+    request: Request,
     username: str = Form(None),
     password: str = Form(None),
     tower_site_id: int = Form(None),
@@ -1655,6 +1668,11 @@ async def update_switch(
     session: dict = Depends(require_role("admin", "operator")),
 ):
     """Update a switch."""
+    form = await request.form()
+    recognized_fields = {"username", "password", "tower_site_id", "enabled", "notes"}
+    if not recognized_fields.intersection(form.keys()):
+        raise HTTPException(400, "Provide at least one recognized switch update field")
+
     sw = db.get_switch(ip)
     if not sw:
         raise HTTPException(404, f"Switch not found: {ip}")
@@ -2161,7 +2179,6 @@ _SETTINGS_WRITABLE = {
     "snmp_traps_enabled", "snmp_trap_host", "snmp_trap_port",
     "snmp_trap_community", "snmp_trap_version",
     "autoupdate_enabled", "release_channel",
-    "telemetry_enabled", "telemetry_prompt_seen",
     "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
     "pre_update_reboot",
     "smoke_test_strict",
@@ -3589,84 +3606,6 @@ async def get_audit_log_api(
     entries = db.get_audit_log(limit=limit, offset=offset, username=username, action=action)
     total = db.get_audit_log_count(username=username, action=action)
     return {"entries": entries, "total": total}
-
-
-# ---------------------------------------------------------------------------
-# API token management
-# ---------------------------------------------------------------------------
-
-@app.get("/api/tokens", tags=["auth"])
-async def list_tokens_api(session: dict = Depends(require_auth)):
-    """List API tokens for the current user (admins see all)."""
-    if session.get("role") == "admin":
-        tokens = db.list_api_tokens()
-    else:
-        tokens = db.list_api_tokens(user_id=session.get("user_id"))
-    return {"tokens": tokens}
-
-
-@app.post("/api/tokens", tags=["auth"])
-async def create_token_api(request: Request, session: dict = Depends(require_role("admin", "operator"))):
-    """Create a new API token. Returns the token value (shown only once).
-
-    Restricted to admin/operator: tokens can carry write scope and survive
-    session revocation, so viewers must not be able to mint them.
-    """
-    data = await request.json()
-    name = data.get("name", "").strip()
-    if not name:
-        raise HTTPException(400, "Token name is required")
-    if len(name) > 100:
-        raise HTTPException(400, "Token name too long")
-
-    scopes = data.get("scopes", "read")
-    if scopes not in ("read", "read,write"):
-        raise HTTPException(400, "Scopes must be 'read' or 'read,write'")
-    # Only admins can mint write-scoped tokens.
-    if scopes == "read,write" and session.get("role") != "admin":
-        raise HTTPException(403, "Only admins can create write-scoped tokens")
-
-    # Reject the synthetic env-fallback admin (user_id=0): tokens must be
-    # owned by a real user row so revocation/audit ties back to a person.
-    user_id = session.get("user_id", 0)
-    if not user_id:
-        raise HTTPException(403, "Token creation requires a real user account")
-
-    expires_days = data.get("expires_days")
-    expires_at = None
-    if expires_days:
-        expires_days = int(expires_days)
-        if expires_days < 1 or expires_days > 365:
-            raise HTTPException(400, "expires_days must be 1-365")
-        expires_at = (datetime.now() + timedelta(days=expires_days)).isoformat()
-
-    token, token_hash, token_prefix = generate_api_token()
-    token_id = db.create_api_token(
-        name=name,
-        token_hash=token_hash,
-        token_prefix=token_prefix,
-        user_id=user_id,
-        scopes=scopes,
-        expires_at=expires_at,
-    )
-    db.log_audit(session["username"], "token.create", "api_token", str(token_id),
-                 f"Created token '{name}'", _client_ip(request))
-    return {"id": token_id, "token": token, "prefix": token_prefix, "name": name}
-
-
-@app.delete("/api/tokens/{token_id}", tags=["auth"])
-async def delete_token_api(token_id: int, request: Request, session: dict = Depends(require_auth)):
-    """Delete an API token."""
-    # Admins can delete any token; others can only delete their own
-    if session.get("role") == "admin":
-        deleted = db.delete_api_token(token_id)
-    else:
-        deleted = db.delete_api_token(token_id, user_id=session.get("user_id"))
-    if not deleted:
-        raise HTTPException(404, "Token not found")
-    db.log_audit(session["username"], "token.delete", "api_token", str(token_id),
-                 None, _client_ip(request))
-    return {"ok": True}
 
 
 @app.get("/api/time", tags=["system"])
@@ -6550,19 +6489,6 @@ async def run_update_job(job: UpdateJob, concurrency: int):
     except Exception as e:
         logger.error(f"Failed to persist job history for {job.job_id}: {e}")
 
-    # Send anonymized telemetry (non-blocking background task)
-    asyncio.create_task(telemetry.send_telemetry_background(
-        job_id=job.job_id,
-        success_count=success_count,
-        failed_count=failed_count,
-        skipped_count=skipped_count,
-        cancelled_count=cancelled_count,
-        duration_seconds=(job.completed_at - job.started_at).total_seconds(),
-        bank_mode=job.bank_mode,
-        is_scheduled=job.is_scheduled,
-        devices=devices_dict,
-    ))
-
     # Send Slack notification (non-blocking)
     rollout_info = None
     next_job_info = None
@@ -6838,6 +6764,7 @@ from .config_utils import (
     validate_fragment_safety as _validate_fragment_safety,
     validate_ping_watchdog_safety as _validate_ping_watchdog_safety,
     deep_merge,
+    merge_template_config,
     generate_config_diff,
     check_config_compliance as _check_config_compliance,
     fragment_matches as _fragment_matches,
@@ -7340,9 +7267,7 @@ async def get_config_compliance(
     """
     polled = 0
     if refresh:
-        # refresh=true polls the whole fleet and writes config state — a write
-        # action reached via GET, so read-only tokens must not trigger it.
-        require_write_scope(session)
+        # refresh=true polls the whole fleet and writes config state.
         poller = get_poller()
         if poller:
             ap_ips = list(db.get_all_access_points_dict(enabled_only=True).keys())
@@ -7623,10 +7548,20 @@ async def preview_config_merge(request: Request, session: dict = Depends(require
 
     original = json.loads(stored["config_json"]) if isinstance(stored["config_json"], str) else stored["config_json"]
 
+    device = db.get_access_point(ip) or db.get_switch(ip)
+    if not device:
+        cpe = db.get_cpe_by_ip(ip)
+        if cpe:
+            device = db.get_access_point(cpe["ap_ip"])
+    login_username = device.get("username") if device else None
+
     # Apply only the templates that match this device's type
     merged = original
     for t in applicable:
-        merged = deep_merge(merged, t["fragment"])
+        try:
+            merged = merge_template_config(merged, t["fragment"], login_username)
+        except ValueError as e:
+            raise HTTPException(400, f"Template '{t['name']}' rejected for {ip}: {e}")
 
     diff_lines = generate_config_diff(original, merged, label_a="current", label_b="after merge")
 
@@ -7660,11 +7595,6 @@ async def push_config_templates(request: Request, session: dict = Depends(requir
 
     if not template_ids or not targets:
         raise HTTPException(400, "template_ids and targets are required")
-
-    # Block if a phased rollout is active
-    active_rollout = db.get_active_config_push_rollout()
-    if active_rollout:
-        raise HTTPException(409, "A config push rollout is already active. Cancel it before starting an immediate push.")
 
     # Load templates
     templates = []
@@ -7732,7 +7662,7 @@ async def push_config_templates(request: Request, session: dict = Depends(requir
     # Run config push in background with job tracking
     job_id = str(uuid.uuid4())[:8]
     template_names = ", ".join(t["name"] for t in templates)
-    job_info = {"cancelled": False, "success": 0, "failed": 0, "skipped": 0, "total": len(device_list), "done": False}
+    job_info = {"cancelled": False, "success": 0, "failed": 0, "skipped": 0, "total": len(device_list), "done": False, "results": []}
     task = asyncio.create_task(_run_config_push(job_id, device_list, templates, job_info))
     job_info["task"] = task
     _config_push_jobs[job_id] = job_info
@@ -7776,6 +7706,7 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
             return
 
         started_at = datetime.now().isoformat()
+        failed_stage = "connect"
 
         # Acquire push lock for this IP
         async with _config_push_lock:
@@ -7795,6 +7726,7 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                     if login_result is not True:
                         raise RuntimeError(f"Login failed: {login_result}")
 
+                    failed_stage = "read_config"
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "fetching_config"})
 
                     current_config = await client.get_config()
@@ -7802,6 +7734,7 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                         raise RuntimeError("Failed to fetch current config")
 
                     # Safety: save pre-push config snapshot so we have a "before" backup
+                    failed_stage = "snapshot"
                     pre_push_json = _canonical_config_json(current_config)
                     pre_push_hash = _compute_config_hash(current_config)
                     model = device.get("model")
@@ -7809,20 +7742,23 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                     db.save_device_config(ip, pre_push_json, pre_push_hash, model, hardware_id)
 
                     # Merge applicable templates into current config
+                    failed_stage = "template_merge"
                     merged = current_config
                     for t in applicable:
-                        merged = deep_merge(merged, t["fragment"])
+                        merged = merge_template_config(merged, t["fragment"], device["username"])
 
                     # Safety: dry_run first to validate the merged config
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "validating"})
-                    dry_result = await client.apply_config(merged, dry_run=True)
+                    failed_stage = "dry-run"
+                    dry_result = await client.apply_config(merged, dry_run=True, preserve_user_passwords=True)
                     if not dry_result.get("success"):
                         error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run validation failed"))
                         raise RuntimeError(f"Dry run rejected: {error_msg}")
 
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "applying"})
 
-                    result = await client.apply_config(merged)
+                    failed_stage = "apply"
+                    result = await client.apply_config(merged, preserve_user_passwords=True)
                     completed_at = datetime.now().isoformat()
                     duration = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()
 
@@ -7836,6 +7772,11 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                             started_at=started_at, completed_at=completed_at,
                             action="config_push",
                         )
+                        if job_info is not None:
+                            job_info.setdefault("results", []).append({
+                                "ip": ip, "status": "success", "error": None,
+                                "failed_stage": None,
+                            })
                         await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "success"})
                     else:
                         failed_count += 1
@@ -7848,6 +7789,11 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                             started_at=started_at, completed_at=completed_at,
                             action="config_push",
                         )
+                        if job_info is not None:
+                            job_info.setdefault("results", []).append({
+                                "ip": ip, "status": "failed", "error": str(error_msg),
+                                "failed_stage": failed_stage,
+                            })
                         await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "failed", "error": str(error_msg)})
 
                 except Exception as e:
@@ -7857,11 +7803,16 @@ async def _run_config_push(job_id: str, device_list: list, templates: list, job_
                     db.save_device_update_history(
                         job_id=job_id, ip=ip, role=device["role"], pass_number=1,
                         status="failed", old_version=None, new_version=None,
-                        model=None, error=str(e), failed_stage="connect",
+                        model=None, error=str(e), failed_stage=failed_stage,
                         stages=[], duration_seconds=duration,
                         started_at=started_at, completed_at=completed_at,
                         action="config_push",
                     )
+                    if job_info is not None:
+                        job_info.setdefault("results", []).append({
+                            "ip": ip, "status": "failed", "error": str(e),
+                            "failed_stage": failed_stage,
+                        })
                     await broadcast({"type": "config_push_update", "job_id": job_id, "ip": ip, "status": "failed", "error": str(e)})
         finally:
             _config_pushing_ips.discard(ip)
@@ -7905,6 +7856,7 @@ async def get_config_push_job(job_id: str, session: dict = Depends(require_auth)
         "skipped": job.get("skipped", 0),
         "cancelled": job["cancelled"],
         "done": job["done"],
+        "results": job.get("results", []),
     }
 
 
@@ -7960,6 +7912,35 @@ async def rollback_device_config(ip: str, request: Request, session: dict = Depe
     if not device:
         raise HTTPException(404, "Device not found")
 
+    # Serialize with config pushes and other rollbacks on this device.
+    # Fail closed on contention: a second writer could interleave with the
+    # apply and make the read-back check below meaningless.
+    async with _config_push_lock:
+        if ip in _config_pushing_ips:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "config_change_in_progress",
+                    "message": (
+                        "Another config push or rollback is running on this device. "
+                        "Wait for it to finish, then try again."
+                    ),
+                },
+            )
+        _config_pushing_ips.add(ip)
+    try:
+        return await _rollback_device_config_locked(
+            ip, request, session, device, target_snapshot, rollback_config, force,
+        )
+    finally:
+        _config_pushing_ips.discard(ip)
+
+
+async def _rollback_device_config_locked(
+    ip: str, request: Request, session: dict, device: dict,
+    target_snapshot: dict, rollback_config: dict, force: bool,
+) -> dict:
+    """Apply a rollback and verify it. The caller holds the per-IP push lock."""
     # Connect and save pre-rollback backup
     client = TachyonClient(ip, device["username"], device["password"])
     login_result = await client.login()
@@ -8024,566 +8005,62 @@ async def rollback_device_config(ip: str, request: Request, session: dict = Depe
         error_msg = result.get("error", result.get("raw_response", "Apply failed"))
         raise HTTPException(502, f"Rollback failed: {error_msg}")
 
-    # Re-poll config to verify
+    # Verify: read the config back and compare its hash to the target.
+    # A device that accepts the apply but drops fields must not report success.
+    expected_hash = _compute_config_hash(rollback_config)
+    actual_hash: Optional[str] = None
+    read_back_error: Optional[str] = None
+    try:
+        read_back = await client.get_config()
+        if read_back:
+            actual_hash = _compute_config_hash(read_back)
+        else:
+            read_back_error = "device returned empty config"
+    except Exception as e:
+        read_back_error = str(e) or e.__class__.__name__
+
+    # Re-poll config so the stored snapshot shows the device's actual state
     poller = get_poller()
     if poller:
         asyncio.create_task(poller.poll_configs_for_ips([ip]))
+
+    if actual_hash != expected_hash:
+        reason = read_back_error or "config hash on device does not match the target snapshot"
+        logger.error(
+            "Rollback of %s not verified: %s (expected %s, got %s)",
+            ip, reason, expected_hash, actual_hash,
+        )
+        db.log_audit(
+            session["username"], "config.rollback.unverified", "device", ip,
+            f"Rollback applied but not verified: {reason}",
+            _client_ip(request),
+        )
+        raise HTTPException(
+            502,
+            detail={
+                "code": "rollback_not_verified",
+                "message": (
+                    f"Rollback was applied but not verified: {reason}. "
+                    "Check the device config before you make more changes."
+                ),
+                "rollback_verified": False,
+                "expected_hash": expected_hash,
+                "actual_hash": actual_hash,
+                "safety_snapshot_saved": safety_snapshot_saved,
+            },
+        )
 
     return {
         "status": "success",
         "ip": ip,
         "rolled_back_to": target_snapshot["fetched_at"],
         "safety_snapshot_saved": safety_snapshot_saved,
+        "rollback_verified": True,
+        "config_hash": actual_hash,
     }
 
 
 # ---------------------------------------------------------------------------
-# Config push rollout (phased)
-# ---------------------------------------------------------------------------
-
-_config_push_rollout_task: Optional[asyncio.Task] = None
-_config_push_rollout_lock = asyncio.Lock()
-
-CONFIG_PUSH_PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
-
-
-def _resolve_config_push_targets(targets: list[dict]) -> list[dict]:
-    """Resolve target specs to device list with credentials (same as config-push)."""
-    device_list = []
-    seen_ips = set()
-    for target in targets:
-        target_type = target.get("type")
-        if target_type == "ap":
-            ap = db.get_access_point(target["ip"])
-            if ap and ap["ip"] not in seen_ips:
-                device_list.append({"ip": ap["ip"], "username": ap["username"], "password": ap["password"], "role": "ap", "model": ap.get("model")})
-                seen_ips.add(ap["ip"])
-        elif target_type == "switch":
-            sw = db.get_switch(target["ip"])
-            if sw and sw["ip"] not in seen_ips:
-                device_list.append({"ip": sw["ip"], "username": sw["username"], "password": sw["password"], "role": "switch", "model": sw.get("model")})
-                seen_ips.add(sw["ip"])
-        elif target_type == "cpe":
-            cpe = db.get_cpe_by_ip(target["ip"])
-            if cpe:
-                ap = db.get_access_point(cpe["ap_ip"])
-                if ap and cpe["ip"] not in seen_ips:
-                    device_list.append({"ip": cpe["ip"], "username": ap["username"], "password": ap["password"], "role": "cpe", "model": cpe.get("model")})
-                    seen_ips.add(cpe["ip"])
-        elif target_type == "site":
-            site_id = target.get("id")
-            for ap in db.get_access_points(tower_site_id=site_id):
-                if ap["ip"] not in seen_ips:
-                    device_list.append({"ip": ap["ip"], "username": ap["username"], "password": ap["password"], "role": "ap", "model": ap.get("model")})
-                    seen_ips.add(ap["ip"])
-                    for cpe in db.get_cpes_for_ap(ap["ip"]):
-                        if cpe["ip"] and cpe["ip"] not in seen_ips and cpe.get("auth_status") == "ok":
-                            device_list.append({"ip": cpe["ip"], "username": ap["username"], "password": ap["password"], "role": "cpe", "model": cpe.get("model")})
-                            seen_ips.add(cpe["ip"])
-            for sw in db.get_switches(tower_site_id=site_id):
-                if sw["ip"] not in seen_ips:
-                    device_list.append({"ip": sw["ip"], "username": sw["username"], "password": sw["password"], "role": "switch", "model": sw.get("model")})
-                    seen_ips.add(sw["ip"])
-    return device_list
-
-
-def _load_rollout_templates(rollout: dict) -> list:
-    """Load templates from rollout snapshot, falling back to DB if no snapshot.
-
-    Re-validates the loaded fragments against the same safety rules that
-    `start_config_push_rollout` enforces at creation time. A rollout that
-    was created with an unsafe `Watchdog Standard` template *before* the
-    #167 validator landed can still sit paused on disk; advance/resume
-    must not push it. Raises `ValueError` (callers translate to HTTP 400)
-    if any fragment in the snapshot would now be rejected on save.
-    """
-    snapshot = rollout.get("templates_snapshot")
-    templates: list
-    if snapshot:
-        try:
-            templates = json.loads(snapshot)
-        except (json.JSONDecodeError, TypeError):
-            templates = None  # fall through to DB fallback below
-        else:
-            for t in templates:
-                fragment = t.get("fragment", {})
-                _validate_fragment_safety(fragment)
-                _validate_ping_watchdog_safety(fragment)
-            return templates
-
-    # Fallback: load from DB by template IDs. DB rows go through the same
-    # validators at save time, but re-validate here too so a row hand-edited
-    # in SQLite can't slip past.
-    template_ids = json.loads(rollout["template_ids"])
-    templates = []
-    for tid in template_ids:
-        t = db.get_config_template(tid)
-        if t:
-            fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
-            _validate_fragment_safety(fragment)
-            _validate_ping_watchdog_safety(fragment)
-            templates.append({
-                "id": t["id"],
-                "name": t["name"],
-                "fragment": fragment,
-                "device_types": t.get("device_types"),
-            })
-    return templates
-
-
-def _compute_phase_batch_size(phase: str, total_unassigned: int) -> int:
-    """Return how many devices to assign for the given phase."""
-    if phase == "canary":
-        return 1
-    elif phase == "pct10":
-        return max(1, math.ceil(total_unassigned * 0.1))
-    elif phase == "pct50":
-        return max(1, math.ceil(total_unassigned * 0.5))
-    else:  # pct100
-        return total_unassigned
-
-
-@app.get("/api/config-push/rollout")
-async def get_config_push_rollout_status(session: dict = Depends(require_auth)):
-    """Get current config push rollout status."""
-    rollout = db.get_current_config_push_rollout()
-    if not rollout:
-        return {"rollout": None}
-    progress = db.get_config_push_rollout_progress(rollout["id"])
-    devices = db.get_config_push_rollout_devices(rollout["id"])
-    # Count total target devices (assigned + not yet assigned)
-    total_target = rollout.get("_total_devices", progress["total"])
-    return {
-        "rollout": {
-            **rollout,
-            "progress": progress,
-            "devices": devices,
-            "total_target_devices": total_target,
-        }
-    }
-
-
-@app.post("/api/config-push/rollout/start")
-async def start_config_push_rollout(request: Request, session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.CONFIG_PUSH))):
-    """Start a phased config push rollout."""
-    if not config_write_guard.automatic_config_writes_allowed():
-        raise HTTPException(409, config_write_guard.CONFIG_WRITES_PAUSED_REASON)
-    global _config_push_rollout_task
-
-    data = await request.json()
-    template_ids = data.get("template_ids", [])
-    targets = data.get("targets", [])
-
-    if not template_ids or not targets:
-        raise HTTPException(400, "template_ids and targets are required")
-
-    # Check no active rollout
-    active = db.get_active_config_push_rollout()
-    if active:
-        raise HTTPException(409, "A config push rollout is already active")
-
-    # Load and validate templates
-    templates = []
-    for tid in template_ids:
-        t = db.get_config_template(tid)
-        if not t:
-            raise HTTPException(404, f"Template {tid} not found")
-        fragment = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
-        _validate_fragment_safety(fragment)
-        _validate_ping_watchdog_safety(fragment)
-        templates.append({
-            "id": t["id"],
-            "name": t["name"],
-            "fragment": fragment,
-            "device_types": t.get("device_types"),
-        })
-
-    # Resolve all target devices
-    device_list = _resolve_config_push_targets(targets)
-    if not device_list:
-        raise HTTPException(400, "No valid devices found for the given targets")
-
-    template_names = ", ".join(t["name"] for t in templates)
-    template_ids_json = json.dumps([t["id"] for t in templates])
-    templates_snapshot = json.dumps(templates)
-
-    # Create rollout record with template snapshot
-    rollout_id = db.create_config_push_rollout(template_ids_json, template_names, templates_snapshot)
-
-    # Pre-assign ALL devices to phases upfront
-    total = len(device_list)
-    remaining = list(device_list)
-    for phase in CONFIG_PUSH_PHASE_ORDER:
-        if not remaining:
-            break
-        batch_size = _compute_phase_batch_size(phase, len(remaining))
-        batch = remaining[:batch_size]
-        remaining = remaining[batch_size:]
-        for device in batch:
-            db.assign_config_push_device(rollout_id, device["ip"], device["role"], phase)
-
-    # Start canary phase automatically
-    _config_push_rollout_task = asyncio.create_task(
-        _run_config_push_phase(rollout_id, templates, device_list)
-    )
-
-    await _broadcast_config_push_rollout_state(rollout_id)
-
-    return {
-        "rollout_id": rollout_id,
-        "device_count": total,
-        "template_names": template_names,
-    }
-
-
-@app.post("/api/config-push/rollout/{rollout_id}/advance")
-async def advance_config_push_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
-    """Manually advance to execute the next phase."""
-    if not config_write_guard.automatic_config_writes_allowed():
-        raise HTTPException(409, config_write_guard.CONFIG_WRITES_PAUSED_REASON)
-    global _config_push_rollout_task
-
-    rollout = db.get_config_push_rollout(rollout_id)
-    if not rollout:
-        raise HTTPException(404, "Rollout not found")
-    if rollout["status"] not in ("active",):
-        raise HTTPException(400, f"Cannot advance rollout in '{rollout['status']}' state")
-
-    # Check that current phase devices are all done
-    phase_devices = db.get_config_push_rollout_devices(rollout_id, rollout["phase"])
-    pending = [d for d in phase_devices if d["status"] == "pending"]
-    if pending:
-        raise HTTPException(400, "Current phase still has pending devices")
-
-    # Require at least one successful device before advancing (Gap 7).
-    # Empty phases (no devices assigned) are exempt: small rollouts (1–3
-    # devices) leave one or more of pct10/pct50/pct100 unfilled because
-    # `_compute_phase_batch_size` allocates per-phase floors of 1, and the
-    # canary always consumes the first device.
-    if phase_devices:
-        updated = [d for d in phase_devices if d["status"] == "updated"]
-        if not updated:
-            raise HTTPException(400, "Cannot advance: no devices succeeded in the current phase")
-
-    # Load templates from snapshot (or fallback to DB) and re-validate them
-    # — a rollout started before the #167 ping_watchdog floor landed could
-    # still hold an unsafe fragment in its snapshot.
-    try:
-        templates = _load_rollout_templates(rollout)
-    except ValueError as e:
-        raise HTTPException(400, f"Cannot advance — rollout snapshot is unsafe: {e}")
-
-    # Advance the phase, walking past any subsequent empty phases in one
-    # call so a single-device rollout doesn't require the operator to click
-    # advance four times to traverse pct10/pct50/pct100 placeholders.
-    while True:
-        db.advance_config_push_rollout_phase(rollout_id)
-        rollout = db.get_config_push_rollout(rollout_id)
-        if rollout["status"] == "completed":
-            break
-        if db.get_config_push_rollout_devices(rollout_id, rollout["phase"]):
-            break
-
-    if rollout["status"] == "completed":
-        await _broadcast_config_push_rollout_state(rollout_id)
-        return {"status": "completed"}
-
-    # Resolve device credentials for this phase
-    all_devices = _resolve_all_rollout_device_credentials(rollout_id)
-
-    # Execute the new phase
-    _config_push_rollout_task = asyncio.create_task(
-        _run_config_push_phase(rollout_id, templates, all_devices)
-    )
-
-    await _broadcast_config_push_rollout_state(rollout_id)
-    return {"status": "advanced", "phase": rollout["phase"]}
-
-
-@app.post("/api/config-push/rollout/{rollout_id}/resume")
-async def resume_config_push_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
-    """Resume a paused rollout (retries failed devices in current phase)."""
-    if not config_write_guard.automatic_config_writes_allowed():
-        raise HTTPException(409, config_write_guard.CONFIG_WRITES_PAUSED_REASON)
-    global _config_push_rollout_task
-
-    rollout = db.get_config_push_rollout(rollout_id)
-    if not rollout or rollout["status"] != "paused":
-        raise HTTPException(400, "Rollout is not paused")
-
-    db.update_config_push_rollout_status(rollout_id, "active")
-
-    # Reset failed devices in current phase to pending
-    phase_devices = db.get_config_push_rollout_devices(rollout_id, rollout["phase"])
-    for d in phase_devices:
-        if d["status"] == "failed":
-            db.mark_config_push_device(rollout_id, d["ip"], "pending")
-
-    # Load templates from snapshot (or fallback to DB) and re-validate — see
-    # the same call site in the advance endpoint for the gory details on why.
-    try:
-        templates = _load_rollout_templates(rollout)
-    except ValueError as e:
-        # Roll status back so the operator can cancel and start fresh.
-        db.update_config_push_rollout_status(rollout_id, "paused", pause_reason=f"Snapshot unsafe: {e}")
-        raise HTTPException(400, f"Cannot resume — rollout snapshot is unsafe: {e}")
-
-    all_devices = _resolve_all_rollout_device_credentials(rollout_id)
-
-    _config_push_rollout_task = asyncio.create_task(
-        _run_config_push_phase(rollout_id, templates, all_devices)
-    )
-
-    await _broadcast_config_push_rollout_state(rollout_id)
-    return {"status": "resumed"}
-
-
-@app.post("/api/config-push/rollout/{rollout_id}/cancel")
-async def cancel_config_push_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
-    """Cancel an active or paused rollout."""
-    rollout = db.get_config_push_rollout(rollout_id)
-    if not rollout or rollout["status"] not in ("active", "paused"):
-        raise HTTPException(400, "Rollout is not active or paused")
-    db.update_config_push_rollout_status(rollout_id, "cancelled")
-    # Let submitted device operations finish and record their results.
-    await _broadcast_config_push_rollout_state(rollout_id)
-    return {"status": "cancelled"}
-
-
-def _resolve_all_rollout_device_credentials(rollout_id: int) -> list[dict]:
-    """Build device list with credentials from the rollout's assigned devices."""
-    devices = db.get_config_push_rollout_devices(rollout_id)
-    result = []
-    for d in devices:
-        ip = d["ip"]
-        dtype = d["device_type"]
-        if dtype == "ap":
-            ap = db.get_access_point(ip)
-            if ap:
-                result.append({"ip": ip, "username": ap["username"], "password": ap["password"], "role": "ap", "model": ap.get("model")})
-        elif dtype == "switch":
-            sw = db.get_switch(ip)
-            if sw:
-                result.append({"ip": ip, "username": sw["username"], "password": sw["password"], "role": "switch", "model": sw.get("model")})
-        elif dtype == "cpe":
-            cpe = db.get_cpe_by_ip(ip)
-            if cpe:
-                ap = db.get_access_point(cpe["ap_ip"])
-                if ap:
-                    result.append({"ip": ip, "username": ap["username"], "password": ap["password"], "role": "cpe", "model": cpe.get("model")})
-    return result
-
-
-async def _run_config_push_phase(rollout_id: int, templates: list, all_devices: list):
-    """Execute the current phase of a config push rollout."""
-    if not config_write_guard.automatic_config_writes_allowed():
-        return
-    rollout = db.get_config_push_rollout(rollout_id)
-    if not rollout or rollout["status"] != "active":
-        return
-
-    phase = rollout["phase"]
-    phase_device_rows = db.get_config_push_rollout_devices(rollout_id, phase)
-    pending_devices = [d for d in phase_device_rows if d["status"] == "pending"]
-
-    if not pending_devices:
-        # Phase already complete, nothing to do
-        await _broadcast_config_push_rollout_state(rollout_id)
-        return
-
-    # Build credential lookup from all_devices
-    cred_lookup = {d["ip"]: d for d in all_devices}
-
-    sem = asyncio.Semaphore(5)
-    job_id = f"cpush-{rollout_id}-{phase}"
-    failed_any = False
-
-    async def push_one(device_row: dict):
-        nonlocal failed_any
-        ip = device_row["ip"]
-
-        # Check if rollout was cancelled before starting this device
-        r = db.get_config_push_rollout(rollout_id)
-        if not r or r["status"] != "active":
-            return
-
-        creds = cred_lookup.get(ip)
-        if not creds:
-            db.mark_config_push_device(rollout_id, ip, "skipped", "Device not found in inventory")
-            return
-
-        # Filter templates by this device's type so an "AP-only" template
-        # doesn't get merged into a switch config (and vice versa).
-        applicable, excluded = _filter_templates_by_device_type(templates, creds.get("role"))
-        if not applicable:
-            excluded_names = ", ".join(t["name"] for t in excluded) or "all"
-            db.mark_config_push_device(
-                rollout_id, ip, "skipped",
-                f"No templates apply to device_type={creds.get('role')} (excluded: {excluded_names})",
-            )
-            await broadcast({
-                "type": "config_push_rollout_update",
-                "rollout_id": rollout_id,
-                "ip": ip,
-                "status": "skipped",
-                "phase": phase,
-                "reason": f"No templates apply to device_type={creds.get('role')}",
-            })
-            return
-
-        started_at = datetime.now().isoformat()
-
-        async with _config_push_lock:
-            if ip in _config_pushing_ips:
-                db.mark_config_push_device(rollout_id, ip, "failed", "Push already in progress")
-                failed_any = True
-                return
-            _config_pushing_ips.add(ip)
-
-        try:
-            async with sem:
-                if not config_write_guard.automatic_config_writes_allowed():
-                    return
-                await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "connecting", "phase": phase})
-
-                client = TachyonClient(ip, creds["username"], creds["password"])
-                login_result = await client.login()
-                if login_result is not True:
-                    raise RuntimeError(f"Login failed: {login_result}")
-
-                await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "fetching_config", "phase": phase})
-
-                current_config = await client.get_config()
-                if current_config is None:
-                    raise RuntimeError("Failed to fetch current config")
-
-                # Save pre-push backup
-                pre_push_json = _canonical_config_json(current_config)
-                pre_push_hash = _compute_config_hash(current_config)
-                model = creds.get("model")
-                hardware_id = client.get_hardware_id(model)
-                db.save_device_config(ip, pre_push_json, pre_push_hash, model, hardware_id)
-
-                # Merge applicable templates only
-                merged = current_config
-                for t in applicable:
-                    merged = deep_merge(merged, t["fragment"])
-
-                # Defense-in-depth: even when each template individually
-                # cleared `_validate_ping_watchdog_safety`, the deep_merge
-                # of two templates that each touch the same `ping_watchdog`
-                # block can produce an unsafe combination (e.g. one sets
-                # `enabled=true` and another sets `failure=3`). Reject the
-                # final config before handing it to the device's dry-run.
-                try:
-                    _validate_ping_watchdog_safety(merged)
-                except ValueError as merge_err:
-                    raise RuntimeError(
-                        f"Merged config rejected before dry-run: {merge_err}"
-                    )
-
-                # Dry-run validation
-                await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "validating", "phase": phase})
-                if not config_write_guard.automatic_config_writes_allowed():
-                    return
-                dry_result = await client.apply_config(merged, dry_run=True)
-                if not dry_result.get("success"):
-                    error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run validation failed"))
-                    raise RuntimeError(f"Dry run rejected: {error_msg}")
-
-                # Apply
-                await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "applying", "phase": phase})
-                if not config_write_guard.automatic_config_writes_allowed():
-                    return
-                current = db.get_config_push_rollout(rollout_id)
-                if not current or current["status"] != "active":
-                    return
-                result = await client.apply_config(merged)
-                completed_at = datetime.now().isoformat()
-                duration = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()
-
-                if result.get("success"):
-                    db.mark_config_push_device(rollout_id, ip, "updated")
-                    db.save_device_update_history(
-                        job_id=job_id, ip=ip, role=creds["role"], pass_number=1,
-                        status="success", old_version=None, new_version=None,
-                        model=model, error=None, failed_stage=None,
-                        stages=[], duration_seconds=duration,
-                        started_at=started_at, completed_at=completed_at,
-                        action="config_push",
-                    )
-                    await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "success", "phase": phase})
-                else:
-                    error_msg = result.get("error", result.get("raw_response", "Unknown error"))
-                    raise RuntimeError(str(error_msg))
-
-        except Exception as e:
-            failed_any = True
-            completed_at = datetime.now().isoformat()
-            duration = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()
-            db.mark_config_push_device(rollout_id, ip, "failed", str(e))
-            db.save_device_update_history(
-                job_id=job_id, ip=ip, role=creds.get("role", "ap"), pass_number=1,
-                status="failed", old_version=None, new_version=None,
-                model=creds.get("model"), error=str(e), failed_stage="connect",
-                stages=[], duration_seconds=duration,
-                started_at=started_at, completed_at=completed_at,
-                action="config_push",
-            )
-            await broadcast({"type": "config_push_rollout_update", "rollout_id": rollout_id, "ip": ip, "status": "failed", "phase": phase, "error": str(e)})
-        finally:
-            _config_pushing_ips.discard(ip)
-
-    await asyncio.gather(*[push_one(d) for d in pending_devices])
-
-    # Check result
-    rollout = db.get_config_push_rollout(rollout_id)
-    if not rollout or rollout["status"] != "active":
-        return
-
-    if failed_any:
-        db.update_config_push_rollout_status(rollout_id, "paused", "One or more devices failed")
-    else:
-        # Auto-finalize: when this phase finished with no failures and there
-        # are no pending devices in any phase (i.e. everything that was
-        # going to push has pushed), mark the rollout `completed` rather
-        # than make the operator click `Advance` once more on a fully-green
-        # bar. Mirrors the empty-phase walk-through in
-        # `advance_config_push_rollout` (PR #88) but without the manual click.
-        all_devices = db.get_config_push_rollout_devices(rollout_id)
-        any_pending = any(
-            (d.get("status") or "") == "pending" for d in all_devices
-        )
-        if not any_pending:
-            db.update_config_push_rollout_status(rollout_id, "completed")
-
-    # Re-poll configs for pushed devices
-    poller = get_poller()
-    if poller:
-        pushed_ips = [d["ip"] for d in pending_devices]
-        asyncio.create_task(poller.poll_configs_for_ips(pushed_ips))
-
-    await _broadcast_config_push_rollout_state(rollout_id)
-
-
-async def _broadcast_config_push_rollout_state(rollout_id: int):
-    """Broadcast current config push rollout state via WebSocket."""
-    rollout = db.get_config_push_rollout(rollout_id)
-    if not rollout:
-        return
-    progress = db.get_config_push_rollout_progress(rollout_id)
-    devices = db.get_config_push_rollout_devices(rollout_id)
-    await broadcast({
-        "type": "config_push_rollout_status",
-        "rollout": {
-            **rollout,
-            "progress": progress,
-            "devices": devices,
-        },
-    })
-
-
-# ============================================================================
 # RADIUS Push (non-rollout)
 # ============================================================================
 

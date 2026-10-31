@@ -13,7 +13,7 @@ from . import config_write_guard
 from . import database as db
 from . import radius_config
 from .config_utils import (
-    deep_merge,
+    merge_template_config,
     fragment_matches,
     check_config_compliance,
     validate_fragment_safety,
@@ -266,6 +266,21 @@ class NetworkPoller:
         self._failure_counts.pop(ip, None)
         self._backoff_until.pop(ip, None)
 
+    def get_backoff_state(self, ip: str) -> dict:
+        """Return the current backoff state for an API device row."""
+        until = self._backoff_until.get(ip)
+        active_until = None
+        if until is not None and until > time.time():
+            active_until = datetime.fromtimestamp(until, timezone.utc).isoformat()
+        return {
+            "consecutive_failures": self._failure_counts.get(ip, 0),
+            "backoff_until": active_until,
+        }
+
+    def _clear_poll_backoff(self, ip: str):
+        """End the current backoff wait without resetting failure history."""
+        self._backoff_until.pop(ip, None)
+
     def _record_poll_failure(self, ip: str):
         """Increment failure count and set backoff if threshold exceeded."""
         count = self._failure_counts.get(ip, 0) + 1
@@ -408,6 +423,7 @@ class NetworkPoller:
             if not client:
                 db.update_ap_status(ip, last_error=error)
                 self._check_uptime_transition(ip, "ap", prev_error, error)
+                self._record_poll_failure(ip)
                 return
 
             # Get AP info
@@ -423,6 +439,7 @@ class NetworkPoller:
                 if not client:
                     db.update_ap_status(ip, last_error=error)
                     self._check_uptime_transition(ip, "ap", prev_error, error)
+                    self._record_poll_failure(ip)
                     return
                 ap_info = await client.get_ap_info()
             location = ap_info.get("location")  # Don't fall back to zone
@@ -481,7 +498,6 @@ class NetworkPoller:
                 **bank_kwargs,
             )
             self._check_uptime_transition(ip, "ap", prev_error, None)
-            self._record_poll_success(ip)
 
             # Get connected CPEs
             cpes = await client.get_connected_cpes()
@@ -566,6 +582,13 @@ class NetworkPoller:
                     *[probe_cpe(cpe_ip) for cpe_ip in cpe_ips_to_probe],
                     return_exceptions=True,
                 )
+
+            # A failed boot bank read makes this poll a failure. Keep the last
+            # good bank values, report its warning, and let backoff count it.
+            if bank_warning:
+                self._record_poll_failure(ip)
+            else:
+                self._record_poll_success(ip)
 
         except Exception as e:
             logger.error(f"Error polling {ip}: {e}")
@@ -801,6 +824,8 @@ class NetworkPoller:
     def invalidate_client(self, ip: str):
         """Remove cached client (e.g., when credentials change)."""
         self._remove_cached_client(ip)
+        self._clear_poll_backoff(ip)
+        self._failure_counts.pop(ip, None)
         # CPE sessions are keyed by CPE IP but inherit credentials from APs.
         self.invalidate_cpe_clients()
 
@@ -810,6 +835,9 @@ class NetworkPoller:
         if not ap:
             return False
 
+        # A manual request ends the wait, but keeps the count so another failed
+        # request resumes backoff instead of repeatedly bypassing the threshold.
+        self._clear_poll_backoff(ip)
         await self._poll_ap(ap)
         refreshed = db.get_access_point(ip)
 
@@ -1316,12 +1344,6 @@ class NetworkPoller:
         """Core enforce loop: find non-compliant devices, push in phases."""
         if not config_write_guard.automatic_config_writes_allowed():
             return
-        # Skip if a manual config push rollout is active
-        active_rollout = db.get_active_config_push_rollout()
-        if active_rollout:
-            logger.info("Config enforce: skipping — a config push rollout is active")
-            return
-
         # Skip if an immediate (non-rollout) /api/config-push is in flight —
         # cached compliance reads would race against the operator's push and
         # the next enforce pass would clobber what the operator just changed.
@@ -1739,12 +1761,12 @@ class NetworkPoller:
                 for t in templates:
                     frag = json.loads(t["config_fragment"]) if isinstance(t["config_fragment"], str) else t["config_fragment"]
                     validate_fragment_safety(frag)
-                    merged = deep_merge(merged, frag)
+                    merged = merge_template_config(merged, frag, device["username"])
 
                 # Dry-run validation
                 if not config_write_guard.automatic_config_writes_allowed():
                     return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, pre_snapshot_id)
-                dry_result = await client.apply_config(merged, dry_run=True)
+                dry_result = await client.apply_config(merged, dry_run=True, preserve_user_passwords=True)
                 if not dry_result.get("success"):
                     error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run failed"))
                     raise PolicyEnforceError(f"Dry run rejected: {error_msg}")
@@ -1752,7 +1774,7 @@ class NetworkPoller:
                 # Apply
                 if not config_write_guard.automatic_config_writes_allowed():
                     return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, pre_snapshot_id)
-                result = await client.apply_config(merged)
+                result = await client.apply_config(merged, preserve_user_passwords=True)
                 if not result.get("success"):
                     error_msg = result.get("error", result.get("raw_response", "Apply failed"))
                     raise PolicyEnforceError(f"Apply failed: {error_msg}")

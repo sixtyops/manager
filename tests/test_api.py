@@ -56,15 +56,49 @@ class TestAPsAPI:
         assert resp.status_code == 200
         assert len(resp.json()["aps"]) >= 1
 
+    def test_ap_rows_include_poller_backoff_state(self, authed_client):
+        db.upsert_access_point("10.0.0.22", "root", "pass")
+        mock_poller = MagicMock()
+        mock_poller.get_backoff_state.return_value = {
+            "consecutive_failures": 4,
+            "backoff_until": "2026-10-30T12:00:00+00:00",
+        }
+        with patch("updater.app.get_poller", return_value=mock_poller):
+            rows = authed_client.get("/api/aps").json()["aps"]
+
+        ap = next(row for row in rows if row["ip"] == "10.0.0.22")
+        assert ap["consecutive_failures"] == 4
+        assert ap["backoff_until"] == "2026-10-30T12:00:00+00:00"
+
     def test_delete_ap(self, authed_client):
         authed_client.post("/api/aps", data={"ip": "10.0.0.3", "username": "root", "password": "pass"})
         resp = authed_client.delete("/api/aps/10.0.0.3")
         assert resp.status_code == 200
 
+    def test_update_ap_rejects_json_and_form_update_reads_back(self, authed_client):
+        db.upsert_access_point("10.0.0.7", "root", "pass")
+
+        resp = authed_client.put("/api/aps/10.0.0.7", json={"enabled": False, "notes": "JSON update"})
+        assert resp.status_code == 400
+        assert "recognized AP update field" in resp.json()["detail"]
+        ap = next(item for item in authed_client.get("/api/aps").json()["aps"] if item["ip"] == "10.0.0.7")
+        assert ap["enabled"] == 1
+        assert ap["notes"] in (None, "")
+
+        resp = authed_client.put("/api/aps/10.0.0.7", data={"enabled": "false", "notes": "form update"})
+        assert resp.status_code == 200
+        ap = next(item for item in authed_client.get("/api/aps").json()["aps"] if item["ip"] == "10.0.0.7")
+        assert ap["enabled"] == 0
+        assert ap["notes"] == "form update"
+
     def test_update_ap_reprobes_ap_and_cpes_when_credentials_change(self, authed_client):
         db.upsert_access_point("10.0.0.4", "root", "oldpass")
 
-        mock_poller = MagicMock()
+        from updater.poller import NetworkPoller
+
+        mock_poller = NetworkPoller()
+        for _ in range(3):
+            mock_poller._record_poll_failure("10.0.0.4")
         mock_poller.poll_ap_now = AsyncMock(return_value=True)
 
         mock_client = MagicMock()
@@ -72,12 +106,17 @@ class TestAPsAPI:
         mock_client.get_ap_info = AsyncMock(return_value={"model": "TNA-301"})
 
         with patch("updater.app.get_poller", return_value=mock_poller), \
-             patch("updater.app.TachyonClient", return_value=mock_client):
+             patch("updater.app.TachyonClient", return_value=mock_client), \
+             patch.object(mock_poller, "invalidate_client", wraps=mock_poller.invalidate_client) as invalidate:
             resp = authed_client.put("/api/aps/10.0.0.4", data={"password": "newpass"})
 
         assert resp.status_code == 200
-        mock_poller.invalidate_client.assert_called_once_with("10.0.0.4")
+        invalidate.assert_called_once_with("10.0.0.4")
         mock_poller.poll_ap_now.assert_awaited_once_with("10.0.0.4")
+        assert mock_poller.get_backoff_state("10.0.0.4") == {
+            "consecutive_failures": 0,
+            "backoff_until": None,
+        }
 
     def test_global_device_credentials_invalidate_cpe_sessions(self, authed_client):
         mock_poller = MagicMock()
@@ -123,6 +162,30 @@ class TestAPsAPI:
         refreshed = db.get_access_point("10.0.0.6")
         assert refreshed["password"] == "newpass"
 
+    def test_manual_poll_reports_failure_instead_of_success(self, authed_client):
+        db.upsert_access_point("10.0.0.23", "root", "pass")
+        mock_poller = MagicMock()
+        mock_poller.poll_ap_now = AsyncMock(return_value=False)
+        with patch("updater.app.get_poller", return_value=mock_poller):
+            response = authed_client.post("/api/aps/10.0.0.23/poll")
+
+        assert response.status_code == 502
+        assert "Failed to poll 10.0.0.23" in response.json()["detail"]
+
+    def test_manual_poll_reports_bootbank_warning_as_failure(self, authed_client):
+        ip = "10.0.0.24"
+        warning = "Boot bank read failed (HTTP 503)"
+        db.upsert_access_point(ip, "root", "pass")
+        db.update_ap_status(ip, last_error=warning)
+        mock_poller = MagicMock()
+        mock_poller.poll_ap_now = AsyncMock(return_value=False)
+
+        with patch("updater.app.get_poller", return_value=mock_poller):
+            response = authed_client.post(f"/api/aps/{ip}/poll")
+
+        assert response.status_code == 502
+        assert response.json()["detail"] == warning
+
     def test_update_ap_rejects_bad_credentials_before_save(self, authed_client):
         db.upsert_access_point("10.0.0.5", "root", "oldpass")
 
@@ -136,6 +199,36 @@ class TestAPsAPI:
         assert "Cannot connect" in resp.json()["detail"]
         refreshed = db.get_access_point("10.0.0.5")
         assert refreshed["password"] == "oldpass"
+
+
+class TestSwitchesAPI:
+    def test_switch_rows_include_poller_backoff_state(self, authed_client):
+        db.upsert_switch("10.0.0.24", "root", "pass")
+        mock_poller = MagicMock()
+        mock_poller.get_backoff_state.return_value = {
+            "consecutive_failures": 3,
+            "backoff_until": "2026-10-30T12:00:00+00:00",
+        }
+        with patch("updater.app.get_poller", return_value=mock_poller):
+            rows = authed_client.get("/api/switches").json()["switches"]
+
+        switch = next(row for row in rows if row["ip"] == "10.0.0.24")
+        assert switch["consecutive_failures"] == 3
+        assert switch["backoff_until"] == "2026-10-30T12:00:00+00:00"
+
+    def test_update_switch_rejects_json_and_form_update_reads_back(self, authed_client):
+        db.upsert_switch("10.0.0.8", "root", "pass")
+
+        resp = authed_client.put("/api/switches/10.0.0.8", json={"enabled": False})
+        assert resp.status_code == 400
+        assert "recognized switch update field" in resp.json()["detail"]
+        switch = next(item for item in authed_client.get("/api/switches").json()["switches"] if item["ip"] == "10.0.0.8")
+        assert switch["enabled"] == 1
+
+        resp = authed_client.put("/api/switches/10.0.0.8", data={"enabled": "false"})
+        assert resp.status_code == 200
+        switch = next(item for item in authed_client.get("/api/switches").json()["switches"] if item["ip"] == "10.0.0.8")
+        assert switch["enabled"] == 0
 
 
 class TestSettingsAPI:
@@ -528,18 +621,6 @@ class TestAutoUpdateAPI:
         assert resp.status_code == 200
         assert resp.json()["update_available"] is False
         mock_checker.check_for_updates.assert_awaited_once()
-
-    def test_update_telemetry_opt_in_settings(self, authed_client, mock_db):
-        from updater import database as db
-
-        resp = authed_client.put("/api/settings", json={
-            "telemetry_enabled": "true",
-            "telemetry_prompt_seen": "true",
-        })
-
-        assert resp.status_code == 200
-        assert db.get_setting("telemetry_enabled") == "true"
-        assert db.get_setting("telemetry_prompt_seen") == "true"
 
     def test_check_for_updates_finds_new_version(self, authed_client):
         mock_checker = MagicMock()
@@ -1761,9 +1842,8 @@ class TestProtectedConfigKeys:
         validate_fragment_safety({"wireless": {"country": "US"}})
         validate_fragment_safety({"services": {"radios": {}, "zones": []}})
 
-    # Fragments in the shape that formDataToFragment (monitor.html) builds for
-    # each shipped template type. They must keep passing until the owner
-    # decides the Users rule in #310.
+    # Save validation allows Users entries. The merge checks live users
+    # and the Manager login before preview or push.
     @pytest.mark.parametrize("fragment", [
         {"services": {"snmp": {
             "enabled": True,

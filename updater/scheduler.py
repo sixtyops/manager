@@ -601,14 +601,52 @@ class AutoUpdateScheduler:
             if not self._scheduled_admission_allowed():
                 await self._broadcast_status()
                 return
-            rollout_id = db.create_rollout(fw_30x, fw_303l if fw_303l else None, fw_tns100 if fw_tns100 else None)
-            rollout = db.get_rollout(rollout_id)
-            # Snapshot update-relevant settings for rollout consistency
+            try:
+                scope_ips = self._resolve_scope(settings)
+                switch_scope = self._resolve_switch_scope(settings)
+                targets = self._target_versions(settings, None)
+                cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
+                ap_members = self._filter_devices_needing_update(
+                    scope_ips, targets, allow_downgrade, cooldown_days=cooldown_days
+                )
+                switch_members = self._filter_switches_needing_update(
+                    switch_scope, targets, allow_downgrade, cooldown_days=cooldown_days
+                )
+                inventory_aps = db.get_all_access_points_dict(enabled_only=False)
+                inventory_switches = db.get_all_switches_dict(enabled_only=False)
+                members = (
+                    [{"ip": ip, "device_type": "ap"} for ip in ap_members
+                     if ip in inventory_aps and inventory_aps[ip].get("enabled")]
+                    + [{"ip": ip, "device_type": "switch"} for ip in switch_members
+                       if ip in inventory_switches and inventory_switches[ip].get("enabled")]
+                )
+            except Exception as e:
+                logger.warning(f"Rollout membership snapshot failed; no rollout created: {e}")
+                self._state = "waiting"
+                self._block_reason = "Could not read rollout membership; retry next tick"
+                await self._broadcast_status()
+                return
+            if not members:
+                self._state = "blocked_all_current"
+                self._block_reason = "All devices up to date"
+                await self._broadcast_status()
+                return
             snapshot_keys = ["bank_mode", "parallel_updates", "allow_downgrade", "pre_update_reboot",
                              "bandwidth_limit_kbps", "schedule_start_hour", "schedule_end_hour",
                              "schedule_days", "schedule_timezone"]
             snapshot = {k: settings.get(k, "") for k in snapshot_keys}
-            db.set_rollout_settings_snapshot(rollout_id, snapshot)
+            try:
+                rollout_id = db.create_rollout(
+                    fw_30x, fw_303l if fw_303l else None, fw_tns100 if fw_tns100 else None,
+                    members=members, settings_snapshot=snapshot, now=now,
+                )
+            except Exception as e:
+                logger.warning(f"Rollout membership could not be saved; no rollout started: {e}")
+                self._state = "waiting"
+                self._block_reason = "Could not save rollout membership; retry next tick"
+                await self._broadcast_status()
+                return
+            rollout = db.get_rollout(rollout_id)
             db.log_schedule_event("rollout_created", f"Rollout {rollout_id} for {fw_30x}")
             logger.info(f"Created rollout {rollout_id} for firmware {fw_30x}")
 
@@ -617,6 +655,29 @@ class AutoUpdateScheduler:
             self._block_reason = f"Rollout paused: {rollout.get('pause_reason', 'Unknown reason')}"
             await self._broadcast_status()
             return
+
+        if rollout["status"] == "waiting_hold":
+            held_families, family_holds = self._held_families(settings, rollout)
+            member_families = set(family_holds)
+            if not member_families or held_families:
+                self._hold_clear_reason = None
+                new_reason = self._firmware_hold_block_reason(held_families, family_holds)
+                if self._block_reason != new_reason:
+                    db.log_schedule_event("blocked_firmware_hold", new_reason)
+                self._state = "blocked_firmware_hold"
+                self._block_reason = new_reason
+                await self._broadcast_status()
+                return
+            if not db.activate_rollout_if_unheld(
+                rollout["id"], member_families, held_families
+            ):
+                refreshed = db.get_rollout(rollout["id"])
+                if not refreshed or refreshed.get("status") != "active":
+                    self._state = "blocked_firmware_hold"
+                    self._block_reason = "Firmware hold state could not be activated safely"
+                    await self._broadcast_status()
+                    return
+            rollout = db.get_rollout(rollout["id"])
 
         # ── Wave gate: one wave per maintenance window + firmware hold ──
         # Single source of truth in rollout_gate (fail-closed). Rule 1 stops all
@@ -696,16 +757,74 @@ class AutoUpdateScheduler:
             db.log_schedule_event("firmware_hold_cleared", f"Rollout {rollout['id']}: {clear_note}")
         self._hold_clear_reason = clear_note
 
-        if not scope_ips and not switch_scope:
-            self._state = "idle"
-            self._block_reason = "No devices in scope"
+        if not self._mark_excluded_rollout_members(rollout, scope_ips, switch_scope):
+            self._state = "waiting"
+            self._block_reason = "Could not read rollout eligibility; retry next tick"
             await self._broadcast_status()
             return
+
 
         if not batch_ips and not batch_switches:
             if not self._scheduled_admission_allowed():
                 await self._broadcast_status()
                 return
+            try:
+                members = db.get_rollout_devices(rollout["id"])
+            except Exception as exc:
+                logger.warning("Could not read rollout members after an empty phase: %s", exc)
+                self._state = "waiting"
+                self._block_reason = "Could not read rollout members; retry next tick"
+                await self._broadcast_status()
+                return
+
+            unfinished = [
+                member for member in members
+                if member["status"] not in {
+                    "updated", "failed", "disabled", "removed (scope)",
+                    "removed (archived)", "removed (no_target)", "skipped_current",
+                }
+            ]
+            if members and not unfinished:
+                # Reuse the rollout completion path. No device work remains, so
+                # advance its state to the same terminal phase used after a job.
+                while rollout["phase"] != db.PHASE_ORDER[-1]:
+                    db.complete_rollout_phase(rollout["id"])
+                    rollout = db.get_rollout(rollout["id"])
+                db.complete_rollout_phase(rollout["id"])
+                self._state = "idle"
+                self._block_reason = None
+                db.log_schedule_event("rollout_completed", f"Rollout {rollout['id']} completed")
+                await self._broadcast_status()
+                return
+
+            if not scope_ips and not switch_scope:
+                self._state = "idle"
+                self._block_reason = "No devices in scope"
+                await self._broadcast_status()
+                return
+
+            # A phase can be empty after a prior wave reserved later members.
+            # Advance one phase only when a later phase has eligible candidates.
+            later_candidates = False
+            current_index = db.PHASE_ORDER.index(rollout["phase"])
+            for phase in db.PHASE_ORDER[current_index + 1:]:
+                later_rollout = {**rollout, "phase": phase}
+                if (
+                    self._get_devices_for_phase(later_rollout, scope_ips, allow_downgrade, settings)
+                    or self._get_switches_for_phase(later_rollout, switch_scope, allow_downgrade, settings)
+                ):
+                    later_candidates = True
+                    break
+            if later_candidates:
+                # phase_run_decision above is the shared gate; save its window
+                # marker before advancing so the next phase waits for a new one.
+                db.set_rollout_phase_window(rollout["id"], window_key)
+                db.complete_rollout_phase(rollout["id"])
+                self._state = "waiting"
+                self._block_reason = "Empty phase advanced; next phase waits for the next window"
+                await self._broadcast_status()
+                return
+
             self._state = "waiting"
             self._block_reason = "No schedulable devices; retry this wave in a later window"
             await self._broadcast_status()
@@ -901,6 +1020,41 @@ class AutoUpdateScheduler:
             "tna-303l": rollout.get("firmware_file_303l") or settings.get("selected_firmware_303l", ""),
             "tns-100": rollout.get("firmware_file_tns100") or settings.get("selected_firmware_tns100", ""),
         }
+        if rollout and rollout.get("status") == "waiting_hold":
+            try:
+                members = db.get_rollout_devices(rollout["id"])
+                if not members:
+                    raise ValueError("held rollout has no saved members")
+                ap_dict = db.get_all_access_points_dict(enabled_only=False)
+                switch_dict = db.get_all_switches_dict(enabled_only=False)
+                cpes_by_ap = db.get_all_cpes_grouped()
+                member_families = set()
+                for member in members:
+                    devices = ap_dict if member["device_type"] == "ap" else switch_dict
+                    device = devices.get(member["ip"])
+                    family = _firmware_type_for_model(device.get("model")) if device else "unknown"
+                    if family not in files or not files[family]:
+                        raise ValueError(f"cannot resolve saved member family for {member['ip']}")
+                    member_families.add(family)
+                    if member["device_type"] == "ap":
+                        for cpe in cpes_by_ap.get(member["ip"], []):
+                            if cpe.get("auth_status") != "ok":
+                                continue
+                            cpe_family = _firmware_type_for_model(cpe.get("model"))
+                            if cpe_family not in files or not files[cpe_family]:
+                                raise ValueError(
+                                    f"cannot resolve attached CPE family for {cpe.get('ip')}"
+                                )
+                            member_families.add(cpe_family)
+                files = {family: filename for family, filename in files.items() if family in member_families}
+            except Exception as e:
+                logger.warning(f"Saved rollout family check failed; holding: {e}")
+                fail_closed = {family: filename for family, filename in files.items() if filename}
+                return set(fail_closed), {
+                    family: {"held": True, "clears_at": None, "confirmed_by": None,
+                             "version": "", "cleared_by_device": False}
+                    for family in fail_closed
+                }
         hold_days = _as_int(settings.get("firmware_canary_hold_days", "6"), 6)
         confirmed_by = (
             self._confirmed_family_devices(settings, rollout, targets) if hold_days > 0 else {}
@@ -936,7 +1090,7 @@ class AutoUpdateScheduler:
     def _pending_split_by_hold(
         self, settings: dict, rollout: dict, allow_downgrade: bool, held_families: set
     ) -> tuple[bool, bool]:
-        """Scan in-scope APs/switches/CPEs that still need this update and split by
+        """Scan saved AP/switch members and attached CPEs, then split by
         whether the device's firmware family hold is cleared. Returns
         (has_cleared_pending, has_held_pending) — used to decide whether the first
         wave is FULLY held (held pending exists, nothing cleared to roll).
@@ -944,13 +1098,14 @@ class AutoUpdateScheduler:
         target_versions = self._target_versions(settings, rollout)
         cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
         try:
-            scope_ips = self._resolve_scope(settings)
-            switch_scope = self._resolve_switch_scope(settings)
-            ap_dict = db.get_all_access_points_dict(enabled_only=True)
-            switch_dict = db.get_all_switches_dict(enabled_only=True)
+            members = db.get_rollout_devices(rollout["id"])
+            ap_dict = db.get_all_access_points_dict(enabled_only=False)
+            switch_dict = db.get_all_switches_dict(enabled_only=False)
             cpes_by_ap = db.get_all_cpes_grouped()
         except Exception as e:  # pragma: no cover - defensive
             logger.warning(f"Pending-split check could not read fleet, holding: {e}")
+            return False, True
+        if not members:
             return False, True
 
         flags = {"cleared": False, "held": False}
@@ -963,18 +1118,16 @@ class AutoUpdateScheduler:
             ):
                 flags["held" if fam in held_families else "cleared"] = True
 
-        for ip in scope_ips:
-            ap = ap_dict.get(ip)
-            if not ap:
-                continue
-            _account(ap)
-            for cpe in cpes_by_ap.get(ip, []):
-                if cpe.get("auth_status") == "ok":
-                    _account(cpe)
-        for ip in switch_scope:
-            sw = switch_dict.get(ip)
-            if sw:
-                _account(sw)
+        for member in members:
+            ip = member["ip"]
+            device = (ap_dict if member["device_type"] == "ap" else switch_dict).get(ip)
+            if not device:
+                return False, True
+            _account(device)
+            if member["device_type"] == "ap":
+                for cpe in cpes_by_ap.get(ip, []):
+                    if cpe.get("auth_status") == "ok":
+                        _account(cpe)
         return flags["cleared"], flags["held"]
 
     @staticmethod
@@ -1091,13 +1244,22 @@ class AutoUpdateScheduler:
         cooldown_days = _as_int(actual_settings.get("firmware_update_cooldown_days", "30"), 30)
 
         existing_devices = db.get_rollout_devices(rollout_id)
-        already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "failed")}
+        already_done = {
+            d["ip"] for d in existing_devices
+            if d["status"] in (
+                "updated", "failed", "disabled", "removed (scope)",
+                "removed (archived)", "removed (no_target)", "skipped_current",
+            )
+        }
+        member_ips = {
+            d["ip"] for d in existing_devices if d["device_type"] == "ap"
+        }
 
-        ap_dict = db.get_all_access_points_dict(enabled_only=False)
+        ap_dict = db.get_all_access_points_dict(enabled_only=True)
         cpes_by_ap = db.get_all_cpes_grouped()
         candidates = []
         for ip in scope_ips:
-            if ip in already_done:
+            if ip not in member_ips or ip in already_done:
                 continue
             ap = ap_dict.get(ip)
             if not ap:
@@ -1127,12 +1289,21 @@ class AutoUpdateScheduler:
         cooldown_days = _as_int(actual_settings.get("firmware_update_cooldown_days", "30"), 30)
 
         existing_devices = db.get_rollout_devices(rollout_id)
-        already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "failed")}
+        already_done = {
+            d["ip"] for d in existing_devices
+            if d["status"] in (
+                "updated", "failed", "disabled", "removed (scope)",
+                "removed (archived)", "removed (no_target)", "skipped_current",
+            )
+        }
+        member_ips = {
+            d["ip"] for d in existing_devices if d["device_type"] == "switch"
+        }
 
-        switch_dict = db.get_all_switches_dict(enabled_only=False)
+        switch_dict = db.get_all_switches_dict(enabled_only=True)
         candidates = []
         for ip in scope_ips:
-            if ip in already_done:
+            if ip not in member_ips or ip in already_done:
                 continue
             switch = switch_dict.get(ip)
             if not switch:
@@ -1148,6 +1319,40 @@ class AutoUpdateScheduler:
                 candidates.append(ip)
 
         return self._select_phase_batch(phase, candidates)
+
+    def _mark_excluded_rollout_members(
+        self, rollout: dict, scope_ips: list[str], switch_scope: list[str]
+    ) -> bool:
+        """Mark excluded members terminal; return false when eligibility is unknown."""
+        try:
+            ap_inventory = db.get_all_access_points_dict(enabled_only=False)
+            switch_inventory = db.get_all_switches_dict(enabled_only=False)
+            members = db.get_rollout_devices(rollout["id"])
+        except Exception as exc:
+            logger.warning(
+                "Could not read rollout eligibility; saved members remain pending: %s", exc
+            )
+            return False
+
+        scopes = {"ap": set(scope_ips), "switch": set(switch_scope)}
+        inventories = {"ap": ap_inventory, "switch": switch_inventory}
+        for member in members:
+            if member["status"] not in ("pending", "deferred"):
+                continue
+            device_type = member["device_type"]
+            device = inventories.get(device_type, {}).get(member["ip"])
+            if device is None:
+                db.mark_rollout_device(
+                    rollout["id"], member["ip"], "removed (archived)"
+                )
+                continue
+            if not device.get("enabled"):
+                db.mark_rollout_device(rollout["id"], member["ip"], "disabled")
+            elif member["ip"] not in scopes.get(device_type, set()):
+                db.mark_rollout_device(
+                    rollout["id"], member["ip"], "removed (scope)"
+                )
+        return True
 
     def _select_phase_batch(self, phase: str, candidates: list[str]) -> list[str]:
         """Select the devices for a rollout wave (pct10 -> pct50 -> pct100)."""

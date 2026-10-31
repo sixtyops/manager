@@ -229,10 +229,17 @@ def _is_stored_user_password_hash(value) -> bool:
     *with different salts* — every push generates a fresh salt, so naïve
     string equality flags drift on every cycle even when the underlying
     plaintext credential is unchanged."""
+    alphabet = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    if not isinstance(value, str) or len(value) != 34:
+        return False
+    parts = value.split("$")
     return (
-        isinstance(value, str)
-        and value.startswith("$1$")
-        and len(value) == 34
+        len(parts) == 4
+        and parts[0] == ""
+        and parts[1] == "1"
+        and len(parts[2]) == 8
+        and len(parts[3]) == 22
+        and all(char in alphabet for char in parts[2] + parts[3])
     )
 
 
@@ -240,8 +247,11 @@ def _user_lists_compatible(device_users, template_users) -> bool:
     """Per-username comparison for the `system.users` list under the Users
     template. The list is matched by `username` (not by index — devices
     return users in factory order which need not match the template's
-    order). Each per-user field is compared exactly *except* `password`:
-    if both sides hold a valid stored `$1$<salt>$<hash>` value, that's
+    order). Each per-user field is compared exactly except for password
+    hashes and role aliases. The template UI stores passwords as `password`
+    and roles as levels 0/9. Tachyon uses `password`, `level`, and on some
+    firmware may return `password_hash` and `type`. If both password sides
+    hold a valid stored `$1$<salt>$<hash>` value, that's
     treated as compatible regardless of the hash bytes (different salts
     encode the same plaintext but never compare equal as strings, which
     would otherwise flag every fleet as non-compliant immediately after
@@ -265,14 +275,112 @@ def _user_lists_compatible(device_users, template_users) -> bool:
         if du is None:
             return False
         for k, v in tu.items():
-            if k == "password":
-                if _is_stored_user_password_hash(v) and _is_stored_user_password_hash(du.get("password")):
+            if k in ("password", "password_hash"):
+                device_password = du.get("password_hash", du.get("password"))
+                if _is_stored_user_password_hash(v) and _is_stored_user_password_hash(device_password):
                     continue  # both sides have a stored hash; treat as compatible
-                if du.get("password") != v:
+                if device_password != v:
+                    return False
+            elif k in ("level", "type"):
+                role_by_level = {0: "admin", 9: "read-only"}
+                role_by_type = {"admin": 0, "read-only": 9}
+                template_level = (
+                    v if k == "level" else role_by_type.get(v)
+                )
+                if "level" in du:
+                    if template_level is None or du.get("level") != template_level:
+                        return False
+                elif "type" in du:
+                    if template_level is None or role_by_type.get(du.get("type")) != template_level:
+                        return False
+                else:
                     return False
             elif du.get(k) != v:
                 return False
     return True
+
+
+def merge_template_config(base: dict, overlay: dict, login_username: str | None) -> dict:
+    """Add template users by username. Preserve all existing user records.
+
+    Reject changes to existing users and any entry for the Manager login.
+    Compare stored passwords with the compliance rule. Convert each added
+    user to Tachyon's `username`, `password`, `level`, `enabled`, and
+    `first_login` record. Hash plaintext passwords before the device request.
+    Existing records stay unchanged. Other lists use deep_merge replacement.
+    """
+    if "system" not in overlay:
+        return deep_merge(base, overlay)
+    system = overlay["system"]
+    if not isinstance(system, dict):
+        raise ValueError("users_invalid: template system must be an object")
+    if "users" not in system:
+        return deep_merge(base, overlay)
+    if not isinstance(login_username, str) or not login_username:
+        raise ValueError("users_login_unknown: cannot verify the Manager login user")
+
+    live_system = base.get("system", {})
+    if not isinstance(live_system, dict):
+        raise ValueError("users_invalid: device system must be an object")
+    live_users = live_system.get("users", [])
+    template_users = system["users"]
+
+    def by_username(users, source):
+        if not isinstance(users, list):
+            raise ValueError(f"users_invalid: {source} system.users must be a list")
+        result = {}
+        for position, user in enumerate(users, start=1):
+            if not isinstance(user, dict):
+                raise ValueError(f"users_invalid: {source} user must be an object")
+            name = user.get("username")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(f"users_invalid: {source} user needs a username")
+            if name in result:
+                raise ValueError(
+                    f"users_invalid: {source} has duplicate username at entry {position}"
+                )
+            result[name] = user
+        return result
+
+    live_by_name = by_username(live_users, "device")
+    template_by_name = by_username(template_users, "template")
+    additions = []
+    for position, (name, user) in enumerate(template_by_name.items(), start=1):
+        if name == login_username:
+            raise ValueError(
+                f"users_login_protected: template entry {position} names the Manager login user"
+            )
+        if name in live_by_name:
+            if not _user_lists_compatible([live_by_name[name]], [user]):
+                raise ValueError(
+                    f"users_existing_user_change: template changes a device account at entry {position}"
+                )
+        else:
+            added_user = deepcopy(user)
+            password = added_user.pop("password", added_user.pop("password_hash", None))
+            if not isinstance(password, str) or not password:
+                raise ValueError(f"users_invalid: added user at entry {position} needs a password")
+            password_hash = password if _is_stored_user_password_hash(password) else _md5_crypt(password)
+
+            if "level" in added_user:
+                level = added_user.pop("level")
+            else:
+                role_by_type = {"admin": 0, "read-only": 9}
+                level = role_by_type.get(added_user.pop("type", None))
+            if type(level) is not int or level not in (0, 9):
+                raise ValueError(f"users_invalid: added user at entry {position} needs a valid role")
+
+            additions.append({
+                "username": name,
+                "password": password_hash,
+                "level": level,
+                "enabled": True,
+                "first_login": False,
+            })
+
+    merged = deep_merge(base, overlay)
+    merged["system"]["users"] = deepcopy(live_users + additions)
+    return merged
 
 
 def fragment_matches(config: dict, fragment: dict, _path: tuple = ()) -> bool:

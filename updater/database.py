@@ -93,6 +93,66 @@ def _backfill_firmware_sha256(db, firmware_dir: Path) -> None:
         )
 
 
+def _migrate_cpe_rows(db):
+    """Copy every legacy CPE row and its current metrics atomically."""
+    if db.in_transaction:
+        raise RuntimeError("CPE migration requires a clean transaction")
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(devices)")}
+        for name, definition in (("parent_device_id", "INTEGER REFERENCES devices(id)"), ("auth_status", "TEXT"),
+                                 ("bank_last_fetched", "TEXT")):
+            if name not in columns:
+                db.execute(f"ALTER TABLE devices ADD COLUMN {name} {definition}")
+        metric_names = ("link_distance", "rx_power", "combined_signal", "last_local_rssi",
+                        "tx_rate", "rx_rate", "mcs", "link_uptime", "signal_health",
+                        "target_rssi_dbm", "snr_db", "sector_tx", "sector_rx", "antenna_kit",
+                        "max_rain_mm_hr")
+        source_columns = {row[1] for row in db.execute("PRAGMA table_info(cpe_cache)")}
+        for row in db.execute("SELECT * FROM cpe_cache ORDER BY id").fetchall():
+            old_id = row["id"]
+            if db.execute("SELECT 1 FROM cpe_migration_map WHERE old_cpe_id=?", (old_id,)).fetchone():
+                continue
+            parent = db.execute("SELECT id,username,password FROM devices WHERE ip=? AND role='ap'",
+                                (row["ap_ip"],)).fetchone()
+            if not parent:
+                raise ValueError(f"CPE migration row {old_id} has no AP parent at {row['ap_ip']}")
+            owner = db.execute("SELECT id,role FROM devices WHERE ip=?", (row["ip"],)).fetchone()
+            if owner:
+                prior = db.execute(
+                    "SELECT old_cpe_id,device_id FROM cpe_migration_map WHERE device_id=?",
+                    (owner["id"],),
+                ).fetchone()
+                raise ValueError(
+                    f"CPE migration collision rows {prior['old_cpe_id'] if prior else 'existing'} "
+                    f"and {old_id}; parent device IDs {owner['id']} and {parent['id']}; IP {row['ip']}"
+                )
+            values = {name: row[name] for name in source_columns}
+            cursor = db.execute("""INSERT INTO devices (
+                ip,vendor,role,parent_device_id,username,password,system_name,model,mac,
+                firmware_version,last_seen,enabled,bank1_version,bank2_version,active_bank,
+                bank_last_fetched,last_config_poll_at,last_config_poll_status,
+                last_config_poll_error,auth_status,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (row["ip"], values.get("vendor") or "tachyon", "cpe", parent["id"],
+                 parent["username"], parent["password"], row["system_name"], row["model"],
+                 row["mac"], row["firmware_version"], values.get("last_updated"), 1,
+                 values.get("bank1_version"), values.get("bank2_version"),
+                 values.get("active_bank"), values.get("bank_last_fetched"),
+                 values.get("last_config_poll_at"), values.get("last_config_poll_status"),
+                 values.get("last_config_poll_error"), values.get("auth_status"),
+                 values.get("last_updated")))
+            device_id = cursor.lastrowid
+            db.execute(f"INSERT INTO link_metrics(device_id,{','.join(metric_names)}) "
+                       f"VALUES ({','.join('?' for _ in range(len(metric_names)+1))})",
+                       (device_id, *(values.get(name) for name in metric_names)))
+            db.execute("INSERT INTO cpe_migration_map VALUES (?,?)", (old_id, device_id))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
 def _migrate(db):
     """Run schema migrations."""
     # Check if auth_status column exists on cpe_cache
@@ -138,6 +198,18 @@ def _migrate(db):
         db.execute("ALTER TABLE rollouts ADD COLUMN target_version_303l TEXT DEFAULT NULL")
     if "target_version_tns100" not in rollout_columns:
         db.execute("ALTER TABLE rollouts ADD COLUMN target_version_tns100 TEXT DEFAULT NULL")
+
+    # Mark members admitted after rollout creation. Keep the migration additive
+    # so existing members read as non-stragglers and older code can keep running.
+    rollout_device_columns = {
+        row[1] for row in db.execute("PRAGMA table_info(rollout_devices)").fetchall()
+    }
+    if "model_family" not in rollout_device_columns:
+        db.execute("ALTER TABLE rollout_devices ADD COLUMN model_family TEXT")
+    if "is_straggler" not in rollout_device_columns:
+        db.execute(
+            "ALTER TABLE rollout_devices ADD COLUMN is_straggler INTEGER NOT NULL DEFAULT 0"
+        )
 
     # Backfill firmware_registry for existing firmware files
     firmware_dir = Path(__file__).parent.parent / "firmware"
@@ -222,14 +294,6 @@ def _migrate(db):
         db.execute("ALTER TABLE rollouts ADD COLUMN last_phase_window TEXT")
     if "canary_completed_at" not in rollout_columns:
         db.execute("ALTER TABLE rollouts ADD COLUMN canary_completed_at TEXT")
-
-    # Add templates_snapshot to config_push_rollouts
-    try:
-        cpr_columns = [row[1] for row in db.execute("PRAGMA table_info(config_push_rollouts)").fetchall()]
-        if cpr_columns and "templates_snapshot" not in cpr_columns:
-            db.execute("ALTER TABLE config_push_rollouts ADD COLUMN templates_snapshot TEXT")
-    except Exception:
-        pass  # Table may not exist yet
 
     # Add target_ips_json to radius_rollouts
     try:
@@ -417,6 +481,8 @@ def _migrate(db):
         pass  # Best-effort backfill; new rows will populate correctly
 
     _migrate_identity(db)
+    db.commit()
+    _migrate_cpe_rows(db)
 
 
 def _migrate_identity(db):
@@ -658,7 +724,7 @@ def init_db():
 
     with get_db() as db:
         # Pre-schema migration: drop tables with incompatible schemas (pre-release)
-        for _tbl, _req in [("audit_log", {"username"}), ("api_tokens", {"user_id"})]:
+        for _tbl, _req in [("audit_log", {"username"})]:
             _cols = {r[1] for r in db.execute(f"PRAGMA table_info({_tbl})").fetchall()}
             if _cols and not _req.issubset(_cols):
                 db.execute(f"DROP TABLE {_tbl}")
@@ -2070,10 +2136,10 @@ def cleanup_old_config_enforce_log(max_age_days: int = 90):
 
 # Rollout operations
 def get_active_rollout() -> Optional[dict]:
-    """Get the current active or paused rollout."""
+    """Get the current open rollout."""
     with get_db() as db:
         row = db.execute(
-            "SELECT * FROM rollouts WHERE status IN ('active', 'paused') ORDER BY id DESC LIMIT 1"
+            "SELECT * FROM rollouts WHERE status IN ('waiting_hold', 'active', 'paused') ORDER BY id DESC LIMIT 1"
         ).fetchone()
         return dict(row) if row else None
 
@@ -2103,12 +2169,30 @@ def _insert_rollout_membership(db, rollout_id: int, members: list[dict]) -> None
         if not ip or not device_type or ip in seen_ips:
             raise ValueError("Rollout members require unique IPs and a device type")
         seen_ips.add(ip)
+        device = db.execute(
+            "SELECT model FROM devices WHERE ip = ? AND role = ?", (ip, device_type)
+        ).fetchone()
+        model_family = _rollout_model_family(device["model"] if device else None)
         db.execute(
             """INSERT INTO rollout_devices
-               (rollout_id, ip, device_type, phase_assigned, status)
-               VALUES (?, ?, ?, NULL, 'pending')""",
-            (rollout_id, ip, device_type),
+               (rollout_id, ip, device_type, model_family, phase_assigned, status)
+               VALUES (?, ?, ?, ?, NULL, 'pending')""",
+            (rollout_id, ip, device_type, model_family),
         )
+
+
+def _rollout_model_family(model: Optional[str]) -> Optional[str]:
+    """Return the saved rollout family for a device model, or None if unknown."""
+    if not isinstance(model, str) or not model.strip():
+        return None
+    normalized = model.strip().lower()
+    if normalized.startswith(("tns-100", "tns100")):
+        return "tns-100"
+    if normalized.startswith(("tna-303l", "tna303l")):
+        return "tna-303l"
+    if normalized.startswith(("tna-30", "tna30")):
+        return "tna-30x"
+    return None
 
 
 def create_rollout(
@@ -2208,6 +2292,33 @@ def create_rollout(
         if membership:
             _insert_rollout_membership(db, rollout_id, members)
         return rollout_id
+
+
+def activate_rollout_if_unheld(
+    rollout_id: int, member_families: set[str], held_families: set[str]
+) -> bool:
+    """Atomically activate a saved rollout after every member family clears Hold."""
+    if not member_families or member_families.intersection(held_families):
+        return False
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT status FROM rollouts WHERE id = ?", (rollout_id,)
+        ).fetchone()
+        if not row or row["status"] != "waiting_hold":
+            return False
+        member = conn.execute(
+            "SELECT 1 FROM rollout_devices WHERE rollout_id = ? LIMIT 1", (rollout_id,)
+        ).fetchone()
+        if not member:
+            return False
+        cursor = conn.execute(
+            "UPDATE rollouts SET status = 'active', updated_at = ? "
+            "WHERE id = ? AND status = 'waiting_hold'",
+            (now, rollout_id),
+        )
+        return cursor.rowcount == 1
 
 
 def get_last_rollout_for_firmware(firmware_file: str) -> Optional[dict]:
@@ -2380,8 +2491,9 @@ def reserve_rollout_wave(
     assignments: list[tuple[str, str, str]],
     settings: dict,
     first_wave_held: bool = False,
+    straggler_candidates: list[dict] = None,
 ) -> bool:
-    """Commit the window marker, wave assignments, and settings as one unit."""
+    """Commit straggler admission, window marker, assignments, and settings."""
     from datetime import date
     from .rollout_gate import phase_run_decision
 
@@ -2400,6 +2512,19 @@ def reserve_rollout_wave(
         return False
     if not assignments:
         return False
+    candidates = list(straggler_candidates or [])
+    if candidates and phase != "pct100":
+        return False
+    candidate_keys = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            return False
+        ip, device_type = candidate.get("ip"), candidate.get("device_type")
+        if not isinstance(ip, str) or not ip.strip() or device_type not in ("ap", "switch"):
+            return False
+        candidate_keys.append((ip, device_type))
+    if len(set(candidate_keys)) != len(candidate_keys):
+        return False
 
     encoded_key = json.dumps(list(window_key), separators=(",", ":"))
     encoded_settings = json.dumps(settings, separators=(",", ":"))
@@ -2407,11 +2532,80 @@ def reserve_rollout_wave(
     with get_db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT id, status, phase, last_phase_window FROM rollouts WHERE id = ?",
+            "SELECT * FROM rollouts WHERE id = ?",
             (rollout_id,),
         ).fetchone()
-        if not row or row["phase"] != phase:
+        if not row or row["status"] != "active" or row["phase"] != phase:
             return False
+
+        validated_candidates = []
+        if candidates:
+            # A pct100 assignment means that final-wave reservation has already
+            # begun. The persisted rows make this check survive process restarts.
+            if conn.execute(
+                "SELECT 1 FROM rollout_devices WHERE rollout_id = ? "
+                "AND phase_assigned = 'pct100' LIMIT 1",
+                (rollout_id,),
+            ).fetchone():
+                return False
+
+            from .firmware_policy import classify_device_version, extract_version_from_filename
+
+            family_fields = {
+                "tna-30x": ("firmware_file", "target_version"),
+                "tna-303l": ("firmware_file_303l", "target_version_303l"),
+                "tns-100": ("firmware_file_tns100", "target_version_tns100"),
+            }
+            saved_members = conn.execute(
+                """SELECT ip, device_type, model_family
+                   FROM rollout_devices WHERE rollout_id = ?""",
+                (rollout_id,),
+            ).fetchall()
+            saved_families = {
+                member["model_family"] for member in saved_members
+                if member["device_type"] == "ap" and member["model_family"]
+            }
+            if any(
+                member["device_type"] == "switch"
+                and member["model_family"] == "tns-100"
+                for member in saved_members
+            ):
+                saved_families.add("tns-100")
+
+            snapshot = {}
+            try:
+                snapshot = json.loads(row["settings_json"] or "{}")
+            except (TypeError, ValueError):
+                return False
+            allow_downgrade = str(snapshot.get("allow_downgrade", "false")).lower() == "true"
+            for ip, device_type in candidate_keys:
+                device = conn.execute(
+                    "SELECT ip, role, model, firmware_version, enabled FROM devices WHERE ip = ?",
+                    (ip,),
+                ).fetchone()
+                family = _rollout_model_family(device["model"]) if device else None
+                if (
+                    not device
+                    or device["role"] != device_type
+                    or not device["enabled"]
+                    or family is None
+                    or family not in saved_families
+                    or conn.execute(
+                        "SELECT 1 FROM rollout_devices WHERE rollout_id = ? AND ip = ?",
+                        (rollout_id, ip),
+                    ).fetchone()
+                ):
+                    return False
+                file_field, version_field = family_fields[family]
+                filename = row[file_field]
+                if not filename:
+                    return False
+                target = row[version_field] or extract_version_from_filename(filename)
+                if not target or not classify_device_version(
+                    device["firmware_version"], target, allow_downgrade
+                ).needs_update:
+                    return False
+                validated_candidates.append((ip, device_type, family))
         allowed, _ = phase_run_decision(
             dict(row), window_key, first_wave_held=first_wave_held
         )
@@ -2424,12 +2618,25 @@ def reserve_rollout_wave(
             "UPDATE rollouts SET last_phase_window = ?, updated_at = ? WHERE id = ?",
             (encoded_key, now, rollout_id),
         )
+        for ip, device_type, family in validated_candidates:
+            conn.execute(
+                """INSERT INTO rollout_devices
+               (rollout_id, ip, device_type, model_family, phase_assigned, status, is_straggler)
+                   VALUES (?, ?, ?, ?, 'pct100', 'pending', 1)""",
+                (rollout_id, ip, device_type, family),
+            )
         for ip, device_type, assigned_phase in assignments:
             conn.execute(
                 """INSERT OR IGNORE INTO rollout_devices
                    (rollout_id, ip, device_type, phase_assigned, status)
                    VALUES (?, ?, ?, ?, 'pending')""",
                 (rollout_id, ip, device_type, assigned_phase),
+            )
+            conn.execute(
+                """UPDATE rollout_devices SET phase_assigned = ?
+                   WHERE rollout_id = ? AND ip = ? AND device_type = ?
+                     AND phase_assigned IS NULL AND status = 'pending'""",
+                (assigned_phase, rollout_id, ip, device_type),
             )
         conn.execute(
             "UPDATE rollouts SET settings_json = ? WHERE id = ?",
@@ -3266,125 +3473,6 @@ def delete_config_template(template_id: int):
         db.execute("DELETE FROM config_templates WHERE id = ?", (template_id,))
 
 
-# ---------------------------------------------------------------------------
-# Config push rollouts
-# ---------------------------------------------------------------------------
-
-CONFIG_PUSH_PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
-
-
-def create_config_push_rollout(template_ids_json: str, template_names: str, templates_snapshot: str = None) -> int:
-    now = datetime.now().isoformat()
-    with get_db() as conn:
-        cursor = conn.execute(
-            """INSERT INTO config_push_rollouts
-               (template_ids, template_names, templates_snapshot, phase, status, created_at, updated_at)
-               VALUES (?, ?, ?, 'canary', 'active', ?, ?)""",
-            (template_ids_json, template_names, templates_snapshot, now, now),
-        )
-        return cursor.lastrowid
-
-
-def get_active_config_push_rollout() -> Optional[dict]:
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM config_push_rollouts WHERE status IN ('active', 'paused') ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        return dict(row) if row else None
-
-
-def get_current_config_push_rollout() -> Optional[dict]:
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM config_push_rollouts ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        return dict(row) if row else None
-
-
-def get_config_push_rollout(rollout_id: int) -> Optional[dict]:
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM config_push_rollouts WHERE id = ?", (rollout_id,)
-        ).fetchone()
-        return dict(row) if row else None
-
-
-def update_config_push_rollout_status(rollout_id: int, status: str, pause_reason: str = ""):
-    now = datetime.now().isoformat()
-    completed_at = now if status == "completed" else None
-    with get_db() as conn:
-        conn.execute(
-            """UPDATE config_push_rollouts
-               SET status = ?, pause_reason = ?, updated_at = ?,
-                   completed_at = COALESCE(?, completed_at)
-               WHERE id = ?""",
-            (status, pause_reason or None, now, completed_at, rollout_id),
-        )
-
-
-def advance_config_push_rollout_phase(rollout_id: int):
-    """Advance to next phase or mark completed if on last phase."""
-    rollout = get_config_push_rollout(rollout_id)
-    if not rollout:
-        return
-    now = datetime.now().isoformat()
-    current = rollout["phase"]
-    if current in CONFIG_PUSH_PHASE_ORDER:
-        idx = CONFIG_PUSH_PHASE_ORDER.index(current)
-        if idx + 1 < len(CONFIG_PUSH_PHASE_ORDER):
-            next_phase = CONFIG_PUSH_PHASE_ORDER[idx + 1]
-            with get_db() as conn:
-                conn.execute(
-                    """UPDATE config_push_rollouts
-                       SET phase = ?, last_phase_completed_at = ?, updated_at = ?
-                       WHERE id = ?""",
-                    (next_phase, now, now, rollout_id),
-                )
-            return
-    # Last phase — mark completed
-    update_config_push_rollout_status(rollout_id, "completed")
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE config_push_rollouts SET last_phase_completed_at = ?, updated_at = ? WHERE id = ?",
-            (now, now, rollout_id),
-        )
-
-
-def assign_config_push_device(rollout_id: int, ip: str, device_type: str, phase: str):
-    with get_db() as conn:
-        conn.execute(
-            """INSERT OR IGNORE INTO config_push_rollout_devices
-               (rollout_id, ip, device_type, phase_assigned, status)
-               VALUES (?, ?, ?, ?, 'pending')""",
-            (rollout_id, ip, device_type, phase),
-        )
-
-
-def mark_config_push_device(rollout_id: int, ip: str, status: str, error: str = ""):
-    with get_db() as conn:
-        conn.execute(
-            """UPDATE config_push_rollout_devices
-               SET status = ?, error = ?, updated_at = ?
-               WHERE rollout_id = ? AND ip = ?""",
-            (status, error or None, datetime.now().isoformat(), rollout_id, ip),
-        )
-
-
-def get_config_push_rollout_devices(rollout_id: int, phase: str = None) -> list[dict]:
-    with get_db() as conn:
-        if phase:
-            rows = conn.execute(
-                "SELECT * FROM config_push_rollout_devices WHERE rollout_id = ? AND phase_assigned = ? ORDER BY ip",
-                (rollout_id, phase),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM config_push_rollout_devices WHERE rollout_id = ? ORDER BY ip",
-                (rollout_id,),
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-
 def get_config_templates_for_device(ip: str, site_id: int = None) -> list[dict]:
     """Return effective templates for a device: global + site overrides (site wins per category)."""
     with get_db() as db:
@@ -3481,40 +3569,6 @@ def get_config_enforce_log(ip: str = None, limit: int = 50) -> list[dict]:
                 (limit,)
             ).fetchall()
         return [dict(row) for row in rows]
-
-
-def get_config_push_rollout_progress(rollout_id: int) -> dict:
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT status, COUNT(*) AS count FROM config_push_rollout_devices WHERE rollout_id = ? GROUP BY status",
-            (rollout_id,),
-        ).fetchall()
-    result = {"total": 0, "pending": 0, "updated": 0, "failed": 0, "skipped": 0}
-    for row in rows:
-        status = row["status"] or "pending"
-        count = row["count"] or 0
-        result["total"] += count
-        result[status] = count
-    return result
-
-
-def get_config_push_unassigned_count(rollout_id: int) -> int:
-    """Count devices targeted by this rollout that haven't been assigned to a phase yet."""
-    with get_db() as conn:
-        # Total devices = all APs + switches + authenticated CPEs
-        # Assigned = those in config_push_rollout_devices
-        assigned = conn.execute(
-            "SELECT COUNT(*) FROM config_push_rollout_devices WHERE rollout_id = ?",
-            (rollout_id,),
-        ).fetchone()[0]
-        rollout = get_config_push_rollout(rollout_id)
-        if not rollout:
-            return 0
-        total = conn.execute(
-            "SELECT COUNT(*) FROM config_push_rollout_devices WHERE rollout_id = ? AND phase_assigned IS NOT NULL",
-            (rollout_id,),
-        ).fetchone()[0]
-    return 0  # Devices are assigned on-demand in the execution loop
 
 
 def get_enforce_failures(since_hours: int = 24) -> list[dict]:
@@ -3744,22 +3798,6 @@ def cleanup_old_audit_log(max_age_days: int = 90):
 
 
 # ---------------------------------------------------------------------------
-# API tokens
-# ---------------------------------------------------------------------------
-
-def create_api_token(name: str, token_hash: str, token_prefix: str,
-                     user_id: int, scopes: str = "read", expires_at: str = None) -> int:
-    """Create a new API token. Returns the token ID."""
-    with get_db() as conn:
-        cursor = conn.execute(
-            """INSERT INTO api_tokens (name, token_hash, token_prefix, user_id, scopes, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (name, token_hash, token_prefix, user_id, scopes, expires_at),
-        )
-        return cursor.lastrowid
-
-
-# ---------------------------------------------------------------------------
 # Device groups
 # ---------------------------------------------------------------------------
 
@@ -3787,15 +3825,6 @@ def create_freeze_window(name: str, start_date: str, end_date: str,
             (name, start_date, end_date, reason),
         )
         return cursor.lastrowid
-
-
-def get_api_token_by_hash(token_hash: str) -> Optional[dict]:
-    """Look up a token by its hash."""
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM api_tokens WHERE token_hash = ?", (token_hash,)
-        ).fetchone()
-        return dict(row) if row else None
 
 
 def list_freeze_windows() -> list[dict]:
@@ -3832,51 +3861,6 @@ def get_device_group(group_id: int) -> Optional[dict]:
             "SELECT * FROM device_groups WHERE id = ?", (group_id,)
         ).fetchone()
         return dict(row) if row else None
-
-
-def list_api_tokens(user_id: int = None) -> list[dict]:
-    """List API tokens, optionally filtered by user."""
-    with get_db() as conn:
-        if user_id is not None:
-            rows = conn.execute(
-                "SELECT id, name, token_prefix, user_id, scopes, created_at, last_used_at, expires_at FROM api_tokens WHERE user_id = ? ORDER BY created_at DESC",
-                (user_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id, name, token_prefix, user_id, scopes, created_at, last_used_at, expires_at FROM api_tokens ORDER BY created_at DESC"
-            ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def update_api_token_last_used(token_id: int):
-    """Update the last_used_at timestamp for a token."""
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE api_tokens SET last_used_at = ? WHERE id = ?",
-            (datetime.now().isoformat(), token_id),
-        )
-
-
-def delete_api_token(token_id: int, user_id: int = None) -> bool:
-    """Delete an API token. If user_id is provided, only delete if owned by that user."""
-    with get_db() as conn:
-        if user_id is not None:
-            cursor = conn.execute(
-                "DELETE FROM api_tokens WHERE id = ? AND user_id = ?", (token_id, user_id)
-            )
-        else:
-            cursor = conn.execute("DELETE FROM api_tokens WHERE id = ?", (token_id,))
-        return cursor.rowcount > 0
-
-
-def cleanup_expired_api_tokens():
-    """Delete expired API tokens."""
-    with get_db() as conn:
-        conn.execute(
-            "DELETE FROM api_tokens WHERE expires_at IS NOT NULL AND expires_at < ?",
-            (datetime.now().isoformat(),),
-        )
 
 
 def update_freeze_window(window_id: int, **kwargs) -> bool:
