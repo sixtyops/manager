@@ -369,6 +369,20 @@ SQLite. The database file (`sixtyops.db`) is created automatically on first run 
 
 Schema migrations run automatically on startup. No manual database setup is required.
 
+### Bridge export
+
+A later release uses a new schema. That schema cannot open the current
+database. Before you install it, export a bridge archive:
+
+1. Sign in as an admin.
+2. Send `POST /api/backup/bridge` with `{"passphrase": "..."}` in the JSON body.
+   Use a passphrase of 8 or more characters.
+3. Keep the downloaded `.bridge` file and the passphrase in a safe place.
+
+The archive holds devices, credentials, users, settings, firmware history, job
+history, and the credential encryption key. It does not hold RADIUS users, API
+tokens, or telemetry. [bridge-format.md](bridge-format.md) defines the format.
+
 ## Network Requirements
 
 The server needs HTTPS access (port 443) to all managed devices. Tachyon devices use self-signed TLS certificates, which the client handles with curl's `-k` flag.
