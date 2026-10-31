@@ -12,6 +12,9 @@ not claim that every gate is shipped.
 **Detail:** Shipped differences are marked *(today: …)* or linked to
 [gradual-rollout.md](gradual-rollout.md).
 
+The customer-router recovery signals and observed Tachyon fields are recorded
+in [Expected Tachyon CPE and AP behavior](tachyon-expected-behavior.md).
+
 - **A device is an identity, not an IP address.** `device_id` never changes.
   We identify a device by a serial claim that we verify under a named trust
   policy. A MAC is a mutable alias. IP is just an attribute.

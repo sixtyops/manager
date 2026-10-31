@@ -796,26 +796,6 @@ Rollback a device to a previous config snapshot. Requires admin or operator role
 - **Body** (JSON, optional): `config_id`
 - **Response**: `{ "status", "ip", "rolled_back_to" }`
 
-### `GET /api/config-push/rollout`
-Get current config push rollout status.
-
-- **Response**: `{ "rollout": { "progress", "devices", "total_target_devices", ... } | null }`
-
-### `POST /api/config-push/rollout/start`
-Start a phased config push rollout. Requires admin or operator role.
-
-- **Body** (JSON): `template_ids`, `targets`
-- **Response**: `{ "rollout_id", "device_count", "template_names" }`
-
-### `POST /api/config-push/rollout/{rollout_id}/advance`
-Manually advance to execute the next phase. Requires admin or operator role.
-
-### `POST /api/config-push/rollout/{rollout_id}/resume`
-Resume a paused config push rollout. Requires admin or operator role.
-
-### `POST /api/config-push/rollout/{rollout_id}/cancel`
-Cancel a config push rollout. Requires admin or operator role.
-
 ## Notifications
 
 ### `POST /api/snmp/test`

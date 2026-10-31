@@ -202,7 +202,9 @@ before merge. Only the owner names bench devices.
 **Detail:** Record the tested models, firmware, recovery evidence, and exact
 commit in the pull request. Re-run bench proof after any change to the pull
 request head. This is a target merge requirement. This documentation change
-does not claim hardware proof.
+does not claim hardware proof. Use
+[Expected Tachyon CPE and AP behavior](tachyon-expected-behavior.md) for the
+read-only customer-router signals and their current limits.
 
 ## Read-only bench wrapper
 

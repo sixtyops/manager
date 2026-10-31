@@ -37,7 +37,7 @@ const fresh=[{id:10,category:'snmp',enabled:true}];
 const context={console:{error(){}},configLoaded:true,configLoadFailed:false,
     configTemplates:original,configSuggestedCategories:new Set(['snmp']),activeColumnMode:'config',
     document:{getElementById:id=>id==='configTemplateBadge'?badge:id==='cfgScopeSelect'?{value:'global'}:id==='cfgStatus-snmp'?status:null},
-    updateConfigStats(){},loadConfigTemplateUI(){renders.push('templates')},renderConfigPushRolloutUI(){},
+    updateConfigStats(){},loadConfigTemplateUI(){renders.push('templates')},
     loadEnforceStatus(){},loadEnforceLog(){},populateScopeSelector(){},loadRecycleBin(){},renderTable(){},
     isSectionPopulated:cat=>cat==='snmp',collectFormData:()=>({enabled:true}),formDataToFragment:()=>({services:{snmp:{enabled:true}}}),
     showToast:m=>messages.push(m),alert:m=>alerts.push(m),showDiffModal(){renders.push('preview')},
