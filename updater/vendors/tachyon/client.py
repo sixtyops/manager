@@ -290,6 +290,7 @@ class TachyonClient:
         # for the AP's radio, used by the link-budget UI.
         self.last_radio_params: Optional[Dict[str, Any]] = None
         self.last_connected_cpes_valid = False
+        self.last_reboot_deadline: Optional[float] = None
 
     @staticmethod
     def _parse_system_status(body: str) -> dict:
@@ -834,14 +835,13 @@ class TachyonClient:
         2. Wait for web server to be ready
         """
         logger.info(f"Waiting for {self.ip} to reboot...")
-
-        # Initial wait for device to go down
-        await asyncio.sleep(10)
-
-        start_time = asyncio.get_event_loop().time()
+        loop = asyncio.get_running_loop()
+        self.last_reboot_deadline = loop.time() + timeout
+        # The initial wait is inside A4's absolute reboot deadline.
+        await asyncio.sleep(min(10, max(0, self.last_reboot_deadline - loop.time())))
         ping_responded = False
 
-        while asyncio.get_event_loop().time() - start_time < timeout:
+        while loop.time() < self.last_reboot_deadline:
             if not ping_responded:
                 # Phase 1: Wait for device to respond to ping (or curl if ping unavailable)
                 responded = False
@@ -928,7 +928,7 @@ class TachyonClient:
 
             await asyncio.sleep(3)
 
-        logger.error(f"{self.ip} did not come back online within {timeout}s")
+        logger.error(f"{self.ip} did not come back online before its reboot deadline")
         return False
 
     async def reboot(self, timeout: int = 300) -> bool:
@@ -1386,7 +1386,7 @@ class TachyonClient:
 
         return info
 
-    async def get_bridge_table(self) -> List[Dict[str, str]]:
+    async def get_bridge_table(self) -> List[Dict[str, Any]]:
         """Fetch the switch's MAC forwarding table via /cgi.lua/bridge_table.
 
         Returns a list of {mac, port} dicts. MAC is normalized to uppercase
@@ -1405,7 +1405,7 @@ class TachyonClient:
             return []
 
         raw = data.get("data", "")
-        seen = set()
+        by_key = {}
         entries = []
         for line in raw.splitlines():
             parts = line.split()
@@ -1414,10 +1414,17 @@ class TachyonClient:
             mac = parts[0].upper()
             port = parts[2]
             key = (mac, port)
-            if key in seen:
+            age = re.search(r"\b(?:learning[_ ]?)?age(?:[_ ]seconds?)?\s*[=: ]\s*(\d+)\b", " ".join(parts[3:]), re.I)
+            if key in by_key:
+                entry = by_key[key]
+                if age and ("learning_age_seconds" not in entry or int(age[1]) < entry["learning_age_seconds"]):
+                    entry["learning_age_seconds"] = int(age[1])
                 continue
-            seen.add(key)
-            entries.append({"mac": mac, "port": port})
+            entry = {"mac": mac, "port": port}
+            if age:
+                entry["learning_age_seconds"] = int(age[1])
+            by_key[key] = entry
+            entries.append(entry)
         return entries
 
     async def get_eth0_byte_counters(self) -> tuple[Optional[int], Optional[int]]:

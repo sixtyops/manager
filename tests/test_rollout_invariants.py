@@ -25,6 +25,7 @@ from updater.core import engine
 from updater.core.gates import MaintenanceSchedule, window_instance_key
 from tests.fixtures.fleet import make_fleet, set_version, set_health, confirm
 from updater import rollout_gate
+from updater import app as app_module
 from updater.scheduler import AutoUpdateScheduler
 
 # The release-date Firmware Hold is evaluated against the real wall clock (not the
@@ -63,67 +64,134 @@ def _seed_aps(n: int):
                ap_models=("TNA-301",))
 
 
-def _ap_customer_signals(rx=101, tx=202, *, peer=True, lan=True, upstream=True):
+def _ap_customer_signals(rx=120, tx=220, *, eth_rx=None, eth_tx=None,
+                         peer=True, lan=True, upstream=True,
+                         link=True, speed=100, age=None):
     radio = "02:00:00:00:00:01"
     customer = "02:00:00:00:00:02"
+    lan_rows = ([{"mac": customer, "port": "eth0"}] if lan else [])
+    upstream_rows = ([{"mac": customer, "port": "prs0"}] if upstream else [])
+    if age is not None:
+        for row in lan_rows + upstream_rows:
+            row["learning_age_seconds"] = age
     return {
         "peers": ({radio: {
-            "lan": ([{"mac": customer, "port": "eth0"}] if lan else []),
-            "bytes": (rx, tx),
+            "lan": lan_rows,
+            "eth0_link_up": link,
+            "eth0_state": {"link_up": link, "link_rate_mbps": speed},
+            "ap_bytes": (rx, tx),
+            "eth0_bytes": (rx if eth_rx is None else eth_rx,
+                           tx if eth_tx is None else eth_tx),
         }} if peer else {}),
-        "upstream": ([{"mac": customer, "port": "prs0"}] if upstream else []),
+        "upstream": upstream_rows,
     }
 
 
-def test_ap_customer_recovery_requires_original_peer_and_bridge_paths():
-    customer = "02:00:00:00:00:02"
-    baseline = {"02:00:00:00:00:01": {
-        "customer_macs": [customer], "rx_bytes": 100, "tx_bytes": 200,
-    }}
-
-    assert rollout_gate.ap_customer_recovery_decision(baseline, _ap_customer_signals()) == (True, "")
-    assert "peer list" in rollout_gate.ap_customer_recovery_decision(
-        baseline, _ap_customer_signals(peer=False)
-    )[1]
-    assert "eth0" in rollout_gate.ap_customer_recovery_decision(
-        baseline, _ap_customer_signals(lan=False)
-    )[1]
-    assert "upstream" in rollout_gate.ap_customer_recovery_decision(
-        baseline, _ap_customer_signals(upstream=False)
-    )[1]
+def _ap_customer_baseline(*, two_way=True, speed=100):
+    return {"peers": {"02:00:00:00:00:01": {
+        "customer_macs": ["02:00:00:00:00:02"],
+        "eth0_link_up": True, "eth0_state": {"link_up": True, "link_rate_mbps": speed},
+        "lan": [{"mac": "02:00:00:00:00:02", "port": "eth0"}],
+        "ap_bytes": (100, 200), "eth0_bytes": (100, 200), "two_way": two_way,
+    }}, "upstream": [{"mac": "02:00:00:00:00:02", "port": "prs0"}]}
 
 
-@pytest.mark.parametrize("rx,tx", [(101, 200), (100, 202), (100, 200), (99, 202)])
-def test_ap_customer_recovery_requires_positive_two_way_deltas(rx, tx):
-    customer = "02:00:00:00:00:02"
-    baseline = {"02:00:00:00:00:01": {
-        "customer_macs": [customer], "rx_bytes": 100, "tx_bytes": 200,
-    }}
-
-    passed, reason = rollout_gate.ap_customer_recovery_decision(
-        baseline, _ap_customer_signals(rx, tx)
+def _check_customer_recovery(baseline=None, current=None):
+    baseline = baseline or _ap_customer_baseline()
+    return app_module._ap_customer_recovery_decision(
+        baseline, _ap_customer_signals(110, 210), current or _ap_customer_signals()
     )
 
-    assert passed is (rx > 100 and tx > 200)
+
+def test_ap_customer_recovery_requires_original_peer_and_bridge_paths():
+    assert _check_customer_recovery() == (True, "")
+    assert "peer list" in _check_customer_recovery(current=_ap_customer_signals(peer=False))[1]
+    assert "eth0" in _check_customer_recovery(current=_ap_customer_signals(lan=False))[1]
+    assert "upstream" in _check_customer_recovery(current=_ap_customer_signals(upstream=False))[1]
+
+
+@pytest.mark.parametrize("rx,tx", [(120, 210), (110, 220), (110, 210), (109, 220)])
+def test_ap_customer_recovery_requires_positive_two_way_deltas(rx, tx):
+    passed, reason = _check_customer_recovery(current=_ap_customer_signals(rx, tx))
+    assert passed is (rx > 110 and tx > 210)
     if not passed:
         assert "both directions" in reason or "reset" in reason
 
 
 def test_ap_customer_recovery_does_not_require_traffic_when_baseline_is_zero():
-    customer = "02:00:00:00:00:02"
-    baseline = {"02:00:00:00:00:01": {
-        "customer_macs": [customer], "rx_bytes": 0, "tx_bytes": 0,
-    }}
-
-    assert rollout_gate.ap_customer_recovery_decision(
-        baseline, _ap_customer_signals(0, 0)
+    assert _check_customer_recovery(
+        baseline=_ap_customer_baseline(two_way=False),
+        current=_ap_customer_signals(110, 210),
     ) == (True, "")
+
+
+def test_ap_management_counter_growth_alone_does_not_prove_customer_traffic():
+    first = _ap_customer_signals(110, 210, eth_rx=100, eth_tx=200)
+    second = _ap_customer_signals(120, 220, eth_rx=100, eth_tx=200)
+
+    passed, reason = app_module._ap_customer_recovery_decision(
+        _ap_customer_baseline(), first, second
+    )
+
+    assert not passed
+    assert "both directions" in reason
+
+
+@pytest.mark.parametrize(("first", "second"), [
+    ((110, 210), (109, 220)),  # AP RX reset
+    ((110, 210), (120, 209)),  # AP TX reset
+])
+def test_ap_customer_recovery_rejects_counter_reset(first, second):
+    passed, reason = app_module._ap_customer_recovery_decision(
+        _ap_customer_baseline(),
+        _ap_customer_signals(*first),
+        _ap_customer_signals(*second),
+    )
+    assert not passed
+    assert "reset" in reason
+
+
+def test_ap_customer_recovery_rejects_missing_traffic_baseline():
+    baseline = _ap_customer_baseline()
+    del baseline["peers"]["02:00:00:00:00:01"]["two_way"]
+
+    passed, reason = _check_customer_recovery(baseline=baseline)
+
+    assert not passed
+    assert "baseline is missing" in reason
 
 
 def test_ap_customer_recovery_allows_a_valid_empty_peer_scope():
-    assert rollout_gate.ap_customer_recovery_decision(
-        {}, {"peers": {}, "upstream": []}
+    assert app_module._ap_customer_recovery_decision(
+        {"peers": {}}, {"peers": {}}, {"peers": {}}
     ) == (True, "")
+
+
+@pytest.mark.parametrize("link,speed,expected", [(False, 100, False), (True, 50, False), (True, 100, True), (True, 1000, True)])
+def test_ap_customer_recovery_requires_eth0_up_and_rate_not_lower(link, speed, expected):
+    passed, _ = _check_customer_recovery(current=_ap_customer_signals(link=link, speed=speed))
+    assert passed is expected
+
+
+def test_ap_customer_recovery_compares_reported_bridge_learning_age():
+    baseline = _ap_customer_baseline()
+    baseline["upstream"] = [{"mac": "02:00:00:00:00:02", "port": "prs0", "learning_age_seconds": 100}]
+    baseline["peers"]["02:00:00:00:00:01"]["lan"] = [
+        {"mac": "02:00:00:00:00:02", "port": "eth0", "learning_age_seconds": 100}
+    ]
+
+    assert _check_customer_recovery(baseline, _ap_customer_signals(age=10))[0]
+    passed, reason = _check_customer_recovery(baseline, _ap_customer_signals(age=101))
+    assert not passed
+    assert "learning is not fresh" in reason
+
+
+def test_ap_customer_recovery_compares_link_when_no_rate_is_reported():
+    baseline = _ap_customer_baseline()
+    baseline["peers"]["02:00:00:00:00:01"]["eth0_state"] = {"state": "up"}
+    current = _ap_customer_signals(speed=None)
+    current["peers"]["02:00:00:00:00:01"]["eth0_state"] = {"link_up": True}
+    assert _check_customer_recovery(baseline, current) == (True, "")
 
 
 def _seed_confirmed(ip: str, version: str, *, model: str = None):

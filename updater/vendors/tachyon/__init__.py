@@ -39,6 +39,10 @@ class TachyonDriver(VendorDriver):
     def last_connected_cpes_valid(self):
         return self._client.last_connected_cpes_valid
 
+    @property
+    def last_reboot_deadline(self):
+        return self._client.last_reboot_deadline
+
     async def connect(self):
         return await self._client.login()
 
@@ -140,11 +144,14 @@ class TachyonDriver(VendorDriver):
     async def fetch_config(self) -> tuple[Optional[dict], str, Optional[str]]:
         return await self._client.fetch_config()
 
-    async def get_bridge_table(self) -> List[Dict[str, str]]:
+    async def get_bridge_table(self) -> List[Dict[str, Any]]:
         return await self._client.get_bridge_table()
 
     async def get_eth0_byte_counters(self):
         return await self._client.get_eth0_byte_counters()
+
+    async def get_eth0_recovery_state(self):
+        return await self._client.get_eth0_recovery_state()
 
     async def apply_config(
         self, config: dict, dry_run: bool = False, *, preserve_user_passwords: bool = False,
