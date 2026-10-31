@@ -7,6 +7,7 @@ because the monitor surfaces them differently — an amber "Can't sign in"
 badge vs. the offline dot.
 """
 
+import asyncio
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -125,6 +126,38 @@ class TestCheckCpeAuthCaching:
             status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
         assert status == "ok"
         assert "10.0.0.11" in poller._cpe_clients
+
+    @pytest.mark.asyncio
+    async def test_invalidation_during_login_does_not_cache_old_session_or_marker(
+        self, mock_db,
+    ):
+        poller = NetworkPoller()
+        started = asyncio.Event()
+        finish_login = asyncio.Event()
+        client = MagicMock()
+
+        async def connect():
+            started.set()
+            await finish_login.wait()
+            return True
+
+        client.connect = AsyncMock(side_effect=connect)
+        settings = {"schedule_enabled": "false"}
+        now = datetime(2026, 10, 27, 12, 0, tzinfo=ZoneInfo("UTC"))
+        with patch("updater.poller.get_driver", return_value=MagicMock(return_value=client)):
+            login = asyncio.create_task(poller.check_cpe_auth_for_period(
+                "10.0.0.11", "root", "ap-pass", settings, now,
+                force_fresh_login=True, validate_cached_session=True,
+            ))
+            await started.wait()
+            poller.invalidate_cpe_clients()
+            finish_login.set()
+            assert await login == "ok"
+
+        assert "10.0.0.11" not in poller._cpe_clients
+        assert not poller.has_successful_cpe_fresh_login(
+            "10.0.0.11", settings, now
+        )
 
     @pytest.mark.asyncio
     async def test_auth_failed_is_not_cached(self, mock_db):

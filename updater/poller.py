@@ -92,6 +92,7 @@ class NetworkPoller:
         # CPE tokens can remain valid after a password change. Keep them until
         # credentials change, the token check fails, or a fresh-login check is due.
         self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, cached_at)
+        self._cpe_credentials_generation = 0
         self._cpe_fresh_login_periods: dict[str, set[object]] = {}
         self._cpe_auth_locks: dict[str, asyncio.Lock] = {}
         self._cpe_forced_login_checks: set[str] = set()
@@ -185,9 +186,14 @@ class NetworkPoller:
             return entry[0]
         return None
 
-    def _cache_cpe_client(self, ip: str, client: VendorDriver):
+    def _cache_cpe_client(self, ip: str, client: VendorDriver,
+                          generation: int = None):
         """Cache an authenticated CPE client."""
+        if (generation is not None
+                and generation != self._cpe_credentials_generation):
+            return False
         self._cpe_clients[ip] = (client, time.time())
+        return True
 
     def _remove_cached_cpe_client(self, ip: str):
         """Remove a CPE client from the cache."""
@@ -678,6 +684,7 @@ class NetworkPoller:
         A fresh login also runs once per active maintenance window, or once a
         day when no maintenance window applies.
         """
+        generation = self._cpe_credentials_generation
         force_fresh_login = force_fresh_login or cpe_ip in self._cpe_forced_login_checks
         # Fast path: a cached session we authenticated on an earlier cycle.
         cached = self._get_cached_cpe_client(cpe_ip)
@@ -705,7 +712,7 @@ class NetworkPoller:
             client = get_driver("tachyon")(cpe_ip, effective_user, effective_pass, timeout=10)
             status = _classify_cpe_connect(await client.connect())
             if status == "ok":
-                self._cache_cpe_client(cpe_ip, client)
+                self._cache_cpe_client(cpe_ip, client, generation)
                 return "ok"
             if status != "auth_failed":
                 return status
@@ -723,7 +730,7 @@ class NetworkPoller:
                     client = get_driver("tachyon")(cpe_ip, default_config.username, default_config.password, timeout=10)
                     status = _classify_cpe_connect(await client.connect())
                     if status == "ok":
-                        self._cache_cpe_client(cpe_ip, client)
+                        self._cache_cpe_client(cpe_ip, client, generation)
                     return status
 
             return "auth_failed"
@@ -761,11 +768,13 @@ class NetworkPoller:
             # The per-CPE lock owns this flag until the auth check completes.
             if force_fresh_login:
                 self._cpe_forced_login_checks.add(cpe_ip)
+            generation = self._cpe_credentials_generation
             try:
                 status = await self._check_cpe_auth(cpe_ip, username, password)
             finally:
                 self._cpe_forced_login_checks.discard(cpe_ip)
-            if force_fresh_login and status == "ok":
+            if (force_fresh_login and status == "ok"
+                    and generation == self._cpe_credentials_generation):
                 self.record_cpe_fresh_login_check(cpe_ip, settings, now)
             return status
 
@@ -813,6 +822,7 @@ class NetworkPoller:
 
     def invalidate_cpe_clients(self):
         """Drop all CPE sessions after credentials shared by CPEs change."""
+        self._cpe_credentials_generation += 1
         self._cpe_clients.clear()
         self._cpe_fresh_login_periods.clear()
 
@@ -832,11 +842,12 @@ class NetworkPoller:
             # Only log in fresh if there's no cached client.
             client = self._get_cached_cpe_client(cpe_ip)
             if not client:
+                generation = self._cpe_credentials_generation
                 client = get_driver("tachyon")(cpe_ip, username, password, timeout=15)
                 result = await client.connect()
                 if result is not True:
                     return
-                self._cache_cpe_client(cpe_ip, client)
+                self._cache_cpe_client(cpe_ip, client, generation)
 
             info = await client.get_device_info()
             if info.bank1_version or info.bank2_version:

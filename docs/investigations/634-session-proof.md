@@ -68,14 +68,9 @@ requirement. A `finally` block clears it, including on cancellation or failure.
 Token validation, unreachable handling, daily markers, and window admission
 keep their existing behavior.
 
-The earlier proof edits and their tests are restored to main in this PR. No
-proof behavior changes remain in the PR diff. The trusted proof still ages a
-cache entry and demands renewal after 600 seconds. That requirement conflicts
-with [#634](https://github.com/sixtyops/manager/issues/634), which removes the
-age cap. A separate proof PR must replace that trigger with an explicit cache
-removal or token invalidation and verify renewal and reuse. Do not restore the
-product age cap to satisfy the old proof. Exact-head bench proof remains with
-the lead; this worker ran offline tests only.
+[PR #662](https://github.com/sixtyops/manager/pull/662) merged the bench proof
+update. The proof reads `CPE_SESSION_POLICY` from the tested head and checks
+the policy it declares. Run bench proof against the exact head before sign-off.
 
 ## Validation commands
 
