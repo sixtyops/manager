@@ -4257,7 +4257,17 @@ def _ap_customer_recovery_decision(baseline, first, second):
                 return False, f"Customer MAC {customer} upstream bridge learning is not fresh"
         if not a.get("eth0_link_up") or not b.get("eth0_link_up"):
             return False, f"CPE {radio_mac} eth0 link is down"
-        before_rate = _eth0_rate(before.get("eth0_state"))
+        before_rates = [_eth0_rate(before.get("eth0_state"))]
+        baseline_second = baseline.get("baseline_second_sample", {})
+        baseline_second_peer = (
+            baseline_second.get("peers", {}).get(radio_mac)
+            if isinstance(baseline_second, dict)
+            and isinstance(baseline_second.get("peers"), dict)
+            else None
+        )
+        if isinstance(baseline_second_peer, dict):
+            before_rates.append(_eth0_rate(baseline_second_peer.get("eth0_state")))
+        before_rate = max((rate for rate in before_rates if rate is not None), default=None)
         for recovered in (a, b):
             after_rate = _eth0_rate(recovered.get("eth0_state"))
             if before_rate is not None and (after_rate is None or after_rate < before_rate):
@@ -4268,6 +4278,20 @@ def _ap_customer_recovery_decision(baseline, first, second):
                 return False, f"CPE {radio_mac} {name} evidence is unavailable"
             if any(type(value) is not int or value < 0 for pair in (old, new_a, new_b) for value in pair):
                 return False, f"CPE {radio_mac} {name} evidence is unavailable"
+            before_counters = old
+            if isinstance(baseline_second_peer, dict):
+                saved_second = baseline_second_peer.get(name)
+                if isinstance(saved_second, (list, tuple)) and len(saved_second) == 2:
+                    if any(type(value) is not int or value < 0 for value in saved_second):
+                        return False, f"CPE {radio_mac} {name} evidence is unavailable"
+                    before_counters = saved_second
+            below_baseline = any(
+                value < saved
+                for pair in (new_a, new_b)
+                for value, saved in zip(pair, before_counters)
+            )
+            if below_baseline:
+                return False, f"CPE {radio_mac} {name} counters reset"
             if new_b[0] < new_a[0] or new_b[1] < new_a[1]:
                 return False, f"CPE {radio_mac} {name} counters reset"
             if before.get("two_way") and (new_b[0] == new_a[0] or new_b[1] == new_a[1]):

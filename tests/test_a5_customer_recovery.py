@@ -213,6 +213,30 @@ def test_management_only_or_one_way_samples_do_not_pass():
     assert _decision(baseline, _sample(110, 210), _sample(120, 210))[0] is False
 
 
+def test_counter_reset_then_increase_does_not_rebase_recovery():
+    baseline = _baseline()
+    baseline["baseline_second_sample"] = _baseline()
+    baseline["baseline_second_sample"]["peers"][RADIO]["ap_bytes"] = (110, 210)
+    baseline["baseline_second_sample"]["peers"][RADIO]["eth0_bytes"] = (110, 210)
+
+    passed, reason = _decision(baseline, _sample(10, 20), _sample(20, 30))
+
+    assert not passed
+    assert "reset" in reason
+
+
+def test_second_baseline_sample_rate_sets_recovery_floor():
+    baseline = _baseline(rate=None)
+    baseline["baseline_second_sample"] = _baseline(rate=100)
+
+    passed, reason = _decision(
+        baseline, _sample(110, 210, rate=50), _sample(120, 220, rate=50)
+    )
+
+    assert not passed
+    assert "link rate" in reason
+
+
 def test_zero_or_one_way_baseline_does_not_require_two_way_traffic():
     assert _decision(_baseline(two_way=False), _sample(100, 200), _sample(100, 200)) == (True, "")
 

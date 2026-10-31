@@ -210,9 +210,9 @@ the same radio MAC must return, each saved customer MAC must appear on CPE
 `eth0` and AP bridge port `prs0`, and a CPE with two-way baseline traffic must
 show positive byte deltas in both directions. A zero counter baseline does not
 prove traffic and does not fail this traffic check. The gate checks after the
-pre-update reboot before flashing and after the firmware reboot. Negotiated
-speed and duplex are unavailable from the observed device API and are not
-checked. A failed check stops the window through `rollout_gate.py`.
+pre-update reboot before flashing and after the firmware reboot. The gate also
+checks reported `eth0` link rates and requires the same or a higher rate. A
+failed check stops the window through `rollout_gate.py`.
 
 **Key points:** Store the first failed device gate under the maintenance window
 instance key. Keep that window closed to new jobs and device actions. Run one
