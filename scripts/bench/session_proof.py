@@ -227,14 +227,28 @@ def _evaluate(recorder: Recorder, errors: set[str], has_session_valid: bool) -> 
     return failures
 
 
+def _cpe_session_max_age(poller_module) -> int | None:
+    """Require a declared policy or the legacy ten-minute cap marker."""
+    policy = getattr(poller_module, "CPE_SESSION_POLICY", None)
+    cap = getattr(poller_module, "_CLIENT_TTL_SECONDS", None)
+    legacy_cap = type(cap) is int and cap == SESSION_MAX_AGE_SECONDS
+    if policy == "login_age" or (not hasattr(poller_module, "CPE_SESSION_POLICY") and legacy_cap):
+        if legacy_cap:
+            return cap
+        raise ValueError("capped CPE session policy lacks the 600-second cap marker")
+    if policy == "credential_change":
+        if hasattr(poller_module, "_CLIENT_TTL_SECONDS"):
+            raise ValueError("conflicting CPE session policy markers")
+        return None
+    raise ValueError("missing or unknown CPE session policy marker")
+
+
 def _instrument(recorder: Recorder):
     from updater import poller as poller_module
     from updater.poller import NetworkPoller
     from updater.vendors.tachyon.client import TachyonClient
 
-    # The checked-out commit defines its CPE session policy. The renamed
-    # _CLIENT_IDLE_TTL_SECONDS applies only to APs and switches.
-    recorder.max_age_seconds = getattr(poller_module, "_CLIENT_TTL_SECONDS", None)
+    recorder.max_age_seconds = _cpe_session_max_age(poller_module)
 
     original_login = TachyonClient.login
 
@@ -372,7 +386,11 @@ async def _run(duration_s: int) -> int:
         return 1
     init_vendors()
     recorder = Recorder(time.time())
-    has_session_valid = _instrument(recorder)
+    try:
+        has_session_valid = _instrument(recorder)
+    except ValueError as error:
+        print(f"session-proof: FAIL: {error}")
+        return 1
     error_handler = RunErrorHandler()
     root_logger = logging.getLogger()
     root_logger.addHandler(error_handler)

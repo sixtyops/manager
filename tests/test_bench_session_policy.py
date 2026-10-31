@@ -84,6 +84,7 @@ async def test_session_proof_policy_and_logout_recovery(fake_devices, monkeypatc
     with monkeypatch.context() as detection:
         if policy == "uncapped":
             detection.delattr(poller_module, "_CLIENT_TTL_SECONDS", raising=False)
+            detection.setattr(poller_module, "CPE_SESSION_POLICY", "credential_change", raising=False)
         recorder, proof = _instrument(monkeypatch)
     poller = NetworkPoller(poll_interval=30)
     for _ in range(6):

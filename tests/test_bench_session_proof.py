@@ -226,3 +226,54 @@ def test_uncapped_report_marks_age_steps_not_applicable(monkeypatch, capsys):
     assert "cpe_session_max_age_s=none" in output
     assert "forced_renewal=not_applicable reuse_after_forced_renewal=not_applicable" in output
     assert "logout_recovery=yes reuse_after_logout_recovery=yes" in output
+
+
+@pytest.mark.parametrize(
+    ("markers", "expected"),
+    [
+        ({"_CLIENT_TTL_SECONDS": 600}, 600),
+        ({"CPE_SESSION_POLICY": "login_age", "_CLIENT_TTL_SECONDS": 600}, 600),
+        ({"CPE_SESSION_POLICY": "credential_change", "_CLIENT_IDLE_TTL_SECONDS": 600}, None),
+    ],
+)
+def test_policy_detection_requires_positive_evidence(markers, expected):
+    from scripts.bench.session_proof import _cpe_session_max_age
+
+    assert _cpe_session_max_age(SimpleNamespace(**markers)) == expected
+
+
+@pytest.mark.parametrize(
+    "markers",
+    [
+        {},
+        {"_CLIENT_IDLE_TTL_SECONDS": 600},
+        {"CPE_SESSION_POLICY": "unknown"},
+        {"CPE_SESSION_POLICY": "unknown", "_CLIENT_TTL_SECONDS": 600},
+        {"CPE_SESSION_POLICY": None, "_CLIENT_TTL_SECONDS": 600},
+        {"CPE_SESSION_POLICY": "login_age"},
+        {"CPE_SESSION_POLICY": "credential_change", "_CLIENT_TTL_SECONDS": 600},
+        {"_CLIENT_TTL_SECONDS": 0},
+        {"_CLIENT_TTL_SECONDS": "600"},
+    ],
+)
+def test_missing_unknown_or_conflicting_policy_fails(markers):
+    from scripts.bench.session_proof import _cpe_session_max_age
+
+    with pytest.raises(ValueError, match="CPE session policy"):
+        _cpe_session_max_age(SimpleNamespace(**markers))
+
+
+@pytest.mark.asyncio
+async def test_missing_policy_stops_proof_before_polling(mock_db, monkeypatch, capsys):
+    from unittest.mock import Mock
+    from scripts.bench.session_proof import _run
+    from updater import poller
+
+    monkeypatch.setenv("SIXTYOPS_BENCH_AP_IP", "192.0.2.1")
+    monkeypatch.delattr(poller, "CPE_SESSION_POLICY", raising=False)
+    monkeypatch.delattr(poller, "_CLIENT_TTL_SECONDS", raising=False)
+    init = Mock()
+    monkeypatch.setattr(poller, "init_poller", init)
+    assert await _run(0) == 1
+    init.assert_not_called()
+    assert "session-proof: FAIL: missing or unknown CPE session policy marker" in capsys.readouterr().out
