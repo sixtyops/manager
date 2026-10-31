@@ -23,6 +23,10 @@
 - **Safety-first** — gradual rollouts, maintenance windows, environmental gates, auto-pause on failure.
 - **Fleet-scoped** — firmware lifecycle plus the fleet visibility it needs. One install serves one operator's network. Subscriber billing, NOC alerting, device-admin authentication, config enforcement, and direct per-device administration have better-suited homes elsewhere.
 
+Manager is a standalone product for Tachyon networks. Every design, safety gate,
+and check uses Manager's own data and the device APIs it calls. Manager does not
+require an outside system that the operator may not run.
+
 ## Operating Principles
 
 1. **Safety over speed.** A rollout that pauses on a single failure is a feature, not a bug.

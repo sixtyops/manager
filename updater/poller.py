@@ -1,6 +1,7 @@
 """Background poller for refreshing AP/CPE data."""
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 import math
@@ -92,6 +93,8 @@ class NetworkPoller:
         # to every CPE every cycle — which otherwise floods each device's audit
         # log with a "management authentication" event per minute.
         self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, logged_in_at)
+        self._paused_cpe_ips: set[str] = set()
+        self._cpe_request_locks: dict[str, asyncio.Lock] = {}
         self._last_config_poll: Optional[datetime] = None
         self._last_config_poll_hydrated = False
         self._poll_in_progress = False
@@ -196,6 +199,21 @@ class NetworkPoller:
         """Remove a CPE client from the cache."""
         self._cpe_clients.pop(ip, None)
 
+    @asynccontextmanager
+    async def pause_cpe_requests(self, ip: str):
+        """Drain Manager CPE requests and pause polling/session use for one CPE."""
+        lock = self._cpe_request_locks.setdefault(ip, asyncio.Lock())
+        self._paused_cpe_ips.add(ip)
+        try:
+            await lock.acquire()
+            try:
+                self._remove_cached_cpe_client(ip)
+                yield
+            finally:
+                lock.release()
+        finally:
+            self._paused_cpe_ips.discard(ip)
+
     def _get_cached_client(self, ip: str) -> Optional[VendorDriver]:
         """Get a cached client, updating its last-used timestamp."""
         entry = self._clients.get(ip)
@@ -223,6 +241,21 @@ class NetworkPoller:
     def _record_poll_success(self, ip: str):
         """Reset circuit breaker on successful poll."""
         self._failure_counts.pop(ip, None)
+        self._backoff_until.pop(ip, None)
+
+    def get_backoff_state(self, ip: str) -> dict:
+        """Return the current backoff state for an API device row."""
+        until = self._backoff_until.get(ip)
+        active_until = None
+        if until is not None and until > time.time():
+            active_until = datetime.fromtimestamp(until, timezone.utc).isoformat()
+        return {
+            "consecutive_failures": self._failure_counts.get(ip, 0),
+            "backoff_until": active_until,
+        }
+
+    def _clear_poll_backoff(self, ip: str):
+        """End the current backoff wait without resetting failure history."""
         self._backoff_until.pop(ip, None)
 
     def _record_poll_failure(self, ip: str):
@@ -367,6 +400,7 @@ class NetworkPoller:
             if not client:
                 db.update_ap_status(ip, last_error=error)
                 self._check_uptime_transition(ip, "ap", prev_error, error)
+                self._record_poll_failure(ip)
                 return
 
             # Get AP info
@@ -382,6 +416,7 @@ class NetworkPoller:
                 if not client:
                     db.update_ap_status(ip, last_error=error)
                     self._check_uptime_transition(ip, "ap", prev_error, error)
+                    self._record_poll_failure(ip)
                     return
                 ap_info = await client.get_ap_info()
             location = ap_info.get("location")  # Don't fall back to zone
@@ -440,7 +475,6 @@ class NetworkPoller:
                 **bank_kwargs,
             )
             self._check_uptime_transition(ip, "ap", prev_error, None)
-            self._record_poll_success(ip)
 
             # Get connected CPEs
             cpes = await client.get_connected_cpes()
@@ -510,21 +544,33 @@ class NetworkPoller:
 
                 async def probe_cpe(cpe_ip):
                     async with cpe_sem:
-                        status = await self._check_cpe_auth(
-                            cpe_ip, ap["username"], ap["password"]
-                        )
-                        db.update_cpe_auth_status(ip, cpe_ip, status)
-
-                        # Fetch bank info if auth OK and not fetched recently
-                        if status == "ok":
-                            await self._maybe_fetch_cpe_banks(
-                                ip, cpe_ip, ap["username"], ap["password"]
+                        if cpe_ip in self._paused_cpe_ips:
+                            self._remove_cached_cpe_client(cpe_ip)
+                            return
+                        lock = self._cpe_request_locks.setdefault(cpe_ip, asyncio.Lock())
+                        async with lock:
+                            if cpe_ip in self._paused_cpe_ips:
+                                return
+                            status = await self._check_cpe_auth(
+                                cpe_ip, ap["username"], ap["password"]
                             )
+                            db.update_cpe_auth_status(ip, cpe_ip, status)
+                            if status == "ok":
+                                await self._maybe_fetch_cpe_banks(
+                                    ip, cpe_ip, ap["username"], ap["password"]
+                                )
 
                 await asyncio.gather(
                     *[probe_cpe(cpe_ip) for cpe_ip in cpe_ips_to_probe],
                     return_exceptions=True,
                 )
+
+            # A failed boot bank read makes this poll a failure. Keep the last
+            # good bank values, report its warning, and let backoff count it.
+            if bank_warning:
+                self._record_poll_failure(ip)
+            else:
+                self._record_poll_success(ip)
 
         except Exception as e:
             logger.error(f"Error polling {ip}: {e}")
@@ -677,6 +723,8 @@ class NetworkPoller:
     def invalidate_client(self, ip: str):
         """Remove cached client (e.g., when credentials change)."""
         self._remove_cached_client(ip)
+        self._clear_poll_backoff(ip)
+        self._failure_counts.pop(ip, None)
         # CPE sessions are keyed by CPE IP, but credentials usually change on the
         # parent AP (whose creds the CPEs inherit) — and we don't have the AP→CPE
         # mapping here. A cached CPE session keeps authenticating on its old
@@ -691,6 +739,9 @@ class NetworkPoller:
         if not ap:
             return False
 
+        # A manual request ends the wait, but keeps the count so another failed
+        # request resumes backoff instead of repeatedly bypassing the threshold.
+        self._clear_poll_backoff(ip)
         await self._poll_ap(ap)
         refreshed = db.get_access_point(ip)
 
@@ -1059,6 +1110,18 @@ class NetworkPoller:
 
     async def _fetch_and_store_config(self, ip: str, username: str, password: str, model: str = None):
         """Fetch config from a device and store if changed."""
+        if ip in self._paused_cpe_ips:
+            self._remove_cached_cpe_client(ip)
+            return
+        lock = self._cpe_request_locks.setdefault(ip, asyncio.Lock())
+        async with lock:
+            if ip in self._paused_cpe_ips:
+                self._remove_cached_cpe_client(ip)
+                return
+            await self._fetch_and_store_config_unlocked(ip, username, password, model)
+
+    async def _fetch_and_store_config_unlocked(self, ip: str, username: str, password: str, model: str = None):
+        """Fetch config while holding the per-CPE request lock."""
         try:
             # Reuse cached client if available, otherwise create new
             client = self._get_cached_client(ip)

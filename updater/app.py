@@ -1429,11 +1429,23 @@ def _strip_credentials(devices: list[dict]) -> list[dict]:
     return devices
 
 
+def _include_backoff_state(devices: list[dict]) -> list[dict]:
+    """Add poller backoff state to AP and switch API rows."""
+    current_poller = get_poller()
+    for device in devices:
+        state = current_poller.get_backoff_state(device["ip"]) if current_poller else {}
+        device.update({
+            "consecutive_failures": state.get("consecutive_failures", 0),
+            "backoff_until": state.get("backoff_until"),
+        })
+    return devices
+
+
 @app.get("/api/aps", tags=["devices"])
 async def list_aps(site_id: int = None, session: dict = Depends(require_auth)):
     """List access points (credentials redacted)."""
     aps = db.get_access_points(tower_site_id=site_id, enabled_only=False)
-    return {"aps": _strip_credentials(aps)}
+    return {"aps": _include_backoff_state(_strip_credentials(aps))}
 
 
 @app.post("/api/aps", tags=["devices"])
@@ -1615,7 +1627,7 @@ async def poll_ap(ip: str, session: dict = Depends(require_role("admin", "operat
 async def list_switches(site_id: int = None, session: dict = Depends(require_auth)):
     """List switches (credentials redacted)."""
     switches = db.get_switches(tower_site_id=site_id, enabled_only=False)
-    return {"switches": _strip_credentials(switches)}
+    return {"switches": _include_backoff_state(_strip_credentials(switches))}
 
 
 @app.post("/api/switches", tags=["devices"])
@@ -7990,6 +8002,35 @@ async def rollback_device_config(ip: str, request: Request, session: dict = Depe
     if not device:
         raise HTTPException(404, "Device not found")
 
+    # Serialize with config pushes and other rollbacks on this device.
+    # Fail closed on contention: a second writer could interleave with the
+    # apply and make the read-back check below meaningless.
+    async with _config_push_lock:
+        if ip in _config_pushing_ips:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "config_change_in_progress",
+                    "message": (
+                        "Another config push or rollback is running on this device. "
+                        "Wait for it to finish, then try again."
+                    ),
+                },
+            )
+        _config_pushing_ips.add(ip)
+    try:
+        return await _rollback_device_config_locked(
+            ip, request, session, device, target_snapshot, rollback_config, force,
+        )
+    finally:
+        _config_pushing_ips.discard(ip)
+
+
+async def _rollback_device_config_locked(
+    ip: str, request: Request, session: dict, device: dict,
+    target_snapshot: dict, rollback_config: dict, force: bool,
+) -> dict:
+    """Apply a rollback and verify it. The caller holds the per-IP push lock."""
     # Connect and save pre-rollback backup
     client = TachyonClient(ip, device["username"], device["password"])
     login_result = await client.login()
@@ -8054,16 +8095,58 @@ async def rollback_device_config(ip: str, request: Request, session: dict = Depe
         error_msg = result.get("error", result.get("raw_response", "Apply failed"))
         raise HTTPException(502, f"Rollback failed: {error_msg}")
 
-    # Re-poll config to verify
+    # Verify: read the config back and compare its hash to the target.
+    # A device that accepts the apply but drops fields must not report success.
+    expected_hash = _compute_config_hash(rollback_config)
+    actual_hash: Optional[str] = None
+    read_back_error: Optional[str] = None
+    try:
+        read_back = await client.get_config()
+        if read_back:
+            actual_hash = _compute_config_hash(read_back)
+        else:
+            read_back_error = "device returned empty config"
+    except Exception as e:
+        read_back_error = str(e) or e.__class__.__name__
+
+    # Re-poll config so the stored snapshot shows the device's actual state
     poller = get_poller()
     if poller:
         asyncio.create_task(poller.poll_configs_for_ips([ip]))
+
+    if actual_hash != expected_hash:
+        reason = read_back_error or "config hash on device does not match the target snapshot"
+        logger.error(
+            "Rollback of %s not verified: %s (expected %s, got %s)",
+            ip, reason, expected_hash, actual_hash,
+        )
+        db.log_audit(
+            session["username"], "config.rollback.unverified", "device", ip,
+            f"Rollback applied but not verified: {reason}",
+            _client_ip(request),
+        )
+        raise HTTPException(
+            502,
+            detail={
+                "code": "rollback_not_verified",
+                "message": (
+                    f"Rollback was applied but not verified: {reason}. "
+                    "Check the device config before you make more changes."
+                ),
+                "rollback_verified": False,
+                "expected_hash": expected_hash,
+                "actual_hash": actual_hash,
+                "safety_snapshot_saved": safety_snapshot_saved,
+            },
+        )
 
     return {
         "status": "success",
         "ip": ip,
         "rolled_back_to": target_snapshot["fetched_at"],
         "safety_snapshot_saved": safety_snapshot_saved,
+        "rollback_verified": True,
+        "config_hash": actual_hash,
     }
 
 

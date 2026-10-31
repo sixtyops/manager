@@ -7,6 +7,29 @@ legacy migrations. The caller owns the connection and seeds default data.
 import sqlite3
 
 
+_DEVICES_TO_LEGACY_UPDATE_TRIGGER = """
+    CREATE TRIGGER IF NOT EXISTS trg_devices_to_legacy_update AFTER UPDATE ON devices
+    WHEN NEW.vendor = 'tachyon'
+    BEGIN
+        UPDATE access_points SET tower_site_id=NEW.tower_site_id, username=NEW.username,
+            password=NEW.password, system_name=NEW.system_name, model=NEW.model,
+            mac=NEW.mac, firmware_version=NEW.firmware_version, location=NEW.location,
+            last_seen=NEW.last_seen, last_error=NEW.last_error, enabled=NEW.enabled,
+            bank1_version=NEW.bank1_version, bank2_version=NEW.bank2_version,
+            active_bank=NEW.active_bank,
+            last_firmware_update=NEW.last_firmware_update, notes=NEW.notes
+        WHERE ip = NEW.ip AND NEW.role = 'ap';
+        UPDATE switches SET tower_site_id=NEW.tower_site_id, username=NEW.username,
+            password=NEW.password, system_name=NEW.system_name, model=NEW.model,
+            mac=NEW.mac, firmware_version=NEW.firmware_version, location=NEW.location,
+            last_seen=NEW.last_seen, last_error=NEW.last_error, enabled=NEW.enabled,
+            bank1_version=NEW.bank1_version, bank2_version=NEW.bank2_version,
+            active_bank=NEW.active_bank, last_firmware_update=NEW.last_firmware_update
+        WHERE ip = NEW.ip AND NEW.role = 'switch';
+    END;
+"""
+
+
 def build_schema(db: sqlite3.Connection) -> None:
     """Create the base tables, indexes, and triggers without seeding data."""
     db.executescript("""
@@ -270,6 +293,7 @@ def build_schema(db: sqlite3.Connection) -> None:
             rollout_id INTEGER NOT NULL,
             ip TEXT NOT NULL,
             device_type TEXT NOT NULL DEFAULT 'ap',
+            model_family TEXT,
             phase_assigned TEXT,
             status TEXT DEFAULT 'pending',
             updated_at TEXT,
@@ -576,26 +600,14 @@ def build_schema(db: sqlite3.Connection) -> None:
                 NEW.active_bank, NEW.last_firmware_update, NEW.created_at
             WHERE NEW.role = 'switch';
         END;
-        CREATE TRIGGER IF NOT EXISTS trg_devices_to_legacy_update AFTER UPDATE ON devices
-        WHEN NEW.vendor = 'tachyon'
-        BEGIN
-            UPDATE access_points SET tower_site_id=NEW.tower_site_id, username=NEW.username,
-                password=NEW.password, system_name=NEW.system_name, model=NEW.model,
-                mac=NEW.mac, firmware_version=NEW.firmware_version, location=NEW.location,
-                last_seen=NEW.last_seen, last_error=NEW.last_error, enabled=NEW.enabled,
-                last_firmware_update=NEW.last_firmware_update, notes=NEW.notes
-            WHERE ip = NEW.ip AND NEW.role = 'ap';
-            UPDATE switches SET tower_site_id=NEW.tower_site_id, username=NEW.username,
-                password=NEW.password, system_name=NEW.system_name, model=NEW.model,
-                mac=NEW.mac, firmware_version=NEW.firmware_version, location=NEW.location,
-                last_seen=NEW.last_seen, last_error=NEW.last_error, enabled=NEW.enabled,
-                bank1_version=NEW.bank1_version, bank2_version=NEW.bank2_version,
-                active_bank=NEW.active_bank, last_firmware_update=NEW.last_firmware_update
-            WHERE ip = NEW.ip AND NEW.role = 'switch';
-        END;
         CREATE TRIGGER IF NOT EXISTS trg_devices_to_legacy_delete AFTER DELETE ON devices
         BEGIN
             DELETE FROM access_points WHERE ip = OLD.ip;
             DELETE FROM switches WHERE ip = OLD.ip;
         END;
     """)
+
+    # This trigger changes with application versions. Replace it on each schema
+    # initialization so existing databases do not keep an older definition.
+    db.execute("DROP TRIGGER IF EXISTS trg_devices_to_legacy_update")
+    db.executescript(_DEVICES_TO_LEGACY_UPDATE_TRIGGER)
