@@ -5,16 +5,16 @@
 Manager updates Tachyon firmware in waves of 10%, 50% and 100%, one wave per maintenance window. Scheduled rollouts stay off until every safety slice below is done and proven on hardware.
 
 ```text
-Overall                   ████████████░░░░░░░░  ~60%
-Write safety              ██████████████████░░  4.5 of 5
+Overall                   ██████████░░░░░░░░░░  7 of 14 slices merged
+Write safety              ████████████████░░░░  4 of 5 slices merged
   Stop at first failure ✓  One writer at a time ✓  Recheck at each write ✓
-  Reboot recovery proof ✓  Customer recovery check: in review
-Waves and windows         ███████████████░░░░░  3 of 4
-  One wave per window ✓  Saved rollout membership ✓  Stragglers join the final wave: in review  Wave sizing: next
-Proof and release         ██████░░░░░░░░░░░░░░  1.5 of 5
-  Read-only bench ✓  Dev host proof: user write ✓, firmware test next  Qualification record  Dev release  Go-live review
-Device identity           ████████░░░░░░░░░░░░  serial, MAC aliases, CPE device rows done; poller cutover next
-Simplification            █████░░░░░░░░░░░░░░░  devmode, telemetry, SFTP backup, API tokens, phased config push removed
+  Reboot recovery proof ✓  Customer recovery check: open; exact-head bench proof is on hold
+Waves and windows         ██████████░░░░░░░░░░  2 of 4 slices merged
+  One wave per window ✓  Saved rollout membership ✓
+  Stragglers: #655 and #659 merged; #663 open and blocked for human review after the deploy-risk check  Wave sizing: Not started
+Proof and release         ████░░░░░░░░░░░░░░░░  1 of 5 slices merged
+  Bench wrapper archive fix ✓  Dev host proof: user-write proof passed; firmware test is next
+  Qualification record: Not started; waits for the firmware test  Dev release: Not started  Go-live review: Not started
 ```
 
 Updated 2026-10-31. Track the work in [issue #604](https://github.com/sixtyops/manager/issues/604).
