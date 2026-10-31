@@ -270,6 +270,7 @@ def build_schema(db: sqlite3.Connection) -> None:
             rollout_id INTEGER NOT NULL,
             ip TEXT NOT NULL,
             device_type TEXT NOT NULL DEFAULT 'ap',
+            model_family TEXT,
             phase_assigned TEXT,
             status TEXT DEFAULT 'pending',
             updated_at TEXT,

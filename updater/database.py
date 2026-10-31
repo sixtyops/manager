@@ -199,6 +199,18 @@ def _migrate(db):
     if "target_version_tns100" not in rollout_columns:
         db.execute("ALTER TABLE rollouts ADD COLUMN target_version_tns100 TEXT DEFAULT NULL")
 
+    # Mark members admitted after rollout creation. Keep the migration additive
+    # so existing members read as non-stragglers and older code can keep running.
+    rollout_device_columns = {
+        row[1] for row in db.execute("PRAGMA table_info(rollout_devices)").fetchall()
+    }
+    if "model_family" not in rollout_device_columns:
+        db.execute("ALTER TABLE rollout_devices ADD COLUMN model_family TEXT")
+    if "is_straggler" not in rollout_device_columns:
+        db.execute(
+            "ALTER TABLE rollout_devices ADD COLUMN is_straggler INTEGER NOT NULL DEFAULT 0"
+        )
+
     # Backfill firmware_registry for existing firmware files
     firmware_dir = Path(__file__).parent.parent / "firmware"
     if firmware_dir.exists():
@@ -2157,12 +2169,30 @@ def _insert_rollout_membership(db, rollout_id: int, members: list[dict]) -> None
         if not ip or not device_type or ip in seen_ips:
             raise ValueError("Rollout members require unique IPs and a device type")
         seen_ips.add(ip)
+        device = db.execute(
+            "SELECT model FROM devices WHERE ip = ? AND role = ?", (ip, device_type)
+        ).fetchone()
+        model_family = _rollout_model_family(device["model"] if device else None)
         db.execute(
             """INSERT INTO rollout_devices
-               (rollout_id, ip, device_type, phase_assigned, status)
-               VALUES (?, ?, ?, NULL, 'pending')""",
-            (rollout_id, ip, device_type),
+               (rollout_id, ip, device_type, model_family, phase_assigned, status)
+               VALUES (?, ?, ?, ?, NULL, 'pending')""",
+            (rollout_id, ip, device_type, model_family),
         )
+
+
+def _rollout_model_family(model: Optional[str]) -> Optional[str]:
+    """Return the saved rollout family for a device model, or None if unknown."""
+    if not isinstance(model, str) or not model.strip():
+        return None
+    normalized = model.strip().lower()
+    if normalized.startswith(("tns-100", "tns100")):
+        return "tns-100"
+    if normalized.startswith(("tna-303l", "tna303l")):
+        return "tna-303l"
+    if normalized.startswith(("tna-30", "tna30")):
+        return "tna-30x"
+    return None
 
 
 def create_rollout(
@@ -2461,8 +2491,9 @@ def reserve_rollout_wave(
     assignments: list[tuple[str, str, str]],
     settings: dict,
     first_wave_held: bool = False,
+    straggler_candidates: list[dict] = None,
 ) -> bool:
-    """Commit the window marker, wave assignments, and settings as one unit."""
+    """Commit straggler admission, window marker, assignments, and settings."""
     from datetime import date
     from .rollout_gate import phase_run_decision
 
@@ -2481,6 +2512,19 @@ def reserve_rollout_wave(
         return False
     if not assignments:
         return False
+    candidates = list(straggler_candidates or [])
+    if candidates and phase != "pct100":
+        return False
+    candidate_keys = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            return False
+        ip, device_type = candidate.get("ip"), candidate.get("device_type")
+        if not isinstance(ip, str) or not ip.strip() or device_type not in ("ap", "switch"):
+            return False
+        candidate_keys.append((ip, device_type))
+    if len(set(candidate_keys)) != len(candidate_keys):
+        return False
 
     encoded_key = json.dumps(list(window_key), separators=(",", ":"))
     encoded_settings = json.dumps(settings, separators=(",", ":"))
@@ -2488,11 +2532,80 @@ def reserve_rollout_wave(
     with get_db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT id, status, phase, last_phase_window FROM rollouts WHERE id = ?",
+            "SELECT * FROM rollouts WHERE id = ?",
             (rollout_id,),
         ).fetchone()
-        if not row or row["phase"] != phase:
+        if not row or row["status"] != "active" or row["phase"] != phase:
             return False
+
+        validated_candidates = []
+        if candidates:
+            # A pct100 assignment means that final-wave reservation has already
+            # begun. The persisted rows make this check survive process restarts.
+            if conn.execute(
+                "SELECT 1 FROM rollout_devices WHERE rollout_id = ? "
+                "AND phase_assigned = 'pct100' LIMIT 1",
+                (rollout_id,),
+            ).fetchone():
+                return False
+
+            from .firmware_policy import classify_device_version, extract_version_from_filename
+
+            family_fields = {
+                "tna-30x": ("firmware_file", "target_version"),
+                "tna-303l": ("firmware_file_303l", "target_version_303l"),
+                "tns-100": ("firmware_file_tns100", "target_version_tns100"),
+            }
+            saved_members = conn.execute(
+                """SELECT ip, device_type, model_family
+                   FROM rollout_devices WHERE rollout_id = ?""",
+                (rollout_id,),
+            ).fetchall()
+            saved_families = {
+                member["model_family"] for member in saved_members
+                if member["device_type"] == "ap" and member["model_family"]
+            }
+            if any(
+                member["device_type"] == "switch"
+                and member["model_family"] == "tns-100"
+                for member in saved_members
+            ):
+                saved_families.add("tns-100")
+
+            snapshot = {}
+            try:
+                snapshot = json.loads(row["settings_json"] or "{}")
+            except (TypeError, ValueError):
+                return False
+            allow_downgrade = str(snapshot.get("allow_downgrade", "false")).lower() == "true"
+            for ip, device_type in candidate_keys:
+                device = conn.execute(
+                    "SELECT ip, role, model, firmware_version, enabled FROM devices WHERE ip = ?",
+                    (ip,),
+                ).fetchone()
+                family = _rollout_model_family(device["model"]) if device else None
+                if (
+                    not device
+                    or device["role"] != device_type
+                    or not device["enabled"]
+                    or family is None
+                    or family not in saved_families
+                    or conn.execute(
+                        "SELECT 1 FROM rollout_devices WHERE rollout_id = ? AND ip = ?",
+                        (rollout_id, ip),
+                    ).fetchone()
+                ):
+                    return False
+                file_field, version_field = family_fields[family]
+                filename = row[file_field]
+                if not filename:
+                    return False
+                target = row[version_field] or extract_version_from_filename(filename)
+                if not target or not classify_device_version(
+                    device["firmware_version"], target, allow_downgrade
+                ).needs_update:
+                    return False
+                validated_candidates.append((ip, device_type, family))
         allowed, _ = phase_run_decision(
             dict(row), window_key, first_wave_held=first_wave_held
         )
@@ -2505,6 +2618,13 @@ def reserve_rollout_wave(
             "UPDATE rollouts SET last_phase_window = ?, updated_at = ? WHERE id = ?",
             (encoded_key, now, rollout_id),
         )
+        for ip, device_type, family in validated_candidates:
+            conn.execute(
+                """INSERT INTO rollout_devices
+               (rollout_id, ip, device_type, model_family, phase_assigned, status, is_straggler)
+                   VALUES (?, ?, ?, ?, 'pct100', 'pending', 1)""",
+                (rollout_id, ip, device_type, family),
+            )
         for ip, device_type, assigned_phase in assignments:
             conn.execute(
                 """INSERT OR IGNORE INTO rollout_devices
