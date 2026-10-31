@@ -635,6 +635,51 @@ def test_empty_wave_reservation_writes_nothing(mock_db):
     assert db.get_rollout_devices(rollout_id) == []
 
 
+def test_engine_forwards_straggler_snapshot_to_wave_reservation(mock_db, monkeypatch):
+    rollout_id = db.create_rollout(FW)
+    rollout = {"id": rollout_id, "phase": "pct100"}
+    candidates = [{"ip": "192.0.2.99", "device_type": "ap"}]
+    captured = {}
+
+    def reserve(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(db, "reserve_rollout_wave", reserve)
+
+    assert engine.start_wave(
+        rollout,
+        {"ap_ips": ["192.0.2.10"], "switch_ips": ["192.0.2.11"]},
+        {"bank_mode": "single"},
+        (1, "2026-06-02"),
+        straggler_candidates=candidates,
+    )
+    assert captured["straggler_candidates"] is candidates
+    assert captured["assignments"] == [
+        ("192.0.2.10", "ap", "pct100"),
+        ("192.0.2.11", "switch", "pct100"),
+    ]
+    assert captured["settings"] == {"bank_mode": "single"}
+
+
+@pytest.mark.parametrize(("rollout", "batch"), [
+    (None, {"ap_ips": ["192.0.2.10"]}),
+    ({"id": 0, "phase": "pct100"}, {"ap_ips": ["192.0.2.10"]}),
+    ({"id": True, "phase": "pct100"}, {"ap_ips": ["192.0.2.10"]}),
+    ({"id": 1, "phase": "unknown"}, {"ap_ips": ["192.0.2.10"]}),
+    ({"id": 1, "phase": "pct100"}, {"ap_ips": []}),
+    ({"id": 1, "phase": "pct100"}, {"ap_ips": [""]}),
+    ({"id": 1, "phase": "pct100"}, {"ap_ips": [None]}),
+    ({"id": 1, "phase": "pct100"}, {"ap_ips": "192.0.2.10"}),
+])
+def test_engine_rejects_invalid_wave_before_reservation(rollout, batch, monkeypatch):
+    reserve_calls = []
+    monkeypatch.setattr(db, "reserve_rollout_wave", lambda **kwargs: reserve_calls.append(kwargs))
+
+    assert not engine.start_wave(rollout, batch, {}, (1, "2026-06-02"))
+    assert reserve_calls == []
+
+
 def test_concurrent_wave_reservations_admit_one_batch(mock_db, monkeypatch, tmp_path):
     import sqlite3
     from contextlib import contextmanager
@@ -714,6 +759,19 @@ async def test_empty_scheduler_batch_does_not_advance_phase(mock_db, monkeypatch
     assert rollout["phase"] == "pct10"
     assert rollout["last_phase_window"] is None
     assert start_update.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_rejected_wave_reservation_does_not_start_job(mock_db, monkeypatch):
+    _seed_aps(1)
+    db.set_settings(_settings(hold_days=0))
+    db.create_rollout(FW)
+    scheduler, start_update = _make_scheduler()
+    monkeypatch.setattr(db, "reserve_rollout_wave", lambda **kwargs: False)
+
+    await _Harness(scheduler, monkeypatch).tick()
+
+    start_update.assert_not_awaited()
 
 
 def test_overnight_window_keeps_its_start_date_key():

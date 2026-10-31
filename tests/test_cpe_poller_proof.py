@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -119,3 +119,51 @@ async def test_poller_alone_daily_and_window_rules(fake_devices, monkeypatch):
         assert fake_devices.count(CPE) == expected_logins
         assert db.get_all_cpes_grouped()[AP][0]["auth_status"] == "ok"
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hour,minute", [(12, 0), (2, 50)])
+async def test_sampling_pause_skips_auth_and_keeps_login_due(fake_devices, monkeypatch, hour, minute):
+    zone = ZoneInfo("America/Chicago")
+    current = datetime(2026, 10, 26, 12, 0, tzinfo=zone)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return current.astimezone(tz) if tz else current.replace(tzinfo=None)
+
+    monkeypatch.setattr(poller_module, "datetime", Clock)
+    for key, value in {"schedule_enabled": "true", "schedule_days": "tue",
+                       "schedule_start_hour": "3", "schedule_end_hour": "4",
+                       "schedule_timezone": "America/Chicago"}.items():
+        db.set_setting(key, value)
+    poller = NetworkPoller()
+    await poller._poll_all_aps()
+    assert fake_devices.count(CPE) == 1
+    markers = set(poller._cpe_fresh_login_periods[CPE])
+    current = datetime(2026, 10, 27, hour, minute, tzinfo=zone)
+    assert poller._fresh_cpe_login_due(CPE)
+    probe = AsyncMock(wraps=poller._probe_cpe_auth)
+    banks = AsyncMock(wraps=poller._maybe_fetch_cpe_banks)
+    auth_updates = Mock(wraps=db.update_cpe_auth_status)
+    monkeypatch.setattr(db, "update_cpe_auth_status", auth_updates)
+    monkeypatch.setattr(poller, "_probe_cpe_auth", probe)
+    monkeypatch.setattr(poller, "_maybe_fetch_cpe_banks", banks)
+
+    async with poller.pause_cpe_requests(CPE):
+        await poller._poll_all_aps()
+        await poller._poll_all_aps()
+        probe.assert_not_awaited()
+        banks.assert_not_awaited()
+        auth_updates.assert_not_called()
+        assert fake_devices.count(CPE) == 1
+        assert db.get_all_cpes_grouped()[AP][0]["auth_status"] not in {"auth_failed", "unreachable"}
+        assert poller._cpe_fresh_login_periods[CPE] == markers
+        assert poller._fresh_cpe_login_due(CPE)
+
+    await poller._poll_all_aps()
+    assert fake_devices.count(CPE) == 2
+    assert not poller._fresh_cpe_login_due(CPE)
+    assert db.get_all_cpes_grouped()[AP][0]["auth_status"] == "ok"
+    await poller._poll_all_aps()
+    assert fake_devices.count(CPE) == 2
