@@ -7,6 +7,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable, Optional
@@ -175,19 +176,70 @@ CHECK_INTERVAL = 86400  # 24 hours
 
 
 def _parse_table_md5s(html: str) -> dict[str, str]:
-    """Map firmware version -> vendor-published MD5 from the summary table(s).
-
-    Scoped to <table> regions so the inline "MD5: <hash>" notes in the
-    release-notes body can't bind a hash to the wrong version. Fail-open: a
-    version with no parsed MD5 simply isn't in the map, and the download falls
-    back to the size guards rather than being blocked. The first match for a
-    version wins (the summary table is the first table on the page).
-    """
+    """Compatibility helper that returns table-published MD5 values."""
     md5s: dict[str, str] = {}
     for table in re.findall(r"<table.*?</table>", html, re.DOTALL):
         for version, md5 in RE_TABLE_MD5.findall(table):
             md5s.setdefault(_normalize_version(version), md5.lower())
     return md5s
+
+
+def _checksum_fields(text: str) -> dict[str, str]:
+    """Extract labeled vendor checksums from an HTML fragment."""
+    plain = unescape(re.sub(r"<[^>]+>", " ", text))
+    fields: dict[str, str] = {}
+    for label, value in re.findall(
+        r"\b(SHA\s*-?\s*256|MD5)\b\s*:?\s*([0-9a-fA-F]{32,64})", plain, re.I
+    ):
+        algorithm = "sha256" if "SHA" in label.upper() else "md5"
+        if len(value) == (64 if algorithm == "sha256" else 32):
+            fields[algorithm] = value.lower()
+    # Current summary tables label the MD5 column but leave row values bare.
+    if "MD5" in plain.upper():
+        fields.setdefault("md5", next(
+            (value.lower() for value in re.findall(r"\b[0-9a-fA-F]{32}\b", plain)),
+            "",
+        ))
+        if not fields["md5"]:
+            fields.pop("md5")
+    if "SHA-256" in plain.upper() or "SHA256" in plain.upper():
+        fields.setdefault("sha256", next(
+            (value.lower() for value in re.findall(r"\b[0-9a-fA-F]{64}\b", plain)),
+            "",
+        ))
+        if not fields["sha256"]:
+            fields.pop("sha256")
+    if not fields:
+        for value in re.findall(r"\b[0-9a-fA-F]{64}\b", plain):
+            fields["sha256"] = value.lower()
+        for value in re.findall(r"\b[0-9a-fA-F]{32}\b", plain):
+            fields["md5"] = value.lower()
+    return fields
+
+
+def _parse_table_checksums(html: str) -> dict[str, dict[str, str]]:
+    """Map firmware versions to MD5 or SHA-256 values in summary-table rows."""
+    checksums: dict[str, dict[str, str]] = {}
+    for table in re.findall(r"<table.*?</table>", html, re.DOTALL | re.IGNORECASE):
+        for row in re.findall(r"<tr\b.*?</tr>", table, re.DOTALL | re.IGNORECASE):
+            version = re.search(r"v[^\d<]*(\d+(?:\.\d+)+)", row, re.I)
+            if version:
+                fields = _checksum_fields(row)
+                if fields:
+                    checksums.setdefault(_normalize_version(version.group(1)), {}).update(fields)
+    return checksums
+
+
+def _parse_release_note_checksums(html: str) -> dict[str, dict[str, str]]:
+    """Map checksums following Version download links to their release version."""
+    matches = list(RE_DOWNLOAD_LINK.finditer(html))
+    checksums: dict[str, dict[str, str]] = {}
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(html)
+        fields = _checksum_fields(html[match.end():end])
+        if fields:
+            checksums.setdefault(_normalize_version(match.group(2)), {}).update(fields)
+    return checksums
 
 
 @dataclass
@@ -198,6 +250,7 @@ class FirmwareRelease:
     channel: str        # "stable" or "beta"
     filename: str       # basename of the URL
     md5: Optional[str] = None  # vendor-published MD5 (lowercase), or None if not listed
+    sha256: Optional[str] = None  # vendor-published SHA-256, preferred when listed
 
 
 class FirmwareFetcher:
@@ -210,6 +263,7 @@ class FirmwareFetcher:
         self.check_interval = check_interval
         self._running = False
         self._task: Optional[asyncio.Task] = None
+        self._download_warning: Optional[str] = None
 
     async def start(self):
         if self._running:
@@ -285,29 +339,32 @@ class FirmwareFetcher:
                     continue
 
             for release in releases:
+                if not (release.sha256 or release.md5):
+                    msg = (
+                        f"{family}: no published MD5 or SHA-256 for "
+                        f"{release.filename}; firmware was not registered"
+                    )
+                    logger.warning(msg)
+                    errors.append(msg)
+                    continue
                 filepath = self.firmware_dir / release.filename
                 if filepath.exists():
                     # Track as auto-fetched even if already present
                     if release.filename not in auto_fetched:
                         auto_fetched.append(release.filename)
-                    if db.get_firmware_sha256(release.filename) is not None:
-                        # Already fingerprinted on a prior cycle; re-register is
-                        # a no-op for the hash (COALESCE preserves it).
-                        db.register_firmware(release.filename, source="auto")
-                        continue
-                    # No stored hash yet — fingerprint the on-disk file so it
-                    # too gets the pre-flash integrity re-check. But an existing
-                    # file can't be trusted on faith: a partial/corrupt download
-                    # left by an older build (or fetched while the page listed no
-                    # MD5) must be verified against the vendor checksum before we
-                    # store its hash, or the pre-flash check would just compare
-                    # the bad file to its own bad hash and pass. On mismatch,
-                    # discard it and fall through to re-download + verify.
+                    # Re-check an on-disk image against Tachyon's published
+                    # checksum before keeping its local pre-flash fingerprint.
+                    # On mismatch, discard it and download a verified copy.
                     file_md5, file_sha256 = await self._hash_existing_file(filepath)
-                    if release.md5 and file_md5 and file_md5.lower() != release.md5.lower():
+                    actual_vendor_hash = file_sha256 if release.sha256 else file_md5
+                    expected_vendor_hash = release.sha256 or release.md5
+                    if (
+                        not actual_vendor_hash
+                        or actual_vendor_hash.lower() != expected_vendor_hash.lower()
+                    ):
                         logger.error(
-                            f"On-disk {release.filename} fails the vendor MD5 "
-                            f"(expected {release.md5}, got {file_md5}) — discarding "
+                            f"On-disk {release.filename} fails the vendor checksum "
+                            f"(expected {expected_vendor_hash}, got {actual_vendor_hash}) — discarding "
                             "and re-downloading"
                         )
                         filepath.unlink(missing_ok=True)
@@ -339,7 +396,10 @@ class FirmwareFetcher:
                         db.unregister_firmware(old_file)
                         replaced.append(old_file)
                 else:
-                    errors.append(f"Download failed: {release.filename}")
+                    errors.append(
+                        self._download_warning
+                        or f"Download failed checksum validation: {release.filename}"
+                    )
 
             # Auto-select for this platform
             self._auto_select(platform, releases, beta_enabled)
@@ -415,8 +475,11 @@ class FirmwareFetcher:
         # Parse download links
         link_matches = RE_DOWNLOAD_LINK.findall(html)
 
-        # Parse the vendor-published MD5 per version (summary table only)
-        md5_by_version = _parse_table_md5s(html)
+        # Summary-table checksums take precedence. Release notes carry hashes on
+        # pages such as TNS-100, which do not have a summary table.
+        checksums_by_version = _parse_release_note_checksums(html)
+        for version, fields in _parse_table_checksums(html).items():
+            checksums_by_version.setdefault(version, {}).update(fields)
 
         releases = []
         has_version_table = stable_version is not None or beta_version is not None
@@ -446,7 +509,8 @@ class FirmwareFetcher:
                 download_url=download_url,
                 channel=channel,
                 filename=filename,
-                md5=md5_by_version.get(version),
+                md5=checksums_by_version.get(version, {}).get("md5"),
+                sha256=checksums_by_version.get(version, {}).get("sha256"),
             ))
 
         # Parse-sanity guard: if the summary table promised a release we
@@ -517,8 +581,8 @@ class FirmwareFetcher:
     async def _download_firmware(self, release: FirmwareRelease) -> tuple[bool, Optional[str]]:
         """Download a firmware .bin file with streaming.
 
-        Verifies the download before accepting it: a transfer whose MD5 doesn't
-        match the vendor-published hash, that is shorter than its advertised
+        Verifies the download before accepting it: a transfer whose preferred
+        vendor SHA-256 or fallback MD5 doesn't match, that is shorter than its advertised
         Content-Length, or that is far smaller than the platform's other
         firmware is rejected rather than renamed into place — so a corrupt or
         partial image can never become the auto-selected target and get flashed
@@ -532,6 +596,12 @@ class FirmwareFetcher:
         """
         filepath = self.firmware_dir / release.filename
         tmp_path = filepath.with_suffix(".downloading")
+        self._download_warning = None
+
+        if not (release.sha256 or release.md5):
+            self._download_warning = f"No published checksum for {release.filename}"
+            logger.warning(self._download_warning)
+            return False, None
 
         logger.info(f"Downloading {release.filename} from {release.download_url}")
         try:
@@ -552,28 +622,28 @@ class FirmwareFetcher:
                             md5_hash.update(chunk)
                             sha256_hash.update(chunk)
 
-            # Reject a vendor-MD5 mismatch (corrupt or wrong image). Checked
-            # first — an authoritative hash is a stronger signal than the size
-            # heuristics below. Skipped when no MD5 was published for the
-            # release (fail-open: never block obtaining firmware on a missing
-            # hash, but never accept a mismatch).
-            if release.md5:
-                actual_md5 = md5_hash.hexdigest()
-                if actual_md5.lower() != release.md5.lower():
-                    tmp_path.unlink(missing_ok=True)
-                    logger.error(
-                        f"MD5 mismatch for {release.filename}: expected {release.md5}, "
-                        f"got {actual_md5} — rejecting download"
-                    )
-                    return False, None
+            # Prefer SHA-256 when Tachyon publishes it.
+            expected_checksum = release.sha256 or release.md5
+            actual_checksum = (
+                sha256_hash.hexdigest() if release.sha256 else md5_hash.hexdigest()
+            )
+            if actual_checksum.lower() != expected_checksum.lower():
+                self._download_warning = (
+                    f"Published checksum mismatch for {release.filename}: "
+                    f"expected {expected_checksum}, got {actual_checksum}"
+                )
+                tmp_path.unlink(missing_ok=True)
+                logger.error(self._download_warning)
+                return False, None
 
             # Reject a server-advertised size mismatch (truncated transfer).
             if expected_len is not None and bytes_written != expected_len:
                 tmp_path.unlink(missing_ok=True)
-                logger.error(
-                    f"Download of {release.filename} truncated: got {bytes_written} bytes, "
-                    f"expected {expected_len} (Content-Length) — rejecting"
+                self._download_warning = (
+                    f"Download rejected for {release.filename}: received {bytes_written} "
+                    f"bytes, expected {expected_len} from Content-Length"
                 )
+                logger.error(self._download_warning)
                 return False, None
 
             # Reject a size outlier vs the platform's other firmware (catches
@@ -581,7 +651,8 @@ class FirmwareFetcher:
             suspect = self._suspect_truncated_size(release.filename, bytes_written)
             if suspect:
                 tmp_path.unlink(missing_ok=True)
-                logger.error(f"{suspect} — rejecting download")
+                self._download_warning = f"Download rejected: {suspect}"
+                logger.error(self._download_warning)
                 return False, None
 
             tmp_path.rename(filepath)
@@ -589,7 +660,8 @@ class FirmwareFetcher:
             return True, sha256_hash.hexdigest()
 
         except Exception as e:
-            logger.error(f"Failed to download {release.filename}: {e}")
+            self._download_warning = f"Failed to download {release.filename}: {e}"
+            logger.error(self._download_warning)
             if tmp_path.exists():
                 tmp_path.unlink()
             return False, None

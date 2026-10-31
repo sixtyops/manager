@@ -471,6 +471,7 @@ async def test_bench_plan_runs_only_named_device(tables, runner):
 @pytest.mark.asyncio
 async def test_fleet_status_exposes_hold_reason(tables, mock_db, monkeypatch, tmp_path):
     (tmp_path / FW).write_bytes(b"synthetic firmware")
+    db.register_firmware(FW, source="manual", sha256="a" * 64)
     monkeypatch.setattr(app_module, "FIRMWARE_DIR", tmp_path)
     monkeypatch.setattr(app_module, "get_scheduler", lambda: None)
     db.set_setting("selected_firmware_30x", FW)
