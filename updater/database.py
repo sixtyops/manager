@@ -204,6 +204,8 @@ def _migrate(db):
     rollout_device_columns = {
         row[1] for row in db.execute("PRAGMA table_info(rollout_devices)").fetchall()
     }
+    if "model_family" not in rollout_device_columns:
+        db.execute("ALTER TABLE rollout_devices ADD COLUMN model_family TEXT")
     if "is_straggler" not in rollout_device_columns:
         db.execute(
             "ALTER TABLE rollout_devices ADD COLUMN is_straggler INTEGER NOT NULL DEFAULT 0"
@@ -2167,12 +2169,30 @@ def _insert_rollout_membership(db, rollout_id: int, members: list[dict]) -> None
         if not ip or not device_type or ip in seen_ips:
             raise ValueError("Rollout members require unique IPs and a device type")
         seen_ips.add(ip)
+        device = db.execute(
+            "SELECT model FROM devices WHERE ip = ? AND role = ?", (ip, device_type)
+        ).fetchone()
+        model_family = _rollout_model_family(device["model"] if device else None)
         db.execute(
             """INSERT INTO rollout_devices
-               (rollout_id, ip, device_type, phase_assigned, status)
-               VALUES (?, ?, ?, NULL, 'pending')""",
-            (rollout_id, ip, device_type),
+               (rollout_id, ip, device_type, model_family, phase_assigned, status)
+               VALUES (?, ?, ?, ?, NULL, 'pending')""",
+            (rollout_id, ip, device_type, model_family),
         )
+
+
+def _rollout_model_family(model: Optional[str]) -> Optional[str]:
+    """Return the saved rollout family for a device model, or None if unknown."""
+    if not isinstance(model, str) or not model.strip():
+        return None
+    normalized = model.strip().lower()
+    if normalized.startswith(("tns-100", "tns100")):
+        return "tns-100"
+    if normalized.startswith(("tna-303l", "tna303l")):
+        return "tna-303l"
+    if normalized.startswith(("tna-30", "tna30")):
+        return "tna-30x"
+    return None
 
 
 def create_rollout(
@@ -2518,6 +2538,7 @@ def reserve_rollout_wave(
         if not row or row["status"] != "active" or row["phase"] != phase:
             return False
 
+        validated_candidates = []
         if candidates:
             # A pct100 assignment means that final-wave reservation has already
             # begun. The persisted rows make this check survive process restarts.
@@ -2530,37 +2551,23 @@ def reserve_rollout_wave(
 
             from .firmware_policy import classify_device_version, extract_version_from_filename
 
-            def family_for_model(model):
-                if not isinstance(model, str) or not model.strip():
-                    return None
-                normalized = model.strip().lower()
-                if normalized.startswith(("tns-100", "tns100")):
-                    return "tns-100"
-                if normalized.startswith(("tna-303l", "tna303l")):
-                    return "tna-303l"
-                if normalized.startswith(("tna-30", "tna30")):
-                    return "tna-30x"
-                return None
-
             family_fields = {
                 "tna-30x": ("firmware_file", "target_version"),
                 "tna-303l": ("firmware_file_303l", "target_version_303l"),
                 "tns-100": ("firmware_file_tns100", "target_version_tns100"),
             }
             saved_members = conn.execute(
-                """SELECT rd.ip, rd.device_type, d.model
-                   FROM rollout_devices rd LEFT JOIN devices d ON d.ip = rd.ip
-                   WHERE rd.rollout_id = ?""",
+                """SELECT ip, device_type, model_family
+                   FROM rollout_devices WHERE rollout_id = ?""",
                 (rollout_id,),
             ).fetchall()
             saved_families = {
-                family for member in saved_members
-                if member["device_type"] == "ap"
-                and (family := family_for_model(member["model"])) is not None
+                member["model_family"] for member in saved_members
+                if member["device_type"] == "ap" and member["model_family"]
             }
             if any(
                 member["device_type"] == "switch"
-                and family_for_model(member["model"]) == "tns-100"
+                and member["model_family"] == "tns-100"
                 for member in saved_members
             ):
                 saved_families.add("tns-100")
@@ -2576,7 +2583,7 @@ def reserve_rollout_wave(
                     "SELECT ip, role, model, firmware_version, enabled FROM devices WHERE ip = ?",
                     (ip,),
                 ).fetchone()
-                family = family_for_model(device["model"]) if device else None
+                family = _rollout_model_family(device["model"]) if device else None
                 if (
                     not device
                     or device["role"] != device_type
@@ -2598,6 +2605,7 @@ def reserve_rollout_wave(
                     device["firmware_version"], target, allow_downgrade
                 ).needs_update:
                     return False
+                validated_candidates.append((ip, device_type, family))
         allowed, _ = phase_run_decision(
             dict(row), window_key, first_wave_held=first_wave_held
         )
@@ -2610,12 +2618,12 @@ def reserve_rollout_wave(
             "UPDATE rollouts SET last_phase_window = ?, updated_at = ? WHERE id = ?",
             (encoded_key, now, rollout_id),
         )
-        for ip, device_type in candidate_keys:
+        for ip, device_type, family in validated_candidates:
             conn.execute(
                 """INSERT INTO rollout_devices
-                   (rollout_id, ip, device_type, phase_assigned, status, is_straggler)
-                   VALUES (?, ?, ?, 'pct100', 'pending', 1)""",
-                (rollout_id, ip, device_type),
+               (rollout_id, ip, device_type, model_family, phase_assigned, status, is_straggler)
+                   VALUES (?, ?, ?, ?, 'pct100', 'pending', 1)""",
+                (rollout_id, ip, device_type, family),
             )
         for ip, device_type, assigned_phase in assignments:
             conn.execute(

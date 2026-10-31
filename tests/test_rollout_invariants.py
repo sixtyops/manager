@@ -183,16 +183,19 @@ def test_straggler_migration_defaults_existing_rows_to_zero(mock_db):
         settings_snapshot={},
     )
     mock_db.execute("ALTER TABLE rollout_devices DROP COLUMN is_straggler")
+    mock_db.execute("ALTER TABLE rollout_devices DROP COLUMN model_family")
 
     db._migrate(mock_db)
     db._migrate(mock_db)
 
     columns = {row[1] for row in mock_db.execute("PRAGMA table_info(rollout_devices)")}
     member = mock_db.execute(
-        "SELECT is_straggler FROM rollout_devices WHERE rollout_id = ?", (rollout_id,)
+        "SELECT is_straggler, model_family FROM rollout_devices WHERE rollout_id = ?",
+        (rollout_id,),
     ).fetchone()
     assert "is_straggler" in columns
-    assert member[0] == 0
+    assert "model_family" in columns
+    assert tuple(member) == (0, None)
 
 
 def _straggler_rollout():
@@ -241,6 +244,36 @@ def test_pct100_reservation_admits_eligible_saved_family_straggler_once(mock_db)
     assert (candidate["phase_assigned"], candidate["status"], candidate["is_straggler"]) == (
         "pct100", "pending", 1
     )
+    assert candidate["model_family"] == "tna-30x"
+
+
+def test_straggler_eligibility_uses_family_saved_at_rollout_creation(mock_db):
+    rollout_id, original_ip = _straggler_rollout()
+    changed_family_ip = "192.0.2.88"
+    matching_family_ip = "192.0.2.89"
+    db.upsert_access_point(
+        changed_family_ip, "fixture-user", "synthetic-password", model="TNA-303L",
+        firmware_version="1.0.0",
+    )
+    db.upsert_access_point(
+        matching_family_ip, "fixture-user", "synthetic-password", model="TNA-301",
+        firmware_version="1.0.0",
+    )
+    # The original member's live model changed after the rollout snapshot.
+    db.upsert_access_point(
+        original_ip, "fixture-user", "synthetic-password", model="TNA-303L",
+        firmware_version="1.0.0",
+    )
+
+    assert not _reserve_stragglers(
+        rollout_id, original_ip, [{"ip": changed_family_ip, "device_type": "ap"}]
+    )
+    assert _reserve_stragglers(
+        rollout_id, original_ip, [{"ip": matching_family_ip, "device_type": "ap"}]
+    )
+    rows = {row["ip"]: row for row in db.get_rollout_devices(rollout_id)}
+    assert changed_family_ip not in rows
+    assert rows[matching_family_ip]["model_family"] == "tna-30x"
 
 
 @pytest.mark.parametrize("candidate", [
