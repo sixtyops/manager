@@ -44,7 +44,8 @@ class _FamilyIndexParser(HTMLParser):
         self._table_depth = 0
         self._row_text: list[str] | None = None
         self._row_url: str | None = None
-        self._in_anchor = False
+        self._outside_url: str | None = None
+        self._outside_text: list[str] = []
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
@@ -54,14 +55,23 @@ class _FamilyIndexParser(HTMLParser):
             self._row_text = []
             self._row_url = None
         elif tag == "a" and self._row_text is not None:
-            self._in_anchor = True
             href = attrs.get("href", "")
             if "solutions/articles/" in href:
                 self._row_url = href
+        elif tag == "a" and not self._table_depth:
+            href = attrs.get("href", "")
+            if "solutions/articles/" in href:
+                self._outside_url = href
+                self._outside_text = []
 
     def handle_endtag(self, tag):
         if tag == "a":
-            self._in_anchor = False
+            if self._outside_url:
+                label = " ".join(self._outside_text)
+                if re.search(r"TNA|TNS", label, re.IGNORECASE):
+                    self.rows.append((label, self._outside_url))
+                self._outside_url = None
+                self._outside_text = []
         elif tag == "tr" and self._row_text is not None:
             if self._row_url:
                 self.rows.append((" ".join(self._row_text), self._row_url))
@@ -73,6 +83,8 @@ class _FamilyIndexParser(HTMLParser):
     def handle_data(self, data):
         if self._row_text is not None and data.strip():
             self._row_text.append(data.strip())
+        elif self._outside_url and data.strip():
+            self._outside_text.append(data.strip())
 
 
 def _platform_for_family_row(text: str) -> Optional[str]:
