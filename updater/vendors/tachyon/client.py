@@ -1264,14 +1264,21 @@ class TachyonClient:
             "speed_mbps", "speed", "link_speed", "rate"
         ) if key in eth0), None)
         link_rate_mbps = self._rate_mbps(rate_value)
+        rx_bytes = self._counter(eth0.get("rx_bytes"))
+        tx_bytes = self._counter(eth0.get("tx_bytes"))
+        counter_reasons = [
+            f"{'invalid' if key in eth0 else 'missing'}_{key}"
+            for key, value in (("rx_bytes", rx_bytes), ("tx_bytes", tx_bytes))
+            if value is None
+        ]
         return {
-            "read_state": "ok",
-            "reason": None,
+            "read_state": "unknown" if counter_reasons else "ok",
+            "reason": ",".join(counter_reasons) or None,
             "link_up": link_up,
             "link_rate_mbps": link_rate_mbps,
             "reported": reported,
-            "rx_bytes": self._counter(eth0.get("rx_bytes")),
-            "tx_bytes": self._counter(eth0.get("tx_bytes")),
+            "rx_bytes": rx_bytes,
+            "tx_bytes": tx_bytes,
         }
 
     @staticmethod

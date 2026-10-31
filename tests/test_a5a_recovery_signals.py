@@ -51,7 +51,7 @@ async def test_cpe_eth0_state_parses_counters_and_only_reported_link_fields():
 
 
 @pytest.mark.asyncio
-async def test_captured_eth0_without_link_fields_does_not_infer_carrier_from_disabled():
+async def test_captured_eth0_without_link_fields_or_counters_is_unknown():
     capture = json.loads((FIXTURES / "cpe_interfaces.json").read_text())
     response = capture["reads"][0]["response"]
     client = TachyonClient("192.0.2.10", "user", "password")
@@ -60,11 +60,35 @@ async def test_captured_eth0_without_link_fields_does_not_infer_carrier_from_dis
     state = await client.get_eth0_recovery_state()
 
     assert state["link_up"] is None
-    assert state["read_state"] == "ok"
-    assert state["reason"] is None
+    assert state["read_state"] == "unknown"
+    assert state["reason"] == "missing_rx_bytes,missing_tx_bytes"
     assert state["link_rate_mbps"] is None
     assert state["rx_bytes"] is None
     assert state["tx_bytes"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("counter_key", "counter_value", "reason", "expected_rx", "expected_tx"), [
+    ("rx_bytes", "invalid", "invalid_rx_bytes", None, 789),
+    ("tx_bytes", -1, "invalid_tx_bytes", 456, None),
+])
+async def test_invalid_eth0_counter_returns_unknown_and_preserves_other_fields(
+    counter_key, counter_value, reason, expected_rx, expected_tx
+):
+    response = {"interfaces": {"eth0": {
+        "status": "up", "speed_mbps": 1000, "rx_bytes": 456, "tx_bytes": 789,
+    }}}
+    response["interfaces"]["eth0"][counter_key] = counter_value
+    client = TachyonClient("192.0.2.10", "user", "password")
+    client._curl = AsyncMock(return_value=(200, json.dumps(response)))
+
+    state = await client.get_eth0_recovery_state()
+
+    assert state["read_state"] == "unknown"
+    assert state["reason"] == reason
+    assert state["link_up"] is True
+    assert state["link_rate_mbps"] == 1000.0
+    assert (state["rx_bytes"], state["tx_bytes"]) == (expected_rx, expected_tx)
 
 
 @pytest.mark.parametrize("value", [True, -1, 1.5, "1.5", None])
