@@ -33,13 +33,6 @@ def device_client(monkeypatch):
     return client
 
 
-def saved_rollout(status):
-    rid = db.create_config_push_rollout("[]", "Saved policy", "[]")
-    db.assign_config_push_device(rid, "10.0.0.1", "ap", "canary")
-    db.update_config_push_rollout_status(rid, status)
-    return rid
-
-
 def targets():
     return [{"ip": "10.0.0.1", "role": "ap", "username": "admin", "password": "pass", "model": None}]
 
@@ -48,31 +41,7 @@ def templates():
     return [{"id": 1, "name": "SNMP", "fragment": {"services": {"snmp": {"community": "new"}}}}]
 
 
-@pytest.mark.parametrize("status", ["active", "paused"])
-def test_saved_rollout_routes_refuse_and_keep_status(operator_client, push_db, device_client, status):
-    rid = saved_rollout(status)
-    for suffix in ["start", f"{rid}/advance", f"{rid}/resume"]:
-        response = operator_client.post(f"/api/config-push/rollout/{suffix}", json={})
-        assert response.status_code == 409
-        assert response.json()["detail"] == config_write_guard.CONFIG_WRITES_PAUSED_REASON
-        assert db.get_config_push_rollout(rid)["status"] == status
-    response = operator_client.get("/api/config-push/rollout")
-    assert response.status_code == 200
-    assert response.json()["rollout"]["id"] == rid
-    assert operator_client.post(f"/api/config-push/rollout/{rid}/cancel").status_code == 200
-    assert db.get_config_push_rollout(rid)["status"] == "cancelled"
-    device_client.apply_config.assert_not_called()
-
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["active", "paused"])
-async def test_saved_rollout_runner_makes_zero_applies(push_db, device_client, status):
-    rid = saved_rollout(status)
-    await app_module._run_config_push_phase(rid, templates(), targets())
-    device_client.apply_config.assert_not_called()
-    assert db.get_config_push_rollout_devices(rid)[0]["status"] == "pending"
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("catchup", [False, True])
 async def test_scheduled_and_catchup_keep_polling_without_enforcement(push_db, device_client, monkeypatch, catchup):
@@ -142,7 +111,7 @@ def test_manual_restore_still_applies(operator_client, push_db, device_client, m
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["phase", "enforce", "rollback"])
+@pytest.mark.parametrize("path", ["enforce", "rollback"])
 async def test_pause_after_dry_run_stops_next_apply(push_db, device_client, monkeypatch, path):
     allowed = True
     monkeypatch.setattr(config_write_guard, "automatic_config_writes_allowed", lambda: allowed)
@@ -155,42 +124,11 @@ async def test_pause_after_dry_run_stops_next_apply(push_db, device_client, monk
 
     device_client.apply_config.side_effect = dry_run_then_pause
     poller = NetworkPoller()
-    if path == "phase":
-        rid = saved_rollout("active")
-        await app_module._run_config_push_phase(rid, templates(), targets())
-        assert db.get_config_push_rollout_devices(rid)[0]["status"] == "pending"
-    elif path == "enforce":
+    if path == "enforce":
         await poller._enforce_device("10.0.0.1", "ap", [{"id": 1, "config_fragment": {}}], "canary", asyncio.Semaphore(1))
     else:
         await poller._auto_rollback_device("10.0.0.1", "ap", db.get_latest_device_config("10.0.0.1")["id"])
     device_client.apply_config.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_stop_lets_submitted_apply_finish_and_records_result(push_db, device_client, monkeypatch):
-    monkeypatch.setattr(config_write_guard, "automatic_config_writes_allowed", lambda: True)
-    rid = saved_rollout("active")
-    applying = asyncio.Event()
-    finish = asyncio.Event()
-
-    async def apply(*args, **kwargs):
-        if not kwargs.get("dry_run"):
-            applying.set()
-            await finish.wait()
-        return {"success": True}
-
-    device_client.apply_config.side_effect = apply
-    task = asyncio.create_task(app_module._run_config_push_phase(rid, templates(), targets()))
-    monkeypatch.setattr(app_module, "_config_push_rollout_task", task)
-    await asyncio.wait_for(applying.wait(), timeout=2)
-    monkeypatch.setattr(config_write_guard, "automatic_config_writes_allowed", lambda: False)
-    await app_module.cancel_config_push_rollout(rid, session={})
-    assert not task.cancelled()
-    finish.set()
-    await asyncio.wait_for(task, timeout=2)
-    assert db.get_config_push_rollout_devices(rid)[0]["status"] == "updated"
-    assert db.get_config_push_rollout(rid)["status"] == "cancelled"
-    assert device_client.apply_config.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -232,10 +170,10 @@ async def test_submitted_automatic_apply_records_success_after_pause(push_db, de
 def test_ui_shows_safety_pause_and_retains_stop(operator_client, push_db):
     response = operator_client.get("/")
     assert response.status_code == 200
-    assert "Phased config rollout is paused for safety" in response.text
     assert "Auto-enforce paused for safety" in response.text
     assert 'id="configAutoEnforceToggle" type="button" disabled' in response.text
-    assert 'onclick="cancelConfigPushRollout()' in response.text
+    assert 'id="configPushRolloutPhases"' not in response.text
+    assert '/api/config-push/rollout' not in response.text
 
 
 @pytest.mark.parametrize("role", ["operator", "admin", "viewer"])

@@ -106,7 +106,14 @@ class TestSchedulerCanaries:
         """The first wave selects ~10% of candidates (the Firmware Hold is enforced
         at the gate, not by filtering the batch)."""
         _seed_rollout_devices()
-        rollout_id = db.create_rollout("firmware.bin")
+        rollout_id = db.create_rollout(
+            "firmware.bin",
+            members=[
+                {"ip": "10.0.0.10", "device_type": "ap"},
+                {"ip": "10.0.0.11", "device_type": "ap"},
+            ],
+            settings_snapshot={},
+        )
         rollout = db.get_rollout(rollout_id)
 
         scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
@@ -124,7 +131,12 @@ class TestSchedulerCanaries:
             "auth_status": "ok",
         })
 
-        rollout_id = db.create_rollout("tna-30x-1.2.3-r123.bin", "tna-303l-2.5.0-r456.bin")
+        rollout_id = db.create_rollout(
+            "tna-30x-1.2.3-r123.bin",
+            "tna-303l-2.5.0-r456.bin",
+            members=[{"ip": "10.0.0.10", "device_type": "ap"}],
+            settings_snapshot={},
+        )
         rollout = db.get_rollout(rollout_id)
         scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
 
