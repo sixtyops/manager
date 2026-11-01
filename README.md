@@ -5,13 +5,13 @@
 Manager updates Tachyon firmware in waves of 10%, 50% and 100%, one wave per maintenance window. Scheduled rollouts stay off until every safety slice below is done and proven on hardware.
 
 ```text
-Overall                   ██████████░░░░░░░░░░  8 of 15 slices merged
+Overall                   ████████████░░░░░░░░  9 of 15 slices merged
 Write safety              ████████████████░░░░  5 of 6 slices merged
   Stop at first failure ✓  One writer at a time ✓  Recheck at each write ✓
-  Reboot recovery proof ✓  CPE link state, counters, and polling pause ✓  Customer recovery check: open; exact-head bench proof is on hold
-Waves and windows         ██████████░░░░░░░░░░  2 of 4 slices merged
+  Reboot recovery proof ✓  CPE link state, counters, and polling pause ✓  Customer recovery check: [#673](https://github.com/sixtyops/manager/pull/673) open; exact-head bench proof is on hold
+Waves and windows         ███████████████░░░░░  3 of 4 slices merged
   One wave per window ✓  Saved rollout membership ✓
-  Stragglers: #655 and #659 merged; #663 open and blocked for human review after the deploy-risk check  Wave sizing: Not started
+  Stragglers: [#655](https://github.com/sixtyops/manager/pull/655), [#659](https://github.com/sixtyops/manager/pull/659), and [#663](https://github.com/sixtyops/manager/pull/663) merged  Wave sizing: Not started
 Proof and release         ████░░░░░░░░░░░░░░░░  1 of 5 slices merged
   Bench wrapper archive fix ✓  Dev host proof: user-write proof passed; firmware test is next
   Qualification record: Not started; waits for the firmware test  Dev release: Not started  Go-live review: Not started
