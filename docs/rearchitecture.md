@@ -1,7 +1,7 @@
 # Rearchitecture: back to the firmware core
 
-> **Status:** decisions recorded 2026-08-29. The executable plan is epic
-> [#316](https://github.com/sixtyops/manager/issues/316): one issue per PR.
+> **Status:** structural decisions recorded 2026-08-29. The active firmware
+> queue plan is epic [#695](https://github.com/sixtyops/manager/issues/695).
 > **Supersedes** the "firmware, config, RADIUS, and monitoring" framing of
 > North Star v1. `docs/north-star.md` is now v2.
 
@@ -93,220 +93,67 @@ The specific problems this plan fixes:
 | Manual **bulk** update | Fleets move via rollouts. Single-device manual update stays (see rules). |
 | `devmode.py` dummy poller | Replaced by the seed script. |
 
-## Rollout rules (the opinionated part)
+## Rollout rules (the target contract)
 
-> The precise definition — identity model, lifecycle state machine, wave
-> construction, and the edge-case table — is in
-> [docs/rollout-logic.md](rollout-logic.md). The rules below are the summary.
+**Key points:** The target replaces percentage waves with a serial queue.
+Current code still runs waves until the cutover PRs land.
 
-**Key points:** These are target invariants for the rebuilt core. They are
-not claims about shipped behavior. Operators can set timing and pacing, but
-cannot disable gates or resume after a failed check in the same window. Only
-one device write and recovery sequence can run at a time.
+**Detail:** Derive pending work from Manager inventory and the selected
+firmware. Run CPEs, then APs, then switches. Allow one device write and recovery
+sequence at a time. Keep Firmware Hold, readiness, eligibility, maintenance
+window, freeze, clock, weather, and artifact checks. Persist the window cutoff
+and first failure. Stop new starts at cutoff or after a failed check. Finish
+active recovery. Continue remaining work only in a later eligible window.
 
-**Detail:** Items marked **always on** describe the target contract. A current
-behavior note names a difference where one is known. The target rules can be
-pinned by `tests/test_rollout_invariants.py` as they are implemented. A
-pre-start gate block is a hold, not an outage. A failure after work starts
-stops the whole window. Do not resume it in that window. Approval is required
-only for no rollback, the first run of a new firmware family, a sole path to
-other devices, or a policy exception such as a named Hold exception. Approval
-covers that plan only. It never bypasses a failed gate.
+A failed device must be checked first in a later window. If it already runs
+the target firmware, verify recovery without flashing again. Otherwise require
+operator resolution before continuing. New and returning devices join the
+derived queue when they need the selected artifact and pass admission checks.
+Scheduled updates use one bank. Manual per-device updates keep their deliberate
+Firmware Hold bypass and do not advance scheduled timing.
 
-### Waves
+The target keeps bounded reported AP peer-return checks, RSSI smoke checks,
+and reported CPE `eth0` link-up when that link was up before reboot. It does
+not treat bridge learning or byte deltas as proof of customer traffic. Missing
+required recovery evidence stops the queue.
 
-1. A rollout progresses **10% → 50% → 100%, cumulative, of the units**
-   (rule 3) built from the frozen membership (rule 13): for 100 units the
-   waves are 10, 40, 50. No canary phase. **Always on.** *(Today each
-   percentage is taken of the then-remaining candidates, giving 10/45/45.)*
-   Rounding is `ceil`, minimum batch 1 unit. Removed and disabled members are
-   not in the denominator. Deferred units stay in the denominator and retry.
-   See [rollout-logic.md §4.2](rollout-logic.md#42-sizing).
-2. **One wave per maintenance window**, DB-backed so restarts cannot cascade.
-   **Always on.** The window key must identify a *window instance*, not a
-   calendar date, so multiple windows per day and windows crossing midnight
-   are handled. *(Today the key is `YYYY-MM-DD`, `scheduler.py:618`.)*
-3. The accounting unit is the **AP with its attached CPEs**; switches are
-   separate units. Within a wave, units run **CPEs → APs → switches**. A
-   switch is eligible only after every AP it powers (per the switch-port
-   topology) has succeeded in an *earlier* wave. Unknown, stale, or conflicting
-   topology blocks an automatic switch update; it does not move the switch to
-   the final wave. No site-spread or model-spread rules. **Always on.**
-4. Pacing is set at the start of each wave. Window and weather settings are
-   read live. Changes are logged. Only one device write and recovery sequence
-   can run at a time. Pacing cannot change this limit. Updates are always
-   **single-bank** (the vendor recommendation) and there is no bank-mode
-   setting. *(Today bank mode is a setting; both are snapshotted once at
-   rollout creation, `scheduler.py:591-596`.)*
-
-### Firmware Hold and confirmation
-
-5. New firmware is held for `firmware_canary_hold_days` from its release
-   date, per model family. **Always on** (days are configurable).
-6. The hold for a family clears early once **one device in that family
-   passes a clean smoke test** and is still healthy at read time. A confirmed
-   device in one family never clears another family. No additional soak period.
-7. Post-update smoke test (version match, CPE re-association, RSSI sanity)
-   is required for a device to count as confirmed. **Always on.**
-8. **If any family in scope is held, the first wave waits** (all-or-nothing).
-   This is current behavior (`scheduler.py:612-617`, pinned by
-   `test_rollout_invariants.py:285-314`) and is kept deliberately: a
-   partial first wave would let the held family skip its own 10% wave.
-   `docs/gradual-rollout.md` is corrected to say this.
-
-### Failure handling
-
-9. **Any failed safety gate or device check stops new writes for the whole
-   maintenance window.** This applies before and after firmware upload begins.
-   Do not resume in that window. Let an active flash finish and complete its
-   recovery checks; do not start another device sequence until the current
-   device passes every check. **Always on.** *(Today a generic failure marks
-   the device failed and pauses at job end; only strict smoke failure and
-   non-return cancel immediately, `app.py:5647-5665`.)* A pre-start gate block
-   is a hold, not an outage.
-10. A failed pre-start check, such as unreachable device, unknown identity, or
-    unsafe artifact, holds the member in its current wave and stops new writes
-    for the window. The wave does not advance past it. Retry only in a later
-    window after the check passes. This hold is not an outage. If the
-    pre-update reboot or a later device action loses service, record a failure
-    and stop the window. *(Today `deferred` means window cutoff, a pre-reboot
-    login failure is recorded as `failed`, and a wave with deferred devices
-    re-runs the same phase, `app.py:5766-5776`, `scheduler.py:1166-1181`.)*
-11. Commit a fresh **pre-update config snapshot before the pre-update reboot
-    and before every device write**. A snapshot failure stops new writes for
-    the whole window and holds the current wave. It does not defer one device
-    while the rollout advances. **Always on.** *(Today snapshot failure is
-    non-fatal, `app.py:5569-5570`.)*
-12. **Pre-update reboot** proves the device recovers before flashing. Run it
-    only after the snapshot passes. **Always on.** *(Today it is a setting,
-    `app.py:5144`.)*
-
-### Fleet membership
-
-13. **Rollout membership is persisted at creation** (one `rollout_devices`
-    row per member, wave unassigned). A device added to the fleet
-    mid-rollout is appended as a **straggler** and joins **only the final
-    (100%) wave**; the straggler cutoff is the moment the final wave starts,
-    so late additions cannot keep a rollout open. *(Today rows are created
-    only when a device is assigned to a wave, `scheduler.py:736-739`.)*
-14. The rollout is keyed to the **firmware artifact (checksum), not the
-    filename**. Selecting a different artifact for any family **cancels the
-    in-progress rollout**; a new rollout starts with the Hold computed from
-    that artifact's release date.
-15. A device deleted or disabled mid-rollout keeps its membership row with a
-    terminal reason (`removed`, `disabled`) for auditability; it is excluded
-    from wave sizing.
-
-### Secondary gates
-
-16. **Weather Guard** (minimum temperature via weather.gov) blocks a wave.
-17. **NTP clock validation** hard-blocks on clock drift; unreachable NTP
-    degrades to the system clock.
-18. **Freeze windows** block waves outright.
-19. No new job starts with fewer than 15 minutes left in the window; in-flight
-    devices may run past window end; devices past the per-device cutoff are
-    deferred.
-
-### Manual updates
-
-20. Exactly **one** manual path: "update this device now." It runs through
-    the same safety gates as the scheduler. A named Hold exception is
-    explicit and audit-logged. It cannot bypass a failed gate. A clean proof
-    records the exception and its result. *(Today manual per-device routes
-    bypass the Firmware Hold; see [gradual-rollout.md](gradual-rollout.md).
-    Today confirmation is scope-restricted, `scheduler.py:787-788`.)* For an
-    AP, "update now" includes its attached CPEs (matching the current
-    `/api/start-update` behavior of the AP button, not `/api/update-device`).
-    Bulk manual selection and the whole-site button do not exist.
-
-### Engine shape
-
-21. There is **one rollout engine** ("roll an action across the fleet under
-    the gate"), one `rollouts`/`rollout_devices` table pair, and one wave
-    loop. Firmware flashing is the first action strategy. Config normalization
-    is a future strategy; it must not get its own loop.
-22. Wave start is decided by **one composed function**
-    (`evaluate_wave_start(context)`) that runs the named gates in order —
-    status, one-wave-per-window, Hold, freeze, NTP, window, end buffer,
-    weather — and returns a reason code. `phase_run_decision` is one invariant
-    inside it. The UI's "next attempt" prediction calls the same function;
-    nothing re-derives its rules.
-23. Four questions are kept distinct and each has one implementation:
-    **membership** (was it in the rollout at creation / straggler),
-    **validity** (still present, enabled, in scope), **action eligibility**
-    (still needs this artifact — the one predicate shared by scheduler and
-    manual path), and **scheduling eligibility** (reachable, not held,
-    topology-safe).
-24. Confirmations recorded by a wave that ends in a pause are **voided**; the
-    Hold clears only from a wave or manual update that completed cleanly.
-    A CPE-only family clears by elapsed days or by a manual CPE update.
+Current behavior remains the source of truth for what ships today. See
+[gradual-rollout.md](gradual-rollout.md) for shipped wave behavior and
+[rollout-logic.md](rollout-logic.md) for the target contract.
 
 ## Target layout
 
-```
-updater/
-  main.py                 create_app(); the one FastAPI instance
-  api/                    routers: devices, firmware, rollouts, configs,
-                          config_push, auth, settings, notifications, ws
-  core/
-    gates.py              evaluate_wave_start, WaveStartContext, ordered gates
-    scheduler.py          the tick loop (moved from updater/scheduler.py last)
-    engine.py             rollout state machine, membership, units, waves,
-                          halt, defer, events
-    eligibility.py        the one needs_update predicate
-    jobs.py               build_job + the job runner (flash one device, smoke)
-    identity.py           match, merge, reconcile addresses
-    lifespan.py           startup/shutdown, recovery hook
-    broadcast.py          WebSocket connection state
-  device/
-    tachyon.py            the Tachyon client (only vendor)
-    credentials.py        default device credentials
-  poller.py               inventory, CPE, topology, config polling;
-                          calls core/identity
-  db/                     schema.py + devices, rollouts, configs, auth, settings
-  config/push.py          push_one: lock, snapshot, merge|replace, dry-run,
-                          apply, verify
-  firmware_policy.py      artifacts, families, targets
-  firmware_fetcher.py
-  backup.py               CSV export, bridge export
-  bridge_import.py
-  notify/                 slack.py, email.py (JobCompleted subscribers)
-  templates/monitor.html  shell only
-  static/css/, static/js/ one file per area
-```
-
-Not in the final tree: `app.py` (or a one-line shim), `scheduler.py`,
-`tachyon.py`, `vendors/`, `radius_*`, `sftp_backup.py`,
-`snmp.py`, `webhooks.py`, `syslog_forwarder.py`, `devmode.py`,
-`features.py`, `license.py`, the apply path of `release_checker.py`.
-
-Rules that keep the tree honest:
-
-- `core/` never imports `api/` or `poller.py`. `poller.py` calls `core`.
-- Behavior changes land in a module's final home. Pure moves happen
-  **before** the behavior change (job runner before the point-of-no-return
-  work; routers and db modules after their feature work).
-- No compatibility shims survive the epic. The last issue deletes them.
+The target keeps one update engine, shared admission checks, current Manager
+inventory, and existing job and history records. It removes percentage phase
+selection, saved rollout membership, wave reservation, and straggler handling
+after their runtime callers move. Keep durable failure records, confirmations,
+window identity, and read-only device recovery.
 
 ## PR sequence
 
-The executable plan is **epic #316** and its child issues, one PR each.
-The phases are:
+The executable delivery plan is [epic #695](https://github.com/sixtyops/manager/issues/695).
+Each PR is one bounded slice, targets `main`, and states shipped behavior
+separately from target behavior. Keep scheduled queue admission closed until
+its required proof passes.
 
-- **Phase A** — clean deletions, distribution model, bridge release, staged
-  schema. 34 issues. Runs mostly in parallel.
-- **Identity** — serial + all MACs, CPEs as devices, never delete on offline,
-  address reconciliation, rekey by `device_id`. 9 issues, in order.
-- **Phase B** — the rollout engine: one eligibility predicate, one job
-  builder, composed gate, rollout state model (11 small issues), completion
-  event, engine/scheduler split, switch/PoE batching, router and db module
-  extraction. Live hardware lane on every engine PR.
-- **Phase C** — config fixes (encrypt `form_data`, lock + verify rollback,
-  one push primitive, snapshot tagging), freeze-window UI, frontend split.
+1. `docs: replace wave contract with serial queue`
+2. `refactor: remove unused wave evaluator`
+3. `refactor: simplify AP recovery evidence`
+4. `refactor: remove unused recovery probes`
+5. `feat: store firmware window timing`
+6. `feat: define queue cutoff`
+7. `feat: execute exact serial entries`
+8. `feat: enforce device admission deadline`
+9. `refactor: derive pending firmware queue`
+10. `feat: replace wave scheduling`, then remove detached wave selection,
+    membership lifecycle, and wave predictions in bounded PRs
+11. `refactor: replace wave API state`
+12. `refactor: delete wave gate`
+13. Delete wave reservation, membership creation, and phase persistence in
+    separate bounded PRs.
 
-Rules that apply to every PR: one issue per PR; CHANGELOG entry for every
-user-visible change; tests and docs for a removed feature go in the same PR
-as the removal; use function and route names, not line numbers.
+Engine and driver PRs need independent review and exact-head bench proof. Keep
+all work behind existing readiness until the cutover evidence passes.
 
 ## Open follow-ups
 
@@ -320,12 +167,14 @@ as the removal; use function and route names, not line numbers.
 - "Back up `./data`" docs must name the Fernet key file explicitly, or
   restores decrypt nothing.
 
-## Review outcome (2026-08-29)
+## Historical review outcome (2026-08-29)
+
+This review records decisions for the superseded percentage-wave proposal. It is historical context, not active delivery guidance. The serial queue contract above and [issue #695](https://github.com/sixtyops/manager/issues/695) replace its B-slice plan. B4 and the wave downgrade fence proposals are superseded; retain their review artifacts for history.
 
 Two independent reviews (Codex CLI and a separate Claude agent) were run
 against the first draft. The following points were raised by **both**
-reviewers. Each has been resolved in the rules and PR tables above; the
-resolutions are: (1) keep all-or-nothing holds; (2) rollout state model in
+reviewers. Those findings belong to the superseded wave proposal. The archived
+resolutions were: (1) keep all-or-nothing holds; (2) rollout state model in
 B4; (3) AP+CPE accounting unit and fail-closed topology; (4) bridge release
 A10; (5) A7/A9/A10 of the first draft moved behind their seams as B2b, B6b,
 B7b; (6) dependencies folded into A3/A4a/A6a/A8; (7) rule 22 recomposed;

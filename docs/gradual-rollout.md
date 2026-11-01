@@ -4,19 +4,25 @@
 the complete target safety contract. Read [one-right-way.md](one-right-way.md)
 for the target and [rollout-logic.md](rollout-logic.md) for the design rules.
 
-**Bottom line:** Auto-update rolls new firmware to the fleet in **10% → 50% → 100%**
-waves, **one wave per maintenance window**, and **halts the whole job the moment a
-device doesn't come back online**. New firmware is held for a configurable soak
-(the **Firmware Hold**) before the first wave; the hold clears early once a device
-is confirmed working on it. There is no separate canary phase — the first 10% wave
-*is* the canary, protected by halt-on-failure.
+**Key points:** Current code runs percentage waves. The serial queue in
+[issue #695](https://github.com/sixtyops/manager/issues/695) is a target and
+will not ship until its cutover PRs land.
 
-The scheduler auto-detects which in-scope devices are behind their per-family target
-(`tna-30x` / `tna-303l` / `tns-100`), creates a rollout, and advances it one wave per
-window. A single fail-closed gate (`rollout_gate.py`) is the only place that decides
-whether a wave may start. Failures pause the rollout for manual review. Manual
-per-device updates bypass the release-date Firmware Hold. Address-change
-qualification applies to both scheduled and manual updates, as described below.
+**Detail:** Today the scheduler advances in-scope devices through 10%, 50%,
+and 100% waves, with one wave per maintenance window. It uses
+`rollout_gate.py` to check scheduled admission. Firmware Hold applies before
+the first scheduled wave. Manual per-device updates bypass that hold. Failure
+handling and device recovery do not yet enforce the full target contract.
+
+The target derives an ordered queue from Manager's current inventory. It runs
+CPEs, then APs, then switches, with one device write and recovery sequence at
+a time. Limit the first used maintenance windows for each new firmware family
+or artifact with the configured minute ramp; later windows use the normal
+schedule. It keeps Firmware Hold and stops new starts at a persisted cutoff,
+and stops the queue after the first failure. An active device finishes its
+recovery. Remaining devices wait for a later window. New and returning devices
+join the derived queue. Scheduled updates use one bank. See
+[one-right-way.md](one-right-way.md) and [rollout-logic.md](rollout-logic.md).
 
 ## Scheduled safety readiness
 
@@ -34,11 +40,12 @@ again before starting its upload process. Let a submitted operation finish its r
 stops the next scheduled action, including another bank pass. The Auto-Update control shows the safety reason while
 readiness is pending, including when the schedule is off.
 
+The serial queue plan in [#695](https://github.com/sixtyops/manager/issues/695)
+supersedes the rollout scope in [#338](https://github.com/sixtyops/manager/issues/338).
 Complete [#416](https://github.com/sixtyops/manager/issues/416),
 [#369](https://github.com/sixtyops/manager/issues/369),
 [#337](https://github.com/sixtyops/manager/issues/337),
 [#341](https://github.com/sixtyops/manager/issues/341),
-[#338](https://github.com/sixtyops/manager/issues/338),
 [#367](https://github.com/sixtyops/manager/issues/367),
 [#417](https://github.com/sixtyops/manager/issues/417), and
 [#422](https://github.com/sixtyops/manager/issues/422), with exact-head bench proof.
@@ -87,23 +94,13 @@ operator decision; it does not check issue status or establish bench proof.
 Set it to `false` to pause new scheduled admission again. The schedule toggle
 changes `schedule_enabled` independently of this flag.
 
-## The gate (`rollout_gate.py`)
+## Shipped wave gate
 
-`phase_run_decision(rollout, window_key, *, first_wave_held)` — fail-closed, two rules:
-
-1. **One wave per maintenance window.** A wave job stamps `rollouts.last_phase_window`
-   when it starts; while that equals the current window the gate holds the next wave,
-   so waves never cascade through one night. DB-backed, survives a restart.
-2. **Firmware Hold on the first wave.** When `first_wave_held` is true the `pct10`
-   wave holds. The caller (`scheduler._held_families` + `_pending_split_by_hold`)
-   computes it per firmware family: a family is **held** while its firmware's
-   release-date + `firmware_canary_hold_days` hasn't elapsed **and** no in-scope
-   device of that family is **confirmed working** on it. `pct50`/`pct100` never
-   re-consult the hold, so a started rollout always finishes on schedule.
-
-Every hold logs a `phase_held` or `blocked_firmware_hold` event.
-`tests/test_rollout_invariants.py` drives the scheduler across ticks/windows to lock
-both rules in.
+Current code uses `phase_run_decision` to enforce one percentage wave per
+maintenance window and Firmware Hold on the first wave. The scheduler computes
+Hold by firmware family. A confirmed working device can clear Hold for its
+family. These are shipped wave rules. The target keeps Firmware Hold but
+replaces percentage progression with serial queue admission.
 
 ## Firmware Hold & confirmed-working clear
 
@@ -120,18 +117,21 @@ both rules in.
   stamp the window, and the held family would then skip its own 10% wave and ship at
   50% (`scheduler.py` `_pending_split_by_hold`, pinned by `test_rollout_invariants.py`).
   See rule 8 in [rearchitecture.md](rearchitecture.md).
-- No manual bypass exists — the hold clears only by elapsed days or a confirmed device.
+- No manual bypass exists — the hold clears by elapsed days or a confirmed device.
   A **manual** per-device update (`/api/start-update`, `/api/update-device`) ignores the
   hold entirely, which is how the operator creates the confirming device.
 
-## Halt-on-first-failure
+## Failure handling
 
-A device that fails to return online cancels the update job (`app.py`) and the rollout
-is paused (`scheduler.on_job_completed` on `failed_count > 0`). Smoke-test warnings,
-failed checks, and exceptions mark the device failed and request job cancellation,
-including with `smoke_test_strict=false`. Already active device operations can
-continue. Persistent window stops and serialized recovery require the remaining
-safety fixes.
+Today a device that does not return online cancels its update job, and the
+scheduler pauses the rollout when the job reports a failure. Other failures do
+not yet enforce the full target stop rule. Persistent window stops and serial
+recovery remain target work.
+
+The target records the first failure for the maintenance window and prevents
+new device starts for the rest of that window. An active device finishes
+recovery. The operator resolves the failure before work resumes in a later
+window. The failed window never reopens.
 
 ## Per-device update state
 
@@ -141,59 +141,45 @@ scope, auto-update is on, and its family's hold hasn't cleared. The UI shows a d
 "on hold" glyph. The release-date hold permits a manual update. The address-change
 hold shows its reason and waits for qualification or an approved named lab plan.
 
-## Database (`database.py`)
+## Shipped rollout state
 
-- `rollouts` — `phase` is one of `pct10` / `pct50` / `pct100` (default `pct10`);
-  `last_phase_window` drives Rule 1. `create_rollout` inserts `phase='pct10'`. A
-  migration remaps any in-flight `canary` rollout to `pct10`.
-- `rollout_devices` — per-device phase assignment + status.
-- `firmware_confirmations` — confirmed-working records.
-- `PHASE_ORDER = ["pct10", "pct50", "pct100"]`; `advance_rollout_phase` /
-  `complete_rollout_phase` walk it. `mark_device_firmware_confirmed`,
-  `get_confirmed_ips_for_version`, `get_firmware_hold_info` support the hold logic.
+Today `rollouts.phase` stores `pct10`, `pct50`, or `pct100`. The
+`rollout_devices` table stores per-device phase assignment. Firmware
+confirmations support the current Hold behavior. These structures remain in
+use until the cutover PRs land.
 
-## Phase progression
+## Target queue behavior
 
-| Window | Wave  | Batch              | After success |
-|--------|-------|--------------------|---------------|
-| 1      | pct10 | ~10% of remaining  | advance to pct50 |
-| 2      | pct50 | ~50% of remaining  | advance to pct100 |
-| 3      | pct100| all remaining      | rollout completed |
-
-"Remaining" = in-scope APs whose firmware or manageable CPEs are behind, plus in-scope
-switches behind their family target, minus devices already updated this rollout and
-held-family devices. An empty wave auto-advances without consuming the window. New
-firmware selection cancels the active rollout and starts a fresh one at `pct10`.
-
-## Safety rules
-
-1. **Failure pauses the rollout** — review and resume manually.
-2. **One wave per maintenance window** — fail-closed gate via DB-backed `last_phase_window`.
-3. **Firmware Hold soaks new firmware** before the first wave; clears early on a
-   confirmed-working device, per family.
-4. **New firmware = new rollout** — starts at `pct10`.
-5. **Manual updates bypass the hold** — the operator's deliberate override / canary.
-6. Time validation, scope, and weather checks still gate every wave.
+The target uses one ordered queue of devices that need the selected firmware.
+It does not save percentage membership or calculate wave sizes. A device that
+becomes eligible joins the queue from current inventory. Run CPEs before APs,
+then switches. Keep one device write and recovery sequence active at a time.
+Persist the maintenance-window cutoff and first failure. Stop new starts at the
+cutoff, finish active recovery, and continue remaining work in a later window.
 
 ## Target contract
 
-**Key points:** The target adds safety gates that are not all shipped. A
-pre-start block is a hold, not an outage. A failed check stops the whole
-maintenance window. The operator cannot resume that rollout in the same
-window or bypass a failed gate. Only one device write and recovery sequence
-can run at a time.
+**Key points:** The target derives an ordered queue from current inventory. It
+runs one device write and recovery sequence at a time. This contract is not
+shipped. Current code still runs percentage waves until the cutover PRs land.
 
-**Detail:** The target requires a saved risk statement before each wave, a
-fresh restorable backup and committed config snapshot before every write, and
-recovery proof before flashing. It verifies version, CPE re-association, RSSI,
-and customer traffic after each update. Traffic proof needs a tested fallback
-for missing or idle traffic. Unknown, stale, or conflicting topology blocks an
-automatic parent update. Operators can record a named Hold exception only
-after the same safety gates pass. See [one-right-way.md](one-right-way.md).
+**Detail:** The target requires a saved risk statement, a fresh restorable
+backup, a committed config snapshot, and recovery proof before each write. It
+checks version and role-specific recovery evidence after each update. For AP
+recovery, use bounded reported peer-return checks, RSSI smoke checks, and
+reported CPE `eth0` link-up when that link was up before reboot. Do not infer
+customer application traffic from bridge learning or byte counters. Unknown,
+stale, or conflicting topology blocks an automatic parent update.
+
+Stop new starts at the persisted window cutoff and finish active recovery. A
+failed check stops new starts for the whole window. Resolve the failure before
+continuing in a later window. Manual per-device updates keep their deliberate
+Firmware Hold bypass. See [one-right-way.md](one-right-way.md) for the target
+contract and [rollout-logic.md](rollout-logic.md) for its rules.
 
 These target rules do not describe the current scheduler or manual update
-routes. In particular, shipped manual per-device updates bypass the Hold and
-shipped failure handling does not enforce every target stop rule.
+routes. Shipped manual per-device updates bypass Firmware Hold. Shipped failure
+handling does not enforce every target stop rule.
 
 ## Failed-window stop
 
@@ -204,15 +190,10 @@ role-specific smoke check with no warnings. Missing or failed proof holds the
 device and stops the firmware window. Resolve the hold before retrying in a
 later window. Stored settings cannot disable reboot or smoke proof.
 
-AP updates also snapshot each connected CPE's radio MAC, customer MACs on
-`eth0`, and `eth0` byte counters before each AP reboot. Before the next write,
-the same radio MAC must return, each saved customer MAC must appear on CPE
-`eth0` and AP bridge port `prs0`, and a CPE with two-way baseline traffic must
-show positive byte deltas in both directions. A zero counter baseline does not
-prove traffic and does not fail this traffic check. The gate checks after the
-pre-update reboot before flashing and after the firmware reboot. The gate also
-checks reported `eth0` link rates and requires the same or a higher rate. A
-failed check stops the window through `rollout_gate.py`.
+AP recovery target checks bounded reported peer return, RSSI smoke results,
+and reported CPE `eth0` link-up when it was up before reboot. Bridge learning
+and byte-counter changes do not prove customer application traffic. Missing
+required recovery evidence stops the queue.
 
 **Key points:** Store the first failed device gate under the maintenance window
 instance key. Keep that window closed to new jobs and device actions. Run one
@@ -223,7 +204,7 @@ smoke test writes a row to `firmware_window_stops`. Keep the stop after a
 manager restart. Apply it to each new job, manual update, scheduled update,
 and rollout resume. In a later maintenance window, the operator records a
 failure resolution through `POST /api/firmware-window-stops/{stop_id}/resolve`.
-Run the normal rollout gates before starting a scheduled wave. Keep the failed
+Run the normal rollout gates before starting scheduled queue work. Keep the failed
 window stopped after the resolution record is saved.
 
 ## Address-change qualification hold
