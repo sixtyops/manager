@@ -20,6 +20,7 @@ class CompatibilityResult:
     reason: str | None = None
     format_version: int | None = None
     empty: bool = False
+    legacy: bool = False
 
 
 def inspect_connection(
@@ -44,7 +45,20 @@ def inspect_connection(
             "SELECT value FROM settings WHERE key = ?", (ROLLOUT_FORMAT_KEY,)
         ).fetchone()
         if marker is None:
-            return CompatibilityResult(False, "Rollout compatibility marker is missing")
+            has_saved_members = False
+            if "rollout_devices" in tables:
+                has_saved_members = db.execute(
+                    "SELECT 1 FROM rollout_devices LIMIT 1"
+                ).fetchone() is not None
+            has_held_rollout = "rollouts" in tables and db.execute(
+                "SELECT 1 FROM rollouts WHERE status = 'waiting_hold' LIMIT 1"
+            ).fetchone() is not None
+            if has_saved_members or has_held_rollout:
+                return CompatibilityResult(
+                    False,
+                    "Rollout compatibility marker is missing while saved rollout data is present",
+                )
+            return CompatibilityResult(True, format_version=1, legacy=True)
         raw = marker[0]
         if not isinstance(raw, str) or not raw.isdecimal() or str(int(raw)) != raw:
             return CompatibilityResult(False, "Rollout compatibility marker is malformed")
@@ -128,6 +142,19 @@ def initialize_empty_database(db: sqlite3.Connection) -> None:
             ("schedule_enabled", "false"),
             ("scheduled_rollout_safety_ready", "false"),
         ),
+    )
+
+
+def stamp_legacy_database(db: sqlite3.Connection) -> None:
+    """Stamp confirmed legacy data in the migration transaction."""
+    result = inspect_connection(db)
+    if not result.allowed or not result.legacy:
+        raise RolloutCompatibilityError(
+            result.reason or "Rollout compatibility marker is no longer missing"
+        )
+    db.execute(
+        "INSERT INTO settings (key, value) VALUES (?, '1')",
+        (ROLLOUT_FORMAT_KEY,),
     )
 
 

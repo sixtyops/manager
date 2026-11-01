@@ -17,6 +17,7 @@ from .db.compatibility import (
     raise_rollout_format_to_2,
     require_compatible_database,
     require_compatible_connection,
+    stamp_legacy_database,
 )
 from .crypto import encrypt_password, decrypt_password, is_encrypted
 from .logging_filter import register_secret
@@ -662,9 +663,10 @@ def _migrate_encrypt_settings(db):
 
 def init_db():
     """Initialize the database schema."""
+    compatibility = None
     if DB_PATH.exists():
         try:
-            require_compatible_database(DB_PATH)
+            compatibility = require_compatible_database(DB_PATH)
         except RolloutCompatibilityError as exc:
             logger.error(str(exc))
             raise
@@ -708,6 +710,12 @@ def init_db():
                 db.execute(f"DROP TABLE {_tbl}")
 
         build_schema(db)
+
+        # Existing installations predate the rollout marker. Stamp only when
+        # the preflight confirmed there is no saved B2 rollout data. This write
+        # shares the transaction with the migrations below.
+        if compatibility and compatibility.legacy:
+            stamp_legacy_database(db)
 
         # Migrations: add columns if missing
         _migrate(db)

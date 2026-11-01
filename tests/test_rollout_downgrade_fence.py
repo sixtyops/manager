@@ -80,8 +80,50 @@ def test_missing_marker_fails_closed():
 
     result = inspect_connection(connection)
 
+    assert result.allowed
+    assert result.legacy
+    assert result.format_version == 1
+
+
+def test_missing_marker_with_saved_membership_fails_closed():
+    connection = _database(sqlite3.connect(":memory:"))
+    connection.execute("DELETE FROM settings WHERE key='rollout_format_version'")
+    connection.execute(
+        "INSERT INTO rollouts (firmware_file, status) VALUES ('fw.bin', 'active')"
+    )
+    connection.execute(
+        "INSERT INTO rollout_devices (rollout_id, ip) VALUES (1, '192.0.2.10')"
+    )
+    connection.commit()
+
+    result = inspect_connection(connection)
+
     assert not result.allowed
-    assert result.reason == "Rollout compatibility marker is missing"
+    assert result.reason == (
+        "Rollout compatibility marker is missing while saved rollout data is present"
+    )
+
+
+def test_existing_legacy_database_upgrade_stamps_marker_and_starts(tmp_path, monkeypatch):
+    path = tmp_path / "manager.db"
+    connection = _database(sqlite3.connect(path))
+    connection.execute("DROP TABLE rollout_devices")
+    connection.execute("DELETE FROM settings WHERE key='rollout_format_version'")
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(database, "DB_PATH", path)
+
+    database.init_db()
+
+    connection = sqlite3.connect(path)
+    marker = connection.execute(
+        "SELECT value FROM settings WHERE key='rollout_format_version'"
+    ).fetchone()[0]
+    assert marker == "1"
+    assert connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rollout_devices'"
+    ).fetchone()
+    connection.close()
 
 
 def test_unreadable_database_fails_closed(tmp_path):
