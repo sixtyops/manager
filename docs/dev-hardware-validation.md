@@ -47,12 +47,14 @@ several roles; its write tests then run one at a time.
 
 The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
 may run dev host procedures. A worker may run a procedure only when the lead
-assigns that worker a named run. Run procedures on the dev host over the
+assigns that worker a named run. The brief names the lock holder and gives the
+exact approved backup, verify, and restore command lines. Run procedures on the dev host over the
 recorded SSH alias. Use the
 approved backup, verify, and restore commands with `sudo -n`; do not run
 `sudo` on the lead host. Read command arguments and paths from the approved
 `sixtyops-manager-loop.env` file without copying its values into Git. Before a
 deploy, list the backup and test-extract it into a temporary directory.
+Record the backup name immediately after creation.
 
 Use these command forms with the approved paths and flags:
 
@@ -69,6 +71,10 @@ comparing the access file's `address` field with the API list's `ip` key. The
 switch is optional for an AP-only run. Workers must request sandbox escalation
 for every HTTPS call to the dev host or a lab device. A worker `URLError`
 usually means the sandbox blocked the request.
+
+Route credential-bearing Tachyon curl calls through `_run_curl`, which sends
+credentials outside process arguments. Unauthenticated readiness probes may
+use direct HTTPS calls. Request sandbox escalation for both call types.
 
 On Tachyon TNA-30x firmware 1.15.1, each user record has `username`,
 `password`, `level`, `enabled`, and `first_login` fields. The password field
@@ -272,6 +278,10 @@ Modes:
   does not download firmware, check for self-updates, or open the RADIUS
   port. The proof logs out only sessions that its own login instrumentation
   opened.
+
+For session-sensitive changes, run the exact-head session proof for at least
+three minutes. Follow the session policy in that commit. Record login, reuse,
+renewal, and logout recovery evidence in the sanitized summary.
 
 For `local-switch`, the wrapper also requires an owner-only output directory
 with mode `700`. It creates a new log and summary with mode `600` before

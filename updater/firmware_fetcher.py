@@ -586,8 +586,8 @@ class FirmwareFetcher:
         Content-Length, or that is far smaller than the platform's other
         firmware is rejected rather than renamed into place — so a corrupt or
         partial image can never become the auto-selected target and get flashed
-        to a device. The MD5 check is fail-open: when the release page lists no
-        MD5 (`release.md5` is None) the size guards still apply. See issue #214.
+        to a device. A missing published MD5 or SHA-256 rejects the release
+        before download, while the size guards reject incomplete transfers.
 
         Returns (True, sha256_hex) on success — the SHA256 is computed in the
         same streaming pass so the caller can store it, bringing auto-fetched

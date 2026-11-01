@@ -14,13 +14,11 @@ procedures do not extend Manager authority.
 
 ## Authority history
 
-**Key points:** The owner approves merges through the ops bot.
+**Key points:** The owner merges ready PRs in daily batches.
 
-**Detail:** The owner delegated lead duties on 2026-10-02. On 2026-10-14, the
-owner authorized the Manager lead to merge PRs that met sign-off criteria. See
-[Review, merge and development release gates](#review-merge-and-development-release-gates)
-for the current process. This grant does not allow push, deploy, release, or
-production-device actions.
+**Detail:** The owner assigns lead duties and merges ready PRs in daily
+batches. The lead prepares evidence and keeps every review, CI, sign-off, and
+bench gate. See [Review, merge and development release gates](#review-merge-and-development-release-gates).
 
 Public-repo rulesets are free. This supersedes the earlier Team-plan
 requirement recorded in [#116](https://github.com/sixtyops/manager/issues/116).
@@ -103,7 +101,7 @@ unpushed work, run the fix worker in the builder's workspace and have it verify
 that work first. Reuse a worker only for a follow-up inside its own task, such
 as a test rerun.
 
-Use Luna as the default worker for nearly all work, including safety-path work
+Use GPT workers only. Use Luna as the default worker for nearly all work, including safety-path work
 at high reasoning. Assign docs and small code at low or medium reasoning. Assign
 pre-reviews, re-reviews, designated reviews, and bench or dev-host runs at high
 reasoning. Use Sol at medium only after Luna fails at a named step, or for a
@@ -112,7 +110,7 @@ design question at medium; never send a whole review to Astra. A PR escalated to
 Astra also gets a Sol review. For large decisions, meaning major product or
 safety decisions, use the five seats: Astra medium, Sol medium, Luna high, Luna
 medium, and the owner. [AGENTS.md](../AGENTS.md#models) points here for model
-routing and quorum. Only the Manager lead session may use Claude models.
+routing and quorum. Do not use Claude workers.
 Do not give implementation work to an architect; give its design to a coding worker.
 Verify installed provider/model/thinking IDs before sending work. Follow the
 review-fix rule in [Priority and delegation](#priority-and-delegation). Preserve
@@ -137,8 +135,10 @@ Each assignment names intent, issue, exact files, dependencies, acceptance,
 required instructions, tests, forbidden actions, evidence path and handoff.
 Require progress updates and completion through a reviewable PR or a concrete
 blocker. Keep detailed logs outside lead context and summaries concise.
-For dev host runs, assign the worker to run the approved backup, verify, and
-restore commands on the dev host over SSH with non-interactive `sudo -n`.
+For dev host runs, name the lock holder and give the worker the exact approved
+backup, verify, and restore commands for the dev host over SSH with
+non-interactive `sudo -n`. Record the backup name as soon as the command
+returns.
 Require a backup listing and test extraction before deploy, and sandbox
 escalation for each HTTPS call to the dev host or lab devices. A worker
 `URLError` usually means the sandbox blocked the request; have the worker
@@ -204,6 +204,8 @@ access.
 
 **Detail:** Workers run full offline `pytest -v` in a compatible private
 environment before commit, plus scoped checks and documentation verification.
+Keep the shared test virtual environment outside `/tmp`; macOS may remove
+temporary files while a review is running.
 They push a feature branch normally and open one PR to `main` with issue closure,
 validation, risks/limits and `agent:review`. Never force-push shared history.
 Follow [Slices and reviews](../AGENTS.md#slices-and-reviews) for epic structure,
@@ -227,23 +229,11 @@ Hold merge until the review and all normal review and sign-off gates pass. Use
 the existing `agent:escalated` and `agent:needs-human` states; do not create a
 new review label.
 
-The personal-processes ops bot sends the owner a Signal ready ping or digest
-for each Manager PR labeled `agent:ready-for-signoff`, with a ready packet.
-The owner approves by replying `merge` on Signal or reacting to the mapped
-message. The ops bot merges with `gh pr merge --squash --match-head-commit`.
-The lead keeps every gate and uses the 2026-10-14 merge grant only when the
-owner asks. The lead sends no Signal messages. After each
-ops-bot merge, read the merge commit message on `main`. If it contains a
-co-author trailer or a personal name, stop applying `agent:ready-for-signoff`
-to PRs and report the finding to the owner. Manager joins the digest through
-[personal-processes issue #509](https://github.com/isolson/personal-processes/issues/509)
-and [PR #510](https://github.com/isolson/personal-processes/pull/510).
-
-The owner prefers a few larger batches, once or twice a day. Main moves only
-when the owner merges. Keep gated PRs ready between batches. After each batch,
-one worker updates every open PR from `main` in one pass. Then benches run one
-PR at a time, followed by designated approvals. Follow [Squash source checks](#squash-source-checks)
-before applying the ready label.
+Keep gated PRs ready for the owner's daily merge batch. Use an explicit squash
+subject and an empty body. Read back the merge commit on `main` after each
+merge. Then update open PRs from `main` in one pass, run benches one PR at a
+time, and collect designated approvals. Follow
+[Squash source checks](#squash-source-checks) before marking a PR ready.
 
 Before a merge batch, have a worker create a scratch worktree detached at the
 current `origin/main`. In batch order, squash-apply each queued PR at its
@@ -276,8 +266,9 @@ evaluates the returned evidence, and records a separate rollback decision. A
 later review does not change the pre-merge timeline.
 
 After the review loop passes a head and posts the sign-off packet, keep the
-labels unchanged. Review a new head without changing labels; a manual relabel
-starts another round and counts toward the round and reopen limits.
+labels unchanged. Never relabel a PR after a clean pass. Review a new head
+without changing labels; a manual relabel starts another round and counts
+toward the round and reopen limits.
 
 At the reopen limit, close the PR and open a replacement from the same branch
 and head. Note the replacement in both PRs and leave loop state unchanged. When
@@ -307,17 +298,14 @@ valid head when the local reference is stale.
 ### Squash source checks
 
 **Key points:** Check source commit messages, PR titles, and PR bodies before
-the ready label. The ops bot uses GitHub's default squash message and matches
-the approved head.
+the ready label. The owner uses the approved explicit subject and an empty
+merge body.
 
-**Detail:** Workers commit as the bot account. In the 2026-10-27 batch,
-GitHub's default squash message added a co-author trailer for commits authored
-under a personal account; the lead still reads back each merge commit message.
-Before the lead applies `agent:ready-for-signoff`, inspect every source
-commit message, PR title, and PR body for co-author trailers and personal
-names. Ask a worker to remove any such text before the PR enters the sign-off
-batch. The ops bot uses
-GitHub's default squash message and `--match-head-commit`.
+**Detail:** Workers commit as the bot account. Before the lead applies
+`agent:ready-for-signoff`, inspect every source commit message, PR title, and
+PR body for co-author trailers and personal names. Ask a worker to remove any
+such text before the PR enters the sign-off batch. Read back the merge subject,
+empty body, and resulting head on `main` after each owner merge.
 
 Reply `addressed in <sha>` after a fix. Leave threads to their reviewers.
 Never grant your own sign-off, reset counters, or restart a capped cycle.
@@ -406,7 +394,8 @@ The three adapter wrappers call scripts in
 and [sign-off procedure](https://github.com/isolson/personal-processes/blob/master/docs/signoff-automation.md).
 The supported packet preview is `bash "$hub/scripts/agent-signoff.sh" --config
 "$adapter/dev-host/config/sixtyops-manager-loop.env" --pr "$pr" --dry-run`.
-Set hub/adapter from verified paths. Publication still uses normal gates.
+Set hub/adapter from verified paths. Load the reviewer bot identity before
+posting or regenerating a sign-off packet. Publication still uses normal gates.
 For a follow-up inside a worker's own task, the verified CLI supports `paseo
 send "$worker_id" --prompt-file "$task_file" --no-wait`. For review findings,
 launch a new worker with a brief that names the review report. If the builder

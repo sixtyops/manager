@@ -123,9 +123,9 @@ Start worker completion messages with `DONE from <id> (<title>):`.
 
 ### Repository lead authority
 
-The 2026-10-14 grant lets the lead merge a PR that passes every gate, only when
-the owner asks. The personal-processes ops bot performs the merge after the
-owner approves on Signal. Follow [the lead operations SOP](docs/lead-operations-sop.md#review-merge-and-development-release-gates).
+The owner merges ready PRs in daily batches with an explicit subject and an
+empty body. Read back each merge on `main`. Follow
+[the lead operations SOP](docs/lead-operations-sop.md#review-merge-and-development-release-gates).
 
 #### Slices and reviews
 
@@ -157,11 +157,13 @@ owner approves on Signal. Follow [the lead operations SOP](docs/lead-operations-
 
 ## Models
 
-Follow the model routing and quorum policy in
+Use GPT workers only. Luna is the default. Use Sol only after Luna fails at a
+named step or for a hard design question named by a reviewer. Use Astra for at
+most one narrow architecture question. Do not use Claude workers. For a large
+product or safety decision, use four agents and bring the result to the owner
+as the fifth vote. Follow the model routing and quorum policy in
 [the lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
-Only the Manager lead session may use Claude models. Workers must not use them.
-Use installed and supported models. Verify provider, model, and reasoning IDs.
-Use normal mode unless the owner records a current extension.
+Verify installed provider, model, and reasoning IDs before launch.
 
 Give an architect's design to a coding worker for implementation.
 

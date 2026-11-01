@@ -577,15 +577,21 @@ class TestDownloadIntegrity:
         assert "Published checksum mismatch" in result["errors"][0]
         assert db.get_firmware_sha256(release.filename) is None
 
-    def test_md5_absent_does_not_bypass_size_guard(self, fetcher, tmp_path):
-        # A missing published MD5 must not weaken the existing truncation guard.
+    def test_valid_published_md5_does_not_bypass_size_guard(self, fetcher, tmp_path):
+        # A valid checksum does not bypass the size-outlier guard.
         sib = "tna-30x-1.12.3-r55002-20260219-tn-110-prs-squashfs-sysupgrade.bin"
         (tmp_path / sib).write_bytes(b"x" * 1000)
-        rel = self._release(md5=None)
-        with self._patch_stream(b"x" * 100, content_length=None):
+        body = b"x" * 100
+        rel = self._release(md5=hashlib.md5(body).hexdigest())
+        with self._patch_stream(body, content_length=None):
             ok, sha = asyncio.run(fetcher._download_firmware(rel))
         assert ok is False
         assert sha is None
+        assert (
+            "far smaller than the tna-30x firmware already on disk"
+            in fetcher._download_warning
+        )
+        assert not (tmp_path / rel.filename).exists()
 
 
 class TestCheckAndDownloadHashing:
