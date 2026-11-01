@@ -237,6 +237,74 @@ class TestCheckCpeAuthCaching:
         assert "10.0.0.11" not in poller._cpe_clients
 
     @pytest.mark.asyncio
+    async def test_failed_fresh_login_waits_before_retry(self, mock_db):
+        poller = NetworkPoller()
+        clock = FakeClock(1000.0)
+        factory = _driver_returning("Invalid credentials")
+        settings = {"schedule_enabled": "false"}
+        now = datetime(2026, 10, 27, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+        with patch("updater.poller.time.time", clock.time), \
+             patch("updater.poller.get_driver", return_value=factory), \
+             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+            assert await poller._probe_cpe_auth(
+                "10.0.0.11", "root", "ap-pass", settings, now
+            ) == "auth_failed"
+            clock.advance(60)
+            assert await poller._probe_cpe_auth(
+                "10.0.0.11", "root", "ap-pass", settings, now
+            ) == "auth_failed"
+            assert factory.call_count == 1
+
+            clock.advance(240)
+            assert await poller._probe_cpe_auth(
+                "10.0.0.11", "root", "ap-pass", settings, now
+            ) == "auth_failed"
+            assert factory.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_credential_change_bypasses_failed_login_delay(self, mock_db):
+        poller = NetworkPoller()
+        clock = FakeClock(1000.0)
+        factory = _driver_returning("Invalid credentials")
+        with patch("updater.poller.time.time", clock.time), \
+             patch("updater.poller.get_driver", return_value=factory), \
+             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+            assert await poller._check_cpe_auth(
+                "10.0.0.11", "root", "old-pass"
+            ) == "auth_failed"
+            poller.invalidate_cpe_clients()
+            assert await poller._check_cpe_auth(
+                "10.0.0.11", "root", "new-pass"
+            ) == "auth_failed"
+
+        assert factory.call_count == 2
+        assert factory.call_args_list[1] == call(
+            "10.0.0.11", "root", "new-pass", timeout=10
+        )
+
+    @pytest.mark.asyncio
+    async def test_successful_fresh_login_resets_retry_state(self, mock_db):
+        poller = NetworkPoller()
+        clock = FakeClock(1000.0)
+        factory = MagicMock(side_effect=[
+            _driver_returning("Invalid credentials").return_value,
+            _driver_returning(True).return_value,
+        ])
+        with patch("updater.poller.time.time", clock.time), \
+             patch("updater.poller.get_driver", return_value=factory), \
+             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+            assert await poller._check_cpe_auth(
+                "10.0.0.11", "root", "ap-pass"
+            ) == "auth_failed"
+            clock.advance(300)
+            assert await poller._check_cpe_auth(
+                "10.0.0.11", "root", "ap-pass"
+            ) == "ok"
+
+        assert "10.0.0.11" not in poller._cpe_login_retries
+
+    @pytest.mark.asyncio
     async def test_valid_cached_session_skips_relogin(self, mock_db):
         # A live cached session is verified with a lightweight call; no fresh
         # login (no new client built, connect() never called).

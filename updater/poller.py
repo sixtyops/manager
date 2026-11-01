@@ -51,6 +51,8 @@ CPE_SESSION_POLICY = "credential_change"
 _MAX_CLIENT_CACHE = 500
 _CLIENT_IDLE_TTL_SECONDS = 600  # 10 minutes since last use, for APs and switches
 _CPE_FRESH_LOGIN_LEAD = timedelta(minutes=15)
+_CPE_LOGIN_RETRY_BASE_SECONDS = 300
+_CPE_LOGIN_RETRY_MAX_SECONDS = 1800
 _BACKOFF_THRESHOLD = 3  # consecutive failures before backoff
 _MAX_BACKOFF_CYCLES = 16
 
@@ -95,6 +97,7 @@ class NetworkPoller:
         self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, cached_at)
         self._cpe_credentials_generation = 0
         self._cpe_fresh_login_periods: dict[str, set[object]] = {}
+        self._cpe_login_retries: dict[str, tuple[int, int, float, str]] = {}
         self._cpe_auth_locks: dict[str, asyncio.Lock] = {}
         self._cpe_forced_login_checks: set[str] = set()
         self._paused_cpe_ips: set[str] = set()
@@ -212,6 +215,32 @@ class NetworkPoller:
     def _remove_cached_cpe_client(self, ip: str):
         """Remove a CPE client from the cache."""
         self._cpe_clients.pop(ip, None)
+
+    def _cpe_login_retry_status(self, ip: str, generation: int) -> Optional[str]:
+        """Return the last result while a failed-login retry delay is active."""
+        retry = self._cpe_login_retries.get(ip)
+        if retry is None or retry[0] != generation:
+            return None
+        if time.time() >= retry[2]:
+            return None
+        return retry[3]
+
+    def _record_cpe_login_attempt(self, ip: str, generation: int, status: str):
+        """Reset retry state on success or delay a failed fresh login."""
+        if not self._credentials_current(generation):
+            return
+        if status == "ok":
+            self._cpe_login_retries.pop(ip, None)
+            return
+        previous = self._cpe_login_retries.get(ip)
+        failures = previous[1] + 1 if previous and previous[0] == generation else 1
+        delay = min(
+            _CPE_LOGIN_RETRY_BASE_SECONDS * (2 ** (failures - 1)),
+            _CPE_LOGIN_RETRY_MAX_SECONDS,
+        )
+        self._cpe_login_retries[ip] = (
+            generation, failures, time.time() + delay, status,
+        )
 
     def _cpe_auth_check_period(self, settings: dict = None, now: datetime = None):
         """Return an active/near window key, or a daily key outside that window."""
@@ -742,6 +771,7 @@ class NetworkPoller:
             if not self._credentials_current(generation):
                 return "unreachable"
             if state == "ok":
+                self._cpe_login_retries.pop(cpe_ip, None)
                 if not force_fresh_login:
                     return "ok"
                 self._remove_cached_cpe_client(cpe_ip)
@@ -751,6 +781,10 @@ class NetworkPoller:
                 return "unreachable"
             # "expired" — token no longer accepted; drop it and re-authenticate.
             self._remove_cached_cpe_client(cpe_ip)
+
+        retry_status = self._cpe_login_retry_status(cpe_ip, generation)
+        if retry_status is not None:
+            return retry_status
 
         # Get effective credentials (device-specific or global defaults)
         effective_user, effective_pass = radius_config.get_device_credentials(username, password)
@@ -762,8 +796,10 @@ class NetworkPoller:
                 return "unreachable"
             if status == "ok":
                 self._cache_cpe_client(cpe_ip, client, generation)
+                self._record_cpe_login_attempt(cpe_ip, generation, status)
                 return "ok"
             if status != "auth_failed":
+                self._record_cpe_login_attempt(cpe_ip, generation, status)
                 return status
 
             # AP credentials were rejected — try global defaults as fallback.
@@ -782,11 +818,14 @@ class NetworkPoller:
                         return "unreachable"
                     if status == "ok":
                         self._cache_cpe_client(cpe_ip, client, generation)
+                    self._record_cpe_login_attempt(cpe_ip, generation, status)
                     return status
 
+            self._record_cpe_login_attempt(cpe_ip, generation, "auth_failed")
             return "auth_failed"
         except Exception as e:
             logger.debug(f"CPE auth probe failed for {cpe_ip}: {e}")
+            self._record_cpe_login_attempt(cpe_ip, generation, "unreachable")
             return "unreachable"
 
     async def _probe_cpe_auth(self, cpe_ip: str, username: str, password: str,
@@ -897,6 +936,7 @@ class NetworkPoller:
         self._cpe_credentials_generation += 1
         self._cpe_clients.clear()
         self._cpe_fresh_login_periods.clear()
+        self._cpe_login_retries.clear()
 
     async def _maybe_fetch_cpe_banks(self, ap_ip: str, cpe_ip: str,
                                       username: str, password: str,
