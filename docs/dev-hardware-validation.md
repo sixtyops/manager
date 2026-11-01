@@ -48,13 +48,23 @@ several roles; its write tests then run one at a time.
 From 2026-11-01, the lead may change firmware versions on dedicated test lab
 devices when a test or validation needs it. Use only firmware images in the
 Manager store for that model. Change one device at a time. Hold the shared dev
-hardware lock; start its holder with `ssh -n` so it stays active in the
-background. After each write, read back firmware, active bank, both bank
-versions, connected CPE count, and config section names twice. Judge the write
-from these read-backs; `update_firmware()` return values do not prove success
-([#670](https://github.com/sixtyops/manager/issues/670)). Record each change
-in the lead artifacts. This grant covers dedicated test lab devices only; it
-does not cover production devices or the dev host Manager release.
+hardware lock with a detached process on the dev host. The lead's lock helper
+starts this holder over one SSH call and prints its PID:
+
+```sh
+ssh <dev host alias> 'setsid nohup flock -w 300 /var/lock/sixtyops-dev-hardware.lock sleep <seconds> >/dev/null 2>&1 < /dev/null & echo $!'
+```
+
+Confirm that the lock is held with `flock -n /var/lock/sixtyops-dev-hardware.lock -c true`; it must fail while the holder runs. Release the lock by stopping the printed PID and its child on the dev host. Then confirm that `flock -n /var/lock/sixtyops-dev-hardware.lock -c true` succeeds. A local background holder does not stay alive across agent tool calls.
+
+After each write, read back firmware, active bank, both bank versions,
+connected CPE count, and config section names twice. Judge the write from
+these read-backs. On 2026-11-01, two lab bank writes returned success and the
+read-backs confirmed them, so the false failure in
+[#670](https://github.com/sixtyops/manager/issues/670) is intermittent. Record
+each change in the lead artifacts. This grant covers dedicated test lab
+devices only; it does not cover production devices or the dev host Manager
+release.
 
 ### Dev host run procedure
 
