@@ -43,6 +43,19 @@ Docker, within these boundaries:
 When the lab has fewer devices than test roles, one dedicated lab AP can fill
 several roles; its write tests then run one at a time.
 
+### Lab firmware authority
+
+From 2026-11-01, the lead may change firmware versions on dedicated test lab
+devices when a test or validation needs it. Use only firmware images in the
+Manager store for that model. Change one device at a time. Hold the shared dev
+hardware lock; start its holder with `ssh -n` so it stays active in the
+background. After each write, read back firmware, active bank, both bank
+versions, connected CPE count, and config section names twice. Judge the write
+from these read-backs; `update_firmware()` return values do not prove success
+([#670](https://github.com/sixtyops/manager/issues/670)). Record each change
+in the lead artifacts. This grant covers dedicated test lab devices only; it
+does not cover production devices or the dev host Manager release.
+
 ### Dev host run procedure
 
 The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
