@@ -915,6 +915,7 @@ class AutoUpdateScheduler:
         poller = get_poller()
         failures = []
         for parent_ip in parent_ap_ips:
+            generation = poller._cpe_credentials_generation if poller is not None else None
             ap = db.get_access_point(parent_ip)
             cpes = db.get_cpes_for_ap(parent_ip)
             for cpe in cpes:
@@ -928,6 +929,7 @@ class AutoUpdateScheduler:
                             cpe_ip, ap["username"], ap["password"], settings, now,
                             force_fresh_login=True,
                             validate_cached_session=False,
+                            credential_generation=generation,
                         )
                         db.update_cpe_auth_status(parent_ip, cpe_ip, status)
                     except Exception:

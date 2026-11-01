@@ -187,11 +187,24 @@ class NetworkPoller:
             return entry[0]
         return None
 
+    def _credentials_current(self, generation: int, ip: str = None) -> bool:
+        """Use a login result only while its credential generation is current.
+
+        Capture the generation before reading credentials. Use or store a
+        cached client, success marker, precheck result, or bank-info read only
+        if that generation still matches. Otherwise discard the result and
+        report failure, or retry with current credentials. All paths use this
+        guard without an await between the guard and the use or store.
+        An IP selects the AP/switch generation; otherwise use the CPE generation.
+        """
+        current = (self._cpe_credentials_generation if ip is None
+                   else self._client_credentials_generation.get(ip, 0))
+        return generation == current
+
     def _cache_cpe_client(self, ip: str, client: VendorDriver,
                           generation: int = None):
         """Cache an authenticated CPE client."""
-        if (generation is not None
-                and generation != self._cpe_credentials_generation):
+        if generation is not None and not self._credentials_current(generation):
             return False
         self._cpe_clients[ip] = (client, time.time())
         return True
@@ -613,7 +626,7 @@ class NetworkPoller:
                                 cpe_ip, username, password,
                                 credential_generation=cpe_generation,
                             )
-                            if cpe_generation != self._cpe_credentials_generation:
+                            if not self._credentials_current(cpe_generation):
                                 return
                             db.update_cpe_auth_status(ip, cpe_ip, status)
                             if status == "ok":
@@ -649,7 +662,7 @@ class NetworkPoller:
         """
         if generation is None:
             generation = self._client_credentials_generation.get(ip, 0)
-        if generation != self._client_credentials_generation.get(ip, 0):
+        if not self._credentials_current(generation, ip):
             return None, "Credentials changed during poll"
         cached = self._get_cached_client(ip)
         if cached:
@@ -663,9 +676,9 @@ class NetworkPoller:
         client = driver_cls(ip, username, password)
 
         result = await client.connect()
+        if not self._credentials_current(generation, ip):
+            return None, "Credentials changed during login"
         if result is True:
-            if generation != self._client_credentials_generation.get(ip, 0):
-                return None, "Credentials changed during login"
             self._cache_client(ip, client)
             return client, None
 
@@ -707,7 +720,7 @@ class NetworkPoller:
         """
         generation = (self._cpe_credentials_generation
                       if credential_generation is None else credential_generation)
-        if generation != self._cpe_credentials_generation:
+        if not self._credentials_current(generation):
             return "unreachable"
         force_fresh_login = force_fresh_login or cpe_ip in self._cpe_forced_login_checks
         # Fast path: a cached session we authenticated on an earlier cycle.
@@ -718,7 +731,7 @@ class NetworkPoller:
             except Exception as e:
                 logger.debug(f"CPE session check failed for {cpe_ip}: {e}")
                 state = "unreachable"
-            if generation != self._cpe_credentials_generation:
+            if not self._credentials_current(generation):
                 return "unreachable"
             if state == "ok":
                 if not force_fresh_login:
@@ -737,9 +750,9 @@ class NetworkPoller:
         try:
             client = get_driver("tachyon")(cpe_ip, effective_user, effective_pass, timeout=10)
             status = _classify_cpe_connect(await client.connect())
+            if not self._credentials_current(generation):
+                return "unreachable"
             if status == "ok":
-                if generation != self._cpe_credentials_generation:
-                    return "unreachable"
                 self._cache_cpe_client(cpe_ip, client, generation)
                 return "ok"
             if status != "auth_failed":
@@ -757,9 +770,9 @@ class NetworkPoller:
                     logger.debug(f"Trying global default credentials for CPE {cpe_ip}")
                     client = get_driver("tachyon")(cpe_ip, default_config.username, default_config.password, timeout=10)
                     status = _classify_cpe_connect(await client.connect())
+                    if not self._credentials_current(generation):
+                        return "unreachable"
                     if status == "ok":
-                        if generation != self._cpe_credentials_generation:
-                            return "unreachable"
                         self._cache_cpe_client(cpe_ip, client, generation)
                     return status
 
@@ -794,15 +807,16 @@ class NetworkPoller:
             lock = asyncio.Lock()
             self._cpe_auth_locks[cpe_ip] = lock
         async with lock:
-            if generation != self._cpe_credentials_generation:
+            if not self._credentials_current(generation):
                 return "unreachable"
             if self.has_successful_cpe_fresh_login(cpe_ip, settings, now):
                 if not validate_cached_session:
                     return "ok"
-                return await self._check_cpe_auth(
+                status = await self._check_cpe_auth(
                     cpe_ip, username, password,
                     credential_generation=generation,
                 )
+                return status if self._credentials_current(generation) else "unreachable"
 
             # Keep the three-argument hook used by the trusted session proof.
             # The per-CPE lock owns this flag until the auth check completes.
@@ -815,14 +829,22 @@ class NetworkPoller:
                 )
             finally:
                 self._cpe_forced_login_checks.discard(cpe_ip)
-            if (force_fresh_login and status == "ok"
-                    and generation == self._cpe_credentials_generation):
-                self.record_cpe_fresh_login_check(cpe_ip, settings, now)
+            if not self._credentials_current(generation):
+                return "unreachable"
+            if force_fresh_login and status == "ok":
+                self.record_cpe_fresh_login_check(
+                    cpe_ip, settings, now, credential_generation=generation,
+                )
             return status
 
     def record_cpe_fresh_login_check(self, cpe_ip: str, settings: dict = None,
-                                     now: datetime = None):
+                                     now: datetime = None, *,
+                                     credential_generation: int = None):
         """Record a successful login for this CPE's window and daily periods."""
+        generation = (self._cpe_credentials_generation
+                      if credential_generation is None else credential_generation)
+        if not self._credentials_current(generation):
+            return
         period = self._cpe_auth_check_period(settings, now)
         if period is not None:
             day_key = period[1] if isinstance(period, tuple) else period
@@ -874,7 +896,7 @@ class NetworkPoller:
         """Fetch CPE bank info if newly discovered or >24h since last fetch."""
         generation = (self._cpe_credentials_generation
                       if credential_generation is None else credential_generation)
-        if generation != self._cpe_credentials_generation:
+        if not self._credentials_current(generation):
             return
         try:
             last_fetched = db.get_cpe_bank_last_fetched(ap_ip, cpe_ip)
@@ -891,12 +913,12 @@ class NetworkPoller:
             if not client:
                 client = get_driver("tachyon")(cpe_ip, username, password, timeout=15)
                 result = await client.connect()
-                if result is not True or generation != self._cpe_credentials_generation:
+                if result is not True or not self._credentials_current(generation):
                     return
                 self._cache_cpe_client(cpe_ip, client, generation)
 
             info = await client.get_device_info()
-            if generation != self._cpe_credentials_generation:
+            if not self._credentials_current(generation):
                 return
             if info.bank1_version or info.bank2_version:
                 db.update_cpe_bank_info(
