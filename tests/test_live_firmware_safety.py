@@ -194,6 +194,22 @@ def test_job_failure_message_has_sanitized_evidence(failed_job):
     assert "private-token" not in message
 
 
+@pytest.mark.parametrize(("evidence", "expected"), [
+    ("peer 198.51.100.25", "peer <address>"),
+    ("peer 2001:db8::25", "peer <address>"),
+    ("peer 00:11:22:aa:bb:cc", "peer <mac>"),
+    ("peer 198.51.100.25 via 2001:db8::25 from 00:11:22:aa:bb:cc; stage=write",
+     "peer <address> via <address> from <mac>; stage=write"),
+])
+def test_safe_text_redacts_addresses_and_macs_in_evidence(evidence, expected):
+    assert firmware._safe_text(evidence) == expected
+
+
+def test_safe_text_preserves_firmware_versions():
+    text = "old_version=1.15.0.100; new_version=1.15.0.200; stage=write"
+    assert firmware._safe_text(text) == text
+
+
 def test_restoration_bank_mismatch_requires_operator(client):
     session, state = client
     state["mode"] = "bank-mismatch"
