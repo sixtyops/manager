@@ -164,7 +164,7 @@ class TestCircuitBreaker:
         ap = {"ip": "10.0.0.1", "last_error": None}
         monkeypatch.setattr(poller_module.db, "get_access_point", lambda ip: ap)
 
-        async def successful_poll(_ap):
+        async def successful_poll(_ap, **kwargs):
             poller._record_poll_success("10.0.0.1")
 
         poller._poll_ap = AsyncMock(side_effect=successful_poll)
@@ -172,7 +172,7 @@ class TestCircuitBreaker:
         assert await poller.poll_ap_now("10.0.0.1")
         assert not poller._is_backed_off("10.0.0.1")
         assert "10.0.0.1" not in poller._failure_counts
-        poller._poll_ap.assert_awaited_once_with(ap)
+        poller._poll_ap.assert_awaited_once_with(ap, generation=0, cpe_generation=0)
 
     @pytest.mark.asyncio
     async def test_failed_manual_ap_poll_keeps_count_and_resumes_backoff(self, monkeypatch):
@@ -263,13 +263,13 @@ class TestClientCache:
         assert poller._get_cached_client("10.0.0.1") is None
 
     def test_evict_stale_by_ttl(self):
-        from updater.poller import NetworkPoller, _CLIENT_TTL_SECONDS
+        from updater.poller import NetworkPoller, _CLIENT_IDLE_TTL_SECONDS
         from unittest.mock import MagicMock
 
         poller = NetworkPoller()
         # Cache a client with old timestamp
         mock_client = MagicMock()
-        poller._clients["10.0.0.1"] = (mock_client, time.time() - _CLIENT_TTL_SECONDS - 10)
+        poller._clients["10.0.0.1"] = (mock_client, time.time() - _CLIENT_IDLE_TTL_SECONDS - 10)
 
         with patch("updater.database.get_all_device_ips", return_value={"10.0.0.1"}):
             poller._evict_stale_clients()

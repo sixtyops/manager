@@ -47,8 +47,12 @@ class PolicyEnforceError(RuntimeError):
 
 logger = logging.getLogger(__name__)
 
+CPE_SESSION_POLICY = "credential_change"
 _MAX_CLIENT_CACHE = 500
-_CLIENT_TTL_SECONDS = 600  # 10 minutes
+_CLIENT_IDLE_TTL_SECONDS = 600  # 10 minutes since last use, for APs and switches
+_CPE_FRESH_LOGIN_LEAD = timedelta(minutes=15)
+_CPE_LOGIN_RETRY_BASE_SECONDS = 300
+_CPE_LOGIN_RETRY_MAX_SECONDS = 1800
 _BACKOFF_THRESHOLD = 3  # consecutive failures before backoff
 _MAX_BACKOFF_CYCLES = 16
 
@@ -87,12 +91,15 @@ class NetworkPoller:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._clients: dict[str, tuple[VendorDriver, float]] = {}  # IP -> (client, last_used)
-        # CPEs aren't in the `devices` table, so they get their own client cache
-        # (keyed by CPE IP) that's evicted purely by TTL. Reusing the cached,
-        # already-authenticated session across poll cycles avoids re-logging in
-        # to every CPE every cycle — which otherwise floods each device's audit
-        # log with a "management authentication" event per minute.
-        self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, logged_in_at)
+        self._client_credentials_generation: dict[str, int] = {}
+        # CPE tokens can remain valid after a password change. Keep them until
+        # credentials change, the token check fails, or a fresh-login check is due.
+        self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, cached_at)
+        self._cpe_credentials_generation = 0
+        self._cpe_fresh_login_periods: dict[str, set[object]] = {}
+        self._cpe_login_retries: dict[str, tuple[int, int, float, str]] = {}
+        self._cpe_auth_locks: dict[str, asyncio.Lock] = {}
+        self._cpe_forced_login_checks: set[str] = set()
         self._paused_cpe_ips: set[str] = set()
         self._cpe_request_locks: dict[str, asyncio.Lock] = {}
         self._last_config_poll: Optional[datetime] = None
@@ -149,7 +156,7 @@ class NetworkPoller:
         now = time.time()
         stale = []
         for ip, (client, last_used) in self._clients.items():
-            if ip not in known_ips or (now - last_used) > _CLIENT_TTL_SECONDS:
+            if ip not in known_ips or (now - last_used) > _CLIENT_IDLE_TTL_SECONDS:
                 stale.append(ip)
         for ip in stale:
             del self._clients[ip]
@@ -164,13 +171,9 @@ class NetworkPoller:
             logger.info(f"Evicted {len(stale)} stale client(s) from cache")
         self._evict_stale_cpe_clients(now)
 
-    def _evict_stale_cpe_clients(self, now: float):
-        """Evict CPE clients past the TTL (age-only — CPEs aren't in the
-        devices table, and stale topology entries simply age out)."""
-        stale = [ip for ip, (_, logged_in_at) in self._cpe_clients.items()
-                 if (now - logged_in_at) >= _CLIENT_TTL_SECONDS]
-        for ip in stale:
-            del self._cpe_clients[ip]
+    def _evict_stale_cpe_clients(self, now: float = None):
+        """Enforce the CPE cache size limit without expiring sessions by age."""
+        stale = []
         if len(self._cpe_clients) > _MAX_CLIENT_CACHE:
             sorted_by_age = sorted(self._cpe_clients.items(), key=lambda x: x[1][1])
             excess = len(self._cpe_clients) - _MAX_CLIENT_CACHE
@@ -181,23 +184,112 @@ class NetworkPoller:
             logger.debug(f"Evicted {len(stale)} stale CPE client(s) from cache")
 
     def _get_cached_cpe_client(self, ip: str) -> Optional[VendorDriver]:
-        """Return a CPE session for at most ten minutes after login."""
+        """Return a cached CPE session, regardless of its age."""
         entry = self._cpe_clients.get(ip)
         if entry:
-            client, logged_in_at = entry
-            if time.time() - logged_in_at >= _CLIENT_TTL_SECONDS:
-                self._remove_cached_cpe_client(ip)
-                return None
-            return client
+            return entry[0]
         return None
 
-    def _cache_cpe_client(self, ip: str, client: VendorDriver):
+    def _credentials_current(self, generation: int, ip: str = None) -> bool:
+        """Use a login result only while its credential generation is current.
+
+        Capture the generation before reading credentials. Use or store a
+        cached client, success marker, precheck result, or bank-info read only
+        if that generation still matches. Otherwise discard the result and
+        report failure, or retry with current credentials. All paths use this
+        guard without an await between the guard and the use or store.
+        An IP selects the AP/switch generation; otherwise use the CPE generation.
+        """
+        current = (self._cpe_credentials_generation if ip is None
+                   else self._client_credentials_generation.get(ip, 0))
+        return generation == current
+
+    def _cache_cpe_client(self, ip: str, client: VendorDriver,
+                          generation: int = None):
         """Cache an authenticated CPE client."""
+        if generation is not None and not self._credentials_current(generation):
+            return False
         self._cpe_clients[ip] = (client, time.time())
+        return True
 
     def _remove_cached_cpe_client(self, ip: str):
         """Remove a CPE client from the cache."""
         self._cpe_clients.pop(ip, None)
+
+    def _cpe_login_retry_status(self, ip: str, generation: int) -> Optional[str]:
+        """Return the last result while a failed-login retry delay is active."""
+        retry = self._cpe_login_retries.get(ip)
+        if retry is None or retry[0] != generation:
+            return None
+        if time.time() >= retry[2]:
+            return None
+        return retry[3]
+
+    def _record_cpe_login_attempt(self, ip: str, generation: int, status: str):
+        """Reset retry state on success or delay a failed fresh login."""
+        if not self._credentials_current(generation):
+            return
+        if status == "ok":
+            self._cpe_login_retries.pop(ip, None)
+            return
+        previous = self._cpe_login_retries.get(ip)
+        failures = previous[1] + 1 if previous and previous[0] == generation else 1
+        delay = min(
+            _CPE_LOGIN_RETRY_BASE_SECONDS * (2 ** (failures - 1)),
+            _CPE_LOGIN_RETRY_MAX_SECONDS,
+        )
+        self._cpe_login_retries[ip] = (
+            generation, failures, time.time() + delay, status,
+        )
+
+    def _cpe_auth_check_period(self, settings: dict = None, now: datetime = None):
+        """Return an active/near window key, or a daily key outside that window."""
+        settings = settings if settings is not None else db.get_all_settings()
+        if settings.get("schedule_enabled") == "true":
+            days = {day.strip().lower()[:3] for day in settings.get("schedule_days", "").split(",")}
+            active_days = days.intersection({"mon", "tue", "wed", "thu", "fri", "sat", "sun"})
+            if active_days:
+                from zoneinfo import ZoneInfo
+                from .rollout_gate import firmware_window_key
+
+                timezone_name = settings.get("schedule_timezone") or settings.get("timezone")
+                try:
+                    zone = ZoneInfo(timezone_name) if timezone_name and timezone_name != "auto" else None
+                    if now is None:
+                        now = datetime.now(zone) if zone else datetime.now().astimezone()
+                    elif zone and now.tzinfo is None:
+                        now = now.replace(tzinfo=zone)
+                    elif zone:
+                        now = now.astimezone(zone)
+                    elif now.tzinfo is None:
+                        now = now.astimezone()
+                    active_key = firmware_window_key(settings, now)
+                    if active_key:
+                        return active_key
+
+                    start_hour = int(settings["schedule_start_hour"])
+                    for offset in range(8):
+                        window_date = now.date() + timedelta(days=offset)
+                        if window_date.strftime("%a").lower()[:3] not in active_days:
+                            continue
+                        window_start = datetime.combine(
+                            window_date, datetime.min.time().replace(hour=start_hour), tzinfo=now.tzinfo
+                        )
+                        if now <= window_start <= now + _CPE_FRESH_LOGIN_LEAD:
+                            return ("firmware", window_date.isoformat())
+                    # The poller also runs without the scheduler. Keep its
+                    # once-daily fresh-login check active between windows.
+                    return now.date().isoformat()
+                except (KeyError, TypeError, ValueError):
+                    pass
+        now = now or datetime.now().astimezone()
+        return now.date().isoformat()
+
+    def _fresh_cpe_login_due(self, cpe_ip: str, settings: dict = None,
+                             now: datetime = None) -> bool:
+        """Check each CPE once before a window or daily when no window applies."""
+        period = self._cpe_auth_check_period(settings, now)
+        return period is not None and not self._has_cpe_fresh_login_period(cpe_ip, period)
 
     @asynccontextmanager
     async def pause_cpe_requests(self, ip: str):
@@ -276,6 +368,8 @@ class NetworkPoller:
         self._poll_in_progress = True
         try:
             self._evict_stale_clients()
+            generations = self._client_credentials_generation.copy()
+            cpe_generation = self._cpe_credentials_generation
             aps = db.get_access_points(enabled_only=True)
 
             if not aps:
@@ -288,7 +382,10 @@ class NetworkPoller:
 
             async def poll_with_limit(ap):
                 async with semaphore:
-                    await self._poll_ap(ap)
+                    await self._poll_ap(
+                        ap, generation=generations.get(ap["ip"], 0),
+                        cpe_generation=cpe_generation,
+                    )
 
             await asyncio.gather(*[poll_with_limit(ap) for ap in aps], return_exceptions=True)
 
@@ -384,9 +481,15 @@ class NetworkPoller:
         except Exception as e:
             logger.error(f"Device recovered alert dispatch error: {e}")
 
-    async def _poll_ap(self, ap: dict):
+    async def _poll_ap(self, ap: dict, *, generation: int = None,
+                       cpe_generation: int = None):
         """Poll a single AP for CPE data."""
         ip = ap["ip"]
+        if generation is None:
+            generation = self._client_credentials_generation.get(ip, 0)
+        if cpe_generation is None:
+            cpe_generation = self._cpe_credentials_generation
+        username, password = ap["username"], ap["password"]
         prev_error = ap.get("last_error")
 
         if self._is_backed_off(ip):
@@ -395,7 +498,9 @@ class NetworkPoller:
 
         try:
             # Get or create authenticated client
-            client, error = await self._get_client(ip, ap["username"], ap["password"])
+            client, error = await self._get_client(
+                ip, username, password, generation=generation
+            )
 
             if not client:
                 db.update_ap_status(ip, last_error=error)
@@ -412,7 +517,9 @@ class NetworkPoller:
             if not ap_info.get("model") and not ap_info.get("firmware_version") and not ap_info.get("system_name"):
                 logger.info(f"Stale session detected for {ip}, re-authenticating")
                 self._remove_cached_client(ip)
-                client, error = await self._get_client(ip, ap["username"], ap["password"])
+                client, error = await self._get_client(
+                    ip, username, password, generation=generation
+                )
                 if not client:
                     db.update_ap_status(ip, last_error=error)
                     self._check_uptime_transition(ip, "ap", prev_error, error)
@@ -551,13 +658,18 @@ class NetworkPoller:
                         async with lock:
                             if cpe_ip in self._paused_cpe_ips:
                                 return
-                            status = await self._check_cpe_auth(
-                                cpe_ip, ap["username"], ap["password"]
+                            username, password = ap["username"], ap["password"]
+                            status = await self._probe_cpe_auth(
+                                cpe_ip, username, password,
+                                credential_generation=cpe_generation,
                             )
+                            if not self._credentials_current(cpe_generation):
+                                return
                             db.update_cpe_auth_status(ip, cpe_ip, status)
                             if status == "ok":
                                 await self._maybe_fetch_cpe_banks(
-                                    ip, cpe_ip, ap["username"], ap["password"]
+                                    ip, cpe_ip, username, password,
+                                    credential_generation=cpe_generation,
                                 )
 
                 await asyncio.gather(
@@ -579,11 +691,16 @@ class NetworkPoller:
             self._record_poll_failure(ip)
             self._remove_cached_client(ip)
 
-    async def _get_client(self, ip: str, username: str, password: str, vendor: str = "tachyon") -> tuple:
+    async def _get_client(self, ip: str, username: str, password: str,
+                          vendor: str = "tachyon", generation: int = None) -> tuple:
         """Get authenticated client, reusing existing session if possible.
 
         Returns (client, None) on success or (None, error_string) on failure.
         """
+        if generation is None:
+            generation = self._client_credentials_generation.get(ip, 0)
+        if not self._credentials_current(generation, ip):
+            return None, "Credentials changed during poll"
         cached = self._get_cached_client(ip)
         if cached:
             return cached, None
@@ -596,6 +713,8 @@ class NetworkPoller:
         client = driver_cls(ip, username, password)
 
         result = await client.connect()
+        if not self._credentials_current(generation, ip):
+            return None, "Credentials changed during login"
         if result is True:
             self._cache_client(ip, client)
             return client, None
@@ -621,7 +740,9 @@ class NetworkPoller:
             logger.error(f"Failed to create site {location}: {e}")
             return None
 
-    async def _check_cpe_auth(self, cpe_ip: str, username: str, password: str) -> str:
+    async def _check_cpe_auth(self, cpe_ip: str, username: str, password: str,
+                              force_fresh_login: bool = False,
+                              credential_generation: int = None) -> str:
         """Check if we can authenticate to a CPE.
 
         Tries authentication in order:
@@ -630,12 +751,15 @@ class NetworkPoller:
 
         Returns "ok", "auth_failed", or "unreachable".
 
-        Reuses a cached, already-authenticated session when one exists: a single
-        lightweight authenticated call verifies the token still works instead of
-        re-logging in every poll cycle (a fresh login per CPE per minute floods
-        each device's audit log). A full login only happens on the first probe,
-        after the cached session expires, or when the token stops working.
+        A lightweight authenticated call checks the cached token on every poll.
+        A fresh login also runs once per active maintenance window, or once a
+        day when no maintenance window applies.
         """
+        generation = (self._cpe_credentials_generation
+                      if credential_generation is None else credential_generation)
+        if not self._credentials_current(generation):
+            return "unreachable"
+        force_fresh_login = force_fresh_login or cpe_ip in self._cpe_forced_login_checks
         # Fast path: a cached session we authenticated on an earlier cycle.
         cached = self._get_cached_cpe_client(cpe_ip)
         if cached:
@@ -644,8 +768,13 @@ class NetworkPoller:
             except Exception as e:
                 logger.debug(f"CPE session check failed for {cpe_ip}: {e}")
                 state = "unreachable"
+            if not self._credentials_current(generation):
+                return "unreachable"
             if state == "ok":
-                return "ok"
+                self._cpe_login_retries.pop(cpe_ip, None)
+                if not force_fresh_login:
+                    return "ok"
+                self._remove_cached_cpe_client(cpe_ip)
             if state == "unreachable":
                 # Don't re-login a device that's currently offline; report it and
                 # keep the cached client so we can revalidate once it's back.
@@ -653,16 +782,24 @@ class NetworkPoller:
             # "expired" — token no longer accepted; drop it and re-authenticate.
             self._remove_cached_cpe_client(cpe_ip)
 
+        retry_status = self._cpe_login_retry_status(cpe_ip, generation)
+        if retry_status is not None:
+            return retry_status
+
         # Get effective credentials (device-specific or global defaults)
         effective_user, effective_pass = radius_config.get_device_credentials(username, password)
 
         try:
             client = get_driver("tachyon")(cpe_ip, effective_user, effective_pass, timeout=10)
             status = _classify_cpe_connect(await client.connect())
+            if not self._credentials_current(generation):
+                return "unreachable"
             if status == "ok":
-                self._cache_cpe_client(cpe_ip, client)
+                self._cache_cpe_client(cpe_ip, client, generation)
+                self._record_cpe_login_attempt(cpe_ip, generation, status)
                 return "ok"
             if status != "auth_failed":
+                self._record_cpe_login_attempt(cpe_ip, generation, status)
                 return status
 
             # AP credentials were rejected — try global defaults as fallback.
@@ -677,18 +814,138 @@ class NetworkPoller:
                     logger.debug(f"Trying global default credentials for CPE {cpe_ip}")
                     client = get_driver("tachyon")(cpe_ip, default_config.username, default_config.password, timeout=10)
                     status = _classify_cpe_connect(await client.connect())
+                    if not self._credentials_current(generation):
+                        return "unreachable"
                     if status == "ok":
-                        self._cache_cpe_client(cpe_ip, client)
+                        self._cache_cpe_client(cpe_ip, client, generation)
+                    self._record_cpe_login_attempt(cpe_ip, generation, status)
                     return status
 
+            self._record_cpe_login_attempt(cpe_ip, generation, "auth_failed")
             return "auth_failed"
         except Exception as e:
             logger.debug(f"CPE auth probe failed for {cpe_ip}: {e}")
+            self._record_cpe_login_attempt(cpe_ip, generation, "unreachable")
             return "unreachable"
 
+    async def _probe_cpe_auth(self, cpe_ip: str, username: str, password: str,
+                              settings: dict = None, now: datetime = None,
+                              credential_generation: int = None) -> str:
+        """Check a CPE and record a due period only after fresh login succeeds."""
+        fresh_login_due = self._fresh_cpe_login_due(cpe_ip, settings, now)
+        return await self.check_cpe_auth_for_period(
+            cpe_ip, username, password, settings, now,
+            force_fresh_login=fresh_login_due,
+            validate_cached_session=True,
+            credential_generation=credential_generation,
+        )
+
+    async def check_cpe_auth_for_period(
+        self, cpe_ip: str, username: str, password: str,
+        settings: dict = None, now: datetime = None, *,
+        force_fresh_login: bool, validate_cached_session: bool,
+        credential_generation: int = None,
+    ) -> str:
+        """Serialize CPE login checks and reuse a fresh login for this period."""
+        generation = (self._cpe_credentials_generation
+                      if credential_generation is None else credential_generation)
+        lock = self._cpe_auth_locks.get(cpe_ip)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._cpe_auth_locks[cpe_ip] = lock
+        async with lock:
+            if not self._credentials_current(generation):
+                return "unreachable"
+            if self.has_successful_cpe_fresh_login(cpe_ip, settings, now):
+                if not validate_cached_session:
+                    return "ok"
+                status = await self._check_cpe_auth(
+                    cpe_ip, username, password,
+                    credential_generation=generation,
+                )
+                return status if self._credentials_current(generation) else "unreachable"
+
+            # Keep the three-argument hook used by the trusted session proof.
+            # The per-CPE lock owns this flag until the auth check completes.
+            if force_fresh_login:
+                self._cpe_forced_login_checks.add(cpe_ip)
+            try:
+                status = await self._check_cpe_auth(
+                    cpe_ip, username, password,
+                    credential_generation=generation,
+                )
+            finally:
+                self._cpe_forced_login_checks.discard(cpe_ip)
+            if not self._credentials_current(generation):
+                return "unreachable"
+            if force_fresh_login and status == "ok":
+                self.record_cpe_fresh_login_check(
+                    cpe_ip, settings, now, credential_generation=generation,
+                )
+            return status
+
+    def record_cpe_fresh_login_check(self, cpe_ip: str, settings: dict = None,
+                                     now: datetime = None, *,
+                                     credential_generation: int = None):
+        """Record a successful login for this CPE's window and daily periods."""
+        generation = (self._cpe_credentials_generation
+                      if credential_generation is None else credential_generation)
+        if not self._credentials_current(generation):
+            return
+        period = self._cpe_auth_check_period(settings, now)
+        if period is not None:
+            day_key = period[1] if isinstance(period, tuple) else period
+            markers = self._cpe_fresh_login_periods.setdefault(cpe_ip, set())
+            markers.difference_update(
+                {
+                    marker for marker in markers
+                    if (marker[1] if isinstance(marker, tuple) else marker) != day_key
+                }
+            )
+            markers.add(period)
+            markers.add(day_key)
+
+    def has_successful_cpe_fresh_login(self, cpe_ip: str, settings: dict = None,
+                                       now: datetime = None) -> bool:
+        """Return whether this CPE logged in successfully during this period."""
+        period = self._cpe_auth_check_period(settings, now)
+        return period is not None and self._has_cpe_fresh_login_period(cpe_ip, period)
+
+    def _has_cpe_fresh_login_period(self, cpe_ip: str, period: object) -> bool:
+        """Match daily and window markers without reusing across distinct windows."""
+        markers = self._cpe_fresh_login_periods.get(cpe_ip, set())
+        if period in markers:
+            return True
+
+        # A daily login cannot satisfy a window precheck: admission requires a
+        # fresh login during that window. A successful window login can satisfy
+        # the daily check later that day, avoiding an immediate second login.
+        if isinstance(period, tuple):
+            return False
+
+        day_key = period
+        day_windows = {
+            marker for marker in markers
+            if isinstance(marker, tuple) and marker[1] == day_key
+        }
+        # A successful window login also satisfies the daily poller check.
+        return bool(day_windows)
+
+    def invalidate_cpe_clients(self):
+        """Drop all CPE sessions after credentials shared by CPEs change."""
+        self._cpe_credentials_generation += 1
+        self._cpe_clients.clear()
+        self._cpe_fresh_login_periods.clear()
+        self._cpe_login_retries.clear()
+
     async def _maybe_fetch_cpe_banks(self, ap_ip: str, cpe_ip: str,
-                                      username: str, password: str):
+                                      username: str, password: str,
+                                      credential_generation: int = None):
         """Fetch CPE bank info if newly discovered or >24h since last fetch."""
+        generation = (self._cpe_credentials_generation
+                      if credential_generation is None else credential_generation)
+        if not self._credentials_current(generation):
+            return
         try:
             last_fetched = db.get_cpe_bank_last_fetched(ap_ip, cpe_ip)
             if last_fetched:
@@ -704,11 +961,13 @@ class NetworkPoller:
             if not client:
                 client = get_driver("tachyon")(cpe_ip, username, password, timeout=15)
                 result = await client.connect()
-                if result is not True:
+                if result is not True or not self._credentials_current(generation):
                     return
-                self._cache_cpe_client(cpe_ip, client)
+                self._cache_cpe_client(cpe_ip, client, generation)
 
             info = await client.get_device_info()
+            if not self._credentials_current(generation):
+                return
             if info.bank1_version or info.bank2_version:
                 db.update_cpe_bank_info(
                     ap_ip, cpe_ip,
@@ -722,19 +981,17 @@ class NetworkPoller:
 
     def invalidate_client(self, ip: str):
         """Remove cached client (e.g., when credentials change)."""
+        self._client_credentials_generation[ip] = self._client_credentials_generation.get(ip, 0) + 1
         self._remove_cached_client(ip)
         self._clear_poll_backoff(ip)
         self._failure_counts.pop(ip, None)
-        # CPE sessions are keyed by CPE IP, but credentials usually change on the
-        # parent AP (whose creds the CPEs inherit) — and we don't have the AP→CPE
-        # mapping here. A cached CPE session keeps authenticating on its old
-        # device-side token, so it would mask a credential change until the token
-        # expired on its own. Credential changes are rare; drop the whole CPE
-        # cache so every CPE re-authenticates with the new creds next cycle.
-        self._cpe_clients.clear()
+        # CPE sessions are keyed by CPE IP but inherit credentials from APs.
+        self.invalidate_cpe_clients()
 
     async def poll_ap_now(self, ip: str) -> bool:
         """Trigger immediate poll of a specific AP."""
+        generation = self._client_credentials_generation.get(ip, 0)
+        cpe_generation = self._cpe_credentials_generation
         ap = db.get_access_point(ip)
         if not ap:
             return False
@@ -742,7 +999,7 @@ class NetworkPoller:
         # A manual request ends the wait, but keeps the count so another failed
         # request resumes backoff instead of repeatedly bypassing the threshold.
         self._clear_poll_backoff(ip)
-        await self._poll_ap(ap)
+        await self._poll_ap(ap, generation=generation, cpe_generation=cpe_generation)
         refreshed = db.get_access_point(ip)
 
         # Broadcast update
@@ -757,6 +1014,7 @@ class NetworkPoller:
 
     async def _poll_all_switches(self):
         """Poll all enabled switches."""
+        generations = self._client_credentials_generation.copy()
         switches = db.get_switches(enabled_only=True)
         if not switches:
             return
@@ -768,13 +1026,15 @@ class NetworkPoller:
 
         async def poll_with_limit(sw):
             async with semaphore:
-                await self._poll_switch(sw)
+                await self._poll_switch(sw, generation=generations.get(sw["ip"], 0))
 
         await asyncio.gather(*[poll_with_limit(sw) for sw in switches], return_exceptions=True)
 
-    async def _poll_switch(self, sw: dict):
+    async def _poll_switch(self, sw: dict, *, generation: int = None):
         """Poll a single switch for status info."""
         ip = sw["ip"]
+        if generation is None:
+            generation = self._client_credentials_generation.get(ip, 0)
         prev_error = sw.get("last_error")
 
         if self._is_backed_off(ip):
@@ -782,7 +1042,9 @@ class NetworkPoller:
             return
 
         try:
-            client, error = await self._get_client(ip, sw["username"], sw["password"])
+            client, error = await self._get_client(
+                ip, sw["username"], sw["password"], generation=generation
+            )
 
             if not client:
                 db.update_switch_status(ip, last_error=error)
@@ -795,7 +1057,9 @@ class NetworkPoller:
             if not ap_info.get("model") and not ap_info.get("firmware_version") and not ap_info.get("system_name"):
                 logger.info(f"Stale session detected for switch {ip}, re-authenticating")
                 self._remove_cached_client(ip)
-                client, error = await self._get_client(ip, sw["username"], sw["password"])
+                client, error = await self._get_client(
+                    ip, sw["username"], sw["password"], generation=generation
+                )
                 if not client:
                     db.update_switch_status(ip, last_error=error)
                     self._check_uptime_transition(ip, "switch", prev_error, error)
@@ -859,11 +1123,12 @@ class NetworkPoller:
 
     async def poll_switch_now(self, ip: str) -> bool:
         """Trigger immediate poll of a specific switch."""
+        generation = self._client_credentials_generation.get(ip, 0)
         sw = db.get_switch(ip)
         if not sw:
             return False
 
-        await self._poll_switch(sw)
+        await self._poll_switch(sw, generation=generation)
 
         if self.broadcast_func:
             topology = self.get_topology()
@@ -1576,6 +1841,7 @@ class NetworkPoller:
                 raise RuntimeError("Pre-enforce snapshot missing")
             rollback_cfg = json.loads(snapshot["config_json"])
 
+            generation = self._client_credentials_generation.get(ip, 0)
             device = db.get_access_point(ip) or db.get_switch(ip)
             if not device:
                 raise RuntimeError("Device not found")
@@ -1584,12 +1850,16 @@ class NetworkPoller:
             driver_cls = get_driver(vendor)
             client = driver_cls(ip, device["username"], device["password"], timeout=15)
             login_result = await client.connect()
+            if not self._credentials_current(generation, ip):
+                raise RuntimeError("Credentials changed during rollback")
             if login_result is not True:
                 raise RuntimeError(f"Login failed: {login_result}")
 
             if not config_write_guard.automatic_config_writes_allowed():
                 return False
             dry = await client.apply_config(rollback_cfg, dry_run=True)
+            if not self._credentials_current(generation, ip):
+                raise RuntimeError("Credentials changed during rollback")
             if not dry.get("success"):
                 raise RuntimeError(
                     f"Dry run rejected: {dry.get('error') or dry.get('raw_response')}"
@@ -1598,6 +1868,8 @@ class NetworkPoller:
             if not config_write_guard.automatic_config_writes_allowed():
                 return False
             result = await client.apply_config(rollback_cfg)
+            if not self._credentials_current(generation, ip):
+                raise RuntimeError("Credentials changed during rollback")
             if not result.get("success"):
                 raise RuntimeError(
                     f"Apply failed: {result.get('error') or result.get('raw_response')}"
@@ -1645,6 +1917,7 @@ class NetworkPoller:
                 return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, None)
             try:
                 # Get device credentials
+                generation = self._client_credentials_generation.get(ip, 0)
                 device = db.get_access_point(ip)
                 if not device:
                     device = db.get_switch(ip)
@@ -1656,10 +1929,14 @@ class NetworkPoller:
                 driver_cls = get_driver(vendor)
                 client = driver_cls(ip, device["username"], device["password"], timeout=15)
                 login_result = await client.connect()
+                if not self._credentials_current(generation, ip):
+                    raise PolicyEnforceError("Credentials changed during enforce")
                 if login_result is not True:
                     raise TransientEnforceError(f"Login failed: {login_result}")
 
                 current_config = await client.get_config()
+                if not self._credentials_current(generation, ip):
+                    raise PolicyEnforceError("Credentials changed during enforce")
                 if current_config is None:
                     raise TransientEnforceError("Failed to fetch current config")
 
@@ -1683,6 +1960,8 @@ class NetworkPoller:
                 if not config_write_guard.automatic_config_writes_allowed():
                     return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, pre_snapshot_id)
                 dry_result = await client.apply_config(merged, dry_run=True, preserve_user_passwords=True)
+                if not self._credentials_current(generation, ip):
+                    raise PolicyEnforceError("Credentials changed during enforce")
                 if not dry_result.get("success"):
                     error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run failed"))
                     raise PolicyEnforceError(f"Dry run rejected: {error_msg}")
@@ -1691,6 +1970,8 @@ class NetworkPoller:
                 if not config_write_guard.automatic_config_writes_allowed():
                     return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, pre_snapshot_id)
                 result = await client.apply_config(merged, preserve_user_passwords=True)
+                if not self._credentials_current(generation, ip):
+                    raise PolicyEnforceError("Credentials changed during enforce")
                 if not result.get("success"):
                     error_msg = result.get("error", result.get("raw_response", "Apply failed"))
                     raise PolicyEnforceError(f"Apply failed: {error_msg}")

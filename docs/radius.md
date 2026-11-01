@@ -97,7 +97,8 @@ Current rollout behavior:
 - The saved RADIUS config template must match the built-in RADIUS device host, port, and shared secret before rollout can start
 - Each device is migrated using its currently stored manual management credentials
 - CPEs inherit the parent AP credentials during migration; if that inherited login fails, the rollout pauses and the operator must update the AP credentials inline before resuming
-- The poller checks current CPE credentials at least every ten minutes. It measures session age from login. Polls and bank-info reads do not extend the session lifetime.
+- Before admitting each firmware wave, the scheduler performs a fresh CPE login with inherited parent-AP credentials for every CPE under the APs in that wave. A missing or failed login holds that AP's wave and shows the reason. The poller also checks each cached session token during normal polls.
+- The poller keeps a CPE session after a password change. In lab round 5, the session remained valid after the password change, including after 60 seconds, and login with the new password succeeded. The poller drops cached CPE sessions when the credentials Manager uses change, then renews the session on its next login.
 - Saving new AP credentials triggers an immediate AP reprobe, which rediscovers attached CPEs and rechecks inherited CPE authentication before rollout resumes
 - After the RADIUS config is applied, the app immediately verifies the cutover by logging back into the device through RADIUS with a hidden automation account hosted on this appliance
 - Remaining rollout devices are resolved from current inventory state as each phase runs, so later CPE phases use the latest parent AP credentials instead of a stale snapshot

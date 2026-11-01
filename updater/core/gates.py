@@ -231,6 +231,14 @@ def phase_run_decision(
     if rollout.get("phase") == "pct10" and first_wave_held:
         return False, "firmware_hold"
 
+    # Scheduled admission also carries the CPE fresh-login results for the
+    # candidate AP wave. Keep this in the shared gate so every caller uses the
+    # same fail-closed admission path.
+    cpe_auth_failures = rollout.get("cpe_auth_failures", ())
+    if cpe_auth_failures:
+        parent_ip, cpe_ip, status = cpe_auth_failures[0]
+        return False, f"cpe_auth_failed:{parent_ip}:{cpe_ip}:{status}"
+
     return True, None
 
 

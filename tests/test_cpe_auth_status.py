@@ -7,13 +7,16 @@ because the monitor surfaces them differently — an amber "Can't sign in"
 badge vs. the offline dot.
 """
 
+import asyncio
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock, call
 
 from updater import radius_config
-from updater.poller import NetworkPoller, _CLIENT_TTL_SECONDS
+from updater.poller import NetworkPoller, _CLIENT_IDLE_TTL_SECONDS
 
 
 def _driver_returning(connect_result):
@@ -125,6 +128,104 @@ class TestCheckCpeAuthCaching:
         assert "10.0.0.11" in poller._cpe_clients
 
     @pytest.mark.asyncio
+    async def test_invalidation_during_login_does_not_cache_old_session_or_marker(
+        self, mock_db,
+    ):
+        poller = NetworkPoller()
+        started = asyncio.Event()
+        finish_login = asyncio.Event()
+        client = MagicMock()
+
+        async def connect():
+            started.set()
+            await finish_login.wait()
+            return True
+
+        client.connect = AsyncMock(side_effect=connect)
+        settings = {"schedule_enabled": "false"}
+        now = datetime(2026, 10, 27, 12, 0, tzinfo=ZoneInfo("UTC"))
+        with patch("updater.poller.get_driver", return_value=MagicMock(return_value=client)):
+            login = asyncio.create_task(poller.check_cpe_auth_for_period(
+                "10.0.0.11", "root", "ap-pass", settings, now,
+                force_fresh_login=True, validate_cached_session=True,
+            ))
+            await started.wait()
+            poller.invalidate_cpe_clients()
+            finish_login.set()
+            assert await login == "unreachable"
+
+        assert "10.0.0.11" not in poller._cpe_clients
+        assert not poller.has_successful_cpe_fresh_login(
+            "10.0.0.11", settings, now
+        )
+
+    @pytest.mark.asyncio
+    async def test_invalidation_during_auth_does_not_start_bank_fallback_with_old_credentials(
+        self, mock_db,
+    ):
+        poller = NetworkPoller()
+        cpe_ip = "10.0.0.11"
+        generation = poller._cpe_credentials_generation
+        started = asyncio.Event()
+        finish_login = asyncio.Event()
+        stale_client = MagicMock()
+
+        async def connect():
+            started.set()
+            await finish_login.wait()
+            return True
+
+        stale_client.connect = AsyncMock(side_effect=connect)
+        factory = MagicMock(return_value=stale_client)
+        with patch("updater.poller.get_driver", return_value=factory):
+            status_task = asyncio.create_task(poller._check_cpe_auth(
+                cpe_ip, "root", "old-ap-password",
+                credential_generation=generation,
+            ))
+            await started.wait()
+            poller.invalidate_cpe_clients()
+            finish_login.set()
+            assert await status_task == "unreachable"
+
+            # The poll path must carry the generation captured before it read
+            # AP credentials. It must not snapshot the new generation here.
+            with patch("updater.poller.db.get_cpe_bank_last_fetched") as bank_fetch:
+                await poller._maybe_fetch_cpe_banks(
+                    "10.0.0.1", cpe_ip, "root", "old-ap-password",
+                    credential_generation=generation,
+                )
+                bank_fetch.assert_not_called()
+
+        assert cpe_ip not in poller._cpe_clients
+        factory.assert_called_once_with(cpe_ip, "root", "old-ap-password", timeout=10)
+
+    @pytest.mark.asyncio
+    async def test_invalidation_during_ap_login_does_not_cache_old_client(self, mock_db):
+        poller = NetworkPoller()
+        started = asyncio.Event()
+        finish_login = asyncio.Event()
+        client = MagicMock()
+
+        async def connect():
+            started.set()
+            await finish_login.wait()
+            return True
+
+        client.connect = AsyncMock(side_effect=connect)
+        with patch("updater.poller.get_driver", return_value=MagicMock(return_value=client)):
+            login = asyncio.create_task(poller._get_client(
+                "10.0.0.1", "root", "old-password", generation=0
+            ))
+            await started.wait()
+            poller.invalidate_client("10.0.0.1")
+            finish_login.set()
+            result, error = await login
+
+        assert result is None
+        assert error == "Credentials changed during login"
+        assert "10.0.0.1" not in poller._clients
+
+    @pytest.mark.asyncio
     async def test_auth_failed_is_not_cached(self, mock_db):
         poller = NetworkPoller()
         with patch("updater.poller.get_driver",
@@ -134,6 +235,74 @@ class TestCheckCpeAuthCaching:
             status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
         assert status == "auth_failed"
         assert "10.0.0.11" not in poller._cpe_clients
+
+    @pytest.mark.asyncio
+    async def test_failed_fresh_login_waits_before_retry(self, mock_db):
+        poller = NetworkPoller()
+        clock = FakeClock(1000.0)
+        factory = _driver_returning("Invalid credentials")
+        settings = {"schedule_enabled": "false"}
+        now = datetime(2026, 10, 27, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+        with patch("updater.poller.time.time", clock.time), \
+             patch("updater.poller.get_driver", return_value=factory), \
+             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+            assert await poller._probe_cpe_auth(
+                "10.0.0.11", "root", "ap-pass", settings, now
+            ) == "auth_failed"
+            clock.advance(60)
+            assert await poller._probe_cpe_auth(
+                "10.0.0.11", "root", "ap-pass", settings, now
+            ) == "auth_failed"
+            assert factory.call_count == 1
+
+            clock.advance(240)
+            assert await poller._probe_cpe_auth(
+                "10.0.0.11", "root", "ap-pass", settings, now
+            ) == "auth_failed"
+            assert factory.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_credential_change_bypasses_failed_login_delay(self, mock_db):
+        poller = NetworkPoller()
+        clock = FakeClock(1000.0)
+        factory = _driver_returning("Invalid credentials")
+        with patch("updater.poller.time.time", clock.time), \
+             patch("updater.poller.get_driver", return_value=factory), \
+             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+            assert await poller._check_cpe_auth(
+                "10.0.0.11", "root", "old-pass"
+            ) == "auth_failed"
+            poller.invalidate_cpe_clients()
+            assert await poller._check_cpe_auth(
+                "10.0.0.11", "root", "new-pass"
+            ) == "auth_failed"
+
+        assert factory.call_count == 2
+        assert factory.call_args_list[1] == call(
+            "10.0.0.11", "root", "new-pass", timeout=10
+        )
+
+    @pytest.mark.asyncio
+    async def test_successful_fresh_login_resets_retry_state(self, mock_db):
+        poller = NetworkPoller()
+        clock = FakeClock(1000.0)
+        factory = MagicMock(side_effect=[
+            _driver_returning("Invalid credentials").return_value,
+            _driver_returning(True).return_value,
+        ])
+        with patch("updater.poller.time.time", clock.time), \
+             patch("updater.poller.get_driver", return_value=factory), \
+             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+            assert await poller._check_cpe_auth(
+                "10.0.0.11", "root", "ap-pass"
+            ) == "auth_failed"
+            clock.advance(300)
+            assert await poller._check_cpe_auth(
+                "10.0.0.11", "root", "ap-pass"
+            ) == "ok"
+
+        assert "10.0.0.11" not in poller._cpe_login_retries
 
     @pytest.mark.asyncio
     async def test_valid_cached_session_skips_relogin(self, mock_db):
@@ -165,7 +334,7 @@ class TestCheckCpeAuthCaching:
         assert poller._cpe_clients["10.0.0.11"][0] is not stale
 
     @pytest.mark.asyncio
-    async def test_active_session_expires_at_exactly_600_seconds(self, mock_db):
+    async def test_active_session_is_reused_after_600_seconds(self, mock_db):
         poller = NetworkPoller()
         cached = MagicMock()
         cached.session_valid = AsyncMock(return_value="ok")
@@ -176,16 +345,13 @@ class TestCheckCpeAuthCaching:
         fresh = factory.return_value
         with patch("updater.poller.time.time", clock.time), \
              patch("updater.poller.get_driver", return_value=factory) as get_driver_mock:
-            clock.advance(_CLIENT_TTL_SECONDS - 1)
+            clock.advance(_CLIENT_IDLE_TTL_SECONDS)
             assert await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass") == "ok"
             assert poller._get_cached_cpe_client("10.0.0.11") is cached
             assert poller._cpe_clients["10.0.0.11"][1] == logged_in_at
             get_driver_mock.assert_not_called()
-            clock.advance(1)
-            assert await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass") == "ok"
-            get_driver_mock.assert_called_once()
-        fresh.connect.assert_awaited_once()
-        assert poller._cpe_clients["10.0.0.11"] == (fresh, clock.time())
+        cached.session_valid.assert_awaited_once()
+        fresh.connect.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_repeated_session_renewals_with_fake_clock(self, mock_db):
@@ -194,27 +360,27 @@ class TestCheckCpeAuthCaching:
         clients = [_driver_returning(True).return_value for _ in range(4)]
         for client in clients:
             client.connect = AsyncMock(return_value=True)
+            client.session_valid = AsyncMock(return_value="ok")
         factory = MagicMock(side_effect=clients)
 
         with patch("updater.poller.time.time", clock.time), \
              patch("updater.poller.get_driver", return_value=factory):
             for index in range(4):
                 assert await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass") == "ok"
-                assert poller._cpe_clients["10.0.0.11"][0] is clients[index]
-                assert poller._cpe_clients["10.0.0.11"][1] == clock.time()
+                assert poller._cpe_clients["10.0.0.11"][0] is clients[0]
                 if index < 3:
-                    clock.advance(_CLIENT_TTL_SECONDS)
+                    clock.advance(_CLIENT_IDLE_TTL_SECONDS)
 
-        assert factory.call_count == 4
-        for client in clients:
-            client.connect.assert_awaited_once()
-        assert _CLIENT_TTL_SECONDS == 600
+        assert factory.call_count == 1
+        clients[0].connect.assert_awaited_once()
+        for client in clients[1:]:
+            client.connect.assert_not_awaited()
 
-    def test_cpe_eviction_expires_at_login_time_limit(self):
+    def test_cpe_eviction_keeps_old_sessions_until_size_limit(self):
         poller = NetworkPoller()
         poller._cpe_clients["10.0.0.11"] = (MagicMock(), 1000.0)
-        poller._evict_stale_cpe_clients(1000.0 + _CLIENT_TTL_SECONDS)
-        assert "10.0.0.11" not in poller._cpe_clients
+        poller._evict_stale_cpe_clients(1000.0 + _CLIENT_IDLE_TTL_SECONDS)
+        assert "10.0.0.11" in poller._cpe_clients
 
     @pytest.mark.asyncio
     async def test_unreachable_cached_session_kept_for_revalidation(self, mock_db):
@@ -237,10 +403,10 @@ class TestCheckCpeAuthCaching:
         poller = NetworkPoller()
         now = time.time()
         poller._cpe_clients["fresh"] = (MagicMock(), now)
-        poller._cpe_clients["old"] = (MagicMock(), now - _CLIENT_TTL_SECONDS - 1)
+        poller._cpe_clients["old"] = (MagicMock(), now - _CLIENT_IDLE_TTL_SECONDS - 1)
         poller._evict_stale_cpe_clients(now)
         assert "fresh" in poller._cpe_clients
-        assert "old" not in poller._cpe_clients
+        assert "old" in poller._cpe_clients
 
     def test_invalidate_client_clears_cpe_cache(self):
         # Credentials usually change on the parent AP, but CPE sessions are keyed
@@ -252,3 +418,127 @@ class TestCheckCpeAuthCaching:
         poller._cpe_clients["10.0.0.12"] = (MagicMock(), time.time())
         poller.invalidate_client("10.0.0.1")  # the AP's IP, not a CPE's
         assert poller._cpe_clients == {}
+
+    @pytest.mark.asyncio
+    async def test_forced_fresh_login_checks_token_then_connects_again(self, mock_db):
+        poller = NetworkPoller()
+        cached = MagicMock()
+        cached.session_valid = AsyncMock(return_value="ok")
+        poller._cpe_clients["10.0.0.11"] = (cached, time.time())
+        fresh_factory = _driver_returning(True)
+        with patch("updater.poller.get_driver", return_value=fresh_factory):
+            assert await poller._check_cpe_auth(
+                "10.0.0.11", "root", "ap-pass", force_fresh_login=True
+            ) == "ok"
+
+        cached.session_valid.assert_awaited_once()
+        assert fresh_factory.call_count == 1
+        fresh_factory.return_value.connect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_unreachable_then_token_ok_still_requires_window_fresh_login(self, mock_db):
+        poller = NetworkPoller()
+        cpe_ip = "10.0.0.11"
+        settings = {
+            "schedule_enabled": "true", "schedule_days": "tue",
+            "schedule_start_hour": "3", "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+        now = datetime(2026, 10, 27, 2, 50, tzinfo=ZoneInfo("America/Chicago"))
+        cached = MagicMock()
+        cached.session_valid = AsyncMock(side_effect=["unreachable", "ok", "ok"])
+        poller._cache_cpe_client(cpe_ip, cached)
+        fresh_factory = _driver_returning(True)
+
+        with patch("updater.poller.get_driver", return_value=fresh_factory), \
+             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+            assert await poller._probe_cpe_auth(
+                cpe_ip, "root", "ap-pass", settings, now
+            ) == "unreachable"
+            assert await poller._check_cpe_auth(cpe_ip, "root", "ap-pass") == "ok"
+            assert poller._fresh_cpe_login_due(cpe_ip, settings, now)
+
+            assert await poller._probe_cpe_auth(
+                cpe_ip, "root", "ap-pass", settings, now
+            ) == "ok"
+
+        assert cached.session_valid.await_count == 3
+        assert fresh_factory.return_value.connect.await_count == 1
+        assert not poller._fresh_cpe_login_due(cpe_ip, settings, now)
+
+    @pytest.mark.asyncio
+    async def test_poller_without_scheduler_fresh_logs_in_and_reuses_session(self, mock_db):
+        """The poller keeps daily auth checks when no scheduler window applies."""
+        poller = NetworkPoller()
+        settings = {
+            "schedule_enabled": "true", "schedule_days": "tue",
+            "schedule_start_hour": "3", "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+        now = datetime(2026, 10, 27, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
+        old_client = MagicMock()
+        old_client.session_valid = AsyncMock(return_value="ok")
+        poller._cache_cpe_client("10.0.0.11", old_client)
+
+        fresh_factory = _driver_returning(True)
+        fresh_factory.return_value.session_valid = AsyncMock(return_value="ok")
+        with patch("updater.poller.get_driver", return_value=fresh_factory), \
+             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+            first = await poller._probe_cpe_auth(
+                "10.0.0.11", "root", "ap-pass", settings, now
+            )
+            second = await poller._probe_cpe_auth(
+                "10.0.0.11", "root", "ap-pass", settings, now
+            )
+
+        assert (first, second) == ("ok", "ok")
+        assert fresh_factory.return_value.connect.await_count == 1
+        assert old_client.session_valid.await_count == 1
+        assert fresh_factory.return_value.session_valid.await_count == 1
+
+    def test_daily_fresh_login_check_runs_once_per_day(self, mock_db):
+        poller = NetworkPoller()
+        settings = {"schedule_enabled": "false"}
+        assert poller._fresh_cpe_login_due("10.0.0.11", settings)
+        poller.record_cpe_fresh_login_check("10.0.0.11", settings)
+        assert not poller._fresh_cpe_login_due("10.0.0.11", settings)
+
+    def test_window_fresh_login_check_runs_once_per_window(self, mock_db):
+        poller = NetworkPoller()
+        settings = {
+            "schedule_enabled": "true", "schedule_days": "tue",
+            "schedule_start_hour": "3", "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+        zone = ZoneInfo("America/Chicago")
+        before_window = datetime(2026, 10, 27, 2, 50, tzinfo=zone)
+        next_window = datetime(2026, 11, 3, 2, 50, tzinfo=zone)
+        too_early = datetime(2026, 10, 27, 2, 44, tzinfo=zone)
+
+        assert poller._fresh_cpe_login_due("10.0.0.11", settings, before_window)
+        poller.record_cpe_fresh_login_check("10.0.0.11", settings, before_window)
+        assert not poller._fresh_cpe_login_due("10.0.0.11", settings, before_window)
+        assert poller._fresh_cpe_login_due("10.0.0.11", settings, next_window)
+        assert not poller._fresh_cpe_login_due("10.0.0.11", settings, too_early)
+
+    def test_daily_window_daily_markers_require_window_login_only_once(self, mock_db):
+        poller = NetworkPoller()
+        daily_settings = {"schedule_enabled": "false"}
+        window_settings = {
+            "schedule_enabled": "true", "schedule_days": "tue",
+            "schedule_start_hour": "3", "schedule_end_hour": "4",
+            "schedule_timezone": "America/Chicago",
+        }
+        zone = ZoneInfo("America/Chicago")
+        early = datetime(2026, 10, 27, 2, 44, tzinfo=zone)
+        in_window = datetime(2026, 10, 27, 3, 15, tzinfo=zone)
+        later = datetime(2026, 10, 27, 12, 0, tzinfo=zone)
+        cpe_ip = "10.0.0.11"
+
+        assert poller._fresh_cpe_login_due(cpe_ip, daily_settings, early)
+        poller.record_cpe_fresh_login_check(cpe_ip, daily_settings, early)
+        # The outside-window login cannot admit the wave. Require and record a
+        # fresh window login, then reuse it for the daily check later that day.
+        assert poller._fresh_cpe_login_due(cpe_ip, window_settings, in_window)
+        poller.record_cpe_fresh_login_check(cpe_ip, window_settings, in_window)
+        assert not poller._fresh_cpe_login_due(cpe_ip, daily_settings, later)
