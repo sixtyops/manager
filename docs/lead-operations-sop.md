@@ -105,12 +105,11 @@ Use GPT workers only. Use Luna as the default worker for nearly all work, includ
 at high reasoning. Assign docs and small code at low or medium reasoning. Assign
 pre-reviews, re-reviews, designated reviews, and bench or dev-host runs at high
 reasoning. Use Sol at medium only after Luna fails at a named step, or for a
-hard design question named by a reviewer. Use Astra for at most one narrow
-design question at medium; never send a whole review to Astra. A PR escalated to
-Astra also gets a Sol review. For large decisions, meaning major product or
-safety decisions, use the five seats: Astra medium, Sol medium, Luna high, Luna
-medium, and the owner. [AGENTS.md](../AGENTS.md#models) points here for model
-routing and quorum. Do not use Claude workers.
+hard design question named by a reviewer. For each architecture decision, ask
+one Astra subagent for a design and follow that design. Bring the decision to
+the owner when you strongly disagree with the design. The owner decides large
+product and safety decisions. [AGENTS.md](../AGENTS.md#models) points here for
+model routing. Do not use Claude workers.
 Do not give implementation work to an architect; give its design to a coding worker.
 Verify installed provider/model/thinking IDs before sending work. Follow the
 review-fix rule in [Priority and delegation](#priority-and-delegation). Preserve
