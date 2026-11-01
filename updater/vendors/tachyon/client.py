@@ -633,7 +633,9 @@ class TachyonClient:
                 info.management_interface, info.management_vlan_id = self._parse_management_zone(body)
                 info.management_mac = info.macs.get(info.management_interface)
                 status_valid, status_present, status_mode = self._parse_management_ip_mode(body)
-                config, config_status, _err = await self.fetch_config()
+                config, config_status, config_err = await self.fetch_config()
+                if config_status != "ok":
+                    self._log_config_fetch_failure(config_status, config_err)
                 config_valid, config_present, config_mode = self._parse_config_management_ip_mode(config)
                 if not status_valid or config_status != "ok" or not config_valid:
                     info.management_ip_mode = None
@@ -1517,13 +1519,17 @@ class TachyonClient:
         config, status, err = await self.fetch_config()
         if status == "ok":
             return config
+        self._log_config_fetch_failure(status, err)
+        return None
+
+    def _log_config_fetch_failure(self, status: str, err: Optional[str]) -> None:
+        """Keep config-read diagnostics consistent across config callers."""
         if status == "http_status":
             logger.warning(f"Failed to get config from {self.ip}: {err}")
         elif status == "json_decode":
             logger.error(f"Failed to parse config from {self.ip}: {err}")
         else:
             logger.warning(f"Failed to get config from {self.ip} ({status}): {err}")
-        return None
 
     async def run_smoke_tests(self, role: str = "ap", pre_update_cpe_count: int = 0) -> SmokeTestResult:
         """Run post-update smoke tests on a device.
