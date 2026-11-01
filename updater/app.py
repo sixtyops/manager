@@ -5900,10 +5900,9 @@ async def _address_artifact_sha256(path: str) -> str:
 
 
 def _address_management_scope(record: dict) -> dict:
-    """Use independently observed source scope; keep absent evidence unknown."""
+    """Use observed management scope; keep absent evidence unknown."""
     record = record if isinstance(record, dict) else {}
     return {
-        "source_sha256": record.get("firmware_sha256", ""),
         "management_vlan": record.get("management_vlan"),
         "management_ip_mode": record.get("management_ip_mode", ""),
     }
@@ -5930,7 +5929,6 @@ def _normalize_address_qualification_info(info, ip: str, role: str):
             "management_interface": getattr(info, "management_interface", None),
             "management_vlan_id": getattr(info, "management_vlan_id", None),
             "management_mac": getattr(info, "management_mac", None),
-            "firmware_sha256": getattr(info, "firmware_sha256", None),
             "management_vlan": getattr(info, "management_vlan_id", None),
             "management_ip_mode": getattr(info, "management_ip_mode", None),
         },

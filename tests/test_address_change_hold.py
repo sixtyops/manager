@@ -19,14 +19,12 @@ TARGET = "1.15.0.55142"
 FW = "tna-30x-1.15.0-r55142-test.bin"
 ARTIFACT = b"synthetic qualified firmware"
 SCOPE = {
-    "source_sha256": "a" * 64,
     "target_sha256": hashlib.sha256(ARTIFACT).hexdigest(),
     "management_vlan": 100,
     "management_ip_mode": "dhcp",
     "recovery_case": "firmware_flash",
 }
-OBSERVED = {"firmware_sha256": SCOPE["source_sha256"],
-            "management_vlan": 100, "management_ip_mode": "dhcp"}
+OBSERVED = {"management_vlan": 100, "management_ip_mode": "dhcp"}
 TRANSITION = gate.AddressTransition("tna-30x", "ap", SOURCE, TARGET, **SCOPE)
 
 
@@ -68,6 +66,16 @@ def test_qualified_exact_build_proceeds(tables):
     assert not gate.address_change_decision("tna-30x", "ap", SOURCE, TARGET, **SCOPE)[0]
 
 
+def test_management_mode_does_not_replace_missing_installed_firmware_hash(tables):
+    allowed, reason = gate.address_change_decision(
+        "tna-30x", "ap", SOURCE, TARGET,
+        source_sha256="", target_sha256=SCOPE["target_sha256"],
+        management_vlan=100, management_ip_mode="dhcp", recovery_case="firmware_flash",
+    )
+    assert not allowed
+    assert "Address-change hold" in reason
+
+
 def write_plan(**overrides):
     import os
     from pathlib import Path
@@ -94,6 +102,37 @@ def test_named_bench_exception_scope(tables, ip, name, scheduled, source, allowe
     assert gate.address_change_decision(
         "tna-30x", "ap", source, TARGET, ip=ip, bench_exception=name, scheduled=scheduled, **SCOPE,
     )[0] is allowed
+
+
+def test_named_plan_rejects_legacy_source_hash_with_clear_hold(tables):
+    write_plan()
+    import os
+    from pathlib import Path
+    path = Path(os.environ["SIXTYOPS_ADDRESS_BENCH_PLAN_FILE"])
+    plan = json.loads(path.read_text())
+    plan["devices"][0]["source_sha256"] = "a" * 64
+    path.write_text(json.dumps(plan))
+
+    allowed, reason = gate.address_change_decision(
+        "tna-30x", "ap", SOURCE, TARGET, ip=IP,
+        bench_exception="lab-plan", **SCOPE,
+    )
+
+    assert not allowed
+    assert "removed source_sha256 field" in reason
+
+
+def test_mixed_named_plan_rejects_legacy_source_hash(tables):
+    write_plan()
+    import os
+    from pathlib import Path
+    path = Path(os.environ["SIXTYOPS_ADDRESS_BENCH_PLAN_FILE"])
+    plan = json.loads(path.read_text())
+    plan["devices"][1]["source_sha256"] = "a" * 64
+    path.write_text(json.dumps(plan))
+
+    with pytest.raises(ValueError, match="removed source_sha256 field"):
+        gate._address_bench_plan("lab-plan")
 
 
 @pytest.mark.parametrize("overrides", [
@@ -276,7 +315,6 @@ async def test_driver_qualification_callback_normalizes_tachyon_info(
         live_info = DeviceInfo(
             ip=IP, model="TNA-301", serial="SYNTHETIC-SERIAL", current_version=version,
             management_interface="eth0.100", management_vlan_id=vlan,
-            firmware_sha256=SCOPE["source_sha256"],
             management_ip_mode=SCOPE["management_ip_mode"],
         )
         admitted, reason = await qualification_check(live_info)
@@ -302,16 +340,17 @@ async def test_driver_qualification_callback_normalizes_tachyon_info(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["source_sha256", "management_ip_mode"])
+@pytest.mark.parametrize("change", ["source_version", "management_ip_mode"])
 async def test_pre_reboot_rechecks_fresh_device_info(tables, runner, monkeypatch, change):
     qualify()
     changed = dict(OBSERVED)
-    if change == "source_sha256":
-        changed["firmware_sha256"] = "b" * 64
+    if change == "source_version":
+        boundary_version = "1.12.3.54971"
     else:
         changed["management_ip_mode"] = "static"
+        boundary_version = SOURCE
     initial = VendorDeviceInfo(ip=IP, model="TNA-301", serial="SYNTHETIC-SERIAL", current_version=SOURCE, extra=dict(OBSERVED))
-    boundary = VendorDeviceInfo(ip=IP, model="TNA-301", serial="SYNTHETIC-SERIAL", current_version=SOURCE, extra=changed)
+    boundary = VendorDeviceInfo(ip=IP, model="TNA-301", serial="SYNTHETIC-SERIAL", current_version=boundary_version, extra=changed)
     runner.get_device_info = AsyncMock(side_effect=[initial, boundary])
     class FixedDateTime(datetime):
         @classmethod
@@ -330,13 +369,17 @@ async def test_pre_reboot_rechecks_fresh_device_info(tables, runner, monkeypatch
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("field", ["firmware_sha256", "management_ip_mode"])
+@pytest.mark.parametrize("field", ["current_version", "management_vlan", "management_ip_mode"])
 async def test_missing_live_qualification_field_holds_before_reboot(tables, runner, field):
     qualify()
     initial = VendorDeviceInfo(ip=IP, model="TNA-301", serial="SYNTHETIC-SERIAL", current_version=SOURCE, extra=dict(OBSERVED))
     missing = dict(OBSERVED)
-    missing.pop(field)
-    boundary = VendorDeviceInfo(ip=IP, model="TNA-301", serial="SYNTHETIC-SERIAL", current_version=SOURCE, extra=missing)
+    boundary_version = SOURCE
+    if field == "current_version":
+        boundary_version = None
+    else:
+        missing.pop(field)
+    boundary = VendorDeviceInfo(ip=IP, model="TNA-301", serial="SYNTHETIC-SERIAL", current_version=boundary_version, extra=missing)
     runner.get_device_info = AsyncMock(side_effect=[initial, boundary])
 
     job = make_job()
@@ -350,7 +393,7 @@ async def test_missing_live_qualification_field_holds_before_reboot(tables, runn
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("boundary", ["upload", "upload_retry", "trigger"])
-@pytest.mark.parametrize("field", ["firmware_sha256", "management_ip_mode"])
+@pytest.mark.parametrize("field", ["current_version", "management_ip_mode"])
 async def test_tachyon_rechecks_live_fields_at_each_driver_write_boundary(
     tables, monkeypatch, tmp_path, boundary, field,
 ):
@@ -360,17 +403,16 @@ async def test_tachyon_rechecks_live_fields_at_each_driver_write_boundary(
     client = TachyonClient(IP, "synthetic", "synthetic")
     client.login = AsyncMock(return_value=True)
     expected = {
-        "firmware_sha256": SCOPE["source_sha256"],
+        "current_version": SOURCE,
         "management_ip_mode": SCOPE["management_ip_mode"],
     }
 
     def live_info(changed=False):
         values = dict(expected)
         if changed:
-            values[field] = "static" if field == "management_ip_mode" else "b" * 64
+            values[field] = "static" if field == "management_ip_mode" else "1.12.3.54971"
         return DeviceInfo(
-            ip=IP, model="TNA-301", current_version=SOURCE,
-            firmware_sha256=values["firmware_sha256"],
+            ip=IP, model="TNA-301", current_version=values["current_version"],
             management_ip_mode=values["management_ip_mode"],
         )
 
@@ -393,7 +435,7 @@ async def test_tachyon_rechecks_live_fields_at_each_driver_write_boundary(
         qualification_checks.append((info, error))
         if error:
             return False, error
-        if (info.firmware_sha256 != expected["firmware_sha256"]
+        if (info.current_version != expected["current_version"]
                 or info.management_ip_mode != expected["management_ip_mode"]):
             return False, "Deferred: live qualification changed"
         return True, ""
@@ -536,8 +578,7 @@ async def test_scheduled_hold_keeps_wave_pending(tables, mock_db, monkeypatch):
 
 
 SCOPE_CHANGES = [
-    ("source_sha256", "b" * 64), ("source_sha256", ""), ("source_sha256", None),
-    ("source_sha256", "not-a-hash"), ("target_sha256", "b" * 64),
+    ("target_sha256", "b" * 64),
     ("target_sha256", ""), ("target_sha256", None),
     ("management_vlan", 101), ("management_vlan", None),
     ("management_vlan", True), ("management_vlan", -1), ("management_vlan", 4095),
@@ -580,7 +621,7 @@ def test_legacy_plan_without_scope_stays_held(tables, field):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scheduled", [True, False])
 @pytest.mark.parametrize("reboot", [True, False])
-@pytest.mark.parametrize("field", ["source_sha256", "target_sha256", "management_vlan", "management_ip_mode"])
+@pytest.mark.parametrize("field", ["target_sha256", "management_vlan", "management_ip_mode"])
 async def test_live_scope_change_holds_before_each_write(tables, runner, scheduled, reboot, field):
     qualify()
     job = make_job(scheduled, reboot)
@@ -591,9 +632,8 @@ async def test_live_scope_change_holds_before_each_write(tables, runner, schedul
             return True
         runner.connect.side_effect = replace_bytes
     else:
-        key = "firmware_sha256" if field == "source_sha256" else field
-        runner.get_device_info.return_value.extra[key] = {
-            "source_sha256": "b" * 64, "management_vlan": 101,
+        runner.get_device_info.return_value.extra[field] = {
+            "management_vlan": 101,
             "management_ip_mode": "static",
         }[field]
     await app_module.run_update_job(job, 1)
@@ -604,7 +644,7 @@ async def test_live_scope_change_holds_before_each_write(tables, runner, schedul
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scheduled", [True, False])
-@pytest.mark.parametrize("field", ["firmware_sha256", "management_vlan", "management_ip_mode"])
+@pytest.mark.parametrize("field", ["management_vlan", "management_ip_mode"])
 async def test_missing_inventory_scope_uses_live_evidence(tables, runner, monkeypatch, scheduled, field):
     qualify()
     read = db.get_access_point
