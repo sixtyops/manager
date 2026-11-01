@@ -73,7 +73,7 @@ def test_success_restores_original_and_uses_form_api(client):
     assert state["version"] == BASELINE["firmware_version"]
 
 
-@pytest.mark.parametrize("mode, message", [("wrong-version", "expected target"),
+@pytest.mark.parametrize("mode, message", [("wrong-version", "Target version check"),
                                             ("failed-job", "job failed")])
 def test_upgrade_failure_still_restores(client, mode, message):
     session, state = client
@@ -122,17 +122,13 @@ def test_completed_job_requires_device_success(client, status):
         firmware._wait_for_job(session, "job", IP)
 
 
-@pytest.mark.parametrize("change", ["rollback-missing", "target-missing", "target-older",
+@pytest.mark.parametrize("change", ["target-older",
                                     "wrong-family", "unhealthy", "unknown-model", "missing-version",
                                     "missing-bank", "mixed-banks"])
 def test_preflight_fails_before_any_write(client, change):
     session, state = client
     files = [dict(item) for item in FILES]
-    if change == "rollback-missing":
-        files.pop(0)
-    elif change == "target-missing":
-        files.pop()
-    elif change == "target-older":
+    if change == "target-older":
         files[1]["name"] = TARGET.replace("r200", "r050")
     elif change == "wrong-family":
         files[0]["name"] = ORIGINAL.replace("tna-30x", "tna-303l")
@@ -147,6 +143,55 @@ def test_preflight_fails_before_any_write(client, change):
     with pytest.raises(firmware.FirmwareCheckError):
         firmware._exercise_firmware(session, IP, files)
     assert state["step"] == 0
+
+
+@pytest.mark.parametrize("files", [[FILES[0]], [FILES[1]]], ids=["no-newer-image", "no-original-image"])
+def test_missing_compatible_image_skips_before_any_write(client, files):
+    session, state = client
+    with pytest.raises(pytest.skip.Exception, match="compatible"):
+        firmware._exercise_firmware(session, IP, files)
+    assert state["step"] == 0
+    assert not any(call.args[0] == "/api/update-device" for call in session.post.call_args_list)
+
+
+@pytest.fixture
+def failed_job():
+    return {
+        "status": "failed",
+        "cancelled": True,
+        "cancel_reason": f"device {IP}; password=private-value",
+        "devices": {
+            IP: {
+                "status": "failed",
+                "error": f"write failed for {IP}; credential=private-value; Bearer private-token",
+                "current_stage": "write",
+                "old_version": "1.15.0.100",
+                "new_version": "1.15.0.200",
+                "active_bank": 1,
+                "bank1_version": "1.15.0.100",
+                "bank2_version": "1.15.0.100",
+            }
+        },
+    }
+
+
+def test_job_failure_message_has_sanitized_evidence(failed_job):
+    message = firmware._job_failure_message("Upgrade job", failed_job, IP)
+    assert "Upgrade job failed" in message
+    assert "status=failed" in message
+    assert "cancelled=True" in message
+    assert "cancel_reason=device <device>; password=<redacted>" in message
+    assert "device <device>: status=failed" in message
+    assert "error=write failed for <device>; credential=<redacted>; Bearer <redacted>" in message
+    assert "current_stage=write" in message
+    assert "old_version=1.15.0.100" in message
+    assert "new_version=1.15.0.200" in message
+    assert "active_bank=1" in message
+    assert "bank1_version=1.15.0.100" in message
+    assert "bank2_version=1.15.0.100" in message
+    assert IP not in message
+    assert "private-value" not in message
+    assert "private-token" not in message
 
 
 def test_restoration_bank_mismatch_requires_operator(client):
