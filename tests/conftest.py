@@ -31,7 +31,7 @@ def memory_db():
         "schedule_start_hour": "3",
         "schedule_end_hour": "4",
         "parallel_updates": "2",
-        "bank_mode": "one",
+        "bank_mode": "both",
         "timezone": "auto",
         "zip_code": "",
         "weather_check_enabled": "true",

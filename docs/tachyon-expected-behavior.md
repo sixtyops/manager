@@ -17,9 +17,9 @@ before treating its values as a qualified baseline.
 **Key points:** Manager uses one bank by default. Verify the active bank after
 each update and record the other bank's firmware version.
 
-**Detail:** In the lab upgrade and restore check, do not require both banks to
-match before the upgrade or after restore. After restore, verify that the active
-bank runs the original firmware. Record the inactive bank version as observed.
+**Detail:** In the lab upgrade and restore check, verify the active bank before
+the upgrade. After restore, verify that the active bank runs the original
+firmware. Record the other bank version as observed.
 
 ## Signals
 
