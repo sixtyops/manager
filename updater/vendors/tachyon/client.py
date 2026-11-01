@@ -372,21 +372,47 @@ class TachyonClient:
         return None, None
 
     @staticmethod
-    def _parse_management_ip_mode(body: str) -> Optional[str]:
-        """Return the live management IP mode when zone status reports it."""
+    def _parse_management_ip_mode(body: str) -> tuple[bool, bool, Optional[str]]:
+        """Return status validity, mode presence, and its normalized value."""
         try:
             data = json.loads(body)
-        except (json.JSONDecodeError, TypeError):
-            return None
-        zones = data.get("zones") if isinstance(data, dict) else None
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return False, False, None
+        if not isinstance(data, dict) or "zones" not in data:
+            return False, False, None
+        zones = data["zones"]
         if not isinstance(zones, dict):
-            return None
+            return False, False, None
         for zone in zones.values():
             if not isinstance(zone, dict) or not zone.get("management_interface"):
                 continue
-            mode = zone.get("management_ip_mode")
-            return mode if isinstance(mode, str) else None
-        return None
+            if "management_ip_mode" not in zone:
+                return True, False, None
+            return True, True, TachyonClient._normalize_management_ip_mode(zone["management_ip_mode"])
+        return True, False, None
+
+    @staticmethod
+    def _normalize_management_ip_mode(value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        mode = value.strip().lower()
+        return mode if mode in {"dhcp", "static"} else None
+
+    @staticmethod
+    def _parse_config_management_ip_mode(config: Any) -> tuple[bool, bool, Optional[str]]:
+        """Return config validity, mode presence, and its normalized value."""
+        if config is None:
+            return False, False, None
+        if not isinstance(config, dict):
+            return False, False, None
+        value = config
+        for key in ("network", "zones", "wan", "management", "proto"):
+            if not isinstance(value, dict):
+                return False, False, None
+            if key not in value:
+                return True, False, None
+            value = value[key]
+        return True, True, TachyonClient._normalize_management_ip_mode(value)
 
     async def _curl(
         self,
@@ -606,7 +632,21 @@ class TachyonClient:
             if status == 200:
                 info.management_interface, info.management_vlan_id = self._parse_management_zone(body)
                 info.management_mac = info.macs.get(info.management_interface)
-                info.management_ip_mode = self._parse_management_ip_mode(body)
+                status_valid, status_present, status_mode = self._parse_management_ip_mode(body)
+                config, config_status, config_err = await self.fetch_config()
+                if config_status != "ok":
+                    self._log_config_fetch_failure(config_status, config_err)
+                config_valid, config_present, config_mode = self._parse_config_management_ip_mode(config)
+                if not status_valid or config_status != "ok" or not config_valid:
+                    info.management_ip_mode = None
+                elif (status_present and status_mode is None) or (config_present and config_mode is None):
+                    info.management_ip_mode = None
+                elif status_present and config_present and status_mode != config_mode:
+                    info.management_ip_mode = None
+                elif status_present:
+                    info.management_ip_mode = status_mode
+                else:
+                    info.management_ip_mode = config_mode
 
         return info
 
@@ -1471,7 +1511,7 @@ class TachyonClient:
             return None, "http_status", f"HTTP {status}"
         try:
             return json.loads(body), "ok", None
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
             return None, "json_decode", f"json decode failed: {e}"
 
     async def get_config(self) -> Optional[dict]:
@@ -1479,13 +1519,17 @@ class TachyonClient:
         config, status, err = await self.fetch_config()
         if status == "ok":
             return config
+        self._log_config_fetch_failure(status, err)
+        return None
+
+    def _log_config_fetch_failure(self, status: str, err: Optional[str]) -> None:
+        """Keep config-read diagnostics consistent across config callers."""
         if status == "http_status":
             logger.warning(f"Failed to get config from {self.ip}: {err}")
         elif status == "json_decode":
             logger.error(f"Failed to parse config from {self.ip}: {err}")
         else:
             logger.warning(f"Failed to get config from {self.ip} ({status}): {err}")
-        return None
 
     async def run_smoke_tests(self, role: str = "ap", pre_update_cpe_count: int = 0) -> SmokeTestResult:
         """Run post-update smoke tests on a device.
