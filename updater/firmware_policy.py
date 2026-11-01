@@ -143,10 +143,8 @@ def firmware_file_health(firmware_dir: Path, filename: str) -> FirmwareFileHealt
     duplicate = bool(version and counts.get((platform, version), 0) > 1)
     registry = {r["filename"]: r for r in db.get_firmware_registry()}
     reg = registry.get(path.name)
-    # A NULL hash in an existing registry row means this file has not been
-    # fingerprinted by the current integrity path. A file with no registry row is
-    # allowed so legacy/manual-on-disk installs do not become unusable on upgrade.
-    verified = bool(exists and (reg is None or reg.get("sha256")))
+    # A file without a recorded hash has no integrity check for pre-flash use.
+    verified = bool(exists and reg and reg.get("sha256"))
 
     reason = ""
     if not exists:
