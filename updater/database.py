@@ -166,6 +166,10 @@ def _migrate(db):
         db.execute("ALTER TABLE rollouts ADD COLUMN target_version_303l TEXT DEFAULT NULL")
     if "target_version_tns100" not in rollout_columns:
         db.execute("ALTER TABLE rollouts ADD COLUMN target_version_tns100 TEXT DEFAULT NULL")
+    if "membership_format" not in rollout_columns:
+        db.execute(
+            "ALTER TABLE rollouts ADD COLUMN membership_format TEXT NOT NULL DEFAULT 'legacy'"
+        )
 
     # Mark members admitted after rollout creation. Keep the migration additive
     # so existing members read as non-stragglers and older code can keep running.
@@ -178,6 +182,15 @@ def _migrate(db):
         db.execute(
             "ALTER TABLE rollout_devices ADD COLUMN is_straggler INTEGER NOT NULL DEFAULT 0"
         )
+    for name in ("device_id", "unit_root_device_id"):
+        if name not in rollout_device_columns:
+            db.execute(
+                f"ALTER TABLE rollout_devices ADD COLUMN {name} INTEGER REFERENCES devices(id)"
+            )
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_rollout_devices_device_id "
+        "ON rollout_devices(rollout_id, device_id) WHERE device_id IS NOT NULL"
+    )
 
     # Backfill firmware_registry for existing firmware files
     firmware_dir = Path(__file__).parent.parent / "firmware"
@@ -2135,6 +2148,114 @@ def _insert_rollout_membership(db, rollout_id: int, members: list[dict]) -> None
                VALUES (?, ?, ?, ?, NULL, 'pending')""",
             (rollout_id, ip, device_type, model_family),
         )
+
+
+def _insert_rollout_members_by_id(db, rollout_id: int, members: list[dict]) -> None:
+    """Insert a complete device-ID snapshot into an empty rollout."""
+    members = list(members)
+    device_ids = [member.get("device_id") for member in members]
+    if not members or any(
+        not isinstance(device_id, int) or isinstance(device_id, bool) or device_id <= 0
+        for device_id in device_ids
+    ):
+        raise ValueError("Rollout members require positive device IDs")
+    if len(set(device_ids)) != len(device_ids):
+        raise ValueError("Rollout members require unique device IDs")
+
+    rollout = db.execute(
+        "SELECT membership_format FROM rollouts WHERE id = ?", (rollout_id,)
+    ).fetchone()
+    if not rollout:
+        raise ValueError("Rollout does not exist")
+    if db.execute(
+        "SELECT 1 FROM rollout_devices WHERE rollout_id = ? LIMIT 1", (rollout_id,)
+    ).fetchone():
+        raise ValueError("Rollout already has membership")
+
+    snapshot = {}
+    for device_id in device_ids:
+        row = db.execute(
+            "SELECT id, ip, role, model FROM devices WHERE id = ?", (device_id,)
+        ).fetchone()
+        family = _rollout_model_family(row["model"] if row else None)
+        if not row or row["role"] not in ("ap", "cpe", "switch") or not family:
+            raise ValueError("Rollout member has unresolved device identity or family")
+        snapshot[device_id] = (row["ip"], row["role"], family)
+
+    for member in members:
+        root_id = member.get("unit_root_device_id")
+        if root_id is not None and root_id not in snapshot:
+            raise ValueError("Unit root must be part of the rollout snapshot")
+
+    for member, device_id in zip(members, device_ids):
+        ip, role, family = snapshot[device_id]
+        db.execute(
+            """INSERT INTO rollout_devices
+               (rollout_id, ip, device_type, device_id, unit_root_device_id,
+                model_family, phase_assigned, status)
+               VALUES (?, ?, ?, ?, ?, ?, NULL, 'pending')""",
+            (
+                rollout_id,
+                ip,
+                role,
+                device_id,
+                member.get("unit_root_device_id"),
+                family,
+            ),
+        )
+    db.execute(
+        "UPDATE rollouts SET membership_format = 'device_id' WHERE id = ?",
+        (rollout_id,),
+    )
+
+
+def save_rollout_members_by_id(rollout_id: int, members: list[dict]) -> None:
+    """Atomically save a complete rollout snapshot keyed by stable device ID."""
+    with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        _insert_rollout_members_by_id(db, rollout_id, members)
+
+
+def get_rollout_members_by_id(rollout_id: int, phase: str = None) -> Optional[list[dict]]:
+    """Return a complete ID-backed snapshot, or None when it must be held."""
+    with get_db() as db:
+        rollout = db.execute(
+            "SELECT membership_format FROM rollouts WHERE id = ?", (rollout_id,)
+        ).fetchone()
+        if not rollout or rollout["membership_format"] != "device_id":
+            return None
+        query = "SELECT * FROM rollout_devices WHERE rollout_id = ?"
+        params = [rollout_id]
+        if phase is not None:
+            query += " AND phase_assigned = ?"
+            params.append(phase)
+        rows = [dict(row) for row in db.execute(query, params).fetchall()]
+        if not rows or any(row["device_id"] is None for row in rows):
+            return None
+        return rows
+
+
+def mark_rollout_member_by_id(rollout_id: int, device_id: int, status: str) -> bool:
+    """Write one member status only when the rollout has an ID-backed member."""
+    now = datetime.now().isoformat()
+    with get_db() as db:
+        cursor = db.execute(
+            """UPDATE rollout_devices SET status = ?, updated_at = ?
+               WHERE rollout_id = ? AND device_id = ? AND EXISTS (
+                   SELECT 1 FROM rollouts
+                   WHERE rollouts.id = rollout_devices.rollout_id
+                     AND rollouts.membership_format = 'device_id'
+               )""",
+            (status, now, rollout_id, device_id),
+        )
+        if cursor.rowcount != 1:
+            return False
+        if status == "updated":
+            db.execute(
+                "UPDATE devices SET last_firmware_update = ? WHERE id = ?",
+                (now, device_id),
+            )
+        return True
 
 
 def _rollout_model_family(model: Optional[str]) -> Optional[str]:

@@ -43,6 +43,102 @@ def test_identity_migration_preserves_legacy_rows_and_is_repeatable():
     conn.close()
 
 
+def _id_rollout_fixture():
+    ap_id = db.upsert_access_point(
+        "192.0.2.10", "fixture-user", "fixture-password", model="TNA-301"
+    )
+    cpe_id = db.upsert_device(
+        "192.0.2.11", role="cpe", username="fixture-user",
+        password="fixture-password", model="TNA-301",
+    )
+    rollout_id = db.create_rollout("firmware.bin")
+    return rollout_id, ap_id, cpe_id
+
+
+def test_rollout_member_id_schema_is_additive_and_legacy_rows_hold(mock_db):
+    rollout_id, ap_id, _ = _id_rollout_fixture()
+    db.assign_device_to_rollout(rollout_id, "192.0.2.10", "ap", "pct10")
+    mock_db.execute("DROP INDEX idx_rollout_devices_device_id")
+    mock_db.execute("ALTER TABLE rollout_devices DROP COLUMN unit_root_device_id")
+    mock_db.execute("ALTER TABLE rollout_devices DROP COLUMN device_id")
+    mock_db.execute("ALTER TABLE rollouts DROP COLUMN membership_format")
+
+    db._migrate(mock_db)
+    db._migrate(mock_db)
+
+    rollout_columns = {row[1] for row in mock_db.execute("PRAGMA table_info(rollouts)")}
+    member_columns = {row[1] for row in mock_db.execute("PRAGMA table_info(rollout_devices)")}
+    legacy = db.get_rollout_devices(rollout_id)[0]
+    assert "membership_format" in rollout_columns
+    assert {"device_id", "unit_root_device_id"} <= member_columns
+    assert legacy["device_id"] is None
+    assert db.get_rollout_members_by_id(rollout_id) is None
+    assert not db.mark_rollout_member_by_id(rollout_id, ap_id, "updated")
+    assert db.get_rollout_devices(rollout_id)[0]["status"] == "pending"
+
+
+def test_save_rollout_members_by_id_stores_cpe_ids_family_and_unit_root(mock_db):
+    rollout_id, ap_id, cpe_id = _id_rollout_fixture()
+
+    db.save_rollout_members_by_id(
+        rollout_id,
+        [
+            {"device_id": ap_id, "unit_root_device_id": ap_id},
+            {"device_id": cpe_id, "unit_root_device_id": ap_id},
+        ],
+    )
+
+    members = {row["device_id"]: row for row in db.get_rollout_members_by_id(rollout_id)}
+    assert db.get_rollout(rollout_id)["membership_format"] == "device_id"
+    assert members[ap_id]["device_type"] == "ap"
+    assert members[cpe_id]["device_type"] == "cpe"
+    assert members[cpe_id]["model_family"] == "tna-30x"
+    assert members[cpe_id]["unit_root_device_id"] == ap_id
+
+
+def test_duplicate_rollout_member_ids_are_rejected(mock_db):
+    rollout_id, ap_id, _ = _id_rollout_fixture()
+
+    with pytest.raises(ValueError, match="unique device IDs"):
+        db.save_rollout_members_by_id(
+            rollout_id, [{"device_id": ap_id}, {"device_id": ap_id}]
+        )
+
+    assert db.get_rollout_devices(rollout_id) == []
+    assert db.get_rollout(rollout_id)["membership_format"] == "legacy"
+
+
+def test_rollout_member_snapshot_rolls_back_as_one_transaction(mock_db):
+    rollout_id, ap_id, cpe_id = _id_rollout_fixture()
+    mock_db.execute(
+        """CREATE TRIGGER reject_second_id_member BEFORE INSERT ON rollout_devices
+           WHEN NEW.device_id = %d
+           BEGIN SELECT RAISE(ABORT, 'injected member failure'); END""" % cpe_id
+    )
+
+    with pytest.raises(Exception, match="injected member failure"):
+        db.save_rollout_members_by_id(
+            rollout_id, [{"device_id": ap_id}, {"device_id": cpe_id}]
+        )
+
+    assert db.get_rollout_devices(rollout_id) == []
+    assert db.get_rollout(rollout_id)["membership_format"] == "legacy"
+
+
+def test_rollout_member_id_survives_device_address_change(mock_db):
+    rollout_id, ap_id, _ = _id_rollout_fixture()
+    db.save_rollout_members_by_id(rollout_id, [{"device_id": ap_id}])
+    mock_db.execute("UPDATE devices SET ip = '192.0.2.99' WHERE id = ?", (ap_id,))
+
+    member = db.get_rollout_members_by_id(rollout_id)[0]
+    assert member["device_id"] == ap_id
+    assert member["ip"] == "192.0.2.10"
+    assert db.mark_rollout_member_by_id(rollout_id, ap_id, "updated")
+    assert mock_db.execute(
+        "SELECT last_firmware_update FROM devices WHERE id = ?", (ap_id,)
+    ).fetchone()[0]
+
+
 class TestTowerSites:
     def test_create_and_get(self, mock_db):
         site_id = db.create_tower_site("Site A", "Location A", 40.0, -90.0)

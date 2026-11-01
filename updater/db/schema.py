@@ -264,7 +264,8 @@ def build_schema(db: sqlite3.Connection) -> None:
             last_phase_completed_at TEXT,
             last_job_id TEXT,
             last_phase_window TEXT,
-            canary_completed_at TEXT
+            canary_completed_at TEXT,
+            membership_format TEXT NOT NULL DEFAULT 'legacy'
         );
 
         CREATE TABLE IF NOT EXISTS firmware_window_stops (
@@ -293,6 +294,8 @@ def build_schema(db: sqlite3.Connection) -> None:
             rollout_id INTEGER NOT NULL,
             ip TEXT NOT NULL,
             device_type TEXT NOT NULL DEFAULT 'ap',
+            device_id INTEGER REFERENCES devices(id),
+            unit_root_device_id INTEGER REFERENCES devices(id),
             model_family TEXT,
             phase_assigned TEXT,
             status TEXT DEFAULT 'pending',
@@ -300,6 +303,8 @@ def build_schema(db: sqlite3.Connection) -> None:
             FOREIGN KEY (rollout_id) REFERENCES rollouts(id),
             UNIQUE(rollout_id, ip)
         );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_rollout_devices_device_id
+            ON rollout_devices(rollout_id, device_id) WHERE device_id IS NOT NULL;
 
         CREATE TABLE IF NOT EXISTS device_durations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
