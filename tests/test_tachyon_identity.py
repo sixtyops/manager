@@ -27,22 +27,25 @@ def fixture_body(name):
 ])
 def test_management_ip_mode_config_is_normalized(value, expected):
     config = {"network": {"zones": {"wan": {"management": {"proto": value}}}}}
-    assert TachyonClient._parse_config_management_ip_mode(config) == expected
+    assert TachyonClient._parse_config_management_ip_mode(config) == (True, expected)
 
 
 def test_management_ip_mode_config_missing_key_is_unknown():
-    assert TachyonClient._parse_config_management_ip_mode({"network": {}}) is None
+    assert TachyonClient._parse_config_management_ip_mode({"network": {}}) == (False, None)
 
 
-@pytest.mark.parametrize("config", [None, {"network": None}, {"network": {"zones": []}}])
-def test_management_ip_mode_malformed_config_is_unknown(config):
-    assert TachyonClient._parse_config_management_ip_mode(config) is None
+@pytest.mark.parametrize("config,present", [
+    (None, False), ({"network": None}, True), ({"network": {"zones": []}}, True),
+])
+def test_management_ip_mode_malformed_config_is_unknown(config, present):
+    assert TachyonClient._parse_config_management_ip_mode(config) == (present, None)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status_mode,config_mode,expected", [
-    ("dhcp", "dhcp", "dhcp"), ("", "static", "static"),
-    ("dhcp", "static", None),
+    ("dhcp", "dhcp", "dhcp"), ("__missing__", "static", "static"),
+    ("dhcp", "static", None), ("automatic", "dhcp", None),
+    ("dhcp", "automatic", None), ("dhcp", "__malformed__", None),
 ])
 async def test_management_mode_reads_config_and_reconciles_status(status_mode, config_mode, expected):
     client = TachyonClient("192.0.2.1", "synthetic", "synthetic")
@@ -54,11 +57,13 @@ async def test_management_mode_reads_config_and_reconciles_status(status_mode, c
         if endpoint.endswith("type=interfaces"):
             return 200, "{}"
         if endpoint.endswith("type=zones"):
-            return 200, json.dumps({"zones": {"wan": {
-                "management_interface": "eth0", "management_ip_mode": status_mode,
-                "mgmt_vlan_id": 100,
-            }}})
+            zone = {"management_interface": "eth0", "mgmt_vlan_id": 100}
+            if status_mode != "__missing__":
+                zone["management_ip_mode"] = status_mode
+            return 200, json.dumps({"zones": {"wan": zone}})
         if endpoint == "/cgi.lua/config":
+            if config_mode == "__malformed__":
+                return 200, json.dumps({"network": {"zones": []}})
             return 200, json.dumps({"network": {"zones": {"wan": {
                 "management": {"proto": config_mode},
             }}}})

@@ -372,20 +372,24 @@ class TachyonClient:
         return None, None
 
     @staticmethod
-    def _parse_management_ip_mode(body: str) -> Optional[str]:
-        """Return the live management IP mode when zone status reports it."""
+    def _parse_management_ip_mode(body: str) -> tuple[bool, Optional[str]]:
+        """Return whether status reports the mode and its normalized value."""
         try:
             data = json.loads(body)
         except (json.JSONDecodeError, TypeError):
-            return None
-        zones = data.get("zones") if isinstance(data, dict) else None
+            return False, None
+        if not isinstance(data, dict) or "zones" not in data:
+            return False, None
+        zones = data["zones"]
         if not isinstance(zones, dict):
-            return None
+            return True, None
         for zone in zones.values():
             if not isinstance(zone, dict) or not zone.get("management_interface"):
                 continue
-            return TachyonClient._normalize_management_ip_mode(zone.get("management_ip_mode"))
-        return None
+            if "management_ip_mode" not in zone:
+                return False, None
+            return True, TachyonClient._normalize_management_ip_mode(zone["management_ip_mode"])
+        return False, None
 
     @staticmethod
     def _normalize_management_ip_mode(value: Any) -> Optional[str]:
@@ -395,12 +399,18 @@ class TachyonClient:
         return mode if mode in {"dhcp", "static"} else None
 
     @staticmethod
-    def _parse_config_management_ip_mode(config: Any) -> Optional[str]:
-        try:
-            value = config["network"]["zones"]["wan"]["management"]["proto"]
-        except (KeyError, TypeError):
-            return None
-        return TachyonClient._normalize_management_ip_mode(value)
+    def _parse_config_management_ip_mode(config: Any) -> tuple[bool, Optional[str]]:
+        """Return whether config reports the mode and its normalized value."""
+        if config is None:
+            return False, None
+        value = config
+        for key in ("network", "zones", "wan", "management", "proto"):
+            if not isinstance(value, dict):
+                return True, None
+            if key not in value:
+                return False, None
+            value = value[key]
+        return True, TachyonClient._normalize_management_ip_mode(value)
 
     async def _curl(
         self,
@@ -620,13 +630,17 @@ class TachyonClient:
             if status == 200:
                 info.management_interface, info.management_vlan_id = self._parse_management_zone(body)
                 info.management_mac = info.macs.get(info.management_interface)
-                status_mode = self._parse_management_ip_mode(body)
+                status_present, status_mode = self._parse_management_ip_mode(body)
                 config = await self.get_config()
-                config_mode = self._parse_config_management_ip_mode(config)
-                if status_mode and config_mode and status_mode != config_mode:
+                config_present, config_mode = self._parse_config_management_ip_mode(config)
+                if (status_present and status_mode is None) or (config_present and config_mode is None):
                     info.management_ip_mode = None
+                elif status_present and config_present and status_mode != config_mode:
+                    info.management_ip_mode = None
+                elif status_present:
+                    info.management_ip_mode = status_mode
                 else:
-                    info.management_ip_mode = config_mode or status_mode
+                    info.management_ip_mode = config_mode
 
         return info
 
