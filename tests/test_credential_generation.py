@@ -151,3 +151,107 @@ async def test_scheduler_precheck_fails_closed_and_recovers(mock_db, invalidate_
         assert poller.has_successful_cpe_fresh_login(CPE, SETTINGS, NOW)
     finally:
         set_poller(None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["ap", "switch"])
+@pytest.mark.parametrize("manual", [False, True])
+async def test_inventory_generation_precedes_credential_read(mock_db, role, manual):
+    poller = NetworkPoller()
+    row = {"ip": AP, "username": "ap", "password": "test-old"}
+
+    def stale_read(*args, **kwargs):
+        poller.invalidate_client(AP)
+        return row if manual else [row]
+
+    getter = ("get_access_point" if role == "ap" else "get_switch") if manual else (
+        "get_access_points" if role == "ap" else "get_switches"
+    )
+    method = (poller.poll_ap_now if role == "ap" else poller.poll_switch_now) if manual else (
+        poller._poll_all_aps if role == "ap" else poller._poll_all_switches
+    )
+    with patch(f"updater.poller.db.{getter}", side_effect=stale_read), \
+         patch.object(poller, "_evict_stale_clients"), \
+         patch.object(poller, "_check_uptime_transition"), \
+         patch("updater.poller.get_driver") as factory:
+        await method(AP) if manual else await method()
+    factory.assert_not_called()
+    assert AP not in poller._clients
+
+
+@pytest.mark.asyncio
+async def test_queued_ap_carries_cpe_generation_from_inventory(mock_db):
+    poller = NetworkPoller()
+    rows = [{"ip": AP}, {"ip": "192.0.2.11"}]
+    seen = []
+
+    async def queued_poll(ap, *, generation, cpe_generation):
+        if ap["ip"] == AP:
+            poller.invalidate_cpe_clients()
+        else:
+            seen.append(poller._credentials_current(cpe_generation))
+
+    with patch("updater.poller.db.get_access_points", return_value=rows), \
+         patch("updater.poller.db.get_setting", return_value="1"), \
+         patch.object(poller, "_evict_stale_clients"), \
+         patch.object(poller, "_poll_ap", side_effect=queued_poll):
+        await poller._poll_all_aps()
+    assert seen == [False]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path,invalidate_at", [
+    (path, boundary)
+    for path in ("rollback", "enforce")
+    for boundary in ("credentials", "login", "read", "dry", "apply")
+    if path != "rollback" or boundary != "read"
+])
+async def test_config_writes_discard_stale_session(mock_db, path, invalidate_at):
+    import asyncio
+
+    poller = NetworkPoller()
+    row = {"ip": AP, "username": "ap", "password": "test-old"}
+
+    def credentials(*args):
+        if invalidate_at == "credentials":
+            poller.invalidate_client(AP)
+        return row
+
+    async def connect():
+        if invalidate_at == "login":
+            poller.invalidate_client(AP)
+        return True
+
+    async def read():
+        if invalidate_at == "read":
+            poller.invalidate_client(AP)
+        return {"system": {"name": "test"}}
+
+    async def apply(config, **kwargs):
+        if invalidate_at == ("dry" if kwargs.get("dry_run") else "apply"):
+            poller.invalidate_client(AP)
+        return {"success": True}
+
+    client = MagicMock(connect=AsyncMock(side_effect=connect),
+                       get_config=AsyncMock(side_effect=read),
+                       apply_config=AsyncMock(side_effect=apply))
+    with patch("updater.poller.config_write_guard.automatic_config_writes_allowed", return_value=True), \
+         patch("updater.poller.db.get_access_point", side_effect=credentials), \
+         patch("updater.poller.db.get_device_config_by_id", return_value={"config_json": "{}"}), \
+         patch("updater.poller.db.save_device_config", return_value=1) as snapshot, \
+         patch("updater.poller.db.save_config_enforce_log") as log, \
+         patch("updater.poller.get_driver", return_value=MagicMock(return_value=client)):
+        if path == "rollback":
+            assert not await poller._auto_rollback_device(AP, "ap", 1)
+            assert log.call_args.args[3] == "failed"
+        else:
+            result = await poller._enforce_device(AP, "ap", [], "canary", asyncio.Semaphore(1))
+            assert result[:2] == (False, "policy")
+            log.assert_not_called()
+        if invalidate_at in {"credentials", "login", "read"}:
+            client.apply_config.assert_not_awaited()
+            snapshot.assert_not_called()
+        elif invalidate_at == "dry":
+            assert client.apply_config.await_count == 1
+        else:
+            assert client.apply_config.await_count == 2

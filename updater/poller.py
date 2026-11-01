@@ -339,6 +339,8 @@ class NetworkPoller:
         self._poll_in_progress = True
         try:
             self._evict_stale_clients()
+            generations = self._client_credentials_generation.copy()
+            cpe_generation = self._cpe_credentials_generation
             aps = db.get_access_points(enabled_only=True)
 
             if not aps:
@@ -351,7 +353,10 @@ class NetworkPoller:
 
             async def poll_with_limit(ap):
                 async with semaphore:
-                    await self._poll_ap(ap)
+                    await self._poll_ap(
+                        ap, generation=generations.get(ap["ip"], 0),
+                        cpe_generation=cpe_generation,
+                    )
 
             await asyncio.gather(*[poll_with_limit(ap) for ap in aps], return_exceptions=True)
 
@@ -447,11 +452,14 @@ class NetworkPoller:
         except Exception as e:
             logger.error(f"Device recovered alert dispatch error: {e}")
 
-    async def _poll_ap(self, ap: dict):
+    async def _poll_ap(self, ap: dict, *, generation: int = None,
+                       cpe_generation: int = None):
         """Poll a single AP for CPE data."""
         ip = ap["ip"]
-        generation = self._client_credentials_generation.get(ip, 0)
-        cpe_generation = self._cpe_credentials_generation
+        if generation is None:
+            generation = self._client_credentials_generation.get(ip, 0)
+        if cpe_generation is None:
+            cpe_generation = self._cpe_credentials_generation
         username, password = ap["username"], ap["password"]
         prev_error = ap.get("last_error")
 
@@ -942,6 +950,8 @@ class NetworkPoller:
 
     async def poll_ap_now(self, ip: str) -> bool:
         """Trigger immediate poll of a specific AP."""
+        generation = self._client_credentials_generation.get(ip, 0)
+        cpe_generation = self._cpe_credentials_generation
         ap = db.get_access_point(ip)
         if not ap:
             return False
@@ -949,7 +959,7 @@ class NetworkPoller:
         # A manual request ends the wait, but keeps the count so another failed
         # request resumes backoff instead of repeatedly bypassing the threshold.
         self._clear_poll_backoff(ip)
-        await self._poll_ap(ap)
+        await self._poll_ap(ap, generation=generation, cpe_generation=cpe_generation)
         refreshed = db.get_access_point(ip)
 
         # Broadcast update
@@ -964,6 +974,7 @@ class NetworkPoller:
 
     async def _poll_all_switches(self):
         """Poll all enabled switches."""
+        generations = self._client_credentials_generation.copy()
         switches = db.get_switches(enabled_only=True)
         if not switches:
             return
@@ -975,13 +986,15 @@ class NetworkPoller:
 
         async def poll_with_limit(sw):
             async with semaphore:
-                await self._poll_switch(sw)
+                await self._poll_switch(sw, generation=generations.get(sw["ip"], 0))
 
         await asyncio.gather(*[poll_with_limit(sw) for sw in switches], return_exceptions=True)
 
-    async def _poll_switch(self, sw: dict):
+    async def _poll_switch(self, sw: dict, *, generation: int = None):
         """Poll a single switch for status info."""
         ip = sw["ip"]
+        if generation is None:
+            generation = self._client_credentials_generation.get(ip, 0)
         prev_error = sw.get("last_error")
 
         if self._is_backed_off(ip):
@@ -989,7 +1002,9 @@ class NetworkPoller:
             return
 
         try:
-            client, error = await self._get_client(ip, sw["username"], sw["password"])
+            client, error = await self._get_client(
+                ip, sw["username"], sw["password"], generation=generation
+            )
 
             if not client:
                 db.update_switch_status(ip, last_error=error)
@@ -1002,7 +1017,9 @@ class NetworkPoller:
             if not ap_info.get("model") and not ap_info.get("firmware_version") and not ap_info.get("system_name"):
                 logger.info(f"Stale session detected for switch {ip}, re-authenticating")
                 self._remove_cached_client(ip)
-                client, error = await self._get_client(ip, sw["username"], sw["password"])
+                client, error = await self._get_client(
+                    ip, sw["username"], sw["password"], generation=generation
+                )
                 if not client:
                     db.update_switch_status(ip, last_error=error)
                     self._check_uptime_transition(ip, "switch", prev_error, error)
@@ -1066,11 +1083,12 @@ class NetworkPoller:
 
     async def poll_switch_now(self, ip: str) -> bool:
         """Trigger immediate poll of a specific switch."""
+        generation = self._client_credentials_generation.get(ip, 0)
         sw = db.get_switch(ip)
         if not sw:
             return False
 
-        await self._poll_switch(sw)
+        await self._poll_switch(sw, generation=generation)
 
         if self.broadcast_func:
             topology = self.get_topology()
@@ -1783,6 +1801,7 @@ class NetworkPoller:
                 raise RuntimeError("Pre-enforce snapshot missing")
             rollback_cfg = json.loads(snapshot["config_json"])
 
+            generation = self._client_credentials_generation.get(ip, 0)
             device = db.get_access_point(ip) or db.get_switch(ip)
             if not device:
                 raise RuntimeError("Device not found")
@@ -1791,12 +1810,16 @@ class NetworkPoller:
             driver_cls = get_driver(vendor)
             client = driver_cls(ip, device["username"], device["password"], timeout=15)
             login_result = await client.connect()
+            if not self._credentials_current(generation, ip):
+                raise RuntimeError("Credentials changed during rollback")
             if login_result is not True:
                 raise RuntimeError(f"Login failed: {login_result}")
 
             if not config_write_guard.automatic_config_writes_allowed():
                 return False
             dry = await client.apply_config(rollback_cfg, dry_run=True)
+            if not self._credentials_current(generation, ip):
+                raise RuntimeError("Credentials changed during rollback")
             if not dry.get("success"):
                 raise RuntimeError(
                     f"Dry run rejected: {dry.get('error') or dry.get('raw_response')}"
@@ -1805,6 +1828,8 @@ class NetworkPoller:
             if not config_write_guard.automatic_config_writes_allowed():
                 return False
             result = await client.apply_config(rollback_cfg)
+            if not self._credentials_current(generation, ip):
+                raise RuntimeError("Credentials changed during rollback")
             if not result.get("success"):
                 raise RuntimeError(
                     f"Apply failed: {result.get('error') or result.get('raw_response')}"
@@ -1852,6 +1877,7 @@ class NetworkPoller:
                 return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, None)
             try:
                 # Get device credentials
+                generation = self._client_credentials_generation.get(ip, 0)
                 device = db.get_access_point(ip)
                 if not device:
                     device = db.get_switch(ip)
@@ -1863,10 +1889,14 @@ class NetworkPoller:
                 driver_cls = get_driver(vendor)
                 client = driver_cls(ip, device["username"], device["password"], timeout=15)
                 login_result = await client.connect()
+                if not self._credentials_current(generation, ip):
+                    raise PolicyEnforceError("Credentials changed during enforce")
                 if login_result is not True:
                     raise TransientEnforceError(f"Login failed: {login_result}")
 
                 current_config = await client.get_config()
+                if not self._credentials_current(generation, ip):
+                    raise PolicyEnforceError("Credentials changed during enforce")
                 if current_config is None:
                     raise TransientEnforceError("Failed to fetch current config")
 
@@ -1890,6 +1920,8 @@ class NetworkPoller:
                 if not config_write_guard.automatic_config_writes_allowed():
                     return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, pre_snapshot_id)
                 dry_result = await client.apply_config(merged, dry_run=True, preserve_user_passwords=True)
+                if not self._credentials_current(generation, ip):
+                    raise PolicyEnforceError("Credentials changed during enforce")
                 if not dry_result.get("success"):
                     error_msg = dry_result.get("error", dry_result.get("raw_response", "Dry run failed"))
                     raise PolicyEnforceError(f"Dry run rejected: {error_msg}")
@@ -1898,6 +1930,8 @@ class NetworkPoller:
                 if not config_write_guard.automatic_config_writes_allowed():
                     return (False, "policy", config_write_guard.CONFIG_WRITES_PAUSED_REASON, pre_snapshot_id)
                 result = await client.apply_config(merged, preserve_user_passwords=True)
+                if not self._credentials_current(generation, ip):
+                    raise PolicyEnforceError("Credentials changed during enforce")
                 if not result.get("success"):
                     error_msg = result.get("error", result.get("raw_response", "Apply failed"))
                     raise PolicyEnforceError(f"Apply failed: {error_msg}")
