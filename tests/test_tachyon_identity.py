@@ -27,18 +27,26 @@ def fixture_body(name):
 ])
 def test_management_ip_mode_config_is_normalized(value, expected):
     config = {"network": {"zones": {"wan": {"management": {"proto": value}}}}}
-    assert TachyonClient._parse_config_management_ip_mode(config) == (True, expected)
+    assert TachyonClient._parse_config_management_ip_mode(config) == (True, True, expected)
 
 
 def test_management_ip_mode_config_missing_key_is_unknown():
-    assert TachyonClient._parse_config_management_ip_mode({"network": {}}) == (False, None)
+    assert TachyonClient._parse_config_management_ip_mode({"network": {}}) == (True, False, None)
 
 
 @pytest.mark.parametrize("config,present", [
-    (None, False), ({"network": None}, True), ({"network": {"zones": []}}, True),
+    (None, False), ([], False), ({"network": None}, False),
+    ({"network": {"zones": []}}, False),
 ])
 def test_management_ip_mode_malformed_config_is_unknown(config, present):
-    assert TachyonClient._parse_config_management_ip_mode(config) == (present, None)
+    valid, _mode_present, mode = TachyonClient._parse_config_management_ip_mode(config)
+    assert valid is present
+    assert mode is None
+
+
+@pytest.mark.parametrize("body", ["{", "[]", "{}", '{"zones": []}'])
+def test_management_ip_mode_malformed_status_is_invalid(body):
+    assert TachyonClient._parse_management_ip_mode(body) == (False, False, None)
 
 
 @pytest.mark.asyncio
@@ -46,6 +54,8 @@ def test_management_ip_mode_malformed_config_is_unknown(config, present):
     ("dhcp", "dhcp", "dhcp"), ("__missing__", "static", "static"),
     ("dhcp", "static", None), ("automatic", "dhcp", None),
     ("dhcp", "automatic", None), ("dhcp", "__malformed__", None),
+    ("__bad_status_json__", "static", None),
+    ("dhcp", "__bad_config_json__", None),
 ])
 async def test_management_mode_reads_config_and_reconciles_status(status_mode, config_mode, expected):
     client = TachyonClient("192.0.2.1", "synthetic", "synthetic")
@@ -57,11 +67,15 @@ async def test_management_mode_reads_config_and_reconciles_status(status_mode, c
         if endpoint.endswith("type=interfaces"):
             return 200, "{}"
         if endpoint.endswith("type=zones"):
+            if status_mode == "__bad_status_json__":
+                return 200, "{"
             zone = {"management_interface": "eth0", "mgmt_vlan_id": 100}
             if status_mode != "__missing__":
                 zone["management_ip_mode"] = status_mode
             return 200, json.dumps({"zones": {"wan": zone}})
         if endpoint == "/cgi.lua/config":
+            if config_mode == "__bad_config_json__":
+                return 200, "{"
             if config_mode == "__malformed__":
                 return 200, json.dumps({"network": {"zones": []}})
             return 200, json.dumps({"network": {"zones": {"wan": {
@@ -71,7 +85,7 @@ async def test_management_mode_reads_config_and_reconciles_status(status_mode, c
     client._curl = AsyncMock(side_effect=curl)
     info = await client.get_device_info(include_management=True)
     assert info.management_ip_mode == expected
-    assert info.management_vlan_id == 100
+    assert info.management_vlan_id == (None if status_mode == "__bad_status_json__" else 100)
     assert client._curl.await_args_list[-1].args == ("GET", "/cgi.lua/config")
 
 
