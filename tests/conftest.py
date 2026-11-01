@@ -83,7 +83,10 @@ def memory_db():
         "webhook_events": "job_completed,job_failed,device_offline,device_recovered",
     }
     for key, value in defaults.items():
-        conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (key, value),
+        )
     # Seed admin user for RBAC
     conn.execute(
         "INSERT INTO users (username, role, auth_method) VALUES (?, ?, ?)",

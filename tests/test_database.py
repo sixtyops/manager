@@ -23,6 +23,9 @@ def test_identity_migration_preserves_legacy_rows_and_is_repeatable():
         CREATE TABLE device_update_history (
             id INTEGER PRIMARY KEY, device_id INTEGER, ip TEXT, status TEXT
         );
+        CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO settings (key, value) VALUES ('rollout_format_version', '1');
+        CREATE TABLE rollouts (status TEXT NOT NULL);
         INSERT INTO devices VALUES (7, '192.0.2.70', '00:11:22:33:44:55',
                                     'admin', 'encrypted-value', '2025-01-01', NULL);
         INSERT INTO device_update_history VALUES (9, 7, '192.0.2.70', 'success');

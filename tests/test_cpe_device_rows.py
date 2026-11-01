@@ -34,6 +34,22 @@ def _legacy_database(path, cpes, devices=()):
             bank_last_fetched TEXT, vendor TEXT DEFAULT 'tachyon',
             UNIQUE(ap_ip, ip)
         );
+        CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO settings (key, value) VALUES ('rollout_format_version', '1');
+        CREATE TABLE rollouts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            firmware_file TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active'
+        );
+        CREATE TABLE rollout_devices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rollout_id INTEGER NOT NULL,
+            ip TEXT NOT NULL,
+            device_type TEXT NOT NULL DEFAULT 'ap',
+            phase_assigned TEXT,
+            status TEXT DEFAULT 'pending',
+            updated_at TEXT
+        );
     """)
     for ip, role in devices:
         conn.execute(

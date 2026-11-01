@@ -6,6 +6,8 @@ legacy migrations. The caller owns the connection and seeds default data.
 
 import sqlite3
 
+from .compatibility import initialize_empty_database, require_compatible_connection
+
 
 _DEVICES_TO_LEGACY_UPDATE_TRIGGER = """
     CREATE TRIGGER IF NOT EXISTS trg_devices_to_legacy_update AFTER UPDATE ON devices
@@ -31,7 +33,8 @@ _DEVICES_TO_LEGACY_UPDATE_TRIGGER = """
 
 
 def build_schema(db: sqlite3.Connection) -> None:
-    """Create the base tables, indexes, and triggers without seeding data."""
+    """Create the base schema and mark empty databases safe for bootstrap."""
+    compatibility = require_compatible_connection(db, allow_empty=True)
     db.executescript("""
         CREATE TABLE IF NOT EXISTS tower_sites (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -611,3 +614,5 @@ def build_schema(db: sqlite3.Connection) -> None:
     # initialization so existing databases do not keep an older definition.
     db.execute("DROP TRIGGER IF EXISTS trg_devices_to_legacy_update")
     db.executescript(_DEVICES_TO_LEGACY_UPDATE_TRIGGER)
+    if compatibility.empty:
+        initialize_empty_database(db)

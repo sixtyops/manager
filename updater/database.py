@@ -11,6 +11,13 @@ from pathlib import Path
 from typing import Optional
 
 from .db.schema import build_schema
+from .db.compatibility import (
+    RolloutCompatibilityError,
+    migration_guard,
+    raise_rollout_format_to_2,
+    require_compatible_database,
+    require_compatible_connection,
+)
 from .crypto import encrypt_password, decrypt_password, is_encrypted
 from .logging_filter import register_secret
 
@@ -61,6 +68,7 @@ def _is_secret_setting(key: str) -> bool:
     return any(key.startswith(p) for p in SECRET_SETTINGS_PREFIXES)
 
 
+@migration_guard
 def _migrate_cpe_rows(db):
     """Copy every legacy CPE row and its current metrics atomically."""
     if db.in_transaction:
@@ -121,6 +129,7 @@ def _migrate_cpe_rows(db):
         raise
 
 
+@migration_guard
 def _migrate(db):
     """Run schema migrations."""
     # Check if auth_status column exists on cpe_cache
@@ -441,6 +450,7 @@ def _migrate(db):
     _migrate_cpe_rows(db)
 
 
+@migration_guard
 def _migrate_identity(db):
     """Add stable identity storage and preserve legacy device observations."""
     columns = {row[1] for row in db.execute("PRAGMA table_info(devices)")}
@@ -474,6 +484,7 @@ def _migrate_identity(db):
                           AND m.mac=UPPER(d.mac) AND m.interface='legacy')""")
 
 
+@migration_guard
 def _migrate_to_devices_table(db):
     """One-time migration: copy data from access_points/switches to unified devices table."""
     # Check if devices table already has data
@@ -541,6 +552,7 @@ def _migrate_to_devices_table(db):
         logger.info(f"Migrated {ap_count} APs and {sw_count} switches to unified devices table")
 
 
+@migration_guard
 def _migrate_encrypt_passwords(db):
     """One-time migration: encrypt any plaintext device passwords in-place."""
     migrated = 0
@@ -561,6 +573,7 @@ def _migrate_encrypt_passwords(db):
         logger.info(f"Encrypted {migrated} plaintext device password(s)")
 
 
+@migration_guard
 def _migrate_encrypt_device_configs(db):
     """One-time migration: encrypt any plaintext device_configs.config_json in-place.
 
@@ -588,6 +601,7 @@ def _migrate_encrypt_device_configs(db):
         logger.info(f"Encrypted {migrated} plaintext device_configs row(s)")
 
 
+@migration_guard
 def _migrate_encrypt_config_templates(db):
     """Encrypt plaintext config_fragment and form_data with the existing key.
 
@@ -619,6 +633,7 @@ def _migrate_encrypt_config_templates(db):
         logger.info(f"Encrypted {migrated} plaintext config_templates row(s)")
 
 
+@migration_guard
 def _migrate_encrypt_settings(db):
     """One-time migration: encrypt any plaintext value in `settings` whose
     key is a secret-bearing key (exact match in SECRET_SETTINGS_KEYS or
@@ -647,6 +662,12 @@ def _migrate_encrypt_settings(db):
 
 def init_db():
     """Initialize the database schema."""
+    if DB_PATH.exists():
+        try:
+            require_compatible_database(DB_PATH)
+        except RolloutCompatibilityError as exc:
+            logger.error(str(exc))
+            raise
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     # The DB and its parent hold Fernet-encrypted device passwords, RADIUS
     # shared secrets, OIDC id_tokens, and bcrypt hashes — and the encryption
@@ -679,6 +700,7 @@ def init_db():
                 check_conn.close()
 
     with get_db() as db:
+        require_compatible_connection(db, allow_empty=True)
         # Pre-schema migration: drop tables with incompatible schemas (pre-release)
         for _tbl, _req in [("audit_log", {"username"})]:
             _cols = {r[1] for r in db.execute(f"PRAGMA table_info({_tbl})").fetchall()}
@@ -2191,6 +2213,9 @@ def create_rollout(
             raise ValueError("Rollout members require unique IPs and a device type")
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
+        compatibility = (
+            require_compatible_connection(db) if membership else None
+        )
         existing = db.execute(
             "SELECT id FROM rollouts "
             "WHERE firmware_file = ? "
@@ -2216,11 +2241,17 @@ def create_rollout(
                 len(existing_members) == len(member_keys)
                 and {(row["ip"], row["device_type"]) for row in existing_members} == requested_members
             ):
+                if compatibility.format_version != 2:
+                    raise RolloutCompatibilityError(
+                        "Existing membership-backed rollout requires format 2 marker"
+                    )
                 logger.warning(
                     f"create_rollout: duplicate suppressed; returning existing id={existing['id']} "
                     f"for {firmware_file!r}"
                 )
                 return existing["id"]
+        if membership:
+            raise_rollout_format_to_2(db)
         # Membership-backed rollouts wait for B2b to evaluate Firmware Hold.
         # Calls without a snapshot retain the existing active-rollout behavior.
         status = "waiting_hold" if membership else "active"
