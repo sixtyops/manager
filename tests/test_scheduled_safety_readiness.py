@@ -1,6 +1,5 @@
 """Keep scheduled admission closed until the operator records readiness."""
 
-import sqlite3
 from unittest.mock import patch
 
 import pytest
@@ -140,41 +139,6 @@ def test_unreadable_current_readiness_holds_admission():
         assert rollout_gate.current_scheduled_admission_decision() == (
             False, rollout_gate.SCHEDULED_ROLLOUT_SAFETY_REASON,
         )
-
-
-@pytest.mark.parametrize(
-    ("state", "reason"),
-    [
-        ("newer", "Rollout format 3 exceeds this image's supported format 2"),
-        (
-            "unmarked_b2",
-            "Rollout compatibility marker is missing while saved rollout data is present",
-        ),
-        ("unreadable", "Rollout compatibility could not be read"),
-    ],
-)
-def test_incompatible_database_closes_current_admission(
-    tmp_path, monkeypatch, state, reason
-):
-    path = tmp_path / "manager.db"
-    if state != "unreadable":
-        connection = sqlite3.connect(path)
-        connection.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
-        connection.execute("CREATE TABLE rollouts (status TEXT)")
-        if state == "newer":
-            connection.execute(
-                "INSERT INTO settings VALUES ('rollout_format_version', '3')"
-            )
-        else:
-            connection.execute("CREATE TABLE rollout_devices (rollout_id INTEGER, ip TEXT)")
-            connection.execute("INSERT INTO rollouts VALUES ('active')")
-            connection.execute("INSERT INTO rollout_devices VALUES (1, '192.0.2.10')")
-        connection.commit()
-        connection.close()
-    monkeypatch.setattr(db, "DB_PATH", path)
-
-    with patch.object(db, "get_setting", return_value="true"):
-        assert rollout_gate.current_scheduled_admission_decision() == (False, reason)
 
 
 @pytest.mark.asyncio

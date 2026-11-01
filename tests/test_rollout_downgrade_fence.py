@@ -104,6 +104,66 @@ def test_missing_marker_with_saved_membership_fails_closed():
     )
 
 
+@pytest.mark.parametrize("status", ["active", "completed", "failed"])
+def test_format_one_rejects_any_saved_membership(status):
+    connection = _database(sqlite3.connect(":memory:"))
+    _set_marker(connection, "1")
+    connection.execute(
+        "INSERT INTO rollouts (firmware_file, status) VALUES ('fw.bin', ?)",
+        (status,),
+    )
+    connection.execute(
+        "INSERT INTO rollout_devices (rollout_id, ip) VALUES (1, '192.0.2.10')"
+    )
+    connection.commit()
+
+    result = inspect_connection(connection)
+
+    assert not result.allowed
+    assert result.reason == "Saved rollout membership requires format 2 support"
+
+
+def test_format_two_requires_membership_table_before_schema_creation():
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO settings VALUES ('rollout_format_version', '2');"
+        "CREATE TABLE rollouts (status TEXT NOT NULL);"
+    )
+
+    result = inspect_connection(connection)
+
+    assert not result.allowed
+    assert result.reason == "Rollout compatibility could not be read"
+    with pytest.raises(RolloutCompatibilityError, match="could not be read"):
+        build_schema(connection)
+    assert connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rollout_devices'"
+    ).fetchone() is None
+
+
+def test_format_two_requires_rollout_tables_to_read_cleanly():
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO settings VALUES ('rollout_format_version', '2');"
+        "CREATE TABLE rollouts (status TEXT NOT NULL);"
+        "CREATE TABLE rollout_devices (ip TEXT NOT NULL);"
+    )
+    connection.set_authorizer(
+        lambda action, first, _second, _database, _trigger: (
+            sqlite3.SQLITE_DENY
+            if action == sqlite3.SQLITE_READ and first == "rollout_devices"
+            else sqlite3.SQLITE_OK
+        )
+    )
+
+    result = inspect_connection(connection)
+
+    assert not result.allowed
+    assert result.reason == "Rollout compatibility could not be read"
+
+
 def test_unmarked_b2_database_starts_without_claiming_legacy_format(tmp_path, monkeypatch):
     path = tmp_path / "manager.db"
     connection = _database(sqlite3.connect(path))
@@ -166,6 +226,7 @@ def test_read_only_preflight_sees_committed_wal_state(tmp_path):
     writer.executescript(
         "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
         "CREATE TABLE rollouts (status TEXT NOT NULL);"
+        "CREATE TABLE rollout_devices (rollout_id INTEGER, ip TEXT);"
     )
     writer.execute(
         "INSERT INTO settings (key, value) VALUES ('rollout_format_version', '2')"

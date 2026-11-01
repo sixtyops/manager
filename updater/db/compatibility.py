@@ -75,6 +75,23 @@ def inspect_connection(
             )
         if "rollouts" not in tables:
             return CompatibilityResult(False, "Rollout compatibility could not be read", version)
+        if version == 2 and "rollout_devices" not in tables:
+            return CompatibilityResult(False, "Rollout compatibility could not be read", version)
+
+        # Read both rollout tables before allowing schema or migration writes.
+        # A format-2 marker requires its saved membership table to remain intact.
+        db.execute("SELECT * FROM rollouts").fetchall()
+        if "rollout_devices" in tables:
+            db.execute("SELECT * FROM rollout_devices").fetchall()
+            has_saved_members = db.execute(
+                "SELECT 1 FROM rollout_devices LIMIT 1"
+            ).fetchone() is not None
+            if version == 1 and has_saved_members:
+                return CompatibilityResult(
+                    False,
+                    "Saved rollout membership requires format 2 support",
+                    version,
+                )
         held = db.execute(
             "SELECT 1 FROM rollouts WHERE status = 'waiting_hold' LIMIT 1"
         ).fetchone()

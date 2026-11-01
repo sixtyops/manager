@@ -93,13 +93,8 @@ def scheduled_admission_decision(settings: dict) -> tuple[bool, Optional[str]]:
 
 
 def current_scheduled_admission_decision() -> tuple[bool, Optional[str]]:
-    """Read compatibility and readiness at each scheduled admission boundary."""
+    """Read current readiness at each scheduled admission boundary."""
     from . import database as db
-    from .db.compatibility import inspect_database
-
-    compatibility = inspect_database(db.DB_PATH)
-    if not compatibility.allowed:
-        return False, compatibility.reason or "Rollout compatibility could not be read"
 
     try:
         readiness = db.get_setting("scheduled_rollout_safety_ready")
