@@ -743,6 +743,27 @@ class AutoUpdateScheduler:
         batch_ips = self._get_devices_for_phase(rollout, scope_ips, allow_downgrade, settings)
         batch_switches = self._get_switches_for_phase(rollout, switch_scope, allow_downgrade, settings)
 
+        straggler_candidates = []
+        if rollout.get("phase") == "pct100" and (batch_ips or batch_switches):
+            try:
+                saved_members = db.get_rollout_devices(rollout["id"])
+            except Exception as exc:
+                self._state = "waiting"
+                self._block_reason = "Could not verify rollout members; retry next tick"
+                logger.warning("Could not identify rollout stragglers; holding wave: %s", exc)
+                await self._broadcast_status()
+                return
+            saved_keys = {
+                (member["ip"], member["device_type"])
+                for member in saved_members
+            }
+            straggler_candidates = [
+                {"ip": ip, "device_type": device_type}
+                for device_type, batch in (("ap", batch_ips), ("switch", batch_switches))
+                for ip in batch
+                if (ip, device_type) not in saved_keys
+            ]
+
         if not batch_ips and not batch_switches:
             if not self._scheduled_admission_allowed():
                 await self._broadcast_status()
@@ -837,6 +858,7 @@ class AutoUpdateScheduler:
             wave_settings,
             window_key,
             first_wave_held=first_wave_held,
+            straggler_candidates=straggler_candidates,
         )
         if not reserved:
             self._state = "waiting"
@@ -1215,7 +1237,83 @@ class AutoUpdateScheduler:
             ):
                 candidates.append(ip)
 
+        if phase == "pct100":
+            candidates.extend(self._get_straggler_candidates(
+                rollout, scope_ips, "ap", existing_devices, cooldown_days
+            ))
+
         return self._select_phase_batch(phase, candidates)
+
+    def _get_straggler_candidates(
+        self,
+        rollout: dict,
+        scope_ips: list[str],
+        device_type: str,
+        existing_devices: list[dict],
+        cooldown_days: int,
+    ) -> list[str]:
+        """Return new, enabled devices that still need a saved rollout target.
+
+        The database reservation rechecks this proposal inside its transaction.
+        This snapshot only narrows the candidates sent to that boundary.
+        """
+        if rollout.get("phase") != "pct100":
+            return []
+
+        try:
+            settings_snapshot = db.get_rollout_settings_snapshot(rollout["id"])
+            if not isinstance(settings_snapshot, dict):
+                return []
+            inventory = (
+                db.get_all_access_points_dict(enabled_only=False)
+                if device_type == "ap"
+                else db.get_all_switches_dict(enabled_only=False)
+            )
+        except Exception as exc:
+            logger.warning("Could not discover rollout stragglers; excluding candidates: %s", exc)
+            return []
+
+        member_keys = {
+            (member["ip"], member["device_type"])
+            for member in existing_devices
+        }
+        saved_families = {
+            member.get("model_family") for member in existing_devices
+            if member.get("model_family")
+            and (member["device_type"] == "ap" or member.get("model_family") == "tns-100")
+        }
+        file_fields = {
+            "tna-30x": ("firmware_file", "target_version"),
+            "tna-303l": ("firmware_file_303l", "target_version_303l"),
+            "tns-100": ("firmware_file_tns100", "target_version_tns100"),
+        }
+        allow_downgrade = str(settings_snapshot.get("allow_downgrade", "false")).lower() == "true"
+        from .firmware_policy import extract_version_from_filename
+
+        candidates = []
+        for ip in scope_ips:
+            if (ip, device_type) in member_keys:
+                continue
+            device = inventory.get(ip)
+            if not device or not device.get("enabled") or device.get("archived_at"):
+                continue
+            family = db._rollout_model_family(device.get("model"))
+            if not family or family not in saved_families:
+                continue
+            file_field, version_field = file_fields[family]
+            filename = rollout.get(file_field)
+            target = rollout.get(version_field) or extract_version_from_filename(filename or "")
+            if not filename or not target:
+                continue
+            if _device_needs_update(
+                device.get("firmware_version", ""),
+                target,
+                allow_downgrade,
+                last_update_iso=device.get("last_firmware_update"),
+                cooldown_days=cooldown_days,
+            ):
+                candidates.append(ip)
+        return candidates
 
     def _get_switches_for_phase(
         self,
@@ -1262,6 +1360,11 @@ class AutoUpdateScheduler:
                 cooldown_days=cooldown_days
             ):
                 candidates.append(ip)
+
+        if phase == "pct100":
+            candidates.extend(self._get_straggler_candidates(
+                rollout, scope_ips, "switch", existing_devices, cooldown_days
+            ))
 
         return self._select_phase_batch(phase, candidates)
 
