@@ -171,6 +171,7 @@ does not walk the whole enabled fleet.
 | `SIXTYOPS_TEST_AP_IP` | *(required for `dev_blocking`)* | Dedicated AP with attached CPEs |
 | `SIXTYOPS_TEST_SWITCH_IP` | *(required for `dev_blocking`)* | Dedicated switch |
 | `SIXTYOPS_TEST_FIRMWARE_AP_IP` | *(required for `dev_blocking`)* | Dedicated firmware test AP |
+| `SIXTYOPS_TEST_ADDRESS_BENCH_PLAN` | *(none)* | Approved lab plan name for firmware writes held by an address change |
 | `SIXTYOPS_TEST_CONFIG_AP_IP` | *(required for `dev_blocking`)* | Dedicated config test AP |
 | `SIXTYOPS_TEST_RADIUS_AP_IP` | *(required for `dev_blocking`)* | Dedicated RADIUS rollout AP |
 

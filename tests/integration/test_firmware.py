@@ -136,6 +136,9 @@ def _start_update(session, ip, image, allow_current=False):
     field = {"tna-303l": "firmware_file_303l", "tns-100": "firmware_file_tns100"}.get(
         detect_platform(image), "firmware_file")
     data = {"ip": ip, "firmware_file": image, "bank_mode": "both", field: image}
+    address_bench_plan = os.environ.get("SIXTYOPS_TEST_ADDRESS_BENCH_PLAN", "").strip()
+    if address_bench_plan:
+        data["address_bench_exception"] = address_bench_plan
     result = _request(session, "post", "/api/update-device", data=data)
     if allow_current and result.get("status") == "already_current":
         return None
@@ -144,7 +147,7 @@ def _start_update(session, ip, image, allow_current=False):
 
 
 _JOB_DEVICE_FIELDS = (
-    "status", "error", "current_stage", "old_version", "new_version",
+    "status", "error", "failed_stage", "current_stage", "old_version", "new_version",
     "active_bank", "bank1_version", "bank2_version",
 )
 
@@ -240,6 +243,12 @@ def _wait_for_job(session, job_id, ip, timeout=600, require_success=True, step="
                 device = job.get("devices", {}).get(ip, {})
                 if (status != "completed" or job.get("cancelled")
                         or device.get("status") != "success"):
+                    if (device.get("failed_stage") == "address_change_hold"
+                            and not os.environ.get("SIXTYOPS_TEST_ADDRESS_BENCH_PLAN", "").strip()):
+                        raise FirmwareCheckError(
+                            f"{_job_failure_message(step, job, ip)}; set "
+                            "SIXTYOPS_TEST_ADDRESS_BENCH_PLAN to the approved lab plan name"
+                        )
                     raise FirmwareCheckError(_job_failure_message(step, job, ip))
             return
         time.sleep(2)

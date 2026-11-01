@@ -73,6 +73,25 @@ def test_success_restores_original_and_uses_form_api(client):
     assert state["version"] == BASELINE["firmware_version"]
 
 
+def test_address_bench_plan_is_sent_on_upgrade_and_restore(client, monkeypatch):
+    session, _ = client
+    monkeypatch.setenv("SIXTYOPS_TEST_ADDRESS_BENCH_PLAN", "approved-lab-plan")
+    firmware._exercise_firmware(session, IP, FILES)
+    writes = [call.kwargs["data"] for call in session.post.call_args_list
+              if call.args[0] == "/api/update-device"]
+    assert [data["address_bench_exception"] for data in writes] == [
+        "approved-lab-plan", "approved-lab-plan"]
+
+
+def test_address_bench_plan_is_omitted_when_unset(client, monkeypatch):
+    session, _ = client
+    monkeypatch.delenv("SIXTYOPS_TEST_ADDRESS_BENCH_PLAN", raising=False)
+    firmware._exercise_firmware(session, IP, FILES)
+    writes = [call.kwargs["data"] for call in session.post.call_args_list
+              if call.args[0] == "/api/update-device"]
+    assert all("address_bench_exception" not in data for data in writes)
+
+
 @pytest.mark.parametrize("mode, message", [("wrong-version", "Target version check"),
                                             ("failed-job", "job failed")])
 def test_upgrade_failure_still_restores(client, mode, message):
