@@ -2,18 +2,22 @@
 
 import base64
 import csv
+import hashlib
 import io
 import ipaddress
+import json
 import logging
 import os
-from datetime import datetime
+import tarfile
+from datetime import datetime, timezone
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
+from . import __version__
 from . import database as db
-from .crypto import decrypt_password, is_encrypted
+from .crypto import decrypt_password, is_encrypted, key_path
 from .logging_filter import register_secret
 
 logger = logging.getLogger(__name__)
@@ -404,3 +408,118 @@ def process_csv_import(csv_content: str, passphrase: str, conflict_mode: str = "
             logger.debug("Could not import device_configs", exc_info=True)
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Bridge export (bridge-v1). docs/bridge-format.md defines the format.
+# ---------------------------------------------------------------------------
+
+BRIDGE_FORMAT = "bridge-v1"
+# The schema before the new schema builder (#327). The new schema cannot open
+# this database, so the bridge archive is the only supported way across.
+BRIDGE_SCHEMA_VERSION = "legacy"
+# The first line of the encrypted file. The second line is the base64 salt.
+BRIDGE_MAGIC = b"sixtyops-bridge-v1"
+
+# Tables in the archive, in archive order. Each table goes into
+# "<table>.json" as a list of row objects with the stored values. Credentials
+# and encrypted settings stay as stored ciphertext; key.bin decrypts them.
+BRIDGE_TABLES = (
+    "devices",
+    "tower_sites",
+    "users",
+    "settings",
+    "device_configs",
+    "firmware_registry",
+    "firmware_confirmations",
+    "job_history",
+    "device_update_history",
+    "device_durations",
+    "audit_log",
+    "freeze_windows",
+)
+
+
+def _bridge_rows(conn, table: str) -> list[dict]:
+    """Read every row of one table. Fail on a value that JSON cannot hold."""
+    rows = [dict(r) for r in conn.execute(f'SELECT * FROM "{table}" ORDER BY rowid').fetchall()]
+    for row in rows:
+        for column, value in row.items():
+            if value is not None and not isinstance(value, (str, int, float)):
+                raise ValueError(f"{table}.{column} holds a {type(value).__name__} value")
+    return rows
+
+
+def _add_tar_member(tar: tarfile.TarFile, name: str, data: bytes, mtime: int) -> None:
+    info = tarfile.TarInfo(name)
+    info.size = len(data)
+    info.mtime = mtime
+    info.mode = 0o600
+    tar.addfile(info, io.BytesIO(data))
+
+
+def build_bridge_export(passphrase: str) -> bytes:
+    """Build the encrypted bridge-v1 archive of the current database.
+
+    Read all tables in one read transaction, so that the row counts in the
+    manifest agree with each other. Raise an error if a table or the
+    encryption key file is missing. A partial archive is never returned.
+    """
+    register_secret(passphrase)
+    key_file = key_path()
+    if not key_file.exists():
+        raise FileNotFoundError("Credential encryption key file is missing")
+    key_bytes = key_file.read_bytes()
+    Fernet(key_bytes.strip())  # Raises ValueError if the key file is damaged.
+
+    files: dict[str, bytes] = {}
+    counts: dict[str, int] = {}
+    with db.get_db() as conn:
+        if not conn.in_transaction:
+            conn.execute("BEGIN")
+        for table in BRIDGE_TABLES:
+            rows = _bridge_rows(conn, table)
+            counts[table] = len(rows)
+            files[f"{table}.json"] = json.dumps(rows, ensure_ascii=False, sort_keys=True).encode()
+
+    files["key.bin"] = key_bytes
+    now = datetime.now(timezone.utc)
+    manifest = {
+        "format": BRIDGE_FORMAT,
+        "schema_version": BRIDGE_SCHEMA_VERSION,
+        "app_version": __version__,
+        "created_at": now.isoformat(),
+        "tables": {table: {"rows": counts[table]} for table in BRIDGE_TABLES},
+        "sha256": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()},
+    }
+
+    mtime = int(now.timestamp())
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        _add_tar_member(tar, "manifest.json", json.dumps(manifest, indent=2, sort_keys=True).encode(), mtime)
+        _add_tar_member(tar, "key.bin", key_bytes, mtime)
+        for table in BRIDGE_TABLES:
+            _add_tar_member(tar, f"{table}.json", files[f"{table}.json"], mtime)
+
+    salt = os.urandom(16)
+    token = Fernet(_derive_key(passphrase, salt)).encrypt(buf.getvalue())
+    return BRIDGE_MAGIC + b"\n" + base64.b64encode(salt) + b"\n" + token
+
+
+def decrypt_bridge_export(blob: bytes, passphrase: str) -> bytes:
+    """Decrypt a bridge-v1 file and return the tar bytes.
+
+    Raise ValueError if the header is wrong or the passphrase does not match.
+    """
+    register_secret(passphrase)
+    parts = blob.split(b"\n", 2)
+    if len(parts) != 3 or parts[0] != BRIDGE_MAGIC:
+        raise ValueError("File is not a bridge-v1 archive")
+    try:
+        salt = base64.b64decode(parts[1], validate=True)
+    except ValueError:
+        raise ValueError("Bridge archive has a bad salt line")
+    try:
+        return Fernet(_derive_key(passphrase, salt)).decrypt(parts[2])
+    except InvalidToken:
+        raise ValueError("Wrong passphrase or damaged bridge archive")

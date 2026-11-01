@@ -490,6 +490,14 @@ Import device inventory from a CSV with encrypted passwords.
 
 - **Body** (multipart form): `file`, `passphrase`, `conflict_mode` (`"skip"` or `"update"`)
 
+### `POST /api/backup/bridge`
+Export the encrypted `bridge-v1` archive. The archive keeps devices, users,
+settings, history, and the encryption key across the schema change. See
+[bridge-format.md](bridge-format.md). Requires the admin role.
+
+- **Body** (JSON): `passphrase` (min 8 characters)
+- **Response**: `.bridge` file download
+
 ## App Updates
 
 ### `GET /api/updates`

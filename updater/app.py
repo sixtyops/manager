@@ -66,7 +66,7 @@ from .release_checker import init_checker, get_checker, apply_update, verify_upd
 from . import services
 from . import rollout_gate
 from .auth import require_auth, require_auth_ws, require_role, authenticate, create_session, SESSION_COOKIE_NAME, is_setup_required, is_first_run, complete_setup, is_request_secure, ensure_admin_user, ensure_oidc_user
-from .backup import build_csv_export, process_csv_import
+from .backup import build_bridge_export, build_csv_export, process_csv_import
 from . import slack
 from . import snmp
 from . import webhooks
@@ -3899,6 +3899,33 @@ async def export_backup(request: Request, session: dict = Depends(require_role("
     return StreamingResponse(
         iter([csv_content]),
         media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/backup/bridge", tags=["config"])
+async def export_bridge_backup(request: Request, session: dict = Depends(require_role("admin"))):
+    """Export the encrypted bridge-v1 archive. See docs/bridge-format.md.
+
+    The archive holds user rows and the credential encryption key, so only an
+    admin can export it. The passphrase comes in the request body, because
+    nginx logs query strings.
+    """
+    data = await request.json()
+    passphrase = data.get("passphrase", "") if isinstance(data, dict) else ""
+    if not isinstance(passphrase, str) or len(passphrase) < 8:
+        raise HTTPException(400, "Passphrase must be at least 8 characters")
+
+    try:
+        archive = await asyncio.to_thread(build_bridge_export, passphrase)
+    except Exception as e:
+        logger.error(f"Bridge export failed: {e}")
+        raise HTTPException(500, "Bridge export failed")
+
+    filename = f"sixtyops-bridge-{datetime.now().strftime('%Y%m%d-%H%M%S')}.bridge"
+    return StreamingResponse(
+        iter([archive]),
+        media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
