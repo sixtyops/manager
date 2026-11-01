@@ -68,6 +68,16 @@ def test_qualified_exact_build_proceeds(tables):
     assert not gate.address_change_decision("tna-30x", "ap", SOURCE, TARGET, **SCOPE)[0]
 
 
+def test_management_mode_does_not_replace_missing_installed_firmware_hash(tables):
+    allowed, reason = gate.address_change_decision(
+        "tna-30x", "ap", SOURCE, TARGET,
+        source_sha256="", target_sha256=SCOPE["target_sha256"],
+        management_vlan=100, management_ip_mode="dhcp", recovery_case="firmware_flash",
+    )
+    assert not allowed
+    assert "Address-change hold" in reason
+
+
 def write_plan(**overrides):
     import os
     from pathlib import Path

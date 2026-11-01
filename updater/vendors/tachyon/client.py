@@ -384,9 +384,23 @@ class TachyonClient:
         for zone in zones.values():
             if not isinstance(zone, dict) or not zone.get("management_interface"):
                 continue
-            mode = zone.get("management_ip_mode")
-            return mode if isinstance(mode, str) else None
+            return TachyonClient._normalize_management_ip_mode(zone.get("management_ip_mode"))
         return None
+
+    @staticmethod
+    def _normalize_management_ip_mode(value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        mode = value.strip().lower()
+        return mode if mode in {"dhcp", "static"} else None
+
+    @staticmethod
+    def _parse_config_management_ip_mode(config: Any) -> Optional[str]:
+        try:
+            value = config["network"]["zones"]["wan"]["management"]["proto"]
+        except (KeyError, TypeError):
+            return None
+        return TachyonClient._normalize_management_ip_mode(value)
 
     async def _curl(
         self,
@@ -606,7 +620,13 @@ class TachyonClient:
             if status == 200:
                 info.management_interface, info.management_vlan_id = self._parse_management_zone(body)
                 info.management_mac = info.macs.get(info.management_interface)
-                info.management_ip_mode = self._parse_management_ip_mode(body)
+                status_mode = self._parse_management_ip_mode(body)
+                config = await self.get_config()
+                config_mode = self._parse_config_management_ip_mode(config)
+                if status_mode and config_mode and status_mode != config_mode:
+                    info.management_ip_mode = None
+                else:
+                    info.management_ip_mode = config_mode or status_mode
 
         return info
 

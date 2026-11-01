@@ -21,6 +21,55 @@ def fixture_body(name):
     return json.dumps(load_fixture(name))
 
 
+@pytest.mark.parametrize("value,expected", [
+    ("dhcp", "dhcp"), ("static", "static"), (" DHCP ", "dhcp"),
+    (None, None), ("", None), ("automatic", None), (4, None),
+])
+def test_management_ip_mode_config_is_normalized(value, expected):
+    config = {"network": {"zones": {"wan": {"management": {"proto": value}}}}}
+    assert TachyonClient._parse_config_management_ip_mode(config) == expected
+
+
+def test_management_ip_mode_config_missing_key_is_unknown():
+    assert TachyonClient._parse_config_management_ip_mode({"network": {}}) is None
+
+
+@pytest.mark.parametrize("config", [None, {"network": None}, {"network": {"zones": []}}])
+def test_management_ip_mode_malformed_config_is_unknown(config):
+    assert TachyonClient._parse_config_management_ip_mode(config) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_mode,config_mode,expected", [
+    ("dhcp", "dhcp", "dhcp"), ("", "static", "static"),
+    ("dhcp", "static", None),
+])
+async def test_management_mode_reads_config_and_reconciles_status(status_mode, config_mode, expected):
+    client = TachyonClient("192.0.2.1", "synthetic", "synthetic")
+    async def curl(method, endpoint):
+        if endpoint.endswith("type=system"):
+            return 200, "{}"
+        if endpoint == "/cgi.lua/bootbank":
+            return 200, "{}"
+        if endpoint.endswith("type=interfaces"):
+            return 200, "{}"
+        if endpoint.endswith("type=zones"):
+            return 200, json.dumps({"zones": {"wan": {
+                "management_interface": "eth0", "management_ip_mode": status_mode,
+                "mgmt_vlan_id": 100,
+            }}})
+        if endpoint == "/cgi.lua/config":
+            return 200, json.dumps({"network": {"zones": {"wan": {
+                "management": {"proto": config_mode},
+            }}}})
+        raise AssertionError(endpoint)
+    client._curl = AsyncMock(side_effect=curl)
+    info = await client.get_device_info(include_management=True)
+    assert info.management_ip_mode == expected
+    assert info.management_vlan_id == 100
+    assert client._curl.await_args_list[-1].args == ("GET", "/cgi.lua/config")
+
+
 def syntheticize_interface_macs(response):
     """Replace sanitized fixture placeholders with deterministic test MACs."""
     response = json.loads(json.dumps(response))
