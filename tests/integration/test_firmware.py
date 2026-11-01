@@ -57,14 +57,24 @@ def test_firmware_files_list(firmware_files):
 
 # Let bounded step waits finish recovery before pytest exits.
 @pytest.mark.timeout(0)
-def test_single_device_firmware_update_and_rollback(session, firmware_files):
+def test_single_device_firmware_update_and_rollback(
+    session, firmware_files, record_property=None,
+):
     """Verify each firmware step and attempt restoration after every write."""
     __tracebackhide__ = True
     ip = os.environ.get("SIXTYOPS_TEST_FIRMWARE_AP_IP", "").strip()
     if not ip:
         pytest.skip("SIXTYOPS_TEST_FIRMWARE_AP_IP is required")
     try:
-        _exercise_firmware(session, ip, firmware_files)
+        restored = _exercise_firmware(session, ip, firmware_files)
+        active_bank = restored.get("active_bank")
+        other_bank = 2 if active_bank == 1 else 1
+        if record_property:
+            record_property("restored_active_bank", active_bank)
+            record_property("restored_active_firmware", restored.get("firmware_version"))
+            record_property(
+                f"restored_bank{other_bank}_firmware", restored.get("other_bank_version")
+            )
     except Exception as error:
         message = str(error) if isinstance(error, FirmwareCheckError) else "Firmware test failed"
         pytest.fail(message, pytrace=False)
@@ -110,9 +120,6 @@ def _select_images(ap, files):
     original = ap.get("firmware_version")
     _require(original, "Original firmware version is missing")
     _require(ap.get("active_bank") in (1, 2), "Original active bank is missing")
-    # Two-pass writes can reproduce a baseline with matching bank versions.
-    _require(ap.get("bank1_version") == ap.get("bank2_version") == original,
-             "Prepare matching original bank versions before this test")
     compatible = []
     for item in files:
         name = item.get("name", "")
@@ -135,7 +142,7 @@ def _start_update(session, ip, image, allow_current=False):
     __tracebackhide__ = True
     field = {"tna-303l": "firmware_file_303l", "tns-100": "firmware_file_tns100"}.get(
         detect_platform(image), "firmware_file")
-    data = {"ip": ip, "firmware_file": image, "bank_mode": "both", field: image}
+    data = {"ip": ip, "firmware_file": image, "bank_mode": "one", field: image}
     address_bench_plan = os.environ.get("SIXTYOPS_TEST_ADDRESS_BENCH_PLAN", "").strip()
     if address_bench_plan:
         data["address_bench_exception"] = address_bench_plan
@@ -268,9 +275,9 @@ def _wait_for_job(session, job_id, ip, timeout=600, require_success=True, step="
 
 
 def _wait_for_restored_state(session, ip, original, timeout=180):
-    """Poll fresh AP state until all original versions and bank numbers return."""
+    """Verify the original firmware is active and record the other bank."""
     __tracebackhide__ = True
-    fields = ("firmware_version", "active_bank", "bank1_version", "bank2_version")
+    fields = ("firmware_version", "active_bank")
     deadline = time.monotonic() + timeout
     actual = None
     last_error = None
@@ -279,12 +286,20 @@ def _wait_for_restored_state(session, ip, original, timeout=180):
         try:
             actual = _fresh_ap(session, ip, time.time(), timeout=min(30, remaining))
             if all(actual.get(key) == original.get(key) for key in fields):
-                return actual
+                active_bank = actual["active_bank"]
+                other_bank = 2 if active_bank == 1 else 1
+                return {
+                    **actual,
+                    "other_bank_version": actual.get(f"bank{other_bank}_version"),
+                }
         except FirmwareCheckError as error:
             last_error = error
         time.sleep(min(2, max(0, deadline - time.monotonic())))
     expected = ", ".join(f"{key}={original.get(key)}" for key in fields)
     observed = ", ".join(f"{key}={actual.get(key) if actual else 'unavailable'}" for key in fields)
+    if actual:
+        other_bank = 2 if actual.get("active_bank") == 1 else 1
+        observed += f", bank{other_bank}_version={actual.get(f'bank{other_bank}_version')}"
     detail = f"Restore state check failed after {timeout} seconds; expected {expected}; actual {observed}"
     if actual is None and last_error:
         detail += f"; last observation: {_safe_text(last_error, ip)}"
@@ -310,6 +325,7 @@ def _exercise_firmware(session, ip, files):
         upgrade_error = error
 
     restore_error = None
+    restored = None
     try:
         # Wait for the writer to stop before starting the recovery write.
         _require(job_id, "Restore precondition failed: upgrade writer status is unknown")
@@ -321,7 +337,7 @@ def _exercise_firmware(session, ip, files):
         )
         if restore_job:
             _wait_for_job(session, restore_job, ip, step="Restore job")
-        _wait_for_restored_state(session, ip, original)
+        restored = _wait_for_restored_state(session, ip, original)
     except Exception as error:
         restore_error = error
 
@@ -338,3 +354,4 @@ def _exercise_firmware(session, ip, files):
             f"Restore phase failed; operator recovery may be required: "
             f"{_safe_text(restore_error, ip)}"
         ) from restore_error
+    return restored

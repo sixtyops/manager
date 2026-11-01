@@ -16,7 +16,7 @@ ORIGINAL = "tna-30x-1.15.0-r100-sysupgrade.bin"
 TARGET = "tna-30x-1.15.0-r200-sysupgrade.bin"
 FILES = [{"name": name, "deployable": True} for name in (ORIGINAL, TARGET)]
 BASELINE = {"ip": IP, "model": "TNA-301", "firmware_version": "1.15.0.100",
-            "active_bank": 1, "bank1_version": "1.15.0.100", "bank2_version": "1.15.0.100"}
+            "active_bank": 1, "bank1_version": "1.15.0.100", "bank2_version": "1.14.0.90"}
 
 
 def response(data, status=200):
@@ -65,12 +65,14 @@ def client(monkeypatch):
 
 def test_success_restores_original_and_uses_form_api(client):
     session, state = client
-    firmware._exercise_firmware(session, IP, FILES)
+    restored = firmware._exercise_firmware(session, IP, FILES)
     writes = [call.kwargs["data"] for call in session.post.call_args_list
               if call.args[0] == "/api/update-device"]
     assert [data["firmware_file"] for data in writes] == [TARGET, ORIGINAL]
-    assert all(data["bank_mode"] == "both" for data in writes)
+    assert all(data["bank_mode"] == "one" for data in writes)
     assert state["version"] == BASELINE["firmware_version"]
+    assert restored["firmware_version"] == BASELINE["firmware_version"]
+    assert restored["other_bank_version"] == BASELINE["bank2_version"]
 
 
 def test_address_bench_plan_is_sent_on_upgrade_and_restore(client, monkeypatch):
@@ -143,7 +145,7 @@ def test_completed_job_requires_device_success(client, status):
 
 @pytest.mark.parametrize("change", ["target-older",
                                     "wrong-family", "unhealthy", "unknown-model", "missing-version",
-                                    "missing-bank", "mixed-banks"])
+                                    "missing-bank"])
 def test_preflight_fails_before_any_write(client, change):
     session, state = client
     files = [dict(item) for item in FILES]
@@ -156,7 +158,7 @@ def test_preflight_fails_before_any_write(client, change):
     else:
         ap = dict(BASELINE, last_seen="1970-01-01T00:01:41+00:00")
         key, value = {"unknown-model": ("model", "unknown"), "missing-version": ("firmware_version", ""),
-                      "missing-bank": ("active_bank", None), "mixed-banks": ("bank2_version", "other")}[change]
+                      "missing-bank": ("active_bank", None)}[change]
         ap[key] = value
         session.get.side_effect = lambda _: response({"sites": [{"aps": [ap]}]})
     with pytest.raises(firmware.FirmwareCheckError):

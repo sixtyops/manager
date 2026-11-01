@@ -17,6 +17,8 @@ window. A single fail-closed gate (`rollout_gate.py`) is the only place that dec
 whether a wave may start. Failures pause the rollout for manual review. Manual
 per-device updates bypass the release-date Firmware Hold. Address-change
 qualification applies to both scheduled and manual updates, as described below.
+The **Update Mode** setting defaults to **Single bank (recommended)**. Select
+**Both banks** to update both banks.
 
 ## Scheduled safety readiness
 

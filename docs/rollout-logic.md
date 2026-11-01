@@ -253,6 +253,9 @@ then shows a permanent warning.
 - Any other model is family `unknown`. It is never auto-updated. A manual
   "update now" on it is allowed only if the device's own firmware validation
   accepts the file (`validate_firmware_for_model`).
+- Scheduled and manual updates default to `bank_mode=one`. Use `bank_mode=both`
+  only when an operator selects both banks. Missing bank mode uses `one`; an
+  invalid value blocks the job before a wave reservation or device write.
 - Firmware files are **artifacts** with a checksum. Rollouts point at an
   artifact id, not a filename.
 - A family with no selected artifact has no target. Its devices are left
