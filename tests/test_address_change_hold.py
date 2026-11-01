@@ -66,11 +66,11 @@ def test_qualified_exact_build_proceeds(tables):
     assert not gate.address_change_decision("tna-30x", "ap", SOURCE, TARGET, **SCOPE)[0]
 
 
-def test_management_mode_does_not_replace_missing_installed_firmware_hash(tables):
+@pytest.mark.parametrize("management_ip_mode", ["dhcp", "unknown"])
+def test_management_ip_mode_does_not_bypass_address_change_hold(tables, management_ip_mode):
     allowed, reason = gate.address_change_decision(
-        "tna-30x", "ap", SOURCE, TARGET,
-        source_sha256="", target_sha256=SCOPE["target_sha256"],
-        management_vlan=100, management_ip_mode="dhcp", recovery_case="firmware_flash",
+        "tna-30x", "ap", SOURCE, TARGET, target_sha256=SCOPE["target_sha256"],
+        management_vlan=100, management_ip_mode=management_ip_mode, recovery_case="firmware_flash",
     )
     assert not allowed
     assert "Address-change hold" in reason
