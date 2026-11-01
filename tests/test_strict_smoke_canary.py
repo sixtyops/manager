@@ -102,6 +102,9 @@ class _FakeClient:
     def get_hardware_id(self, model): return "tn-110-prs"
 
     async def connect(self): return True
+    async def get_connected_cpes(self): return []
+    async def get_bridge_table(self): return []
+    async def get_eth0_byte_counters(self): return None, None
     async def reboot(self, timeout=1):
         self._rebooted = True
         return True

@@ -41,6 +41,50 @@ SCHEDULED_ROLLOUT_SAFETY_REASON = (
 )
 
 
+def ap_customer_recovery_decision(baseline: dict, recovered: dict) -> tuple[bool, str]:
+    """Require each pre-update CPE and its customer path to recover."""
+    peers = recovered.get("peers") if isinstance(recovered, dict) else None
+    upstream = recovered.get("upstream") if isinstance(recovered, dict) else None
+    if not isinstance(peers, dict) or not isinstance(upstream, list):
+        return False, "AP customer recovery evidence is incomplete"
+    if not isinstance(baseline, dict):
+        return False, "AP customer recovery baseline is missing"
+    if not baseline:
+        return (True, "") if not peers else (False, "Unexpected CPE appeared in the AP peer list")
+    for radio_mac, saved in baseline.items():
+        current = peers.get(radio_mac)
+        if not isinstance(current, dict):
+            return False, f"CPE {radio_mac} is missing from the AP peer list"
+        if not isinstance(saved, dict):
+            return False, f"CPE {radio_mac} baseline is unavailable"
+        customer_macs = saved.get("customer_macs") if isinstance(saved, dict) else None
+        if not isinstance(customer_macs, list) or not customer_macs:
+            return False, f"CPE {radio_mac} has no saved customer MAC on eth0"
+        current_lan = current.get("lan")
+        if not isinstance(current_lan, list):
+            return False, f"CPE {radio_mac} eth0 bridge data is unavailable"
+        for customer_mac in customer_macs:
+            if not any(row.get("mac") == customer_mac and row.get("port") == "eth0" for row in current_lan if isinstance(row, dict)):
+                return False, f"Customer MAC {customer_mac} is missing from CPE {radio_mac} eth0"
+            if not any(row.get("mac") == customer_mac and row.get("port") == "prs0" for row in upstream if isinstance(row, dict)):
+                return False, f"Customer MAC {customer_mac} is missing from AP upstream port prs0"
+        before_rx, before_tx = saved.get("rx_bytes"), saved.get("tx_bytes")
+        if type(before_rx) is not int or type(before_tx) is not int:
+            return False, f"CPE {radio_mac} baseline byte counters are unavailable"
+        if before_rx > 0 and before_tx > 0:
+            counters = current.get("bytes")
+            if not isinstance(counters, (list, tuple)) or len(counters) != 2:
+                return False, f"CPE {radio_mac} byte counters are unavailable"
+            after_rx, after_tx = counters
+            if not all(type(value) is int for value in (before_rx, before_tx, after_rx, after_tx)):
+                return False, f"CPE {radio_mac} byte counters are unavailable"
+            if after_rx < before_rx or after_tx < before_tx:
+                return False, f"CPE {radio_mac} byte counters reset"
+            if after_rx == before_rx or after_tx == before_tx:
+                return False, f"CPE {radio_mac} customer traffic did not resume in both directions"
+    return True, ""
+
+
 def scheduled_admission_decision(settings: dict) -> tuple[bool, Optional[str]]:
     """Admit scheduled work after the operator records safety readiness."""
     if settings.get("scheduled_rollout_safety_ready") != "true":
