@@ -184,11 +184,11 @@ def failed_job():
                 "status": "failed",
                 "error": f"write failed for {IP}; credential=private-value; Bearer private-token",
                 "current_stage": "write",
-                "old_version": "1.15.0.100",
-                "new_version": "1.15.0.200",
+                "old_version": "1.15.0.55100",
+                "new_version": "1.15.0.55200",
                 "active_bank": 1,
-                "bank1_version": "1.15.0.100",
-                "bank2_version": "1.15.0.100",
+                "bank1_version": "1.15.0.55100",
+                "bank2_version": "1.15.0.55100",
             }
         },
     }
@@ -203,11 +203,11 @@ def test_job_failure_message_has_sanitized_evidence(failed_job):
     assert "device <device>: status=failed" in message
     assert "error=write failed for <device>; credential=<redacted>; Bearer <redacted>" in message
     assert "current_stage=write" in message
-    assert "old_version=1.15.0.100" in message
-    assert "new_version=1.15.0.200" in message
+    assert "old_version=1.15.0.55100" in message
+    assert "new_version=1.15.0.55200" in message
     assert "active_bank=1" in message
-    assert "bank1_version=1.15.0.100" in message
-    assert "bank2_version=1.15.0.100" in message
+    assert "bank1_version=1.15.0.55100" in message
+    assert "bank2_version=1.15.0.55100" in message
     assert IP not in message
     assert "private-value" not in message
     assert "private-token" not in message
@@ -217,6 +217,9 @@ def test_job_failure_message_has_sanitized_evidence(failed_job):
     ("peer 198.51.100.25", "peer <address>"),
     ("peer 2001:db8::25", "peer <address>"),
     ("peer 00:11:22:aa:bb:cc", "peer <mac>"),
+    ("peer AABB.CCDD.EEFF", "peer <mac>"),
+    ("peer aabb.ccdd.eeff", "peer <mac>"),
+    ("peer AA-BB-CC-DD-EE-FF", "peer <mac>"),
     ("peer 198.51.100.25 via 2001:db8::25 from 00:11:22:aa:bb:cc; stage=write",
      "peer <address> via <address> from <mac>; stage=write"),
 ])
@@ -225,8 +228,15 @@ def test_safe_text_redacts_addresses_and_macs_in_evidence(evidence, expected):
 
 
 def test_safe_text_preserves_firmware_versions():
-    text = "old_version=1.15.0.100; new_version=1.15.0.200; stage=write"
+    text = "old_version=1.15.0.55100; new_version=1.15.0.55200; stage=write"
     assert firmware._safe_text(text) == text
+
+
+def test_safe_text_preserves_versions_and_redacts_ipv4_endpoints():
+    text = "1.15.0.55151 to 1.15.1.55177 via 198.51.100.25:443 and 10.0.0.1/24"
+    assert firmware._safe_text(text, preserve_version=True) == (
+        "1.15.0.55151 to 1.15.1.55177 via <address> and <address>"
+    )
 
 
 def test_restoration_bank_mismatch_requires_operator(client):

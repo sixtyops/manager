@@ -159,7 +159,13 @@ def _safe_text(value, ip=None, preserve_version=False):
     value = str(value)
     if ip:
         value = value.replace(str(ip), "<device>")
-    # Preserve dotted firmware versions while removing addresses from free text.
+    # Redact addresses before preserving dotted firmware versions. Some firmware
+    # versions can look like IPv4 addresses, so only preserve what remains.
+    value = re.sub(
+        r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?:/(?:\d{1,2})|:\d{1,5})?(?![\w.])",
+        _redact_ipv4,
+        value,
+    )
     versions = []
     def keep_version(match):
         versions.append(match.group(0))
@@ -168,8 +174,12 @@ def _safe_text(value, ip=None, preserve_version=False):
         value = re.sub(r"\b[0-9]+(?:\.[0-9]+){2,}\b", keep_version, value)
     else:
         value = re.sub(r"(?i)\b(?:old_version|new_version|firmware_version|bank[12]_version)\s*=\s*[0-9]+(?:\.[0-9]+){2,}", keep_version, value)
-    value = re.sub(r"(?i)\b[0-9a-f]{2}(?:[:-][0-9a-f]{2}){5}\b", "<mac>", value)
-    value = re.sub(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])", _redact_ipv4, value)
+    value = re.sub(
+        r"(?i)(?<![\w.])(?:[0-9a-f]{2}(?:[:-])){5}[0-9a-f]{2}(?![\w.])|"
+        r"(?<![\w.])(?:[0-9a-f]{4}\.){2}[0-9a-f]{4}(?![\w.])",
+        "<mac>",
+        value,
+    )
     value = re.sub(r"(?<![\w:])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![\w:])", _redact_ipv6, value, flags=re.IGNORECASE)
     value = re.sub(r"(?i)\bBearer\s+[^\s,;]+", "Bearer <redacted>", value)
     value = re.sub(
@@ -184,8 +194,9 @@ def _safe_text(value, ip=None, preserve_version=False):
 
 
 def _redact_ipv4(match):
+    address = match.group(0).split("/", 1)[0].split(":", 1)[0]
     try:
-        ipaddress.IPv4Address(match.group(0))
+        ipaddress.IPv4Address(address)
     except ipaddress.AddressValueError:
         return match.group(0)
     return "<address>"
