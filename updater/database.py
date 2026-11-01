@@ -2224,14 +2224,18 @@ def get_rollout_members_by_id(rollout_id: int, phase: str = None) -> Optional[li
         ).fetchone()
         if not rollout or rollout["membership_format"] != "device_id":
             return None
-        query = "SELECT * FROM rollout_devices WHERE rollout_id = ?"
-        params = [rollout_id]
-        if phase is not None:
-            query += " AND phase_assigned = ?"
-            params.append(phase)
-        rows = [dict(row) for row in db.execute(query, params).fetchall()]
+        rows = [
+            dict(row)
+            for row in db.execute(
+                "SELECT * FROM rollout_devices WHERE rollout_id = ?", (rollout_id,)
+            ).fetchall()
+        ]
         if not rows or any(row["device_id"] is None for row in rows):
             return None
+        if phase is not None:
+            rows = [row for row in rows if row["phase_assigned"] == phase]
+            if not rows:
+                return None
         return rows
 
 

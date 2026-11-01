@@ -63,6 +63,9 @@ def test_rollout_member_id_schema_is_additive_and_legacy_rows_hold(mock_db):
     mock_db.execute("ALTER TABLE rollout_devices DROP COLUMN device_id")
     mock_db.execute("ALTER TABLE rollouts DROP COLUMN membership_format")
 
+    from updater.db.schema import build_schema
+
+    build_schema(mock_db)
     db._migrate(mock_db)
     db._migrate(mock_db)
 
@@ -94,6 +97,23 @@ def test_save_rollout_members_by_id_stores_cpe_ids_family_and_unit_root(mock_db)
     assert members[cpe_id]["device_type"] == "cpe"
     assert members[cpe_id]["model_family"] == "tna-30x"
     assert members[cpe_id]["unit_root_device_id"] == ap_id
+
+
+def test_rollout_member_phase_filter_validates_all_id_rows(mock_db):
+    rollout_id, ap_id, _ = _id_rollout_fixture()
+    db.save_rollout_members_by_id(rollout_id, [{"device_id": ap_id}])
+    mock_db.execute(
+        "UPDATE rollout_devices SET phase_assigned = 'pct10' WHERE device_id = ?",
+        (ap_id,),
+    )
+    mock_db.execute(
+        """INSERT INTO rollout_devices
+           (rollout_id, ip, device_type, phase_assigned, status)
+           VALUES (?, '192.0.2.99', 'ap', 'pct50', 'pending')""",
+        (rollout_id,),
+    )
+
+    assert db.get_rollout_members_by_id(rollout_id, phase="pct10") is None
 
 
 def test_duplicate_rollout_member_ids_are_rejected(mock_db):

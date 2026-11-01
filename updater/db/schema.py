@@ -303,9 +303,6 @@ def build_schema(db: sqlite3.Connection) -> None:
             FOREIGN KEY (rollout_id) REFERENCES rollouts(id),
             UNIQUE(rollout_id, ip)
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_rollout_devices_device_id
-            ON rollout_devices(rollout_id, device_id) WHERE device_id IS NOT NULL;
-
         CREATE TABLE IF NOT EXISTS device_durations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             job_id TEXT NOT NULL,
