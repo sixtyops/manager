@@ -228,25 +228,28 @@ window stopped after the resolution record is saved.
 
 ## Address-change qualification hold
 
-**Key points:** Qualify both exact builds and artifact SHA-256 values for the
-model family, role, management VLAN, IP mode, and recovery case before writes.
+**Key points:** Qualify the device-reported source build and target artifact
+SHA-256 for the model family, role, management VLAN, IP mode, and recovery case
+before writes.
 Scheduled and manual jobs share this hold.
 The qualification table in `updater/rollout_gate.py` starts empty. The Devices
 view shows the hold reason with a clock glyph.
 
-**Detail:** `address_change_decision` requires a release plus revision for both
-builds. It accepts only a matching `AddressTransition` with a recorded
-bench-proof reference. Its key includes `family`, `role`, `source`, `target`,
-`source_sha256`, `target_sha256`, `management_vlan`, `management_ip_mode`, and
-`recovery_case`. Use lowercase 64-digit hashes. Use VLAN `0` for an observed
+**Detail:** Owner decision on 2026-11-01: trust the full firmware version
+reported by the Tachyon device as the source identity; do not require an
+installed-image hash. `address_change_decision` requires a release plus
+revision for both builds. It accepts only a matching `AddressTransition` with
+a recorded bench-proof reference. Its key includes `family`, `role`, `source`,
+`target`, `target_sha256`, `management_vlan`, `management_ip_mode`, and
+`recovery_case`. Use lowercase 64-digit target hashes. Use VLAN `0` for an observed
 untagged management interface or its tagged VLAN ID from 1 through 4094.
 Use `dhcp` or `static` for the observed IP mode. Qualify `pre_update_reboot`
-and `firmware_flash` separately. A reboot proof covers recovery on the installed
-source artifact before any flash. Unknown or missing values stay held.
+and `firmware_flash` separately. A reboot proof covers recovery before flashing
+that reported source build. Unknown or missing values stay held.
 Release age and confirmed-working firmware affect only the separate Firmware Hold.
 
 The shared job runner checks saved inventory before connecting, then reads
-live model, firmware, installed-artifact hash, and management scope before the
+live model, firmware version, and management scope before the
 pre-update reboot and before each flash. It hashes the selected target file
 at each check, so files with the same numeric build have separate qualifications.
 A held member uses `deferred` with an address-change reason in job history.
@@ -254,13 +257,12 @@ The existing scheduler keeps that wave pending for a later window. Qualification
 is read again at each boundary and survives restart as reviewed source data.
 Keep a member held through all later passes when its pre-reboot scope is held.
 
-Read source evidence independently from inventory fields `firmware_sha256`,
-`management_vlan`, and `management_ip_mode`, and from the same keys in live
-`VendorDeviceInfo.extra`. Current inventory storage and the Tachyon driver
-provide none of these fields. They therefore keep devices held, including
-named lab exceptions, until verified scope collection is available. A build
-number, a registry checksum for another file, and a bench plan supply no
-observed source-artifact or management evidence.
+Read the source version from live Tachyon device information. Read management
+scope independently from inventory fields `management_vlan` and
+`management_ip_mode`, and from the same keys in live `VendorDeviceInfo.extra`.
+Unknown or missing fields keep devices held, including named lab exceptions.
+The Manager hashes the selected stored target file; a registry checksum for a
+different file does not qualify it.
 
 For approved lab validation, set `SIXTYOPS_ADDRESS_BENCH_PLAN_FILE` to a private
 JSON file in the lab Manager environment. Keep the tested source unchanged.
@@ -274,7 +276,6 @@ Use this structure with the approved plan's actual values:
   "devices": [
     {"ip": "192.0.2.10", "family": "tna-30x", "role": "ap",
      "source": "1.12.3.54970", "target": "1.15.0.55142",
-     "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
      "target_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
      "management_vlan": 100, "management_ip_mode": "dhcp",
      "recovery_case": "firmware_flash"}
@@ -287,8 +288,10 @@ Send the plan name as `address_bench_exception` on `/api/start-update` or
 the file again at each check. Use normalized four-part builds and the actual
 artifact hashes in the plan. Include a separate entry for `pre_update_reboot`
 when that phase is enabled. Match the independent observed scope at each check.
-An absent, expired, or malformed plan keeps the device held. Scheduled jobs
-use qualification proof. Each accepted bench exception records its name,
+An absent, expired, or malformed plan keeps the device held. A plan that still
+contains `source_sha256` is rejected with a clear address-change hold error;
+remove that field from every device entry. Scheduled jobs use qualification
+proof. Each accepted bench exception records its name,
 approval, device, and transition in the schedule log. Keep private lab details
 outside the repository.
 

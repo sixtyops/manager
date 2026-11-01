@@ -119,8 +119,7 @@ class _FakeClient:
         version = self._version if self._updated else (self._reboot_version if self._rebooted else "1.0.0.100")
         return VendorDeviceInfo(ip="x", model="TNA-301", serial=serial,
                                 current_version=version,
-                                extra={"firmware_sha256": "a" * 64,
-                                       "management_vlan": 100, "management_ip_mode": "dhcp"})
+                                extra={"management_vlan": 100, "management_ip_mode": "dhcp"})
 
     async def update_firmware(self, fw_path, cb, **kw):
         self._updated = True
@@ -162,16 +161,15 @@ async def _run_update(ip, smoke_passed, version="1.2.3", *, serial="SERIAL-1", p
     artifact = b"synthetic smoke artifact"
     transition = AddressTransition(
         "tna-30x", "ap", "1.0.0.100", target,
-        "a" * 64, hashlib.sha256(artifact).hexdigest(), 100, "dhcp", "firmware_flash",
+        hashlib.sha256(artifact).hexdigest(), 100, "dhcp", "firmware_flash",
     )
     pre_reboot_transition = AddressTransition(
         "tna-30x", "ap", "1.0.0.100", target,
-        "a" * 64, hashlib.sha256(artifact).hexdigest(), 100, "dhcp", "pre_update_reboot",
+        hashlib.sha256(artifact).hexdigest(), 100, "dhcp", "pre_update_reboot",
     )
     read_record = db.get_access_point
     def observed_record(ip):
-        return {**read_record(ip), "firmware_sha256": "a" * 64,
-                "management_vlan": 100, "management_ip_mode": "dhcp"}
+        return {**read_record(ip), "management_vlan": 100, "management_ip_mode": "dhcp"}
 
     def fake_driver(vendor):
         def construct(i, u, p):
