@@ -104,6 +104,32 @@ def test_missing_marker_with_saved_membership_fails_closed():
     )
 
 
+def test_unmarked_b2_database_starts_without_claiming_legacy_format(tmp_path, monkeypatch):
+    path = tmp_path / "manager.db"
+    connection = _database(sqlite3.connect(path))
+    connection.execute("DELETE FROM settings WHERE key='rollout_format_version'")
+    connection.execute(
+        "INSERT INTO rollouts (firmware_file, status) VALUES ('fw.bin', 'active')"
+    )
+    connection.execute(
+        "INSERT INTO rollout_devices (rollout_id, ip) VALUES (1, '192.0.2.10')"
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(database, "DB_PATH", path)
+
+    database.init_db()
+
+    connection = sqlite3.connect(path)
+    assert connection.execute(
+        "SELECT 1 FROM settings WHERE key='rollout_format_version'"
+    ).fetchone() is None
+    assert connection.execute(
+        "SELECT 1 FROM rollout_devices WHERE ip='192.0.2.10'"
+    ).fetchone()
+    connection.close()
+
+
 def test_existing_legacy_database_upgrade_stamps_marker_and_starts(tmp_path, monkeypatch):
     path = tmp_path / "manager.db"
     connection = _database(sqlite3.connect(path))
@@ -154,7 +180,7 @@ def test_read_only_preflight_sees_committed_wal_state(tmp_path):
     assert result.format_version == 2
 
 
-def test_init_db_refuses_newer_marker_before_any_database_write(tmp_path, monkeypatch):
+def test_init_db_skips_newer_database_without_blocking_process_startup(tmp_path, monkeypatch):
     path = tmp_path / "manager.db"
     connection = _database(sqlite3.connect(path))
     _set_marker(connection, "3")
@@ -162,13 +188,12 @@ def test_init_db_refuses_newer_marker_before_any_database_write(tmp_path, monkey
     before = path.read_bytes()
     monkeypatch.setattr(database, "DB_PATH", path)
 
-    with pytest.raises(RolloutCompatibilityError, match="exceeds this image's supported format 2"):
-        database.init_db()
+    database.init_db()
 
     assert path.read_bytes() == before
 
 
-def test_module_import_refuses_newer_marker_before_startup_writes(tmp_path):
+def test_module_import_allows_ui_startup_without_newer_database_writes(tmp_path):
     source = Path(__file__).parents[1] / "updater"
     package = tmp_path / "updater"
     (package / "db").mkdir(parents=True)
@@ -192,6 +217,7 @@ def test_module_import_refuses_newer_marker_before_startup_writes(tmp_path):
         "INSERT INTO settings VALUES ('rollout_format_version', '3');"
     )
     connection.close()
+    before = (data / "sixtyops.db").read_bytes()
     result = subprocess.run(
         [sys.executable, "-c", "import updater.database"],
         cwd=tmp_path,
@@ -201,8 +227,9 @@ def test_module_import_refuses_newer_marker_before_startup_writes(tmp_path):
         check=False,
     )
 
-    assert result.returncode != 0
+    assert result.returncode == 0
     assert "Rollout format 3 exceeds this image's supported format 2" in result.stderr
+    assert (data / "sixtyops.db").read_bytes() == before
 
 
 def test_schema_and_direct_migration_helpers_refuse_newer_marker_before_writes():

@@ -21,6 +21,7 @@ class CompatibilityResult:
     format_version: int | None = None
     empty: bool = False
     legacy: bool = False
+    migration_allowed: bool = False
 
 
 def inspect_connection(
@@ -57,6 +58,7 @@ def inspect_connection(
                 return CompatibilityResult(
                     False,
                     "Rollout compatibility marker is missing while saved rollout data is present",
+                    migration_allowed=True,
                 )
             return CompatibilityResult(True, format_version=1, legacy=True)
         raw = marker[0]
@@ -98,7 +100,9 @@ def require_compatible_connection(
 ) -> CompatibilityResult:
     """Raise before a write boundary when the database is incompatible."""
     result = inspect_connection(db, max_supported)
-    if not result.allowed or (result.empty and not allow_empty):
+    if (not result.allowed and not result.migration_allowed) or (
+        result.empty and not allow_empty
+    ):
         reason = result.reason or "Rollout compatibility marker is missing"
         raise RolloutCompatibilityError(reason)
     return result
@@ -126,7 +130,7 @@ def require_compatible_database(
 ) -> CompatibilityResult:
     """Refuse initialization if an existing database is not compatible."""
     result = inspect_database(path, max_supported)
-    if not result.allowed:
+    if not result.allowed and not result.migration_allowed:
         raise RolloutCompatibilityError(
             result.reason or "Rollout compatibility could not be read"
         )

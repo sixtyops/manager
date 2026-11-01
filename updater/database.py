@@ -669,7 +669,7 @@ def init_db():
             compatibility = require_compatible_database(DB_PATH)
         except RolloutCompatibilityError as exc:
             logger.error(str(exc))
-            raise
+            return
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     # The DB and its parent hold Fernet-encrypted device passwords, RADIUS
     # shared secrets, OIDC id_tokens, and bcrypt hashes — and the encryption
