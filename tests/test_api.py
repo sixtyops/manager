@@ -680,16 +680,10 @@ class TestStartUpdateAPI:
             " VALUES (?, ?, ?, ?, ?)",
             ("10.0.0.1", "root", "pass", "TNA-301", "1.12.2.54970"),
         )
-        mock_db.execute(
-            "INSERT INTO cpe_cache (ap_ip, ip, mac, model, firmware_version, auth_status)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            ("10.0.0.1", "10.0.0.10", "AA:BB:CC:00:00:01", "TNA-303L-65", "1.12.2.7713", "ok"),
-        )
-        mock_db.execute(
-            "INSERT INTO cpe_cache (ap_ip, ip, mac, model, firmware_version, auth_status)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            ("10.0.0.1", "10.0.0.11", "AA:BB:CC:00:00:02", "TNA-301", "1.12.2.54970", "ok"),
-        )
+        db.upsert_cpe("10.0.0.1", {"ip": "10.0.0.10", "mac": "AA:BB:CC:00:00:01", "model": "TNA-303L-65",
+                             "firmware_version": "1.12.2.7713", "auth_status": "ok"})
+        db.upsert_cpe("10.0.0.1", {"ip": "10.0.0.11", "mac": "AA:BB:CC:00:00:02", "model": "TNA-301",
+                             "firmware_version": "1.12.2.54970", "auth_status": "ok"})
         mock_db.commit()
 
     def test_start_update_creates_job(self, authed_client, mock_db, tmp_path):
@@ -936,11 +930,8 @@ class TestDevicePortalAPI:
             " VALUES (?, ?, ?, ?, ?)",
             ("10.1.0.1", "admin", "swpass456", "SW-100", "2.0.1"),
         )
-        mock_db.execute(
-            "INSERT INTO cpe_cache (ap_ip, ip, mac, model, firmware_version, auth_status)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            ("10.0.0.1", "10.0.0.10", "AA:BB:CC:00:00:01", "TNA-303L-65", "1.12.2.7713", "ok"),
-        )
+        db.upsert_cpe("10.0.0.1", {"ip": "10.0.0.10", "mac": "AA:BB:CC:00:00:01", "model": "TNA-303L-65",
+                             "firmware_version": "1.12.2.7713", "auth_status": "ok"})
         mock_db.commit()
 
     def test_portal_ap(self, authed_client, mock_db):

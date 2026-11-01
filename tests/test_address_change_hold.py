@@ -188,6 +188,8 @@ def make_job(scheduled=False, reboot=True, role="ap", bank_mode="one"):
 @pytest.mark.parametrize("role", ["ap", "cpe", "switch"])
 async def test_unqualified_job_holds_before_writes(tables, runner, scheduled, reboot, role):
     if role == "cpe":
+        db.delete_device(IP)
+        db.upsert_access_point(OTHER_IP, "synthetic", "synthetic")
         db.upsert_cpe(OTHER_IP, {"ip": IP, "model": "TNA-301", "firmware_version": SOURCE})
     elif role == "switch":
         db.upsert_switch(IP, "synthetic", "synthetic", model="TNA-301", firmware_version=SOURCE)

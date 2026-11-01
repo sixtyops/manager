@@ -168,14 +168,15 @@ class TestBulkDBFunctions:
     def test_bulk_delete_devices_with_cpes(self, memory_db):
         with memory_db as conn:
             conn.execute("INSERT INTO access_points (ip, username, password) VALUES ('10.0.0.1', 'a', 'p')")
-            conn.execute("INSERT INTO cpe_cache (ap_ip, ip, mac) VALUES ('10.0.0.1', '10.0.0.100', 'aa:bb:cc:dd:ee:ff')")
+            conn.execute("INSERT INTO devices (ip, role, parent_device_id, username, password) "
+                         "SELECT '10.0.0.100', 'cpe', id, 'a', 'p' FROM devices WHERE ip = '10.0.0.1'")
         with patch("updater.database.get_db", return_value=memory_db):
             from updater.database import bulk_delete_devices
             count = bulk_delete_devices("ap", ["10.0.0.1"])
             assert count == 1
             # CPE should also be deleted
             with memory_db as conn:
-                cpes = conn.execute("SELECT * FROM cpe_cache WHERE ap_ip = '10.0.0.1'").fetchall()
+                cpes = conn.execute("SELECT * FROM devices WHERE role = 'cpe'").fetchall()
                 assert len(cpes) == 0
 
     def test_bulk_move_to_site(self, memory_db):

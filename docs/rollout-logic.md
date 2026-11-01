@@ -96,8 +96,10 @@ device can be reported under different MACs by different sources.
 - A MAC-only `uid` is the first MAC we saw. It is only a label.
 
 *(today: `devices.ip` is the unique key and the foreign key everywhere.
-CPEs are not in `devices`; they are in `cpe_cache`, keyed by
-`(ap_ip, ip)`. There is no serial column — issue #254.)*
+CPEs are `devices` rows with `role = 'cpe'` and a `parent_device_id`. The
+poller finds a CPE row by IP. It holds the row when the stored MAC is
+different. Current link readings are in `link_metrics`. There is no serial
+column — issue #254.)*
 
 **Provisional rows.** A CPE is first seen in an AP's peer list, so we only
 know its MAC. That row is a **provisional observation**. Later the poller

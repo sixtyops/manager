@@ -273,6 +273,12 @@ class TestCleanupOrphanedDeviceData:
         verify.close()
 
 
+@pytest.fixture
+def parent_ap(mock_db):
+    db.upsert_access_point("10.0.0.1", "root", "pass")
+
+
+@pytest.mark.usefixtures("parent_ap")
 class TestUpdateDeviceConfigPollStatus:
     """Issue #52: per-device config-poll outcome should be persisted so the
     UI can show *why* a device's config is missing instead of hiding it."""
@@ -304,13 +310,12 @@ class TestUpdateDeviceConfigPollStatus:
         db.update_device_config_poll_status("10.99.99.99", "timeout", "x")
 
     def test_records_outcome_for_cpe(self, mock_db):
-        # CPEs live in cpe_cache, not devices — but the same caller should be
-        # able to record a poll outcome without knowing the role.
+        # The same caller records a poll outcome without knowing the role.
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "green"})
         db.update_device_config_poll_status("1.1.1.1", "auth", "login failed")
         row = mock_db.execute(
             "SELECT last_config_poll_status, last_config_poll_error, last_config_poll_at "
-            "FROM cpe_cache WHERE ip = '1.1.1.1'"
+            "FROM devices WHERE ip = '1.1.1.1' AND role = 'cpe'"
         ).fetchone()
         assert row["last_config_poll_status"] == "auth"
         assert row["last_config_poll_error"] == "login failed"
@@ -322,14 +327,13 @@ class TestUpdateDeviceConfigPollStatus:
         db.update_device_config_poll_status("1.1.1.1", "ok", None)
         row = mock_db.execute(
             "SELECT last_config_poll_status, last_config_poll_error "
-            "FROM cpe_cache WHERE ip = '1.1.1.1'"
+            "FROM devices WHERE ip = '1.1.1.1' AND role = 'cpe'"
         ).fetchone()
         assert row["last_config_poll_status"] == "ok"
         assert row["last_config_poll_error"] is None
 
     def test_does_not_cross_contaminate(self, mock_db):
-        # If an IP exists only as a CPE, the devices table must not be touched.
-        # If an IP exists only as an AP, cpe_cache must not be touched.
+        # A poll outcome for one IP must not change the row of another IP.
         db.upsert_access_point("10.0.0.1", "root", "pass")
         db.upsert_cpe("10.0.0.1", {"ip": "2.2.2.2"})
         db.update_device_config_poll_status("10.0.0.1", "ok", None)  # AP
@@ -337,14 +341,10 @@ class TestUpdateDeviceConfigPollStatus:
         ap_row = mock_db.execute(
             "SELECT last_config_poll_status FROM devices WHERE ip = '10.0.0.1'"
         ).fetchone()
-        cpe_ap = mock_db.execute(
-            "SELECT last_config_poll_status FROM cpe_cache WHERE ip = '10.0.0.1'"
-        ).fetchone()
         cpe_row = mock_db.execute(
-            "SELECT last_config_poll_status FROM cpe_cache WHERE ip = '2.2.2.2'"
+            "SELECT last_config_poll_status FROM devices WHERE ip = '2.2.2.2' AND role = 'cpe'"
         ).fetchone()
         assert ap_row["last_config_poll_status"] == "ok"
-        assert cpe_ap is None  # AP IP must not appear in cpe_cache
         assert cpe_row["last_config_poll_status"] == "timeout"
 
 
@@ -396,6 +396,7 @@ class TestGetAllLatestConfigsPollOutcome:
         assert row["last_config_poll_error"] is None
 
 
+@pytest.mark.usefixtures("parent_ap")
 class TestCPECache:
     def test_upsert_and_get(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "green"})
@@ -440,7 +441,7 @@ class TestCPECache:
         db.prune_stale_cpes("10.0.0.1", ["1.1.1.1"])
         row = mock_db.execute(
             "SELECT last_config_poll_status, last_config_poll_at "
-            "FROM cpe_cache WHERE ip = '1.1.1.1'"
+            "FROM devices WHERE ip = '1.1.1.1' AND role = 'cpe'"
         ).fetchone()
         assert row["last_config_poll_status"] == "ok"
         assert row["last_config_poll_at"] is not None
@@ -550,6 +551,7 @@ class TestSettings:
         assert db.get_setting("radius_secret") == "legacy-cleartext"
 
 
+@pytest.mark.usefixtures("parent_ap")
 class TestHealthSummary:
     def test_summary(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "green"})

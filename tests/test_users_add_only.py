@@ -280,8 +280,7 @@ def test_preview_resolves_login_or_fails_closed(operator_client, users_db, role)
         users_db.execute("INSERT INTO switches (ip, username, password) VALUES (?, ?, ?)",
                          (ip, "manager-login", "synthetic-login"))
     elif role == "cpe":
-        users_db.execute("INSERT INTO cpe_cache (ap_ip, ip, mac) VALUES (?, ?, ?)",
-                         ("192.0.2.1", ip, "00:00:5E:00:53:01"))
+        db.upsert_cpe("192.0.2.1", {"ip": ip, "mac": "00:00:5E:00:53:01"})
     users_db.commit()
     db.save_device_config(ip, json.dumps(LIVE), "synthetic-hash", None, None)
     tid = db.save_config_template(name="Users", category="users",

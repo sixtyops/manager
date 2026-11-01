@@ -93,6 +93,12 @@ def _backfill_firmware_sha256(db, firmware_dir: Path) -> None:
         )
 
 
+_CPE_METRIC_COLUMNS = ("link_distance", "rx_power", "combined_signal", "last_local_rssi",
+                       "tx_rate", "rx_rate", "mcs", "link_uptime", "signal_health",
+                       "target_rssi_dbm", "snr_db", "sector_tx", "sector_rx", "antenna_kit",
+                       "max_rain_mm_hr")
+
+
 def _migrate_cpe_rows(db):
     """Copy every legacy CPE row and its current metrics atomically."""
     if db.in_transaction:
@@ -104,10 +110,9 @@ def _migrate_cpe_rows(db):
                                  ("bank_last_fetched", "TEXT")):
             if name not in columns:
                 db.execute(f"ALTER TABLE devices ADD COLUMN {name} {definition}")
-        metric_names = ("link_distance", "rx_power", "combined_signal", "last_local_rssi",
-                        "tx_rate", "rx_rate", "mcs", "link_uptime", "signal_health",
-                        "target_rssi_dbm", "snr_db", "sector_tx", "sector_rx", "antenna_kit",
-                        "max_rain_mm_hr")
+        if "updated_at" not in {row[1] for row in db.execute("PRAGMA table_info(link_metrics)")}:
+            db.execute("ALTER TABLE link_metrics ADD COLUMN updated_at TEXT")
+        metric_names = (*_CPE_METRIC_COLUMNS, "updated_at")
         source_columns = {row[1] for row in db.execute("PRAGMA table_info(cpe_cache)")}
         for row in db.execute("SELECT * FROM cpe_cache ORDER BY id").fetchall():
             old_id = row["id"]
@@ -145,7 +150,8 @@ def _migrate_cpe_rows(db):
             device_id = cursor.lastrowid
             db.execute(f"INSERT INTO link_metrics(device_id,{','.join(metric_names)}) "
                        f"VALUES ({','.join('?' for _ in range(len(metric_names)+1))})",
-                       (device_id, *(values.get(name) for name in metric_names)))
+                       (device_id, *(values.get(name) for name in _CPE_METRIC_COLUMNS),
+                        values.get("last_updated")))
             db.execute("INSERT INTO cpe_migration_map VALUES (?,?)", (old_id, device_id))
         db.commit()
     except Exception:
@@ -1196,19 +1202,13 @@ def update_device_config_poll_status(ip: str, status: str, error: Optional[str] 
     `status` is one of: ok, timeout, http_status, json_decode, auth, unknown.
     `error` carries a short human-readable detail (for surfacing in the UI).
 
-    APs/switches live in `devices`; CPEs live in `cpe_cache`. We update both
-    tables — exactly one will match for a given IP, the other is a no-op.
-    Unknown IPs (no row in either table) silently no-op.
+    APs, switches, and CPEs all live in `devices`.
+    Unknown IPs silently no-op.
     """
     ts = datetime.now().isoformat()
     with get_db() as db:
         db.execute(
             "UPDATE devices SET last_config_poll_at = ?, last_config_poll_status = ?, "
-            "last_config_poll_error = ? WHERE ip = ?",
-            (ts, status, error, ip),
-        )
-        db.execute(
-            "UPDATE cpe_cache SET last_config_poll_at = ?, last_config_poll_status = ?, "
             "last_config_poll_error = ? WHERE ip = ?",
             (ts, status, error, ip),
         )
@@ -1230,20 +1230,23 @@ def delete_device(ip: str):
     now = datetime.now().isoformat()
     with get_db() as db:
         row = db.execute(
-            "SELECT role, system_name FROM devices WHERE ip = ?", (ip,)
+            "SELECT id, role, system_name FROM devices WHERE ip = ?", (ip,)
         ).fetchone()
         label = (row["system_name"] if row else None) or ip
 
-        # Capture CPE IPs and labels before we drop the cache, so we can soft-delete
-        # the CPE snapshots and label them with the CPE's own name.
+        # Capture CPE IPs and labels before we delete the CPE rows, so we can
+        # soft-delete the CPE snapshots and label them with the CPE's own name.
         cpe_rows = []
         if row and row["role"] == "ap":
             cpe_rows = [
                 dict(r) for r in db.execute(
-                    "SELECT ip, system_name FROM cpe_cache WHERE ap_ip = ?", (ip,)
+                    "SELECT id, ip, system_name FROM devices WHERE role = 'cpe' AND parent_device_id = ?",
+                    (row["id"],),
                 ).fetchall()
             ]
-            db.execute("DELETE FROM cpe_cache WHERE ap_ip = ?", (ip,))
+        _delete_cpe_device_rows(db, [cpe["id"] for cpe in cpe_rows])
+        if row:
+            db.execute("DELETE FROM link_metrics WHERE device_id = ?", (row["id"],))
 
         db.execute("DELETE FROM devices WHERE ip = ?", (ip,))
         db.execute(
@@ -1435,7 +1438,11 @@ def bulk_delete_devices(device_type: str, ips: list[str]) -> int:
     with get_db() as conn:
         placeholders = ",".join("?" for _ in ips)
         if device_type == "ap":
-            conn.execute(f"DELETE FROM cpe_cache WHERE ap_ip IN ({placeholders})", ips)
+            _delete_cpe_device_rows(conn, [row["id"] for row in conn.execute(
+                f"""SELECT id FROM devices WHERE role = 'cpe' AND parent_device_id IN
+                    (SELECT id FROM devices WHERE role = 'ap' AND ip IN ({placeholders}))""",
+                ips,
+            ).fetchall()])
         cursor = conn.execute(
             f"DELETE FROM devices WHERE ip IN ({placeholders})",
             ips,
@@ -1470,52 +1477,97 @@ def update_device_credentials(device_type: str, ip: str, username: str, password
         )
 
 
-# CPE Cache operations
-def upsert_cpe(ap_ip: str, cpe_data: dict):
-    """Update or insert a CPE record."""
+# CPE operations. A CPE is a `devices` row with role 'cpe' under its parent AP.
+# Its current link readings are in `link_metrics`. `cpe_cache` is read only by
+# the startup copy in _migrate_cpe_rows.
+_CPE_SELECT = f"""
+    SELECT c.id, p.ip AS ap_ip, c.ip, c.mac, c.system_name, c.model, c.firmware_version,
+           {", ".join("m." + name for name in _CPE_METRIC_COLUMNS)},
+           COALESCE(m.updated_at, c.last_seen) AS last_updated,
+           c.last_config_poll_at, c.last_config_poll_status, c.last_config_poll_error,
+           c.auth_status, c.bank1_version, c.bank2_version, c.active_bank,
+           c.bank_last_fetched, c.vendor
+      FROM devices c
+      JOIN devices p ON p.id = c.parent_device_id AND p.role = 'ap'
+      LEFT JOIN link_metrics m ON m.device_id = c.id
+     WHERE c.role = 'cpe'"""
+
+_CPE_PARENT_MATCH = "parent_device_id = (SELECT id FROM devices WHERE ip = ? AND role = 'ap')"
+
+
+def _normalize_mac(mac) -> Optional[str]:
+    return mac.strip().upper().replace("-", ":") if isinstance(mac, str) and mac.strip() else None
+
+
+def _delete_cpe_device_rows(db, device_ids: list[int]) -> None:
+    """Delete CPE device rows and their link metrics.
+
+    Keep the cpe_migration_map rows. They stop the startup copy from adding
+    a deleted CPE again from its old cpe_cache row.
+    """
+    if not device_ids:
+        return
+    marks = ",".join("?" * len(device_ids))
+    db.execute(f"DELETE FROM link_metrics WHERE device_id IN ({marks})", device_ids)
+    db.execute(f"DELETE FROM devices WHERE role = 'cpe' AND id IN ({marks})", device_ids)
+
+
+def upsert_cpe(ap_ip: str, cpe_data: dict) -> bool:
+    """Write a CPE device row under its AP and replace its link metrics.
+
+    Return False and write nothing when the IP belongs to a device that is
+    not a CPE, or to a CPE with a different MAC. The IP alone does not prove
+    that the observation is the same device.
+    """
+    ip = cpe_data.get("ip")
+    if not ip:
+        raise ValueError(f"CPE under AP {ap_ip} has no IP address")
+    now = datetime.now().isoformat()
+    mac = cpe_data.get("mac")
     with get_db() as db:
-        db.execute("""
-            INSERT INTO cpe_cache (ap_ip, ip, mac, system_name, model, firmware_version,
-                                   link_distance, rx_power, combined_signal, last_local_rssi,
-                                   tx_rate, rx_rate, mcs, link_uptime, signal_health,
-                                   auth_status, target_rssi_dbm, snr_db, sector_tx, sector_rx,
-                                   antenna_kit, max_rain_mm_hr, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(ap_ip, ip) DO UPDATE SET
-                mac = excluded.mac,
-                system_name = excluded.system_name,
-                model = excluded.model,
-                firmware_version = excluded.firmware_version,
-                link_distance = excluded.link_distance,
-                rx_power = excluded.rx_power,
-                combined_signal = excluded.combined_signal,
-                last_local_rssi = excluded.last_local_rssi,
-                tx_rate = excluded.tx_rate,
-                rx_rate = excluded.rx_rate,
-                mcs = excluded.mcs,
-                link_uptime = excluded.link_uptime,
-                signal_health = excluded.signal_health,
-                auth_status = excluded.auth_status,
-                target_rssi_dbm = excluded.target_rssi_dbm,
-                snr_db = excluded.snr_db,
-                sector_tx = excluded.sector_tx,
-                sector_rx = excluded.sector_rx,
-                antenna_kit = excluded.antenna_kit,
-                max_rain_mm_hr = excluded.max_rain_mm_hr,
-                last_updated = excluded.last_updated
-        """, (
-            ap_ip, cpe_data.get("ip"), cpe_data.get("mac"), cpe_data.get("system_name"),
-            cpe_data.get("model"), cpe_data.get("firmware_version"),
-            cpe_data.get("link_distance"), cpe_data.get("rx_power"),
-            cpe_data.get("combined_signal"), cpe_data.get("last_local_rssi"),
-            cpe_data.get("tx_rate"), cpe_data.get("rx_rate"),
-            cpe_data.get("mcs"), cpe_data.get("link_uptime"),
-            cpe_data.get("signal_health"), cpe_data.get("auth_status"),
-            cpe_data.get("target_rssi_dbm"), cpe_data.get("snr_db"),
-            cpe_data.get("sector_tx"), cpe_data.get("sector_rx"),
-            cpe_data.get("antenna_kit"), cpe_data.get("max_rain_mm_hr"),
-            datetime.now().isoformat()
-        ))
+        if not db.in_transaction:
+            db.execute("BEGIN IMMEDIATE")
+        parent = db.execute(
+            "SELECT id, username, password FROM devices WHERE ip = ? AND role = 'ap'", (ap_ip,)
+        ).fetchone()
+        if not parent:
+            raise ValueError(f"No AP device row for CPE parent {ap_ip}")
+        row = db.execute("SELECT id, role, mac FROM devices WHERE ip = ?", (ip,)).fetchone()
+        if row and row["role"] != "cpe":
+            logger.warning("CPE %s under AP %s skipped: IP belongs to a %s", ip, ap_ip, row["role"])
+            return False
+        old_mac, new_mac = (_normalize_mac(row["mac"]) if row else None), _normalize_mac(mac)
+        if old_mac and new_mac and old_mac != new_mac:
+            logger.warning("CPE %s under AP %s held: MAC %s does not match stored MAC %s",
+                           ip, ap_ip, new_mac, old_mac)
+            return False
+        values = (parent["id"], parent["username"], parent["password"],
+                  cpe_data.get("system_name"), cpe_data.get("model"), mac,
+                  cpe_data.get("firmware_version"), cpe_data.get("auth_status"), now)
+        if row:
+            device_id = row["id"]
+            db.execute(
+                """UPDATE devices SET parent_device_id = ?, username = ?, password = ?,
+                   system_name = ?, model = ?, mac = COALESCE(?, mac), firmware_version = ?,
+                   auth_status = ?, last_seen = ? WHERE id = ?""",
+                (*values, device_id),
+            )
+        else:
+            device_id = db.execute(
+                """INSERT INTO devices (parent_device_id, username, password, system_name,
+                   model, mac, firmware_version, auth_status, last_seen, ip, vendor, role, enabled)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'tachyon', 'cpe', 1)""",
+                (*values, ip),
+            ).lastrowid
+        columns = (*_CPE_METRIC_COLUMNS, "updated_at")
+        db.execute(
+            f"""INSERT INTO link_metrics (device_id, {", ".join(columns)})
+                VALUES (?, {", ".join("?" * len(columns))})
+                ON CONFLICT(device_id) DO UPDATE SET
+                {", ".join(f"{name} = excluded.{name}" for name in columns)}""",
+            (device_id, *(cpe_data.get(name) for name in _CPE_METRIC_COLUMNS), now),
+        )
+        return True
 
 
 def update_ap_radio_params(ip: str, channel: Optional[int], bandwidth_mhz: Optional[int],
@@ -1535,23 +1587,23 @@ def update_ap_radio_params(ip: str, channel: Optional[int], bandwidth_mhz: Optio
 
 
 def get_cpes_for_ap(ap_ip: str) -> list[dict]:
-    """Get cached CPEs for an AP."""
+    """Get the CPEs attached to an AP."""
     with get_db() as db:
-        rows = db.execute("SELECT * FROM cpe_cache WHERE ap_ip = ? ORDER BY ip", (ap_ip,)).fetchall()
+        rows = db.execute(f"{_CPE_SELECT} AND p.ip = ? ORDER BY c.ip", (ap_ip,)).fetchall()
         return [dict(row) for row in rows]
 
 
 def get_all_cpes() -> list[dict]:
-    """Get all cached CPEs."""
+    """Get all CPEs that have an AP parent."""
     with get_db() as db:
-        rows = db.execute("SELECT * FROM cpe_cache ORDER BY ap_ip, ip").fetchall()
+        rows = db.execute(f"{_CPE_SELECT} ORDER BY p.ip, c.ip").fetchall()
         return [dict(row) for row in rows]
 
 
 def get_cpe_by_ip(ip: str) -> Optional[dict]:
     """Get a CPE by its IP address."""
     with get_db() as db:
-        row = db.execute("SELECT * FROM cpe_cache WHERE ip = ?", (ip,)).fetchone()
+        row = db.execute(f"{_CPE_SELECT} AND c.ip = ?", (ip,)).fetchone()
         return dict(row) if row else None
 
 
@@ -1571,7 +1623,7 @@ def get_all_cpes_grouped() -> dict[str, list[dict]]:
     """Get all CPEs grouped by AP IP. Single query, avoids per-AP lookups."""
     from collections import defaultdict
     with get_db() as conn:
-        rows = conn.execute("SELECT * FROM cpe_cache ORDER BY ap_ip, ip").fetchall()
+        rows = conn.execute(f"{_CPE_SELECT} ORDER BY p.ip, c.ip").fetchall()
         result: dict[str, list[dict]] = defaultdict(list)
         for row in rows:
             result[row["ap_ip"]].append(dict(row))
@@ -1582,8 +1634,8 @@ def update_cpe_auth_status(ap_ip: str, cpe_ip: str, auth_status: str):
     """Update auth_status for a specific CPE."""
     with get_db() as db:
         db.execute(
-            "UPDATE cpe_cache SET auth_status = ? WHERE ap_ip = ? AND ip = ?",
-            (auth_status, ap_ip, cpe_ip)
+            f"UPDATE devices SET auth_status = ? WHERE role = 'cpe' AND ip = ? AND {_CPE_PARENT_MATCH}",
+            (auth_status, cpe_ip, ap_ip)
         )
 
 
@@ -1591,9 +1643,9 @@ def update_cpe_bank_info(ap_ip: str, cpe_ip: str, bank1: str, bank2: str, active
     """Update bank info for a specific CPE."""
     with get_db() as db:
         db.execute(
-            """UPDATE cpe_cache SET bank1_version = ?, bank2_version = ?, active_bank = ?,
-               bank_last_fetched = ? WHERE ap_ip = ? AND ip = ?""",
-            (bank1, bank2, active, datetime.now().isoformat(), ap_ip, cpe_ip)
+            f"""UPDATE devices SET bank1_version = ?, bank2_version = ?, active_bank = ?,
+               bank_last_fetched = ? WHERE role = 'cpe' AND ip = ? AND {_CPE_PARENT_MATCH}""",
+            (bank1, bank2, active, datetime.now().isoformat(), cpe_ip, ap_ip)
         )
 
 
@@ -1601,16 +1653,15 @@ def get_cpe_bank_last_fetched(ap_ip: str, cpe_ip: str) -> Optional[str]:
     """Get when bank info was last fetched for a CPE."""
     with get_db() as db:
         row = db.execute(
-            "SELECT bank_last_fetched FROM cpe_cache WHERE ap_ip = ? AND ip = ?",
-            (ap_ip, cpe_ip)
+            f"SELECT bank_last_fetched FROM devices WHERE role = 'cpe' AND ip = ? AND {_CPE_PARENT_MATCH}",
+            (cpe_ip, ap_ip)
         ).fetchone()
         return row["bank_last_fetched"] if row else None
 
 
 def clear_cpes_for_ap(ap_ip: str):
     """Clear cached CPEs for an AP (before refresh)."""
-    with get_db() as db:
-        db.execute("DELETE FROM cpe_cache WHERE ap_ip = ?", (ap_ip,))
+    prune_stale_cpes(ap_ip, [])
 
 
 def prune_stale_cpes(ap_ip: str, current_ips: list[str]) -> int:
@@ -1624,24 +1675,21 @@ def prune_stale_cpes(ap_ip: str, current_ips: list[str]) -> int:
 
     Returns the number of stale rows deleted.
     """
+    query = f"SELECT id FROM devices WHERE role = 'cpe' AND {_CPE_PARENT_MATCH}"
+    if current_ips:
+        query += f" AND ip NOT IN ({','.join('?' * len(current_ips))})"
     with get_db() as db:
-        if not current_ips:
-            cur = db.execute("DELETE FROM cpe_cache WHERE ap_ip = ?", (ap_ip,))
-            return cur.rowcount
-        placeholders = ",".join("?" * len(current_ips))
-        cur = db.execute(
-            f"DELETE FROM cpe_cache WHERE ap_ip = ? AND ip NOT IN ({placeholders})",
-            (ap_ip, *current_ips),
-        )
-        return cur.rowcount
+        ids = [row["id"] for row in db.execute(query, (ap_ip, *current_ips)).fetchall()]
+        _delete_cpe_device_rows(db, ids)
+        return len(ids)
 
 
 def get_health_summary() -> dict:
     """Get overall signal health summary."""
     with get_db() as db:
-        rows = db.execute("""
+        rows = db.execute(f"""
             SELECT signal_health, COUNT(*) as count
-            FROM cpe_cache
+            FROM ({_CPE_SELECT})
             GROUP BY signal_health
         """).fetchall()
 
@@ -3179,20 +3227,18 @@ def get_all_latest_configs() -> dict:
     """Latest live config per device. Returns {ip: row_dict}.
 
     Each row also carries the per-device config-poll outcome
-    (`last_config_poll_at/_status/_error`) coalesced from `devices` (APs and
-    switches) and `cpe_cache` (CPEs), so callers can distinguish "last
+    (`last_config_poll_at/_status/_error`) from `devices`, so callers can distinguish "last
     successful poll" from "last config change" (`fetched_at`).
     """
     with get_db() as db:
         rows = db.execute("""
             SELECT
                 dc.*,
-                COALESCE(d.last_config_poll_at, c.last_config_poll_at) AS last_config_poll_at,
-                COALESCE(d.last_config_poll_status, c.last_config_poll_status) AS last_config_poll_status,
-                COALESCE(d.last_config_poll_error, c.last_config_poll_error) AS last_config_poll_error
+                d.last_config_poll_at AS last_config_poll_at,
+                d.last_config_poll_status AS last_config_poll_status,
+                d.last_config_poll_error AS last_config_poll_error
             FROM device_configs dc
             LEFT JOIN devices d ON d.ip = dc.ip
-            LEFT JOIN cpe_cache c ON c.ip = dc.ip
             WHERE dc.deleted_at IS NULL AND dc.id = (
                 SELECT id FROM device_configs
                 WHERE ip = dc.ip AND deleted_at IS NULL
@@ -3323,7 +3369,7 @@ def purge_recycle_bin(ip: str) -> int:
 
 def find_orphan_snapshots_by_mac(mac: str, current_ip: str) -> list[str]:
     """Find IPs whose live snapshots share the given MAC but are no longer
-    managed devices (not in `devices` and not in `cpe_cache`). Used to
+    managed devices (not in `devices`). Used to
     auto-rebind history when a device's IP changes (DHCP renumber, replacement).
     MAC is per-unit, so a single match is a strong identity signal.
     Returns a list of old IPs.
@@ -3336,12 +3382,10 @@ def find_orphan_snapshots_by_mac(mac: str, current_ip: str) -> list[str]:
             """SELECT DISTINCT dc.ip
                  FROM device_configs dc
             LEFT JOIN devices d ON d.ip = dc.ip
-            LEFT JOIN cpe_cache c ON c.ip = dc.ip
                 WHERE dc.mac = ?
                   AND dc.ip != ?
                   AND dc.deleted_at IS NULL
-                  AND d.ip IS NULL
-                  AND c.ip IS NULL""",
+                  AND d.ip IS NULL""",
             (normalized, current_ip),
         ).fetchall()
         return [r["ip"] for r in rows]

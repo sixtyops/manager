@@ -1,4 +1,4 @@
-"""S4a migration tests for legacy CPE cache rows."""
+"""Tests for CPE device rows, link metrics, and the legacy CPE cache copy."""
 
 import sqlite3
 
@@ -137,3 +137,110 @@ def test_startup_collision_aborts_and_rolls_back_all_cpe_copies(tmp_path, monkey
             (1, cpes[0][0], cpes[0][1]),
             (2, cpes[1][0], cpes[1][1]),
         ]
+
+
+def _migrated(tmp_path, monkeypatch):
+    path = tmp_path / "s4b.db"
+    monkeypatch.setattr(database, "DB_PATH", path)
+    _legacy_database(path, [_cpe("192.0.2.1", "192.0.2.101", "CPE1"),
+                            _cpe("192.0.2.1", "192.0.2.102", "CPE2")],
+                     [("192.0.2.1", "ap")])
+    legacy = [dict(r) for r in _read(path, "SELECT * FROM cpe_cache ORDER BY ap_ip, ip")]
+    database.init_db()
+    return path, legacy
+
+
+def test_cpe_reads_match_legacy_rows_except_ids_and_timestamps(tmp_path, monkeypatch):
+    path, legacy = _migrated(tmp_path, monkeypatch)
+
+    def strip(rows):
+        return [{k: v for k, v in row.items() if k not in ("id", "last_updated")} for row in rows]
+
+    assert strip(database.get_all_cpes()) == strip(legacy)
+    assert strip(database.get_cpes_for_ap("192.0.2.1")) == strip(legacy)
+    assert strip(database.get_all_cpes_grouped()["192.0.2.1"]) == strip(legacy)
+    assert strip([database.get_cpe_by_ip("192.0.2.102")]) == strip(legacy[1:])
+    assert database.get_health_summary() == {"green": 2, "yellow": 0, "red": 0}
+
+
+def test_poller_upsert_writes_device_row_and_replaces_metrics(tmp_path, monkeypatch):
+    path, _ = _migrated(tmp_path, monkeypatch)
+    before = database.get_cpe_by_ip("192.0.2.101")
+    assert database.upsert_cpe("192.0.2.1", {"ip": "192.0.2.101", "mac": "aa-bb-cc-00-00-1",
+                                             "rx_power": -60.0, "signal_health": "red"}) is True
+    assert database.upsert_cpe("192.0.2.1", {"ip": "192.0.2.103", "mac": "AA:BB:CC:00:00:03",
+                                             "system_name": "CPE3", "snr_db": 18.0}) is True
+
+    after = database.get_cpe_by_ip("192.0.2.101")
+    assert after["id"] == before["id"]
+    assert (after["rx_power"], after["signal_health"], after["link_distance"]) == (-60.0, "red", None)
+    assert after["last_updated"] > before["last_updated"]
+    new = database.get_cpe_by_ip("192.0.2.103")
+    assert (new["ap_ip"], new["system_name"], new["snr_db"]) == ("192.0.2.1", "CPE3", 18.0)
+    row = _read(path, "SELECT parent_device_id,username,password,vendor,enabled FROM devices "
+                      "WHERE ip='192.0.2.103'")[0]
+    assert tuple(row) == (1, "parent-user", "gAAAAA-test-ciphertext", "tachyon", 1)
+    assert len(_read(path, "SELECT * FROM link_metrics")) == 3
+    assert _read(path, "SELECT COUNT(*) AS n FROM cpe_cache")[0]["n"] == 2
+
+
+def test_upsert_holds_conflicting_identity_and_rejects_missing_parent(tmp_path, monkeypatch):
+    path, _ = _migrated(tmp_path, monkeypatch)
+    snapshot = "SELECT d.*, m.* FROM devices d LEFT JOIN link_metrics m ON m.device_id = d.id ORDER BY d.id"
+    before = [tuple(r) for r in _read(path, snapshot)]
+
+    assert database.upsert_cpe("192.0.2.1", {"ip": "192.0.2.101", "mac": "AA:BB:CC:99:99:99"}) is False
+    assert database.upsert_cpe("192.0.2.1", {"ip": "192.0.2.1", "mac": "AA:BB:CC:00:00:01"}) is False
+    with pytest.raises(ValueError, match="No AP device row"):
+        database.upsert_cpe("192.0.2.250", {"ip": "192.0.2.104"})
+    with pytest.raises(ValueError, match="no IP address"):
+        database.upsert_cpe("192.0.2.1", {"mac": "AA:BB:CC:00:00:05"})
+    assert [tuple(r) for r in _read(path, snapshot)] == before
+
+
+def test_prune_deletes_cpe_rows_and_startup_does_not_copy_them_again(tmp_path, monkeypatch):
+    path, _ = _migrated(tmp_path, monkeypatch)
+    assert database.prune_stale_cpes("192.0.2.1", ["192.0.2.101"]) == 1
+
+    for _ in range(2):
+        assert [c["ip"] for c in database.get_all_cpes()] == ["192.0.2.101"]
+        assert len(_read(path, "SELECT * FROM link_metrics")) == 1
+        assert len(_read(path, "SELECT * FROM cpe_migration_map")) == 2
+        database.init_db()
+
+
+@pytest.mark.asyncio
+async def test_poller_writes_cpe_rows_and_skips_probe_for_held_cpe(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from updater.poller import NetworkPoller
+
+    _migrated(tmp_path, monkeypatch)
+    database.update_device_credentials("ap", "192.0.2.1", "user", "password")
+
+    def observed(ip, mac):
+        metrics = {name: None for name in database._CPE_METRIC_COLUMNS}
+        return SimpleNamespace(**{**metrics, "ip": ip, "mac": mac, "system_name": ip, "model": "TNA-301",
+                                  "firmware_version": "1.2.4", "rx_power": -50.0, "primary_signal": -50.0,
+                                  "signal_health": SimpleNamespace(value="green")})
+
+    client = SimpleNamespace(
+        get_ap_info=AsyncMock(return_value={"model": "TNA-301", "firmware_version": "1.15.0"}),
+        get_bootbank_info=AsyncMock(return_value=SimpleNamespace(
+            bank1_version=None, bank2_version=None, active_bank=None, warning=None)),
+        get_connected_cpes=AsyncMock(return_value=[
+            observed("192.0.2.101", "AA:BB:CC:99:99:99"), observed("192.0.2.102", "AA:BB:CC:00:00:2")]),
+        last_radio_params={},
+    )
+    poller = NetworkPoller()
+    poller._get_client = AsyncMock(return_value=(client, None))
+    poller._check_cpe_auth = AsyncMock(return_value="unreachable")
+    monkeypatch.setattr(poller, "_check_uptime_transition", lambda *args: None)
+
+    await poller.poll_ap_now("192.0.2.1")
+
+    assert [call.args[0] for call in poller._check_cpe_auth.await_args_list] == ["192.0.2.102"]
+    held, written = database.get_cpe_by_ip("192.0.2.101"), database.get_cpe_by_ip("192.0.2.102")
+    assert (held["mac"], held["firmware_version"], held["auth_status"]) == ("AA:BB:CC:00:00:1", "1.2.3", "ok")
+    assert (written["firmware_version"], written["auth_status"]) == ("1.2.4", "unreachable")

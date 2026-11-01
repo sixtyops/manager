@@ -1390,7 +1390,9 @@ def test_managed_fleet_uses_current_schema(mock_db):
         assert row["enabled"] == 1
         assert row["vendor"] == "tachyon"
         assert row["firmware_version"] == "1.0.0"
-    assert len(db.get_devices(enabled_only=False)) == 12
+    roles = [d["role"] for d in db.get_devices(enabled_only=False)]
+    assert len([r for r in roles if r != "cpe"]) == 12
+    assert roles.count("cpe") == len(fleet["cpes"]) == 40
 
 
 @pytest.mark.parametrize("role", ["ap", "switch"])

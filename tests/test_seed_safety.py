@@ -102,8 +102,13 @@ def test_fresh_seed_plants_no_credentials(tmp_path):
         row = con.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
         return row[0] if row else ""
 
-    # Sample inventory WAS seeded.
+    # Sample inventory WAS seeded. CPEs are device rows with link metrics.
     assert con.execute("SELECT COUNT(*) FROM devices").fetchone()[0] > 0
+    assert con.execute(
+        "SELECT COUNT(*) FROM devices d JOIN link_metrics m ON m.device_id = d.id "
+        "WHERE d.role = 'cpe' AND d.parent_device_id IS NOT NULL"
+    ).fetchone()[0] == 5
+    assert con.execute("SELECT COUNT(*) FROM cpe_cache").fetchone()[0] == 0
     # But nothing dangerous was planted: no admin, no setup bypass, and the
     # seed did not flip the firmware scheduler on (it stays at its init
     # default of "false"). autoupdate_enabled is a separate system default

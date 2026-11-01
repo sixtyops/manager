@@ -40,8 +40,10 @@ def scaling_db(memory_db):
     for i in range(50):
         ap_idx = i % 20
         memory_db.execute(
-            "INSERT INTO cpe_cache (ap_ip, ip, model, firmware_version, auth_status) VALUES (?, ?, ?, ?, ?)",
-            (f"10.0.0.{ap_idx+1}", f"10.0.2.{i+1}", "TNA-30x", "1.0.0", "ok"),
+            "INSERT INTO devices (ip, role, parent_device_id, username, password, model, "
+            "firmware_version, auth_status) SELECT ?, 'cpe', id, 'admin', 'pass', ?, ?, ? "
+            "FROM devices WHERE ip = ? AND role = 'ap'",
+            (f"10.0.2.{i+1}", "TNA-30x", "1.0.0", "ok", f"10.0.0.{ap_idx+1}"),
         )
 
     # Insert job history

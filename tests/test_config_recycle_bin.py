@@ -105,14 +105,10 @@ class TestSoftDeleteCascade:
             ("AP-Lobby", "10.0.0.1"),
         )
         # Two attached CPEs, each with their own snapshots
-        mock_db.execute(
-            "INSERT INTO cpe_cache (ap_ip, ip, mac, system_name) VALUES (?, ?, ?, ?)",
-            ("10.0.0.1", "10.0.1.10", "AA:BB:CC:00:01:01", "CPE-Tenant-A"),
-        )
-        mock_db.execute(
-            "INSERT INTO cpe_cache (ap_ip, ip, mac, system_name) VALUES (?, ?, ?, ?)",
-            ("10.0.0.1", "10.0.1.11", "AA:BB:CC:00:01:02", "CPE-Tenant-B"),
-        )
+        db.upsert_cpe("10.0.0.1", {"ip": "10.0.1.10", "mac": "AA:BB:CC:00:01:01",
+                                   "system_name": "CPE-Tenant-A"})
+        db.upsert_cpe("10.0.0.1", {"ip": "10.0.1.11", "mac": "AA:BB:CC:00:01:02",
+                                   "system_name": "CPE-Tenant-B"})
         mock_db.commit()
         _seed_snapshots("10.0.0.1", "tn-110-prs", ["ap-h"])
         _seed_snapshots("10.0.1.10", "tn-303-l", ["cpe-a-h"])
@@ -181,12 +177,9 @@ class TestMacRebind:
         assert orphans == []
 
     def test_orphan_lookup_excludes_managed_cpe_ips(self, mock_db):
-        # If the old IP is still in cpe_cache (managed CPE), it's not an orphan
+        # If the old IP is still a managed CPE, it's not an orphan
         db.upsert_access_point("10.0.0.1", "root", "pass")
-        mock_db.execute(
-            "INSERT INTO cpe_cache (ap_ip, ip, mac) VALUES (?, ?, ?)",
-            ("10.0.0.1", "10.0.0.10", MAC_A),
-        )
+        db.upsert_cpe("10.0.0.1", {"ip": "10.0.0.10", "mac": MAC_A})
         mock_db.commit()
         _seed_snapshots("10.0.0.10", "tn-110-prs", ["h"], mac=MAC_A)
 

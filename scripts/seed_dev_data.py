@@ -28,6 +28,9 @@ DEV_DEVICE_IPS = {
     "198.51.100.1", "198.51.100.2", "198.51.100.3", "198.51.100.4",
     "198.51.100.10", "203.0.113.1", "203.0.113.2", "203.0.113.3",
     "203.0.113.10",
+    # CPEs
+    "192.0.2.101", "192.0.2.102", "198.51.100.101", "198.51.100.102",
+    "203.0.113.101",
 }
 
 
@@ -145,13 +148,25 @@ def seed():
         ("198.51.100.1", "198.51.100.102", "AA:BB:CC:02:03:02", "DT-CPE-02", "TNA-303L", "1.10.5", 12.4, -75.0, -72.0, -70.0, 80.0, 60.0, 3, 3600, "red"),
         ("203.0.113.1", "203.0.113.101", "AA:BB:CC:03:03:01", "LS-CPE-01", "TNA-301", "1.12.2", 3.7, -58.0, -55.0, -52.0, 280.0, 230.0, 8, 259200, "green"),
     ]
+    # A CPE is a device row under its AP. Its link readings go in link_metrics.
     for ap_ip, ip, mac, sname, model, fw, dist, rx, combined, rssi, tx_rate, rx_rate, mcs, uptime, health in cpes:
+        parent = db.execute(
+            "SELECT id, username, password FROM devices WHERE ip = ? AND role = 'ap'", (ap_ip,)
+        ).fetchone()
+        device_id = db.execute(
+            """INSERT INTO devices
+            (ip, vendor, role, parent_device_id, username, password, system_name, model, mac,
+             firmware_version, last_seen, enabled, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (ip, "tachyon", "cpe", parent["id"], parent["username"], parent["password"],
+             sname, model, mac, fw, now, 1, now),
+        ).lastrowid
         db.execute(
-            """INSERT OR IGNORE INTO cpe_cache
-            (ap_ip, ip, mac, system_name, model, firmware_version, link_distance, rx_power,
-             combined_signal, last_local_rssi, tx_rate, rx_rate, mcs, link_uptime, signal_health, last_updated)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (ap_ip, ip, mac, sname, model, fw, dist, rx, combined, rssi, tx_rate, rx_rate, mcs, uptime, health, now),
+            """INSERT INTO link_metrics
+            (device_id, link_distance, rx_power, combined_signal, last_local_rssi, tx_rate,
+             rx_rate, mcs, link_uptime, signal_health, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (device_id, dist, rx, combined, rssi, tx_rate, rx_rate, mcs, uptime, health, now),
         )
     db.commit()
 
@@ -205,8 +220,8 @@ def seed():
     # SEED_DATA=1 from planting a known password or turning auto-update on.
     db.commit()
 
-    dev_count = db.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
-    cpe_count = db.execute("SELECT COUNT(*) FROM cpe_cache").fetchone()[0]
+    dev_count = db.execute("SELECT COUNT(*) FROM devices WHERE role != 'cpe'").fetchone()[0]
+    cpe_count = db.execute("SELECT COUNT(*) FROM devices WHERE role = 'cpe'").fetchone()[0]
     site_count = db.execute("SELECT COUNT(*) FROM tower_sites").fetchone()[0]
     tmpl_count = db.execute("SELECT COUNT(*) FROM config_templates").fetchone()[0]
     hist_count = db.execute("SELECT COUNT(*) FROM job_history").fetchone()[0]

@@ -202,7 +202,7 @@ def build_schema(db: sqlite3.Connection) -> None:
             last_local_rssi REAL, tx_rate REAL, rx_rate REAL, mcs INTEGER,
             link_uptime INTEGER, signal_health TEXT, target_rssi_dbm REAL,
             snr_db REAL, sector_tx INTEGER, sector_rx INTEGER,
-            antenna_kit TEXT, max_rain_mm_hr REAL,
+            antenna_kit TEXT, max_rain_mm_hr REAL, updated_at TEXT,
             FOREIGN KEY (device_id) REFERENCES devices(id)
         );
         CREATE TABLE IF NOT EXISTS cpe_migration_map (

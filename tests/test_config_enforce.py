@@ -1595,8 +1595,9 @@ class TestPollerWritesPollStatus:
     @pytest.mark.asyncio
     async def test_records_unknown_for_cpe_when_connect_throws(self, scoped_db):
         """Same path for CPEs — `_fetch_and_store_config` is shared across
-        roles, and the new outcome write must reach `cpe_cache` too."""
+        roles, and the new outcome write must reach the CPE device row too."""
         from updater import database as db
+        db.upsert_access_point("10.0.0.1", "root", "pass")
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1"})
         poller = NetworkPoller()
         fake_client = MagicMock()
@@ -1605,7 +1606,7 @@ class TestPollerWritesPollStatus:
             await poller._fetch_and_store_config("1.1.1.1", "root", "pass")
         row = scoped_db.execute(
             "SELECT last_config_poll_status, last_config_poll_error "
-            "FROM cpe_cache WHERE ip = '1.1.1.1'"
+            "FROM devices WHERE ip = '1.1.1.1' AND role = 'cpe'"
         ).fetchone()
         assert row["last_config_poll_status"] == "unknown"
         assert "ECONNREFUSED" in row["last_config_poll_error"]
