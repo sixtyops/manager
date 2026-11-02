@@ -41,7 +41,8 @@ Operational how-to documents do not grant approval to exceed these limits.
 - Run the integration tests in `tests/integration`, including read-only lanes.
 - Create, move, or push a release tag, bump the release version, or run the
   Release workflow. Release tags must be GPG-signed by the release key.
-- The lead merges only when the owner asks. Do not cancel a CI run, bypass a
+- Only the lead merges, and only after every review, CI, sign-off, and bench
+  gate passes. Workers do not merge. Do not cancel a CI run, bypass a
   denial, or weaken a review gate.
 - Send direct Signal messages from lead or worker sessions.
 
@@ -125,8 +126,9 @@ Start worker completion messages with `DONE from <id> (<title>):`.
 
 ### Repository lead authority
 
-The owner merges ready PRs in daily batches with an explicit subject and an
-empty body. Read back each merge on `main`. Follow
+The lead merges a PR after every review, CI, sign-off, and bench gate passes
+(owner decision, 2026-11-01). Use an explicit subject and an empty body. A
+merge does not approve a release, a production install, or a fleet rollout. Read back each merge on `main`. Follow
 [the lead operations SOP](docs/lead-operations-sop.md#review-merge-and-development-release-gates).
 
 #### Slices and reviews
