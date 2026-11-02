@@ -20,9 +20,10 @@ Operational how-to documents do not grant approval to exceed these limits.
 - Run `pytest -v` before committing. All tests must pass. Exclude
   `tests/integration` as shown in Commands.
 - Keep `main` stable. `scripts/install.sh` always pulls `main`.
-- Current code advances firmware rollouts through 10%, 50%, and 100% waves.
-  Halt the whole job if a device does not return online. The target is a serial
-  queue with durable cutoff and failure stops. Never bypass
+- Current code advances firmware rollouts through 10%, 50%, and 100% waves,
+  with one wave per maintenance window. Halt the whole job if a device does not
+  return online. The target is a serial queue with durable cutoff and failure
+  stops. Never bypass
   `updater/rollout_gate.py` or weaken `tests/test_rollout_invariants.py`.
 
 ### Host access
@@ -209,7 +210,10 @@ use repo guidance for work that can proceed. Preserve all safety and proof gates
 
 ## Rollout gotchas
 
-The target fleet update contract uses one ordered serial queue of devices that
+The current fleet rollout uses percentage waves, one wave per maintenance
+window, and halts the whole job if a device does not return online. Keep these
+shipped rules until the queue cutover PRs land. The target fleet update contract
+uses one ordered serial queue of devices that
 need the selected firmware. Run CPEs before APs, then switches, with one device
 write and recovery sequence at a time. Keep Firmware Hold. Limit the first used
 maintenance windows for each new firmware family or artifact with the configured
