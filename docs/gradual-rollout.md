@@ -64,31 +64,26 @@ admission through [#369](https://github.com/sixtyops/manager/issues/369).
 Align [#339](https://github.com/sixtyops/manager/issues/339) with the failed-window
 stop: resume in a later window after the failed check passes.
 
-Complete the identity and recovery prerequisites in
-[#530](https://github.com/sixtyops/manager/issues/530):
-[#288](https://github.com/sixtyops/manager/issues/288),
-[#289](https://github.com/sixtyops/manager/issues/289),
-[#332](https://github.com/sixtyops/manager/issues/332),
-[#333](https://github.com/sixtyops/manager/issues/333),
-[#291](https://github.com/sixtyops/manager/issues/291), nullable-address storage,
-[#290](https://github.com/sixtyops/manager/issues/290),
-[#335](https://github.com/sixtyops/manager/issues/335),
-[#393](https://github.com/sixtyops/manager/issues/393),
-[#394](https://github.com/sixtyops/manager/issues/394), and
-[#217](https://github.com/sixtyops/manager/issues/217).
-Qualify trusted identity continuity before candidate authentication or address
-promotion. Keep automatic parent updates held until topology and child recovery
-proof pass.
+## Update recovery
 
-Record exact source and target build hashes, model, role, management VLAN,
-DHCP/static behavior, topology, and recovery case. Prove the composed behavior on
-the exact head: induced failures leave the next device unchanged; midnight and
-restart preserve the window stop; held-family additions and late children remain
-safe; complete child, association, and traffic recovery pass. Qualify bounded
-address recovery, a different responder at the old IP, and a missing VLAN lease.
-Use bench evidence to set traffic floors, deadlines, and idle/missing-counter
-fallbacks. Enable only the proven model/build/topology scope. Keep unqualified
-scope held in code and record the approved scope with the readiness decision.
+**Key points:** Recovery confirms a Tachyon device with an authenticated serial
+read. Treat an AP peer radio MAC as a candidate selector only.
+
+**Detail:** Before a write, save the expected serial and current locator in the
+active job. Keep the original IP as the job and history key. After a reboot,
+check the current address first. For a missing CPE, use fresh successful peer
+reports from enabled APs to find rows with the saved radio MAC, then read only
+their reported unicast IPs. Use the credentials already selected for the update.
+Confirm the expected serial and compatible model before accepting one current
+address and parent. Do not scan networks, try other credentials, or infer
+identity from a name.
+
+Keep one deadline for recovery. Persist a moved address only after serial
+confirmation, refuse cache collisions, and invalidate sessions for the old and
+new addresses. Recheck the expected serial before every reboot, upload attempt,
+install trigger, reconnect, and bank pass. Missing evidence, ambiguity, failed
+persistence, or timeout stops the whole job and requires operator resolution in
+a later window. Never reflash an unfinished update after restart.
 
 Then have the operator record readiness through the admin settings API:
 `POST /api/settings/save` with `{"scheduled_rollout_safety_ready":"true"}`.
