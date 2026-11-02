@@ -127,7 +127,6 @@ async def test_first_device_failure_stops_all_second_device_writes(
     _DeviceClient.connect_calls = {}
     _DeviceClient.fail_at = failure
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
-    monkeypatch.setattr(app_module, "_address_change_guard", AsyncMock(return_value=True))
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
     monkeypatch.setattr(app_module, "_shutting_down", False)
     monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
@@ -203,7 +202,6 @@ async def test_history_save_failure_withholds_firmware_confirmation(mock_db, mon
     _DeviceClient.connect_calls = {}
     _DeviceClient.fail_at = None
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
-    monkeypatch.setattr(app_module, "_address_change_guard", AsyncMock(return_value=True))
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
     monkeypatch.setattr(app_module, "_shutting_down", False)
     monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
@@ -243,7 +241,6 @@ async def test_unexpected_device_task_error_stops_window_before_next_device(tmp_
     _DeviceClient.connect_calls = {}
     _DeviceClient.fail_at = None
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
-    monkeypatch.setattr(app_module, "_address_change_guard", AsyncMock(return_value=True))
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
     monkeypatch.setattr(app_module, "_shutting_down", False)
     monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
@@ -321,7 +318,6 @@ async def test_queued_device_action_stays_pending_when_window_closes(mock_db, mo
     _DeviceClient.calls = {}
     _DeviceClient.fail_at = None
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
-    monkeypatch.setattr(app_module, "_address_change_guard", AsyncMock(return_value=True))
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
     monkeypatch.setattr(app_module, "_shutting_down", False)
     monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
@@ -452,7 +448,6 @@ async def test_manual_local_day_stop_survives_reopen_and_blocks_manual_routes(
     _DeviceClient.calls = {}
     _DeviceClient.fail_at = "flash"
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
-    monkeypatch.setattr(app_module, "_address_change_guard", AsyncMock(return_value=True))
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
     monkeypatch.setattr(app_module, "_shutting_down", False)
     monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
@@ -611,7 +606,6 @@ async def test_manual_fallback_job_does_not_bypass_scheduled_one_wave_gate(
     _DeviceClient.calls = {}
     _DeviceClient.fail_at = None
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
-    monkeypatch.setattr(app_module, "_address_change_guard", AsyncMock(return_value=True))
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
     monkeypatch.setattr(app_module, "_shutting_down", False)
     monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
@@ -703,7 +697,6 @@ async def test_current_admission_after_connect_blocks_scheduled_writes(
             return result
 
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: ClosingClient)
-    monkeypatch.setattr(app_module, "_address_change_guard", AsyncMock(return_value=True))
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
     monkeypatch.setattr(app_module, "_shutting_down", False)
     monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
@@ -778,7 +771,6 @@ async def test_driver_login_rechecks_write_gate_before_upload_and_trigger(
     _DeviceClient.connect_calls = {}
     _DeviceClient.fail_at = None
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: SlowLoginClient)
-    monkeypatch.setattr(app_module, "_address_change_guard", AsyncMock(return_value=True))
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: False)
     monkeypatch.setattr(app_module, "_shutting_down", False)
     monkeypatch.setattr(app_module, "broadcast", AsyncMock())
@@ -821,7 +813,6 @@ async def test_driver_login_device_failure_still_stops_window(mock_db, monkeypat
             return app_module.UpdateResult(ip=self.ip, success=False, error="Upload failed")
 
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: FailedUpdateClient)
-    monkeypatch.setattr(app_module, "_address_change_guard", AsyncMock(return_value=True))
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: False)
     monkeypatch.setattr(app_module, "_shutting_down", False)
     monkeypatch.setattr(app_module, "broadcast", AsyncMock())

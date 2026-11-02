@@ -17,7 +17,6 @@ from tests.test_strict_smoke_canary import _make_job
 @pytest.fixture
 def runtime_mocks(mock_db, monkeypatch):
     db.set_setting("scheduled_rollout_safety_ready", "true")
-    monkeypatch.setattr(app_module, "_address_change_guard", AsyncMock(return_value=True))
     monkeypatch.setattr(app_module, "broadcast", AsyncMock())
     monkeypatch.setattr(app_module, "get_scheduler", lambda: None)
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda *a: False)
