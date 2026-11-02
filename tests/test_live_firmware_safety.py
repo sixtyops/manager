@@ -29,7 +29,8 @@ def client(monkeypatch):
     monkeypatch.setattr(firmware.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(firmware.time, "sleep", lambda _: None)
     monkeypatch.setattr(firmware.time, "time", lambda: 100)
-    state = {"version": "1.15.0.100", "step": 0, "mode": "success"}
+    state = {"version": "1.15.0.100", "active_bank": 1,
+             "bank2_version": BASELINE["bank2_version"], "step": 0, "mode": "success"}
     session = Mock()
 
     def post(path, **kwargs):
@@ -37,6 +38,7 @@ def client(monkeypatch):
             state["step"] += 1
             name = kwargs["data"]["firmware_file"]
             state["version"] = firmware.extract_version_from_filename(name)
+            state["active_bank"] = 2 if state["step"] == 1 else 1
             if state["step"] == 1:
                 if state["mode"] == "exception":
                     raise RuntimeError("PRIVATE_DEVICE_RESPONSE")
@@ -48,6 +50,8 @@ def client(monkeypatch):
     def get(path):
         if path == "/api/topology":
             ap = {**BASELINE, "firmware_version": state["version"],
+                  "active_bank": state["active_bank"],
+                  "bank2_version": state["bank2_version"],
                   "last_seen": "1970-01-01T00:01:41+00:00"}
             if state["mode"] == "stale":
                 ap["last_seen"] = "1970-01-01T00:01:39+00:00"
@@ -65,12 +69,14 @@ def client(monkeypatch):
 
 def test_success_restores_original_and_uses_form_api(client):
     session, state = client
-    firmware._exercise_firmware(session, IP, FILES)
+    restored = firmware._exercise_firmware(session, IP, FILES)
     writes = [call.kwargs["data"] for call in session.post.call_args_list
               if call.args[0] == "/api/update-device"]
     assert [data["firmware_file"] for data in writes] == [TARGET, ORIGINAL]
-    assert all(data["bank_mode"] == "both" for data in writes)
+    assert all(data["bank_mode"] == "one" for data in writes)
     assert state["version"] == BASELINE["firmware_version"]
+    assert restored["firmware_version"] == BASELINE["firmware_version"]
+    assert restored["active_bank"] == BASELINE["active_bank"]
 
 
 def test_address_bench_plan_is_sent_on_upgrade_and_restore(client, monkeypatch):
@@ -143,7 +149,7 @@ def test_completed_job_requires_device_success(client, status):
 
 @pytest.mark.parametrize("change", ["target-older",
                                     "wrong-family", "unhealthy", "unknown-model", "missing-version",
-                                    "missing-bank", "mixed-banks"])
+                                    "missing-bank"])
 def test_preflight_fails_before_any_write(client, change):
     session, state = client
     files = [dict(item) for item in FILES]
@@ -156,12 +162,27 @@ def test_preflight_fails_before_any_write(client, change):
     else:
         ap = dict(BASELINE, last_seen="1970-01-01T00:01:41+00:00")
         key, value = {"unknown-model": ("model", "unknown"), "missing-version": ("firmware_version", ""),
-                      "missing-bank": ("active_bank", None), "mixed-banks": ("bank2_version", "other")}[change]
+                      "missing-bank": ("active_bank", None)}[change]
         ap[key] = value
         session.get.side_effect = lambda _: response({"sites": [{"aps": [ap]}]})
     with pytest.raises(firmware.FirmwareCheckError):
         firmware._exercise_firmware(session, IP, files)
     assert state["step"] == 0
+
+
+def test_mixed_bank_versions_are_allowed_for_single_bank_restore(client):
+    session, state = client
+    state["bank2_version"] = "1.14.0.900"
+
+    restored = firmware._exercise_firmware(session, IP, FILES)
+
+    writes = [call.kwargs["data"] for call in session.post.call_args_list
+              if call.args[0] == "/api/update-device"]
+    assert len(writes) == 2
+    assert all(data["bank_mode"] == "one" for data in writes)
+    assert restored["firmware_version"] == BASELINE["firmware_version"]
+    assert restored["active_bank"] == BASELINE["active_bank"]
+    assert state["step"] == 2
 
 
 @pytest.mark.parametrize("files", [[FILES[0]], [FILES[1]]], ids=["no-newer-image", "no-original-image"])

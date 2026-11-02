@@ -103,7 +103,7 @@ async def test_rejoin_check_runs_after_saved_cpe_restart(monkeypatch):
             return 600
 
     monkeypatch.setattr(app_module, "_restart_ap_cpes_after_recovery", restart)
-    monkeypatch.setattr(app_module, "_check_ap_customer_recovery", check)
+    monkeypatch.setattr(app_module, "_check_ap_recovery", check)
 
     result = await app_module._check_ap_recovery_after_cpe_rejoin(
         SimpleNamespace(), "192.0.2.1", AP(), {"peers": {}}, 10.0
@@ -116,6 +116,7 @@ async def test_rejoin_check_runs_after_saved_cpe_restart(monkeypatch):
 @pytest.mark.asyncio
 async def test_failed_cpe_reboot_still_fails_when_peer_does_not_return(monkeypatch):
     calls = []
+    clock = {"now": 10.0}
 
     class CPE:
         def __init__(self, ip, *_credentials):
@@ -143,15 +144,15 @@ async def test_failed_cpe_reboot_still_fails_when_peer_does_not_return(monkeypat
             assert role == "ap"
             return 5
 
-    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: CPE)
-    monkeypatch.setattr(app_module, "get_poller", lambda: NetworkPoller())
-    clock = {"now": 10.0}
     monkeypatch.setattr(app_module, "monotonic", lambda: clock["now"])
 
     async def sleep(seconds):
         clock["now"] += seconds
 
     monkeypatch.setattr(app_module.asyncio, "sleep", sleep)
+
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: CPE)
+    monkeypatch.setattr(app_module, "get_poller", lambda: NetworkPoller())
     job = SimpleNamespace(
         credentials={"192.0.2.8": ("user", "password")}, ap_cpe_map={}
     )
@@ -161,7 +162,7 @@ async def test_failed_cpe_reboot_still_fails_when_peer_does_not_return(monkeypat
     )
 
     assert passed is False
-    assert evidence["reason"] == "CPE 02:00:00:00:00:01 is missing from the AP peer list"
+    assert evidence["reason"] == "CPEs are missing from the AP peer list: 02:00:00:00:00:01"
     assert calls == [("192.0.2.8", "connect"), ("192.0.2.8", "reboot")]
 
 
