@@ -38,8 +38,8 @@ ordered PR plan.
 
 - `device_id` never changes. Every rollout, confirmation, and history record
   points at a `device_id`, never at an IP.
-- Identity is a **serial claim, verified under a named trust policy**. It is
-  not absolute hardware proof.
+- Recovery confirms identity with an authenticated serial read. This is a
+  device claim, not cryptographic hardware proof.
 - A MAC is a mutable alias, not identity. A device has **more than one MAC**
   (Ethernet, radio, …). We keep all of them as aliases.
 - A row never merges into another row on serial or MAC alone.
@@ -52,17 +52,16 @@ ordered PR plan.
 shipped. Today the poller matches by IP, and jobs and history are keyed by IP.)*
 
 **What identity means.** `device_id` is the row `id`. It never changes.
-Identity is a serial claim. The device reports a serial. We accept it only
-after a connection that passes a named trust policy (see *Trust policies*
-below). A serial read after login proves that the device claims the expected
-serial. It does not prove who owned the endpoint before we sent credentials.
-It is not absolute hardware proof.
+Identity is a serial claim. The device reports a serial after Manager
+authenticates with its existing management credentials. A matching serial
+confirms the device for update recovery. It does not provide cryptographic
+hardware proof.
 
 **Identity key.**
 
 | Priority | Source | Works for | Notes |
 |---|---|---|---|
-| 1 | Serial number from `/cgi.lua/status?type=system` | APs, switches, and CPEs we can log into | A claim, verified under a trust policy. Survives factory reset, new IP, new AP. |
+| 1 | Serial number from `/cgi.lua/status?type=system` | APs, switches, and CPEs we can log into | A claim read after management authentication. Survives factory reset, new IP, new AP. |
 | 2 | Any of the device's MAC addresses | Any CPE listed by its AP | An alias and a candidate only. Used to propose a match, never to prove one. |
 | 3 | `legacy-ip:<ip>` (`uid_source = ip_legacy`) | Rows imported from a bridge archive with no serial or MAC | Import only. Never a rollout candidate. It joins a real identity only by the rules under *Provisional rows*. |
 
@@ -94,80 +93,50 @@ CPEs are not in `devices`; they are in `cpe_cache`, keyed by
 know its MAC. That row is a **provisional observation**. Later the poller
 may sign in and read a serial.
 
-- A provisional observation joins a device only after three checks pass:
-  the trust check, the expected-serial check, and the conflict checks.
+- Update recovery accepts a candidate only after management authentication,
+  expected-serial confirmation, and conflict checks.
 - Serial alone or MAC alone never merges two rows.
 - A destructive merge needs its own tested migration and a safe history
   plan. A conflicting row holds.
 
-**Trust policies.** A trust policy decides whether a connection may carry
-credentials and a serial read. There are two. The system names the policy
-it used in the event it writes.
-
-- **Mode B (existing credential profile).** Reuse an existing management
-  credential profile that the operator already authorized, with bounded
-  targets. It needs no new account. Do not ask the operator again for
-  access already given. Never fall back to global or AP credentials.
-- **Mode A (TLS key pin).** A unique TLS key pin, enforced on the actual
-  login and write connection, proves continuity under stated assumptions.
-  It is not hardware proof. A shared factory certificate does not qualify.
+**Management authentication.** Manager uses the same credential pair already
+selected for the update. It uses the existing device management
+authentication model. Manager does not pin device certificates. The broader
+credential-profile and certificate-pinning proposals are not planned.
 
 ### 1.2 Address changes
 
 ### Key points
 
-- *(Target, not shipped.)* An address change holds the device. The system
-  never adopts the newest IP.
-- An observed IP is a **candidate**. It becomes the device address only after
-  a trusted connection reads the expected serial.
-- Direct login does not win. A reused IP does not go to the newest report.
-- No blanket network scan. Recovery checks only named candidates.
+- *(Target, not shipped.)* Update recovery uses the current address first,
+  then checks AP-reported CPE candidates by the saved radio MAC.
+- Recovery authenticates with the same credential pair selected for the
+  update and confirms identity with a serial read.
+- A missing or different serial, conflicting candidates, or ambiguity stops
+  recovery. A MAC only selects a candidate; it does not prove identity.
+- Recovery does not scan networks or promote addresses outside the active
+  update operation.
 
 ### Detail
 
 *(today: the poller matches by IP. `devices.ip` is `TEXT NOT NULL UNIQUE`,
 so one IP maps to one row. A nullable `devices.ip` is future work.)*
 
-Candidate sources are the AP peer list, switch neighbor data, and syslog.
-They are **candidates only**. Inbound syslog does not exist. Switch
-`/cgi.lua/discovery` was observed ([#421](https://github.com/sixtyops/manager/issues/421))
-but is not implemented. None of these sources proves identity.
+For update recovery, save the expected serial, model, peer radio MAC, and
+current location before reboot. Try the current address first. For a missing
+CPE, inspect fresh successful peer-list reports from APs Manager polls. Read
+only unicast addresses reported for the saved radio MAC. Use the same
+credential pair selected for the update. Do not use another AP's credentials,
+global credentials, a subnet scan, a device name, or certificate pinning.
 
-Each poll cycle, for each observation:
-
-1. Propose a `device_id` from the serial or from any MAC alias. An
-   observation that matches nothing creates a provisional row with
-   `status = discovered`. It is never a rollout candidate.
-2. Treat the observed IP as a candidate address. Do not change the device
-   `ip` yet. The device holds with a visible reason.
-3. Connect to the candidate under a trust policy (§1). Read the serial from
-   `/cgi.lua/status?type=system`. A direct login does not skip this check.
-4. Promote the address only if the serial equals the expected serial and no
-   conflict exists. Promotion is one short `BEGIN IMMEDIATE` transaction. It
-   uses compare-and-swap on `address_generation`, the expected serial, and
-   one active owner per IP. It does no network work. It keeps `device_id`,
-   history, credentials, and parent IDs. Record the address in
-   `device_addresses (device_id, ip, first_seen, last_seen, source)` and
-   close the old address's `last_seen`. Discard every cache built under an
-   older generation.
-5. Resolve conflicts by holding:
-   - **Two devices, one IP (reused IP).** Both devices hold. The newest
-     report does not win.
-   - **Duplicate serial or duplicate MAC.** Both devices hold.
-   - **Serial mismatch at the candidate.** The candidate is rejected. The
-     device keeps holding.
-   - **One device, two candidate IPs in one cycle.** Neither is promoted
-     until a trusted check reads the expected serial on one of them.
-6. A CPE that appears under a different AP gets a new `parent_device_id`
-   and a `device_rehomed` event. It is still the same device.
-
-A held device stays held until a trusted check passes and no conflict
-remains. Automatic recovery turns on one case at a time, each
-with its own bench proof. Until a case passes its gate, an address change in
-that case holds the device and shows the reason.
-
-**Rollback.** Rolling back any recovery slice disables recovery and holds
-the device. It never restores the CPE prune or unsafe IP-keyed execution.
+Accept one candidate only when its authenticated serial matches the saved
+serial and its model remains compatible. Missing or different serials,
+multiple matching candidates, identity conflicts, failed persistence, or the
+recovery deadline stop the update. Persist the confirmed current address
+before continuing. Check the expected serial again before every later write.
+This bounded recovery applies to the active update. It does not implement a
+general identity migration or address-promotion system. Those broader
+proposals are not planned.
 
 The config-snapshot code already re-links history by MAC when an IP changes
 (`poller.py:1109-1140`). With identity in place, that special case goes away.
@@ -180,8 +149,8 @@ The config-snapshot code already re-links history by MAC when an IP changes
 - Offline devices keep their site, customer label, config history, update
   history, and confirmations. There is no time limit.
 - Archiving is a manual, reversible operator action.
-- If an archived device is seen again and its serial is verified under a
-  trust policy, it is un-archived.
+- If an archived device is seen again and its serial is confirmed after
+  management authentication, it is un-archived.
 
 ### Detail
 
@@ -205,28 +174,20 @@ it.)*
   It is a new device. The old one stays offline until archived. We never
   guess identity from an IP or a name.
 
-### 1.4 TLS pinning
+### 1.4 Device certificate pinning
 
 ### Key points
 
-- Devices use self-signed certificates. We cannot verify them against a CA.
-- We record each device's certificate on first login and refuse to send the
-  password if it changes.
-- A changed certificate puts the device on hold before login. Stop new writes
-  for the window; the hold is not an outage.
-- The operator accepts a new certificate in one click, per device or per
-  site. The manager re-pins by itself when its own firmware update rotated
-  the certificate and the serial still matches.
+- Manager does not save or check managed-device certificate pins.
+- Manager uses its existing device management authentication model.
+- Certificate pinning and certificate-change holds are not planned.
 
 ### Detail
 
-Pins are keyed by `device_id`, so an IP change does not trigger a mismatch.
-A mismatch sets `status = cert_mismatch`, writes a `cert_changed` event, and
-stops all logins to that device. Un-archive needs a serial verified under a
-trust policy (§1). A serial alone, read over an unverified connection, is
-not proof. If the vendor's
-firmware regenerates certificates, an admin can turn pinning off; the UI
-then shows a permanent warning.
+During update recovery, Manager sends the selected management credentials
+using the existing transport. It then confirms the expected serial through
+an authenticated read. A mismatch or ambiguity stops recovery before another
+write.
 
 ### 1.5 What uses `device_id`
 

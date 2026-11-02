@@ -14,8 +14,8 @@ and 100% waves, with one wave per maintenance window. It uses
 the first scheduled wave. Manual per-device updates bypass that hold. Failure
 handling and device recovery do not yet enforce the full target contract.
 The **Update Mode** setting defaults to **Single bank (recommended)**. Select
-**Both banks** to update both banks. Address-change qualification applies to
-both scheduled and manual updates, as described below.
+**Both banks** to update both banks. Update recovery confirms the device after
+a reboot before it continues with another write.
 
 The target derives an ordered queue from Manager's current inventory. It runs
 CPEs, then APs, then switches, with one device write and recovery sequence at
@@ -141,8 +141,7 @@ window. The failed window never reopens.
 `/api/fleet-status` reports `update_state ∈ {up_to_date, needs_update, on_hold}` plus a
 `hold` object (`clears_at`, `confirmed_by`). A device is `on_hold` when it's behind, in
 scope, auto-update is on, and its family's hold hasn't cleared. The UI shows a distinct
-"on hold" glyph. The release-date hold permits a manual update. The address-change
-hold shows its reason and waits for qualification or an approved named lab plan.
+"on hold" glyph. The release-date hold permits a manual update.
 
 ## Shipped rollout state
 
@@ -215,80 +214,26 @@ failure resolution through `POST /api/firmware-window-stops/{stop_id}/resolve`.
 Run the normal rollout gates before starting scheduled queue work. Keep the failed
 window stopped after the resolution record is saved.
 
-## Address-change qualification hold
+## Update recovery identity check
 
-**Key points:** Qualify the device-reported source build and target artifact
-SHA-256 for the model family, role, management VLAN, IP mode, and recovery case
-before writes.
-Scheduled and manual jobs share this hold.
-The qualification table in `updater/rollout_gate.py` starts empty. The Devices
-view shows the hold reason with a clock glyph.
+**Key points:** Recovery authenticates with the same credential pair selected
+for the update. It confirms identity with a serial read before continuing.
 
-**Detail:** Owner decision on 2026-11-01: trust the full firmware version
-reported by the Tachyon device as the source identity; do not require an
-installed-image hash. `address_change_decision` requires a release plus
-revision for both builds. It accepts only a matching `AddressTransition` with
-a recorded bench-proof reference. Its key includes `family`, `role`, `source`,
-`target`, `target_sha256`, `management_vlan`, `management_ip_mode`, and
-`recovery_case`. Use lowercase 64-digit target hashes. Use VLAN `0` for an observed
-untagged management interface or its tagged VLAN ID from 1 through 4094.
-Use `dhcp` or `static` for the observed IP mode. Qualify `pre_update_reboot`
-and `firmware_flash` separately. A reboot proof covers recovery before flashing
-that reported source build. Unknown or missing values stay held.
-Release age and confirmed-working firmware affect only the separate Firmware Hold.
+**Detail:** Manager uses its existing device management authentication
+model. It does not save or check device certificate pins. Recovery for a CPE
+first tries its current address. If the device is missing, Manager checks
+fresh successful peer reports for the saved radio MAC and reads only reported
+unicast addresses. The radio MAC selects a candidate; the authenticated serial
+confirms identity.
 
-The shared job runner checks saved inventory before connecting, then reads
-live model, firmware version, and management scope before the
-pre-update reboot and before each flash. It hashes the selected target file
-at each check, so files with the same numeric build have separate qualifications.
-A held member uses `deferred` with an address-change reason in job history.
-The existing scheduler keeps that wave pending for a later window. Qualification
-is read again at each boundary and survives restart as reviewed source data.
-Keep a member held through all later passes when its pre-reboot scope is held.
+Recovery stops when the serial is missing or different, when candidates are
+ambiguous, or when an identity conflict exists. It does not use another AP's
+credentials, global credentials, subnet scans, or device names. Manager saves
+a confirmed current address before continuing and checks the expected serial
+before each later write. A recovery failure stops the update and the rollout
+window under the failure rules above.
 
-Read the source version from live Tachyon device information. Read management
-scope independently from inventory fields `management_vlan` and
-`management_ip_mode`, and from the same keys in live `VendorDeviceInfo.extra`.
-Unknown or missing fields keep devices held, including named lab exceptions.
-The Manager hashes the selected stored target file; a registry checksum for a
-different file does not qualify it.
-
-For approved lab validation, set `SIXTYOPS_ADDRESS_BENCH_PLAN_FILE` to a private
-JSON file in the lab Manager environment. Keep the tested source unchanged.
-Use this structure with the approved plan's actual values:
-
-```json
-{
-  "name": "approved-lab-plan",
-  "approval": "approval record reference",
-  "expires_at": "2026-10-28T18:00:00+00:00",
-  "devices": [
-    {"ip": "192.0.2.10", "family": "tna-30x", "role": "ap",
-     "source": "1.12.3.54970", "target": "1.15.0.55142",
-     "target_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-     "management_vlan": 100, "management_ip_mode": "dhcp",
-     "recovery_case": "firmware_flash"}
-  ]
-}
-```
-
-Send the plan name as `address_bench_exception` on `/api/start-update` or
-`/api/update-device`. Select it explicitly for each manual job. The gate reads
-the file again at each check. Use normalized four-part builds and the actual
-artifact hashes in the plan. Include a separate entry for `pre_update_reboot`
-when that phase is enabled. Match the independent observed scope at each check.
-An absent, expired, or malformed plan keeps the device held. A plan that still
-contains `source_sha256` is rejected with a clear address-change hold error;
-remove that field from every device entry. Scheduled jobs use qualification
-proof. Each accepted bench exception records its name,
-approval, device, and transition in the schedule log. Keep private lab details
-outside the repository.
-
-Use isolated named lab addresses for these plans. Current inventory and jobs
-still use IP addresses; this gate supplies transition containment, while trusted
-identity and address recovery remain separate work under
-[#530](https://github.com/sixtyops/manager/issues/530). Add qualification only
-after exact-head bench proof and independent review. Record source and target
-builds and hashes, model, role, management VLAN/DHCP behavior, recovery timing,
-identity continuity, association, and traffic results with that proof. Keep
-one-wave-per-window admission and all other checks in effect.
+Certificate pinning, separate credential profiles, general address
+promotion, and broader identity migration are not planned. This recovery
+scope does not make scheduled updates ready. Keep the existing admission and
+exact-head proof gates in place.
