@@ -498,7 +498,8 @@ def _recover_crashed_device_jobs():
             f"was updating {job.get('firmware_name', 'unknown')}"
         )
         try:
-            device_ips = json.loads(job.get("device_ips_json", "[]"))
+            payload = json.loads(job.get("device_ips_json", "[]"))
+            device_ips = payload.get("devices", []) if isinstance(payload, dict) else payload
             now_iso = datetime.now().isoformat()
             for ip in device_ips:
                 db.save_device_update_history(
@@ -4022,6 +4023,7 @@ class UpdateJob:
     ap_cpe_map: Dict[str, list] = field(default_factory=dict)  # AP IP -> [CPE IPs]
     device_roles: Dict[str, str] = field(default_factory=dict)  # IP -> "ap"/"cpe"
     device_parent: Dict[str, str] = field(default_factory=dict)  # CPE IP -> parent AP IP
+    recovery_locators: Dict[str, dict] = field(default_factory=dict)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     status: str = "pending"
@@ -4093,6 +4095,114 @@ def _stop_firmware_window(job: "UpdateJob", ip: str, gate: str, reason: str):
         "device_ip": ip, "gate": gate, "reason": reason,
     }))
     return stop
+
+
+def _persist_recovery_locator(job: "UpdateJob", original_ip: str) -> None:
+    """Persist identity and the current transport locator with the active job."""
+    payload = {
+        "devices": list(job.devices),
+        "recovery": job.recovery_locators,
+    }
+    db.save_active_job(
+        job.job_id, "running", json.dumps(payload),
+        Path(job.device_firmware_map.get(original_ip, "")).name, original_ip,
+    )
+
+
+def _set_driver_locator(client, ip: str) -> None:
+    """Retarget the existing Tachyon session and discard its old token."""
+    inner = getattr(client, "_client", client)
+    client.ip = ip
+    inner.ip = ip
+    inner._base_url = f"https://{ip}"
+    inner._token = None
+
+
+def _make_recovery_callback(job, original_ip, client, expected_serial,
+                            expected_model, radio_mac):
+    """Build bounded read-only recovery for the current Tachyon reboot."""
+    current_ip = job.recovery_locators.get(original_ip, {}).get("ip", original_ip)
+    failure = {"reason": "device did not return at its current address"}
+
+    async def confirm(candidate_ip):
+        _set_driver_locator(client, candidate_ip)
+        if await client.connect() is not True:
+            failure["reason"] = f"known address {candidate_ip} is unavailable"
+            return None
+        info = await client.get_device_info()
+        serial = getattr(info, "serial", None)
+        model = getattr(info, "model", None)
+        if serial != expected_serial:
+            failure["reason"] = f"serial did not match at {candidate_ip}"
+            return None
+        if expected_model and (not model or model.lower() != expected_model.lower()):
+            failure["reason"] = f"model did not match at {candidate_ip}"
+            return None
+        return info
+
+    async def recover(deadline, reboot_started):
+        nonlocal current_ip
+        info = await confirm(current_ip)
+        parent = job.recovery_locators.get(original_ip, {}).get(
+            "parent_ap", job.devices[original_ip].parent_ap
+        )
+        candidate = current_ip
+        if info is None and job.devices[original_ip].role == "cpe":
+            poller = get_poller()
+            snapshots = poller.get_latest_peer_snapshots() if poller else {}
+            enabled_aps = {ap["ip"] for ap in db.get_access_points(enabled_only=True)}
+            candidates = {}
+            for ap_ip, snapshot in snapshots.items():
+                observed_at = snapshot.get("observed_at")
+                if (ap_ip not in enabled_aps or not isinstance(observed_at, (int, float))
+                        or observed_at < reboot_started):
+                    continue
+                peers = _index_recovery_peers(snapshot.get("peers", []))
+                peer = peers.get(radio_mac)
+                if peer is not None:
+                    candidates[(peer.ip, ap_ip)] = peer.ip
+            confirmed = []
+            for (ip, ap_ip), _ in candidates.items():
+                if monotonic() >= deadline:
+                    break
+                if await confirm(ip) is not None:
+                    confirmed.append((ip, ap_ip))
+            if len(confirmed) != 1:
+                failure["reason"] = (
+                    "no candidate matched the expected serial" if not confirmed
+                    else "multiple candidates matched the expected serial"
+                )
+                return False
+            candidate, parent = confirmed[0]
+            info = await confirm(candidate)
+            if info is None:
+                failure["reason"] = "candidate serial confirmation failed"
+                return False
+
+        if info is None:
+            return False
+        old_parent = job.recovery_locators.get(original_ip, {}).get(
+            "parent_ap", job.devices[original_ip].parent_ap
+        )
+        if job.devices[original_ip].role == "cpe" and (
+                candidate, parent) != (current_ip, old_parent):
+            if not db.relocate_cpe_cache(
+                    old_parent, current_ip, parent, candidate, radio_mac):
+                failure["reason"] = "CPE location could not be committed"
+                return False
+            poller = get_poller()
+            if poller:
+                poller._remove_cached_cpe_client(current_ip)
+                poller._remove_cached_cpe_client(candidate)
+        current_ip = candidate
+        job.devices[original_ip].parent_ap = parent
+        job.device_parent[original_ip] = parent or ""
+        job.recovery_locators[original_ip].update({"ip": candidate, "parent_ap": parent})
+        _persist_recovery_locator(job, original_ip)
+        return True
+
+    recover.failure_reason = failure
+    return recover
 
 
 async def _read_ap_recovery_peers(ap_client):
@@ -5991,7 +6101,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     flash_ap_baseline = None
 
     client = None
-    expected_serial = None
+    saved_locator = job.recovery_locators.get(ip, {})
+    expected_serial = saved_locator.get("serial")
     expected_version = None
     admission_denial = {"reason": ""}
     vendor_id = job.device_vendor_map.get(ip, "tachyon")
@@ -6022,7 +6133,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
 
     if driver_cls:
         username, password = job.credentials[ip]
-        client = driver_cls(ip, username, password)
+        client = driver_cls(saved_locator.get("ip", ip), username, password)
+        supports_tachyon_recovery = vendor_id == "tachyon" and hasattr(client, "_client")
 
         if not is_feature_enabled(Feature.CONFIG_BACKUP):
             try:
@@ -6030,7 +6142,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 info = await client.get_device_info() if login_result is True else None
                 qualification_error = "" if info is not None else "live device information could not be read"
                 if info is not None:
-                    expected_serial = getattr(info, "serial", None)
+                    expected_serial = expected_serial or getattr(info, "serial", None)
                     expected_version = getattr(info, "current_version", None)
             except Exception:
                 info = None
@@ -6105,6 +6217,19 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 expected_version = expected_version or current_version
                 if not expected_serial or not expected_version:
                     raise RuntimeError("Expected serial or current firmware version is unavailable")
+                if not job.recovery_locators.get(ip):
+                    cpe = db.get_cpe_by_ip(ip) if device_status.role == "cpe" else None
+                    job.recovery_locators[ip] = {
+                        "original_ip": ip,
+                        "original_parent_ap": device_status.parent_ap,
+                        "ip": getattr(client, "ip", ip),
+                        "parent_ap": device_status.parent_ap,
+                        "radio_mac": str((cpe or {}).get("mac") or "").upper(),
+                    }
+                job.recovery_locators[ip].update({
+                    "serial": expected_serial, "model": getattr(info, "model", None),
+                })
+                _persist_recovery_locator(job, ip)
                 if not await _address_change_guard(
                     job, ip, info=info, pass_number=pass_number,
                     recovery_case="pre_update_reboot",
@@ -6117,8 +6242,23 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     pre_reboot_ap_baseline = await _capture_ap_recovery_baseline(
                         job, ip, client
                     )
-                if not await client.reboot(timeout=reboot_timeout):
-                    raise RuntimeError("Device did not come back online after pre-update reboot")
+                recovery_callback = (
+                    _make_recovery_callback(
+                        job, ip, client, expected_serial, getattr(info, "model", None),
+                        job.recovery_locators[ip].get("radio_mac", ""),
+                    ) if supports_tachyon_recovery else None
+                )
+                reboot_options = {"timeout": reboot_timeout}
+                if recovery_callback:
+                    reboot_options["recovery_callback"] = recovery_callback
+                if not await client.reboot(**reboot_options):
+                    locator = job.recovery_locators.get(ip, {})
+                    reason = (recovery_callback.failure_reason["reason"]
+                              if recovery_callback else "reboot wait expired")
+                    raise RuntimeError(
+                        f"Expected serial {expected_serial} did not return at "
+                        f"{locator.get('ip', ip)}: {reason}"
+                    )
                 if await client.connect() is not True:
                     raise RuntimeError("Authentication failed after pre-update reboot")
                 recovered_info = await client.get_device_info()
@@ -6177,6 +6317,24 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 admission_denial["reason"] = reason
             return admitted, reason
 
+        async def _driver_serial_check(stage):
+            if not expected_serial or await client.connect() is not True:
+                admission_denial["reason"] = f"Expected serial is unavailable before {stage}"
+                return False
+            fresh = await client.get_device_info()
+            if getattr(fresh, "serial", None) != expected_serial:
+                admission_denial["reason"] = f"Expected serial changed before {stage}"
+                return False
+            expected_model = (job.recovery_locators.get(ip, {}).get("model")
+                              or device_status.model)
+            if expected_model:
+                if (not getattr(fresh, "model", None)
+                        or fresh.model.lower() != expected_model.lower()):
+                    admission_denial["reason"] = f"Device model changed before {stage}"
+                    return False
+            _persist_recovery_locator(job, ip)
+            return True
+
         async def _driver_qualification_check(info, error=""):
             info = _normalize_address_qualification_info(
                 info, ip, device_status.role,
@@ -6201,6 +6359,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             "admission_check": _driver_admission_check,
             "qualification_check": _driver_qualification_check,
         }
+        if supports_tachyon_recovery:
+            update_options["serial_check"] = _driver_serial_check
         if vendor_id == "tachyon":
             update_options["upload_started_callback"] = lambda: setattr(
                 device_status, "_firmware_upload_started", True
@@ -6217,6 +6377,27 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             if not expected_serial:
                 expected_serial = getattr(info, "serial", None)
                 expected_version = getattr(info, "current_version", None)
+            if not expected_serial:
+                raise RuntimeError("Expected serial is unavailable before firmware upload")
+            if not job.recovery_locators.get(ip):
+                cpe = db.get_cpe_by_ip(ip) if device_status.role == "cpe" else None
+                job.recovery_locators[ip] = {
+                    "original_ip": ip,
+                    "original_parent_ap": device_status.parent_ap,
+                    "ip": getattr(client, "ip", ip),
+                    "parent_ap": device_status.parent_ap,
+                    "radio_mac": str((cpe or {}).get("mac") or "").upper(),
+                }
+            job.recovery_locators[ip].update({
+                "serial": expected_serial, "model": getattr(info, "model", None),
+            })
+            _persist_recovery_locator(job, ip)
+            if supports_tachyon_recovery:
+                update_options["recovery_callback"] = _make_recovery_callback(
+                    job, ip, client, expected_serial,
+                    job.recovery_locators[ip].get("model"),
+                    job.recovery_locators[ip].get("radio_mac", ""),
+                )
             if not await _address_change_guard(job, ip, info=info, pass_number=pass_number):
                 return
             if device_status.role == "ap" and vendor_id == "tachyon":
@@ -6229,6 +6410,16 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 client.update_firmware(fw_path, progress_callback, pass_number=pass_number, reboot_timeout=reboot_timeout, bandwidth_limit_kbps=bw_limit, **update_options),
                 timeout=update_timeout,
             )
+            if (not result.success and result.error == "Device did not come back online"
+                    and supports_tachyon_recovery):
+                locator = job.recovery_locators.get(ip, {})
+                recovery = update_options.get("recovery_callback")
+                reason = (recovery.failure_reason["reason"] if recovery
+                          else "reboot wait expired")
+                result.error = (
+                    f"Expected serial {expected_serial} did not return at "
+                    f"{locator.get('ip', ip)}: {reason}"
+                )
         except asyncio.TimeoutError:
             result = UpdateResult(ip=ip, success=False, error=f"Update timed out after {update_timeout // 60}m")
         except Exception as e:

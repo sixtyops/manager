@@ -84,8 +84,8 @@ class TachyonDriver(VendorDriver):
     async def wait_for_reboot(self, timeout: int = 300) -> bool:
         return await self._client.wait_for_reboot(timeout)
 
-    async def reboot(self, timeout: int = 300) -> bool:
-        return await self._client.reboot(timeout)
+    async def reboot(self, timeout: int = 300, recovery_callback=None) -> bool:
+        return await self._client.reboot(timeout, recovery_callback=recovery_callback)
 
     async def restart_wireless_or_reboot(self, timeout: int = 300) -> bool:
         return await self._client.restart_wireless_or_reboot(timeout)
@@ -100,6 +100,8 @@ class TachyonDriver(VendorDriver):
         admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
         qualification_check=None,
         upload_started_callback: Optional[Callable[[], None]] = None,
+        serial_check=None,
+        recovery_callback=None,
     ) -> VendorUpdateResult:
         options = {}
         if admission_check:
@@ -108,6 +110,10 @@ class TachyonDriver(VendorDriver):
             options["qualification_check"] = qualification_check
         if upload_started_callback:
             options["upload_started_callback"] = upload_started_callback
+        if serial_check:
+            options["serial_check"] = serial_check
+        if recovery_callback:
+            options["recovery_callback"] = recovery_callback
         result = await self._client.update_firmware(
             firmware_path, progress_callback, pass_number, reboot_timeout, bandwidth_limit_kbps,
             **options,
@@ -137,6 +143,10 @@ class TachyonDriver(VendorDriver):
 
     async def get_connected_cpes(self) -> list:
         return await self._client.get_connected_cpes()
+
+    @property
+    def last_connected_cpes_valid(self):
+        return self._client.last_connected_cpes_valid
 
     async def get_ap_info(self) -> Dict[str, Any]:
         return await self._client.get_ap_info()

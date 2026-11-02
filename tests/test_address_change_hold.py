@@ -369,6 +369,27 @@ async def test_pre_reboot_rechecks_fresh_device_info(tables, runner, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_expected_serial_change_stops_before_pre_update_reboot(tables, runner):
+    qualify()
+    initial = VendorDeviceInfo(
+        ip=IP, model="TNA-301", serial="EXPECTED-SERIAL",
+        current_version=SOURCE, extra=dict(OBSERVED),
+    )
+    changed = VendorDeviceInfo(
+        ip=IP, model="TNA-301", serial="OTHER-SERIAL",
+        current_version=SOURCE, extra=dict(OBSERVED),
+    )
+    runner.get_device_info = AsyncMock(side_effect=[initial, changed])
+    job = make_job()
+
+    await app_module.run_update_job(job, 1)
+
+    runner.reboot.assert_not_awaited()
+    assert job.devices[IP].status == "failed"
+    assert "Expected serial changed before pre-update reboot" in job.devices[IP].error
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["current_version", "management_vlan", "management_ip_mode"])
 async def test_missing_live_qualification_field_holds_before_reboot(tables, runner, field):
     qualify()

@@ -102,6 +102,8 @@ class NetworkPoller:
         self._cpe_forced_login_checks: set[str] = set()
         self._paused_cpe_ips: set[str] = set()
         self._cpe_request_locks: dict[str, asyncio.Lock] = {}
+        # Keep only successful AP reports for recovery during this process.
+        self._peer_snapshots: dict[str, dict] = {}
         self._last_config_poll: Optional[datetime] = None
         self._last_config_poll_hydrated = False
         self._poll_in_progress = False
@@ -585,6 +587,7 @@ class NetworkPoller:
 
             # Get connected CPEs
             cpes = await client.get_connected_cpes()
+            self._record_peer_snapshot(ip, client, cpes)
 
             # Capture this AP's live radio params (channel / BW / freq / kit)
             # so the link-budget UI has up-to-date inputs for every AP.
@@ -987,6 +990,22 @@ class NetworkPoller:
         self._failure_counts.pop(ip, None)
         # CPE sessions are keyed by CPE IP but inherit credentials from APs.
         self.invalidate_cpe_clients()
+
+    def get_latest_peer_snapshots(self) -> dict[str, dict]:
+        """Return copies of successful AP peer reports and their poll times."""
+        return {
+            ip: {"observed_at": snapshot["observed_at"],
+                 "peers": list(snapshot["peers"])}
+            for ip, snapshot in self._peer_snapshots.items()
+        }
+
+    def _record_peer_snapshot(self, ip: str, client, peers: list) -> None:
+        """Store only a successful parsed peer report."""
+        if getattr(client, "last_connected_cpes_valid", True) is True:
+            self._peer_snapshots[ip] = {
+                "observed_at": time.monotonic(),
+                "peers": list(peers),
+            }
 
     async def poll_ap_now(self, ip: str) -> bool:
         """Trigger immediate poll of a specific AP."""

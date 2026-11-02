@@ -753,6 +753,7 @@ class TachyonClient:
         admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
         qualification_check=None,
         upload_started_callback: Optional[Callable[[], None]] = None,
+        serial_check=None,
     ) -> bool:
         """Upload firmware file to device using PUT.
 
@@ -793,6 +794,8 @@ class TachyonClient:
                 admitted, _ = admission_check()
                 if not admitted:
                     return False
+            if serial_check and not await serial_check("upload"):
+                return False
             if qualification_check:
                 try:
                     info = await self.get_device_info(include_management=True)
@@ -867,7 +870,7 @@ class TachyonClient:
             logger.info(f"Update triggered on {self.ip} (connection closed)")
             return True
 
-    async def wait_for_reboot(self, timeout: int = 300) -> bool:
+    async def wait_for_reboot(self, timeout: int = 300, recovery_callback=None) -> bool:
         """Wait for device to come back online after reboot.
 
         Two-phase approach:
@@ -882,6 +885,20 @@ class TachyonClient:
         ping_responded = False
 
         while loop.time() < self.last_reboot_deadline:
+            if recovery_callback:
+                remaining = self.last_reboot_deadline - loop.time()
+                try:
+                    if await asyncio.wait_for(
+                        recovery_callback(
+                            self.last_reboot_deadline,
+                            self.last_reboot_deadline - timeout,
+                        ), timeout=remaining
+                    ):
+                        return True
+                except asyncio.TimeoutError:
+                    break
+                except Exception as exc:
+                    logger.debug("Recovery callback for %s failed: %s", self.ip, exc)
             if not ping_responded:
                 # Phase 1: Wait for device to respond to ping (or curl if ping unavailable)
                 responded = False
@@ -956,8 +973,9 @@ class TachyonClient:
                     if proc.returncode == 0:
                         status = stdout.decode().strip()
                         if status and status.isdigit() and int(status) > 0:
-                            logger.info(f"{self.ip} web server is up, device ready")
-                            return True
+                            if not recovery_callback:
+                                logger.info(f"{self.ip} web server is up, device ready")
+                                return True
                 except Exception:
                     if proc and proc.returncode is None:
                         try:
@@ -971,7 +989,7 @@ class TachyonClient:
         logger.error(f"{self.ip} did not come back online before its reboot deadline")
         return False
 
-    async def reboot(self, timeout: int = 300) -> bool:
+    async def reboot(self, timeout: int = 300, recovery_callback=None) -> bool:
         """Reboot the device and wait for it to come back online."""
         logger.info(f"Rebooting {self.ip}...")
         try:
@@ -979,7 +997,7 @@ class TachyonClient:
         except Exception:
             # Connection may drop immediately during reboot
             logger.info(f"Reboot triggered on {self.ip} (connection closed)")
-        return await self.wait_for_reboot(timeout=timeout)
+        return await self.wait_for_reboot(timeout=timeout, recovery_callback=recovery_callback)
 
     async def restart_wireless_or_reboot(self, timeout: int = 300) -> bool:
         """Reboot the device because no supported wireless restart API is known."""
@@ -995,6 +1013,8 @@ class TachyonClient:
         admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
         qualification_check=None,
         upload_started_callback: Optional[Callable[[], None]] = None,
+        serial_check=None,
+        recovery_callback=None,
     ) -> UpdateResult:
         """Perform complete firmware update cycle.
 
@@ -1087,6 +1107,8 @@ class TachyonClient:
                 upload_options["qualification_check"] = qualification_check
             if upload_started_callback:
                 upload_options["upload_started_callback"] = upload_started_callback
+            if serial_check:
+                upload_options["serial_check"] = serial_check
             if not await self.upload_firmware(
                 firmware_path, bandwidth_limit_kbps=bandwidth_limit_kbps, **upload_options
             ):
@@ -1100,6 +1122,9 @@ class TachyonClient:
                 if not admitted:
                     result.error = reason
                     return result
+            if serial_check and not await serial_check("install"):
+                result.error = "Expected serial did not match before install"
+                return result
             admitted, reason = await check_qualification()
             if not admitted:
                 result.error = reason
@@ -1110,7 +1135,9 @@ class TachyonClient:
 
             # Wait for reboot
             progress("Rebooting...")
-            if not await self.wait_for_reboot(timeout=reboot_timeout):
+            if not await self.wait_for_reboot(
+                timeout=reboot_timeout, recovery_callback=recovery_callback
+            ):
                 result.error = "Device did not come back online"
                 return result
 
