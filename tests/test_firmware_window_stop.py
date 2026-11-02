@@ -165,6 +165,39 @@ async def test_first_device_failure_stops_all_second_device_writes(
 
 
 @pytest.mark.asyncio
+async def test_one_bank_job_updates_cpes_before_parent_ap(mock_db, monkeypatch):
+    order = []
+
+    async def record_update(job, ip, pass_number=1):
+        order.append(ip)
+        job.devices[ip].status = "completed"
+
+    monkeypatch.setattr(app_module, "_update_single_device", record_update)
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value="UTC"))
+    monkeypatch.setattr(app_module, "_shutting_down", False)
+    ap_ip, cpe_ip = "192.0.2.1", "192.0.2.2"
+    job = app_module.UpdateJob(
+        job_id="one-bank-cpe-order",
+        device_firmware_map={ap_ip: "/tmp/fw.bin", cpe_ip: "/tmp/fw.bin"},
+        credentials={ap_ip: ("u", "p"), cpe_ip: ("u", "p")},
+        device_roles={ap_ip: "ap", cpe_ip: "cpe"},
+        device_parent={cpe_ip: ap_ip},
+        devices={
+            ap_ip: app_module.DeviceStatus(ip=ap_ip, role="ap"),
+            cpe_ip: app_module.DeviceStatus(ip=cpe_ip, role="cpe", parent_ap=ap_ip),
+        },
+        bank_mode="one",
+        window_key=("firmware", "2026-10-27"),
+        started_at=datetime.now(),
+    )
+
+    await app_module.run_update_job(job, concurrency=2)
+
+    assert order == [cpe_ip, ap_ip]
+
+
+@pytest.mark.asyncio
 async def test_history_save_failure_withholds_firmware_confirmation(mock_db, monkeypatch):
     _DeviceClient.calls = {}
     _DeviceClient.connect_calls = {}

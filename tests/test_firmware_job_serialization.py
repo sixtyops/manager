@@ -12,6 +12,10 @@ from unittest.mock import AsyncMock
 from updater import app as app_module
 
 
+def test_update_job_defaults_to_one_bank():
+    assert app_module.UpdateJob(job_id="job-default-bank").bank_mode == "one"
+
+
 @pytest.fixture(autouse=True)
 def reset_firmware_job_owner(monkeypatch):
     monkeypatch.setattr(app_module, "_firmware_job_owner_guard", threading.Lock())
@@ -25,7 +29,7 @@ async def test_manual_admission_is_denied_while_scheduled_job_owns_write_sequenc
     with pytest.raises(HTTPException, match="Another firmware job is active") as error:
         await app_module.start_update(
             firmware_file="unused.bin", device_type="mixed", ip_list="10.0.0.1",
-            concurrency=2,
+            concurrency=2, bank_mode="one",
         )
 
     assert error.value.status_code == 409
@@ -99,7 +103,7 @@ async def test_unavailable_owner_state_denies_admission(monkeypatch):
     with pytest.raises(HTTPException, match="ownership is unavailable") as error:
         await app_module.start_update(
             firmware_file="unused.bin", device_type="mixed", ip_list="10.0.0.1",
-            concurrency=2,
+            concurrency=2, bank_mode="one",
         )
 
     assert error.value.status_code == 503
@@ -115,7 +119,7 @@ async def test_existing_window_stop_gate_still_denies_and_releases_reservation(m
     with pytest.raises(HTTPException, match="window stopped"):
         await app_module.start_update(
             firmware_file="unused.bin", device_type="mixed", ip_list="10.0.0.1",
-            concurrency=2,
+            concurrency=2, bank_mode="one",
         )
 
     assert app_module._firmware_job_owner is None

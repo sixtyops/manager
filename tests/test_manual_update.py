@@ -42,7 +42,6 @@ def _start_update(authed_client, **extra):
         "firmware_file": FW_30X,
         "device_type": "mixed",
         "ip_list": AP_IP,
-        "bank_mode": "one",
         "firmware_file_303l": FW_303L_BETA2,
     }
     data.update(extra)
@@ -58,6 +57,27 @@ class TestStartUpdate:
         assert resp.status_code == 200, resp.text
         assert resp.json().get("job_id")
         spawn.assert_called_once()
+        assert spawn.call_args.args[0].bank_mode == "one"
+
+    @pytest.mark.asyncio
+    async def test_scheduled_job_defaults_to_one_bank(self, mock_db, tmp_path):
+        """Omitting bank_mode from scheduled job creation selects one bank."""
+        (tmp_path / FW_30X).write_bytes(b"x")
+        (tmp_path / FW_303L_BETA2).write_bytes(b"x")
+        _seed_303l_ap("1.5.0.54970")
+
+        with patch("updater.app.FIRMWARE_DIR", tmp_path), \
+             patch("updater.app._scheduled_action_decision", return_value=(True, None)), \
+             patch("updater.app._spawn_update_job") as spawn:
+            job_id = await app_module._start_scheduled_update(
+                ap_ips=[AP_IP],
+                firmware_file=FW_30X,
+                firmware_file_303l=FW_303L_BETA2,
+            )
+
+        assert job_id
+        spawn.assert_called_once()
+        assert spawn.call_args.args[0].bank_mode == "one"
 
     def test_enrolls_ap_that_parses_as_ahead(self, authed_client, mock_db, fw_dir):
         """The core fix: a device whose build parses as *newer* than the chosen
@@ -222,7 +242,6 @@ class TestUpdateDevice:
         data = {
             "ip": AP_IP,
             "firmware_file": FW_30X,
-            "bank_mode": "one",
             "firmware_file_303l": FW_303L_BETA2,
         }
         data.update(extra)
@@ -235,6 +254,7 @@ class TestUpdateDevice:
         assert resp.status_code == 200, resp.text
         assert resp.json().get("job_id")
         spawn.assert_called_once()
+        assert spawn.call_args.args[0].bank_mode == "one"
 
     def test_exact_build_reports_already_current(self, authed_client, mock_db, fw_dir):
         _seed_303l_ap("1.5.0.54980")

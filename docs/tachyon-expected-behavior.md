@@ -12,6 +12,15 @@ MAC suffix was `D0:A0:BE`; its `eth0` MAC suffix was `D0:A0:BC`. Keep the
 radio and Ethernet MACs distinct. Repeat this capture on the target CPE build
 before treating its values as a qualified baseline.
 
+## Single-bank firmware check
+
+**Key points:** Manager uses one bank by default. Verify the active bank after
+each update and record the other bank's firmware version.
+
+**Detail:** In the lab upgrade and restore check, verify the active bank before
+the upgrade. After restore, verify that the active bank runs the original
+firmware. Record the other bank version as observed.
+
 ## Signals
 
 | Signal | Read and fields | Normal values seen | Fault indication |
