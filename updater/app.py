@@ -4016,7 +4016,7 @@ class UpdateJob:
     device_vendor_map: Dict[str, str] = field(default_factory=dict)  # IP -> vendor ID
     credentials: Dict[str, tuple] = field(default_factory=dict)  # IP -> (username, password)
     devices: Dict[str, DeviceStatus] = field(default_factory=dict)
-    bank_mode: str = "both"
+    bank_mode: str = "one"
     cancelled: bool = False
     cancel_reason: Optional[str] = None
     ap_cpe_map: Dict[str, list] = field(default_factory=dict)  # AP IP -> [CPE IPs]
@@ -5149,7 +5149,7 @@ async def _start_scheduled_update(
     firmware_file: str,
     firmware_file_303l: str = "",
     firmware_file_tns100: str = "",
-    bank_mode: str = "both",
+    bank_mode: str = "one",
     concurrency: int = 2,
     start_hour: int = None,
     end_hour: int = None,
@@ -5160,6 +5160,8 @@ async def _start_scheduled_update(
     window_key: tuple | None = None,
 ) -> str:
     """Start an update job from the scheduler (Python args, not Form data)."""
+    if bank_mode not in ("one", "both"):
+        raise RuntimeError("bank_mode must be 'one' or 'both'")
     if concurrency < 1:
         raise RuntimeError("parallel_updates must be >= 1")
 
@@ -5375,11 +5377,13 @@ async def start_update(
     concurrency: int = Form(2),
     firmware_file_303l: str = Form(""),
     firmware_file_tns100: str = Form(""),
-    bank_mode: str = Form("both"),
+    bank_mode: str = Form("one"),
     address_bench_exception: str = Form(""),
     session: dict = Depends(require_role("admin", "operator")),
 ):
     """Start a firmware update job."""
+    if bank_mode not in ("one", "both"):
+        raise HTTPException(400, "bank_mode must be 'one' or 'both'")
     if concurrency < 1 or concurrency > 32:
         raise HTTPException(400, "concurrency must be between 1 and 32")
 
@@ -5602,12 +5606,14 @@ async def update_single_device_endpoint(
     firmware_file: str = Form(...),
     firmware_file_303l: str = Form(""),
     firmware_file_tns100: str = Form(""),
-    bank_mode: str = Form("both"),
+    bank_mode: str = Form("one"),
     address_bench_exception: str = Form(""),
     session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.UPDATE_SINGLE_DEVICE)),
 ):
     """Start a firmware update for a single device (AP, CPE, or switch)."""
+    if bank_mode not in ("one", "both"):
+        raise HTTPException(400, "bank_mode must be 'one' or 'both'")
     window_key = rollout_gate.firmware_window_key(db.get_all_settings()) or _manual_firmware_window_key()
     _check_firmware_window_admission(window_key)
     # Validate and check firmware file exists
@@ -6651,8 +6657,8 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         ]
     else:
         phases = [
-            (ap_ips, 1, "APs"),
             (cpe_ips, 1, "CPEs"),
+            (ap_ips, 1, "APs"),
             (switch_ips, 1, "Switches"),
         ]
 
