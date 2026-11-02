@@ -14,11 +14,12 @@ procedures do not extend Manager authority.
 
 ## Authority history
 
-**Key points:** The owner merges ready PRs in daily batches.
+**Key points:** The lead merges a PR after every gate passes.
 
-**Detail:** The owner assigns lead duties and merges ready PRs in daily
-batches. The lead prepares evidence and keeps every review, CI, sign-off, and
-bench gate. See [Review, merge and development release gates](#review-merge-and-development-release-gates).
+**Detail:** The owner assigns lead duties. Since 2026-11-01 the lead merges
+ready PRs after every review, CI, sign-off, and bench gate passes. Before that
+date the owner merged in daily batches. A merge does not approve a release.
+See [Review, merge and development release gates](#review-merge-and-development-release-gates).
 
 Public-repo rulesets are free. This supersedes the earlier Team-plan
 requirement recorded in [#116](https://github.com/sixtyops/manager/issues/116).
@@ -229,7 +230,7 @@ Hold merge until the review and all normal review and sign-off gates pass. Use
 the existing `agent:escalated` and `agent:needs-human` states; do not create a
 new review label.
 
-Keep gated PRs ready for the owner's daily merge batch. Use an explicit squash
+Merge gated PRs in batches. Use an explicit squash
 subject and an empty body. Read back the merge commit on `main` after each
 merge. Then update open PRs from `main` in one pass, run benches one PR at a
 time, and collect designated approvals. Follow
@@ -246,7 +247,7 @@ Fetch `origin/main`, then read the current GitHub pull request state and head
 before you report a pull request as open or hand it to another owner. Do not
 reuse an earlier state after a new event.
 
-Before the owner approves a bot merge, require a current non-draft OPEN head
+Before the lead merges, require a current non-draft OPEN head
 and MERGEABLE/CLEAN state. Require the designated independent review and shared review with
 matching recorded `signoff_head`, `agent:ready-for-signoff`, and a packet for
 that head and issue. Read the formal review record. Record its ID, state, full
