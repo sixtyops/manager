@@ -21,8 +21,9 @@ Operational how-to documents do not grant approval to exceed these limits.
   `tests/integration` as shown in Commands.
 - Keep `main` stable. `scripts/install.sh` always pulls `main`.
 - Current code advances firmware rollouts through 10%, 50%, and 100% waves.
-  The target is a serial queue with durable cutoff and failure stops. Never
-  bypass `updater/rollout_gate.py` or weaken `tests/test_rollout_invariants.py`.
+  Halt the whole job if a device does not return online. The target is a serial
+  queue with durable cutoff and failure stops. Never bypass
+  `updater/rollout_gate.py` or weaken `tests/test_rollout_invariants.py`.
 
 ### Host access
 
