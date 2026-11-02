@@ -86,23 +86,62 @@ async def test_saved_cpe_uses_ap_credentials_when_cpe_credentials_are_missing(mo
 @pytest.mark.asyncio
 async def test_rejoin_check_runs_after_saved_cpe_restart(monkeypatch):
     calls = []
+    monkeypatch.setattr(app_module, "monotonic", lambda: 10.0)
 
     async def restart(_job, _ap_ip, _baseline):
         calls.append("restart")
 
-    async def check(_job, _ap_ip, _ap_client, _baseline, _deadline):
+    async def check(_job, _ap_ip, _ap_client, _baseline, deadline):
+        assert deadline == 610.0
         calls.append("peer_check")
         return True, {"peers": {}}
+
+    class AP:
+        def get_reboot_timeout(self, role):
+            assert role == "ap"
+            return 600
 
     monkeypatch.setattr(app_module, "_restart_ap_cpes_after_recovery", restart)
     monkeypatch.setattr(app_module, "_check_ap_customer_recovery", check)
 
     result = await app_module._check_ap_recovery_after_cpe_rejoin(
-        SimpleNamespace(), "192.0.2.1", object(), {"peers": {}}, 10.0
+        SimpleNamespace(), "192.0.2.1", AP(), {"peers": {}}, 10.0
     )
 
     assert result[0] is True
     assert calls == ["restart", "peer_check"]
+
+
+@pytest.mark.asyncio
+async def test_failed_cpe_reboot_still_fails_when_peer_does_not_return(monkeypatch):
+    class CPE:
+        async def connect(self):
+            return True
+
+        async def restart_wireless_or_reboot(self):
+            return False
+
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: CPE)
+    job = SimpleNamespace(credentials={"192.0.2.8": ("user", "password")})
+    baseline = {"peers": {"02:00:00:00:00:01": {"ip": "192.0.2.8"}}}
+    observed_deadlines = []
+
+    async def check(_job, _ap_ip, _ap_client, _baseline, deadline):
+        observed_deadlines.append(deadline)
+        return False, {"reason": "CPE is missing from the AP peer list"}
+
+    class AP:
+        def get_reboot_timeout(self, _role):
+            return 600
+
+    monkeypatch.setattr(app_module, "_check_ap_customer_recovery", check)
+    passed, evidence = await app_module._check_ap_recovery_after_cpe_rejoin(
+        job, "192.0.2.1", AP(), baseline, 1.0
+    )
+
+    assert passed is False
+    assert evidence["reason"] == "CPE is missing from the AP peer list"
+    assert observed_deadlines[0] > app_module.monotonic()
 
 
 @pytest.mark.asyncio

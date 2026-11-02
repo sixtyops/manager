@@ -4404,7 +4404,10 @@ async def _restart_ap_cpes_after_recovery(job, ap_ip, baseline):
 async def _check_ap_recovery_after_cpe_rejoin(job, ap_ip, ap_client, baseline, deadline):
     """Reboot saved CPEs before checking that they rejoined the recovered AP."""
     await _restart_ap_cpes_after_recovery(job, ap_ip, baseline)
-    return await _check_ap_customer_recovery(job, ap_ip, ap_client, baseline, deadline)
+    peer_return_deadline = monotonic() + ap_client.get_reboot_timeout("ap")
+    return await _check_ap_customer_recovery(
+        job, ap_ip, ap_client, baseline, peer_return_deadline
+    )
 
 
 async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
