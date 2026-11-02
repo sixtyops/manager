@@ -4056,6 +4056,7 @@ class UpdateJob:
     device_vendor_map: Dict[str, str] = field(default_factory=dict)  # IP -> vendor ID
     credentials: Dict[str, tuple] = field(default_factory=dict)  # IP -> (username, password)
     devices: Dict[str, DeviceStatus] = field(default_factory=dict)
+    device_order: list[str] = field(default_factory=list)
     bank_mode: str = "one"
     cancelled: bool = False
     cancel_reason: Optional[str] = None
@@ -4129,11 +4130,25 @@ def _persist_recovery_locator(job: "UpdateJob", original_ip: str) -> None:
     """Persist identity and the current transport locator with the active job."""
     payload = {
         "devices": list(job.devices),
+        "order": job.device_order,
         "recovery": job.recovery_locators,
     }
     db.save_active_job(
         job.job_id, "running", json.dumps(payload),
         Path(job.device_firmware_map.get(original_ip, "")).name, original_ip,
+    )
+
+
+def _persist_device_result(job: "UpdateJob", ip: str) -> None:
+    """Clear the in-flight marker only after the device result is durable."""
+    payload = {
+        "devices": list(job.devices),
+        "order": job.device_order,
+        "recovery": job.recovery_locators,
+    }
+    db.save_active_job(
+        job.job_id, "running", json.dumps(payload),
+        Path(job.device_firmware_map.get(ip, "")).name,
     )
 
 
@@ -5144,6 +5159,7 @@ async def _start_scheduled_update(
     switch_ips: list[str] | None = None,
     enforce_window_cutoff: bool = True,
     window_key: tuple | None = None,
+    device_entries: list[dict] | None = None,
 ) -> str:
     """Start an update job from the scheduler (Python args, not Form data)."""
     if bank_mode not in ("one", "both"):
@@ -5200,10 +5216,31 @@ async def _start_scheduled_update(
     # entry refuses the whole batch (we can't guarantee cross-family compat).
     missing_firmware: list[tuple[Optional[str], str]] = []
 
+    if device_entries is not None:
+        role_order = {"cpe": 0, "ap": 1, "switch": 2}
+        if any(
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("role"), str)
+            or entry.get("role") not in role_order
+            or not isinstance(entry.get("ip"), str)
+            or not entry["ip"].strip()
+            for entry in device_entries
+        ):
+            raise RuntimeError("device_entries must contain CPE, AP, or switch IP entries")
+        entry_ips = [entry["ip"].strip() for entry in device_entries]
+        ranks = [role_order[entry["role"]] for entry in device_entries]
+        if len(entry_ips) != len(set(entry_ips)) or ranks != sorted(ranks):
+            raise RuntimeError("device_entries must be unique and ordered CPEs, APs, then switches")
+        requested_ap_ips = [entry["ip"].strip() for entry in device_entries if entry["role"] == "ap"]
+    else:
+        requested_ap_ips = ap_ips
+
     valid_aps = []
-    for ip in ap_ips:
+    for ip in requested_ap_ips:
         ap = db.get_access_point(ip)
         if not ap:
+            if device_entries is not None:
+                raise RuntimeError(f"AP {ip} is unavailable")
             continue
 
         ap_fw = _select_firmware_for_model(ap.get("model"), firmware_files)
@@ -5220,7 +5257,7 @@ async def _start_scheduled_update(
                 logger.info(f"Skipping AP {ip}: already at target version {ap_target}")
 
         # Always process CPEs regardless of AP status
-        cpes = db.get_cpes_for_ap(ip)
+        cpes = [] if device_entries is not None else db.get_cpes_for_ap(ip)
         cpe_ips = []
         for cpe in cpes:
             cpe_ip = cpe.get("ip")
@@ -5255,8 +5292,40 @@ async def _start_scheduled_update(
             device_firmware_map[cpe_ip] = cpe_fw
         ap_cpe_map[ip] = cpe_ips
 
+    if device_entries is not None:
+        for entry in device_entries:
+            if entry["role"] != "cpe":
+                continue
+            cpe_ip = entry["ip"].strip()
+            cpe = db.get_cpe_by_ip(cpe_ip)
+            parent_ip = (entry.get("parent_ap") or (cpe or {}).get("ap_ip"))
+            parent = db.get_access_point(parent_ip) if parent_ip else None
+            if not cpe or cpe.get("auth_status") != "ok" or not parent:
+                raise RuntimeError(f"CPE {cpe_ip} or its parent AP is unavailable")
+            cpe_fw = _select_firmware_for_model(cpe.get("model"), firmware_files)
+            target_version = _extract_version_from_filename(Path(cpe_fw).name) if cpe_fw else None
+            if cpe_fw is None:
+                missing_firmware.append((cpe.get("model"), cpe_ip))
+            elif _device_needs_update_for_bank_mode(
+                cpe, target_version, bank_mode=bank_mode, allow_downgrade=allow_downgrade,
+            ):
+                device_roles[cpe_ip] = "cpe"
+                device_parent[cpe_ip] = parent_ip
+                credentials[cpe_ip] = (parent["username"], parent["password"])
+                device_firmware_map[cpe_ip] = cpe_fw
+                ap_cpe_map.setdefault(parent_ip, []).append(cpe_ip)
+
     # Enroll the requested switches (or all enabled switches for legacy callers)
-    if switch_ips is None:
+    if device_entries is not None:
+        switches = []
+        for entry in device_entries:
+            if entry["role"] != "switch":
+                continue
+            sw = db.get_switch(entry["ip"].strip())
+            if not sw or not sw.get("enabled", 1):
+                raise RuntimeError(f"Switch {entry['ip'].strip()} is unavailable")
+            switches.append(sw)
+    elif switch_ips is None:
         switches = db.get_switches(enabled_only=True)
     else:
         switches = []
@@ -5313,6 +5382,10 @@ async def _start_scheduled_update(
         ap_cpe_map=ap_cpe_map,
         device_roles=device_roles,
         device_parent=device_parent,
+        device_order=(
+            [entry["ip"].strip() for entry in device_entries if entry["ip"].strip() in device_roles]
+            if device_entries is not None else []
+        ),
         started_at=datetime.now(),
         status="running",
         is_scheduled=True,
@@ -5332,6 +5405,12 @@ async def _start_scheduled_update(
             job.devices[cpe_ip] = DeviceStatus(ip=cpe_ip, role="cpe", parent_ap=ap_ip)
     for sw_ip in valid_switches:
         job.devices[sw_ip] = DeviceStatus(ip=sw_ip, role="switch")
+    if not job.device_order:
+        job.device_order = (
+            [ip for ip, role in job.device_roles.items() if role == "cpe"]
+            + [ip for ip, role in job.device_roles.items() if role == "ap"]
+            + [ip for ip, role in job.device_roles.items() if role == "switch"]
+        )
 
     admitted, reason = _scheduled_action_decision(job)
     if not admitted:
@@ -6481,11 +6560,10 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         history_saved = True
     except Exception as e:
         logger.warning(f"Failed to save device update history for {ip}: {e}")
-        if smoke_clean_pass:
-            device_status.status = "failed"
-            device_status.error = "Recovery evidence could not be saved; firmware was not confirmed"
-            device_status.progress_message = device_status.error
-            _stop_firmware_window(job, ip, "recovery_evidence", device_status.error)
+        device_status.status = "failed"
+        device_status.error = "Device result could not be saved; the queue stopped"
+        device_status.progress_message = device_status.error
+        _stop_firmware_window(job, ip, "recovery_evidence", device_status.error)
     if smoke_clean_pass and result.new_version and history_saved:
         try:
             db.mark_device_firmware_confirmed(
@@ -6517,7 +6595,9 @@ async def run_update_job(job: UpdateJob, concurrency: int):
 
     # Build phase list based on bank_mode
     # Switches always run last, after all APs and CPEs complete
-    if job.bank_mode == "both":
+    if job.bank_mode == "one" and job.device_order:
+        phases = [(job.device_order, 1, "Ordered devices")]
+    elif job.bank_mode == "both":
         phases = [
             (cpe_ips, 1, "CPEs pass 1"),
             (ap_ips, 1, "APs pass 1"),
@@ -6572,6 +6652,8 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                 return
             try:
                 await _update_single_device(job, ip, pass_number=pass_number)
+                if job.device_order and job.bank_mode == "one":
+                    _persist_device_result(job, ip)
             except Exception as exc:
                 ds = job.devices[ip]
                 err_text = f"Internal device task error: {exc}"
