@@ -13,6 +13,9 @@ and 100% waves, with one wave per maintenance window. It uses
 `rollout_gate.py` to check scheduled admission. Firmware Hold applies before
 the first scheduled wave. Manual per-device updates bypass that hold. Failure
 handling and device recovery do not yet enforce the full target contract.
+The **Update Mode** setting defaults to **Single bank (recommended)**. Select
+**Both banks** to update both banks. Address-change qualification applies to
+both scheduled and manual updates, as described below.
 
 The target derives an ordered queue from Manager's current inventory. It runs
 CPEs, then APs, then switches, with one device write and recovery sequence at

@@ -314,6 +314,29 @@ class TestSchedulerBankModeFiltering:
 
         assert result == ["10.0.0.1"]
 
+    @pytest.mark.parametrize(("bank_mode", "expected_minutes"), [(None, 1.0), ("both", 2.0)])
+    def test_prediction_defaults_to_one_bank_but_keeps_both_mode(
+        self, mock_db, bank_mode, expected_minutes,
+    ):
+        scheduler = AutoUpdateScheduler(broadcast_func=None, start_update_func=None)
+        settings = {} if bank_mode is None else {"bank_mode": bank_mode}
+        with patch("updater.scheduler.db.get_avg_durations", return_value={
+                 "ap": 60, "cpe": 0, "switch": 0,
+             }), \
+             patch("updater.scheduler.db.get_rollout_devices", return_value=[]), \
+             patch("updater.scheduler.db.get_access_point", return_value={"ip": "10.0.0.1"}), \
+             patch("updater.scheduler.db.get_cpes_for_ap", return_value=[]), \
+             patch.object(scheduler, "_resolve_scope", return_value=["10.0.0.1"]), \
+             patch.object(scheduler, "_resolve_switch_scope", return_value=[]), \
+             patch.object(scheduler, "_target_versions", return_value={}), \
+             patch.object(scheduler, "_ap_or_children_need_update", return_value=True), \
+             patch.object(scheduler, "_select_phase_batch", side_effect=lambda _phase, ips: list(ips)):
+            prediction = scheduler._calculate_predictions(
+                {"id": "rollout", "phase": "pct100"}, settings,
+            )
+
+        assert prediction["current_phase"]["estimated_duration_minutes"] == expected_minutes
+
 
 class TestSchedulerCanaries:
     def test_wave_batch_takes_ten_percent_at_pct10(self, mock_db):
@@ -582,8 +605,8 @@ class TestSchedulerStartFailure:
         assert scheduler._state == "waiting"
 
     @pytest.mark.asyncio
-    async def test_job_starting_log_uses_reserved_wave_bank_mode(self, mock_db):
-        """The log and admitted job use the bank mode reserved for this wave."""
+    async def test_job_starting_defaults_to_one_bank_when_setting_is_missing(self, mock_db):
+        """A missing stored mode uses one bank for the log and admitted job."""
         from datetime import datetime as dt
         from zoneinfo import ZoneInfo
 
@@ -592,21 +615,18 @@ class TestSchedulerStartFailure:
             "schedule_enabled": "true",
             "scheduled_rollout_safety_ready": "true",
             "selected_firmware_30x": fw,
-            "bank_mode": "both",
             "timezone": "America/Chicago",
             "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
             "schedule_start_hour": "0",
             "schedule_end_hour": "23",
         })
         settings = db.get_all_settings()
+        settings.pop("bank_mode", None)
         rollout_id = db.create_rollout(fw)
         start = AsyncMock(return_value="job-bank-mode")
         scheduler = AutoUpdateScheduler(AsyncMock(), start)
 
         def resolve_scope(_settings):
-            # Model a settings update after the scheduler's initial read and
-            # before it builds the immutable settings passed to start_wave.
-            settings["bank_mode"] = "one"
             return ["10.0.0.10"]
 
         now = dt(2026, 6, 23, 12, 0, tzinfo=ZoneInfo("America/Chicago"))

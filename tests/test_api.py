@@ -757,6 +757,29 @@ class TestStartUpdateAPI:
         assert "job_id" in data
         # AP (1) + 2 authenticated CPEs = 3 devices
         assert data["device_count"] == 3
+        assert mock_spawn.call_args.args[0].bank_mode == "both"
+
+    def test_start_update_defaults_to_single_bank(self, authed_client, mock_db, tmp_path):
+        """Omitting bank_mode starts a single-bank job."""
+        self._seed_ap_and_cpes(mock_db)
+        fw_30x = "tna-30x-1.12.3-r55002.bin"
+        fw_303l = "tna-303l-1.12.3-r7782.bin"
+        (tmp_path / fw_30x).write_bytes(b"fake firmware")
+        (tmp_path / fw_303l).write_bytes(b"fake firmware")
+
+        with patch("updater.app.FIRMWARE_DIR", tmp_path), \
+             patch("updater.app._spawn_update_job") as mock_spawn:
+            resp = authed_client.post("/api/start-update", data={
+                "firmware_file": fw_30x,
+                "firmware_file_303l": fw_303l,
+                "device_type": "mixed",
+                "ip_list": "10.0.0.1",
+                "concurrency": "2",
+            })
+
+        assert resp.status_code == 200
+        mock_spawn.assert_called_once()
+        assert mock_spawn.call_args.args[0].bank_mode == "one"
 
     def test_start_update_no_firmware(self, authed_client, mock_db, tmp_path):
         """POST with non-existent firmware file returns 400."""

@@ -860,8 +860,16 @@ class AutoUpdateScheduler:
             "bandwidth_limit_kbps", "schedule_start_hour", "schedule_end_hour",
             "schedule_days", "schedule_timezone",
         ]
-        wave_settings = {key: settings.get(key, "") for key in snapshot_keys}
-        bank_mode = wave_settings.get("bank_mode", "both")
+        wave_settings = {
+            key: settings.get(key, "one" if key == "bank_mode" else "")
+            for key in snapshot_keys
+        }
+        bank_mode = wave_settings.get("bank_mode") or "one"
+        if bank_mode not in ("one", "both"):
+            self._state = "waiting"
+            self._block_reason = "bank_mode must be 'one' or 'both'"
+            await self._broadcast_status()
+            return
         phase = rollout["phase"]
         db.log_schedule_event(
             "job_starting",
@@ -1654,7 +1662,7 @@ class AutoUpdateScheduler:
         """Calculate rollout time predictions based on historical device durations."""
         avg_durations = db.get_avg_durations()
         concurrency = _as_int(settings.get("parallel_updates", "2"), 2)
-        bank_mode = settings.get("bank_mode", "both")
+        bank_mode = settings.get("bank_mode") or "one"
         allow_downgrade = settings.get("allow_downgrade", "false") == "true"
         start_hour = _as_int(settings.get("schedule_start_hour", "3"), 3)
         end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
