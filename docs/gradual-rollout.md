@@ -193,10 +193,10 @@ role-specific smoke check with no warnings. Missing or failed proof holds the
 device and stops the firmware window. Resolve the hold before retrying in a
 later window. Stored settings cannot disable reboot or smoke proof.
 
-AP recovery target checks bounded reported peer return, RSSI smoke results,
-and reported CPE `eth0` link-up when it was up before reboot. Bridge learning
-and byte-counter changes do not prove customer application traffic. Missing
-required recovery evidence stops the queue.
+AP recovery checks bounded reported peer return and reported CPE `eth0`
+link-up when it was up before reboot. The existing RSSI smoke check also runs.
+Bridge learning, byte counters, and link rates do not prove customer application
+traffic. Missing required recovery evidence stops the queue.
 
 **Key points:** Store the first failed device gate under the maintenance window
 instance key. Keep that window closed to new jobs and device actions. Run one
