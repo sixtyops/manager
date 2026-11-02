@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from updater.core.gates import MaintenanceSchedule, window_instance_key
+from updater.core.gates import MaintenanceSchedule, firmware_window_cutoff, window_instance_key
 
 CHI = ZoneInfo("America/Chicago")
 ALL_DAYS = frozenset(range(7))
@@ -77,3 +77,47 @@ def test_dst_offset_change_keeps_window_key(zone, before, after, start_date):
     later = datetime.fromisoformat(after)
     assert window_instance_key(schedule, first) == window_instance_key(schedule, later)
     assert window_instance_key(schedule, first) == (1, start_date)
+
+
+def test_firmware_cutoff_uses_first_ramp_from_scheduled_start():
+    schedule = MaintenanceSchedule(schedule_id=1, days=ALL_DAYS, start_hour=3, end_hour=6, tz="America/Chicago")
+    cutoff = firmware_window_cutoff(schedule, datetime(2026, 6, 10, 3, 20, tzinfo=CHI), 1, [30, 120])
+    assert cutoff == datetime(2026, 6, 10, 8, 30, tzinfo=timezone.utc)
+
+
+def test_firmware_cutoff_uses_second_ramp_and_full_window_after_ramp_list():
+    schedule = MaintenanceSchedule(schedule_id=1, days=ALL_DAYS, start_hour=3, end_hour=6, tz="America/Chicago")
+    now = datetime(2026, 6, 10, 3, 20, tzinfo=CHI)
+    assert firmware_window_cutoff(schedule, now, 2, [30, 120]) == datetime(2026, 6, 10, 10, 0, tzinfo=timezone.utc)
+    assert firmware_window_cutoff(schedule, now, 3, [30, 120]) == datetime(2026, 6, 10, 10, 45, tzinfo=timezone.utc)
+
+
+def test_firmware_cutoff_late_tick_does_not_shift_ramp_anchor():
+    schedule = MaintenanceSchedule(schedule_id=1, days=ALL_DAYS, start_hour=3, end_hour=6, tz="America/Chicago")
+    cutoff = firmware_window_cutoff(schedule, datetime(2026, 6, 10, 3, 40, tzinfo=CHI), 1, [30, 120])
+    assert cutoff == datetime(2026, 6, 10, 8, 30, tzinfo=timezone.utc)
+
+
+def test_firmware_cutoff_handles_overnight_window_and_dst():
+    overnight = MaintenanceSchedule(schedule_id=1, days=ALL_DAYS, start_hour=22, end_hour=2, tz="America/Chicago")
+    cutoff = firmware_window_cutoff(overnight, datetime(2026, 6, 11, 1, 0, tzinfo=CHI), 2, [30, 120])
+    assert cutoff == datetime(2026, 6, 11, 5, 0, tzinfo=timezone.utc)
+
+    dst = MaintenanceSchedule(schedule_id=1, days=ALL_DAYS, start_hour=0, end_hour=4, tz="America/Chicago")
+    cutoff = firmware_window_cutoff(dst, datetime(2026, 3, 8, 3, 15, tzinfo=CHI), 2, [30, 120])
+    assert cutoff == datetime(2026, 3, 8, 8, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("setting", [[0, 120], [120, 30], [30, True], "30,120", None])
+def test_firmware_cutoff_fails_closed_for_malformed_ramp(setting):
+    schedule = MaintenanceSchedule(schedule_id=1, days=ALL_DAYS, start_hour=3, end_hour=6, tz="America/Chicago")
+    now = datetime(2026, 6, 10, 3, 20, tzinfo=CHI)
+    assert firmware_window_cutoff(schedule, now, 1, setting) is None
+
+
+def test_firmware_cutoff_never_extends_stored_cutoff():
+    schedule = MaintenanceSchedule(schedule_id=1, days=ALL_DAYS, start_hour=3, end_hour=6, tz="America/Chicago")
+    now = datetime(2026, 6, 10, 3, 20, tzinfo=CHI)
+    stored = datetime(2026, 6, 10, 8, 10, tzinfo=timezone.utc)
+    assert firmware_window_cutoff(schedule, now, 2, [30, 120], stored) == stored
+    assert firmware_window_cutoff(schedule, now, 2, [30, 120], "bad cutoff") is None

@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -98,6 +98,61 @@ def window_instance_key(schedule: Any, now: Any) -> Optional[WindowKey]:
     """
     window = _current_window(schedule, now)
     return window.key if window else None
+
+
+def firmware_window_cutoff(
+    schedule: Any,
+    now: Any,
+    ordinal: Any,
+    ramp_minutes: Any,
+    stored_cutoff: Any = None,
+) -> Optional[datetime]:
+    """Return the UTC cutoff for the active firmware window, or None if invalid.
+
+    Ramp limits are anchored to the scheduled start. A stored cutoff can only
+    shorten the result, so a restart or settings edit cannot extend a window.
+    """
+    if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1:
+        return None
+    if not isinstance(ramp_minutes, (list, tuple)) or any(
+        not isinstance(minutes, int) or isinstance(minutes, bool) or minutes <= 0
+        for minutes in ramp_minutes
+    ):
+        return None
+    if any(later < earlier for earlier, later in zip(ramp_minutes, ramp_minutes[1:])):
+        return None
+
+    window = _current_window(schedule, now)
+    if window is None:
+        return None
+
+    local_now = now.astimezone(ZoneInfo(schedule.tz)) if schedule.tz else now
+    try:
+        start_date = date.fromisoformat(window.key[1])
+        scheduled_start = datetime.combine(
+            start_date, time(schedule.start_hour), tzinfo=local_now.tzinfo,
+        ).astimezone(timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    cutoff = window.end_utc - timedelta(minutes=15)
+    if ordinal <= len(ramp_minutes):
+        cutoff = min(cutoff, scheduled_start + timedelta(minutes=ramp_minutes[ordinal - 1]))
+
+    if stored_cutoff is not None:
+        if isinstance(stored_cutoff, str):
+            try:
+                stored_cutoff = datetime.fromisoformat(stored_cutoff.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        if not isinstance(stored_cutoff, datetime) or stored_cutoff.tzinfo is None:
+            return None
+        try:
+            stored_utc = stored_cutoff.astimezone(timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        cutoff = min(cutoff, stored_utc)
+    return cutoff
 
 
 def _is_window_key(value: Any) -> bool:

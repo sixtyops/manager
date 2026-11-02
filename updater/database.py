@@ -717,6 +717,7 @@ def init_db():
             "admin_password_hash": "",
             "firmware_canary_hold_days": "6",
             "firmware_update_cooldown_days": "30",
+            "firmware_window_ramp_minutes": "[30, 120]",
             "slack_webhook_url": "",
             # Notification health tracking
             "notification_consecutive_failures": "0",
