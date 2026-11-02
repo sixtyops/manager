@@ -87,6 +87,9 @@ class TachyonDriver(VendorDriver):
     async def reboot(self, timeout: int = 300) -> bool:
         return await self._client.reboot(timeout)
 
+    async def restart_wireless_or_reboot(self, timeout: int = 300) -> bool:
+        return await self._client.restart_wireless_or_reboot(timeout)
+
     async def update_firmware(
         self,
         firmware_path: str,

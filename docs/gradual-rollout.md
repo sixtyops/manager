@@ -198,6 +198,11 @@ link-up when it was up before reboot. The existing RSSI smoke check also runs.
 Bridge learning, byte counters, and link rates do not prove customer application
 traffic. Missing required recovery evidence stops the queue.
 
+After AP firmware recovery, Manager reboots each reachable CPE in the saved
+pre-update peer list, then checks that the peers and customer paths returned.
+The Tachyon client has no documented wireless-only restart call, so it uses
+the documented `POST /reboot` endpoint. Unreachable CPEs are skipped and logged.
+
 **Key points:** Store the first failed device gate under the maintenance window
 instance key. Keep that window closed to new jobs and device actions. Run one
 device through recovery before starting another device.
