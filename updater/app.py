@@ -6700,9 +6700,17 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                         "parent_ap": ds.parent_ap,
                     })
 
-        await asyncio.gather(
-            *[_run_device(ip, pass_number) for ip in device_ips],
-        )
+        if job.device_order and job.bank_mode == "one":
+            # Exact scheduled entries are a queue, not independent tasks.
+            # Await each complete update and persist its result before moving on.
+            for ip in device_ips:
+                await _run_device(ip, pass_number)
+                if job.cancelled:
+                    break
+        else:
+            await asyncio.gather(
+                *[_run_device(ip, pass_number) for ip in device_ips],
+            )
 
         # Check cancellation after phase completes
         if job.cancelled:

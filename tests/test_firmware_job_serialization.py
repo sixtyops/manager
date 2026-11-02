@@ -100,6 +100,8 @@ async def test_owner_is_released_after_job_completion_or_failure(
 @pytest.mark.asyncio
 async def test_exact_device_order_runs_one_result_at_a_time(mock_db, monkeypatch):
     events = []
+    active = 0
+    max_active = 0
     job = app_module.UpdateJob(
         job_id="exact-order", started_at=datetime.now(),
         device_order=["cpe", "ap", "switch"],
@@ -111,8 +113,13 @@ async def test_exact_device_order_runs_one_result_at_a_time(mock_db, monkeypatch
     app_module._firmware_job_owner = job.job_id
 
     async def update_one(job, ip, pass_number=1):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
         events.append(("update", ip))
+        await asyncio.sleep(0)
         job.devices[ip].status = "success"
+        active -= 1
 
     monkeypatch.setattr(app_module, "_update_single_device", update_one)
     monkeypatch.setattr(
@@ -134,6 +141,7 @@ async def test_exact_device_order_runs_one_result_at_a_time(mock_db, monkeypatch
         ("update", "ap"), ("persist", "ap"),
         ("update", "switch"), ("persist", "switch"),
     ]
+    assert max_active == 1
 
 
 def test_exact_order_persists_result_before_clearing_in_flight_device(mock_db):
