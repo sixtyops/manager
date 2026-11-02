@@ -106,9 +106,10 @@ at high reasoning. Assign docs and small code at low or medium reasoning. Assign
 pre-reviews, re-reviews, designated reviews, and bench or dev-host runs at high
 reasoning. Use Sol at medium only after Luna fails at a named step, or for a
 hard design question named by a reviewer. For each architecture decision, ask
-one Astra subagent for a design and follow that design. Bring the decision to
-the owner when you strongly disagree with the design. The owner decides large
-product and safety decisions. [AGENTS.md](../AGENTS.md#models) points here for
+one Astra subagent for a design and follow that design. The lead asks the owner
+for major product and safety decisions and brings a recommendation. The lead
+brings an architecture decision to the owner only when the lead strongly
+disagrees with the Astra design. [AGENTS.md](../AGENTS.md#models) points here for
 model routing. Do not use Claude workers.
 Do not give implementation work to an architect; give its design to a coding worker.
 Verify installed provider/model/thinking IDs before sending work. Follow the

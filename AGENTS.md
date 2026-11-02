@@ -160,8 +160,9 @@ empty body. Read back each merge on `main`. Follow
 Use GPT workers only. Luna is the default. Use Sol only after Luna fails at a
 named step or for a hard design question named by a reviewer. For each
 architecture decision, ask one Astra subagent for a design and follow that
-design. Bring the decision to the owner when you strongly disagree with the
-design. The owner decides large product and safety decisions. Follow the model
+design. The lead asks the owner for major product and safety decisions and
+brings a recommendation. The lead brings an architecture decision to the owner
+only when the lead strongly disagrees with the Astra design. Follow the model
 routing in [the lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
 Verify installed provider, model, and reasoning IDs before launch.
 
