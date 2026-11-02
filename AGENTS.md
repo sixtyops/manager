@@ -160,11 +160,12 @@ merge does not approve a release, a production install, or a fleet rollout. Read
 ## Models
 
 Use GPT workers only. Luna is the default. Use Sol only after Luna fails at a
-named step or for a hard design question named by a reviewer. Use Astra for at
-most one narrow architecture question. Do not use Claude workers. For a large
-product or safety decision, use four agents and bring the result to the owner
-as the fifth vote. Follow the model routing and quorum policy in
-[the lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
+named step or for a hard design question named by a reviewer. For each
+architecture decision, ask one Astra subagent for a design and follow that
+design. The lead asks the owner for major product and safety decisions and
+brings a recommendation. The lead brings an architecture decision to the owner
+only when the lead strongly disagrees with the Astra design. Follow the model
+routing in [the lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
 Verify installed provider, model, and reasoning IDs before launch.
 
 Give an architect's design to a coding worker for implementation.
