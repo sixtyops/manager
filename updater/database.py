@@ -124,6 +124,17 @@ def _migrate_cpe_rows(db):
 
 def _migrate(db):
     """Run schema migrations."""
+    active_job_columns = {
+        row[1] for row in db.execute("PRAGMA table_info(active_jobs)").fetchall()
+    }
+    if "in_flight_device_ip" not in active_job_columns:
+        db.execute("ALTER TABLE active_jobs ADD COLUMN in_flight_device_ip TEXT")
+        db.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) "
+            "VALUES ('scheduled_rollout_safety_ready', 'false', ?)",
+            (datetime.now().isoformat(),),
+        )
+
     # Check if auth_status column exists on cpe_cache
     columns = [row[1] for row in db.execute("PRAGMA table_info(cpe_cache)").fetchall()]
     if "auth_status" not in columns:
@@ -716,6 +727,7 @@ def init_db():
             "setup_completed": "false",
             "admin_password_hash": "",
             "firmware_canary_hold_days": "6",
+            "firmware_window_ramp_minutes": "[30, 120]",
             "firmware_update_cooldown_days": "30",
             "slack_webhook_url": "",
             # Notification health tracking
@@ -888,13 +900,24 @@ def periodic_maintenance():
 
 
 # Active job tracking for crash recovery
-def save_active_job(job_id: str, status: str, device_ips_json: str, firmware_name: str):
+def save_active_job(
+    job_id: str,
+    status: str,
+    device_ips_json: str,
+    firmware_name: str,
+    in_flight_device_ip: str = None,
+):
     """Persist an active job so it can be recovered after a crash."""
     with get_db() as db:
         db.execute(
-            "INSERT OR REPLACE INTO active_jobs (job_id, status, started_at, device_ips_json, firmware_name, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
-            (job_id, status, datetime.now().isoformat(), device_ips_json, firmware_name),
+            "INSERT OR REPLACE INTO active_jobs "
+            "(job_id, status, started_at, device_ips_json, firmware_name, "
+            "in_flight_device_ip, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            (
+                job_id, status, datetime.now().isoformat(), device_ips_json,
+                firmware_name, in_flight_device_ip,
+            ),
         )
 
 
@@ -909,6 +932,39 @@ def clear_active_job(job_id: str):
     """Remove an active job after completion or recovery."""
     with get_db() as db:
         db.execute("DELETE FROM active_jobs WHERE job_id = ?", (job_id,))
+
+
+def record_firmware_window_admission(
+    family: str,
+    target_sha256: str,
+    window_key,
+    cutoff_utc: str,
+) -> dict:
+    """Atomically start or reuse a family's timing row for one window."""
+    if not family or not target_sha256 or not cutoff_utc:
+        raise ValueError("Firmware window timing fields must not be empty")
+    if not isinstance(window_key, (tuple, list)) or len(window_key) != 2:
+        raise ValueError("Firmware window key must contain two values")
+    key_json = json.dumps(list(window_key), separators=(",", ":"))
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO firmware_window_timing "
+            "(family, target_sha256, ordinal, last_window_key, cutoff_utc) "
+            "VALUES (?, ?, 1, ?, ?) "
+            "ON CONFLICT(family, target_sha256) DO UPDATE SET "
+            "ordinal = firmware_window_timing.ordinal + 1, "
+            "last_window_key = excluded.last_window_key, "
+            "cutoff_utc = excluded.cutoff_utc, "
+            "updated_at = CURRENT_TIMESTAMP "
+            "WHERE firmware_window_timing.last_window_key != excluded.last_window_key",
+            (family, target_sha256, key_json, cutoff_utc),
+        )
+        row = db.execute(
+            "SELECT family, target_sha256, ordinal, last_window_key, cutoff_utc "
+            "FROM firmware_window_timing WHERE family = ? AND target_sha256 = ?",
+            (family, target_sha256),
+        ).fetchone()
+        return dict(row)
 
 
 def stop_firmware_window(window_key, job_id: str, device_ip: str, gate: str, reason: str):

@@ -280,6 +280,16 @@ def build_schema(db: sqlite3.Connection) -> None:
             resolution TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS firmware_window_timing (
+            family TEXT NOT NULL,
+            target_sha256 TEXT NOT NULL,
+            ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+            last_window_key TEXT NOT NULL,
+            cutoff_utc TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (family, target_sha256)
+        );
+
         CREATE TABLE IF NOT EXISTS firmware_window_holds (
             window_key TEXT PRIMARY KEY,
             job_id TEXT NOT NULL,
@@ -486,6 +496,7 @@ def build_schema(db: sqlite3.Connection) -> None:
             started_at TEXT,
             device_ips_json TEXT,
             firmware_name TEXT,
+            in_flight_device_ip TEXT,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
