@@ -121,3 +121,31 @@ def test_legacy_upgrade_closes_readiness_once_and_keeps_pause_history(mock_db):
     assert mock_db.execute(
         "SELECT value FROM settings WHERE key = 'scheduled_rollout_safety_ready'"
     ).fetchone()[0] == "true"
+
+
+def test_failed_upgrade_after_column_add_keeps_readiness_closed(mock_db):
+    mock_db.execute("ALTER TABLE active_jobs DROP COLUMN in_flight_device_ip")
+    mock_db.execute(
+        "INSERT OR REPLACE INTO settings (key, value) "
+        "VALUES ('scheduled_rollout_safety_ready', 'true')"
+    )
+    mock_db.commit()
+
+    class FailAfterColumnCommit:
+        def execute(self, sql, parameters=()):
+            result = mock_db.execute(sql, parameters)
+            if sql == "ALTER TABLE active_jobs ADD COLUMN in_flight_device_ip TEXT":
+                mock_db.commit()
+                raise RuntimeError("simulated stop after schema change")
+            return result
+
+    with pytest.raises(RuntimeError, match="simulated stop"):
+        db._migrate(FailAfterColumnCommit())
+
+    # A new startup sees the column, skips the reset branch, and must still
+    # find readiness closed from the migration that added it.
+    db._migrate(mock_db)
+
+    assert mock_db.execute(
+        "SELECT value FROM settings WHERE key = 'scheduled_rollout_safety_ready'"
+    ).fetchone()[0] == "false"

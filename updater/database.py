@@ -128,12 +128,12 @@ def _migrate(db):
         row[1] for row in db.execute("PRAGMA table_info(active_jobs)").fetchall()
     }
     if "in_flight_device_ip" not in active_job_columns:
-        db.execute("ALTER TABLE active_jobs ADD COLUMN in_flight_device_ip TEXT")
         db.execute(
             "INSERT OR REPLACE INTO settings (key, value, updated_at) "
             "VALUES ('scheduled_rollout_safety_ready', 'false', ?)",
             (datetime.now().isoformat(),),
         )
+        db.execute("ALTER TABLE active_jobs ADD COLUMN in_flight_device_ip TEXT")
 
     # Check if auth_status column exists on cpe_cache
     columns = [row[1] for row in db.execute("PRAGMA table_info(cpe_cache)").fetchall()]
