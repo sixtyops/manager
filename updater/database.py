@@ -1463,9 +1463,10 @@ def relocate_cpe_cache(old_ap_ip: str, old_ip: str, new_ap_ip: str, new_ip: str,
             "SELECT id, ap_ip, ip, mac FROM cpe_cache WHERE ip = ? ORDER BY id",
             (old_ip,),
         ).fetchall()
-        source = [row for row in source_rows
-                  if row["ap_ip"] == old_ap_ip and
-                  _normalize_cpe_radio_mac(row["mac"]) == expected_mac]
+        source_locator = [row for row in source_rows
+                          if (row["ap_ip"], row["ip"]) == (old_ap_ip, old_ip)]
+        source = [row for row in source_locator
+                  if _normalize_cpe_radio_mac(row["mac"]) == expected_mac]
         destination_rows = db.execute(
             "SELECT id, ap_ip, ip, mac FROM cpe_cache WHERE ip = ? ORDER BY id",
             (new_ip,),
@@ -1478,15 +1479,27 @@ def relocate_cpe_cache(old_ap_ip: str, old_ip: str, new_ap_ip: str, new_ip: str,
 
         matching_destination = [
             row for row in destination_rows
-            if row["ap_ip"] == new_ap_ip and
+            if (row["ap_ip"], row["ip"]) == (new_ap_ip, new_ip) and
             _normalize_cpe_radio_mac(row["mac"]) == expected_mac
         ]
-        if not source_rows and len(destination_rows) == 1 and len(matching_destination) == 1:
+        source_ids = {row["id"] for row in source_locator}
+        destination_ids = {row["id"] for row in matching_destination}
+        competing_source_rows = [
+            row for row in source_rows
+            if row["id"] not in source_ids and row["id"] not in destination_ids
+        ]
+        competing_destination_rows = [
+            row for row in destination_rows
+            if row["id"] not in source_ids and row["id"] not in destination_ids
+        ]
+        if (not source_locator and len(matching_destination) == 1 and
+                not competing_source_rows and not competing_destination_rows):
             return True
-        if len(source_rows) != 1 or len(source) != 1:
+        if (len(source_locator) != 1 or len(source) != 1 or
+                competing_source_rows):
             raise ValueError("CPE relocation source ownership is missing or ambiguous")
 
-        if not destination_rows:
+        if not matching_destination and not competing_destination_rows:
             cursor = db.execute(
                 "UPDATE cpe_cache SET ap_ip = ?, ip = ? "
                 "WHERE id = ? AND ap_ip = ? AND ip = ?",
@@ -1496,7 +1509,7 @@ def relocate_cpe_cache(old_ap_ip: str, old_ip: str, new_ap_ip: str, new_ip: str,
                 raise ValueError("CPE relocation source changed before update")
             return True
 
-        if len(destination_rows) != 1 or len(matching_destination) != 1:
+        if len(matching_destination) != 1 or competing_destination_rows:
             raise ValueError("CPE relocation destination ownership is missing or ambiguous")
         cursor = db.execute(
             "DELETE FROM cpe_cache WHERE id = ? AND ap_ip = ? AND ip = ?",

@@ -469,6 +469,55 @@ class TestCPECache:
         assert (rows[0]["ap_ip"], rows[0]["ip"]) == ("10.0.0.2", "192.0.2.20")
         assert (rows[0]["signal_health"], rows[0]["rx_power"]) == ("green", -55)
 
+    def test_relocation_moves_source_when_ip_stays_the_same(self, mock_db):
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.10", "mac": "00:11:22:33:44:55", "signal_health": "green",
+        })
+
+        assert db.relocate_cpe_cache(
+            "10.0.0.1", "192.0.2.10", "10.0.0.2", "192.0.2.10",
+            "00:11:22:33:44:55",
+        ) is True
+
+        row = mock_db.execute("SELECT ap_ip, ip FROM cpe_cache").fetchone()
+        assert tuple(row) == ("10.0.0.2", "192.0.2.10")
+
+    def test_relocation_keeps_matching_fresh_row_when_ip_stays_the_same(self, mock_db):
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.10", "mac": "00:11:22:33:44:55", "signal_health": "red",
+        })
+        db.upsert_cpe("10.0.0.2", {
+            "ip": "192.0.2.10", "mac": "00-11-22-33-44-55",
+            "signal_health": "green", "rx_power": -55,
+        })
+        fresh = mock_db.execute(
+            "SELECT id FROM cpe_cache WHERE ap_ip = '10.0.0.2' AND ip = '192.0.2.10'"
+        ).fetchone()["id"]
+
+        assert db.relocate_cpe_cache(
+            "10.0.0.1", "192.0.2.10", "10.0.0.2", "192.0.2.10",
+            "00:11:22:33:44:55",
+        ) is True
+
+        rows = mock_db.execute("SELECT * FROM cpe_cache").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["id"] == fresh
+        assert (rows[0]["ap_ip"], rows[0]["ip"]) == ("10.0.0.2", "192.0.2.10")
+        assert (rows[0]["signal_health"], rows[0]["rx_power"]) == ("green", -55)
+
+    def test_relocation_destination_only_is_idempotent_when_ip_stays_the_same(self, mock_db):
+        db.upsert_cpe("10.0.0.2", {
+            "ip": "192.0.2.10", "mac": "00:11:22:33:44:55", "signal_health": "green",
+        })
+
+        assert db.relocate_cpe_cache(
+            "10.0.0.1", "192.0.2.10", "10.0.0.2", "192.0.2.10",
+            "00:11:22:33:44:55",
+        ) is True
+
+        row = mock_db.execute("SELECT ap_ip, ip, signal_health FROM cpe_cache").fetchone()
+        assert tuple(row) == ("10.0.0.2", "192.0.2.10", "green")
+
     def test_relocation_rejects_unrelated_destination_owner_without_changes(self, mock_db):
         db.upsert_cpe("10.0.0.1", {
             "ip": "192.0.2.10", "mac": "00:11:22:33:44:55", "signal_health": "red",
