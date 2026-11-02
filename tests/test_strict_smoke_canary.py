@@ -154,22 +154,10 @@ async def _run_update(ip, smoke_passed, version="1.2.3", *, serial="SERIAL-1", p
                            firmware_version="1.0.0.100")
     job = _make_job(ip)
     job.pre_update_reboot = False
-    from updater.rollout_gate import ADDRESS_CHANGE_QUALIFICATIONS, AddressTransition
     target = version if version.count(".") == 3 else version + ".200"
     release, revision = target.rsplit(".", 1)
     job.device_firmware_map[ip] = f"/tmp/tna-30x-{release}-r{revision}.bin"
     artifact = b"synthetic smoke artifact"
-    transition = AddressTransition(
-        "tna-30x", "ap", "1.0.0.100", target,
-        hashlib.sha256(artifact).hexdigest(), 100, "dhcp", "firmware_flash",
-    )
-    pre_reboot_transition = AddressTransition(
-        "tna-30x", "ap", "1.0.0.100", target,
-        hashlib.sha256(artifact).hexdigest(), 100, "dhcp", "pre_update_reboot",
-    )
-    read_record = db.get_access_point
-    def observed_record(ip):
-        return {**read_record(ip), "management_vlan": 100, "management_ip_mode": "dhcp"}
 
     def fake_driver(vendor):
         def construct(i, u, p):
@@ -184,13 +172,7 @@ async def _run_update(ip, smoke_passed, version="1.2.3", *, serial="SERIAL-1", p
         return construct
 
     with TemporaryDirectory() as firmware_dir, \
-         patch.object(db, "get_access_point", side_effect=observed_record), \
          patch.object(app_module, "get_driver", fake_driver), \
-         patch.object(app_module, "_get_firmware_type_for_model", return_value="tna-30x"), \
-         patch.dict(ADDRESS_CHANGE_QUALIFICATIONS, {
-             transition: "synthetic smoke-test bench proof",
-             pre_reboot_transition: "synthetic pre-reboot bench proof",
-         }), \
          patch.object(app_module, "broadcast", AsyncMock()), \
          patch.object(app_module, "_shutting_down", False), \
          patch.object(app_module, "is_feature_enabled", return_value=False):

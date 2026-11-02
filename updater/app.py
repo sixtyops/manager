@@ -4073,7 +4073,6 @@ class UpdateJob:
     schedule_timezone: Optional[str] = None
     pre_update_reboot: bool = True
     enforce_window_cutoff: bool = True
-    address_bench_exception: str = ""
     window_key: Optional[tuple] = None
 
 
@@ -4084,21 +4083,11 @@ def _firmware_stop_message(stop: dict) -> str:
     )
 
 
-def _firmware_hold_message(hold: dict) -> str:
-    return (
-        f"Firmware qualification is held for window {hold['window_key']}: "
-        f"{hold['device_ip']} ({hold['reason']})"
-    )
-
-
 def _check_firmware_window_admission(window_key):
     if window_key:
         stop = db.get_firmware_window_stop(window_key)
         if stop:
             raise HTTPException(409, _firmware_stop_message(stop))
-        hold = db.get_firmware_window_hold(window_key)
-        if hold:
-            raise HTTPException(409, _firmware_hold_message(hold))
     unresolved = db.get_unresolved_firmware_window_stops()
     if unresolved:
         stop = unresolved[0]
@@ -4890,41 +4879,6 @@ async def get_fleet_status(session: dict = Depends(require_auth)):
             "next_attempt_reason": sw_next["reason"],
         })
 
-    from .rollout_gate import address_change_decision
-    records = {(role, record["ip"]): record
-               for role, rows in (("ap", aps), ("cpe", all_cpes), ("switch", switches))
-               for record in rows}
-    target_hashes = {family: await _address_artifact_sha256(str(FIRMWARE_DIR / target["file"]))
-                     for family, target in targets.items() if target["deployable"]}
-    for device in devices:
-        target = targets.get(device["firmware_type"])
-        if not target or not target["deployable"]:
-            continue
-        if device["status"] == "current" and _device_on_exact_build(
-            device, device["target_version"], settings.get("bank_mode", "one"),
-        ):
-            continue
-        cases = ["firmware_flash"]
-        if settings.get("pre_update_reboot", "true") == "true":
-            cases.insert(0, "pre_update_reboot")
-        for recovery_case in cases:
-            allowed, reason = address_change_decision(
-                device["firmware_type"], device["role"],
-                device["firmware_version"], device["target_version"],
-                target_sha256=target_hashes.get(device["firmware_type"], ""),
-                recovery_case=recovery_case,
-                **_address_management_scope(records.get((device["role"], device["ip"]), {})),
-            )
-            if not allowed:
-                break
-        if not allowed:
-            if device["update_state"] != "on_hold":
-                summary["on_hold"] += 1
-            device["update_state"] = "on_hold"
-            device["hold"] = {"reason": reason, "code": "address_change_hold"}
-            device["next_attempt_iso"] = None
-            device["next_attempt_reason"] = reason
-
     return {"devices": devices, "summary": summary, "targets": targets}
 
 
@@ -5410,7 +5364,6 @@ async def start_update(
     firmware_file_303l: str = Form(""),
     firmware_file_tns100: str = Form(""),
     bank_mode: str = Form("one"),
-    address_bench_exception: str = Form(""),
     session: dict = Depends(require_role("admin", "operator")),
 ):
     """Start a firmware update job."""
@@ -5597,7 +5550,6 @@ async def start_update(
         status="running",
         pre_update_reboot=pre_update_reboot,
         window_key=window_key,
-        address_bench_exception=address_bench_exception,
     )
 
     # Create device statuses for all devices (APs + CPEs + Switches)
@@ -5639,7 +5591,6 @@ async def update_single_device_endpoint(
     firmware_file_303l: str = Form(""),
     firmware_file_tns100: str = Form(""),
     bank_mode: str = Form("one"),
-    address_bench_exception: str = Form(""),
     session: dict = Depends(require_role("admin", "operator")),
     _pro=Depends(require_feature(Feature.UPDATE_SINGLE_DEVICE)),
 ):
@@ -5767,7 +5718,6 @@ async def update_single_device_endpoint(
         status="running",
         pre_update_reboot=pre_update_reboot,
         window_key=window_key,
-        address_bench_exception=address_bench_exception,
     )
 
     role = device_roles[ip]
@@ -5834,15 +5784,6 @@ def _hold_scheduled_device(job: "UpdateJob", device_status: "DeviceStatus") -> b
 
 def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
     """Recheck the stop, current readiness, and window before a device write."""
-    hold = db.get_firmware_window_hold(job.window_key) if job.window_key else None
-    if hold:
-        reason = _firmware_hold_message(hold)
-        job.devices[ip].status = "cancelled"
-        job.devices[ip].error = reason
-        job.devices[ip].progress_message = reason
-        _request_job_cancel(job, reason)
-        return False, reason
-
     stop = db.get_firmware_window_stop(job.window_key) if job.window_key else None
     if stop:
         reason = _firmware_stop_message(stop)
@@ -5923,119 +5864,6 @@ async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
     return _scheduled_action_decision(job)
 
 
-async def _address_artifact_sha256(path: str) -> str:
-    """Hash the selected bytes for each admission and write-boundary check."""
-    def hash_file():
-        digest = hashlib.sha256()
-        with open(path, "rb") as handle:
-            for block in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(block)
-        return digest.hexdigest()
-    try:
-        return await asyncio.to_thread(hash_file)
-    except OSError:
-        return ""
-
-
-def _address_management_scope(record: dict) -> dict:
-    """Use observed management scope; keep absent evidence unknown."""
-    record = record if isinstance(record, dict) else {}
-    return {
-        "management_vlan": record.get("management_vlan"),
-        "management_ip_mode": record.get("management_ip_mode", ""),
-    }
-
-
-def _normalize_address_qualification_info(info, ip: str, role: str):
-    """Map live Tachyon info to the vendor-neutral qualification shape."""
-    if info is None or hasattr(info, "extra"):
-        return info
-    from .vendors.base import VendorDeviceInfo
-
-    return VendorDeviceInfo(
-        ip=getattr(info, "ip", ip),
-        vendor="tachyon",
-        model=getattr(info, "model", None),
-        serial=getattr(info, "serial", None),
-        mac=getattr(info, "mac", None),
-        current_version=getattr(info, "current_version", None),
-        bank1_version=getattr(info, "bank1_version", None),
-        bank2_version=getattr(info, "bank2_version", None),
-        active_bank=getattr(info, "active_bank", None),
-        extra={
-            "macs": getattr(info, "macs", {}),
-            "management_interface": getattr(info, "management_interface", None),
-            "management_vlan_id": getattr(info, "management_vlan_id", None),
-            "management_mac": getattr(info, "management_mac", None),
-            "management_vlan": getattr(info, "management_vlan_id", None),
-            "management_ip_mode": getattr(info, "management_ip_mode", None),
-        },
-    )
-
-
-async def _address_change_guard(
-    job: "UpdateJob", ip: str, *, info=None, pass_number: int = 1,
-    recovery_case: str = "firmware_flash", qualification_error: str = "",
-) -> bool:
-    """Check transition qualification and persist a visible hold before writes."""
-    from .rollout_gate import address_change_decision
-
-    ds = job.devices[ip]
-    if info is None:
-        qualification_error = qualification_error or "live device information is unavailable"
-        model, source, record = None, None, {}
-    else:
-        try:
-            model, source = info.model, info.current_version
-            record = info.extra
-        except Exception:
-            qualification_error = qualification_error or "live device information is incomplete"
-            model, source, record = None, None, {}
-    fw_path = job.device_firmware_map.get(ip, "")
-    target = _extract_version_from_filename(Path(fw_path).name)
-    if qualification_error:
-        allowed, reason = False, f"Deferred: Address-change qualification unavailable ({qualification_error})"
-    else:
-        try:
-            allowed, reason = address_change_decision(
-                _get_firmware_type_for_model(model), ds.role, source, target,
-                ip=ip, bench_exception=job.address_bench_exception, scheduled=job.is_scheduled,
-                target_sha256=await _address_artifact_sha256(fw_path),
-                recovery_case=recovery_case, **_address_management_scope(record),
-            )
-        except Exception:
-            allowed, reason = False, "Deferred: Address-change qualification unavailable"
-    if allowed:
-        if reason:
-            db.log_schedule_event(
-                "address_bench_exception", f"{reason}; {ip}, {source} to {target}",
-                job_id=job.job_id,
-            )
-        return True
-    ds.status = "deferred"
-    ds.error = reason
-    ds.progress_message = reason
-    await broadcast({
-        "type": "device_update", "job_id": job.job_id, "ip": ip,
-        "status": ds.status, "message": reason, "role": ds.role, "parent_ap": ds.parent_ap,
-    })
-    now_iso = datetime.now().isoformat()
-    db.save_device_update_history(
-        job_id=job.job_id, ip=ip, role=ds.role, pass_number=pass_number,
-        status="deferred", old_version=source, new_version=target, model=model,
-        error=reason, failed_stage="address_change_hold", stages=[], duration_seconds=0,
-        started_at=now_iso, completed_at=now_iso,
-    )
-    if job.window_key:
-        hold = db.hold_firmware_window(job.window_key, job.job_id, ip, reason)
-        _request_job_cancel(job, _firmware_hold_message(hold or {
-            "window_key": json.dumps(list(job.window_key), separators=(",", ":")),
-            "device_ip": ip,
-            "reason": reason,
-        }))
-    return False
-
-
 async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1):
     """Update a single device within a job."""
     device_status = job.devices[ip]
@@ -6045,14 +5873,6 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         return
 
     stop = db.get_firmware_window_stop(job.window_key) if job.window_key else None
-    hold = db.get_firmware_window_hold(job.window_key) if job.window_key else None
-    if hold:
-        reason = _firmware_hold_message(hold)
-        device_status.status = "cancelled"
-        device_status.error = reason
-        device_status.progress_message = reason
-        _request_job_cancel(job, reason)
-        return
     if stop:
         device_status.status = "cancelled"
         device_status.error = _firmware_stop_message(stop)
@@ -6219,23 +6039,11 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             try:
                 login_result = await client.connect()
                 info = await client.get_device_info() if login_result is True else None
-                qualification_error = "" if info is not None else "live device information could not be read"
                 if info is not None:
                     expected_serial = expected_serial or getattr(info, "serial", None)
                     expected_version = getattr(info, "current_version", None)
             except Exception:
                 info = None
-                qualification_error = "live device information could not be read"
-            if not await _address_change_guard(
-                job, ip, info=info, pass_number=pass_number,
-                recovery_case=(
-                    "pre_update_reboot"
-                    if pass_number == 1
-                    else "firmware_flash"
-                ),
-                qualification_error=qualification_error,
-            ):
-                return
 
         # Pre-update config backup (Pro feature)
         if is_feature_enabled(Feature.CONFIG_BACKUP):
@@ -6309,11 +6117,6 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     "serial": expected_serial, "model": getattr(info, "model", None),
                 })
                 _persist_recovery_locator(job, ip)
-                if not await _address_change_guard(
-                    job, ip, info=info, pass_number=pass_number,
-                    recovery_case="pre_update_reboot",
-                ):
-                    return
                 reboot_timeout = client.get_reboot_timeout(device_status.role)
                 if not _firmware_write_gate(job, ip)[0]:
                     return
@@ -6345,11 +6148,6 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     raise RuntimeError("Expected serial did not match after pre-update reboot")
                 if _normalize_version(getattr(recovered_info, "current_version", None)) != _normalize_version(expected_version):
                     raise RuntimeError("Firmware version changed after pre-update reboot")
-                if not await _address_change_guard(
-                    job, ip, info=recovered_info, pass_number=pass_number,
-                    recovery_case="pre_update_reboot",
-                ):
-                    return
                 if pre_reboot_ap_baseline is not None:
                     passed, evidence = await _check_ap_recovery(
                         job, ip, client, pre_reboot_ap_baseline,
@@ -6414,29 +6212,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             _persist_recovery_locator(job, ip)
             return True
 
-        async def _driver_qualification_check(info, error=""):
-            info = _normalize_address_qualification_info(
-                info, ip, device_status.role,
-            )
-            if expected_serial and getattr(info, "serial", None) != expected_serial:
-                error = error or "expected serial did not match during recovery"
-            target = _extract_version_from_filename(Path(fw_path).name)
-            if (
-                not error and expected_serial
-                and _normalize_version(getattr(info, "current_version", None)) == _normalize_version(target)
-            ):
-                return True, ""
-            admitted = await _address_change_guard(
-                job, ip, info=info, pass_number=pass_number, qualification_error=error,
-            )
-            reason = "" if admitted else (device_status.error or "Deferred: Address-change qualification held")
-            if not admitted:
-                admission_denial["reason"] = reason
-            return admitted, reason
-
         update_options = {
             "admission_check": _driver_admission_check,
-            "qualification_check": _driver_qualification_check,
         }
         if supports_tachyon_recovery:
             update_options["serial_check"] = _driver_serial_check
@@ -6477,8 +6254,6 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     job.recovery_locators[ip].get("model"),
                     job.recovery_locators[ip].get("radio_mac", ""),
                 )
-            if not await _address_change_guard(job, ip, info=info, pass_number=pass_number):
-                return
             if device_status.role == "ap" and vendor_id == "tachyon":
                 flash_ap_baseline = await _capture_ap_recovery_baseline(
                     job, ip, client
@@ -6605,21 +6380,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             _stop_firmware_window(job, ip, "smoke", device_status.error or "Smoke test failed")
     else:
         if admission_denial["reason"].startswith((
-            "Address-change hold", "Deferred: Address-change qualification",
-        )):
-            device_status.status = "deferred"
-            device_status.error = admission_denial["reason"]
-            device_status.progress_message = admission_denial["reason"]
-            await broadcast({
-                "type": "device_update", "job_id": job.job_id, "ip": ip,
-                "status": device_status.status, "message": device_status.progress_message,
-                "error": device_status.error, "role": device_status.role,
-                "parent_ap": device_status.parent_ap,
-            })
-            return
-        if admission_denial["reason"].startswith((
             "Firmware writes are stopped for window",
-            "Firmware qualification is held for window",
         )):
             # Preserve the existing stop without recording a second device failure.
             device_status.status = "cancelled"
@@ -6746,11 +6507,8 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         _request_job_cancel(job, block_reason)
         logger.warning(f"Job {job.job_id} cancelled before start: {block_reason}")
     stop = db.get_firmware_window_stop(job.window_key) if job.window_key else None
-    hold = db.get_firmware_window_hold(job.window_key) if job.window_key else None
-    unresolved = db.get_unresolved_firmware_window_stops() if not stop and not hold else []
-    if hold:
-        _request_job_cancel(job, _firmware_hold_message(hold))
-    elif stop or unresolved:
+    unresolved = db.get_unresolved_firmware_window_stops() if not stop else []
+    if stop or unresolved:
         _request_job_cancel(job, _firmware_stop_message(stop or unresolved[0]))
 
     ap_ips = [ip for ip, role in job.device_roles.items() if role == "ap"]

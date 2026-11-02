@@ -751,7 +751,6 @@ class TachyonClient:
     async def upload_firmware(
         self, firmware_path: str, bandwidth_limit_kbps: int = 0,
         admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
-        qualification_check=None,
         upload_started_callback: Optional[Callable[[], None]] = None,
         serial_check=None,
     ) -> bool:
@@ -764,7 +763,6 @@ class TachyonClient:
         url = f"{self._base_url}/cgi.lua/update"
         max_attempts = 3
         backoff_delays = [0, 30, 60]  # seconds: no delay, 30s, 60s
-        self._qualification_denial = ""
 
         for attempt in range(max_attempts):
             if attempt > 0:
@@ -796,19 +794,6 @@ class TachyonClient:
                     return False
             if serial_check and not await serial_check("upload"):
                 return False
-            if qualification_check:
-                try:
-                    info = await self.get_device_info(include_management=True)
-                except Exception:
-                    admitted, reason = await qualification_check(
-                        None, "live device information could not be read",
-                    )
-                else:
-                    admitted, reason = await qualification_check(info)
-                if not admitted:
-                    self._qualification_denial = reason
-                    return False
-
             if upload_started_callback:
                 upload_started_callback()
             returncode, stdout = await _run_curl(cmd)
@@ -1011,7 +996,6 @@ class TachyonClient:
         reboot_timeout: int = 300,
         bandwidth_limit_kbps: int = 0,
         admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
-        qualification_check=None,
         upload_started_callback: Optional[Callable[[], None]] = None,
         serial_check=None,
         recovery_callback=None,
@@ -1033,18 +1017,6 @@ class TachyonClient:
             logger.info(f"[{self.ip}] {msg}")
 
         result = UpdateResult(ip=self.ip, success=False)
-
-        async def check_qualification(fresh_info=None):
-            if not qualification_check:
-                return True, ""
-            try:
-                if fresh_info is None:
-                    fresh_info = await self.get_device_info(include_management=True)
-            except Exception:
-                return await qualification_check(
-                    None, "live device information could not be read",
-                )
-            return await qualification_check(fresh_info)
 
         try:
             # Login (with retries for connectivity errors, e.g. CPE reassociating after AP reboot)
@@ -1068,21 +1040,13 @@ class TachyonClient:
 
             # Get current info
             progress("Getting device info...")
-            info = (
-                await self.get_device_info(include_management=True)
-                if qualification_check else await self.get_device_info()
-            )
+            info = await self.get_device_info()
             result.old_version = info.current_version
             result.model = info.model
             result.bank1_version = info.bank1_version
             result.bank2_version = info.bank2_version
             result.active_bank = info.active_bank
             progress(f"Current version: {info.current_version}")
-
-            admitted, reason = await check_qualification(info)
-            if not admitted:
-                result.error = reason
-                return result
 
             # Validate firmware is compatible with device model
             if info.model:
@@ -1103,8 +1067,6 @@ class TachyonClient:
             upload_options = {}
             if admission_check:
                 upload_options["admission_check"] = admission_check
-            if qualification_check:
-                upload_options["qualification_check"] = qualification_check
             if upload_started_callback:
                 upload_options["upload_started_callback"] = upload_started_callback
             if serial_check:
@@ -1112,7 +1074,7 @@ class TachyonClient:
             if not await self.upload_firmware(
                 firmware_path, bandwidth_limit_kbps=bandwidth_limit_kbps, **upload_options
             ):
-                result.error = self._qualification_denial or "Firmware upload failed"
+                result.error = "Firmware upload failed"
                 return result
 
             # Trigger update (device reboots)
@@ -1124,10 +1086,6 @@ class TachyonClient:
                     return result
             if serial_check and not await serial_check("install"):
                 result.error = "Expected serial did not match before install"
-                return result
-            admitted, reason = await check_qualification()
-            if not admitted:
-                result.error = reason
                 return result
             if not await self.trigger_update():
                 result.error = "Failed to trigger update"
@@ -1149,10 +1107,6 @@ class TachyonClient:
                 return result
 
             new_info = await self.get_device_info()
-            admitted, reason = await check_qualification(new_info)
-            if not admitted:
-                result.error = reason or "Recovery qualification failed after firmware reboot"
-                return result
             result.new_version = new_info.current_version
             result.bank1_version = new_info.bank1_version
             result.bank2_version = new_info.bank2_version
