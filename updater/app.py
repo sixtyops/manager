@@ -6657,8 +6657,8 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         ]
     else:
         phases = [
-            (ap_ips, 1, "APs"),
             (cpe_ips, 1, "CPEs"),
+            (ap_ips, 1, "APs"),
             (switch_ips, 1, "Switches"),
         ]
 
