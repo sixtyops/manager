@@ -1,8 +1,10 @@
 # One right way to keep a Tachyon fleet current
 
 **Key points:** Manager owns update safety. The operator chooses when and how
-fast. "Keep my fleet current" is the primary action. This is the target contract,
-not a claim about the current engine. The owner set this direction on 2026-09-30.
+fast. "Keep my fleet current" is the primary action. This is the target
+contract, not a claim about the current engine. Current code still runs
+percentage waves until the cutover PRs land. The owner set this direction on
+2026-09-30.
 
 **Detail:** Manager is a standalone product for Tachyon networks. Use Manager's
 data and the device APIs it calls for every design and safety check. Do not
@@ -18,27 +20,29 @@ Keep credentials private. Show target firmware and fleet health in one glance.
 Use existing UI components. Remove options and screens that do not support this
 task. Give a short, tested recovery step when a device fails.
 
-Before each wave, save and show its risk statement: devices and firmware,
+Before queue work, save and show its risk statement: devices and firmware,
 worst case, tested limits, rollback evidence, and untested models or firmware.
-Run low-risk work on schedule only with proven rollback and passing gates.
-Give the operator a Stop action before and during the wave. Stop prevents new
+Run scheduled work only with proven rollback and passing gates. Give the
+operator a Stop action before and during a device sequence. Stop prevents new
 writes; it does not interrupt a flash. Ask for approval only for no rollback,
 the first run of a new firmware family, a sole path to other devices, or a policy
 exception. Approval covers that plan only. It cannot bypass a failed gate.
 
-Use cumulative 10%, 50%, and 100% waves, one wave per maintenance window.
-Before the pre-update reboot and every device write, verify a fresh, restorable
-backup and commit a fresh config snapshot. Prove recovery with the reboot only
-after the snapshot passes. Enforce Firmware Hold,
-weather, clock, artifact, and maintenance-window gates. Use single-bank writes.
-After each update, verify version, CPE re-association, RSSI, and customer traffic
-recovery. Compare AP traffic with its pre-update baseline within a fixed deadline.
-Missing or idle traffic needs a tested fallback; it never counts as proof.
-Choose the traffic floor and deadline from bench evidence before enabling this gate.
+Derive an ordered queue from current inventory. Run CPEs, then APs, then
+switches, with one device write and recovery sequence at a time. Persist each
+window cutoff. Stop new starts at cutoff, finish active recovery, and continue
+remaining devices in a later window. Before the pre-update reboot and every
+device write, verify a fresh, restorable backup and commit a fresh config
+snapshot. Prove recovery with the reboot only after the snapshot passes. Enforce
+Firmware Hold, weather, clock, artifact, and maintenance-window gates. Use
+single-bank scheduled writes. After each update, verify version, CPE
+re-association, and RSSI. Use bounded reported peer-return checks and reported
+CPE `eth0` link-up when it was up before reboot. Do not infer customer traffic
+from bridge learning or byte counters.
 
-Update children before parents. A management or traffic path waits for all
-downstream members to pass, including switch chains and radio backhaul.
-Unknown, stale, or conflicting topology blocks an automatic parent update.
+Update children before parents. A management path waits for required downstream
+devices to pass. Unknown, stale, or conflicting topology blocks an automatic
+parent update.
 Stop the entire window on the first failed safety gate or device check.
 Do not resume in that window. A gate block before a write is a hold, not an
 outage. Never start another device write until the prior device passes every

@@ -20,8 +20,10 @@ Operational how-to documents do not grant approval to exceed these limits.
 - Run `pytest -v` before committing. All tests must pass. Exclude
   `tests/integration` as shown in Commands.
 - Keep `main` stable. `scripts/install.sh` always pulls `main`.
-- Fleet rollouts advance one wave per maintenance window: 10%, 50%, 100%.
-  Halt the whole job if a device does not return online. Never bypass
+- Current code advances firmware rollouts through 10%, 50%, and 100% waves,
+  with one wave per maintenance window. Halt the whole job if a device does not
+  return online. The target is a serial queue with durable cutoff and failure
+  stops. Never bypass
   `updater/rollout_gate.py` or weaken `tests/test_rollout_invariants.py`.
 
 ### Host access
@@ -211,12 +213,26 @@ use repo guidance for work that can proceed. Preserve all safety and proof gates
 
 ## Rollout gotchas
 
-New firmware waits for the Firmware Hold: release date plus
-`firmware_canary_hold_days`. Confirmed working firmware clears the hold early
-per model family. Hold clearance must not bypass the one-wave-per-window gate.
-Manual per-device updates intentionally bypass the hold. Do not add a canary
-phase or auto-advance outside the gate. Keep one rollout engine; never copy
-its wave loop. See [gradual-rollout.md](docs/gradual-rollout.md).
+The current fleet rollout uses percentage waves, one wave per maintenance
+window, and halts the whole job if a device does not return online. Keep these
+shipped rules until the queue cutover PRs land. The target fleet update contract
+uses one ordered serial queue of devices that
+need the selected firmware. Run CPEs before APs, then switches, with one device
+write and recovery sequence at a time. Keep Firmware Hold. Limit the first used
+maintenance windows for each new firmware family or artifact with the configured
+minute ramp; later windows use the normal schedule. Persist the cutoff across
+restarts. Stop starting devices at cutoff and finish active recovery. Continue
+remaining work next window. New and returning devices join the derived queue.
+Persist the first failure and stop the whole queue until the operator resolves
+it for a later window. Never reopen the failed window. Use single-bank scheduled
+updates. Keep one update engine and shared admission checks. Test cutoff,
+restart, Firmware Hold, recovery, and stop-on-first-failure in
+`tests/test_rollout_invariants.py`.
+
+Current code still uses percentage waves until the queue cutover PRs land. Do
+not claim the target queue is shipped before those PRs and required proof pass.
+Manual per-device updates intentionally bypass Firmware Hold. See
+[gradual-rollout.md](docs/gradual-rollout.md) for current behavior.
 
 ## Reference docs
 
