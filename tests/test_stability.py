@@ -63,7 +63,8 @@ class TestJobCleanup:
 class TestCrashRecovery:
     """Verify crashed job detection and recovery on startup."""
 
-    def test_recover_crashed_jobs(self, mock_db):
+    @pytest.mark.asyncio
+    async def test_recover_crashed_jobs(self, mock_db):
         """Active jobs from a previous crash should be marked as failed in history."""
         from updater.app import _recover_crashed_device_jobs
         import updater.database as db_mod
@@ -76,7 +77,7 @@ class TestCrashRecovery:
         )
         mock_db.commit()
 
-        _recover_crashed_device_jobs()
+        await _recover_crashed_device_jobs()
 
         # Active job should be cleared
         row = mock_db.execute("SELECT * FROM active_jobs WHERE job_id = 'crash-job-1'").fetchone()
@@ -91,12 +92,13 @@ class TestCrashRecovery:
             assert h["status"] == "failed"
             assert "crashed" in h["error"].lower()
 
-    def test_recover_no_active_jobs(self, mock_db):
+    @pytest.mark.asyncio
+    async def test_recover_no_active_jobs(self, mock_db):
         """No active jobs should be a no-op."""
         from updater.app import _recover_crashed_device_jobs
 
         # Should not raise
-        _recover_crashed_device_jobs()
+        await _recover_crashed_device_jobs()
 
         rows = mock_db.execute("SELECT * FROM active_jobs").fetchall()
         assert len(rows) == 0

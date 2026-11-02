@@ -1,6 +1,7 @@
 """Offline checks for serial-confirmed Tachyon reboot recovery."""
 
 import json
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -58,9 +59,10 @@ async def run_recovery(monkeypatch, serials, snapshots, role="cpe"):
     job = recovery_job(role)
     client = RecoveryClient(serials)
     now = app.monotonic()
+    removed = []
     poller = SimpleNamespace(
         get_latest_peer_snapshots=lambda: snapshots,
-        _remove_cached_cpe_client=lambda ip: None,
+        _remove_cached_cpe_client=removed.append,
     )
     monkeypatch.setattr(app, "get_poller", lambda: poller)
     monkeypatch.setattr(app.db, "get_access_points", lambda enabled_only=True: [
@@ -73,17 +75,35 @@ async def run_recovery(monkeypatch, serials, snapshots, role="cpe"):
         job, OLD_IP, client, SERIAL, "TNA-301", RADIO_MAC,
     )
     success = await callback(now + 5, now)
-    return success, job, client, relocate
+    return success, job, client, relocate, removed
 
 
 @pytest.mark.asyncio
 async def test_same_ip_is_confirmed_by_serial_without_relocation(monkeypatch):
-    success, job, client, relocate = await run_recovery(
+    success, job, client, relocate, removed = await run_recovery(
         monkeypatch, {OLD_IP: SERIAL}, {},
     )
     assert success
     assert client.ip == OLD_IP
     assert job.recovery_locators[OLD_IP]["serial"] == SERIAL
+    relocate.assert_not_called()
+    assert OLD_IP in removed
+
+
+@pytest.mark.asyncio
+async def test_open_identity_conflict_stops_recovery(monkeypatch):
+    connection = SimpleNamespace(execute=lambda query: SimpleNamespace(
+        fetchall=lambda: [("mac", RADIO_MAC.lower().replace(":", "-"))],
+    ))
+    monkeypatch.setattr(app.db, "get_db", lambda: nullcontext(connection))
+    snapshot = {
+        NEW_AP: {"observed_at": app.monotonic() + 1, "peers": [peer(NEW_IP)]},
+    }
+    success, _, client, relocate, _ = await run_recovery(
+        monkeypatch, {NEW_IP: SERIAL}, snapshot,
+    )
+    assert not success
+    assert client.ip == NEW_IP
     relocate.assert_not_called()
 
 
@@ -93,7 +113,7 @@ async def test_cpe_move_uses_peer_radio_mac_and_commits_current_locator(monkeypa
     snapshot = {
         parent: {"observed_at": app.monotonic() + 1, "peers": [peer(NEW_IP)]},
     }
-    success, job, client, relocate = await run_recovery(
+    success, job, client, relocate, _ = await run_recovery(
         monkeypatch, {NEW_IP: SERIAL}, snapshot,
     )
     assert success
@@ -108,7 +128,7 @@ async def test_reused_old_ip_is_rejected_and_moved_serial_is_found(monkeypatch):
     snapshot = {
         NEW_AP: {"observed_at": app.monotonic() + 1, "peers": [peer(NEW_IP)]},
     }
-    success, _, client, _ = await run_recovery(
+    success, _, client, _, _ = await run_recovery(
         monkeypatch, {OLD_IP: "OTHER-SERIAL", NEW_IP: SERIAL}, snapshot,
     )
     assert success
@@ -121,7 +141,7 @@ async def test_wrong_or_missing_serial_is_not_recovered(monkeypatch, candidate_s
     snapshot = {
         NEW_AP: {"observed_at": app.monotonic(), "peers": [peer(NEW_IP)]},
     }
-    success, _, _, relocate = await run_recovery(
+    success, _, _, relocate, _ = await run_recovery(
         monkeypatch, {OLD_IP: "OTHER-SERIAL", NEW_IP: candidate_serial}, snapshot,
     )
     assert not success
@@ -143,7 +163,7 @@ async def test_missing_changed_stale_or_failed_peer_report_does_not_recover(
             "observed_at": app.monotonic() + observed,
             "peers": [peer(NEW_IP, mac)],
         }
-    success, _, _, _ = await run_recovery(
+    success, _, _, _, _ = await run_recovery(
         monkeypatch, {}, snapshots,
     )
     assert not success
@@ -156,7 +176,7 @@ async def test_ambiguous_serial_confirmed_candidates_are_rejected(monkeypatch):
         OLD_AP: {"observed_at": now + 1, "peers": [peer(NEW_IP)]},
         NEW_AP: {"observed_at": now + 1, "peers": [peer("192.0.2.22")]},
     }
-    success, _, _, relocate = await run_recovery(
+    success, _, _, relocate, _ = await run_recovery(
         monkeypatch,
         {NEW_IP: SERIAL, "192.0.2.22": SERIAL},
         snapshots,
@@ -171,7 +191,7 @@ async def test_ap_and_switch_retry_known_address_without_peer_discovery(monkeypa
     snapshot = {
         NEW_AP: {"observed_at": app.monotonic() + 1, "peers": [peer(NEW_IP)]},
     }
-    success, _, client, _ = await run_recovery(
+    success, _, client, _, _ = await run_recovery(
         monkeypatch, {}, snapshot, role=role,
     )
     assert not success
@@ -191,21 +211,41 @@ def test_poller_keeps_only_latest_successful_peer_snapshot():
     assert poller.get_latest_peer_snapshots()[OLD_AP]["peers"]
 
 
-def test_crash_recovery_records_failure_without_replaying_firmware(monkeypatch):
+@pytest.mark.asyncio
+async def test_crash_recovery_reads_saved_locator_and_serial_without_replaying_firmware(monkeypatch):
     payload = {
         "devices": [OLD_IP],
-        "recovery": {OLD_IP: {"serial": SERIAL, "ip": NEW_IP}},
+        "recovery": {OLD_IP: {"serial": SERIAL, "ip": NEW_IP, "parent_ap": OLD_AP}},
     }
     monkeypatch.setattr(app.db, "get_active_jobs", lambda: [{
         "job_id": "crashed", "device_ips_json": json.dumps(payload),
+        "in_flight_device_ip": OLD_IP,
     }])
+    monkeypatch.setattr(app.db, "get_access_point", lambda ip: {
+        "username": "synthetic", "password": "synthetic",
+    })
+    checked = []
+
+    class ReadOnlyClient:
+        def __init__(self, ip, username, password):
+            checked.append((ip, username, password))
+
+        async def connect(self):
+            return True
+
+        async def get_device_info(self):
+            return SimpleNamespace(serial=SERIAL)
+
+    monkeypatch.setattr(app, "get_driver", lambda vendor: ReadOnlyClient)
     history = []
     monkeypatch.setattr(app.db, "save_device_update_history", lambda **row: history.append(row))
     monkeypatch.setattr(app.db, "clear_active_job", lambda job_id: None)
-    app._recover_crashed_device_jobs()
+    await app._recover_crashed_device_jobs()
+    assert checked == [(NEW_IP, "synthetic", "synthetic")]
     assert len(history) == 1
     assert history[0]["ip"] == OLD_IP
     assert history[0]["failed_stage"] == "crash_recovery"
+    assert "read-only recovery confirmed serial" in history[0]["error"]
 
 
 @pytest.mark.asyncio

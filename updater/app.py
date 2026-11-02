@@ -489,8 +489,8 @@ async def _websocket_health_check():
             logger.debug(f"Removed {len(dead)} dead WebSocket connection(s)")
 
 
-def _recover_crashed_device_jobs():
-    """On startup, mark any in-progress jobs from a previous crash as failed."""
+async def _recover_crashed_device_jobs():
+    """Reconcile saved device identity after a crash, then stop for the operator."""
     active = db.get_active_jobs()
     for job in active:
         logger.warning(
@@ -500,12 +500,51 @@ def _recover_crashed_device_jobs():
         try:
             payload = json.loads(job.get("device_ips_json", "[]"))
             device_ips = payload.get("devices", []) if isinstance(payload, dict) else payload
+            recovery = payload.get("recovery", {}) if isinstance(payload, dict) else {}
+            in_flight_ip = job.get("in_flight_device_ip")
+            locator = recovery.get(in_flight_ip, {}) if in_flight_ip else {}
+            expected_serial = locator.get("serial")
+            current_ip = locator.get("ip")
+            parent_ap = locator.get("parent_ap")
+            reconciliation = "saved recovery identity is missing; operator action required"
+            if expected_serial and current_ip:
+                credential_source = (
+                    db.get_access_point(parent_ap) if parent_ap
+                    else db.get_access_point(current_ip) or db.get_switch(current_ip)
+                )
+                if (credential_source and credential_source.get("username")
+                        and credential_source.get("password")):
+                    try:
+                        client = get_driver("tachyon")(
+                            current_ip, credential_source["username"],
+                            credential_source["password"],
+                        )
+                        if await client.connect() is True:
+                            info = await client.get_device_info()
+                            if getattr(info, "serial", None) == expected_serial:
+                                reconciliation = (
+                                    f"read-only recovery confirmed serial {expected_serial} at {current_ip}; "
+                                    "operator action required"
+                                )
+                            else:
+                                reconciliation = (
+                                    f"read-only recovery did not confirm expected serial {expected_serial} "
+                                    f"at {current_ip}; operator action required"
+                                )
+                        else:
+                            reconciliation = (
+                                f"saved recovery address {current_ip} is unavailable; operator action required"
+                            )
+                    except Exception as e:
+                        reconciliation = (
+                            f"read-only recovery failed at {current_ip}: {e}; operator action required"
+                        )
             now_iso = datetime.now().isoformat()
             for ip in device_ips:
                 db.save_device_update_history(
                     job_id=job["job_id"], ip=ip, role="unknown", pass_number=1,
                     status="failed", old_version=None, new_version=None,
-                    model=None, error="App crashed during firmware update",
+                    model=None, error=f"App crashed during firmware update; {reconciliation}",
                     failed_stage="crash_recovery", stages=[],
                     duration_seconds=0, started_at=job.get("started_at", now_iso),
                     completed_at=now_iso, action="firmware_update",
@@ -590,7 +629,7 @@ async def lifespan(app: FastAPI):
     checker = init_checker(broadcast)
     await checker.start()
     await verify_update_on_startup(broadcast)
-    _recover_crashed_device_jobs()
+    await _recover_crashed_device_jobs()
     syslog_forwarder.reload_config()
     radius_svc = init_radius_service(broadcast)
     radius_task = asyncio.create_task(
@@ -4123,6 +4162,13 @@ def _make_recovery_callback(job, original_ip, client, expected_serial,
     """Build bounded read-only recovery for the current Tachyon reboot."""
     current_ip = job.recovery_locators.get(original_ip, {}).get("ip", original_ip)
     failure = {"reason": "device did not return at its current address"}
+    confirmed_addresses = set()
+
+    def invalidate_confirmed_sessions():
+        poller = get_poller()
+        if poller:
+            for address in confirmed_addresses:
+                poller._remove_cached_cpe_client(address)
 
     async def confirm(candidate_ip):
         _set_driver_locator(client, candidate_ip)
@@ -4135,12 +4181,13 @@ def _make_recovery_callback(job, original_ip, client, expected_serial,
         if serial != expected_serial:
             failure["reason"] = f"serial did not match at {candidate_ip}"
             return None
+        confirmed_addresses.add(candidate_ip)
         if expected_model and (not model or model.lower() != expected_model.lower()):
             failure["reason"] = f"model did not match at {candidate_ip}"
             return None
         return info
 
-    async def recover(deadline, reboot_started):
+    async def recover_once(deadline, reboot_started):
         nonlocal current_ip
         info = await confirm(current_ip)
         parent = job.recovery_locators.get(original_ip, {}).get(
@@ -4178,8 +4225,11 @@ def _make_recovery_callback(job, original_ip, client, expected_serial,
             if info is None:
                 failure["reason"] = "candidate serial confirmation failed"
                 return False
-
         if info is None:
+            return False
+        if job.devices[original_ip].role == "cpe" and _has_open_recovery_identity_conflict(
+                expected_serial, radio_mac):
+            failure["reason"] = "an open identity conflict exists for the expected serial or radio MAC"
             return False
         old_parent = job.recovery_locators.get(original_ip, {}).get(
             "parent_ap", job.devices[original_ip].parent_ap
@@ -4190,10 +4240,7 @@ def _make_recovery_callback(job, original_ip, client, expected_serial,
                     old_parent, current_ip, parent, candidate, radio_mac):
                 failure["reason"] = "CPE location could not be committed"
                 return False
-            poller = get_poller()
-            if poller:
-                poller._remove_cached_cpe_client(current_ip)
-                poller._remove_cached_cpe_client(candidate)
+            confirmed_addresses.add(current_ip)
         current_ip = candidate
         job.devices[original_ip].parent_ap = parent
         job.device_parent[original_ip] = parent or ""
@@ -4201,8 +4248,40 @@ def _make_recovery_callback(job, original_ip, client, expected_serial,
         _persist_recovery_locator(job, original_ip)
         return True
 
+    async def recover(deadline, reboot_started):
+        try:
+            return await recover_once(deadline, reboot_started)
+        finally:
+            invalidate_confirmed_sessions()
+
     recover.failure_reason = failure
     return recover
+
+
+def _has_open_recovery_identity_conflict(serial, radio_mac):
+    """Fail closed when an open identity conflict names this serial or MAC."""
+    try:
+        with db.get_db() as conn:
+            rows = conn.execute(
+                "SELECT kind, value FROM identity_conflicts WHERE state='open'"
+            ).fetchall()
+    except Exception:
+        return True
+    expected_mac = _normalize_recovery_mac(radio_mac)
+    return any(
+        (kind == "serial" and value == serial)
+        or (kind == "mac" and _normalize_recovery_mac(value) == expected_mac)
+        for kind, value in rows
+    )
+
+
+def _normalize_recovery_mac(value):
+    if not isinstance(value, str):
+        return ""
+    compact = re.sub(r"[:-]", "", value.strip()).upper()
+    if len(compact) != 12 or not re.fullmatch(r"[0-9A-F]{12}", compact):
+        return ""
+    return ":".join(compact[index:index + 2] for index in range(0, 12, 2))
 
 
 async def _read_ap_recovery_peers(ap_client):
