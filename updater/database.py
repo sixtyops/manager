@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -1427,6 +1428,85 @@ def update_device_credentials(device_type: str, ip: str, username: str, password
 
 
 # CPE Cache operations
+def _normalize_cpe_radio_mac(value: str) -> Optional[str]:
+    """Return a canonical MAC address, or None when the value is invalid."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if re.fullmatch(r"[0-9a-fA-F]{12}", value):
+        parts = [value[i:i + 2] for i in range(0, 12, 2)]
+    elif re.fullmatch(r"(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}", value):
+        parts = re.split("[:-]", value)
+    else:
+        return None
+    return ":".join(part.upper() for part in parts)
+
+
+def relocate_cpe_cache(old_ap_ip: str, old_ip: str, new_ap_ip: str, new_ip: str,
+                       expected_mac: str) -> bool:
+    """Move one CPE cache row after its identity has been confirmed.
+
+    A matching row already reported at the new location is kept so its fresh
+    telemetry survives. Reject uncertain ownership before changing any row.
+    This updates only ``cpe_cache``; history and configuration rows keep their
+    original IP keys.
+    """
+    expected_mac = _normalize_cpe_radio_mac(expected_mac)
+    if not all((old_ap_ip, old_ip, new_ap_ip, new_ip)) or not expected_mac:
+        raise ValueError("CPE relocation requires both locations and a valid radio MAC")
+    if (old_ap_ip, old_ip) == (new_ap_ip, new_ip):
+        raise ValueError("CPE relocation source and destination must differ")
+
+    with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        source_rows = db.execute(
+            "SELECT id, ap_ip, ip, mac FROM cpe_cache WHERE ip = ? ORDER BY id",
+            (old_ip,),
+        ).fetchall()
+        source = [row for row in source_rows
+                  if row["ap_ip"] == old_ap_ip and
+                  _normalize_cpe_radio_mac(row["mac"]) == expected_mac]
+        destination_rows = db.execute(
+            "SELECT id, ap_ip, ip, mac FROM cpe_cache WHERE ip = ? ORDER BY id",
+            (new_ip,),
+        ).fetchall()
+        configured_owner = db.execute(
+            "SELECT id, role FROM devices WHERE ip = ?", (new_ip,)
+        ).fetchone()
+        if configured_owner:
+            raise ValueError("CPE relocation destination is owned by a configured device")
+
+        matching_destination = [
+            row for row in destination_rows
+            if row["ap_ip"] == new_ap_ip and
+            _normalize_cpe_radio_mac(row["mac"]) == expected_mac
+        ]
+        if not source_rows and len(destination_rows) == 1 and len(matching_destination) == 1:
+            return True
+        if len(source_rows) != 1 or len(source) != 1:
+            raise ValueError("CPE relocation source ownership is missing or ambiguous")
+
+        if not destination_rows:
+            cursor = db.execute(
+                "UPDATE cpe_cache SET ap_ip = ?, ip = ? "
+                "WHERE id = ? AND ap_ip = ? AND ip = ?",
+                (new_ap_ip, new_ip, source[0]["id"], old_ap_ip, old_ip),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("CPE relocation source changed before update")
+            return True
+
+        if len(destination_rows) != 1 or len(matching_destination) != 1:
+            raise ValueError("CPE relocation destination ownership is missing or ambiguous")
+        cursor = db.execute(
+            "DELETE FROM cpe_cache WHERE id = ? AND ap_ip = ? AND ip = ?",
+            (source[0]["id"], old_ap_ip, old_ip),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("CPE relocation source changed before delete")
+        return True
+
+
 def upsert_cpe(ap_ip: str, cpe_data: dict):
     """Update or insert a CPE record."""
     with get_db() as db:
