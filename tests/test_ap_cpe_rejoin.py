@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from updater import app as app_module
+from updater.poller import NetworkPoller
 from updater.vendors.tachyon.client import TachyonClient
 
 
@@ -114,34 +115,54 @@ async def test_rejoin_check_runs_after_saved_cpe_restart(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_failed_cpe_reboot_still_fails_when_peer_does_not_return(monkeypatch):
+    calls = []
+
     class CPE:
+        def __init__(self, ip, *_credentials):
+            self.ip = ip
+
         async def connect(self):
+            calls.append((self.ip, "connect"))
             return True
 
         async def restart_wireless_or_reboot(self):
+            calls.append((self.ip, "reboot"))
             return False
 
-    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: CPE)
-    job = SimpleNamespace(credentials={"192.0.2.8": ("user", "password")})
-    baseline = {"peers": {"02:00:00:00:00:01": {"ip": "192.0.2.8"}}}
-    observed_deadlines = []
-
-    async def check(_job, _ap_ip, _ap_client, _baseline, deadline):
-        observed_deadlines.append(deadline)
-        return False, {"reason": "CPE is missing from the AP peer list"}
-
     class AP:
-        def get_reboot_timeout(self, _role):
-            return 600
+        last_connected_cpes_valid = True
 
-    monkeypatch.setattr(app_module, "_check_ap_customer_recovery", check)
+        async def get_connected_cpes(self):
+            # The device read reports that the saved CPE did not return.
+            return []
+
+        async def get_bridge_table(self):
+            return []
+
+        def get_reboot_timeout(self, role):
+            assert role == "ap"
+            return 5
+
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: CPE)
+    monkeypatch.setattr(app_module, "get_poller", lambda: NetworkPoller())
+    clock = {"now": 10.0}
+    monkeypatch.setattr(app_module, "monotonic", lambda: clock["now"])
+
+    async def sleep(seconds):
+        clock["now"] += seconds
+
+    monkeypatch.setattr(app_module.asyncio, "sleep", sleep)
+    job = SimpleNamespace(
+        credentials={"192.0.2.8": ("user", "password")}, ap_cpe_map={}
+    )
+    baseline = {"peers": {"02:00:00:00:00:01": {"ip": "192.0.2.8"}}}
     passed, evidence = await app_module._check_ap_recovery_after_cpe_rejoin(
         job, "192.0.2.1", AP(), baseline, 1.0
     )
 
     assert passed is False
-    assert evidence["reason"] == "CPE is missing from the AP peer list"
-    assert observed_deadlines[0] > app_module.monotonic()
+    assert evidence["reason"] == "CPE 02:00:00:00:00:01 is missing from the AP peer list"
+    assert calls == [("192.0.2.8", "connect"), ("192.0.2.8", "reboot")]
 
 
 @pytest.mark.asyncio
