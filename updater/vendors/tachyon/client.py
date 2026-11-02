@@ -981,6 +981,10 @@ class TachyonClient:
             logger.info(f"Reboot triggered on {self.ip} (connection closed)")
         return await self.wait_for_reboot(timeout=timeout)
 
+    async def restart_wireless_or_reboot(self, timeout: int = 300) -> bool:
+        """Reboot the device because no supported wireless restart API is known."""
+        return await self.reboot(timeout=timeout)
+
     async def update_firmware(
         self,
         firmware_path: str,

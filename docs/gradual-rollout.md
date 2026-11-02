@@ -216,6 +216,11 @@ pre-update reboot before flashing and after the firmware reboot. The gate also
 checks reported `eth0` link rates and requires the same or a higher rate. A
 failed check stops the window through `rollout_gate.py`.
 
+After AP firmware recovery, Manager reboots each reachable CPE in the saved
+pre-update peer list, then checks that the peers and customer paths returned.
+The Tachyon client has no documented wireless-only restart call, so it uses
+the documented `POST /reboot` endpoint. Unreachable CPEs are skipped and logged.
+
 **Key points:** Store the first failed device gate under the maintenance window
 instance key. Keep that window closed to new jobs and device actions. Run one
 device through recovery before starting another device.

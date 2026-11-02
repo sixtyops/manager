@@ -4382,6 +4382,31 @@ async def _check_ap_customer_recovery(job, ap_ip, ap_client, baseline, deadline)
         return False, {"reason": reason if 'reason' in locals() else "A4 recovery deadline expired"}
 
 
+async def _restart_ap_cpes_after_recovery(job, ap_ip, baseline):
+    """Reboot reachable CPEs saved before an AP update so they scan again."""
+    for radio_mac, saved in baseline.get("peers", {}).items():
+        cpe_ip = saved.get("ip")
+        credentials = job.credentials.get(cpe_ip) or job.credentials.get(ap_ip)
+        if not cpe_ip or not credentials:
+            logger.warning("Skipping saved CPE %s after AP update: credentials are unavailable", radio_mac)
+            continue
+        try:
+            cpe_client = get_driver("tachyon")(cpe_ip, *credentials)
+            if await cpe_client.connect() is not True:
+                logger.warning("Skipping unreachable CPE %s (%s) after AP update", radio_mac, cpe_ip)
+                continue
+            if not await cpe_client.restart_wireless_or_reboot():
+                logger.warning("CPE %s (%s) did not return after AP update reboot", radio_mac, cpe_ip)
+        except Exception as exc:
+            logger.warning("Could not restart CPE %s (%s) after AP update: %s", radio_mac, cpe_ip, exc)
+
+
+async def _check_ap_recovery_after_cpe_rejoin(job, ap_ip, ap_client, baseline, deadline):
+    """Reboot saved CPEs before checking that they rejoined the recovered AP."""
+    await _restart_ap_cpes_after_recovery(job, ap_ip, baseline)
+    return await _check_ap_customer_recovery(job, ap_ip, ap_client, baseline, deadline)
+
+
 async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
     """Finalize a job if its task crashes unexpectedly."""
     if job.status == "completed":
@@ -6409,7 +6434,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             if not target or _normalize_version(getattr(recovered_info, "current_version", None)) != _normalize_version(target):
                 raise RuntimeError("Target firmware version was not confirmed after firmware reboot")
             if flash_customer_baseline is not None:
-                passed, evidence = await _check_ap_customer_recovery(
+                passed, evidence = await _check_ap_recovery_after_cpe_rejoin(
                     job, ip, client, flash_customer_baseline,
                     getattr(client, "last_reboot_deadline", None),
                 )

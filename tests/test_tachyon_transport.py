@@ -111,6 +111,7 @@ async def test_login_payload_and_cookie_cleanup(process, caplog, verify):
     ]),
     ("trigger_update", {}, [("POST", "/cgi.lua/update")]),
     ("reboot", {}, [("POST", "/reboot")]),
+    ("restart_wireless_or_reboot", {}, [("POST", "/reboot")]),
 ])
 @pytest.mark.parametrize("verify", [False, True])
 async def test_authenticated_request_paths_keep_secrets_in_stdin(

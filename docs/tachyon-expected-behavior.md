@@ -76,3 +76,12 @@ prove a DHCP lease or successful application traffic. Do not generate traffic
 to qualify an idle customer link. Record a healthy two-way baseline and require
 positive deltas in both directions after recovery when that baseline had
 two-way traffic.
+
+## AP update CPE rejoin
+
+**Key points:** After an AP firmware update recovers, Manager reboots each
+reachable CPE saved in the pre-update peer list before it checks peer return.
+
+**Detail:** The repository documents `POST /reboot` and has no observed or
+documented wireless-only restart call. Manager uses the existing reboot call
+for this step. It skips and logs CPEs that it cannot reach.
