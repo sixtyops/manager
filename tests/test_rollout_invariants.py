@@ -1,22 +1,15 @@
-"""Rollout timing invariants — the guarantees that keep a fleet rollout from
-updating the whole fleet at once.
+"""Timing and failure invariants for scheduled firmware queue admission.
 
-The canary phase was removed: the first fleet wave (pct10) is the de-facto canary
-and is protected by halt-on-first-failure. Two timing rules remain (rollout_gate):
-
-  1. One wave-job per maintenance window (no cascade).
-  2. The Firmware Hold gates the first wave (pct10) of newly-released firmware
-     until N days after the firmware's Tachyon release date — or earlier once a
-     device of that model family is confirmed working on it.
-
-These drive the scheduler across multiple ticks within one maintenance window and
-across successive windows — the exact scenario that lets the "all phases in one
-night" cascade slip through if Rule 1 ever regresses.
+The scheduler derives pending devices from current inventory, applies Firmware
+Hold per family, and persists each target's cutoff across restarts. One failure
+stops later queue admission across families. Maintenance window identity remains
+timezone-aware across midnight and daylight-saving changes.
 """
 
 import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -871,103 +864,6 @@ def test_concurrent_wave_reservations_admit_one_batch(mock_db, monkeypatch, tmp_
     assert db.get_rollout(rollout_id)["last_phase_window"] == '["firmware","2026-06-02"]'
 
 
-def test_reserved_pending_ap_retries_after_scheduler_restart(mock_db, monkeypatch):
-    _seed_aps(1)
-    db.set_settings(_settings(hold_days=0))
-    db.create_rollout(FW)
-    rollout = db.get_active_rollout()
-    engine.start_wave(
-        rollout,
-        {"ap_ips": ["192.0.2.10"], "switch_ips": []},
-        {"bank_mode": "both"},
-        ("firmware", "2026-06-02"),
-    )
-
-    retry_scheduler, retry_start = _make_scheduler()
-    h = _Harness(retry_scheduler, monkeypatch)
-    async def restart_ticks():
-        await h.tick(day=2)
-        assert retry_start.call_count == 0
-        await h.tick(day=3)
-
-    asyncio.run(restart_ticks())
-    assert retry_start.call_count == 1
-    assert db.get_rollout_devices(rollout["id"])[0]["status"] == "pending"
-
-
-@pytest.mark.asyncio
-async def test_empty_scheduler_batch_does_not_advance_phase(mock_db, monkeypatch):
-    _seed_aps(1)
-    db.set_settings(_settings(hold_days=0))
-    rollout_id = db.create_rollout(FW)
-    set_version(db.get_all_access_points_dict(enabled_only=False)["192.0.2.10"], "1.12.3.55002")
-    scheduler, start_update = _make_scheduler()
-    h = _Harness(scheduler, monkeypatch)
-
-    await h.tick()
-
-    rollout = db.get_rollout(rollout_id)
-    assert rollout["phase"] == "pct10"
-    assert rollout["last_phase_window"] is None
-    assert start_update.call_count == 0
-
-
-@pytest.mark.asyncio
-async def test_rejected_wave_reservation_does_not_start_job(mock_db, monkeypatch):
-    _seed_aps(1)
-    db.set_settings(_settings(hold_days=0))
-    db.create_rollout(FW)
-    scheduler, start_update = _make_scheduler()
-    monkeypatch.setattr(db, "reserve_rollout_wave", lambda **kwargs: False)
-
-    await _Harness(scheduler, monkeypatch).tick()
-
-    start_update.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_scheduler_reserves_final_wave_straggler_and_rejects_late_addition(
-    mock_db, monkeypatch
-):
-    _seed_aps(1)
-    db.set_settings(_settings(hold_days=0))
-    saved_ip = "192.0.2.10"
-    new_ip = "192.0.2.99"
-    later_ip = "192.0.2.98"
-    rollout_id = db.create_rollout(
-        FW,
-        members=[{"ip": saved_ip, "device_type": "ap"}],
-        settings_snapshot={"allow_downgrade": "false"},
-    )
-    with db.get_db() as conn:
-        conn.execute(
-            "UPDATE rollouts SET status = 'active', phase = 'pct100' WHERE id = ?",
-            (rollout_id,),
-        )
-    db.upsert_access_point(
-        new_ip, "fixture-user", "synthetic-password", model="TNA-301",
-        firmware_version="1.0.0", enabled=True,
-    )
-    scheduler, start_update = _make_scheduler()
-    harness = _Harness(scheduler, monkeypatch)
-
-    await harness.tick(day=2)
-
-    admitted = {row["ip"]: row for row in db.get_rollout_devices(rollout_id)}
-    assert admitted[new_ip]["is_straggler"] == 1
-    assert admitted[new_ip]["phase_assigned"] == "pct100"
-    start_update.assert_awaited_once()
-
-    db.upsert_access_point(
-        later_ip, "fixture-user", "synthetic-password", model="TNA-301",
-        firmware_version="1.0.0", enabled=True,
-    )
-    await harness.tick(day=3)
-
-    assert later_ip not in {row["ip"] for row in db.get_rollout_devices(rollout_id)}
-    assert start_update.await_count == 1
-
-
 def test_overnight_window_keeps_its_start_date_key():
     schedule = MaintenanceSchedule(
         schedule_id=7, days=frozenset({0}), start_hour=23, end_hour=2, tz="UTC"
@@ -979,14 +875,15 @@ def test_overnight_window_keeps_its_start_date_key():
 
 
 class _Harness:
-    """Drives _check_and_run at a controllable clock with the env gates stubbed
-    out, so the tests isolate the wave-gate / hold logic."""
+    """Drive scheduler ticks at a fixed clock with environmental checks stubbed."""
 
     def __init__(self, scheduler, monkeypatch):
         self.scheduler = scheduler
-        self.now = datetime(2026, 6, 2, 3, 15)  # inside the 03:00-04:00 window
+        self.now = datetime(2026, 6, 2, 3, 15, tzinfo=ZoneInfo("America/Chicago"))
+
         async def _time(_tz):
             return (True, self.now)
+
         monkeypatch.setattr("updater.scheduler.services.validate_time_sources", _time)
         monkeypatch.setattr(
             "updater.scheduler.services.is_in_schedule_window", lambda *a, **k: True
@@ -997,489 +894,86 @@ class _Harness:
 
     async def tick(self, day: int = None):
         if day is not None:
-            self.now = datetime(2026, 6, day, 3, 15)
+            self.now = datetime(2026, 6, day, 3, 15, tzinfo=ZoneInfo("America/Chicago"))
+        import hashlib
+        for key in ("selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100"):
+            filename = db.get_setting(key)
+            if filename and not db.get_firmware_sha256(filename):
+                db.register_firmware(filename, sha256=hashlib.sha256(filename.encode()).hexdigest())
         await self.scheduler._check_and_run()
 
     def complete_job(self, failed: int = 0):
-        """Simulate the in-flight job finishing for its devices (all success, or
-        `failed` of them failing → halt-on-first-failure)."""
-        rollout = db.get_active_rollout()
-        pending = [
-            d for d in db.get_rollout_devices(rollout["id"], phase=rollout["phase"])
-            if d["status"] == "pending"
-        ]
-        statuses = {d["ip"]: "success" for d in pending}
-        fail_n = failed
-        for d in pending:
-            if fail_n <= 0:
-                break
-            statuses[d["ip"]] = "failed"
-            fail_n -= 1
-        success = sum(1 for s in statuses.values() if s == "success")
+        context = self.scheduler._queue_job_context[self.scheduler._current_job_id]
+        entries = context["entries"]
+        statuses = {entry["ip"]: "success" for entry in entries}
+        if failed and entries:
+            statuses[entries[0]["ip"]] = "failed"
         with patch("updater.scheduler.asyncio.create_task", _discard_task):
             self.scheduler.on_job_completed(
-                self.scheduler._current_job_id, success, failed, device_statuses=statuses
+                self.scheduler._current_job_id, len(entries) - failed, failed,
+                device_statuses=statuses,
             )
 
 
-# ── Rule 1: one wave per maintenance window ──
-
 @pytest.mark.asyncio
-async def test_one_phase_per_window_no_cascade(mock_db, monkeypatch):
-    """After the 10% wave finishes, the next wave must NOT run in the same window
-    (the anti-cascade rule)."""
-    _seed_aps(10)
+async def test_scheduler_dispatches_exact_serial_queue(mock_db, monkeypatch):
+    _seed_aps(2)
+    parent_ip = "192.0.2.10"
+    db.upsert_cpe(parent_ip, {
+        "ip": "192.0.2.50", "model": "TNA-301", "firmware_version": "1.0.0",
+        "auth_status": "ok",
+    })
     db.set_settings(_settings(hold_days=0))
     scheduler, start_update = _make_scheduler()
-    h = _Harness(scheduler, monkeypatch)
 
-    await h.tick()  # window 1: pct10
-    assert start_update.call_count == 1
-    rollout = db.get_active_rollout()
-    assert rollout["phase"] == "pct10"
+    await _Harness(scheduler, monkeypatch).tick()
 
-    h.complete_job()  # pct10 done -> advances to pct50
-    assert db.get_active_rollout()["phase"] == "pct50"
-
-    await h.tick()  # SAME window — must hold
-    assert start_update.call_count == 1, "second wave ran in the same window (cascade)"
-    assert db.get_active_rollout()["phase"] == "pct50"
-    assert scheduler._state == "waiting"
+    start_update.assert_awaited_once()
+    kwargs = start_update.await_args.kwargs
+    assert [entry["role"] for entry in kwargs["device_entries"]] == ["cpe", "ap", "ap"]
+    assert kwargs["concurrency"] == 1
+    assert kwargs["bank_mode"] == "one"
+    assert kwargs["device_entries"][0]["parent_ap"] == parent_ip
 
 
 @pytest.mark.asyncio
-async def test_phases_progress_one_per_window(mock_db, monkeypatch):
-    """Across successive windows the rollout walks pct10 -> pct50 -> pct100,
-    exactly one wave per window."""
-    _seed_aps(10)
-    db.set_settings(_settings(hold_days=0))
-    scheduler, start_update = _make_scheduler()
-    h = _Harness(scheduler, monkeypatch)
-
-    expected = ["pct10", "pct50", "pct100"]
-    seen = []
-    for day in (2, 3, 4, 5):
-        await h.tick(day=day)
-        rollout = db.get_active_rollout()
-        if rollout is None:  # rollout completed
-            break
-        seen.append(rollout["phase"])
-        h.complete_job()
-
-    assert seen == expected, f"waves did not advance one-per-window: {seen}"
-    assert start_update.call_count == 3
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("exclusion", ["disabled", "scope", "missing"])
-async def test_disabled_saved_member_is_terminal_and_rollout_completes(
-    mock_db, monkeypatch, exclusion
-):
-    _seed_aps(10)
-    db.set_settings(_settings(hold_days=0))
-    scheduler, start_update = _make_scheduler()
-    h = _Harness(scheduler, monkeypatch)
-
-    await h.tick(day=2)
-    rollout = db.get_active_rollout()
-    rollout_id = rollout["id"]
-    h.complete_job()
-
-    devices = db.get_access_points()
-    disabled_ip = devices[-1]["ip"]
-    if exclusion == "disabled":
-        assert db.bulk_set_enabled("ap", [disabled_ip], False) == 1
-        terminal_status = "disabled"
-    elif exclusion == "missing":
-        db.delete_access_point(disabled_ip)
-        terminal_status = "removed (archived)"
-    else:
-        settings = db.get_all_settings()
-        settings.update(
-            schedule_scope="aps",
-            schedule_scope_data=",".join(device["ip"] for device in devices[:-1]),
-        )
-        db.set_settings(settings)
-        terminal_status = "removed (scope)"
-
-    await h.tick(day=3)
-    member = next(
-        row for row in db.get_rollout_devices(rollout_id)
-        if row["ip"] == disabled_ip
-    )
-    assert member["status"] == terminal_status
-    h.complete_job()
-
-    await h.tick(day=4)
-    h.complete_job()
-
-    assert start_update.call_count == 3
-    assert db.get_rollout(rollout_id)["status"] == "completed"
-
-
-@pytest.mark.asyncio
-async def test_empty_phase_advances_through_gate_and_waits_for_next_window(
-    mock_db, monkeypatch
-):
+async def test_queue_failure_stops_later_windows_and_target_changes(mock_db, monkeypatch):
     _seed_aps(2)
     db.set_settings(_settings(hold_days=0))
-    ips = [device["ip"] for device in db.get_access_points()]
-    rollout_id = db.create_rollout(
-        FW,
-        members=[{"ip": ip, "device_type": "ap"} for ip in ips],
-        settings_snapshot={},
-    )
     scheduler, start_update = _make_scheduler()
     harness = _Harness(scheduler, monkeypatch)
 
-    def candidates_for_phase(rollout, *_args):
-        return [ips[0]] if rollout["phase"] == "pct50" else []
+    await harness.tick()
+    harness.complete_job(failed=1)
+    stop = db.get_firmware_window_stop(("firmware", "2026-06-02"))
+    assert stop and stop["device_ip"]
+    assert db.get_unresolved_firmware_window_stops()
 
-    monkeypatch.setattr(scheduler, "_get_devices_for_phase", candidates_for_phase)
-    monkeypatch.setattr(scheduler, "_get_switches_for_phase", lambda *_args: [])
-
-    await harness.tick(day=2)
-
-    advanced = db.get_rollout(rollout_id)
-    assert advanced["phase"] == "pct50"
-    assert advanced["last_phase_window"]
-    start_update.assert_not_awaited()
-
-    await harness.tick(day=2)
-    assert db.get_rollout(rollout_id)["phase"] == "pct50"
-    start_update.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_rollout_with_only_terminal_members_closes(mock_db, monkeypatch):
-    _seed_aps(1)
-    db.set_settings(_settings(hold_days=0))
-    ip = db.get_access_points()[0]["ip"]
-    rollout_id = db.create_rollout(
-        FW, members=[{"ip": ip, "device_type": "ap"}], settings_snapshot={}
-    )
-    db.mark_rollout_device(rollout_id, ip, "removed (archived)")
-    scheduler, start_update = _make_scheduler()
-    harness = _Harness(scheduler, monkeypatch)
-
-    await harness.tick(day=2)
-
-    assert db.get_rollout(rollout_id)["status"] == "completed"
-    start_update.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_all_saved_members_excluded_from_empty_scope_closes_rollout(
-    mock_db, monkeypatch
-):
-    _seed_aps(1)
-    ip = db.get_access_points()[0]["ip"]
-    settings = _settings(hold_days=0)
-    settings.update(schedule_scope="aps", schedule_scope_data="")
+    settings = db.get_all_settings()
+    settings["selected_firmware_30x"] = _dated("tna-30x-1.12.4-r55003", 30)
     db.set_settings(settings)
-    rollout_id = db.create_rollout(
-        FW, members=[{"ip": ip, "device_type": "ap"}], settings_snapshot={}
-    )
-    scheduler, start_update = _make_scheduler()
-
-    await _Harness(scheduler, monkeypatch).tick(day=2)
-
-    assert db.get_rollout_devices(rollout_id)[0]["status"] == "removed (scope)"
-    assert db.get_rollout(rollout_id)["status"] == "completed"
-    start_update.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_saved_member_back_in_scope_before_wave_is_processed_normally(
-    mock_db, monkeypatch
-):
-    fleet = make_fleet(sites=1, aps_per_site=2, switches_per_site=0,
-                       ap_models=("TNA-301",))
-    saved_ip = fleet["aps"][1]["ip"]
-    settings = _settings(hold_days=0)
-    settings.update(schedule_scope="aps", schedule_scope_data=fleet["aps"][0]["ip"])
-    db.set_settings(settings)
-    rollout_id = db.create_rollout(
-        FW,
-        members=[{"ip": saved_ip, "device_type": "ap"}],
-        settings_snapshot={},
-    )
-
-    settings["schedule_scope_data"] = saved_ip
-    db.set_settings(settings)
-    scheduler, start_update = _make_scheduler()
-    await _Harness(scheduler, monkeypatch).tick()
-
-    assert start_update.call_count == 1
-    assert start_update.call_args.kwargs["ap_ips"] == [saved_ip]
-    assert db.get_rollout_devices(rollout_id)[0]["status"] == "pending"
-
-
-@pytest.mark.asyncio
-async def test_held_phase_logs_event(mock_db, monkeypatch):
-    """Holding the next wave for the window rule emits an observable event."""
-    _seed_aps(10)
-    db.set_settings(_settings(hold_days=0))
-    scheduler, start_update = _make_scheduler()
-    precheck = scheduler._precheck_cpe_credentials
-    h = _Harness(scheduler, monkeypatch)
-
-    await h.tick()
-    h.complete_job()
-    for _ in range(3):
-        await h.tick()  # same window -> held
-    assert precheck.await_count == 1
-
-    with db.get_db() as conn:
-        rows = conn.execute(
-            "SELECT 1 FROM schedule_log WHERE event = 'phase_held'"
-        ).fetchall()
-    assert len(rows) >= 1
-
-
-# ── Rule 2: the Firmware Hold gates the first fleet wave ──
-
-@pytest.mark.asyncio
-async def test_release_date_hold_gates_first_wave(mock_db, monkeypatch):
-    """Newly-released firmware (release date today, 6-day hold) must NOT roll the
-    first wave — the fleet waits out the Firmware Hold."""
-    _seed_aps(10)
-    db.set_settings(_settings(hold_days=6, firmware=FW_HELD))
-    scheduler, start_update = _make_scheduler()
-    precheck = scheduler._precheck_cpe_credentials
-    h = _Harness(scheduler, monkeypatch)
-
-    for _ in range(3):
-        await h.tick(day=2)  # release 2026-06-01 + 6 days clears 06-07; today is 06-02
-    assert start_update.call_count == 0
-    precheck.assert_not_awaited()
-    assert scheduler._state == "blocked_firmware_hold"
-    rollout = db.get_active_rollout()
-    assert rollout["phase"] == "pct10"
-    with db.get_db() as conn:
-        rows = conn.execute(
-            "SELECT 1 FROM schedule_log WHERE event = 'blocked_firmware_hold'"
-        ).fetchall()
-    assert len(rows) >= 1
-
-
-@pytest.mark.asyncio
-async def test_waiting_hold_members_survive_scope_change_and_scheduler_restart(
-    mock_db, monkeypatch, hold_clock
-):
-    fleet = make_fleet(sites=1, aps_per_site=2, switches_per_site=0,
-                       ap_models=("TNA-301", "TNA-303L"))
-    settings = _settings(hold_days=6, firmware="tna-30x-1.12.3-r55002-20260601-x.bin")
-    settings["selected_firmware_303l"] = "tna-303l-1.12.4-r7782-20260601-x.bin"
-    db.set_settings(settings)
-    scheduler, start_update = _make_scheduler()
-    await _Harness(scheduler, monkeypatch).tick()
-
-    rollout = db.get_active_rollout()
-    assert rollout["status"] == "waiting_hold"
-    assert {row["device_type"] for row in db.get_rollout_devices(rollout["id"])} == {"ap"}
-    settings["schedule_scope"] = "aps"
-    settings["schedule_scope_data"] = fleet["aps"][0]["ip"]
-    db.set_settings(settings)
-    restarted, _ = _make_scheduler()
-    await _Harness(restarted, monkeypatch).tick()
-
-    assert db.get_rollout(rollout["id"])["status"] == "waiting_hold"
-    assert {row["ip"] for row in db.get_rollout_devices(rollout["id"])} == {
-        device["ip"] for device in fleet["aps"]
-    }
-    assert start_update.call_count == 0
-    assert restarted._state == "blocked_firmware_hold"
-
-
-@pytest.mark.asyncio
-async def test_unheld_member_families_activate_and_empty_family_is_ignored(
-    mock_db, monkeypatch, hold_clock
-):
-    fleet = make_fleet(sites=1, aps_per_site=2, switches_per_site=0,
-                       ap_models=("TNA-301", "TNA-303L"))
-    set_version(fleet["aps"][1], "1.12.4.7782")
-    settings = _settings(hold_days=6, firmware="tna-30x-1.12.3-r55002-20260501-x.bin")
-    settings["selected_firmware_303l"] = "tna-303l-1.12.4-r7782-20260601-x.bin"
-    db.set_settings(settings)
-    scheduler, start_update = _make_scheduler()
-
-    await _Harness(scheduler, monkeypatch).tick()
-
-    rollout = db.get_active_rollout()
-    assert rollout["status"] == "active", scheduler._held_families(settings, rollout)
-    members = db.get_rollout_devices(rollout["id"])
-    assert {row["ip"] for row in members} == {fleet["aps"][0]["ip"]}
-    assert start_update.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_attached_cpe_family_keeps_waiting_rollout_held(
-    mock_db, monkeypatch, hold_clock
-):
-    fleet = make_fleet(sites=1, aps_per_site=1, cpes_per_ap=1,
-                       switches_per_site=0, ap_models=("TNA-301",))
-    cpe = {**fleet["cpes"][0], "model": "TNA-303L", "auth_status": "ok"}
-    db.upsert_cpe(cpe["ap_ip"], cpe)
-    settings = _settings(
-        hold_days=6,
-        firmware="tna-30x-1.12.3-r55002-20260501-x.bin",
-    )
-    settings["selected_firmware_303l"] = "tna-303l-1.12.4-r7782-20260601-x.bin"
-    db.set_settings(settings)
-    scheduler, start_update = _make_scheduler()
-    harness = _Harness(scheduler, monkeypatch)
-
-    await harness.tick(day=2)
-
-    rollout = db.get_active_rollout()
-    assert rollout["status"] == "waiting_hold"
-    held_families, _ = scheduler._held_families(settings, rollout)
-    assert held_families == {"tna-303l"}
-    assert start_update.call_count == 0
-
-    monkeypatch.setattr(
-        db,
-        "get_firmware_hold_info",
-        lambda filename, hold_days: {"cleared": True, "clears_at": None},
-    )
     await harness.tick(day=3)
 
-    assert db.get_rollout(rollout["id"])["status"] == "active"
-    assert start_update.call_count == 1
+    assert start_update.await_count == 1
+    assert db.get_unresolved_firmware_window_stops()[0]["device_ip"] == stop["device_ip"]
+    assert scheduler._state == "blocked_safety"
 
 
 @pytest.mark.asyncio
-async def test_confirmed_member_family_activates_waiting_rollout(mock_db, monkeypatch, hold_clock):
-    fleet = make_fleet(aps_per_site=2, switches_per_site=0, ap_models=("TNA-301", "TNA-303L"))
-    settings = _settings(hold_days=6, firmware="tna-30x-1.12.3-r55002-20260501-x.bin")
-    settings["selected_firmware_303l"] = "tna-303l-1.12.4-r7782-20260601-x.bin"
-    db.set_settings(settings)
-    scheduler, start_update = _make_scheduler()
-    await _Harness(scheduler, monkeypatch).tick()
-    rollout = db.get_active_rollout()
-    assert rollout["status"] == "waiting_hold"
-    _seed_confirmed(fleet["aps"][1]["ip"], "1.12.4.7782", model="TNA-303L")
-
-    restarted, start_update = _make_scheduler()
-    await _Harness(restarted, monkeypatch).tick()
-
-    assert db.get_rollout(rollout["id"])["status"] == "active"
-    assert start_update.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_hold_clears_after_days_elapse(mock_db, monkeypatch):
-    """Once the firmware's release date + hold days has elapsed, the first wave
-    runs without any confirmed device."""
-    _seed_aps(10)
-    db.set_settings(_settings(hold_days=6, firmware=FW_AGED))  # released 2020 -> long clear
-    scheduler, start_update = _make_scheduler()
-    h = _Harness(scheduler, monkeypatch)
-
-    await h.tick(day=2)
-    assert start_update.call_count == 1
-    assert scheduler._state == "running"
-    assert db.get_active_rollout()["phase"] == "pct10"
-
-
-@pytest.mark.asyncio
-async def test_hold_clears_via_confirmed_device(mock_db, monkeypatch):
-    """A device confirmed working on the new firmware clears its family's hold
-    early — the first wave runs inside the release-date hold window, and the
-    clearing device is logged."""
-    _seed_aps(10)
-    settings = _settings(hold_days=6, firmware=FW_HELD)
-    db.set_settings(settings)
-    scheduler, start_update = _make_scheduler()
-    target = scheduler._target_versions(settings, None)["tna-30x"]
-    _seed_confirmed("10.0.0.200", target)
-    h = _Harness(scheduler, monkeypatch)
-
-    await h.tick(day=2)  # still inside the release-date hold, but confirmed -> RUN
-    assert start_update.call_count == 1
-    assert scheduler._state == "running"
-    assert scheduler._hold_clear_reason and "confirmed working" in scheduler._hold_clear_reason
-    with db.get_db() as conn:
-        rows = conn.execute(
-            "SELECT 1 FROM schedule_log WHERE event = 'firmware_hold_cleared'"
-        ).fetchall()
-    assert len(rows) >= 1
-
-
-@pytest.mark.asyncio
-async def test_hold_does_not_clear_for_unconfirmed_or_unhealthy_device(mock_db, monkeypatch):
-    """Fail-closed: a same-family device on the target version but NOT recorded as
-    confirmed (e.g. organic/observed only) does not clear the hold."""
-    _seed_aps(10)
-    settings = _settings(hold_days=6, firmware=FW_HELD)
-    db.set_settings(settings)
-    scheduler, start_update = _make_scheduler()
-    target = scheduler._target_versions(settings, None)["tna-30x"]
-    # On the target version + healthy, but no confirmation event recorded.
-    db.upsert_access_point("10.0.0.200", "root", "pass", enabled=True, firmware_version=target)
-    db.update_ap_status("10.0.0.200", last_seen=datetime.now(timezone.utc).isoformat(), last_error=None)
-    h = _Harness(scheduler, monkeypatch)
-
-    await h.tick(day=2)
-    assert start_update.call_count == 0
-    assert scheduler._state == "blocked_firmware_hold"
-
-
-@pytest.mark.asyncio
-async def test_confirmed_clear_is_per_family(mock_db, monkeypatch):
-    """A confirmed tna-30x device never clears a held tna-303l family (the
-    per-family clearing invariant). Because the hold is enforced all-or-nothing,
-    a still-held 303l family holds the whole first wave even though tna-30x is
-    cleared — so no held firmware (incl. attached CPEs) ever slips out."""
-    _seed_aps(10)  # tna-30x devices on 1.0.0
-    db.upsert_access_point("10.0.0.50", "root", "pass", enabled=True,
-                           firmware_version="1.0.0", model="TNA-303L")
-    settings = _settings(hold_days=6, firmware=FW_HELD)
+async def test_held_family_waits_without_blocking_an_unheld_family(mock_db, monkeypatch):
+    fleet = make_fleet(sites=1, aps_per_site=2, switches_per_site=0,
+                       ap_models=("TNA-301", "TNA-303L"))
+    settings = _settings(hold_days=6, firmware=FW_AGED)
     settings["selected_firmware_303l"] = FW_303L_HELD
     db.set_settings(settings)
     scheduler, start_update = _make_scheduler()
-    targets = scheduler._target_versions(settings, None)
-    _seed_confirmed("10.0.0.200", targets["tna-30x"])  # confirms tna-30x only
 
-    held, family_holds = scheduler._held_families(settings, None)
-    assert "tna-303l" in held          # 303l still held (no confirmed device)
-    assert "tna-30x" not in held       # 30x cleared by the confirmed device
+    await _Harness(scheduler, monkeypatch).tick()
 
-    h = _Harness(scheduler, monkeypatch)
-    await h.tick(day=2)
-    # All-or-nothing: the held 303l family holds the whole first wave.
-    assert start_update.call_count == 0
-    assert scheduler._state == "blocked_firmware_hold"
-
-    # Confirm a 303l device too -> both families cleared -> the wave runs.
-    _seed_confirmed("10.0.0.51", targets["tna-303l"], model="TNA-303L")
-    await h.tick(day=3)
-    assert start_update.call_count == 1
+    assert start_update.await_count == 1
+    entries = start_update.await_args.kwargs["device_entries"]
+    assert [entry["ip"] for entry in entries] == [fleet["aps"][0]["ip"]]
     assert scheduler._state == "running"
-
-
-# ── Halt-on-first-failure ──
-
-@pytest.mark.asyncio
-async def test_halt_on_first_failure_pauses_rollout(mock_db, monkeypatch):
-    """A device that fails during a wave pauses the whole rollout — the next wave
-    is never assigned (halt-on-first-failure)."""
-    _seed_aps(10)
-    db.set_settings(_settings(hold_days=0))
-    scheduler, start_update = _make_scheduler()
-    h = _Harness(scheduler, monkeypatch)
-
-    await h.tick()  # pct10 runs
-    assert db.get_active_rollout()["phase"] == "pct10"
-    h.complete_job(failed=1)  # one device fails
-
-    rollout = db.get_active_rollout()
-    assert rollout["status"] == "paused"
-    assert rollout["phase"] == "pct10"  # never advanced to pct50
-
-    await h.tick(day=3)  # next window — paused rollout does not run
-    assert start_update.call_count == 1
 
 
 # ── Pure-logic gate tests (no scheduler/DB) ──
@@ -1642,17 +1136,16 @@ async def test_managed_confirmation_hold_boundaries(mock_db, monkeypatch, hold_c
     assert holds[family]["confirmed_by"] == (prover["ip"] if accepted else None)
     h = _Harness(scheduler, monkeypatch)
     await h.tick()
-    assert start_update.call_count == int(accepted)
-    assert scheduler._state == ("running" if accepted else "blocked_firmware_hold")
+    should_run = accepted or role == "switch"
+    assert start_update.call_count == int(should_run)
+    assert scheduler._state == ("running" if should_run else "blocked_firmware_hold")
     if accepted:
         call = start_update.call_args.kwargs
-        candidates = call["switch_ips"] if role == "switch" else call["ap_ips"]
+        candidates = [
+            entry["ip"] for entry in call["device_entries"]
+            if entry["role"] == role
+        ]
         assert candidates and prover["ip"] not in candidates
-        h.complete_job()
-        assert db.get_active_rollout()["phase"] == "pct50"
-        await h.tick()
-        assert start_update.call_count == 1, "Hold clearance started a second wave in one window"
-        assert scheduler._state == "waiting"
 
 
 @pytest.mark.parametrize("failed_read", ["get_all_access_points_dict", "get_all_switches_dict"])

@@ -46,7 +46,7 @@ async def test_unready_tick_preserves_rollout_and_admits_no_job(
 
 
 @pytest.mark.asyncio
-async def test_recorded_readiness_can_be_revoked_between_waves(mock_db, monkeypatch):
+async def test_recorded_readiness_can_be_revoked_before_a_later_window(mock_db, monkeypatch):
     _seed_aps(10)
     db.set_settings(_settings())
     scheduler, start = _make_scheduler()
@@ -54,7 +54,7 @@ async def test_recorded_readiness_can_be_revoked_between_waves(mock_db, monkeypa
     await harness.tick()
     harness.complete_job()
     before = db.get_active_rollout()
-    assert before["phase"] == "pct50"
+    assert before["phase"] == "pct10"
     db.set_setting("scheduled_rollout_safety_ready", "false")
 
     await harness.tick(day=3)
@@ -152,6 +152,7 @@ async def test_revocation_during_job_keeps_current_wave(mock_db, monkeypatch):
     db.set_setting("scheduled_rollout_safety_ready", "false")
     harness.complete_job()
     assert db.get_active_rollout()["phase"] == before["phase"]
-    assert scheduler._state == "blocked_safety"
+    assert scheduler._state == "waiting"
     await harness.tick(day=3)
     assert start.call_count == 1
+    assert scheduler._state == "blocked_safety"

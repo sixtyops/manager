@@ -656,8 +656,8 @@ class TestSchedulerCanaries:
 
 class TestSchedulerStartFailure:
     @pytest.mark.asyncio
-    async def test_failed_job_start_keeps_reserved_members_retryable(self, mock_db):
-        """A failed admission keeps its committed reservation for a later window."""
+    async def test_failed_queue_admission_does_not_consume_timing(self, mock_db):
+        """A rejected runner admission leaves the target ordinal unchanged."""
         from datetime import datetime as dt
         from zoneinfo import ZoneInfo
         from updater import services
@@ -671,7 +671,13 @@ class TestSchedulerStartFailure:
             "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
             "schedule_start_hour": "0",
             "schedule_end_hour": "23",
+            "firmware_canary_hold_days": "0",
         })
+        db.register_firmware(fw, sha256="a" * 64)
+        db.upsert_access_point(
+            "10.0.0.10", "root", "pass", enabled=True, model="TNA-301",
+            firmware_version="1.0.0",
+        )
         rollout_id = db.create_rollout(fw)
         rollout = db.get_rollout(rollout_id)
 
@@ -688,16 +694,66 @@ class TestSchedulerStartFailure:
              patch.object(scheduler, "_early_clear_note", return_value=None), \
              patch.object(scheduler, "_resolve_scope", return_value=["10.0.0.10"]), \
              patch.object(scheduler, "_resolve_switch_scope", return_value=[]), \
-             patch.object(scheduler, "_get_devices_for_phase", return_value=["10.0.0.10"]), \
-             patch.object(scheduler, "_get_switches_for_phase", return_value=[]):
+             patch.object(scheduler, "_scheduled_admission_allowed", return_value=True):
             await scheduler._check_and_run()
 
         start.assert_awaited_once()
-        statuses = [d["status"] for d in db.get_rollout_devices(rollout_id)]
-        assert statuses == ["pending"]
-        assert db.get_rollout(rollout_id)["last_phase_window"]
+        assert start.await_args.kwargs["device_entries"] == [
+            {"ip": "10.0.0.10", "role": "ap", "parent_ap": None}
+        ]
+        with db.get_db() as conn:
+            timing = conn.execute(
+                "SELECT ordinal FROM firmware_window_timing WHERE family='tna-30x'"
+            ).fetchone()
+        assert timing is None
+        assert db.get_rollout(rollout_id)["last_phase_window"] is None
         assert scheduler._current_job_id is None
         assert scheduler._state == "waiting"
+
+    @pytest.mark.asyncio
+    async def test_readiness_closed_before_admission_does_not_consume_timing(self, mock_db):
+        """A readiness change after queue preparation does not use a ramp window."""
+        from datetime import datetime as dt
+        from zoneinfo import ZoneInfo
+
+        fw = "tna-30x-1.2.3-r123.bin"
+        db.set_settings({
+            "schedule_enabled": "true",
+            "scheduled_rollout_safety_ready": "true",
+            "selected_firmware_30x": fw,
+            "timezone": "America/Chicago",
+            "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
+            "schedule_start_hour": "0",
+            "schedule_end_hour": "23",
+            "firmware_canary_hold_days": "0",
+        })
+        db.register_firmware(fw, sha256="a" * 64)
+        db.upsert_access_point(
+            "10.0.0.10", "root", "pass", enabled=True, model="TNA-301",
+            firmware_version="1.0.0",
+        )
+        db.create_rollout(fw)
+        start = AsyncMock(return_value="must-not-start")
+        scheduler = AutoUpdateScheduler(AsyncMock(), start)
+        readiness = [True, False]
+        now = dt(2026, 6, 23, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
+
+        with patch("updater.services.validate_time_sources", AsyncMock(return_value=(True, now))), \
+             patch("updater.scheduler.rollout_gate.phase_run_decision", return_value=(True, "ok")), \
+             patch.object(scheduler, "_firmware_changed", return_value=False), \
+             patch.object(scheduler, "_held_families", return_value=(set(), {})), \
+             patch.object(scheduler, "_early_clear_note", return_value=None), \
+             patch.object(scheduler, "_resolve_scope", return_value=["10.0.0.10"]), \
+             patch.object(scheduler, "_resolve_switch_scope", return_value=[]), \
+             patch.object(scheduler, "_scheduled_admission_allowed", side_effect=readiness):
+            await scheduler._check_and_run()
+
+        start.assert_not_awaited()
+        with db.get_db() as conn:
+            timing = conn.execute(
+                "SELECT ordinal FROM firmware_window_timing WHERE family='tna-30x'"
+            ).fetchone()
+        assert timing is None
 
     @pytest.mark.asyncio
     async def test_job_starting_defaults_to_one_bank_when_setting_is_missing(self, mock_db):
@@ -714,7 +770,13 @@ class TestSchedulerStartFailure:
             "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
             "schedule_start_hour": "0",
             "schedule_end_hour": "23",
+            "firmware_canary_hold_days": "0",
         })
+        db.register_firmware(fw, sha256="a" * 64)
+        db.upsert_access_point(
+            "10.0.0.10", "root", "pass", enabled=True, model="TNA-301",
+            firmware_version="1.0.0",
+        )
         settings = db.get_all_settings()
         settings.pop("bank_mode", None)
         rollout_id = db.create_rollout(fw)
@@ -727,24 +789,22 @@ class TestSchedulerStartFailure:
         now = dt(2026, 6, 23, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
         with patch("updater.scheduler.db.get_all_settings", return_value=settings), \
              patch("updater.services.validate_time_sources", AsyncMock(return_value=(True, now))), \
-             patch("updater.scheduler.rollout_gate.phase_run_decision", return_value=(True, "ok")), \
              patch.object(scheduler, "_firmware_changed", return_value=False), \
              patch.object(scheduler, "_held_families", return_value=(set(), {})), \
-             patch.object(scheduler, "_early_clear_note", return_value=None), \
              patch.object(scheduler, "_resolve_scope", side_effect=resolve_scope), \
              patch.object(scheduler, "_resolve_switch_scope", return_value=[]), \
-             patch.object(scheduler, "_get_devices_for_phase", return_value=["10.0.0.10"]), \
-             patch.object(scheduler, "_get_switches_for_phase", return_value=[]), \
+             patch.object(scheduler, "_scheduled_admission_allowed", return_value=True), \
              patch("updater.scheduler.db.log_schedule_event", wraps=db.log_schedule_event) as log_event:
             await scheduler._check_and_run()
 
         log_event.assert_any_call(
             "job_starting",
-            f"Rollout {rollout_id} phase=pct10, 1 APs, 0 switches, bank_mode=one",
+            "Derived queue: 1 device(s), concurrency=1",
         )
         start.assert_awaited_once()
         assert start.await_args.kwargs["bank_mode"] == "one"
-        assert db.get_rollout_devices(rollout_id)[0]["status"] == "pending"
+        assert start.await_args.kwargs["concurrency"] == 1
+        assert db.get_rollout(rollout_id)["last_phase_window"] is None
 
     @pytest.mark.asyncio
     async def test_successful_job_start_assigns_pending_devices(self, mock_db):
@@ -762,7 +822,13 @@ class TestSchedulerStartFailure:
             "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
             "schedule_start_hour": "0",
             "schedule_end_hour": "23",
+            "firmware_canary_hold_days": "0",
         })
+        db.register_firmware(fw, sha256="a" * 64)
+        db.upsert_access_point(
+            "10.0.0.10", "root", "pass", enabled=True, model="TNA-301",
+            firmware_version="1.0.0",
+        )
         rollout_id = db.create_rollout(fw)
 
         now = dt(2026, 6, 23, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
@@ -770,20 +836,32 @@ class TestSchedulerStartFailure:
         scheduler = AutoUpdateScheduler(AsyncMock(), start)
 
         with patch("updater.services.validate_time_sources", AsyncMock(return_value=(True, now))), \
-             patch("updater.scheduler.rollout_gate.phase_run_decision", return_value=(True, "ok")), \
              patch.object(scheduler, "_firmware_changed", return_value=False), \
              patch.object(scheduler, "_held_families", return_value=(set(), {})), \
-             patch.object(scheduler, "_early_clear_note", return_value=None), \
              patch.object(scheduler, "_resolve_scope", return_value=["10.0.0.10"]), \
              patch.object(scheduler, "_resolve_switch_scope", return_value=[]), \
-             patch.object(scheduler, "_get_devices_for_phase", return_value=["10.0.0.10"]), \
-             patch.object(scheduler, "_get_switches_for_phase", return_value=[]):
+             patch.object(scheduler, "_scheduled_admission_allowed", return_value=True):
             await scheduler._check_and_run()
 
         start.assert_awaited_once()
-        statuses = {d["ip"]: d["status"] for d in db.get_rollout_devices(rollout_id)}
-        assert statuses == {"10.0.0.10": "pending"}
+        assert start.await_args.kwargs["device_entries"] == [
+            {"ip": "10.0.0.10", "role": "ap", "parent_ap": None}
+        ]
+        assert db.get_rollout(rollout_id)["last_phase_window"] is None
         assert scheduler._current_job_id == "job-123"
+        with db.get_db() as conn:
+            timing = conn.execute(
+                "SELECT ordinal FROM firmware_window_timing WHERE family='tna-30x'"
+            ).fetchone()
+        assert timing["ordinal"] == 1
+
+        await scheduler._check_and_run()
+
+        with db.get_db() as conn:
+            timing = conn.execute(
+                "SELECT ordinal FROM firmware_window_timing WHERE family='tna-30x'"
+            ).fetchone()
+        assert timing["ordinal"] == 1
 
 
 class TestSchedulerStartupRecovery:
