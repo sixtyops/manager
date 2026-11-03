@@ -19,6 +19,101 @@ def _seed_rollout_devices():
     db.upsert_switch("10.0.1.6", "admin", "pass", enabled=True, firmware_version="1.0.0")
 
 
+class TestDerivedPendingQueue:
+    @staticmethod
+    def _settings():
+        return {
+            "schedule_scope": "all",
+            "selected_firmware_30x": "tna-30x-2.0.0-r200.bin",
+            "selected_firmware_303l": "tna-303l-2.0.0-r200.bin",
+            "selected_firmware_tns100": "tns-100-2.0.0-r200.bin",
+            "firmware_update_cooldown_days": "0",
+        }
+
+    def test_orders_cpes_then_aps_then_switches_by_normalized_ip(self, mock_db):
+        db.upsert_access_point("10.0.0.10", "root", "pass", enabled=True, model="TNA-301", firmware_version="1.0.0")
+        db.upsert_access_point("10.0.0.2", "root", "pass", enabled=True, model="TNA-302", firmware_version="1.0.0")
+        db.upsert_cpe("10.0.0.10", {"ip": "10.0.0.30", "model": "TNA-303L", "firmware_version": "1.0.0", "auth_status": "ok"})
+        db.upsert_cpe("10.0.0.2", {"ip": "10.0.0.20", "model": "TNA-303L", "firmware_version": "1.0.0", "auth_status": "ok"})
+        db.upsert_switch("10.0.1.2", "admin", "pass", enabled=True, model="TNS-100", firmware_version="1.0.0")
+        db.upsert_switch("10.0.1.10", "admin", "pass", enabled=True, model="TNS-100", firmware_version="1.0.0")
+
+        queue = AutoUpdateScheduler(AsyncMock(), AsyncMock())._derive_pending_queue(
+            self._settings(), held_families=set()
+        )
+
+        assert [(item["device_type"], item["ip"]) for item in queue] == [
+            ("cpe", "10.0.0.20"), ("cpe", "10.0.0.30"),
+            ("ap", "10.0.0.2"), ("ap", "10.0.0.10"),
+            ("switch", "10.0.1.2"), ("switch", "10.0.1.10"),
+        ]
+
+    def test_excludes_current_and_includes_new_returning_and_offline_inventory(self, mock_db):
+        db.upsert_access_point("10.0.0.1", "root", "pass", enabled=True, model="TNA-301", firmware_version="2.0.0.200")
+        db.upsert_access_point("10.0.0.2", "root", "pass", enabled=True, model="TNA-301", firmware_version="1.0.0")
+        db.upsert_access_point("10.0.0.3", "root", "pass", enabled=True, model="TNA-301", firmware_version="1.0.0")
+        db.update_ap_status("10.0.0.2", last_error="offline")
+        db.update_ap_status("10.0.0.3", last_error=None)
+
+        # Neither newly added nor returning inventory needs a saved rollout member.
+        queue = AutoUpdateScheduler(AsyncMock(), AsyncMock())._derive_pending_queue(
+            self._settings(), rollout={"id": -1}, held_families=set()
+        )
+
+        assert [item["ip"] for item in queue] == ["10.0.0.2", "10.0.0.3"]
+
+    def test_held_late_family_is_omitted_without_blocking_other_family(self, mock_db):
+        db.upsert_access_point("10.0.0.1", "root", "pass", enabled=True, model="TNA-301", firmware_version="1.0.0")
+        db.upsert_access_point("10.0.0.2", "root", "pass", enabled=True, model="TNA-303L", firmware_version="1.0.0")
+
+        queue = AutoUpdateScheduler(AsyncMock(), AsyncMock())._derive_pending_queue(
+            self._settings(), held_families={"tna-303l"}
+        )
+
+        assert [item["ip"] for item in queue] == ["10.0.0.1"]
+
+    def test_default_selector_uses_firmware_hold_helper(self, mock_db, monkeypatch):
+        db.upsert_access_point("10.0.0.1", "root", "pass", enabled=True, model="TNA-301", firmware_version="1.0.0")
+        db.upsert_access_point("10.0.0.2", "root", "pass", enabled=True, model="TNA-303L", firmware_version="1.0.0")
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        monkeypatch.setattr(
+            scheduler, "_held_families",
+            lambda settings, rollout: ({"tna-303l"}, {}),
+        )
+
+        queue = scheduler._derive_pending_queue(self._settings())
+
+        assert [item["ip"] for item in queue] == ["10.0.0.1"]
+
+    def test_unknown_model_holds_queue(self, mock_db):
+        db.upsert_access_point("10.0.0.1", "root", "pass", enabled=True, model="TNA-305", firmware_version="1.0.0")
+
+        with pytest.raises(ValueError, match="unknown model"):
+            AutoUpdateScheduler(AsyncMock(), AsyncMock())._derive_pending_queue(
+                self._settings(), held_families=set()
+            )
+
+    def test_duplicate_management_address_holds_queue(self, mock_db):
+        db.upsert_access_point("10.0.0.1", "root", "pass", enabled=True, model="TNA-301", firmware_version="1.0.0")
+        db.upsert_cpe("10.0.0.1", {"ip": "10.0.0.1", "model": "TNA-303L", "firmware_version": "1.0.0", "auth_status": "ok"})
+
+        with pytest.raises(ValueError, match="duplicate management address"):
+            AutoUpdateScheduler(AsyncMock(), AsyncMock())._derive_pending_queue(
+                self._settings(), held_families=set()
+            )
+
+    def test_duplicate_normalized_cpe_address_under_same_parent_holds_queue(self, mock_db):
+        parent = "10.0.0.1"
+        db.upsert_access_point(parent, "root", "pass", enabled=True, model="TNA-301", firmware_version="1.0.0")
+        db.upsert_cpe(parent, {"ip": "2001:db8::1", "model": "TNA-303L", "firmware_version": "1.0.0", "auth_status": "ok"})
+        db.upsert_cpe(parent, {"ip": "2001:0db8:0:0:0:0:0:1", "model": "TNA-303L", "firmware_version": "1.0.0", "auth_status": "ok"})
+
+        with pytest.raises(ValueError, match="duplicate management address"):
+            AutoUpdateScheduler(AsyncMock(), AsyncMock())._derive_pending_queue(
+                self._settings(), held_families=set()
+            )
+
+
 class TestSchedulerCompletionHandling:
     @pytest.mark.asyncio
     async def test_cancelled_no_progress_does_not_advance_phase(self):
