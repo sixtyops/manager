@@ -626,10 +626,31 @@ class AutoUpdateScheduler:
         family_holds: dict = {}
         try:
             held_families, family_holds = self._held_families(settings, rollout)
-            queue = self._derive_pending_queue(
-                settings, rollout, allow_downgrade, held_families=held_families,
-                recovery_ip=recovery_ip,
-            )
+            if recovery_ip:
+                recovery_queue = self._derive_pending_queue(
+                    settings, rollout, allow_downgrade, held_families=set(),
+                    recovery_ip=recovery_ip,
+                )
+                recovery_entry = next(
+                    (entry for entry in recovery_queue if entry["ip"] == recovery_ip), None,
+                )
+                if recovery_entry is None:
+                    self._state = "blocked_safety"
+                    self._block_reason = "Could not verify the previously failed device"
+                    await self._broadcast_status()
+                    return
+                if recovery_entry["family"] in held_families:
+                    self._state = "blocked_firmware_hold"
+                    self._block_reason = self._firmware_hold_block_reason(
+                        {recovery_entry["family"]}, family_holds,
+                    )
+                    await self._broadcast_status()
+                    return
+                queue = [recovery_entry]
+            else:
+                queue = self._derive_pending_queue(
+                    settings, rollout, allow_downgrade, held_families=held_families,
+                )
         except Exception as exc:
             logger.warning("Derived firmware queue failed closed: %s", exc)
             if held_families:
