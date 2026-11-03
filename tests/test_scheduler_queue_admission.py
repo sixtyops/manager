@@ -53,7 +53,7 @@ async def _admit(scheduler, settings, rollout, now, start):
         settings, rollout, now,
         ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
         3, 6, "America/Chicago", settings["selected_firmware_30x"], "", FW_TNS,
-        False, now.strftime("%Y-%m-%d"),
+        False,
     )
 
 

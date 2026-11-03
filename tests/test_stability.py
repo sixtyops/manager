@@ -225,56 +225,6 @@ class TestHealthCheck:
         assert data == {"status": "ok", "db": "ok"}
 
 
-class TestSchedulerDedupRecovery:
-    """Verify scheduler _ran_today is recovered from DB on startup."""
-
-    def test_ran_today_populated_from_db(self, mock_db):
-        """Scheduler should detect today's run from schedule_log on start."""
-        from updater.scheduler import AutoUpdateScheduler
-
-        today = datetime.now().strftime("%Y-%m-%d")
-        mock_db.execute(
-            "INSERT INTO schedule_log (event, details, timestamp) VALUES (?, ?, ?)",
-            ("job_started", f"Job test-123 for rollout 1", datetime.now().isoformat()),
-        )
-        mock_db.commit()
-
-        scheduler = AutoUpdateScheduler(
-            broadcast_func=AsyncMock(),
-            start_update_func=AsyncMock(),
-            check_interval=60,
-        )
-
-        # Simulate start() sync portion
-        import asyncio
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(scheduler.start())
-            assert today in scheduler._ran_today
-        finally:
-            loop.run_until_complete(scheduler.stop())
-            loop.close()
-
-    def test_ran_today_empty_when_no_log(self, mock_db):
-        """Scheduler should have empty _ran_today if no job ran today."""
-        from updater.scheduler import AutoUpdateScheduler
-
-        scheduler = AutoUpdateScheduler(
-            broadcast_func=AsyncMock(),
-            start_update_func=AsyncMock(),
-            check_interval=60,
-        )
-
-        import asyncio
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(scheduler.start())
-            assert len(scheduler._ran_today) == 0
-        finally:
-            loop.run_until_complete(scheduler.stop())
-            loop.close()
-
-
 class TestActiveJobTracking:
     """Verify active job CRUD in database."""
 

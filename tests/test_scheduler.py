@@ -114,44 +114,6 @@ class TestDerivedPendingQueue:
             )
 
 
-class TestSchedulerCompletionHandling:
-    @pytest.mark.asyncio
-    async def test_cancelled_no_progress_does_not_advance_phase(self):
-        scheduler = AutoUpdateScheduler(broadcast_func=None, start_update_func=None)
-        scheduler._current_job_id = "job123"
-
-        rollout = {
-            "id": 7,
-            "phase": "canary",
-            "status": "active",
-            "last_job_id": "job123",
-        }
-
-        with patch("updater.scheduler.db.get_active_rollout", return_value=rollout), \
-             patch("updater.scheduler.db.mark_rollout_device") as mark_rollout_device, \
-             patch("updater.scheduler.db.complete_rollout_phase") as complete_rollout_phase, \
-             patch("updater.scheduler.db.pause_rollout") as pause_rollout, \
-             patch("updater.scheduler.db.log_schedule_event") as log_schedule_event:
-            scheduler.on_job_completed(
-                job_id="job123",
-                success_count=0,
-                failed_count=0,
-                device_statuses={"10.0.0.1": "skipped"},
-                cancel_reason="Outside maintenance window",
-            )
-
-            await asyncio.sleep(0)
-
-        mark_rollout_device.assert_called_once_with(7, "10.0.0.1", "skipped")
-        complete_rollout_phase.assert_not_called()
-        pause_rollout.assert_not_called()
-        log_schedule_event.assert_any_call(
-            "job_deferred",
-            "Outside maintenance window",
-            job_id="job123",
-        )
-
-
 class TestCpeCredentialAdmission:
     @pytest.mark.asyncio
     async def test_concurrent_precheck_and_poll_share_one_fresh_login(self, mock_db):
@@ -448,40 +410,6 @@ class TestSchedulerCanaries:
 
         assert scope == ["10.0.1.5"]
 
-    def test_on_job_completed_persists_learned_versions_per_family(self, mock_db):
-        _seed_rollout_devices()
-        rollout_id = db.create_rollout("firmware.bin", "303l.bin", "switch.bin")
-        db.assign_device_to_rollout(rollout_id, "10.0.0.10", "ap", "canary")
-        db.set_rollout_job_id(rollout_id, "job-1234")
-
-        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
-        scheduler._current_job_id = "job-1234"
-
-        def _discard_task(coro):
-            coro.close()
-            class _DummyTask:
-                def add_done_callback(self, _cb):
-                    return None
-            return _DummyTask()
-
-        with patch("updater.scheduler.asyncio.create_task", _discard_task):
-            scheduler.on_job_completed(
-                "job-1234",
-                1,
-                0,
-                learned_versions={
-                    "tna-30x": "1.2.3.123",
-                    "tna-303l": "2.5.0.456",
-                    "tns-100": "3.4.5.678",
-                },
-                device_statuses={"10.0.0.10": "success"},
-            )
-
-        rollout = db.get_rollout(rollout_id)
-        assert rollout["target_version"] == "1.2.3.123"
-        assert rollout["target_version_303l"] == "2.5.0.456"
-        assert rollout["target_version_tns100"] == "3.4.5.678"
-
     def test_firmware_changed_detects_303l_change(self, mock_db):
         """Changing 303L firmware should be detected as a firmware change."""
         rollout_id = db.create_rollout("tna-30x-1.0.0-r100.bin", "tna-303l-1.0.0-r100.bin", None)
@@ -620,7 +548,6 @@ class TestSchedulerStartFailure:
              patch("updater.scheduler.rollout_gate.phase_run_decision", return_value=(True, "ok")), \
              patch.object(scheduler, "_firmware_changed", return_value=False), \
              patch.object(scheduler, "_held_families", return_value=(set(), {})), \
-             patch.object(scheduler, "_early_clear_note", return_value=None), \
              patch.object(scheduler, "_resolve_scope", return_value=["10.0.0.10"]), \
              patch.object(scheduler, "_resolve_switch_scope", return_value=[]), \
              patch.object(scheduler, "_scheduled_admission_allowed", return_value=True):
@@ -671,7 +598,6 @@ class TestSchedulerStartFailure:
              patch("updater.scheduler.rollout_gate.phase_run_decision", return_value=(True, "ok")), \
              patch.object(scheduler, "_firmware_changed", return_value=False), \
              patch.object(scheduler, "_held_families", return_value=(set(), {})), \
-             patch.object(scheduler, "_early_clear_note", return_value=None), \
              patch.object(scheduler, "_resolve_scope", return_value=["10.0.0.10"]), \
              patch.object(scheduler, "_resolve_switch_scope", return_value=[]), \
              patch.object(scheduler, "_scheduled_admission_allowed", side_effect=readiness):
@@ -793,73 +719,6 @@ class TestSchedulerStartFailure:
         assert timing["ordinal"] == 1
 
 
-class TestSchedulerStartupRecovery:
-    def test_orphaned_active_rollout_devices_marked_deferred(self, mock_db):
-        """An active rollout whose update job died with the previous process
-        should have its pending devices flipped to ``deferred`` and its
-        ``last_job_id`` cleared so the next window can start fresh."""
-        rollout_id = db.create_rollout("firmware.bin")
-        db.assign_device_to_rollout(rollout_id, "10.0.0.10", "ap", "canary")
-        db.assign_device_to_rollout(rollout_id, "10.0.0.11", "ap", "canary")
-        db.set_rollout_job_id(rollout_id, "orphan-job-1")
-        db.log_schedule_event("job_started", "stale", job_id="orphan-job-1")
-
-        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
-        scheduler._recover_orphaned_rollouts()
-
-        rollout = db.get_rollout(rollout_id)
-        assert rollout["last_job_id"] is None
-        statuses = {d["ip"]: d["status"] for d in db.get_rollout_devices(rollout_id)}
-        assert statuses == {"10.0.0.10": "deferred", "10.0.0.11": "deferred"}
-
-    def test_completed_rollout_not_touched_by_recovery(self, mock_db):
-        """A non-active rollout must not be modified by orphan recovery."""
-        rollout_id = db.create_rollout("firmware.bin")
-        db.assign_device_to_rollout(rollout_id, "10.0.0.10", "ap", "canary")
-        db.set_rollout_job_id(rollout_id, "old-job")
-        with db.get_db() as conn:
-            conn.execute("UPDATE rollouts SET status = 'completed' WHERE id = ?", (rollout_id,))
-
-        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
-        scheduler._recover_orphaned_rollouts()
-
-        rollout = db.get_rollout(rollout_id)
-        assert rollout["last_job_id"] == "old-job"
-        assert db.get_rollout_devices(rollout_id)[0]["status"] == "pending"
-
-    def test_active_rollout_with_completion_event_not_touched(self, mock_db):
-        """An active rollout whose job already logged a completion event is
-        not orphaned."""
-        rollout_id = db.create_rollout("firmware.bin")
-        db.assign_device_to_rollout(rollout_id, "10.0.0.10", "ap", "canary")
-        db.set_rollout_job_id(rollout_id, "completed-job")
-        db.log_schedule_event("job_completed", "ok", job_id="completed-job")
-
-        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
-        scheduler._recover_orphaned_rollouts()
-
-        rollout = db.get_rollout(rollout_id)
-        assert rollout["last_job_id"] == "completed-job"
-
-    def test_ran_today_recovery_uses_configured_timezone_key(self, mock_db):
-        """The recovered ``today_key`` must be the date in the configured
-        timezone, so it lines up with the runtime check (regression for
-        P0-4)."""
-        from datetime import datetime as dt
-        from zoneinfo import ZoneInfo
-
-        db.set_settings({"timezone": "America/Chicago"})
-        db.log_schedule_event("job_started", "recent", job_id="job-1")
-
-        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
-        scheduler._recover_ran_today()
-
-        assert len(scheduler._ran_today) == 1
-        recovered_key = next(iter(scheduler._ran_today))
-        expected_key = dt.now(ZoneInfo("America/Chicago")).strftime("%Y-%m-%d")
-        assert recovered_key == expected_key
-
-
 class TestSchedulerSettingsSafety:
     @pytest.mark.asyncio
     async def test_malformed_settings_do_not_crash_check_and_run(self, mock_db, monkeypatch):
@@ -889,55 +748,6 @@ class TestSchedulerSettingsSafety:
 
         # Must complete without raising.
         await scheduler._check_and_run()
-
-
-class TestOnJobCompletedReconciliation:
-    def test_stale_completion_for_active_rollout_reconciles(self, mock_db):
-        """After a restart, a completion event whose job_id is still tracked
-        on an active rollout should be reconciled, not silently dropped
-        (regression for P1-8)."""
-        rollout_id = db.create_rollout("firmware.bin")
-        db.assign_device_to_rollout(rollout_id, "10.0.0.10", "ap", "canary")
-        db.set_rollout_job_id(rollout_id, "stale-job-1")
-
-        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
-        # _current_job_id is None — simulating post-restart state
-
-        def _discard_task(coro):
-            coro.close()
-            class _DummyTask:
-                def add_done_callback(self, _cb):
-                    return None
-            return _DummyTask()
-
-        with patch("updater.scheduler.asyncio.create_task", _discard_task):
-            scheduler.on_job_completed(
-                "stale-job-1",
-                1,
-                0,
-                device_statuses={"10.0.0.10": "success"},
-            )
-
-        device = db.get_rollout_devices(rollout_id)[0]
-        assert device["status"] == "updated"
-
-    def test_truly_stale_completion_dropped(self, mock_db):
-        """A completion for a job_id that no longer matches any active
-        rollout is silently discarded with a warning (no DB writes)."""
-        rollout_id = db.create_rollout("firmware.bin")
-        db.assign_device_to_rollout(rollout_id, "10.0.0.10", "ap", "canary")
-        db.set_rollout_job_id(rollout_id, "different-job")
-
-        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
-        scheduler.on_job_completed(
-            "ghost-job",
-            1,
-            0,
-            device_statuses={"10.0.0.10": "success"},
-        )
-
-        device = db.get_rollout_devices(rollout_id)[0]
-        assert device["status"] == "pending"
 
 
 class TestFinalizeCrashedJobRegression:

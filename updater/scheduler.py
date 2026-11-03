@@ -6,7 +6,7 @@ import json
 import logging
 import math
 from datetime import date, datetime, timedelta, timezone
-from typing import Callable, Optional, Set
+from typing import Callable, Optional
 
 from . import database as db
 from .core import engine
@@ -245,7 +245,6 @@ class AutoUpdateScheduler:
         self._current_job_id: Optional[str] = None
         self._check_lock = asyncio.Lock()
         self._queue_job_context: dict[str, dict] = {}
-        self._ran_today: Set[str] = set()
         # Human-readable note when a family's Firmware Hold was cleared early
         # because a device is confirmed working on the new firmware (None when no
         # early clear is in effect).
@@ -266,8 +265,6 @@ class AutoUpdateScheduler:
         """Start the scheduler check loop."""
         if self._running:
             return
-        self._recover_ran_today()
-        self._recover_orphaned_rollouts()
         self._running = True
         self._task = asyncio.create_task(self._check_loop())
         logger.info(f"Auto-update scheduler started (interval: {self.check_interval}s)")
@@ -276,104 +273,6 @@ class AutoUpdateScheduler:
         # can outlive the scheduler (e.g. in tests, leaving "Task was destroyed but
         # it is pending" warnings at loop teardown).
         self._weather_task = asyncio.create_task(self._fetch_weather_initial())
-
-    def _recover_ran_today(self):
-        """Recover the per-day run guard so a restart doesn't trigger a second job.
-
-        The schedule_log timestamp column is naive container-local time, so
-        `_ran_today` is keyed by the configured timezone's calendar date and
-        we look back 23 hours instead of relying on a DATE() match across
-        differing zones.
-        """
-        settings = db.get_all_settings()
-        tz_str = settings.get("timezone", "auto")
-        try:
-            from zoneinfo import ZoneInfo
-            if tz_str == "auto":
-                tz = datetime.now().astimezone().tzinfo
-            else:
-                tz = ZoneInfo(tz_str)
-        except Exception:
-            tz = datetime.now().astimezone().tzinfo
-        today_key = datetime.now(tz).strftime("%Y-%m-%d")
-
-        cutoff = (datetime.now() - timedelta(hours=23)).isoformat()
-        try:
-            with db.get_db() as conn:
-                row = conn.execute(
-                    "SELECT 1 FROM schedule_log WHERE event = 'job_started' "
-                    "AND timestamp >= ? LIMIT 1",
-                    (cutoff,),
-                ).fetchone()
-                if row:
-                    self._ran_today.add(today_key)
-                    logger.info(f"Scheduler: recovered _ran_today for {today_key} from DB")
-        except Exception as e:
-            logger.warning(f"Scheduler: failed to recover _ran_today: {e}")
-
-    def _recover_orphaned_rollouts(self):
-        """Reconcile rollouts whose update job died with the previous process.
-
-        An active rollout with `last_job_id` set but no completion event for
-        that job is orphaned — the async update task did not survive the
-        restart. Flip its pending devices to `deferred` so they retry next
-        window, and clear `last_job_id` so the next window starts a fresh
-        job.
-        """
-        completion_events = (
-            "job_completed",
-            "job_completed_with_failures",
-            "rollout_paused",
-            "rollout_completed",
-            "rollout_cancelled",
-            "job_deferred",
-            "phase_completed",
-            "phase_deferred",
-        )
-        placeholders = ",".join("?" for _ in completion_events)
-        recovered = []
-        try:
-            with db.get_db() as conn:
-                rollouts = conn.execute(
-                    "SELECT id, last_job_id FROM rollouts "
-                    "WHERE status = 'active' AND last_job_id IS NOT NULL"
-                ).fetchall()
-                for row in rollouts:
-                    rollout_id = row["id"]
-                    job_id = row["last_job_id"]
-                    completion = conn.execute(
-                        f"SELECT 1 FROM schedule_log WHERE job_id = ? "
-                        f"AND event IN ({placeholders}) LIMIT 1",
-                        (job_id, *completion_events),
-                    ).fetchone()
-                    if completion:
-                        continue
-                    now_iso = datetime.now().isoformat()
-                    cur = conn.execute(
-                        "UPDATE rollout_devices SET status = 'deferred', updated_at = ? "
-                        "WHERE rollout_id = ? AND status = 'pending'",
-                        (now_iso, rollout_id),
-                    )
-                    affected = cur.rowcount
-                    conn.execute(
-                        "UPDATE rollouts SET last_job_id = NULL, updated_at = ? WHERE id = ?",
-                        (now_iso, rollout_id),
-                    )
-                    recovered.append((rollout_id, job_id, affected))
-        except Exception as e:
-            logger.warning(f"Scheduler: orphaned rollout recovery failed: {e}")
-            return
-
-        for rollout_id, job_id, affected in recovered:
-            db.log_schedule_event(
-                "startup_recovery",
-                f"Rollout {rollout_id}: orphaned job {job_id}, {affected} device(s) deferred",
-                job_id=job_id,
-            )
-            logger.warning(
-                f"Scheduler: recovered orphaned rollout {rollout_id} (job {job_id}); "
-                f"{affected} pending device(s) marked deferred"
-            )
 
     async def _fetch_weather_initial(self):
         """Fetch weather on startup so the UI shows temperature immediately."""
@@ -526,12 +425,6 @@ class AutoUpdateScheduler:
         )
 
         if not services.is_in_schedule_window(current_hour, current_day, schedule_days, start_hour, end_hour):
-            today_key = now.strftime("%Y-%m-%d")
-            if current_hour >= end_hour and today_key in self._ran_today:
-                pass
-            elif current_hour < start_hour:
-                self._ran_today.clear()
-
             if self._state != "idle":
                 logger.info(
                     f"Outside maintenance window (day={current_day}, hour={current_hour}), setting state to idle"
@@ -544,17 +437,6 @@ class AutoUpdateScheduler:
             return
 
         logger.info(f"Inside maintenance window! day={current_day}, hour={current_hour}, window={start_hour}-{end_hour}")
-
-        today_key = now.strftime("%Y-%m-%d")
-        if today_key in self._ran_today:
-            active_rollout = db.get_last_rollout_for_firmware(fw_30x) if fw_30x else None
-            if not active_rollout or active_rollout["status"] != "active":
-                if self._state != "waiting":
-                    self._state = "waiting"
-                    self._block_reason = "Already ran today"
-                    await self._broadcast_status()
-                return
-            logger.info(f"Continuing active rollout {active_rollout['id']} (phase {active_rollout['phase']})")
 
         minutes_until_end = services.minutes_until_window_end(now, start_hour, end_hour)
         if minutes_until_end <= SCHEDULE_END_BUFFER_MINUTES:
@@ -631,36 +513,6 @@ class AutoUpdateScheduler:
             if not self._scheduled_admission_allowed():
                 await self._broadcast_status()
                 return
-            try:
-                scope_ips = self._resolve_scope(settings)
-                switch_scope = self._resolve_switch_scope(settings)
-                targets = self._target_versions(settings, None)
-                cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
-                ap_members = self._filter_devices_needing_update(
-                    scope_ips, targets, allow_downgrade, cooldown_days=cooldown_days
-                )
-                switch_members = self._filter_switches_needing_update(
-                    switch_scope, targets, allow_downgrade, cooldown_days=cooldown_days
-                )
-                inventory_aps = db.get_all_access_points_dict(enabled_only=False)
-                inventory_switches = db.get_all_switches_dict(enabled_only=False)
-                members = (
-                    [{"ip": ip, "device_type": "ap"} for ip in ap_members
-                     if ip in inventory_aps and inventory_aps[ip].get("enabled")]
-                    + [{"ip": ip, "device_type": "switch"} for ip in switch_members
-                       if ip in inventory_switches and inventory_switches[ip].get("enabled")]
-                )
-            except Exception as e:
-                logger.warning(f"Rollout membership snapshot failed; no rollout created: {e}")
-                self._state = "waiting"
-                self._block_reason = "Could not read rollout membership; retry next tick"
-                await self._broadcast_status()
-                return
-            if not members:
-                self._state = "blocked_all_current"
-                self._block_reason = "All devices up to date"
-                await self._broadcast_status()
-                return
             snapshot_keys = ["bank_mode", "parallel_updates", "allow_downgrade", "pre_update_reboot",
                              "bandwidth_limit_kbps", "schedule_start_hour", "schedule_end_hour",
                              "schedule_days", "schedule_timezone"]
@@ -668,12 +520,12 @@ class AutoUpdateScheduler:
             try:
                 rollout_id = db.create_rollout(
                     fw_30x, fw_303l if fw_303l else None, fw_tns100 if fw_tns100 else None,
-                    members=members, settings_snapshot=snapshot, now=now,
+                    settings_snapshot=snapshot, now=now,
                 )
             except Exception as e:
-                logger.warning(f"Rollout membership could not be saved; no rollout started: {e}")
+                logger.warning(f"Rollout could not be created; no job started: {e}")
                 self._state = "waiting"
-                self._block_reason = "Could not save rollout membership; retry next tick"
+                self._block_reason = "Could not create rollout; retry next tick"
                 await self._broadcast_status()
                 return
             rollout = db.get_rollout(rollout_id)
@@ -682,12 +534,12 @@ class AutoUpdateScheduler:
 
         return await self._run_derived_queue(
             settings, rollout, now, schedule_days, start_hour, end_hour, tz_str,
-            fw_30x, fw_303l, fw_tns100, allow_downgrade, today_key,
+            fw_30x, fw_303l, fw_tns100, allow_downgrade,
         )
 
     async def _run_derived_queue(
         self, settings, rollout, now, schedule_days, start_hour, end_hour,
-        timezone_name, fw_30x, fw_303l, fw_tns100, allow_downgrade, today_key,
+        timezone_name, fw_30x, fw_303l, fw_tns100, allow_downgrade,
     ):
         """Admit the current derived queue under its persisted family cutoffs."""
         window_key = rollout_gate.firmware_window_key({
@@ -860,8 +712,6 @@ class AutoUpdateScheduler:
             "window_key": window_key,
             "entries": queue,
         }
-        self._ran_today.add(today_key)
-        db.set_rollout_job_id(rollout["id"], job_id)
         db.log_schedule_event("job_started", f"Job {job_id} for derived firmware queue", job_id=job_id)
         return
 
@@ -994,41 +844,6 @@ class AutoUpdateScheduler:
             "tna-303l": rollout.get("firmware_file_303l") or settings.get("selected_firmware_303l", ""),
             "tns-100": rollout.get("firmware_file_tns100") or settings.get("selected_firmware_tns100", ""),
         }
-        if rollout and rollout.get("status") == "waiting_hold":
-            try:
-                members = db.get_rollout_devices(rollout["id"])
-                if not members:
-                    raise ValueError("held rollout has no saved members")
-                ap_dict = db.get_all_access_points_dict(enabled_only=False)
-                switch_dict = db.get_all_switches_dict(enabled_only=False)
-                cpes_by_ap = db.get_all_cpes_grouped()
-                member_families = set()
-                for member in members:
-                    devices = ap_dict if member["device_type"] == "ap" else switch_dict
-                    device = devices.get(member["ip"])
-                    family = _firmware_type_for_model(device.get("model")) if device else "unknown"
-                    if family not in files or not files[family]:
-                        raise ValueError(f"cannot resolve saved member family for {member['ip']}")
-                    member_families.add(family)
-                    if member["device_type"] == "ap":
-                        for cpe in cpes_by_ap.get(member["ip"], []):
-                            if cpe.get("auth_status") != "ok":
-                                continue
-                            cpe_family = _firmware_type_for_model(cpe.get("model"))
-                            if cpe_family not in files or not files[cpe_family]:
-                                raise ValueError(
-                                    f"cannot resolve attached CPE family for {cpe.get('ip')}"
-                                )
-                            member_families.add(cpe_family)
-                files = {family: filename for family, filename in files.items() if family in member_families}
-            except Exception as e:
-                logger.warning(f"Saved rollout family check failed; holding: {e}")
-                fail_closed = {family: filename for family, filename in files.items() if filename}
-                return set(fail_closed), {
-                    family: {"held": True, "clears_at": None, "confirmed_by": None,
-                             "version": "", "cleared_by_device": False}
-                    for family in fail_closed
-                }
         hold_days = _as_int(settings.get("firmware_canary_hold_days", "6"), 6)
         confirmed_by = (
             self._confirmed_family_devices(settings, rollout, targets) if hold_days > 0 else {}
@@ -1061,49 +876,6 @@ class AutoUpdateScheduler:
                 held_families.add(fam)
         return held_families, family_holds
 
-    def _pending_split_by_hold(
-        self, settings: dict, rollout: dict, allow_downgrade: bool, held_families: set
-    ) -> tuple[bool, bool]:
-        """Scan saved AP/switch members and attached CPEs, then split by
-        whether the device's firmware family hold is cleared. Returns
-        (has_cleared_pending, has_held_pending) — used to decide whether the first
-        wave is FULLY held (held pending exists, nothing cleared to roll).
-        Fail-closed: an unreadable fleet reports held."""
-        target_versions = self._target_versions(settings, rollout)
-        cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
-        try:
-            members = db.get_rollout_devices(rollout["id"])
-            ap_dict = db.get_all_access_points_dict(enabled_only=False)
-            switch_dict = db.get_all_switches_dict(enabled_only=False)
-            cpes_by_ap = db.get_all_cpes_grouped()
-        except Exception as e:  # pragma: no cover - defensive
-            logger.warning(f"Pending-split check could not read fleet, holding: {e}")
-            return False, True
-        if not members:
-            return False, True
-
-        flags = {"cleared": False, "held": False}
-
-        def _account(dev: dict):
-            fam = _firmware_type_for_model(dev.get("model"))
-            if _device_needs_update(
-                dev.get("firmware_version", ""), target_versions.get(fam, ""), allow_downgrade,
-                last_update_iso=dev.get("last_firmware_update"), cooldown_days=cooldown_days,
-            ):
-                flags["held" if fam in held_families else "cleared"] = True
-
-        for member in members:
-            ip = member["ip"]
-            device = (ap_dict if member["device_type"] == "ap" else switch_dict).get(ip)
-            if not device:
-                return False, True
-            _account(device)
-            if member["device_type"] == "ap":
-                for cpe in cpes_by_ap.get(ip, []):
-                    if cpe.get("auth_status") == "ok":
-                        _account(cpe)
-        return flags["cleared"], flags["held"]
-
     @staticmethod
     def _firmware_hold_block_reason(held_families: set, family_holds: dict) -> str:
         """Human reason for a blocked_firmware_hold state."""
@@ -1123,21 +895,6 @@ class AutoUpdateScheduler:
             except (TypeError, ValueError):
                 pass
         return f"Firmware hold — soaking {models} before the first fleet wave"
-
-    @staticmethod
-    def _early_clear_note(rollout: Optional[dict], family_holds: dict) -> Optional[str]:
-        """If a family's hold was cleared early by a confirmed device, return a
-        short honest note naming it (only meaningful at the first wave)."""
-        if not rollout or rollout.get("phase") != "pct10":
-            return None
-        notes = [
-            f"{fam} confirmed working on {d['confirmed_by']}"
-            for fam, d in sorted(family_holds.items())
-            if d.get("cleared_by_device") and d.get("confirmed_by")
-        ]
-        if not notes:
-            return None
-        return "Firmware hold cleared early — " + "; ".join(notes)
 
     def _ap_or_children_need_update(self, ap: dict, target_versions: dict[str, str], allow_downgrade: bool,
                                      cpes_by_ap: Optional[dict[str, list[dict]]] = None, cooldown_days: int = 0) -> bool:
@@ -1289,40 +1046,6 @@ class AutoUpdateScheduler:
         ))
         return entries
 
-    def _mark_excluded_rollout_members(
-        self, rollout: dict, scope_ips: list[str], switch_scope: list[str]
-    ) -> bool:
-        """Mark excluded members terminal; return false when eligibility is unknown."""
-        try:
-            ap_inventory = db.get_all_access_points_dict(enabled_only=False)
-            switch_inventory = db.get_all_switches_dict(enabled_only=False)
-            members = db.get_rollout_devices(rollout["id"])
-        except Exception as exc:
-            logger.warning(
-                "Could not read rollout eligibility; saved members remain pending: %s", exc
-            )
-            return False
-
-        scopes = {"ap": set(scope_ips), "switch": set(switch_scope)}
-        inventories = {"ap": ap_inventory, "switch": switch_inventory}
-        for member in members:
-            if member["status"] not in ("pending", "deferred"):
-                continue
-            device_type = member["device_type"]
-            device = inventories.get(device_type, {}).get(member["ip"])
-            if device is None:
-                db.mark_rollout_device(
-                    rollout["id"], member["ip"], "removed (archived)"
-                )
-                continue
-            if not device.get("enabled"):
-                db.mark_rollout_device(rollout["id"], member["ip"], "disabled")
-            elif member["ip"] not in scopes.get(device_type, set()):
-                db.mark_rollout_device(
-                    rollout["id"], member["ip"], "removed (scope)"
-                )
-        return True
-
     def on_job_completed(
         self,
         job_id: str,
@@ -1332,160 +1055,40 @@ class AutoUpdateScheduler:
         device_statuses: Optional[dict[str, str]] = None,
         cancel_reason: Optional[str] = None,
     ):
-        """Called when a scheduled job finishes."""
-        if self._current_job_id != job_id:
-            # Stale completion (typically a job that started in a previous
-            # process). Only reconcile if the DB still tracks this job_id on
-            # an active rollout — otherwise drop with a log line.
-            active_rollout = db.get_active_rollout()
-            if not (active_rollout and active_rollout.get("last_job_id") == job_id):
-                logger.warning(
-                    f"Scheduler: ignoring stale completion for job {job_id} "
-                    f"(current_job_id={self._current_job_id})"
-                )
-                return
-            logger.warning(
-                f"Scheduler: reconciling stale completion for job {job_id} "
-                f"(current_job_id={self._current_job_id}, "
-                f"matches active rollout {active_rollout['id']})"
-            )
-        else:
-            self._current_job_id = None
-
-        self._last_run_time = datetime.now().isoformat()
-
+        """Record completion for an admitted derived-queue job."""
         queue_context = self._queue_job_context.pop(job_id, None)
-        if queue_context is not None:
-            if self._current_job_id == job_id:
-                self._current_job_id = None
-            rollout = queue_context["rollout"]
-            window_key = queue_context["window_key"]
-            entries = queue_context["entries"]
-            if device_statuses:
-                for ip, status in device_statuses.items():
-                    db.mark_rollout_device(
-                        rollout["id"], ip, "updated" if status == "success" else status,
-                    )
-            if failed_count > 0:
-                failed_ip = next(
-                    (ip for ip, status in (device_statuses or {}).items()
-                     if status not in ("success", "updated", "deferred", "skipped")),
-                    entries[0]["ip"] if entries else "unknown",
-                )
-                stop = db.stop_firmware_window(
-                    window_key, job_id, failed_ip, "scheduled_update",
-                    f"{failed_count} device(s) failed during the derived firmware queue",
-                )
-                reason = (stop or {}).get("reason") or "A device failed during the firmware queue"
-                self._last_run_result = f"Firmware queue stopped: {reason}"
-                db.log_schedule_event("firmware_window_stopped", reason, job_id=job_id)
-                logger.warning("Firmware queue stopped for job %s: %s", job_id, reason)
-            elif cancel_reason:
-                self._last_run_result = cancel_reason
-                db.log_schedule_event("job_deferred", cancel_reason, job_id=job_id)
-            else:
-                self._last_run_result = f"Queue job completed ({success_count} device(s))"
-                db.log_schedule_event("job_completed", self._last_run_result, job_id=job_id)
-            if self._state != "blocked_safety":
-                self._state = "waiting"
-                self._block_reason = self._last_run_result
-            task = asyncio.create_task(self._broadcast_status())
-            task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
+        if queue_context is None:
+            logger.warning("Scheduler: ignoring completion for unknown job %s", job_id)
             return
 
-        rollout = db.get_active_rollout()
-        if rollout and rollout.get("last_job_id") == job_id:
-            # Job was cancelled/deferred with no progress — don't advance phase
-            if cancel_reason and success_count == 0 and failed_count == 0:
-                if device_statuses:
-                    for ip, status in device_statuses.items():
-                        db.mark_rollout_device(rollout["id"], ip, status)
-                db.log_schedule_event("job_deferred", cancel_reason, job_id=job_id)
-                self._state = "waiting"
-                self._block_reason = cancel_reason
-                logger.info(f"Scheduler job {job_id} deferred: {cancel_reason}")
-                return
-
-            if failed_count > 0:
-                reason = f"{failed_count} device(s) failed during the {rollout['phase']} wave"
-                db.pause_rollout(rollout["id"], reason)
-                if device_statuses:
-                    for ip, status in device_statuses.items():
-                        rollout_status = "updated" if status == "success" else status
-                        db.mark_rollout_device(rollout["id"], ip, rollout_status)
-                else:
-                    db.mark_rollout_phase_devices(rollout["id"], rollout["phase"], "failed")
-                self._last_run_result = f"Rollout paused: {reason}"
-                db.log_schedule_event("rollout_paused", reason, job_id=job_id)
-                logger.warning(f"Rollout {rollout['id']} paused: {reason}")
-            else:
-                if learned_versions:
-                    db.set_rollout_target_versions(rollout["id"], learned_versions)
-                    logger.info(f"Rollout {rollout['id']} learned target versions: {learned_versions}")
-
-                if device_statuses:
-                    for ip, status in device_statuses.items():
-                        # Map window-cutoff skips to "deferred" so they retry next window
-                        rollout_status = "updated" if status == "success" else status
-                        db.mark_rollout_device(rollout["id"], ip, rollout_status)
-                else:
-                    db.mark_rollout_phase_devices(rollout["id"], rollout["phase"], "updated")
-
-                # Check if any devices were deferred (window cutoff) — don't advance wave
-                phase_devices = db.get_rollout_devices(rollout["id"], phase=rollout["phase"])
-                deferred_count = sum(1 for d in phase_devices if d["status"] == "deferred")
-                if deferred_count > 0:
-                    self._last_run_result = (
-                        f"Wave {rollout['phase']}: {success_count} updated, "
-                        f"{deferred_count} deferred (will retry next window)"
-                    )
-                    db.log_schedule_event(
-                        "phase_deferred",
-                        f"Wave {rollout['phase']}: {deferred_count} device(s) deferred",
-                        job_id=job_id,
-                    )
-                    logger.info(f"Rollout {rollout['id']} wave {rollout['phase']} has {deferred_count} deferred device(s)")
-                elif not self._scheduled_admission_allowed():
-                    self._last_run_result = self._block_reason
-                    db.log_schedule_event("phase_held", self._block_reason, job_id=job_id)
-                else:
-                    db.complete_rollout_phase(rollout["id"])
-
-                    refreshed = db.get_rollout(rollout["id"])
-                    if refreshed and refreshed["status"] == "completed":
-                        self._last_run_result = f"Rollout completed ({success_count} devices this wave)"
-                        db.log_schedule_event("rollout_completed", f"Rollout {rollout['id']} completed", job_id=job_id)
-                    else:
-                        self._last_run_result = (
-                            f"Wave {rollout['phase']} done ({success_count} devices), "
-                            f"next: {refreshed['phase'] if refreshed else '?'}"
-                        )
-                        db.log_schedule_event(
-                            "phase_completed",
-                            f"Wave {rollout['phase']} -> {refreshed['phase'] if refreshed else '?'}",
-                            job_id=job_id,
-                        )
+        if self._current_job_id == job_id:
+            self._current_job_id = None
+        self._last_run_time = datetime.now().isoformat()
+        window_key = queue_context["window_key"]
+        entries = queue_context["entries"]
+        if failed_count > 0:
+            failed_ip = next(
+                (ip for ip, status in (device_statuses or {}).items()
+                 if status not in ("success", "updated", "deferred", "skipped")),
+                entries[0]["ip"] if entries else "unknown",
+            )
+            stop = db.stop_firmware_window(
+                window_key, job_id, failed_ip, "scheduled_update",
+                f"{failed_count} device(s) failed during the derived firmware queue",
+            )
+            reason = (stop or {}).get("reason") or "A device failed during the firmware queue"
+            self._last_run_result = f"Firmware queue stopped: {reason}"
+            db.log_schedule_event("firmware_window_stopped", reason, job_id=job_id)
+            logger.warning("Firmware queue stopped for job %s: %s", job_id, reason)
+        elif cancel_reason:
+            self._last_run_result = cancel_reason
+            db.log_schedule_event("job_deferred", cancel_reason, job_id=job_id)
         else:
-            if failed_count > 0:
-                self._last_run_result = f"Completed with {failed_count} failure(s)"
-                db.log_schedule_event(
-                    "job_completed_with_failures",
-                    f"success={success_count}, failed={failed_count}",
-                    job_id=job_id,
-                )
-            else:
-                self._last_run_result = f"Success ({success_count} devices)"
-                db.log_schedule_event("job_completed", f"success={success_count}", job_id=job_id)
-
+            self._last_run_result = f"Queue job completed ({success_count} device(s))"
+            db.log_schedule_event("job_completed", self._last_run_result, job_id=job_id)
         if self._state != "blocked_safety":
             self._state = "waiting"
-            self._block_reason = (
-                rollout.get("pause_reason")
-                if rollout and rollout.get("status") == "paused"
-                else "Already ran today"
-            )
-        logger.info(f"Scheduler job {job_id} completed: {self._last_run_result}")
-
+            self._block_reason = self._last_run_result
         task = asyncio.create_task(self._broadcast_status())
         task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
 
