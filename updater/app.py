@@ -5689,7 +5689,6 @@ async def update_single_device_endpoint(
     if bank_mode not in ("one", "both"):
         raise HTTPException(400, "bank_mode must be 'one' or 'both'")
     window_key = rollout_gate.firmware_window_key(db.get_all_settings()) or _manual_firmware_window_key()
-    _check_firmware_window_admission(window_key)
     # Validate and check firmware file exists
     safe_fw = validate_firmware_filename(firmware_file)
     firmware_path = FIRMWARE_DIR / safe_fw
@@ -5790,6 +5789,8 @@ async def update_single_device_endpoint(
         target_version = _extract_version_from_filename(Path(fw_path).name)
         if _device_on_exact_build(device_record, target_version, bank_mode):
             return {"status": "already_current", "version": target_version}
+
+    _check_firmware_window_admission(window_key)
 
     pre_update_reboot = db.get_setting("pre_update_reboot", "true") == "true"
 
