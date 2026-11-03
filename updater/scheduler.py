@@ -1,6 +1,7 @@
 """Auto-update scheduler with gradual rollout support."""
 
 import asyncio
+import ipaddress
 import logging
 import math
 from datetime import date, datetime, timedelta, timezone
@@ -160,6 +161,26 @@ def _device_needs_update(
             pass
 
     return classify_device_version(current_version, target_version, allow_downgrade).needs_update
+
+
+def _known_firmware_family(model: Optional[str]) -> Optional[str]:
+    """Return the supported firmware family, or None for an unknown model."""
+    if not model:
+        return None
+    normalized = model.strip().lower()
+    if normalized.startswith("tns-100"):
+        return "tns-100"
+    if normalized.startswith("tna-303l"):
+        return "tna-303l"
+    if normalized.startswith(("tna-301", "tna-302", "tna-303x")):
+        return "tna-30x"
+    return None
+
+
+def _normalized_ip(ip: str) -> tuple[int, int]:
+    """Sort IPv4 and IPv6 addresses by numeric value, independent of spelling."""
+    address = ipaddress.ip_address(ip.strip())
+    return address.version, int(address)
 
 
 def _as_int(value, default: int) -> int:
@@ -1258,6 +1279,94 @@ class AutoUpdateScheduler:
             ):
                 needs_update.append(ip)
         return needs_update
+
+    def _derive_pending_queue(
+        self,
+        settings: dict,
+        rollout: Optional[dict] = None,
+        allow_downgrade: bool = False,
+        held_families: Optional[set[str]] = None,
+    ) -> list[dict]:
+        """Build the current ordered queue from enabled Manager inventory.
+
+        This is a selector only. The existing wave dispatcher remains the
+        runtime admission path until the queue cutover.
+        """
+        target_versions = self._target_versions(settings, rollout or {})
+        cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
+        if held_families is None:
+            held_families, _ = self._held_families(settings, rollout)
+        ap_scope = set(self._resolve_scope(settings))
+        switch_scope = set(self._resolve_switch_scope(settings))
+        aps = db.get_all_access_points_dict(enabled_only=True)
+        switches = db.get_all_switches_dict(enabled_only=True)
+        cpes_by_ap = db.get_all_cpes_grouped()
+        entries: list[dict] = []
+        address_owners: set[tuple[int, int]] = set()
+
+        def add_device(device: dict, role: str, parent_ip: Optional[str] = None) -> None:
+            ip = device.get("ip")
+            family = _known_firmware_family(device.get("model"))
+            if not family:
+                if not any(target_versions.values()):
+                    return
+                raise ValueError(f"Pending queue held: unknown model for {role} {ip or 'without address'}")
+            target = target_versions.get(family, "")
+            if not target:
+                return
+            if target == "__unknown__":
+                raise ValueError(f"Pending queue held: target version is unreadable for {family}")
+            if not ip:
+                raise ValueError(f"Pending queue held: {role} has no management address")
+            try:
+                address_key = _normalized_ip(ip)
+            except ValueError as exc:
+                raise ValueError(f"Pending queue held: invalid management address for {role} {ip}") from exc
+            if address_key in address_owners:
+                raise ValueError(f"Pending queue held: duplicate management address {ip}")
+            address_owners.add(address_key)
+
+            version = device.get("firmware_version")
+            if not version:
+                raise ValueError(f"Pending queue held: reported version is unreadable for {role} {ip}")
+            if family in held_families:
+                return
+            if not _device_needs_update(
+                version, target, allow_downgrade,
+                last_update_iso=device.get("last_firmware_update"),
+                cooldown_days=cooldown_days,
+            ):
+                return
+            entries.append({
+                "ip": ip,
+                "device_type": role,
+                "parent_ip": parent_ip,
+                "model": device.get("model"),
+                "family": family,
+                "target_version": target,
+            })
+
+        for parent_ip in sorted(ap_scope):
+            ap = aps.get(parent_ip)
+            if not ap:
+                continue
+            add_device(ap, "ap")
+            for cpe in cpes_by_ap.get(parent_ip, []):
+                # The cache is populated by the AP peer report. Keep the same
+                # authenticated-peer eligibility used by existing scheduling.
+                if cpe.get("auth_status") == "ok":
+                    add_device(cpe, "cpe", parent_ip)
+        for ip in sorted(switch_scope):
+            switch = switches.get(ip)
+            if switch:
+                add_device(switch, "switch")
+
+        entries.sort(key=lambda item: (
+            {"cpe": 0, "ap": 1, "switch": 2}[item["device_type"]],
+            _normalized_ip(item["ip"]),
+            _normalized_ip(item["parent_ip"]) if item["parent_ip"] else (0, 0),
+        ))
+        return entries
 
     def _get_devices_for_phase(
         self,
