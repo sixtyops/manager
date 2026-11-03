@@ -147,7 +147,6 @@ class TestComputeNextAttempt:
         mock_db.commit()
 
         rollout_id = db.create_rollout("fw-1.0.bin")
-        db.assign_device_to_rollout(rollout_id, "10.0.0.10", "ap", "pct50")
         rollout = db.get_rollout(rollout_id)
 
         scheduler = _make_scheduler()

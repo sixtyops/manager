@@ -69,8 +69,8 @@ class TestRolloutPauseStatus:
         current = db.get_current_rollout()
         assert current is not None
         assert current["id"] == rollout_id
-        # The canary phase was removed: a fresh rollout starts at the first wave.
-        assert current["phase"] == "pct10"
+        assert current["status"] == "active"
+        assert db.get_rollout_devices(rollout_id) == []
 
     def test_paused_rollout_shows_paused_status(self, mock_db):
         from updater import database as db

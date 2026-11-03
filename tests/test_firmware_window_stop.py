@@ -726,8 +726,6 @@ async def test_manual_fallback_job_does_not_bypass_scheduled_queue_readiness(
         "firmware_canary_hold_days": "0",
     })
     rollout_id = db.create_rollout(firmware)
-    db.complete_rollout_phase(rollout_id)
-    db.set_rollout_phase_window(rollout_id, configured_key)
 
     from updater.scheduler import AutoUpdateScheduler
 
@@ -739,8 +737,8 @@ async def test_manual_fallback_job_does_not_bypass_scheduled_queue_readiness(
 
     await scheduler._check_and_run()
 
-    assert db.get_active_rollout()["phase"] == "pct50"
-    assert db.get_active_rollout()["last_phase_window"] == '["firmware","' + configured_key[1] + '"]'
+    assert db.get_active_rollout()["id"] == rollout_id
+    assert db.get_active_rollout()["status"] == "active"
     start_update.assert_not_awaited()
     assert scheduler._state == "blocked_all_current"
 
