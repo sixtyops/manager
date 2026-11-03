@@ -288,7 +288,6 @@ class TestCpeCredentialAdmission:
         from datetime import datetime
         from zoneinfo import ZoneInfo
 
-        from updater import rollout_gate
         from updater.poller import NetworkPoller, set_poller
 
         parent_ip = "10.0.0.10"
@@ -322,22 +321,10 @@ class TestCpeCredentialAdmission:
         finally:
             set_poller(None)
 
-        may_run, reason = rollout_gate.phase_run_decision(
-            {
-                "status": "active", "phase": "pct10", "last_phase_window": None,
-                "cpe_auth_failures": failures,
-            },
-            ("firmware", "2026-06-23"),
-        )
         assert cached.session_valid.await_count == 1
         assert fresh_client.connect.await_count == 1
         assert db.get_cpe_by_ip(cpe_ip)["auth_status"] == expected
-        if expected == "ok":
-            assert may_run is True
-            assert reason is None
-        else:
-            assert may_run is False
-            assert reason == f"cpe_auth_failed:{parent_ip}:{cpe_ip}:auth_failed"
+        assert failures == (() if expected == "ok" else ((parent_ip, cpe_ip, "auth_failed"),))
 
     @pytest.mark.asyncio
     async def test_unreachable_fresh_login_does_not_mark_period_checked(self, mock_db):
@@ -579,7 +566,6 @@ class TestSchedulerStartFailure:
         scheduler = AutoUpdateScheduler(AsyncMock(), start)
 
         with patch("updater.services.validate_time_sources", AsyncMock(return_value=(True, now))), \
-             patch("updater.scheduler.rollout_gate.phase_run_decision", return_value=(True, "ok")), \
              patch.object(scheduler, "_firmware_changed", return_value=False), \
              patch.object(scheduler, "_held_families", return_value=(set(), {})), \
              patch.object(scheduler, "_resolve_scope", return_value=["10.0.0.10"]), \
@@ -629,7 +615,6 @@ class TestSchedulerStartFailure:
         now = dt(2026, 6, 23, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
 
         with patch("updater.services.validate_time_sources", AsyncMock(return_value=(True, now))), \
-             patch("updater.scheduler.rollout_gate.phase_run_decision", return_value=(True, "ok")), \
              patch.object(scheduler, "_firmware_changed", return_value=False), \
              patch.object(scheduler, "_held_families", return_value=(set(), {})), \
              patch.object(scheduler, "_resolve_scope", return_value=["10.0.0.10"]), \

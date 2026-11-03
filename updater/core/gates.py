@@ -1,12 +1,10 @@
-"""Runtime phase checks and maintenance-window identity."""
+"""Maintenance-window identity and scheduled cutoff calculations."""
 
-import json
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
-from ..database import PHASE_ORDER
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -153,104 +151,3 @@ def firmware_window_cutoff(
             return None
         cutoff = min(cutoff, stored_utc)
     return cutoff
-
-
-def _is_window_key(value: Any) -> bool:
-    if not (
-        isinstance(value, (tuple, list))
-        and len(value) == 2
-        and _valid_schedule_id(value[0])
-        and isinstance(value[1], str)
-    ):
-        return False
-    try:
-        return date.fromisoformat(value[1]).isoformat() == value[1]
-    except ValueError:
-        return False
-
-
-def _is_local_window_date(value: Any) -> bool:
-    if not isinstance(value, str):
-        return False
-    try:
-        return date.fromisoformat(value).isoformat() == value
-    except ValueError:
-        return False
-
-
-def phase_run_decision(
-    rollout: dict,
-    window_key: Any,
-    *,
-    first_wave_held: bool = False,
-) -> tuple[bool, Optional[str]]:
-    """Decide whether `rollout` may START its current wave's job right now.
-
-    `window_key` identifies the current maintenance window. A legacy date-only
-    `last_phase_window` may refer to a window starting on that date or the
-    previous date. Admit only a window starting after the marker date.
-    `first_wave_held` (computed by the caller) is True when the pct10 wave must
-    still wait out the Firmware Hold — i.e. the firmware's release-date hold has
-    not elapsed AND no in-scope device of any pending family is confirmed working
-    on it yet. It is meaningful only at pct10.
-
-    Returns (may_run, reason). When may_run is False, `reason` is a short
-    machine-readable tag ("status_<x>", "already_ran_this_window", "firmware_hold").
-    When may_run is True, `reason` is None.
-
-    `first_wave_held` gates pct10 only — it never bypasses Rule 1, so waves still
-    advance at most one per maintenance window and never cascade. Fail-closed.
-    """
-    status = rollout.get("status")
-    if status != "active":
-        return False, f"status_{status}"
-
-    # Rule 1: one wave-job per maintenance window. Always enforced and checked
-    # first, so an early-cleared firmware hold can never let a second wave run in
-    # the same window.
-    last_window = rollout.get("last_phase_window")
-    if last_window is not None:
-        stored_key = last_window
-        if isinstance(last_window, str):
-            try:
-                stored_key = json.loads(last_window)
-            except (TypeError, ValueError):
-                # Older installs stored the local maintenance date as plain text.
-                stored_key = last_window
-        if _is_local_window_date(stored_key):
-            if _is_window_key(window_key):
-                current_date = window_key[1]
-            elif _is_local_window_date(window_key):
-                current_date = window_key
-            else:
-                # Without a valid current date, the legacy marker cannot prove
-                # that this is a different maintenance window.
-                return False, "already_ran_this_window"
-            if stored_key == current_date:
-                return False, "already_ran_this_window"
-            # The old marker used the clock date, not the window start date.
-            # After midnight it can describe the previous day's window. With
-            # no time or schedule ID, only a later start date proves separation.
-            if current_date < stored_key:
-                return False, "legacy_window_ambiguous"
-            last_window = None
-        elif _is_window_key(stored_key):
-            last_window = tuple(stored_key)
-        else:
-            return False, "already_ran_this_window"
-    if last_window and last_window == window_key:
-        return False, "already_ran_this_window"
-
-    # Rule 2: the firmware hold gates the first fleet wave (pct10) only.
-    if rollout.get("phase") == "pct10" and first_wave_held:
-        return False, "firmware_hold"
-
-    # Scheduled admission also carries the CPE fresh-login results for the
-    # candidate AP wave. Keep this in the shared gate so every caller uses the
-    # same fail-closed admission path.
-    cpe_auth_failures = rollout.get("cpe_auth_failures", ())
-    if cpe_auth_failures:
-        parent_ip, cpe_ip, status = cpe_auth_failures[0]
-        return False, f"cpe_auth_failed:{parent_ip}:{cpe_ip}:{status}"
-
-    return True, None

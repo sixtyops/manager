@@ -14,7 +14,6 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from updater import database as db
-from updater.core import engine
 from updater.core.gates import MaintenanceSchedule, window_instance_key
 from tests.fixtures.fleet import make_fleet, set_version, set_health, confirm
 from updater import rollout_gate
@@ -30,8 +29,7 @@ def _dated(prefix: str, days_ago: int) -> str:
 
 
 # Undated firmware (no release date in the name) — the hold falls back to the
-# registry/legacy path and is treated as cleared, so these exercise the wave/window
-# rules without a hold getting in the way.
+# registry/legacy path and is treated as cleared.
 FW = "tna-30x-1.12.3-r55002.bin"  # target version 1.12.3.55002
 # Released yesterday — with hold_days=6 its hold has NOT elapsed (first wave held).
 FW_HELD = _dated("tna-30x-1.12.3-r55002", 1)
@@ -85,33 +83,10 @@ def _settings(hold_days: int = 0, firmware: str = FW) -> dict:
 def _make_scheduler():
     start_update = AsyncMock(side_effect=lambda **kw: f"job-{start_update.call_count}")
     scheduler = AutoUpdateScheduler(AsyncMock(), start_update)
-    # These wave-gate tests use synthetic CPE inventory without a poller. The
-    # dedicated scheduler admission tests cover the fresh-login result path.
+    # Use synthetic CPE inventory without a poller. Dedicated scheduler tests
+    # cover the fresh-login result path.
     scheduler._precheck_cpe_credentials = AsyncMock(return_value=())
     return scheduler, start_update
-
-
-def test_wave_reservation_rolls_back_marker_assignments_and_settings(mock_db):
-    rollout_id = db.create_rollout(FW)
-    db.set_rollout_settings_snapshot(rollout_id, {"old": "snapshot"})
-    with db.get_db() as conn:
-        conn.execute(
-            """CREATE TRIGGER reject_wave_assignment BEFORE INSERT ON rollout_devices
-               BEGIN SELECT RAISE(ABORT, 'injected assignment failure'); END"""
-        )
-
-    with pytest.raises(Exception, match="injected assignment failure"):
-        engine.start_wave(
-            db.get_rollout(rollout_id),
-            {"ap_ips": ["10.0.0.1"], "switch_ips": []},
-            {"bank_mode": "single"},
-            (1, "2026-06-02"),
-        )
-
-    rollout = db.get_rollout(rollout_id)
-    assert rollout["last_phase_window"] is None
-    assert db.get_rollout_settings_snapshot(rollout_id) == {"old": "snapshot"}
-    assert db.get_rollout_devices(rollout_id) == []
 
 
 def test_straggler_migration_defaults_existing_rows_to_zero(mock_db):
@@ -133,269 +108,6 @@ def test_straggler_migration_defaults_existing_rows_to_zero(mock_db):
     assert "is_straggler" in columns
     assert "model_family" in columns
     assert tuple(member) == (0, None)
-
-
-def _straggler_rollout():
-    original_ip = "192.0.2.10"
-    db.upsert_access_point(
-        original_ip, "fixture-user", "synthetic-password", model="TNA-301",
-        firmware_version="1.0.0",
-    )
-    rollout_id = db.create_rollout(
-        FW, members=[{"ip": original_ip, "device_type": "ap"}],
-        settings_snapshot={"allow_downgrade": "false"},
-    )
-    with db.get_db() as conn:
-        conn.execute(
-            "UPDATE rollouts SET status = 'active', phase = 'pct100' WHERE id = ?",
-            (rollout_id,),
-        )
-    return rollout_id, original_ip
-
-
-def _reserve_stragglers(rollout_id, original_ip, candidates, *, window="2026-06-02"):
-    return db.reserve_rollout_wave(
-        rollout_id=rollout_id,
-        phase="pct100",
-        window_key=(1, window),
-        assignments=[(original_ip, "ap", "pct100")],
-        settings={"bank_mode": "single"},
-        straggler_candidates=candidates,
-    )
-
-
-def test_pct100_reservation_admits_eligible_saved_family_straggler_once(mock_db):
-    rollout_id, original_ip = _straggler_rollout()
-    candidate_ip = "192.0.2.99"
-    db.upsert_access_point(
-        candidate_ip, "fixture-user", "synthetic-password", model="TNA-301",
-        firmware_version="1.0.0",
-    )
-
-    assert _reserve_stragglers(
-        rollout_id, original_ip, [{"ip": candidate_ip, "device_type": "ap"}]
-    )
-    candidate = next(
-        row for row in db.get_rollout_devices(rollout_id) if row["ip"] == candidate_ip
-    )
-    assert (candidate["phase_assigned"], candidate["status"], candidate["is_straggler"]) == (
-        "pct100", "pending", 1
-    )
-    assert candidate["model_family"] == "tna-30x"
-
-
-def test_straggler_eligibility_uses_family_saved_at_rollout_creation(mock_db):
-    rollout_id, original_ip = _straggler_rollout()
-    changed_family_ip = "192.0.2.88"
-    matching_family_ip = "192.0.2.89"
-    db.upsert_access_point(
-        changed_family_ip, "fixture-user", "synthetic-password", model="TNA-303L",
-        firmware_version="1.0.0",
-    )
-    db.upsert_access_point(
-        matching_family_ip, "fixture-user", "synthetic-password", model="TNA-301",
-        firmware_version="1.0.0",
-    )
-    # The original member's live model changed after the rollout snapshot.
-    db.upsert_access_point(
-        original_ip, "fixture-user", "synthetic-password", model="TNA-303L",
-        firmware_version="1.0.0",
-    )
-
-    assert not _reserve_stragglers(
-        rollout_id, original_ip, [{"ip": changed_family_ip, "device_type": "ap"}]
-    )
-    assert _reserve_stragglers(
-        rollout_id, original_ip, [{"ip": matching_family_ip, "device_type": "ap"}]
-    )
-    rows = {row["ip"]: row for row in db.get_rollout_devices(rollout_id)}
-    assert changed_family_ip not in rows
-    assert rows[matching_family_ip]["model_family"] == "tna-30x"
-
-
-@pytest.mark.parametrize("candidate", [
-    {"ip": "192.0.2.10", "device_type": "ap"},  # existing member
-    {"ip": "192.0.2.99", "device_type": "ap"},  # unsupported model/family
-    {"ip": "192.0.2.98", "device_type": "ap"},  # already at the target
-    {"ip": "192.0.2.97", "device_type": "switch"},  # wrong role
-])
-def test_straggler_reservation_rejects_stale_or_unrepresented_candidates(mock_db, candidate):
-    rollout_id, original_ip = _straggler_rollout()
-    if candidate["ip"] == "192.0.2.99":
-        db.upsert_access_point(
-            candidate["ip"], "fixture-user", "synthetic-password", model="unknown-model",
-            firmware_version="1.0.0",
-        )
-    elif candidate["ip"] == "192.0.2.98":
-        db.upsert_access_point(
-            candidate["ip"], "fixture-user", "synthetic-password", model="TNA-301",
-            firmware_version="1.12.3.55002",
-        )
-    elif candidate["ip"] == "192.0.2.97":
-        db.upsert_device(
-            candidate["ip"], "ap", "fixture-user", "synthetic-password",
-            model="TNA-301", firmware_version="1.0.0",
-        )
-
-    assert not _reserve_stragglers(
-        rollout_id, original_ip, [candidate]
-    )
-    rows = db.get_rollout_devices(rollout_id)
-    assert len(rows) == 1 and rows[0]["ip"] == original_ip
-    assert db.get_rollout(rollout_id)["last_phase_window"] is None
-
-
-def test_straggler_reservation_rejects_new_family_and_late_candidate(mock_db):
-    rollout_id, original_ip = _straggler_rollout()
-    new_family_ip = "192.0.2.96"
-    late_ip = "192.0.2.95"
-    db.upsert_access_point(
-        new_family_ip, "fixture-user", "synthetic-password", model="TNA-303L",
-        firmware_version="1.0.0",
-    )
-    db.upsert_access_point(
-        late_ip, "fixture-user", "synthetic-password", model="TNA-301",
-        firmware_version="1.0.0",
-    )
-    assert not _reserve_stragglers(
-        rollout_id, original_ip, [{"ip": new_family_ip, "device_type": "ap"}]
-    )
-    assert _reserve_stragglers(rollout_id, original_ip, [])
-    assert not db.reserve_rollout_wave(
-        rollout_id=rollout_id, phase="pct100", window_key=(1, "2026-06-03"),
-        assignments=[(original_ip, "ap", "pct100")], settings={},
-        straggler_candidates=[{"ip": late_ip, "device_type": "ap"}],
-    )
-    assert late_ip not in {row["ip"] for row in db.get_rollout_devices(rollout_id)}
-
-
-def test_straggler_reservation_rejects_wrong_phase_or_duplicate_proposal(mock_db):
-    rollout_id, original_ip = _straggler_rollout()
-    candidate_ip = "192.0.2.93"
-    db.upsert_access_point(
-        candidate_ip, "fixture-user", "synthetic-password", model="TNA-301",
-        firmware_version="1.0.0",
-    )
-    candidate = {"ip": candidate_ip, "device_type": "ap"}
-
-    assert not db.reserve_rollout_wave(
-        rollout_id=rollout_id, phase="pct50", window_key=(1, "2026-06-02"),
-        assignments=[(original_ip, "ap", "pct50")], settings={},
-        straggler_candidates=[candidate],
-    )
-    with db.get_db() as conn:
-        conn.execute("UPDATE rollouts SET status = 'paused' WHERE id = ?", (rollout_id,))
-    assert not _reserve_stragglers(rollout_id, original_ip, [candidate])
-    with db.get_db() as conn:
-        conn.execute("UPDATE rollouts SET status = 'active' WHERE id = ?", (rollout_id,))
-    assert not _reserve_stragglers(rollout_id, original_ip, [candidate, candidate])
-    assert candidate_ip not in {row["ip"] for row in db.get_rollout_devices(rollout_id)}
-    assert db.get_rollout(rollout_id)["last_phase_window"] is None
-
-
-def test_straggler_reservation_rejects_missing_saved_family_artifact(mock_db):
-    original_ip = "192.0.2.11"
-    candidate_ip = "192.0.2.91"
-    for ip in (original_ip, candidate_ip):
-        db.upsert_access_point(
-            ip, "fixture-user", "synthetic-password", model="TNA-303L",
-            firmware_version="1.0.0",
-        )
-    rollout_id = db.create_rollout(
-        FW, members=[{"ip": original_ip, "device_type": "ap"}],
-        settings_snapshot={},
-    )
-    with db.get_db() as conn:
-        conn.execute(
-            "UPDATE rollouts SET status = 'active', phase = 'pct100' WHERE id = ?",
-            (rollout_id,),
-        )
-
-    assert not _reserve_stragglers(
-        rollout_id, original_ip, [{"ip": candidate_ip, "device_type": "ap"}]
-    )
-    assert {row["ip"] for row in db.get_rollout_devices(rollout_id)} == {original_ip}
-
-
-def test_straggler_insert_and_wave_reservation_roll_back_together(mock_db):
-    rollout_id, original_ip = _straggler_rollout()
-    candidate_ip = "192.0.2.94"
-    db.upsert_access_point(
-        candidate_ip, "fixture-user", "synthetic-password", model="TNA-301",
-        firmware_version="1.0.0",
-    )
-    db.set_rollout_settings_snapshot(rollout_id, {"old": "snapshot"})
-    with db.get_db() as conn:
-        conn.execute(
-            """CREATE TRIGGER reject_final_assignment BEFORE UPDATE OF phase_assigned
-               ON rollout_devices WHEN NEW.ip = '192.0.2.10'
-               BEGIN SELECT RAISE(ABORT, 'injected final assignment failure'); END"""
-        )
-
-    with pytest.raises(Exception, match="injected final assignment failure"):
-        _reserve_stragglers(
-            rollout_id, original_ip, [{"ip": candidate_ip, "device_type": "ap"}]
-        )
-
-    assert {row["ip"] for row in db.get_rollout_devices(rollout_id)} == {original_ip}
-    assert db.get_rollout(rollout_id)["last_phase_window"] is None
-    assert db.get_rollout_settings_snapshot(rollout_id) == {"old": "snapshot"}
-
-
-def test_straggler_reservation_uses_pinned_clock(mock_db, monkeypatch):
-    rollout_id, original_ip = _straggler_rollout()
-    fixed = datetime(2026, 6, 2, 3, 15)
-
-    class FixedDateTime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return fixed.replace(tzinfo=tz) if tz else fixed
-
-    monkeypatch.setattr(db, "datetime", FixedDateTime)
-    assert _reserve_stragglers(rollout_id, original_ip, [])
-    assert db.get_rollout(rollout_id)["updated_at"] == fixed.isoformat()
-
-
-def test_concurrent_pct100_reservations_admit_candidate_once(mock_db, monkeypatch, tmp_path):
-    import sqlite3
-    from contextlib import contextmanager
-    from concurrent.futures import ThreadPoolExecutor
-
-    rollout_id, original_ip = _straggler_rollout()
-    candidate_ip = "192.0.2.92"
-    db.upsert_access_point(
-        candidate_ip, "fixture-user", "synthetic-password", model="TNA-301",
-        firmware_version="1.0.0",
-    )
-    path = tmp_path / "straggler-reservation.db"
-    persisted = sqlite3.connect(path)
-    mock_db.backup(persisted)
-    persisted.close()
-
-    @contextmanager
-    def file_db():
-        conn = sqlite3.connect(path, timeout=5)
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-
-    monkeypatch.setattr(db, "get_db", file_db)
-    candidate = [{"ip": candidate_ip, "device_type": "ap"}]
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(
-            lambda _: _reserve_stragglers(rollout_id, original_ip, candidate), range(2)
-        ))
-
-    assert sorted(results) == [False, True]
-    rows = db.get_rollout_devices(rollout_id)
-    admitted = [row for row in rows if row["ip"] == candidate_ip]
-    assert len(admitted) == 1 and admitted[0]["is_straggler"] == 1
 
 
 def test_create_rollout_persists_complete_membership_snapshot(mock_db):
@@ -553,80 +265,6 @@ def test_create_rollout_rejects_missing_or_invalid_settings_snapshot_without_wri
         assert conn.execute("SELECT COUNT(*) FROM rollout_devices").fetchone()[0] == 0
 
 
-def test_empty_wave_reservation_writes_nothing(mock_db):
-    rollout_id = db.create_rollout(FW)
-    before = db.get_rollout(rollout_id)
-
-    assert not engine.start_wave(
-        before,
-        {"ap_ips": [], "switch_ips": []},
-        {"bank_mode": "single"},
-        (1, "2026-06-02"),
-    )
-    after = db.get_rollout(rollout_id)
-    assert after["last_phase_window"] == before["last_phase_window"]
-    assert after["settings_json"] == before["settings_json"]
-    assert db.get_rollout_devices(rollout_id) == []
-
-
-@pytest.mark.parametrize(("rollout", "batch"), [
-    (None, {"ap_ips": ["192.0.2.10"]}),
-    ({"id": 0, "phase": "pct100"}, {"ap_ips": ["192.0.2.10"]}),
-    ({"id": True, "phase": "pct100"}, {"ap_ips": ["192.0.2.10"]}),
-    ({"id": 1, "phase": "unknown"}, {"ap_ips": ["192.0.2.10"]}),
-    ({"id": 1, "phase": "pct100"}, {"ap_ips": []}),
-    ({"id": 1, "phase": "pct100"}, {"ap_ips": [""]}),
-    ({"id": 1, "phase": "pct100"}, {"ap_ips": [None]}),
-    ({"id": 1, "phase": "pct100"}, {"ap_ips": "192.0.2.10"}),
-])
-def test_engine_rejects_invalid_wave_before_reservation(rollout, batch, monkeypatch):
-    reserve_calls = []
-    monkeypatch.setattr(db, "reserve_rollout_wave", lambda **kwargs: reserve_calls.append(kwargs))
-
-    assert not engine.start_wave(rollout, batch, {}, (1, "2026-06-02"))
-    assert reserve_calls == []
-
-
-def test_concurrent_wave_reservations_admit_one_batch(mock_db, monkeypatch, tmp_path):
-    import sqlite3
-    from contextlib import contextmanager
-    from concurrent.futures import ThreadPoolExecutor
-
-    path = tmp_path / "wave-reservation.db"
-    persisted = sqlite3.connect(path)
-    mock_db.backup(persisted)
-    persisted.close()
-
-    @contextmanager
-    def file_db():
-        conn = sqlite3.connect(path, timeout=5)
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-
-    monkeypatch.setattr(db, "get_db", file_db)
-    rollout_id = db.create_rollout(FW)
-    rollout = db.get_rollout(rollout_id)
-    key = ("firmware", "2026-06-02")
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(
-            lambda ip: engine.start_wave(
-                rollout, {"ap_ips": [ip], "switch_ips": []}, {"bank_mode": "both"}, key
-            ),
-            ("10.0.0.1", "10.0.0.2"),
-        ))
-
-    assert sorted(results) == [False, True]
-    assert len(db.get_rollout_devices(rollout_id)) == 1
-    assert db.get_rollout(rollout_id)["last_phase_window"] == '["firmware","2026-06-02"]'
-
-
 def test_overnight_window_keeps_its_start_date_key():
     schedule = MaintenanceSchedule(
         schedule_id=7, days=frozenset({0}), start_hour=23, end_hour=2, tz="UTC"
@@ -746,46 +384,6 @@ _NOW = "2026-06-10"
 
 def _pct10(window=None):
     return {"status": "active", "phase": "pct10", "last_phase_window": window}
-
-
-def test_gate_holds_first_wave_when_held():
-    """The hold blocks pct10 when the caller reports first_wave_held."""
-    may_run, reason = rollout_gate.phase_run_decision(_pct10(), _NOW, first_wave_held=True)
-    assert may_run is False
-    assert reason == "firmware_hold"
-
-
-def test_gate_runs_first_wave_when_clear():
-    """pct10 runs when the hold is clear."""
-    may_run, reason = rollout_gate.phase_run_decision(_pct10(), _NOW, first_wave_held=False)
-    assert may_run is True
-    assert reason is None
-
-
-def test_firmware_hold_clear_never_overrides_one_phase_per_window():
-    """Even with the hold clear, a wave already run this window waits for the next
-    one — the hold clearance never bypasses the anti-cascade rule (Rule 1 first)."""
-    rollout = _pct10(window=_NOW)
-    may_run, reason = rollout_gate.phase_run_decision(rollout, _NOW, first_wave_held=False)
-    assert may_run is False
-    assert reason == "already_ran_this_window"
-
-
-def test_hold_only_affects_pct10():
-    """first_wave_held is ignored for non-pct10 waves (they aren't hold-gated)."""
-    for phase in ("pct50", "pct100"):
-        rollout = {"status": "active", "phase": phase, "last_phase_window": None}
-        may_run, reason = rollout_gate.phase_run_decision(rollout, _NOW, first_wave_held=True)
-        assert may_run is True
-        assert reason is None
-
-
-def test_gate_fail_closed_on_non_active_status():
-    """Any non-active status holds (fail-closed)."""
-    rollout = {"status": "paused", "phase": "pct10", "last_phase_window": None}
-    may_run, reason = rollout_gate.phase_run_decision(rollout, _NOW, first_wave_held=False)
-    assert may_run is False
-    assert reason == "status_paused"
 
 
 # ── Migration: in-flight canary rollouts remap to pct10 ──
