@@ -40,14 +40,9 @@ require an outside system that the operator may not run.
 
 ### Always-on safety defaults
 
-**Key points:** These are target rules for the rebuilt engine. They do not
-describe all shipped behavior. Operators cannot disable a safety gate or
-resume a failed rollout in the same maintenance window.
+**Key points:** These rules describe the target contract. Shipped behavior is listed first; the remaining items are targets. Operators cannot disable a safety gate or resume a failed queue in the same maintenance window.
 
-**Detail:** The precise target rules are in [rearchitecture.md](rearchitecture.md),
-*Rollout rules*. Shipped behavior is stated separately in
-[gradual-rollout.md](gradual-rollout.md). An approval can record a named Hold
-exception. It cannot bypass a failed safety gate.
+**Detail:** Shipped queue behavior: Manager processes one device at a time, CPEs before APs and switches; applies a 30-120 minute ramp to the first used windows for each new family or artifact; persists the cutoff; finishes active recovery; and stops after the first failure. After resume, it checks that device first. Update Mode defaults to one bank; the operator can select both banks. Wave membership and predictions were removed. See [gradual-rollout.md](gradual-rollout.md). The list below describes target rules unless stated as shipped.
 
 - **Firmware Hold** — target queue work waits for the configured release-date period, per model family, unless a device in that family passes a clean smoke test first.
 - **Weather Guard** — queue admission stops below the minimum temperature.
@@ -61,15 +56,7 @@ exception. It cannot bypass a failed safety gate.
 - **One active device sequence** — do not start another device write or recovery sequence until the previous device passes every recovery check.
 - **Single-bank updates** — the vendor recommendation; there is no bank-mode setting.
 
-These include target rules that are not all shipped. The serial queue shipped
-in [PR #715](https://github.com/sixtyops/manager/pull/715). Scheduled admission
-still requires a fresh, restorable backup and
-config snapshot before each write, recovery proof before flashing, and checks
-for version, CPE re-association, RSSI, reported peer return, and reported CPE
-link-up when it was up before reboot. Do not infer customer traffic from bridge
-learning or byte counters. See [gradual-rollout.md](gradual-rollout.md) for
-current behavior. Read the shipped-behavior notes in
-[gradual-rollout.md](gradual-rollout.md) before relying on a gate.
+The serial queue shipped in [#715](https://github.com/sixtyops/manager/pull/715), with ramp, cutoff, recovery, and stop behavior in follow-up work. The remaining gates above are targets. Scheduled admission stays closed until its required proof passes.
 
 ---
 

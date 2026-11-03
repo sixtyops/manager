@@ -14,8 +14,8 @@ SQLite, and Docker. Paths in the table are relative to the repository root.
 | `updater/app.py` | All API routes, WebSocket, update logic |
 | `updater/templates/monitor.html` | Entire frontend (single-page app) |
 | `updater/database.py` | SQLite schema and data access |
-| `updater/scheduler.py` | Auto-update scheduler + gradual rollout (10%→50%→100%, one wave per window) |
-| `updater/rollout_gate.py` | Fail-closed phase gate: one wave per maintenance window + Firmware Hold |
+| `updater/scheduler.py` | Auto-update scheduler and serial queue (CPEs, APs, then switches) |
+| `updater/rollout_gate.py` | Fail-closed admission checks for scheduled queue work and Firmware Hold |
 | `updater/release_checker.py` | Self-update: checks GitHub releases API |
 | `updater/tachyon.py` | Tachyon device communication client (hardware vendor) |
 | `scripts/install.sh` | Production installer (always pulls `main`) |
@@ -25,7 +25,7 @@ SQLite, and Docker. Paths in the table are relative to the repository root.
 | `.github/release.yml` | GitHub auto-generated release notes config |
 | `docs/north-star.md` | Product direction (v2: Tachyon firmware automation) |
 | `docs/rearchitecture.md` | Rearchitecture decisions, feature disposition, target layout |
-| `docs/rollout-logic.md` | Target rollout model: identity, lifecycle, waves, edge cases |
+| `docs/rollout-logic.md` | Shipped serial queue and clearly marked target safety rules |
 | `tests/integration/` | Integration tests against real hardware (requires `SIXTYOPS_TEST_URL`) |
 
 ## Strategy & Roadmap

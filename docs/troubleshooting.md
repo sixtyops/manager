@@ -124,7 +124,7 @@ no obvious reason.
    rollout's `pause_reason` field. Look for `pause_reason` in the
    rollout's API response (`GET /api/rollout/current`) or in the banner
    tooltip on the dashboard.
-3. **Maintenance window**. A rollout that's mid-phase at the end of its
+3. **Maintenance window**. A queue that reaches its cutoff at the end of its
    window will defer until the next window opens — that looks like
    "stuck" but is correct behavior. Check the rollout's configured
    window against the current time.
@@ -143,7 +143,7 @@ no obvious reason.
 - **Test new firmware before the fleet rolls**: the firmware is held until its
   Firmware Hold elapses or a device is confirmed working on it. To clear the hold
   sooner, manually update one device (the **Update Firmware** button skips the
-  hold); once it reboots healthy and passes smoke tests, that model's fleet wave
+  hold); once it reboots healthy and passes smoke tests, that firmware family's scheduled queue
   proceeds at the next window.
 
 ---

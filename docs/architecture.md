@@ -63,7 +63,7 @@ The main FastAPI application. Handles all routing, serves HTML templates, manage
 Key responsibilities:
 - 30+ REST endpoints for sites, APs, CPEs, firmware, updates, settings, rollouts
 - WebSocket broadcast to all connected clients
-- Update job orchestration with phase-based device ordering
+- Update job orchestration with serial CPE, AP, then switch ordering
 - App lifespan management (starts/stops poller, scheduler, release checks, and Radius log sync)
 - Manages the in-process pyrad RADIUS server for built-in device-admin authentication
 
@@ -107,9 +107,9 @@ Background task that checks every 60 seconds whether to start an update. Enforce
 - System clock validated against NTP sources
 - Weather conditions acceptable (optional temperature check)
 - Firmware files selected
-- The rollout has not already run a wave in this maintenance window
+- The queue has not reached its cutoff or recorded a failure for this maintenance window
 
-Manages gradual rollout progression across consecutive schedule windows. A fail-closed gate (`rollout_gate.py`) is the single source of truth that enforces **one wave per maintenance window** (DB-backed, survives restarts) and the **Firmware Hold** on the first wave (new firmware soaks for `firmware_canary_hold_days` from its release date, clearing early once a device is confirmed working on it), so waves cannot cascade through a single window. `tests/test_rollout_invariants.py` guards both rules.
+Manages the scheduled serial queue. It processes CPEs, APs, then switches, one device at a time. The first used windows for new firmware families or artifacts use the 30–120 minute ramp. A persisted cutoff stops new starts and lets active recovery finish. A failure stops the queue; after resume, the failed device is checked first. Firmware Hold remains in force. `tests/test_rollout_invariants.py` guards queue safety.
 
 ### `poller.py` - Network Discovery
 
@@ -144,7 +144,7 @@ Helpers for IP geolocation, weather forecasts (weather.gov), timezone detection,
 
 ### `slack.py` - Slack Notifications
 
-Sends rich webhook notifications on job completion with success/failure counts, failed device details, rollout phase progress, and next scheduled job info. Configured via `slack_webhook_url` in settings.
+Sends rich webhook notifications on job completion with success/failure counts, failed device details, queue progress, and next scheduled job info. Configured via `slack_webhook_url` in settings.
 
 ### `features.py` - Feature Classification (being removed)
 
@@ -183,9 +183,9 @@ The remaining 9 features (firmware updates, Slack, SNMP, webhooks, device portal
 
 **WebSocket broadcast** - All connected clients receive every status update. The server maintains a set of active WebSocket connections and broadcasts to all on any state change.
 
-**Phase-based updates** - Devices are grouped into phases (CPEs first, then APs, then second bank pass) to maintain network connectivity during updates.
+**Serial updates** - Scheduled work processes CPEs before APs and switches, one device write and recovery sequence at a time.
 
-**Gradual rollout** - Scheduled updates roll out in waves — 10%, then 50%, then 100% — one wave per maintenance window. New firmware is held before the first wave (the Firmware Hold) until it soaks or a device is confirmed working on it. Any device that fails to come back online halts the job and pauses the rollout.
+**Scheduled queue** - Scheduled work uses the current inventory and selected firmware. It applies the configured ramp to first used windows, stops new starts at cutoff, and stops after a failed check. After resume, Manager checks the failed device first.
 
 **curl for device communication** - Tachyon devices require specific TLS handling that is simplest to achieve with curl's `-k` flag for self-signed certs.
 

@@ -1,8 +1,6 @@
 # Scheduled Rollout Logic
 
-> **Status:** design spec for the rebuilt core. `docs/rearchitecture.md`
-> rules 1–24 are the summary. This document is the full definition.
-> Lines marked *(today: …)* describe what the current code does instead.
+> **Status:** The serial queue is shipped. This document separates shipped queue behavior from target identity and safety rules. See [gradual-rollout.md](gradual-rollout.md) for operator-facing behavior and [issue #604](https://github.com/sixtyops/manager/issues/604) for proof status.
 
 ## Summary
 
@@ -10,21 +8,17 @@
 [PR #715](https://github.com/sixtyops/manager/pull/715). Scheduled admission
 stays closed until required safety proof passes.
 
-**Detail:** The target uses Manager inventory and the device APIs it calls. It
-runs one ordered list of devices that need the selected firmware. It does not
-persist rollout membership or percentage waves.
+**Detail:** The shipped queue uses Manager inventory and the device APIs it calls. It runs one ordered list of devices that need the selected firmware. It does not persist membership or calculate percentages.
 
 - Keep device identity, address holds, and offline history as described below.
-- Keep Firmware Hold by firmware family. Limit the first used maintenance
-  windows for each new firmware family or artifact with the configured minute
-  ramp; later windows use the normal schedule.
+- Keep Firmware Hold by firmware family. Apply `firmware_window_ramp_minutes` (30-120) to the first used maintenance windows for each new firmware family or artifact; later windows use the normal schedule.
 - Run CPEs, then APs, then switches. Process one device write and recovery
   sequence at a time.
 - Persist the first failure and the maintenance-window cutoff. Stop new starts
   at the cutoff, finish active recovery, and continue remaining devices in a
   later window.
 - New and returning devices join the derived queue when they need the target.
-- Keep scheduled updates single-bank. Manual per-device updates retain their
+- Default Update Mode to one bank; the operator can select both banks. Manual per-device updates retain their
   deliberate Firmware Hold bypass and do not advance scheduled timing.
 - Stop the queue after a failed check. Resolve the failure before work resumes
   in a later window. Never reopen the failed window.
@@ -208,7 +202,7 @@ write.
   accepts the file (`validate_firmware_for_model`).
 - Scheduled and manual updates default to `bank_mode=one`. Use `bank_mode=both`
   only when an operator selects both banks. Missing bank mode uses `one`; an
-  invalid value blocks the job before a wave reservation or device write.
+  invalid value blocks the job before a device write.
 - Firmware files are **artifacts** with a checksum. Rollouts point at an
   artifact id, not a filename.
 - A family with no selected artifact has no target. Its devices are left
@@ -243,7 +237,7 @@ the artifact id for each family it is rolling. Filenames are for display.
 
 This is the queue contract shipped in [PR #715](https://github.com/sixtyops/manager/pull/715).
 It derives each pending queue from current Manager inventory instead of saved
-rollout membership and percentage phases.
+rollout membership and percentage selection.
 
 Before admitting a device, check current readiness, Firmware Hold, schedule,
 freeze, clock, weather, artifact integrity, device identity, and eligibility.
@@ -281,8 +275,7 @@ required recovery evidence stops the queue.
 
 The queue is derived again from current inventory at each admission. Devices
 that become eligible or return online join when they pass the admission gates.
-Do not preserve percentage membership, add stragglers to a final wave, or
-advance an empty wave.
+Re-derive pending devices from current inventory. Do not save membership for future queue runs.
 
 ## 5. Target examples
 
@@ -296,7 +289,7 @@ recovery; remaining devices wait for the next window.
 
 The target stores window timing and in-flight device recovery using existing
 Manager job and history data. It does not add saved rollout membership,
-percentage phases, straggler state, or a second rollout engine. Keep existing
+percentage selection or a second rollout engine. Keep existing
 history and stop records.
 
 Pin these target invariants in `tests/test_rollout_invariants.py`:

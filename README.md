@@ -1,23 +1,22 @@
 # SixtyOps Manager
 
-## Road to safe scheduled rollouts
+## Safe scheduled firmware progress
 
-Manager updates Tachyon firmware in waves of 10%, 50% and 100%, one wave per maintenance window. Scheduled rollouts stay off until every safety slice below is done and proven on hardware.
+The serial queue is on `main`. It processes one device at a time, with CPEs
+before APs and switches. The first used maintenance windows for a new firmware
+family or artifact use the configured 30-120 minute ramp. The cutoff stops new
+starts and lets active recovery finish. A failure stops the queue; after resume,
+Manager checks that device first. Wave selection, saved membership, and
+predictions have been removed.
 
-```text
-Overall                   ████████████░░░░░░░░  9 of 15 slices merged
-Write safety              ████████████████░░░░  5 of 6 slices merged
-  Stop at first failure ✓  One writer at a time ✓  Recheck at each write ✓
-  Reboot recovery proof ✓  CPE link state, counters, and polling pause ✓  Customer recovery check: [#673](https://github.com/sixtyops/manager/pull/673) open; exact-head bench proof is on hold
-Waves and windows         ███████████████░░░░░  3 of 4 slices merged
-  One wave per window ✓  Saved rollout membership ✓
-  Stragglers: [#655](https://github.com/sixtyops/manager/pull/655), [#659](https://github.com/sixtyops/manager/pull/659), and [#663](https://github.com/sixtyops/manager/pull/663) merged  Wave sizing: Not started
-Proof and release         ████░░░░░░░░░░░░░░░░  1 of 5 slices merged
-  Bench wrapper archive fix ✓  Dev host proof: user-write proof passed; firmware test is next
-  Qualification record: Not started; waits for the firmware test  Dev release: Not started  Go-live review: Not started
-```
+- Write safety: serial recovery, CPE rediscovery, serial checks before each
+  write, and stop-on-first-failure are shipped.
+- Queue: cutoff, serial execution, and removal of wave behavior are shipped.
+- Proof: C2 passed on 2026-11-03 in dev host run 26. The live single-bank
+  firmware test upgraded and restored the lab AP. C3 qualification record, dev
+  release, and the go-live decision remain open.
 
-Updated 2026-10-31. Track the work in [issue #604](https://github.com/sixtyops/manager/issues/604).
+Updated 2026-11-03. Track status in [issue #604](https://github.com/sixtyops/manager/issues/604).
 
 Automated firmware updates for Tachyon wireless networks — handles scheduling, gradual rollouts, and safety checks so you don't have to update APs manually.
 
@@ -37,13 +36,7 @@ A firmware cycle means logging into each AP and every attached CPE, uploading th
    - Set your maintenance window (e.g., Sunday 2–6 AM)
    - Assign firmware images to device models
    - Set safety thresholds (temperature, timezone)
-4. The system automatically rolls out updates over 4 consecutive nights:
-   - Night 1: Canary APs (+ attached CPEs) and canary switches
-   - Night 2: 10% of remaining APs and switches
-   - Night 3: 50% of remaining APs and switches
-   - Night 4: All remaining APs and switches
-
-Any failure pauses the rollout. Review the failed devices in the rollout status panel and resume when ready.
+4. Scheduled work uses a serial queue. Manager processes CPEs, then APs, then switches, one device at a time. The first used windows for a new firmware family or artifact use the configured minute ramp. A cutoff stops new starts and lets active recovery finish. A failed check stops the queue. After resume, Manager checks the failed device first.
 
 You can also trigger immediate updates on any single AP, CPE, or switch from the device table's **Update** column without affecting the scheduled rollout.
 
@@ -51,8 +44,8 @@ You can also trigger immediate updates on any single AP, CPE, or switch from the
 
 - **Temperature validation** — Blocks updates if temperature is below threshold (default -10°C / 14°F) to protect equipment in cold conditions
 - **Timezone validation** — Prevents daytime updates that would cause outages due to device clock drift
-- **Gradual rollout** — Updates canary devices first, then progressively larger groups on consecutive nights
-- **Manual canary run** — Click the pending Canary pill to test firmware on canary devices before the maintenance window
+- **Serial scheduled queue** — Updates one device at a time in CPE, AP, then switch order
+- **Firmware Hold** — Holds scheduled work until the family hold clears; manual per-device updates can proceed
 - **Automatic pause on failure** — Any failed update stops the rollout; manually review and resume from the rollout status panel
 - **Maintenance windows** — Updates only run during configured days and times
 
@@ -135,7 +128,7 @@ See [docs/deployment.md](docs/deployment.md) for full deployment options.
    - Set temperature threshold (default: -10°C / 14°F)
 4. Enable the scheduler
 
-The system runs the gradual rollout automatically on your configured nights. Monitor progress in the **Rollout Status** panel. If you have a lab AP or switch, pin it as a canary in the firmware drawer to test before the full rollout.
+The system runs the serial queue during configured maintenance windows. Monitor progress in the **Rollout Status** panel. Scheduled admission stays closed until safety readiness is recorded.
 
 See [docs/gradual-rollout.md](docs/gradual-rollout.md) for rollout details.
 

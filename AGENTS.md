@@ -20,11 +20,7 @@ Operational how-to documents do not grant approval to exceed these limits.
 - Run `pytest -v` before committing. All tests must pass. Exclude
   `tests/integration` as shown in Commands.
 - Keep `main` stable. `scripts/install.sh` always pulls `main`.
-- Current code advances firmware rollouts through 10%, 50%, and 100% waves,
-  with one wave per maintenance window. Halt the whole job if a device does not
-  return online. The target is a serial queue with durable cutoff and failure
-  stops. Never bypass
-  `updater/rollout_gate.py` or weaken `tests/test_rollout_invariants.py`.
+- Scheduled firmware work uses the serial queue shipped in [#715](https://github.com/sixtyops/manager/pull/715). It runs CPEs, then APs, then switches, one device at a time. The first used windows for a new firmware family or artifact use `firmware_window_ramp_minutes` (30-120); later windows use the normal schedule. Cutoff stops new starts and lets active recovery finish. A failure stops the queue; after resume, check the failed device first. Scheduled updates default to one bank. Never bypass `updater/rollout_gate.py` or weaken `tests/test_rollout_invariants.py`.
 
 ### Host access
 
