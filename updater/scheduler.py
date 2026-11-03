@@ -4,8 +4,7 @@ import asyncio
 import ipaddress
 import json
 import logging
-import math
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from . import database as db
@@ -1144,117 +1143,6 @@ class AutoUpdateScheduler:
 
         return []
 
-    def _calculate_predictions(self, rollout: dict, settings: dict) -> dict:
-        """Calculate rollout time predictions based on historical device durations."""
-        avg_durations = db.get_avg_durations()
-        concurrency = _as_int(settings.get("parallel_updates", "2"), 2)
-        bank_mode = settings.get("bank_mode") or "one"
-        allow_downgrade = settings.get("allow_downgrade", "false") == "true"
-        start_hour = _as_int(settings.get("schedule_start_hour", "3"), 3)
-        end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
-        schedule_days = settings.get("schedule_days", "")
-        cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
-        window_minutes = (end_hour - start_hour) * 60
-        if window_minutes <= 0:
-            window_minutes += 24 * 60
-
-        scope_ips = self._resolve_scope(settings)
-        switch_scope = self._resolve_switch_scope(settings)
-
-        total_cpes = 0
-        for ip in scope_ips:
-            cpes = db.get_cpes_for_ap(ip)
-            total_cpes += sum(1 for c in cpes if c.get("auth_status") == "ok")
-
-        existing_devices = db.get_rollout_devices(rollout["id"])
-        already_done = {d["ip"] for d in existing_devices if d["status"] in ("updated", "pending")}
-        target_versions = self._target_versions(settings, rollout)
-
-        ap_candidates = []
-        for ip in scope_ips:
-            if ip in already_done:
-                continue
-            ap = db.get_access_point(ip)
-            if ap and self._ap_or_children_need_update(
-                ap, target_versions, allow_downgrade, cooldown_days=cooldown_days
-            ):
-                ap_candidates.append(ip)
-
-        switch_candidates = []
-        for ip in switch_scope:
-            if ip in already_done:
-                continue
-            switch = db.get_switch(ip)
-            if not switch:
-                continue
-            target_version = target_versions.get(_firmware_type_for_model(switch.get("model")), "")
-            if _device_needs_update(
-                switch.get("firmware_version", ""),
-                target_version,
-                allow_downgrade,
-                last_update_iso=switch.get("last_firmware_update"),
-                cooldown_days=cooldown_days
-            ):
-                switch_candidates.append(ip)
-
-        total_candidates = len(ap_candidates) + len(switch_candidates)
-
-        def _estimate_phase_duration(ap_count: int, switch_count: int) -> float:
-            avg_cpes_per_ap = total_cpes / len(scope_ips) if scope_ips else 0
-            cpe_count = round(ap_count * avg_cpes_per_ap)
-            passes = 2 if bank_mode == "both" else 1
-
-            ap_batches = math.ceil(ap_count / concurrency) if ap_count > 0 else 0
-            ap_time = ap_batches * avg_durations["ap"] * passes
-
-            cpe_batches = math.ceil(cpe_count / concurrency) if cpe_count > 0 else 0
-            cpe_time = cpe_batches * avg_durations["cpe"] * passes
-
-            sw_batches = math.ceil(switch_count / concurrency) if switch_count > 0 else 0
-            sw_time = sw_batches * avg_durations["switch"] * passes
-
-            return (ap_time + cpe_time + sw_time) / 60.0
-
-        current_phase = rollout.get("phase", "")
-        current_ap_batch = ap_candidates
-        current_switch_batch = switch_candidates
-        current_ap_count = len(current_ap_batch)
-        current_switch_count = len(current_switch_batch)
-        current_primary_count = current_ap_count + current_switch_count
-        current_duration = _estimate_phase_duration(current_ap_count, current_switch_count)
-
-        effective_window = window_minutes - 10
-        if current_duration > 0 and effective_window > 0:
-            fit_ratio = min(1.0, effective_window / current_duration)
-            devices_that_fit = max(1, math.floor(current_primary_count * fit_ratio))
-        else:
-            devices_that_fit = current_primary_count
-
-        current_phase_info = {
-            "device_count": current_primary_count,
-            "ap_count": current_ap_count,
-            "switch_count": current_switch_count,
-            "estimated_duration_minutes": round(current_duration, 1),
-            "devices_that_fit_in_window": min(devices_that_fit, current_primary_count),
-        }
-
-        remaining_phases = []
-
-        remaining_windows = 1 + len([p for p in remaining_phases if p["estimated_devices"] > 0])
-        windows = upcoming_window_starts(
-            datetime.now(), schedule_days, start_hour, end_hour, count=remaining_windows
-        )
-        estimated_completion = windows[-1].date().isoformat() if len(windows) >= remaining_windows else None
-
-        return {
-            "current_phase": current_phase_info,
-            "remaining_phases": remaining_phases,
-            "estimated_completion_date": estimated_completion,
-            "avg_durations": avg_durations,
-            "total_candidates": total_candidates,
-            "window_minutes": window_minutes,
-        }
-
     def compute_next_attempt(
         self,
         ip: str,
@@ -1267,7 +1155,7 @@ class AutoUpdateScheduler:
         switch_scope: Optional[set] = None,
         hold_clears_at_iso: Optional[str] = None,
     ) -> dict:
-        """Return when this device is expected to receive its next auto-update.
+        """Return the next scheduled window when this device can be considered.
 
         Returns a dict with:
           - auto_update_eligible: bool — whether the scheduler will ever pick
@@ -1277,12 +1165,10 @@ class AutoUpdateScheduler:
             attempt is blocked (e.g. waiting on the firmware hold to clear)
 
         `hold_clears_at_iso` is the device's Firmware Hold clear time (ISO), or
-        None when its model family's hold is already clear. The hold delays the
-        first fleet wave, so when set it pushes the next attempt past that date.
-        Callers iterating over many devices (e.g. /api/fleet-status) pre-resolve
-        `settings`, `scope_ips`, `switch_scope`, `rollout`, `rollout_devices_by_ip`,
-        and the per-family hold to avoid N×DB queries. Pass `rollout=None`
-        explicitly to say "no active rollout"; omit it to let this method look up.
+        None when its model family's hold is already clear. When set, the hold
+        pushes the next eligible window past that date. Callers iterating over
+        many devices (e.g. /api/fleet-status) can pre-resolve `settings`,
+        `scope_ips`, and `switch_scope` to avoid repeated scope queries.
         """
         settings = settings or db.get_all_settings()
 
@@ -1324,8 +1210,8 @@ class AutoUpdateScheduler:
             return {"auto_update_eligible": True, "next_attempt_iso": None,
                     "reason": "Waiting for firmware to be selected"}
 
-        # The Firmware Hold (computed per family by the caller) delays the first
-        # fleet wave for newly-released firmware until it clears.
+        # The Firmware Hold (computed per family by the caller) delays this
+        # device until its family clears.
         hold_clears_at: Optional[datetime] = None
         if hold_clears_at_iso:
             try:
@@ -1333,40 +1219,18 @@ class AutoUpdateScheduler:
             except (TypeError, ValueError):
                 hold_clears_at = None
 
-        # If the device is already in an active rollout, use its assigned wave
-        # to figure out how many windows away it lands.
-        if rollout is _UNSET:
-            rollout = db.get_active_rollout()
-        phase_idx = 0
-        if rollout:
-            if rollout_devices_by_ip is None:
-                rollout_devices_by_ip = {d["ip"]: d for d in db.get_rollout_devices(rollout["id"])}
-            device = rollout_devices_by_ip.get(parent_ap_ip if role == "cpe" else ip)
-            current_phase = rollout.get("phase", "pct10")
-            current_idx = db.PHASE_ORDER.index(current_phase) if current_phase in db.PHASE_ORDER else 0
-            if device:
-                if device["status"] == "updated":
-                    return {"auto_update_eligible": True, "next_attempt_iso": None,
-                            "reason": "Updated"}
-                assigned = device.get("phase_assigned")
-                assigned_idx = db.PHASE_ORDER.index(assigned) if assigned in db.PHASE_ORDER else current_idx
-                phase_idx = max(0, assigned_idx - current_idx)
-            else:
-                # Unassigned but rollout active — it will land in a later wave.
-                phase_idx = 1 if current_idx < len(db.PHASE_ORDER) - 1 else 0
-
-        # The hold gates the first fleet wave, so it applies to this device until
-        # its family clears.
+        # Firmware Hold delays a device until its family is clear. The queue
+        # does not assign devices to later percentage waves.
         earliest = hold_clears_at
 
         windows = upcoming_window_starts(
             datetime.now(), schedule_days, start_hour, end_hour,
-            count=phase_idx + 1, earliest_after=earliest,
+            count=1, earliest_after=earliest,
         )
-        if not windows or len(windows) <= phase_idx:
+        if not windows:
             return {"auto_update_eligible": True, "next_attempt_iso": None,
                     "reason": None}
-        target = windows[phase_idx]
+        target = windows[0]
         reason = None
         if earliest and target.date() == earliest.date():
             reason = "Waiting for the firmware hold to clear"
@@ -1382,15 +1246,38 @@ class AutoUpdateScheduler:
         schedule_days = settings.get("schedule_days", "")
 
         rollout_info = None
-        pre_rollout_predictions = None
         rollout = db.get_current_rollout()
         if rollout:
             progress = db.get_rollout_progress(rollout["id"])
+            remaining_devices = None
+            cutoff_utc = None
             try:
-                predictions = self._calculate_predictions(rollout, settings)
-            except Exception as e:
-                logger.warning(f"Failed to calculate predictions: {e}")
-                predictions = None
+                pending = self._derive_pending_queue(
+                    settings, rollout, settings.get("allow_downgrade", "false") == "true",
+                    held_families=set(),
+                )
+                remaining_devices = len(pending)
+                if pending:
+                    family = pending[0]["family"]
+                    artifact = {
+                        "tna-30x": rollout.get("firmware_file") or settings.get("selected_firmware_30x", ""),
+                        "tna-303l": rollout.get("firmware_file_303l") or settings.get("selected_firmware_303l", ""),
+                        "tns-100": rollout.get("firmware_file_tns100") or settings.get("selected_firmware_tns100", ""),
+                    }.get(family)
+                    target_sha256 = db.get_firmware_sha256(artifact) if artifact else None
+                    window_key = rollout_gate.firmware_window_key(settings, datetime.now())
+                    if target_sha256 and window_key:
+                        encoded_key = json.dumps(list(window_key), separators=(",", ":"))
+                        with db.get_db() as conn:
+                            timing = conn.execute(
+                                "SELECT last_window_key, cutoff_utc FROM firmware_window_timing "
+                                "WHERE family = ? AND target_sha256 = ?",
+                                (family, target_sha256),
+                            ).fetchone()
+                        if timing and timing["last_window_key"] == encoded_key:
+                            cutoff_utc = timing["cutoff_utc"]
+            except Exception as exc:
+                logger.debug("Could not calculate current queue status: %s", exc)
             rollout_info = {
                 "id": rollout["id"],
                 "phase": rollout["phase"],
@@ -1399,15 +1286,10 @@ class AutoUpdateScheduler:
                 "firmware_file": rollout["firmware_file"],
                 "firmware_file_tns100": rollout.get("firmware_file_tns100"),
                 "progress": progress,
-                "pause_reason": rollout.get("pause_reason"),
-                "predictions": predictions,
+                "remaining_devices": remaining_devices,
+                "pause_reason": rollout.get("pause_reason") or self._block_reason,
+                "cutoff_utc": cutoff_utc,
             }
-        else:
-            try:
-                synthetic_rollout = {"id": 0, "phase": "pct10", "target_version": None}
-                pre_rollout_predictions = self._calculate_predictions(synthetic_rollout, settings)
-            except Exception as e:
-                logger.debug(f"Pre-rollout prediction failed: {e}")
 
         # Per-family Firmware Hold state for the selected firmware (or the active
         # rollout's): the release-date soak, clearable early by a confirmed device.
@@ -1444,7 +1326,6 @@ class AutoUpdateScheduler:
             "schedule_start_hour": start_hour,
             "schedule_end_hour": end_hour,
             "rollout": rollout_info,
-            "predictions": pre_rollout_predictions,
             "firmware_hold": firmware_hold,
             "hold_clear_reason": self._hold_clear_reason,
         }

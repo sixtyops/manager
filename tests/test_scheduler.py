@@ -371,29 +371,6 @@ class TestSchedulerBankModeFiltering:
 
         assert result == ["10.0.0.1"]
 
-    @pytest.mark.parametrize(("bank_mode", "expected_minutes"), [(None, 1.0), ("both", 2.0)])
-    def test_prediction_defaults_to_one_bank_but_keeps_both_mode(
-        self, mock_db, bank_mode, expected_minutes,
-    ):
-        scheduler = AutoUpdateScheduler(broadcast_func=None, start_update_func=None)
-        settings = {} if bank_mode is None else {"bank_mode": bank_mode}
-        with patch("updater.scheduler.db.get_avg_durations", return_value={
-                 "ap": 60, "cpe": 0, "switch": 0,
-             }), \
-             patch("updater.scheduler.db.get_rollout_devices", return_value=[]), \
-             patch("updater.scheduler.db.get_access_point", return_value={"ip": "10.0.0.1"}), \
-             patch("updater.scheduler.db.get_cpes_for_ap", return_value=[]), \
-             patch.object(scheduler, "_resolve_scope", return_value=["10.0.0.1"]), \
-             patch.object(scheduler, "_resolve_switch_scope", return_value=[]), \
-             patch.object(scheduler, "_target_versions", return_value={}), \
-             patch.object(scheduler, "_ap_or_children_need_update", return_value=True):
-            prediction = scheduler._calculate_predictions(
-                {"id": "rollout", "phase": "pct100"}, settings,
-            )
-
-        assert prediction["current_phase"]["estimated_duration_minutes"] == expected_minutes
-
-
 class TestSchedulerCanaries:
     def test_switch_scope_follows_selected_sites(self, mock_db):
         site_a = db.create_tower_site("Site A")
