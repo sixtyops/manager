@@ -4307,13 +4307,11 @@ async def _read_cpe_eth0_link(job, ap_ip, peer):
         raise RuntimeError(f"CPE {peer.mac} eth0 link state is unavailable")
     state = await state_reader()
     link_up = _eth0_link_up(state)
-    if link_up is None:
-        raise RuntimeError(f"CPE {peer.mac} eth0 link state is unavailable")
     return link_up
 
 
 async def _capture_ap_recovery_baseline(job, ap_ip, ap_client):
-    """Record AP-reported peers and each peer's reported eth0 link state."""
+    """Record AP peers and each CPE's reported eth0 link state, if present."""
     peers = await _read_ap_recovery_peers(ap_client)
     if not peers and job.ap_cpe_map.get(ap_ip):
         raise RuntimeError("The AP peer list is unavailable for recovery")
@@ -4366,6 +4364,10 @@ async def _check_ap_recovery(job, ap_ip, ap_client, baseline, deadline):
     if type(deadline) not in (int, float):
         return False, {"reason": "A4 recovery deadline is unavailable"}
     reason = "A4 recovery deadline expired"
+    skipped_link_checks = [
+        mac for mac, saved in expected.items()
+        if saved.get("eth0_link_was_up") is None
+    ]
     while monotonic() < deadline:
         try:
             peers = await _read_ap_recovery_peers(ap_client)
@@ -4374,14 +4376,20 @@ async def _check_ap_recovery(job, ap_ip, ap_client, baseline, deadline):
                 reason = f"CPEs are missing from the AP peer list: {', '.join(sorted(missing))}"
             else:
                 for mac, saved in expected.items():
-                    if not saved["eth0_link_was_up"]:
+                    if saved.get("eth0_link_was_up") is not True:
                         continue
                     if not await _read_cpe_eth0_link(job, ap_ip, peers[mac]):
                         raise RuntimeError(f"CPE {mac} eth0 link is down")
                 if monotonic() > deadline:
                     reason = "A4 recovery deadline expired before recovery completed"
                 else:
-                    return True, {"returned_peers": sorted(expected)}
+                    evidence = {"returned_peers": sorted(expected)}
+                    if skipped_link_checks:
+                        evidence["eth0_link_check_skipped"] = {
+                            "reason": "Pre-reboot eth0 link state was unavailable",
+                            "cpe_macs": sorted(skipped_link_checks),
+                        }
+                    return True, evidence
         except Exception as exc:
             reason = str(exc)
         remaining = deadline - monotonic()

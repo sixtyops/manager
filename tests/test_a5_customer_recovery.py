@@ -64,6 +64,41 @@ async def test_baseline_records_reported_peers_and_eth0_link_only(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_baseline_records_unknown_when_eth0_has_no_link_field(monkeypatch):
+    cpe = CPE(link=None)
+    cpe.get_eth0_recovery_state.return_value = {
+        "read_state": "ok", "link_up": None, "rx_bytes": 10, "tx_bytes": 20,
+    }
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: lambda *_args: cpe)
+
+    baseline = await app_module._capture_ap_recovery_baseline(_job(), AP_IP, AP([_peer()]))
+
+    assert baseline == _baseline(link_up=None)
+    assert cpe.get_eth0_recovery_state.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_recovery_skips_only_eth0_link_check_for_unknown_baseline(monkeypatch):
+    cpe = CPE(link=False)
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: lambda *_args: cpe)
+
+    passed, evidence = await app_module._check_ap_recovery(
+        _job(), AP_IP, AP([_peer()]), _baseline(link_up=None),
+        deadline=app_module.monotonic() + 10.0,
+    )
+
+    assert passed
+    assert evidence == {
+        "returned_peers": [RADIO],
+        "eth0_link_check_skipped": {
+            "reason": "Pre-reboot eth0 link state was unavailable",
+            "cpe_macs": [RADIO],
+        },
+    }
+    cpe.get_eth0_recovery_state.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_baseline_fails_closed_when_ap_peer_report_is_invalid():
     ap = AP([SimpleNamespace(mac="not-a-mac", ip=CPE_IP)])
 
