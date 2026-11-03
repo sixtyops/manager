@@ -2,8 +2,11 @@
 
 **Key points:** The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
 may run this procedure. A worker may run it only when the lead assigns the
-worker a named run. Loop workers must not run `tests/integration` or touch live
-hardware, a dev host, or a production install outside that assigned run.
+worker a named run. The exception in [AGENTS.md](../AGENTS.md#must-not-do)
+allows that worker to run only the integration tests named in the run brief,
+against the dev host and dedicated lab devices. Workers must not run other
+integration tests or touch live hardware, a dev host, or a production install
+outside that assigned run.
 
 **Detail:** Commands and reference tables below do not grant access. Follow
 [Agent rules](../AGENTS.md#agent-rules). Use existing private credentials

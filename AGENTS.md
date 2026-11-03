@@ -38,7 +38,11 @@ Operational how-to documents do not grant approval to exceed these limits.
 
 ### Must not do
 
-- Run the integration tests in `tests/integration`, including read-only lanes.
+- Keep integration tests in `tests/integration` out of ordinary worker runs.
+  A worker assigned by the lead to a named dev host run under
+  [docs/dev-hardware-validation.md](docs/dev-hardware-validation.md#dev-host-run-procedure)
+  may run only the integration tests named in that run brief, against the
+  authorized dev host and dedicated lab devices.
 - Create, move, or push a release tag, bump the release version, or run the
   Release workflow. Release tags must be GPG-signed by the release key.
 - Only the lead merges, and only after every review, CI, sign-off, and bench
