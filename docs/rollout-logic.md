@@ -6,8 +6,9 @@
 
 ## Summary
 
-**Key points:** This document defines the target serial firmware queue. Current
-code still runs percentage waves until the cutover PRs land.
+**Key points:** This document defines the serial firmware queue shipped in
+[PR #715](https://github.com/sixtyops/manager/pull/715). Scheduled admission
+stays closed until required safety proof passes.
 
 **Detail:** The target uses Manager inventory and the device APIs it calls. It
 runs one ordered list of devices that need the selected firmware. It does not
@@ -240,9 +241,9 @@ the artifact id for each family it is rolling. Filenames are for display.
 
 ### Detail
 
-This is the target contract. Current code uses persisted rollout membership
-and 10%, 50%, and 100% phases until the cutover PRs land. The target removes
-those phases and derives each pending queue from current Manager inventory.
+This is the queue contract shipped in [PR #715](https://github.com/sixtyops/manager/pull/715).
+It derives each pending queue from current Manager inventory instead of saved
+rollout membership and percentage phases.
 
 Before admitting a device, check current readiness, Firmware Hold, schedule,
 freeze, clock, weather, artifact integrity, device identity, and eligibility.
@@ -310,6 +311,4 @@ Pin these target invariants in `tests/test_rollout_invariants.py`:
 7. Manual per-device updates keep their Hold bypass and do not advance
    scheduled timing.
 
-Current wave invariants remain in force until the corresponding cutover code
-lands. This target does not authorize enabling scheduled queue admission before
-exact-head proof passes.
+Keep scheduled queue admission closed until exact-head proof passes.

@@ -61,9 +61,9 @@ exception. It cannot bypass a failed safety gate.
 - **One active device sequence** — do not start another device write or recovery sequence until the previous device passes every recovery check.
 - **Single-bank updates** — the vendor recommendation; there is no bank-mode setting.
 
-These are target rules, not shipped behavior. Current code still runs
-percentage waves until the cutover PRs land. The serial queue and its gates are
-not enabled today. The target contract requires a fresh, restorable backup and
+These include target rules that are not all shipped. The serial queue shipped
+in [PR #715](https://github.com/sixtyops/manager/pull/715). Scheduled admission
+still requires a fresh, restorable backup and
 config snapshot before each write, recovery proof before flashing, and checks
 for version, CPE re-association, RSSI, reported peer return, and reported CPE
 link-up when it was up before reboot. Do not infer customer traffic from bridge

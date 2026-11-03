@@ -96,7 +96,7 @@ The specific problems this plan fixes:
 ## Rollout rules (the target contract)
 
 **Key points:** The target replaces percentage waves with a serial queue.
-Current code still runs waves until the cutover PRs land.
+The serial queue shipped in [PR #715](https://github.com/sixtyops/manager/pull/715).
 
 **Detail:** Derive pending work from Manager inventory and the selected
 firmware. Run CPEs, then APs, then switches. Allow one device write and recovery
@@ -153,7 +153,7 @@ its required proof passes.
     separate bounded PRs.
 
 Engine and driver PRs need independent review and exact-head bench proof. Keep
-all work behind existing readiness until the cutover evidence passes.
+all work behind existing readiness until the required safety evidence passes.
 
 ## Open follow-ups
 

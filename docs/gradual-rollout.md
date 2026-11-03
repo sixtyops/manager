@@ -4,15 +4,15 @@
 the complete target safety contract. Read [one-right-way.md](one-right-way.md)
 for the target and [rollout-logic.md](rollout-logic.md) for the design rules.
 
-**Key points:** Current code runs percentage waves. The serial queue in
-[issue #695](https://github.com/sixtyops/manager/issues/695) is a target and
-will not ship until its cutover PRs land.
+**Key points:** Scheduled rollouts use the serial queue shipped in
+[PR #715](https://github.com/sixtyops/manager/pull/715). Scheduled admission
+stays closed until safety readiness is recorded.
 
-**Detail:** Today the scheduler advances in-scope devices through 10%, 50%,
-and 100% waves, with one wave per maintenance window. It uses
-`rollout_gate.py` to check scheduled admission. Firmware Hold applies before
-the first scheduled wave. Manual per-device updates bypass that hold. Failure
-handling and device recovery do not yet enforce the full target contract.
+**Detail:** The scheduler derives pending devices from Manager inventory and
+passes exact device entries to one update job with concurrency 1. It runs CPEs,
+then APs, then switches. Firmware Hold applies to scheduled work. Manual
+per-device updates bypass that hold. Scheduled admission remains closed until
+the required safety proof is complete.
 The **Update Mode** setting defaults to **Single bank (recommended)**. Select
 **Both banks** to update both banks. Update recovery confirms the device after
 a reboot before it continues with another write.
@@ -43,7 +43,7 @@ again before starting its upload process. Let a submitted operation finish its r
 stops the next scheduled action, including another bank pass. The Auto-Update control shows the safety reason while
 readiness is pending, including when the schedule is off.
 
-The serial queue plan in [#695](https://github.com/sixtyops/manager/issues/695)
+The serial queue in [#715](https://github.com/sixtyops/manager/pull/715)
 supersedes the rollout scope in [#338](https://github.com/sixtyops/manager/issues/338).
 Complete [#416](https://github.com/sixtyops/manager/issues/416),
 [#369](https://github.com/sixtyops/manager/issues/369),
@@ -92,13 +92,11 @@ operator decision; it does not check issue status or establish bench proof.
 Set it to `false` to pause new scheduled admission again. The schedule toggle
 changes `schedule_enabled` independently of this flag.
 
-## Shipped wave gate
+## Shipped queue admission
 
-Current code uses `phase_run_decision` to enforce one percentage wave per
-maintenance window and Firmware Hold on the first wave. The scheduler computes
-Hold by firmware family. A confirmed working device can clear Hold for its
-family. These are shipped wave rules. The target keeps Firmware Hold but
-replaces percentage progression with serial queue admission.
+The scheduler checks scheduled readiness before it admits the derived queue.
+It computes Firmware Hold by firmware family. A confirmed working device can
+clear Hold for its family. These are shipped queue rules.
 
 ## Firmware Hold & confirmed-working clear
 
@@ -143,7 +141,7 @@ scope, auto-update is on, and its family's hold hasn't cleared. The UI shows a d
 Today `rollouts.phase` stores `pct10`, `pct50`, or `pct100`. The
 `rollout_devices` table stores per-device phase assignment. Firmware
 confirmations support the current Hold behavior. These structures remain in
-use until the cutover PRs land.
+use with the serial queue shipped in [#715](https://github.com/sixtyops/manager/pull/715).
 
 ## Target queue behavior
 
@@ -158,7 +156,8 @@ cutoff, finish active recovery, and continue remaining work in a later window.
 
 **Key points:** The target derives an ordered queue from current inventory. It
 runs one device write and recovery sequence at a time. This contract is not
-shipped. Current code still runs percentage waves until the cutover PRs land.
+shipped. The serial queue shipped in [#715](https://github.com/sixtyops/manager/pull/715).
+Keep scheduled admission closed until the required safety proof passes.
 
 **Detail:** The target requires a saved risk statement, a fresh restorable
 backup, a committed config snapshot, and recovery proof before each write. It
