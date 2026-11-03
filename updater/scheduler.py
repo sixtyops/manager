@@ -776,6 +776,7 @@ class AutoUpdateScheduler:
             end_hour=end_hour,
             tz=timezone_name,
         )
+        timing_admissions = []
         try:
             ramp_minutes = json.loads(settings.get("firmware_window_ramp_minutes", "[30, 120]"))
             families = dict.fromkeys(entry["family"] for entry in queue)
@@ -799,11 +800,7 @@ class AutoUpdateScheduler:
                 )
                 if cutoff is None:
                     raise ValueError(f"Firmware cutoff is invalid for {family}")
-                timing = db.record_firmware_window_admission(
-                    family, target_sha256, window_key, cutoff.isoformat(),
-                )
-                if timing["last_window_key"] != encoded_key or int(timing["ordinal"]) != ordinal:
-                    raise ValueError(f"Firmware timing changed during admission for {family}")
+                timing_admissions.append((family, target_sha256, cutoff, encoded_key, ordinal))
         except Exception as exc:
             logger.warning("Could not persist firmware window timing; holding queue: %s", exc)
             self._state = "waiting"
@@ -838,6 +835,22 @@ class AutoUpdateScheduler:
             self._block_reason = f"Queue admission failed: {exc}"
             db.log_schedule_event("job_start_failed", str(exc))
             logger.error("Scheduler failed to admit derived firmware queue: %s", exc)
+            await self._broadcast_status()
+            return
+
+        # Count a target window only after the update runner has accepted the
+        # queue. A readiness block or rejected job must leave its ordinal alone.
+        try:
+            for family, target_sha256, cutoff, encoded_key, ordinal in timing_admissions:
+                timing = db.record_firmware_window_admission(
+                    family, target_sha256, window_key, cutoff.isoformat(),
+                )
+                if timing["last_window_key"] != encoded_key or int(timing["ordinal"]) != ordinal:
+                    raise ValueError(f"Firmware timing changed during admission for {family}")
+        except Exception as exc:
+            logger.error("Could not persist admitted firmware window timing: %s", exc)
+            self._state = "waiting"
+            self._block_reason = "Firmware window timing is unavailable"
             await self._broadcast_status()
             return
 
