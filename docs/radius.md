@@ -1,3 +1,5 @@
+> **Status:** This document describes the removed RADIUS feature. It is retained for historical reference and does not describe current firmware scheduling.
+
 # Built-in RADIUS
 
 The application includes a built-in RADIUS server (pyrad) for device-admin authentication. This is intended for managed devices such as APs and switches authenticating to this system over UDP `1812`.

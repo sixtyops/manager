@@ -1,15 +1,17 @@
 # One right way to keep a Tachyon fleet current
 
 **Key points:** Manager owns update safety. The operator chooses when and how
-fast. "Keep my fleet current" is the primary action. The serial queue shipped
-in [PR #715](https://github.com/sixtyops/manager/pull/715). The owner set this direction on
-2026-09-30.
+fast. "Keep my fleet current" is the primary action. The queue behavior shipped in [PR #715](https://github.com/sixtyops/manager/pull/715) and follow-up PRs. The owner set this direction on 2026-09-30.
 
 **Detail:** Manager is a standalone product for Tachyon networks. Use Manager's
 data and the device APIs it calls for every design and safety check. Do not
 require an outside system.
 
 ## Built-in behavior
+
+**Shipped behavior:** Scheduled work uses a serial queue, one device at a time, ordered CPEs, APs, then switches. The first used windows for each new firmware family or artifact use the configured 30-120 minute ramp. A persisted cutoff stops new starts and lets active recovery finish. A failure stops the queue; after resume, Manager checks that device first. The shipped Update Mode defaults to one bank; the operator can select both banks. Wave selection, saved membership, and predictions have been removed. See [gradual-rollout.md](gradual-rollout.md).
+
+**Target behavior:** The rules below describe the intended contract. They are not all shipped.
 
 **Key points:** Every update uses one engine. Safety gates have no off switch.
 

@@ -340,6 +340,12 @@ identity. Read scripts/help first; status commands do not authorize a run.
 and `lock`, `pickup/lock`, `codex-review/lock` when present. Read effective
 configuration and each loop status; do not dump credential files or environments.
 
+### Run coordination lessons
+
+**Key points:** Use the current review-loop and dev-host procedures.
+
+**Detail:** Worker GitHub label edits do not wake the review loop; the lead re-adds `agent:review`. Set bench session-proof timeout to at least 600 seconds. The dev host lock holder must run detached on the host through the `devlock` helper. The sign-off packet usually arrives in about five minutes. When a safety reviewer requires live-write approval, `ask-operator` through Signal is the trusted channel and needs `needs live-write`. Standing lab and dev-host approval is recorded in [dev-hardware-validation.md](dev-hardware-validation.md#lab-firmware-authority).
+
 ### Dev host runs
 
 The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)

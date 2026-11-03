@@ -38,15 +38,15 @@ Three fixed layers, always in this order:
 - **Color is never the sole signal.** Pair with glyph (`▲`/`▼`), label, or shape.
 - **Humans first, numbers as evidence.** Status pills carry English; numbers live in popovers.
 
-## Rollout phases
+## Scheduled queue status
 
-Rollouts display a horizontal phase stepper (dot + label + per-phase count) in the expanded status-bar panel. The phases and advancement differ by type:
+The scheduled queue processes CPEs, APs, then switches, one device at a time.
+Show queue progress and the current device status. The configured ramp applies
+to the first used windows for a new firmware family or artifact. The persisted
+cutoff stops new starts and allows active recovery to finish. A failed check
+stops the queue. After resume, Manager checks the failed device first. Do not
+show deleted wave selection, saved membership, predictions, or phase controls.
 
-- **Firmware rollouts** — shipped behavior has three waves: **10% → 50% → 100%** (no canary phase; the first wave is the de-facto canary). The scheduler auto-advances one wave per maintenance window after each completes (`scheduler.py`, `database.complete_rollout_phase`). Current operator controls include resume after failure and cancel. The target stops the whole window on a failed check and permits resume only in a later window. The stepper is informational only — no manual-advance action.
-- **Config push** uses immediate manual push and restore for selected devices.
-  Config compliance remains read-only.
-
-Firmware phase pills show completed phases in green, active phases in blue, and locked phases as grey outlines.
 
 ## Don't ask the user for input
 
@@ -63,15 +63,15 @@ window. A pre-start block is a hold, not an outage. Only one device write and
 recovery sequence can run at a time.
 
 **Detail:** Operators can set timing and pacing within the exposure limits.
-They get a Stop action before and during a wave. Stop prevents new writes but
+They get a Stop action before and during a device sequence. Stop prevents new writes but
 does not interrupt a flash. Approval is required only for no rollback, the
 first run of a new firmware family, a sole path to other devices, or a policy
 exception such as a named Hold exception. Approval covers that plan only. It
-cannot bypass a failed gate. A wave shows its saved risk statement, gate
+cannot bypass a failed gate. A queue shows its risk statement, gate
 inputs and results, device results, and operator actions. These are target
 requirements. The current override panel and controls above remain shipped
 behavior until implementation changes them.
 
 ---
 
-**Doc check:** covers page structure (dashboard/tabs/status bar), fleet-scope rules, disclosure progression, color/copy, firmware rollout phase distinction, and safety-defaults pattern including the correct Weather Guard default.
+**Doc check:** covers page structure (dashboard/tabs/status bar), fleet-scope rules, disclosure progression, color/copy, scheduled queue status, and safety-defaults pattern including the correct Weather Guard default.
