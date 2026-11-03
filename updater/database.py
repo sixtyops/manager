@@ -185,18 +185,6 @@ def _migrate(db):
     if "target_version_tns100" not in rollout_columns:
         db.execute("ALTER TABLE rollouts ADD COLUMN target_version_tns100 TEXT DEFAULT NULL")
 
-    # Mark members admitted after rollout creation. Keep the migration additive
-    # so existing members read as non-stragglers and older code can keep running.
-    rollout_device_columns = {
-        row[1] for row in db.execute("PRAGMA table_info(rollout_devices)").fetchall()
-    }
-    if "model_family" not in rollout_device_columns:
-        db.execute("ALTER TABLE rollout_devices ADD COLUMN model_family TEXT")
-    if "is_straggler" not in rollout_device_columns:
-        db.execute(
-            "ALTER TABLE rollout_devices ADD COLUMN is_straggler INTEGER NOT NULL DEFAULT 0"
-        )
-
     # Backfill firmware_registry for existing firmware files
     firmware_dir = Path(__file__).parent.parent / "firmware"
     if firmware_dir.exists():
@@ -270,17 +258,6 @@ def _migrate(db):
         db.execute("ALTER TABLE rollouts ADD COLUMN vendor TEXT DEFAULT 'tachyon'")
     if "firmware_files_json" not in rollout_columns:
         db.execute("ALTER TABLE rollouts ADD COLUMN firmware_files_json TEXT")
-    if "settings_json" not in rollout_columns:
-        db.execute("ALTER TABLE rollouts ADD COLUMN settings_json TEXT")
-    # Per-window phase gate + fleet-canary soak (prevents the phase cascade where
-    # all phases run in a single maintenance window). last_phase_window is the
-    # maintenance-window date in which this rollout last started a phase job;
-    # canary_completed_at is when the canary phase finished on this fleet.
-    if "last_phase_window" not in rollout_columns:
-        db.execute("ALTER TABLE rollouts ADD COLUMN last_phase_window TEXT")
-    if "canary_completed_at" not in rollout_columns:
-        db.execute("ALTER TABLE rollouts ADD COLUMN canary_completed_at TEXT")
-
     # Add target_ips_json to radius_rollouts
     try:
         rr_columns = [row[1] for row in db.execute("PRAGMA table_info(radius_rollouts)").fetchall()]
@@ -332,29 +309,6 @@ def _migrate(db):
             db.execute("DELETE FROM settings WHERE key = 'firmware_quarantine_days'")
     except Exception as e:
         logger.warning(f"Setting rename quarantine→canary_hold skipped: {e}")
-
-    # Canary phase removed: the first fleet wave is now pct10. Remap any in-flight
-    # (active/paused) rollout still sitting at the old 'canary' phase to 'pct10' so
-    # the fail-closed gate doesn't treat it as an unknown phase and stall it
-    # forever. Completed/cancelled rollouts keep their historical phase value.
-    try:
-        remapped = db.execute(
-            "UPDATE rollouts SET phase = 'pct10' "
-            "WHERE phase = 'canary' AND status IN ('active', 'paused')"
-        ).rowcount
-        # Also remap the devices assigned to those rollouts' canary phase. Without
-        # this, a pending row with phase_assigned='canary' stays in the scheduler's
-        # already_done set forever (so it's never re-selected) while completion only
-        # checks pct10 — the device would be skipped through rollout completion.
-        db.execute(
-            "UPDATE rollout_devices SET phase_assigned = 'pct10' "
-            "WHERE phase_assigned = 'canary' AND rollout_id IN "
-            "(SELECT id FROM rollouts WHERE status IN ('active', 'paused'))"
-        )
-        if remapped:
-            logger.info(f"Migrated {remapped} in-flight rollout(s) from canary→pct10")
-    except Exception as e:
-        logger.warning(f"Rollout canary→pct10 remap skipped: {e}")
 
     # Migrate data from access_points/switches into unified devices table
     _migrate_to_devices_table(db)
@@ -2272,48 +2226,11 @@ def get_rollout(rollout_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def _insert_rollout_membership(db, rollout_id: int, members: list[dict]) -> None:
-    """Insert a complete, unassigned rollout membership snapshot."""
-    seen_ips = set()
-    for member in members:
-        ip = member["ip"]
-        device_type = member["device_type"]
-        if not ip or not device_type or ip in seen_ips:
-            raise ValueError("Rollout members require unique IPs and a device type")
-        seen_ips.add(ip)
-        device = db.execute(
-            "SELECT model FROM devices WHERE ip = ? AND role = ?", (ip, device_type)
-        ).fetchone()
-        model_family = _rollout_model_family(device["model"] if device else None)
-        db.execute(
-            """INSERT INTO rollout_devices
-               (rollout_id, ip, device_type, model_family, phase_assigned, status)
-               VALUES (?, ?, ?, ?, NULL, 'pending')""",
-            (rollout_id, ip, device_type, model_family),
-        )
-
-
-def _rollout_model_family(model: Optional[str]) -> Optional[str]:
-    """Return the saved rollout family for a device model, or None if unknown."""
-    if not isinstance(model, str) or not model.strip():
-        return None
-    normalized = model.strip().lower()
-    if normalized.startswith(("tns-100", "tns100")):
-        return "tns-100"
-    if normalized.startswith(("tna-303l", "tna303l")):
-        return "tna-303l"
-    if normalized.startswith(("tna-30", "tna30")):
-        return "tna-30x"
-    return None
-
-
 def create_rollout(
     firmware_file: str,
     firmware_file_303l: str = None,
     firmware_file_tns100: str = None,
     *,
-    members: list[dict] = None,
-    settings_snapshot: dict = None,
     now: datetime = None,
 ) -> int:
     """Create a new rollout. Returns the rollout ID.
@@ -2326,25 +2243,6 @@ def create_rollout(
     now = now or datetime.now()
     created_at = now.strftime("%Y-%m-%d %H:%M:%S")
     duplicate_since = (now - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")
-    membership = members is not None
-    encoded_settings_snapshot = None
-    if membership:
-        if not isinstance(settings_snapshot, dict):
-            raise ValueError("Rollout membership requires a settings snapshot object")
-        try:
-            encoded_settings_snapshot = json.dumps(
-                settings_snapshot, separators=(",", ":"), allow_nan=False
-            )
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Rollout settings snapshot must be valid JSON") from exc
-        members = list(members)
-        if not members:
-            raise ValueError("Rollout membership snapshot must not be empty")
-        member_keys = [(member["ip"], member["device_type"]) for member in members]
-        if any(not ip or not device_type for ip, device_type in member_keys):
-            raise ValueError("Rollout members require unique IPs and a device type")
-        if len({ip for ip, _ in member_keys}) != len(member_keys):
-            raise ValueError("Rollout members require unique IPs and a device type")
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
         existing = db.execute(
@@ -2356,81 +2254,27 @@ def create_rollout(
             "ORDER BY id DESC LIMIT 1",
             (firmware_file, firmware_file_303l, firmware_file_tns100, duplicate_since)
         ).fetchone()
-        if existing and not membership:
+        if existing:
             logger.warning(
                 f"create_rollout: duplicate suppressed; returning existing id={existing['id']} "
                 f"for {firmware_file!r}"
             )
             return existing["id"]
-        if existing and membership:
-            existing_members = db.execute(
-                "SELECT ip, device_type FROM rollout_devices WHERE rollout_id = ?",
-                (existing["id"],),
-            ).fetchall()
-            requested_members = set(member_keys)
-            if (
-                len(existing_members) == len(member_keys)
-                and {(row["ip"], row["device_type"]) for row in existing_members} == requested_members
-            ):
-                logger.warning(
-                    f"create_rollout: duplicate suppressed; returning existing id={existing['id']} "
-                    f"for {firmware_file!r}"
-                )
-                return existing["id"]
-        # Membership-backed rollouts wait for B2b to evaluate Firmware Hold.
-        # Calls without a snapshot retain the existing active-rollout behavior.
-        status = "waiting_hold" if membership else "active"
-        # The current schema requires a phase value. `status` keeps this wave
-        # from admission until the hold lifecycle activates the rollout.
-        phase = "pct10"
         cursor = db.execute(
             """INSERT INTO rollouts
                (firmware_file, firmware_file_303l, firmware_file_tns100,
-                phase, status, created_at, updated_at, settings_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
             (
                 firmware_file,
                 firmware_file_303l,
                 firmware_file_tns100,
-                phase,
-                status,
+                "active",
                 created_at,
                 created_at,
-                encoded_settings_snapshot
-                if membership else None,
             ),
         )
-        rollout_id = cursor.lastrowid
-        if membership:
-            _insert_rollout_membership(db, rollout_id, members)
-        return rollout_id
-
-
-def activate_rollout_if_unheld(
-    rollout_id: int, member_families: set[str], held_families: set[str]
-) -> bool:
-    """Atomically activate a saved rollout after every member family clears Hold."""
-    if not member_families or member_families.intersection(held_families):
-        return False
-    now = datetime.now().isoformat()
-    with get_db() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
-            "SELECT status FROM rollouts WHERE id = ?", (rollout_id,)
-        ).fetchone()
-        if not row or row["status"] != "waiting_hold":
-            return False
-        member = conn.execute(
-            "SELECT 1 FROM rollout_devices WHERE rollout_id = ? LIMIT 1", (rollout_id,)
-        ).fetchone()
-        if not member:
-            return False
-        cursor = conn.execute(
-            "UPDATE rollouts SET status = 'active', updated_at = ? "
-            "WHERE id = ? AND status = 'waiting_hold'",
-            (now, rollout_id),
-        )
-        return cursor.rowcount == 1
+        return cursor.lastrowid
 
 
 def get_last_rollout_for_firmware(firmware_file: str) -> Optional[dict]:
@@ -2459,47 +2303,6 @@ def get_last_rollout_for_firmware_set(
             (firmware_file, firmware_file_303l or "", firmware_file_tns100 or ""),
         ).fetchone()
         return dict(row) if row else None
-
-
-# Fleet rollout waves. The canary phase was removed: the first wave (pct10) is
-# the de-facto canary, gated by the release-date Firmware Hold (see rollout_gate)
-# and protected by halt-on-first-failure. One wave per maintenance window still
-# holds (rollout_gate Rule 1) — never let these cascade through a single window.
-PHASE_ORDER = ["pct10", "pct50", "pct100"]
-
-
-def advance_rollout_phase(rollout_id: int):
-    """Advance rollout to the next phase. If already at pct100, mark completed."""
-    with get_db() as db:
-        row = db.execute("SELECT phase FROM rollouts WHERE id = ?", (rollout_id,)).fetchone()
-        if not row:
-            return
-        current = row["phase"]
-        now = datetime.now().isoformat()
-        if current in PHASE_ORDER:
-            idx = PHASE_ORDER.index(current)
-            if idx + 1 < len(PHASE_ORDER):
-                next_phase = PHASE_ORDER[idx + 1]
-                db.execute(
-                    "UPDATE rollouts SET phase = ?, updated_at = ? WHERE id = ?",
-                    (next_phase, now, rollout_id)
-                )
-            else:
-                db.execute(
-                    "UPDATE rollouts SET status = 'completed', updated_at = ? WHERE id = ?",
-                    (now, rollout_id)
-                )
-
-
-def complete_rollout_phase(rollout_id: int):
-    """Mark current phase as completed and advance to next."""
-    now = datetime.now().isoformat()
-    with get_db() as db:
-        db.execute(
-            "UPDATE rollouts SET last_phase_completed_at = ?, updated_at = ? WHERE id = ?",
-            (now, now, rollout_id)
-        )
-    advance_rollout_phase(rollout_id)
 
 
 def pause_rollout(rollout_id: int, reason: str):
@@ -2558,101 +2361,6 @@ def set_rollout_job_id(rollout_id: int, job_id: str):
             "UPDATE rollouts SET last_job_id = ?, updated_at = ? WHERE id = ?",
             (job_id, now, rollout_id)
         )
-
-
-def set_rollout_phase_window(rollout_id: int, window_key: str):
-    """Record the maintenance-window key in which this rollout last ran a phase
-    job. The scheduler refuses to start another phase in the same window, which
-    is what guarantees one phase per maintenance window (see rollout_gate)."""
-    now = datetime.now().isoformat()
-    if isinstance(window_key, (tuple, list)):
-        window_key = json.dumps(list(window_key), separators=(",", ":"))
-    with get_db() as db:
-        db.execute(
-            "UPDATE rollouts SET last_phase_window = ?, updated_at = ? WHERE id = ?",
-            (window_key, now, rollout_id)
-        )
-
-
-def set_canary_completed_at(rollout_id: int, completed_at: str):
-    """Record when the canary phase completed on this fleet. The canary soak is
-    measured from this timestamp (not the firmware release date)."""
-    now = datetime.now().isoformat()
-    with get_db() as db:
-        db.execute(
-            "UPDATE rollouts SET canary_completed_at = ?, updated_at = ? WHERE id = ?",
-            (completed_at, now, rollout_id)
-        )
-
-
-def set_rollout_settings_snapshot(rollout_id: int, settings: dict):
-    """Save a snapshot of update-relevant settings for a rollout."""
-    import json
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE rollouts SET settings_json = ? WHERE id = ?",
-            (json.dumps(settings), rollout_id)
-        )
-
-
-
-
-def get_rollout_settings_snapshot(rollout_id: int) -> Optional[dict]:
-    """Get the settings snapshot for a rollout, or None if not set."""
-    import json
-    with get_db() as conn:
-        row = conn.execute("SELECT settings_json FROM rollouts WHERE id = ?", (rollout_id,)).fetchone()
-        if row and row["settings_json"]:
-            return json.loads(row["settings_json"])
-        return None
-
-
-def assign_device_to_rollout(rollout_id: int, ip: str, device_type: str, phase: str):
-    """Assign a device to a rollout phase."""
-    with get_db() as db:
-        db.execute(
-            """INSERT OR IGNORE INTO rollout_devices (rollout_id, ip, device_type, phase_assigned, status)
-               VALUES (?, ?, ?, ?, 'pending')""",
-            (rollout_id, ip, device_type, phase)
-        )
-
-
-def mark_rollout_device(rollout_id: int, ip: str, status: str):
-    """Mark a single rollout device status."""
-    now = datetime.now().isoformat()
-    with get_db() as db:
-        db.execute(
-            "UPDATE rollout_devices SET status = ?, updated_at = ? WHERE rollout_id = ? AND ip = ?",
-            (status, now, rollout_id, ip)
-        )
-        # If successfully updated, record the timestamp on the device
-        if status == "updated":
-            db.execute(
-                "UPDATE devices SET last_firmware_update = ? WHERE ip = ?",
-                (now, ip)
-            )
-
-
-def mark_rollout_phase_devices(rollout_id: int, phase: str, status: str):
-    """Bulk mark all devices in a rollout phase."""
-    now = datetime.now().isoformat()
-    with get_db() as db:
-        db.execute(
-            "UPDATE rollout_devices SET status = ?, updated_at = ? WHERE rollout_id = ? AND phase_assigned = ?",
-            (status, now, rollout_id, phase)
-        )
-        # If successfully updated, record the timestamp on the devices themselves
-        if status == "updated":
-            # Get the IPs for this phase and update devices table
-            rows = db.execute(
-                "SELECT ip FROM rollout_devices WHERE rollout_id = ? AND phase_assigned = ?",
-                (rollout_id, phase)
-            ).fetchall()
-            for row in rows:
-                db.execute(
-                    "UPDATE devices SET last_firmware_update = ? WHERE ip = ?",
-                    (now, row[0])
-                )
 
 
 def get_rollout_devices(rollout_id: int, phase: str = None) -> list[dict]:

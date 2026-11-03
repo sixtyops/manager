@@ -89,180 +89,32 @@ def _make_scheduler():
     return scheduler, start_update
 
 
-def test_straggler_migration_defaults_existing_rows_to_zero(mock_db):
-    rollout_id = db.create_rollout(
-        FW, members=[{"ip": "192.0.2.10", "device_type": "ap"}],
-        settings_snapshot={},
-    )
-    mock_db.execute("ALTER TABLE rollout_devices DROP COLUMN is_straggler")
-    mock_db.execute("ALTER TABLE rollout_devices DROP COLUMN model_family")
+def test_rollout_creation_keeps_membership_history_inert(mock_db):
+    rollout_id = db.create_rollout(FW)
+    with db.get_db() as conn:
+        conn.execute(
+            """INSERT INTO rollout_devices (rollout_id, ip, device_type, phase_assigned, status)
+               VALUES (?, ?, ?, ?, ?)""",
+            (rollout_id, "192.0.2.10", "ap", "pct10", "updated"),
+        )
+        conn.execute(
+            """INSERT INTO firmware_window_stops
+               (window_key, job_id, device_ip, gate, reason, stopped_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            ('["firmware","2026-06-02"]', "job-1", "192.0.2.10", "flash", "failed", "2026-06-02T03:00:00"),
+        )
 
     db._migrate(mock_db)
     db._migrate(mock_db)
 
-    columns = {row[1] for row in mock_db.execute("PRAGMA table_info(rollout_devices)")}
-    member = mock_db.execute(
-        "SELECT is_straggler, model_family FROM rollout_devices WHERE rollout_id = ?",
-        (rollout_id,),
-    ).fetchone()
-    assert "is_straggler" in columns
-    assert "model_family" in columns
-    assert tuple(member) == (0, None)
-
-
-def test_create_rollout_persists_complete_membership_snapshot(mock_db):
-    fixed_now = datetime(2026, 6, 2, 3, 15)
-    members = [
-        {"ip": "192.0.2.10", "device_type": "ap"},
-        {"ip": "192.0.2.11", "device_type": "switch"},
-    ]
-    settings = {"bank_mode": "both", "allow_downgrade": "false"}
-
-    rollout_id = db.create_rollout(
-        FW, members=members, settings_snapshot=settings, now=fixed_now
-    )
-
-    rollout = db.get_rollout(rollout_id)
-    persisted = db.get_rollout_devices(rollout_id)
-    assert rollout["status"] == "waiting_hold"
-    assert rollout["phase"] == "pct10"
-    assert rollout["firmware_file"] == FW
-    assert rollout["created_at"] == "2026-06-02 03:15:00"
-    assert db.get_rollout_settings_snapshot(rollout_id) == settings
-    assert {(row["ip"], row["device_type"], row["phase_assigned"], row["status"])
-            for row in persisted} == {
-                ("192.0.2.10", "ap", None, "pending"),
-                ("192.0.2.11", "switch", None, "pending"),
-            }
-
-
-def test_activate_rollout_requires_every_member_family_unheld(mock_db, hold_clock):
-    rollout_id = db.create_rollout(
-        FW_HELD,
-        firmware_file_tns100="tns-100-1.12.3-r55002-20260601-x.bin",
-        members=[
-            {"ip": "192.0.2.10", "device_type": "ap"},
-            {"ip": "192.0.2.11", "device_type": "switch"},
-        ],
-        settings_snapshot={"bank_mode": "both"},
-        now=hold_clock.replace(tzinfo=None),
-    )
-
-    families = {"tna-30x", "tns-100"}
-    assert not db.activate_rollout_if_unheld(rollout_id, families, {"tns-100"})
-    assert db.get_rollout(rollout_id)["status"] == "waiting_hold"
-    assert db.activate_rollout_if_unheld(rollout_id, families, set())
-    assert db.get_rollout(rollout_id)["status"] == "active"
-    assert db.get_rollout(rollout_id)["updated_at"] == hold_clock.replace(tzinfo=None).isoformat()
-
-
-def test_activate_rollout_rolls_back_when_status_write_fails(mock_db, hold_clock):
-    rollout_id = db.create_rollout(
-        FW,
-        members=[{"ip": "192.0.2.10", "device_type": "ap"}],
-        settings_snapshot={"bank_mode": "both"},
-        now=hold_clock.replace(tzinfo=None),
-    )
     with db.get_db() as conn:
-        conn.execute(
-            """CREATE TRIGGER reject_rollout_activation BEFORE UPDATE OF status ON rollouts
-               WHEN NEW.status = 'active'
-               BEGIN SELECT RAISE(ABORT, 'injected activation failure'); END"""
-        )
-
-    with pytest.raises(Exception, match="injected activation failure"):
-        db.activate_rollout_if_unheld(rollout_id, {"tna-30x"}, set())
-
-    assert db.get_rollout(rollout_id)["status"] == "waiting_hold"
-
-
-def test_create_rollout_rolls_back_when_any_member_insert_fails(mock_db):
-    with db.get_db() as conn:
-        conn.execute(
-            """CREATE TRIGGER reject_rollout_member BEFORE INSERT ON rollout_devices
-               WHEN NEW.ip = '192.0.2.11'
-               BEGIN SELECT RAISE(ABORT, 'injected membership failure'); END"""
-        )
-
-    with pytest.raises(Exception, match="injected membership failure"):
-        db.create_rollout(
-            FW,
-            members=[
-                {"ip": "192.0.2.10", "device_type": "ap"},
-                {"ip": "192.0.2.11", "device_type": "switch"},
-            ],
-            settings_snapshot={"bank_mode": "both"},
-            now=datetime(2026, 6, 2, 3, 15),
-        )
-
-    with db.get_db() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM rollouts").fetchone()[0] == 0
-        assert conn.execute("SELECT COUNT(*) FROM rollout_devices").fetchone()[0] == 0
-
-
-def test_create_rollout_duplicate_membership_requires_an_exact_snapshot(mock_db):
-    fixed_now = datetime(2026, 6, 2, 3, 15)
-    original_members = [{"ip": "192.0.2.10", "device_type": "ap"}]
-    settings = {"bank_mode": "both"}
-    rollout_id = db.create_rollout(
-        FW, members=original_members, settings_snapshot=settings, now=fixed_now
-    )
-
-    duplicate_id = db.create_rollout(
-        FW,
-        members=original_members,
-        settings_snapshot=settings,
-        now=fixed_now + timedelta(seconds=1),
-    )
-    changed_id = db.create_rollout(
-        FW,
-        members=original_members + [{"ip": "192.0.2.11", "device_type": "switch"}],
-        settings_snapshot=settings,
-        now=fixed_now + timedelta(seconds=2),
-    )
-
-    assert duplicate_id == rollout_id
-    assert changed_id != rollout_id
-    assert len(db.get_rollout_devices(rollout_id)) == 1
-    assert len(db.get_rollout_devices(changed_id)) == 2
-
-
-def test_create_rollout_rejects_an_empty_membership_snapshot(mock_db):
-    with pytest.raises(ValueError, match="must not be empty"):
-        db.create_rollout(
-            FW,
-            members=[],
-            settings_snapshot={"bank_mode": "both"},
-            now=datetime(2026, 6, 2, 3, 15),
-        )
-
-    with db.get_db() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM rollouts").fetchone()[0] == 0
-
-
-@pytest.mark.parametrize(
-    ("snapshot", "message"),
-    [
-        (None, "requires a settings snapshot"),
-        ({"bank_mode": object()}, "must be valid JSON"),
-    ],
-    ids=["missing", "invalid"],
-)
-def test_create_rollout_rejects_missing_or_invalid_settings_snapshot_without_writes(
-    mock_db, snapshot, message
-):
-    kwargs = {} if snapshot is None else {"settings_snapshot": snapshot}
-    with pytest.raises(ValueError, match=message):
-        db.create_rollout(
-            FW,
-            members=[{"ip": "192.0.2.10", "device_type": "ap"}],
-            now=datetime(2026, 6, 2, 3, 15),
-            **kwargs,
-        )
-
-    with db.get_db() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM rollouts").fetchone()[0] == 0
-        assert conn.execute("SELECT COUNT(*) FROM rollout_devices").fetchone()[0] == 0
+        membership = conn.execute(
+            "SELECT ip, status FROM rollout_devices WHERE rollout_id = ?", (rollout_id,)
+        ).fetchone()
+        stop = conn.execute("SELECT device_ip, resolved_at FROM firmware_window_stops").fetchone()
+    assert tuple(membership) == ("192.0.2.10", "updated")
+    assert tuple(stop) == ("192.0.2.10", None)
+    assert db.get_rollout_devices(db.create_rollout("another.bin")) == []
 
 
 def test_overnight_window_keeps_its_start_date_key():
@@ -380,18 +232,6 @@ async def test_held_family_waits_without_blocking_an_unheld_family(mock_db, monk
 # ── Pure-logic gate tests (no scheduler/DB) ──
 
 _NOW = "2026-06-10"
-
-
-def _pct10(window=None):
-    return {"status": "active", "phase": "pct10", "last_phase_window": window}
-
-
-# ── Migration: in-flight canary rollouts remap to pct10 ──
-
-def test_create_rollout_starts_at_pct10(mock_db):
-    """New rollouts start at the first fleet wave, not the removed canary phase."""
-    rid = db.create_rollout(FW)
-    assert db.get_rollout(rid)["phase"] == "pct10"
 
 
 def test_firmware_window_key_uses_schedule_zone_for_naive_scheduler_time():

@@ -561,14 +561,10 @@ class AutoUpdateScheduler:
             if not self._scheduled_admission_allowed():
                 await self._broadcast_status()
                 return
-            snapshot_keys = ["bank_mode", "parallel_updates", "allow_downgrade", "pre_update_reboot",
-                             "bandwidth_limit_kbps", "schedule_start_hour", "schedule_end_hour",
-                             "schedule_days", "schedule_timezone"]
-            snapshot = {k: settings.get(k, "") for k in snapshot_keys}
             try:
                 rollout_id = db.create_rollout(
                     fw_30x, fw_303l if fw_303l else None, fw_tns100 if fw_tns100 else None,
-                    settings_snapshot=snapshot, now=now,
+                    now=now,
                 )
             except Exception as e:
                 logger.warning(f"Rollout could not be created; no job started: {e}")

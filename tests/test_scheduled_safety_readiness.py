@@ -11,9 +11,9 @@ from tests.test_rollout_invariants import _Harness, _make_scheduler, _seed_aps, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("readiness", [None, "false", "", "TRUE", "1", "invalid"])
-@pytest.mark.parametrize("phase", [None, "pct10", "pct50", "pct100", "paused"])
+@pytest.mark.parametrize("status", [None, "active", "paused"])
 async def test_unready_tick_preserves_rollout_and_admits_no_job(
-    mock_db, monkeypatch, readiness, phase
+    mock_db, monkeypatch, readiness, status
 ):
     _seed_aps(10)
     settings = _settings()
@@ -21,23 +21,18 @@ async def test_unready_tick_preserves_rollout_and_admits_no_job(
     db.set_settings(settings)
     if readiness is not None:
         db.set_setting("scheduled_rollout_safety_ready", readiness)
-    if phase:
+    if status:
         rollout_id = db.create_rollout(FW)
-        if phase == "paused":
+        if status == "paused":
             db.pause_rollout(rollout_id, "Review recovery proof")
-        else:
-            mock_db.execute("UPDATE rollouts SET phase = ? WHERE id = ?", (phase, rollout_id))
-            mock_db.commit()
     before = db.get_current_rollout()
     scheduler, start = _make_scheduler()
     harness = _Harness(scheduler, monkeypatch)
 
-    with patch.object(db, "create_rollout", wraps=db.create_rollout) as create, \
-         patch.object(db, "complete_rollout_phase", wraps=db.complete_rollout_phase) as advance:
+    with patch.object(db, "create_rollout", wraps=db.create_rollout) as create:
         await harness.tick()
         await harness.tick(day=3)
     create.assert_not_called()
-    advance.assert_not_called()
     start.assert_not_awaited()
     assert db.get_current_rollout() == before
     assert scheduler._state == "blocked_safety"
@@ -54,7 +49,6 @@ async def test_recorded_readiness_can_be_revoked_before_a_later_window(mock_db, 
     await harness.tick()
     harness.complete_job()
     before = db.get_active_rollout()
-    assert before["phase"] == "pct10"
     db.set_setting("scheduled_rollout_safety_ready", "false")
 
     await harness.tick(day=3)
@@ -116,10 +110,8 @@ async def test_revocation_during_tick_holds_new_admission(
             db.set_setting("scheduled_rollout_safety_ready", "false")
         monkeypatch.setattr(scheduler, "_broadcast_status", revoke_broadcast)
 
-    with patch.object(db, "complete_rollout_phase", wraps=db.complete_rollout_phase) as advance:
-        await harness.tick()
+    await harness.tick()
     start.assert_not_awaited()
-    advance.assert_not_called()
     assert scheduler._state == "blocked_safety"
     if boundary in {"time", "weather"}:
         assert db.get_current_rollout() is None
