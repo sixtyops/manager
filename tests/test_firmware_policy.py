@@ -1,15 +1,49 @@
 import json
+import pytest
 
 from updater import database as db
 from updater.firmware_policy import (
     auto_select_platform_target,
     classify_device_version,
+    extract_version_from_filename,
     firmware_file_health,
 )
+from updater.vendors.tachyon.client import _extract_version_from_firmware
 
 
 FW_303L_STABLE = "tna-303l-1.12.4-r7782-20251209-sysupgrade.bin"
 FW_303L_BETA = "tna-303l-1.15.0-r8515-20260609-sysupgrade.bin"
+
+
+@pytest.mark.parametrize(("filename", "expected"), [
+    (
+        "tna-30x-v1.15.1-r55177-20260728-tn-110-prs-squashfs-sysupgrade.bin",
+        "1.15.1.55177",
+    ),
+    (
+        "tna-303l-v1.15.1-r55177-20260728-sysupgrade.bin",
+        "1.15.1.55177",
+    ),
+    (
+        "tns-v1.15.1-r55177-20260728-tns-100-squashfs-sysupgrade.bin",
+        "1.15.1.55177",
+    ),
+    (
+        "tna-30x-1.15.0-r55151-20260609-tn-110-prs-squashfs-sysupgrade.bin",
+        "1.15.0.55151",
+    ),
+    (
+        "tna-303l-1.15.0-r55151-20260609-sysupgrade.bin",
+        "1.15.0.55151",
+    ),
+    (
+        "tns-1.15.0-r55151-20260609-tns-100-squashfs-sysupgrade.bin",
+        "1.15.0.55151",
+    ),
+])
+def test_tachyon_image_versions_keep_the_build_number(filename, expected):
+    assert extract_version_from_filename(filename) == expected
+    assert _extract_version_from_firmware(filename) == expected
 
 
 def test_newer_than_target_is_not_reported_as_behind():

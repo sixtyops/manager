@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable, List
 
+from ...firmware_policy import extract_version_from_filename
 from ...logging_filter import register_device_token
 
 logger = logging.getLogger(__name__)
@@ -179,20 +180,9 @@ def _device_error_message(body: str) -> str:
 def _extract_version_from_firmware(firmware_path: str) -> str:
     """Extract normalized version from firmware filename.
 
-    'tna-30x-2.5.1-r54970.bin' -> '2.5.1.54970'
+    'tna-30x-v2.5.1-r54970.bin' -> '2.5.1.54970'
     """
-    filename = Path(firmware_path).name
-    match = re.search(
-        r"(?:tna-30x|tna30x|tna-303l|tna303l|tns-100|tns100)-(\d+\.\d+\.\d+)-r(\d+)",
-        filename,
-        re.IGNORECASE,
-    )
-    if match:
-        return f"{match.group(1)}.{match.group(2)}"
-    match2 = re.search(r"(\d+\.\d+\.\d+)", filename)
-    if match2:
-        return match2.group(1)
-    return ""
+    return extract_version_from_filename(Path(firmware_path).name)
 
 
 def _normalize_version(version: str) -> str:
