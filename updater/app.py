@@ -4307,6 +4307,10 @@ async def _read_cpe_eth0_link(job, ap_ip, peer):
         raise RuntimeError(f"CPE {peer.mac} eth0 link state is unavailable")
     state = await state_reader()
     link_up = _eth0_link_up(state)
+    if link_up is None and (
+        not isinstance(state, dict) or state.get("read_state") != "ok"
+    ):
+        raise RuntimeError(f"CPE {peer.mac} eth0 link state is unavailable")
     return link_up
 
 

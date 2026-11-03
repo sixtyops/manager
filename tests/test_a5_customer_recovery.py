@@ -78,6 +78,21 @@ async def test_baseline_records_unknown_when_eth0_has_no_link_field(monkeypatch)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("state", [
+    {"read_state": "unknown", "reason": "request_failed", "link_up": None},
+    {"read_state": "unknown", "reason": "invalid_json", "link_up": None},
+    None,
+])
+async def test_baseline_fails_closed_when_eth0_read_is_unavailable(monkeypatch, state):
+    cpe = CPE(link=None)
+    cpe.get_eth0_recovery_state.return_value = state
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: lambda *_args: cpe)
+
+    with pytest.raises(RuntimeError, match="eth0 link state is unavailable"):
+        await app_module._capture_ap_recovery_baseline(_job(), AP_IP, AP([_peer()]))
+
+
+@pytest.mark.asyncio
 async def test_recovery_skips_only_eth0_link_check_for_unknown_baseline(monkeypatch):
     cpe = CPE(link=False)
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: lambda *_args: cpe)
