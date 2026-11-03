@@ -62,6 +62,25 @@ class TestDerivedPendingQueue:
 
         assert [item["ip"] for item in queue] == ["10.0.0.2", "10.0.0.3"]
 
+    def test_resolved_failure_on_target_is_included_first_for_recovery(self, mock_db):
+        failed_ip = "10.0.0.1"
+        db.upsert_access_point(
+            failed_ip, "root", "pass", enabled=True, model="TNA-301",
+            firmware_version="2.0.0.200",
+        )
+        db.upsert_access_point(
+            "10.0.0.2", "root", "pass", enabled=True, model="TNA-301",
+            firmware_version="1.0.0",
+        )
+
+        queue = AutoUpdateScheduler(AsyncMock(), AsyncMock())._derive_pending_queue(
+            self._settings(), held_families=set(), recovery_ip=failed_ip,
+        )
+
+        assert [item["ip"] for item in queue] == [failed_ip, "10.0.0.2"]
+        assert queue[0]["verify_recovery_if_current"] is True
+        assert queue[1]["verify_recovery_if_current"] is False
+
     def test_held_late_family_is_omitted_without_blocking_other_family(self, mock_db):
         db.upsert_access_point("10.0.0.1", "root", "pass", enabled=True, model="TNA-301", firmware_version="1.0.0")
         db.upsert_access_point("10.0.0.2", "root", "pass", enabled=True, model="TNA-303L", firmware_version="1.0.0")

@@ -34,6 +34,39 @@ _DAY_INDEX = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun":
 _UNSET = object()
 
 
+def _resolved_failure_recovery_ip(window_key) -> Optional[str]:
+    """Return the latest prior resolved failure that has no later success record."""
+    if not isinstance(window_key, (list, tuple)) or len(window_key) != 2:
+        return None
+    try:
+        current_day = datetime.fromisoformat(window_key[1]).date()
+        with db.get_db() as conn:
+            stops = conn.execute(
+                "SELECT window_key, device_ip, resolved_at FROM firmware_window_stops "
+                "WHERE resolved_at IS NOT NULL ORDER BY resolved_at DESC, stopped_at DESC"
+            ).fetchall()
+            for stop in stops:
+                try:
+                    prior_key = json.loads(stop["window_key"])
+                    prior_day = (
+                        datetime.fromisoformat(prior_key[1]).date()
+                        if isinstance(prior_key, list) and len(prior_key) == 2 else None
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if prior_day is None or prior_key[0] != window_key[0] or prior_day >= current_day:
+                    continue
+                verified = conn.execute(
+                    "SELECT 1 FROM device_update_history "
+                    "WHERE ip = ? AND status = 'success' AND completed_at > ? LIMIT 1",
+                    (stop["device_ip"], stop["resolved_at"]),
+                ).fetchone()
+                return None if verified else stop["device_ip"]
+    except Exception:
+        raise
+    return None
+
+
 def _parse_schedule_days(schedule_days) -> set[int]:
     """Convert schedule_days (csv string or list) to a set of weekday integers."""
     if not schedule_days:
@@ -406,7 +439,9 @@ class AutoUpdateScheduler:
                 needs_switch_update = self._filter_switches_needing_update(
                     switch_scope, target_versions, allow_downgrade, cooldown_days=cooldown_days
                 )
-                if not needs_update and not needs_switch_update:
+                retry_key = rollout_gate.firmware_window_key(settings, now)
+                if (not needs_update and not needs_switch_update
+                        and not _resolved_failure_recovery_ip(retry_key)):
                     if self._state != "blocked_all_current":
                         self._state = "blocked_all_current"
                         self._block_reason = "All devices up to date"
@@ -503,7 +538,9 @@ class AutoUpdateScheduler:
                 needs_switch_update = self._filter_switches_needing_update(
                     switch_scope, target_versions, allow_downgrade, cooldown_days=cooldown_days
                 )
-                if not needs_update and not needs_switch_update:
+                retry_key = rollout_gate.firmware_window_key(settings, now)
+                if (not needs_update and not needs_switch_update
+                        and not _resolved_failure_recovery_ip(retry_key)):
                     self._state = "blocked_all_current"
                     self._block_reason = "All devices up to date"
                     await self._broadcast_status()
@@ -554,6 +591,15 @@ class AutoUpdateScheduler:
             return
 
         try:
+            recovery_ip = _resolved_failure_recovery_ip(window_key)
+        except Exception as exc:
+            logger.warning("Could not read resolved firmware stop; holding queue: %s", exc)
+            self._state = "blocked_safety"
+            self._block_reason = "Could not verify the previously failed device"
+            await self._broadcast_status()
+            return
+
+        try:
             if db.get_firmware_window_stop(window_key):
                 self._state = "blocked_safety"
                 self._block_reason = "This maintenance window stopped after a device failure"
@@ -582,6 +628,7 @@ class AutoUpdateScheduler:
             held_families, family_holds = self._held_families(settings, rollout)
             queue = self._derive_pending_queue(
                 settings, rollout, allow_downgrade, held_families=held_families,
+                recovery_ip=recovery_ip,
             )
         except Exception as exc:
             logger.warning("Derived firmware queue failed closed: %s", exc)
@@ -598,6 +645,7 @@ class AutoUpdateScheduler:
             try:
                 held_queue = self._derive_pending_queue(
                     settings, rollout, allow_downgrade, held_families=set(),
+                    recovery_ip=recovery_ip,
                 ) if held_families else []
             except Exception as exc:
                 logger.warning("Could not verify held queue entries: %s", exc)
@@ -660,7 +708,9 @@ class AutoUpdateScheduler:
             return
 
         entries = [
-            {"ip": item["ip"], "role": item["device_type"], "parent_ap": item["parent_ip"]}
+            ({"ip": item["ip"], "role": item["device_type"], "parent_ap": item["parent_ip"]}
+             | ({"verify_recovery_if_current": True}
+                if item.get("verify_recovery_if_current") else {}))
             for item in queue
         ]
         self._state = "running"
@@ -963,6 +1013,7 @@ class AutoUpdateScheduler:
         rollout: Optional[dict] = None,
         allow_downgrade: bool = False,
         held_families: Optional[set[str]] = None,
+        recovery_ip: Optional[str] = None,
     ) -> list[dict]:
         """Build the current ordered queue from enabled Manager inventory.
 
@@ -1008,11 +1059,12 @@ class AutoUpdateScheduler:
                 raise ValueError(f"Pending queue held: reported version is unreadable for {role} {ip}")
             if family in held_families:
                 return
-            if not _device_needs_update(
+            needs_update = _device_needs_update(
                 version, target, allow_downgrade,
                 last_update_iso=device.get("last_firmware_update"),
                 cooldown_days=cooldown_days,
-            ):
+            )
+            if not needs_update and ip != recovery_ip:
                 return
             entries.append({
                 "ip": ip,
@@ -1021,6 +1073,7 @@ class AutoUpdateScheduler:
                 "model": device.get("model"),
                 "family": family,
                 "target_version": target,
+                "verify_recovery_if_current": ip == recovery_ip and not needs_update,
             })
 
         for parent_ip in sorted(ap_scope):
@@ -1039,6 +1092,7 @@ class AutoUpdateScheduler:
                 add_device(switch, "switch")
 
         entries.sort(key=lambda item: (
+            0 if item["ip"] == recovery_ip else 1,
             {"cpe": 0, "ap": 1, "switch": 2}[item["device_type"]],
             _normalized_ip(item["ip"]),
             _normalized_ip(item["parent_ip"]) if item["parent_ip"] else (0, 0),

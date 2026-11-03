@@ -4015,6 +4015,7 @@ class UpdateJob:
     device_roles: Dict[str, str] = field(default_factory=dict)  # IP -> "ap"/"cpe"
     device_parent: Dict[str, str] = field(default_factory=dict)  # CPE IP -> parent AP IP
     recovery_locators: Dict[str, dict] = field(default_factory=dict)
+    recovery_only_devices: set[str] = field(default_factory=set)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     status: str = "pending"
@@ -5121,7 +5122,7 @@ def _retry_resolved_failure_first(entries: list[dict], window_key: tuple | None)
         if prior_day is None or prior_key[0] != window_key[0] or prior_day >= current_day:
             continue
         index = next((i for i, entry in enumerate(entries) if entry["ip"].strip() == failure["device_ip"]), None)
-        return [entries[index], *entries[:index], *entries[index + 1:]] if index else entries
+        return [entries[index], *entries[:index], *entries[index + 1:]] if index is not None else entries
     return entries
 
 
@@ -5196,6 +5197,7 @@ async def _start_scheduled_update(
     device_roles = {}
     device_parent = {}
     device_firmware_map = {}
+    recovery_only_ips: set[str] = set()
 
     # Devices whose firmware family has no matching file selected. Collected
     # across APs/CPEs/switches so the operator gets one complete reason; any
@@ -5217,6 +5219,10 @@ async def _start_scheduled_update(
     if len(entry_ips) != len(set(entry_ips)) or ranks != sorted(ranks):
         raise RuntimeError("device_entries must be unique and ordered CPEs, APs, then switches")
     device_entries = _retry_resolved_failure_first(device_entries, window_key)
+    recovery_requested = {
+        entry["ip"].strip() for entry in device_entries
+        if entry.get("verify_recovery_if_current") is True
+    }
     requested_ap_ips = [entry["ip"].strip() for entry in device_entries if entry["role"] == "ap"]
 
     valid_aps = []
@@ -5232,6 +5238,12 @@ async def _start_scheduled_update(
             ap_target = _extract_version_from_filename(Path(ap_fw).name)
             if _device_needs_update(ap, ap_target, bank_mode, allow_downgrade):
                 valid_aps.append(ip)
+                credentials[ip] = (ap["username"], ap["password"])
+                device_roles[ip] = "ap"
+                device_firmware_map[ip] = ap_fw
+            elif ip in recovery_requested:
+                valid_aps.append(ip)
+                recovery_only_ips.add(ip)
                 credentials[ip] = (ap["username"], ap["password"])
                 device_roles[ip] = "ap"
                 device_firmware_map[ip] = ap_fw
@@ -5256,6 +5268,13 @@ async def _start_scheduled_update(
             elif _device_needs_update_for_bank_mode(
                 cpe, target_version, bank_mode=bank_mode, allow_downgrade=allow_downgrade,
             ):
+                device_roles[cpe_ip] = "cpe"
+                device_parent[cpe_ip] = parent_ip
+                credentials[cpe_ip] = (parent["username"], parent["password"])
+                device_firmware_map[cpe_ip] = cpe_fw
+                ap_cpe_map.setdefault(parent_ip, []).append(cpe_ip)
+            elif cpe_ip in recovery_requested:
+                recovery_only_ips.add(cpe_ip)
                 device_roles[cpe_ip] = "cpe"
                 device_parent[cpe_ip] = parent_ip
                 credentials[cpe_ip] = (parent["username"], parent["password"])
@@ -5289,10 +5308,12 @@ async def _start_scheduled_update(
             bank_mode=bank_mode,
             allow_downgrade=allow_downgrade,
         ):
-            logger.info(
-                f"Skipping switch {sw_ip}: bank_mode={bank_mode}, target={target_version} already satisfied"
-            )
-            continue
+            if sw_ip not in recovery_requested:
+                logger.info(
+                    f"Skipping switch {sw_ip}: bank_mode={bank_mode}, target={target_version} already satisfied"
+                )
+                continue
+            recovery_only_ips.add(sw_ip)
 
         valid_switches.append(sw_ip)
         credentials[sw_ip] = (sw["username"], sw["password"])
@@ -5330,6 +5351,7 @@ async def _start_scheduled_update(
         pre_update_reboot=pre_update_reboot,
         enforce_window_cutoff=enforce_window_cutoff,
         window_key=window_key,
+        recovery_only_devices=recovery_only_ips,
     )
 
     for ip in valid_aps:
@@ -5933,6 +5955,106 @@ async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
     return _scheduled_action_decision(job)
 
 
+async def _verify_recovered_device(job: "UpdateJob", ip: str) -> None:
+    """Verify a previously failed, already-current device without writing to it."""
+    device_status = job.devices[ip]
+    started = datetime.now()
+    target = _extract_version_from_filename(Path(job.device_firmware_map[ip]).name)
+    client = None
+    try:
+        admitted, reason = _scheduled_action_decision(job)
+        if not admitted:
+            device_status.status = "pending"
+            device_status.progress_message = reason
+            return
+        device_status.status = "verifying"
+        device_status.current_stage = "recovery"
+        device_status.current_stage_started = started.isoformat()
+        await broadcast({
+            "type": "device_update", "job_id": job.job_id, "ip": ip,
+            "status": "verifying", "message": "Checking firmware recovery...",
+            "role": device_status.role, "parent_ap": device_status.parent_ap,
+        })
+        vendor_id = job.device_vendor_map.get(ip, "tachyon")
+        driver_cls = get_driver(vendor_id)
+        username, password = job.credentials[ip]
+        locator = job.recovery_locators.get(ip, {}).get("ip", ip)
+        client = driver_cls(locator, username, password)
+        if await client.connect() is not True:
+            raise RuntimeError("Device is not reachable after its previous reboot")
+        info = await client.get_device_info()
+        serial = getattr(info, "serial", None)
+        model = getattr(info, "model", None)
+        version = _normalize_version(getattr(info, "current_version", None))
+        if not serial:
+            raise RuntimeError("Device serial is unavailable during recovery verification")
+        if device_status.model and (not model or model.lower() != device_status.model.lower()):
+            raise RuntimeError("Device model changed during recovery verification")
+        if not target or version != _normalize_version(target):
+            raise RuntimeError("Target firmware version was not confirmed during recovery verification")
+        smoke = await client.run_smoke_tests(
+            role=device_status.role,
+            pre_update_cpe_count=len(job.ap_cpe_map.get(ip, [])) if device_status.role == "ap" else 0,
+        )
+        required = {"device_responsive", "config_intact"}
+        if device_status.role == "ap":
+            required.update({"cpe_connectivity", "cpe_signal_levels"})
+        checks = {
+            item.get("check"): item for item in (smoke.checks or [])
+            if isinstance(item, dict) and item.get("check")
+        }
+        missing = required - checks.keys()
+        failed = {name for name in required if name in checks and checks[name].get("passed") is not True}
+        if not smoke.passed or smoke.warnings or missing or failed:
+            details = []
+            if missing:
+                details.append(f"Missing checks: {', '.join(sorted(missing))}")
+            if failed:
+                details.append(f"Failed checks: {', '.join(sorted(failed))}")
+            if smoke.warnings:
+                details.extend(smoke.warnings[:3])
+            raise RuntimeError("Smoke test failed: " + ("; ".join(details) or "Required check failed"))
+
+        device_status.old_version = version
+        device_status.new_version = version
+        device_status.smoke_checks = smoke.checks
+        device_status.status = "success"
+        device_status.progress_message = f"Recovery verified on {version}"
+        db.save_device_update_history(
+            job_id=job.job_id, ip=ip, role=device_status.role, pass_number=1,
+            status="success", old_version=version, new_version=version,
+            model=model, error=None, failed_stage=None, stages=[{"stage": "recovery", "success": True}],
+            duration_seconds=(datetime.now() - started).total_seconds(),
+            started_at=started.isoformat(), completed_at=datetime.now().isoformat(),
+        )
+    except Exception as exc:
+        reason = f"Recovery verification failed: {exc}"
+        device_status.status = "failed"
+        device_status.error = reason
+        device_status.progress_message = reason
+        device_status.smoke_warnings = [reason]
+        _stop_firmware_window(job, ip, "recovery", reason)
+        try:
+            db.save_device_update_history(
+                job_id=job.job_id, ip=ip, role=device_status.role, pass_number=1,
+                status="failed", old_version=None, new_version=None,
+                model=device_status.model, error=reason, failed_stage="recovery",
+                stages=[{"stage": "recovery", "success": False}],
+                duration_seconds=(datetime.now() - started).total_seconds(),
+                started_at=started.isoformat(), completed_at=datetime.now().isoformat(),
+            )
+        except Exception as history_error:
+            logger.warning("Failed to save recovery history for %s: %s", ip, history_error)
+    finally:
+        _persist_device_result(job, ip)
+        await broadcast({
+            "type": "device_update", "job_id": job.job_id, "ip": ip,
+            "status": device_status.status, "message": device_status.progress_message,
+            "error": device_status.error, "role": device_status.role,
+            "parent_ap": device_status.parent_ap,
+        })
+
+
 async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1):
     """Update a single device within a job."""
     device_status = job.devices[ip]
@@ -5994,6 +6116,10 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 return
         except Exception as e:
             logger.warning(f"Maintenance window check failed: {e}")
+
+    if ip in job.recovery_only_devices:
+        await _verify_recovered_device(job, ip)
+        return
 
 
     device_start_time = datetime.now()

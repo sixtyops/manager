@@ -345,6 +345,47 @@ async def test_queue_cutoff_blocks_before_start_but_finishes_started_device(mock
         assert "flash" not in _DeviceClient.calls["192.0.2.1"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("smoke_failure", [False, True])
+async def test_resolved_failure_on_target_runs_read_only_recovery(smoke_failure, mock_db, monkeypatch):
+    class CurrentTargetClient(_DeviceClient):
+        def __init__(self, ip, username, password):
+            super().__init__(ip, username, password)
+            self.updated = True
+
+    ip = "192.0.2.1"
+    window_key = ("firmware", "2026-10-28")
+    db.stop_firmware_window(("firmware", "2026-10-27"), "old-job", ip, "recovery", "Device did not return")
+    old_stop = db.get_firmware_window_stop(("firmware", "2026-10-27"))
+    db.resolve_firmware_window_stop(old_stop["id"], "admin", "Device is on target")
+    db.set_setting("scheduled_rollout_safety_ready", "true")
+    _DeviceClient.calls = {}
+    _DeviceClient.connect_calls = {}
+    _DeviceClient.fail_at = "smoke" if smoke_failure else None
+    monkeypatch.setattr(app_module, "_shutting_down", False)
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: CurrentTargetClient)
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(app_module, "_persist_device_result", lambda *args: None)
+    job = app_module.UpdateJob(
+        job_id="recovery", device_firmware_map={ip: "/tmp/tna-30x-2.0.0-r1.bin"},
+        credentials={ip: ("user", "pass")}, device_roles={ip: "ap"},
+        devices={ip: app_module.DeviceStatus(ip=ip, role="ap", model="TNA-301")},
+        device_order=[ip], recovery_only_devices={ip}, window_key=window_key,
+    )
+
+    await app_module._update_single_device(job, ip)
+
+    assert "flash" not in _DeviceClient.calls[ip]
+    assert "pre_reboot" not in _DeviceClient.calls[ip]
+    assert "smoke" in _DeviceClient.calls[ip]
+    if smoke_failure:
+        assert job.devices[ip].status == "failed"
+        assert db.get_firmware_window_stop(window_key)["device_ip"] == ip
+    else:
+        assert job.devices[ip].status == "success"
+        assert db.get_firmware_window_stop(window_key) is None
+
+
 def test_restart_routes_keep_failed_window_closed_and_record_resolution(tmp_path, monkeypatch):
     db_path = tmp_path / "restart.sqlite"
     monkeypatch.setattr(db, "DB_PATH", db_path)
