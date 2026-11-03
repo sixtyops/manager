@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from . import database as db
-from .core import engine
 from .firmware_policy import (
     classify_device_version,
     extract_version_from_filename as policy_extract_version_from_filename,
