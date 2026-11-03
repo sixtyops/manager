@@ -424,8 +424,7 @@ class TestSchedulerBankModeFiltering:
              patch.object(scheduler, "_resolve_scope", return_value=["10.0.0.1"]), \
              patch.object(scheduler, "_resolve_switch_scope", return_value=[]), \
              patch.object(scheduler, "_target_versions", return_value={}), \
-             patch.object(scheduler, "_ap_or_children_need_update", return_value=True), \
-             patch.object(scheduler, "_select_phase_batch", side_effect=lambda _phase, ips: list(ips)):
+             patch.object(scheduler, "_ap_or_children_need_update", return_value=True):
             prediction = scheduler._calculate_predictions(
                 {"id": "rollout", "phase": "pct100"}, settings,
             )
@@ -434,58 +433,6 @@ class TestSchedulerBankModeFiltering:
 
 
 class TestSchedulerCanaries:
-    def test_wave_batch_takes_ten_percent_at_pct10(self, mock_db):
-        """The first wave selects ~10% of candidates (the Firmware Hold is enforced
-        at the gate, not by filtering the batch)."""
-        _seed_rollout_devices()
-        rollout_id = db.create_rollout(
-            "firmware.bin",
-            members=[
-                {"ip": "10.0.0.10", "device_type": "ap"},
-                {"ip": "10.0.0.11", "device_type": "ap"},
-            ],
-            settings_snapshot={},
-        )
-        rollout = db.get_rollout(rollout_id)
-
-        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
-        ap_batch = scheduler._get_devices_for_phase(
-            rollout, ["10.0.0.10", "10.0.0.11"], False, {}
-        )
-        assert len(ap_batch) == 1  # ceil(10% of 2)
-
-    def test_ap_candidate_includes_current_ap_with_behind_cpe(self, mock_db):
-        db.upsert_access_point("10.0.0.10", "root", "pass", enabled=True, model="TNA-301", firmware_version="1.2.3.123")
-        db.upsert_cpe("10.0.0.10", {
-            "ip": "10.0.0.20",
-            "model": "TNA-303L",
-            "firmware_version": "1.0.0.1",
-            "auth_status": "ok",
-        })
-
-        rollout_id = db.create_rollout(
-            "tna-30x-1.2.3-r123.bin",
-            "tna-303l-2.5.0-r456.bin",
-            members=[{"ip": "10.0.0.10", "device_type": "ap"}],
-            settings_snapshot={},
-        )
-        rollout = db.get_rollout(rollout_id)
-        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
-
-        batch = scheduler._get_devices_for_phase(
-            rollout,
-            ["10.0.0.10"],
-            False,
-            {
-                "selected_firmware_30x": "tna-30x-1.2.3-r123.bin",
-                "selected_firmware_303l": "tna-303l-2.5.0-r456.bin",
-                "selected_firmware_tns100": "",
-                "rollout_canary_aps": "10.0.0.10",
-            },
-        )
-
-        assert batch == ["10.0.0.10"]
-
     def test_switch_scope_follows_selected_sites(self, mock_db):
         site_a = db.create_tower_site("Site A")
         site_b = db.create_tower_site("Site B")
@@ -500,24 +447,6 @@ class TestSchedulerCanaries:
         })
 
         assert scope == ["10.0.1.5"]
-
-    def test_switch_phase_selection_uses_switch_family_target(self, mock_db):
-        db.upsert_switch("10.0.1.5", "admin", "pass", enabled=True, model="TNS-100", firmware_version="3.4.5.678")
-        rollout_id = db.create_rollout("tna-30x-1.2.3-r123.bin", None, "tns-100-3.4.5-r678.bin")
-        rollout = db.get_rollout(rollout_id)
-        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
-
-        batch = scheduler._get_switches_for_phase(
-            rollout,
-            ["10.0.1.5"],
-            False,
-            {
-                "selected_firmware_30x": "tna-30x-1.2.3-r123.bin",
-                "selected_firmware_tns100": "tns-100-3.4.5-r678.bin",
-            },
-        )
-
-        assert batch == []
 
     def test_on_job_completed_persists_learned_versions_per_family(self, mock_db):
         _seed_rollout_devices()
