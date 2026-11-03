@@ -355,7 +355,10 @@ async def test_resolved_failure_on_target_runs_read_only_recovery(smoke_failure,
 
     ip = "192.0.2.1"
     window_key = ("firmware", "2026-10-28")
-    db.stop_firmware_window(("firmware", "2026-10-27"), "old-job", ip, "recovery", "Device did not return")
+    db.stop_firmware_window(
+        ("firmware", "2026-10-27"), "old-job", ip, "recovery",
+        "Device did not return", expected_serial="SYNTHETIC-SERIAL",
+    )
     old_stop = db.get_firmware_window_stop(("firmware", "2026-10-27"))
     db.resolve_firmware_window_stop(old_stop["id"], "admin", "Device is on target")
     db.set_setting("scheduled_rollout_safety_ready", "true")
@@ -384,6 +387,47 @@ async def test_resolved_failure_on_target_runs_read_only_recovery(smoke_failure,
     else:
         assert job.devices[ip].status == "success"
         assert db.get_firmware_window_stop(window_key) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reported_serial", [None, "OTHER-SERIAL"])
+async def test_resolved_failure_recovery_requires_saved_serial(
+    reported_serial, mock_db, monkeypatch,
+):
+    class WrongIdentityClient(_DeviceClient):
+        async def get_device_info(self):
+            info = await super().get_device_info()
+            info.serial = reported_serial
+            return info
+
+    ip = "192.0.2.1"
+    prior = db.stop_firmware_window(
+        ("firmware", "2026-10-27"), "old-job", ip, "recovery",
+        "Device did not return", expected_serial="SYNTHETIC-SERIAL",
+    )
+    db.resolve_firmware_window_stop(prior["id"], "admin", "Device is on target")
+    db.set_setting("scheduled_rollout_safety_ready", "true")
+    _DeviceClient.calls = {}
+    _DeviceClient.connect_calls = {}
+    monkeypatch.setattr(app_module, "_shutting_down", False)
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: WrongIdentityClient)
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(app_module, "_persist_device_result", lambda *args: None)
+    job = app_module.UpdateJob(
+        job_id="wrong-recovery-identity",
+        device_firmware_map={ip: "/tmp/tna-30x-2.0.0-r1.bin"},
+        credentials={ip: ("user", "pass")}, device_roles={ip: "ap"},
+        devices={ip: app_module.DeviceStatus(ip=ip, role="ap", model="TNA-301")},
+        device_order=[ip], recovery_only_devices={ip},
+        window_key=("firmware", "2026-10-28"),
+    )
+
+    await app_module._update_single_device(job, ip)
+
+    assert job.devices[ip].status == "failed"
+    assert "Expected serial did not match" in job.devices[ip].error
+    assert "smoke" not in _DeviceClient.calls[ip]
+    assert db.get_firmware_window_stop(job.window_key)["device_ip"] == ip
 
 
 def test_restart_routes_keep_failed_window_closed_and_record_resolution(tmp_path, monkeypatch):

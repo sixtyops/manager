@@ -4070,7 +4070,10 @@ def _firmware_window_key_start_date(window_key, expected_schedule: str) -> date 
 
 
 def _stop_firmware_window(job: "UpdateJob", ip: str, gate: str, reason: str):
-    stop = db.stop_firmware_window(job.window_key, job.job_id, ip, gate, reason) if job.window_key else None
+    expected_serial = job.recovery_locators.get(ip, {}).get("serial")
+    stop = db.stop_firmware_window(
+        job.window_key, job.job_id, ip, gate, reason, expected_serial=expected_serial,
+    ) if job.window_key else None
     _request_job_cancel(job, _firmware_stop_message(stop or {
         "window_key": json.dumps(job.window_key) if job.window_key else "unknown",
         "device_ip": ip, "gate": gate, "reason": reason,
@@ -5984,10 +5987,14 @@ async def _verify_recovered_device(job: "UpdateJob", ip: str) -> None:
             raise RuntimeError("Device is not reachable after its previous reboot")
         info = await client.get_device_info()
         serial = getattr(info, "serial", None)
+        expected_serial = job.recovery_locators.get(ip, {}).get("serial")
+        if not expected_serial:
+            prior_stop = db.get_latest_resolved_firmware_window_stop(ip, job.window_key)
+            expected_serial = prior_stop.get("expected_serial") if prior_stop else None
+        if not expected_serial or serial != expected_serial:
+            raise RuntimeError("Expected serial did not match during recovery verification")
         model = getattr(info, "model", None)
         version = _normalize_version(getattr(info, "current_version", None))
-        if not serial:
-            raise RuntimeError("Device serial is unavailable during recovery verification")
         if device_status.model and (not model or model.lower() != device_status.model.lower()):
             raise RuntimeError("Device model changed during recovery verification")
         if not target or version != _normalize_version(target):

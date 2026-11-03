@@ -274,6 +274,7 @@ def build_schema(db: sqlite3.Connection) -> None:
             device_ip TEXT NOT NULL,
             gate TEXT NOT NULL,
             reason TEXT NOT NULL,
+            expected_serial TEXT,
             stopped_at TEXT NOT NULL,
             resolved_at TEXT,
             resolved_by TEXT,
