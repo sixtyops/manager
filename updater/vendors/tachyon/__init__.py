@@ -156,9 +156,6 @@ class TachyonDriver(VendorDriver):
     async def get_bridge_table(self) -> List[Dict[str, Any]]:
         return await self._client.get_bridge_table()
 
-    async def get_eth0_byte_counters(self):
-        return await self._client.get_eth0_byte_counters()
-
     async def get_eth0_recovery_state(self):
         return await self._client.get_eth0_recovery_state()
 

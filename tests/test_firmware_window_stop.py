@@ -39,9 +39,6 @@ class _DeviceClient:
     async def get_bridge_table(self):
         return []
 
-    async def get_eth0_byte_counters(self):
-        return None, None
-
     async def get_config(self):
         self.calls[self.ip].append("snapshot")
         if self.ip == "192.0.2.1" and self.fail_at == "snapshot":

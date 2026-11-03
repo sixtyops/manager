@@ -1,7 +1,6 @@
 """Background poller for refreshing AP/CPE data."""
 
 import asyncio
-from contextlib import asynccontextmanager
 import json
 import logging
 import math
@@ -100,7 +99,6 @@ class NetworkPoller:
         self._cpe_login_retries: dict[str, tuple[int, int, float, str]] = {}
         self._cpe_auth_locks: dict[str, asyncio.Lock] = {}
         self._cpe_forced_login_checks: set[str] = set()
-        self._paused_cpe_ips: set[str] = set()
         self._cpe_request_locks: dict[str, asyncio.Lock] = {}
         # Keep only successful AP reports for recovery during this process.
         self._peer_snapshots: dict[str, dict] = {}
@@ -292,21 +290,6 @@ class NetworkPoller:
         """Check each CPE once before a window or daily when no window applies."""
         period = self._cpe_auth_check_period(settings, now)
         return period is not None and not self._has_cpe_fresh_login_period(cpe_ip, period)
-
-    @asynccontextmanager
-    async def pause_cpe_requests(self, ip: str):
-        """Drain Manager CPE requests and pause polling/session use for one CPE."""
-        lock = self._cpe_request_locks.setdefault(ip, asyncio.Lock())
-        self._paused_cpe_ips.add(ip)
-        try:
-            await lock.acquire()
-            try:
-                self._remove_cached_cpe_client(ip)
-                yield
-            finally:
-                lock.release()
-        finally:
-            self._paused_cpe_ips.discard(ip)
 
     def _get_cached_client(self, ip: str) -> Optional[VendorDriver]:
         """Get a cached client, updating its last-used timestamp."""
@@ -654,13 +637,8 @@ class NetworkPoller:
 
                 async def probe_cpe(cpe_ip):
                     async with cpe_sem:
-                        if cpe_ip in self._paused_cpe_ips:
-                            self._remove_cached_cpe_client(cpe_ip)
-                            return
                         lock = self._cpe_request_locks.setdefault(cpe_ip, asyncio.Lock())
                         async with lock:
-                            if cpe_ip in self._paused_cpe_ips:
-                                return
                             username, password = ap["username"], ap["password"]
                             status = await self._probe_cpe_auth(
                                 cpe_ip, username, password,
@@ -1394,14 +1372,8 @@ class NetworkPoller:
 
     async def _fetch_and_store_config(self, ip: str, username: str, password: str, model: str = None):
         """Fetch config from a device and store if changed."""
-        if ip in self._paused_cpe_ips:
-            self._remove_cached_cpe_client(ip)
-            return
         lock = self._cpe_request_locks.setdefault(ip, asyncio.Lock())
         async with lock:
-            if ip in self._paused_cpe_ips:
-                self._remove_cached_cpe_client(ip)
-                return
             await self._fetch_and_store_config_unlocked(ip, username, password, model)
 
     async def _fetch_and_store_config_unlocked(self, ip: str, username: str, password: str, model: str = None):

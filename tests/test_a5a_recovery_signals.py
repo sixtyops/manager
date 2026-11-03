@@ -1,13 +1,11 @@
-"""A5a parser and CPE-pause tests using sanitized Tachyon response shapes."""
+"""A5a parser tests using sanitized Tachyon response shapes."""
 
-import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
-from updater.poller import NetworkPoller
 from updater.vendors.tachyon.client import TachyonClient
 
 
@@ -159,53 +157,3 @@ async def test_transport_exception_returns_unknown_with_reason():
     assert state["read_state"] == "unknown"
     assert state["reason"] == "request_failed"
     assert state["link_up"] is None
-
-
-@pytest.mark.asyncio
-async def test_manager_cpe_config_requests_pause_for_recovery_window():
-    poller = NetworkPoller()
-    fetch = AsyncMock()
-    poller._fetch_and_store_config_unlocked = fetch
-    poller._cache_cpe_client("192.0.2.10", object())
-
-    async with poller.pause_cpe_requests("192.0.2.10"):
-        await poller._fetch_and_store_config("192.0.2.10", "user", "password")
-        assert "192.0.2.10" not in poller._cpe_clients
-        fetch.assert_not_awaited()
-
-    await poller._fetch_and_store_config("192.0.2.10", "user", "password")
-    fetch.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_pause_waits_for_inflight_cpe_config_request():
-    poller = NetworkPoller()
-    started = asyncio.Event()
-    release = asyncio.Event()
-    pause_entered = asyncio.Event()
-    pause_release = asyncio.Event()
-
-    async def fetch(*_args):
-        started.set()
-        await release.wait()
-
-    poller._fetch_and_store_config_unlocked = fetch
-    request = asyncio.create_task(
-        poller._fetch_and_store_config("192.0.2.10", "user", "password")
-    )
-    await started.wait()
-
-    async def hold_pause():
-        async with poller.pause_cpe_requests("192.0.2.10"):
-            pause_entered.set()
-            await pause_release.wait()
-
-    paused = asyncio.create_task(hold_pause())
-    await asyncio.sleep(0)
-    assert not pause_entered.is_set()
-    release.set()
-    await request
-    await pause_entered.wait()
-    assert "192.0.2.10" in poller._paused_cpe_ips
-    pause_release.set()
-    await paused

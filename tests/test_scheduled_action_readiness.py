@@ -62,7 +62,6 @@ async def test_queued_action_stops_while_submitted_action_recovers(runtime_mocks
         async def connect(self): return True
         async def get_connected_cpes(self): return []
         async def get_bridge_table(self): return []
-        async def get_eth0_byte_counters(self): return None, None
         async def get_device_info(self):
             return SimpleNamespace(
                 ip=self.ip, model="TNA-301", serial=f"SERIAL-{self.ip}",
