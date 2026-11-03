@@ -68,6 +68,21 @@ async def test_captured_eth0_without_link_fields_or_counters_is_unknown():
 
 
 @pytest.mark.asyncio
+async def test_malformed_reported_eth0_link_field_makes_read_unknown():
+    response = {"interfaces": {"eth0": {
+        "status": "maybe", "rx_bytes": 456, "tx_bytes": 789,
+    }}}
+    client = TachyonClient("192.0.2.10", "user", "password")
+    client._curl = AsyncMock(return_value=(200, json.dumps(response)))
+
+    state = await client.get_eth0_recovery_state()
+
+    assert state["read_state"] == "unknown"
+    assert state["reason"] == "invalid_link_state"
+    assert state["link_up"] is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("counter_key", "counter_value", "reason", "expected_rx", "expected_tx"), [
     ("rx_bytes", "invalid", "invalid_rx_bytes", None, 789),
     ("tx_bytes", -1, "invalid_tx_bytes", 456, None),

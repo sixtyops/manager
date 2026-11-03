@@ -1276,9 +1276,11 @@ class TachyonClient:
         )
         reported = {key: eth0[key] for key in reported_keys if key in eth0}
         link_up = None
+        link_field_present = False
         for key in ("link", "state", "status", "operstate", "carrier", "link_state", "link_status"):
             if key not in eth0:
                 continue
+            link_field_present = True
             link_value = eth0[key]
             if isinstance(link_value, bool):
                 link_up = link_value
@@ -1302,9 +1304,11 @@ class TachyonClient:
             for key, value in (("rx_bytes", rx_bytes), ("tx_bytes", tx_bytes))
             if value is None
         ]
+        invalid_link = link_field_present and link_up is None
+        reasons = counter_reasons + (["invalid_link_state"] if invalid_link else [])
         return {
-            "read_state": "unknown" if counter_reasons else "ok",
-            "reason": ",".join(counter_reasons) or None,
+            "read_state": "unknown" if reasons else "ok",
+            "reason": ",".join(reasons) or None,
             "link_up": link_up,
             "link_rate_mbps": link_rate_mbps,
             "reported": reported,
