@@ -313,7 +313,7 @@ def test_stopped_window_blocks_device_action_and_resolution_does_not_reopen_it(m
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cutoff_checks, expected_reboot", [((20, 0), False), ((20, 20, 0), True)])
-async def test_queued_device_action_stays_pending_when_window_closes(mock_db, monkeypatch, cutoff_checks, expected_reboot):
+async def test_queue_cutoff_blocks_before_start_but_finishes_started_device(mock_db, monkeypatch, cutoff_checks, expected_reboot):
     db.set_setting("scheduled_rollout_safety_ready", "true")
     _DeviceClient.calls = {}
     _DeviceClient.fail_at = None
@@ -338,10 +338,14 @@ async def test_queued_device_action_stays_pending_when_window_closes(mock_db, mo
 
     await app_module._update_single_device(job, "192.0.2.1")
 
-    assert job.devices["192.0.2.1"].status == "pending"
-    assert "retry next window" in job.devices["192.0.2.1"].progress_message
     assert ("pre_reboot" in _DeviceClient.calls["192.0.2.1"]) is expected_reboot
-    assert "flash" not in _DeviceClient.calls["192.0.2.1"]
+    if expected_reboot:
+        assert job.devices["192.0.2.1"].status == "success"
+        assert "flash" in _DeviceClient.calls["192.0.2.1"]
+    else:
+        assert job.devices["192.0.2.1"].status == "pending"
+        assert "retry next window" in job.devices["192.0.2.1"].progress_message
+        assert "flash" not in _DeviceClient.calls["192.0.2.1"]
 
 
 def test_restart_routes_keep_failed_window_closed_and_record_resolution(tmp_path, monkeypatch):
@@ -735,7 +739,7 @@ async def test_current_admission_after_connect_blocks_scheduled_writes(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("closure", ["cutoff", "readiness", "window_stop"])
-async def test_driver_login_rechecks_write_gate_before_upload_and_trigger(
+async def test_driver_login_keeps_active_device_running_past_cutoff_but_honors_other_gates(
     mock_db, monkeypatch, closure,
 ):
     db.set_setting("scheduled_rollout_safety_ready", "true")
@@ -765,7 +769,11 @@ async def test_driver_login_rechecks_write_gate_before_upload_and_trigger(
                 return app_module.UpdateResult(ip=self.ip, success=False, error=reason)
 
             self.calls[self.ip].append("trigger")
-            return app_module.UpdateResult(ip=self.ip, success=True, old_version="1", new_version="2")
+            self.updated = True
+            return app_module.UpdateResult(
+                ip=self.ip, success=True, old_version="1.0.0.100",
+                new_version="2.0.0.1",
+            )
 
     _DeviceClient.calls = {}
     _DeviceClient.connect_calls = {}
@@ -790,13 +798,19 @@ async def test_driver_login_rechecks_write_gate_before_upload_and_trigger(
 
     calls = _DeviceClient.calls["192.0.2.1"]
     assert "driver_login" in calls
-    assert "upload" not in calls
-    assert "trigger" not in calls
-    if closure in ("cutoff", "readiness"):
+    if closure == "cutoff":
+        assert "upload" in calls
+        assert "trigger" in calls
+        assert job.devices["192.0.2.1"].status == "success"
+        assert db.get_firmware_window_stop(key) is None
+    else:
+        assert "upload" not in calls
+        assert "trigger" not in calls
+    if closure == "readiness":
         assert job.devices["192.0.2.1"].status == "pending"
         assert job.devices["192.0.2.1"].error is None
         assert db.get_firmware_window_stop(key) is None
-    else:
+    elif closure == "window_stop":
         assert job.devices["192.0.2.1"].status == "cancelled"
         stop = db.get_firmware_window_stop(key)
         assert stop["device_ip"] == "192.0.2.2"
