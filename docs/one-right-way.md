@@ -1,9 +1,8 @@
 # One right way to keep a Tachyon fleet current
 
 **Key points:** Manager owns update safety. The operator chooses when and how
-fast. "Keep my fleet current" is the primary action. This is the target
-contract, not a claim about the current engine. Current code still runs
-percentage waves until the cutover PRs land. The owner set this direction on
+fast. "Keep my fleet current" is the primary action. The serial queue shipped
+in [PR #715](https://github.com/sixtyops/manager/pull/715). The owner set this direction on
 2026-09-30.
 
 **Detail:** Manager is a standalone product for Tachyon networks. Use Manager's

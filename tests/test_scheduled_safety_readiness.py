@@ -92,21 +92,14 @@ def test_admin_records_readiness_and_schedule_toggle_preserves_it(authed_client,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("boundary,empty_wave", [
-    ("time", False), ("time", True), ("weather", False), ("weather", True),
-    ("broadcast", False),
-])
+@pytest.mark.parametrize("boundary", ["time", "weather", "broadcast"])
 async def test_revocation_during_tick_holds_new_admission(
-    mock_db, monkeypatch, boundary, empty_wave
+    mock_db, monkeypatch, boundary
 ):
     _seed_aps(10)
     db.set_settings(_settings())
     scheduler, start = _make_scheduler()
     harness = _Harness(scheduler, monkeypatch)
-    if empty_wave:
-        rollout_id = db.create_rollout(FW)
-        monkeypatch.setattr(scheduler, "_get_devices_for_phase", lambda *a: [])
-        monkeypatch.setattr(scheduler, "_get_switches_for_phase", lambda *a: [])
     if boundary == "time":
         async def revoke_time(*args):
             db.set_setting("scheduled_rollout_safety_ready", "false")
@@ -128,10 +121,8 @@ async def test_revocation_during_tick_holds_new_admission(
     start.assert_not_awaited()
     advance.assert_not_called()
     assert scheduler._state == "blocked_safety"
-    if boundary in {"time", "weather"} and not empty_wave:
+    if boundary in {"time", "weather"}:
         assert db.get_current_rollout() is None
-    if empty_wave:
-        assert db.get_rollout(rollout_id)["phase"] == "pct10"
 
 
 def test_unreadable_current_readiness_holds_admission():

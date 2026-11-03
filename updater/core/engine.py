@@ -12,7 +12,6 @@ def start_wave(
     window_key: Any,
     *,
     first_wave_held: bool = False,
-    straggler_candidates: list[dict] | None = None,
 ) -> bool:
     """Atomically reserve one non-empty wave before admitting its async job.
 
@@ -45,5 +44,4 @@ def start_wave(
         assignments=assignments,
         settings=settings,
         first_wave_held=first_wave_held,
-        straggler_candidates=straggler_candidates,
     )

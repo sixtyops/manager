@@ -213,10 +213,7 @@ use repo guidance for work that can proceed. Preserve all safety and proof gates
 
 ## Rollout gotchas
 
-The current fleet rollout uses percentage waves, one wave per maintenance
-window, and halts the whole job if a device does not return online. Keep these
-shipped rules until the queue cutover PRs land. The target fleet update contract
-uses one ordered serial queue of devices that
+The fleet rollout uses one ordered serial queue of devices that
 need the selected firmware. Run CPEs before APs, then switches, with one device
 write and recovery sequence at a time. Keep Firmware Hold. Limit the first used
 maintenance windows for each new firmware family or artifact with the configured
@@ -229,8 +226,8 @@ updates. Keep one update engine and shared admission checks. Test cutoff,
 restart, Firmware Hold, recovery, and stop-on-first-failure in
 `tests/test_rollout_invariants.py`.
 
-Current code still uses percentage waves until the queue cutover PRs land. Do
-not claim the target queue is shipped before those PRs and required proof pass.
+The serial queue shipped in [#715](https://github.com/sixtyops/manager/pull/715).
+Keep scheduled admission closed until required proof passes.
 Manual per-device updates intentionally bypass Firmware Hold. See
 [gradual-rollout.md](docs/gradual-rollout.md) for current behavior.
 
