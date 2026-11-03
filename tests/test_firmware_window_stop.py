@@ -493,11 +493,7 @@ async def test_manual_local_day_stop_survives_reopen_and_blocks_manual_routes(
     start_update = client.post("/api/start-update", data={
         "firmware_file": "missing.bin", "device_type": "ap", "ip_list": "192.0.2.2",
     })
-    update_device = client.post("/api/update-device", data={
-        "ip": "192.0.2.2", "firmware_file": "missing.bin",
-    })
     assert start_update.status_code == 409
-    assert update_device.status_code == 409
 
     stop_id = db.get_firmware_window_stop(failed_key)["id"]
     same_day_resolution = client.post(f"/api/firmware-window-stops/{stop_id}/resolve", data={

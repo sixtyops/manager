@@ -266,6 +266,33 @@ class TestUpdateDevice:
         assert body["version"] == "1.5.0.54980"
         spawn.assert_not_called()
 
+    def test_exact_build_reports_already_current_during_window_stop(
+        self, authed_client, mock_db, fw_dir,
+    ):
+        _seed_303l_ap("1.5.0.54980")
+        window_key = app_module._manual_firmware_window_key()
+        db.stop_firmware_window(window_key, "stopped-job", AP_IP, "flash", "Upload failed")
+
+        with patch("updater.app._spawn_update_job") as spawn:
+            resp = self._update_device(authed_client)
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"status": "already_current", "version": "1.5.0.54980"}
+        spawn.assert_not_called()
+
+    def test_real_write_stays_blocked_during_window_stop(
+        self, authed_client, mock_db, fw_dir,
+    ):
+        _seed_303l_ap("1.5.0.54970")
+        window_key = app_module._manual_firmware_window_key()
+        db.stop_firmware_window(window_key, "stopped-job", AP_IP, "flash", "Upload failed")
+
+        with patch("updater.app._spawn_update_job") as spawn:
+            resp = self._update_device(authed_client)
+
+        assert resp.status_code == 409
+        spawn.assert_not_called()
+
     def test_no_matching_firmware_fails_clearly(self, authed_client, mock_db, fw_dir):
         _seed_303l_ap("1.5.0.54970")
         with patch("updater.app._spawn_update_job") as spawn:
