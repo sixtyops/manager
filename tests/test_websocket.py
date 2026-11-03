@@ -107,8 +107,8 @@ def test_websocket_replays_completed_job_history(authed_client, mock_db):
     assert license_state["type"] == "license_state"
 
 
-def test_websocket_sends_scheduler_and_rollout_status(authed_client, monkeypatch):
-    """Scheduler state should be replayed so reconnects do not show stale rollout UI."""
+def test_websocket_replays_queue_status_without_wave_fields(authed_client, monkeypatch):
+    """Reconnects receive queue state without a separate wave message."""
     from updater import app as app_mod
 
     scheduler = MagicMock()
@@ -123,15 +123,12 @@ def test_websocket_sends_scheduler_and_rollout_status(authed_client, monkeypatch
         assert ws.receive_json()["type"] == "topology_update"
         assert ws.receive_json()["type"] == "license_state"
         scheduler_status = ws.receive_json()
-        rollout_status = ws.receive_json()
 
     assert scheduler_status["type"] == "scheduler_status"
     assert scheduler_status["enabled"] is True
     assert scheduler_status["rollout"]["status"] == "paused"
-    assert rollout_status == {
-        "type": "rollout_status",
-        "rollout": {"status": "paused", "phase": "10%"},
-    }
+    assert scheduler_status["rollout"]["remaining_devices"] is None
+    assert "phase" not in scheduler_status["rollout"]
 
 
 def test_websocket_removes_connection_on_disconnect(authed_client):

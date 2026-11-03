@@ -70,9 +70,10 @@ class TestStartUpdate:
              patch("updater.app._scheduled_action_decision", return_value=(True, None)), \
              patch("updater.app._spawn_update_job") as spawn:
             job_id = await app_module._start_scheduled_update(
-                ap_ips=[AP_IP],
+                ap_ips=[],
                 firmware_file=FW_30X,
                 firmware_file_303l=FW_303L_BETA2,
+                device_entries=[{"ip": AP_IP, "role": "ap"}],
             )
 
         assert job_id
@@ -177,10 +178,11 @@ class TestStartUpdate:
              patch("updater.app._spawn_update_job") as spawn:
             with pytest.raises(RuntimeError, match="303L firmware file not found"):
                 await app_module._start_scheduled_update(
-                    ap_ips=[AP_IP],
+                    ap_ips=[],
                     firmware_file=FW_30X,
                     firmware_file_303l=FW_303L_BETA2,
                     bank_mode="one",
+                    device_entries=[{"ip": AP_IP, "role": "ap"}],
                 )
 
         spawn.assert_not_called()
@@ -197,10 +199,11 @@ class TestStartUpdate:
              patch("updater.app._spawn_update_job") as spawn:
             with pytest.raises(RuntimeError, match="TNA-303L"):
                 await app_module._start_scheduled_update(
-                    ap_ips=[AP_IP],
+                    ap_ips=[],
                     firmware_file=FW_30X,
                     firmware_file_303l="",
                     bank_mode="one",
+                    device_entries=[{"ip": AP_IP, "role": "ap"}],
                 )
 
         spawn.assert_not_called()

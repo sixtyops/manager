@@ -79,9 +79,9 @@ class TestRoleEnforcement:
         resp = viewer_client.post("/api/aps/10.0.0.1/poll")
         assert resp.status_code == 403
 
-    def test_viewer_cannot_resume_rollout(self, viewer_client):
+    def test_legacy_rollout_resume_route_is_removed(self, viewer_client):
         resp = viewer_client.post("/api/rollout/1/resume")
-        assert resp.status_code == 403
+        assert resp.status_code == 404
 
     def test_viewer_cannot_cancel_rollout(self, viewer_client):
         resp = viewer_client.post("/api/rollout/1/cancel")

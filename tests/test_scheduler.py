@@ -478,10 +478,11 @@ class TestSchedulerCanaries:
              patch.object(app_module, "broadcast", AsyncMock()), \
              patch.object(app_module.asyncio, "create_task", _discard_task):
             job_id = await app_module._start_scheduled_update(
-                ap_ips=["10.0.0.10"],
+                ap_ips=[],
                 firmware_file=fw_name,
                 schedule_timezone="America/Chicago",
                 enforce_window_cutoff=False,
+                device_entries=[{"ip": "10.0.0.10", "role": "ap"}],
             )
 
         assert app_module.update_jobs[job_id].enforce_window_cutoff is False

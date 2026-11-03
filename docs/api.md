@@ -390,22 +390,12 @@ Auto-detect server location from IP address or configured zip code.
 ## Scheduler
 
 ### `GET /api/scheduler/status`
-Get scheduler state including: status (`idle`, `running`, `blocked_weather`, etc.), next run info, and active rollout summary.
+Get scheduler state and the serial queue summary. The queue shows remaining devices, the current device, its pause or stop reason, cutoff, and next maintenance window.
 
-## Rollouts
-
-### `GET /api/rollout/current`
-Get the active or paused rollout with device progress counts.
-
-### `POST /api/rollout/{rollout_id}/resume`
-Resume a paused rollout after the failed window has an operator resolution record.
-The stopped window stays closed.
+## Firmware queue
 
 ### `POST /api/rollout/{rollout_id}/cancel`
 Cancel an active or paused rollout.
-
-### `POST /api/rollout/{rollout_id}/reset`
-Reset a paused rollout — cancels it so a fresh rollout starts next maintenance window.
 
 ### `GET /api/firmware-window-stops`
 List stopped firmware windows that still need an operator resolution record.

@@ -374,7 +374,7 @@ def test_restart_routes_keep_failed_window_closed_and_record_resolution(tmp_path
     manual = client.post("/api/start-update", data={
         "firmware_file": "missing.bin", "device_type": "ap", "ip_list": "192.0.2.2",
     })
-    assert resume.status_code == 409
+    assert resume.status_code == 404
     assert manual.status_code == 409
     with pytest.raises(RuntimeError, match="Upload failed"):
         asyncio.run(app_module._start_scheduled_update(
