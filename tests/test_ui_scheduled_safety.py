@@ -34,7 +34,7 @@ const context = {
     autoUpdateEnabled: false, topology: null, lastFleetTotal: 1, lastBehindCount: 0,
     lastAutoState: 'disabled', setToggleActive() {},
     setHidden(element, hidden) {if (element) element.hidden = hidden;},
-    updateBarDeviceCount() {}, renderIdlePhases() {},
+    updateBarDeviceCount() {}, renderQueueStatus() {},
 };
 vm.createContext(context);
 vm.runInContext(source, context);

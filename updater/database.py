@@ -124,6 +124,12 @@ def _migrate_cpe_rows(db):
 
 def _migrate(db):
     """Run schema migrations."""
+    stop_columns = {
+        row[1] for row in db.execute("PRAGMA table_info(firmware_window_stops)").fetchall()
+    }
+    if "expected_serial" not in stop_columns:
+        db.execute("ALTER TABLE firmware_window_stops ADD COLUMN expected_serial TEXT")
+
     active_job_columns = {
         row[1] for row in db.execute("PRAGMA table_info(active_jobs)").fetchall()
     }
@@ -968,7 +974,10 @@ def record_firmware_window_admission(
         return dict(row)
 
 
-def stop_firmware_window(window_key, job_id: str, device_ip: str, gate: str, reason: str):
+def stop_firmware_window(
+    window_key, job_id: str, device_ip: str, gate: str, reason: str,
+    expected_serial: str | None = None,
+):
     """Persist the first failed device gate for a maintenance window."""
     if not window_key:
         return None
@@ -976,14 +985,40 @@ def stop_firmware_window(window_key, job_id: str, device_ip: str, gate: str, rea
     with get_db() as db:
         db.execute(
             "INSERT OR IGNORE INTO firmware_window_stops "
-            "(window_key, job_id, device_ip, gate, reason, stopped_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (key_json, job_id, device_ip, gate, reason, datetime.now().isoformat()),
+            "(window_key, job_id, device_ip, gate, reason, expected_serial, stopped_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (key_json, job_id, device_ip, gate, reason, expected_serial, datetime.now().isoformat()),
         )
         row = db.execute(
             "SELECT * FROM firmware_window_stops WHERE window_key = ?", (key_json,)
         ).fetchone()
         return dict(row) if row else None
+
+
+def get_latest_resolved_firmware_window_stop(device_ip: str, window_key=None):
+    """Return the latest prior resolved failure record for a device and schedule."""
+    if not isinstance(window_key, (tuple, list)) or len(window_key) != 2:
+        return None
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT * FROM firmware_window_stops "
+            "WHERE device_ip = ? AND resolved_at IS NOT NULL "
+            "ORDER BY resolved_at DESC, stopped_at DESC",
+            (device_ip,),
+        ).fetchall()
+        for row in rows:
+            try:
+                prior_key = json.loads(row["window_key"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if (
+                isinstance(prior_key, list) and len(prior_key) == 2
+                and prior_key[0] == window_key[0]
+                and isinstance(prior_key[1], str)
+                and prior_key[1] < window_key[1]
+            ):
+                return dict(row)
+        return None
 
 
 def get_firmware_window_stop(window_key):

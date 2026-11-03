@@ -218,9 +218,41 @@ _last_data_housekeeping_day: Optional[str] = None
 _shutting_down = False
 
 
+def _current_queue_device(job_id: str | None) -> dict | None:
+    """Return the device that currently owns the scheduled update sequence."""
+    job = update_jobs.get(job_id) if job_id else None
+    if not job:
+        return None
+    active_statuses = {"connecting", "uploading", "installing", "rebooting", "verifying", "smoke_testing"}
+    return next((
+        {"ip": ip, "role": device.role, "status": device.status}
+        for ip in job.device_order
+        if (device := job.devices.get(ip)) and device.status in active_statuses
+    ), None)
+
+
+def _queue_status_payload(status: dict) -> dict:
+    """Expose the serial queue contract without wave state or predictions."""
+    result = dict(status)
+    rollout = status.get("rollout")
+    if not rollout:
+        return result
+    result["rollout"] = {
+        "status": rollout.get("status"),
+        "remaining_devices": rollout.get("remaining_devices"),
+        "current_device": _current_queue_device(status.get("current_job_id")),
+        "pause_reason": rollout.get("pause_reason") or status.get("block_reason") or status.get("safety_block_reason"),
+        "cutoff_utc": rollout.get("cutoff_utc"),
+        "next_window": status.get("next_window_iso") or status.get("next_window"),
+    }
+    return result
+
+
 async def broadcast(message: dict):
     """Broadcast message to all connected WebSocket clients."""
     import json as _json
+    if message.get("type") == "scheduler_status":
+        message = {"type": "scheduler_status", **_queue_status_payload(message)}
     json_text = _json.dumps(message)
     disconnected = set()
     # Connect/disconnect can change membership while a send is suspended.
@@ -1359,17 +1391,11 @@ async def websocket_endpoint(websocket: WebSocket):
     # Send scheduler status (includes rollout info)
     scheduler = get_scheduler()
     if scheduler:
-        status = scheduler.get_status()
+        status = _queue_status_payload(scheduler.get_status())
         await websocket.send_json({
             "type": "scheduler_status",
             **status,
         })
-        # Also send dedicated rollout_status message
-        if status.get("rollout"):
-            await websocket.send_json({
-                "type": "rollout_status",
-                "rollout": status["rollout"],
-            })
 
     try:
         while True:
@@ -1506,7 +1532,7 @@ async def add_ap(
         poller.invalidate_client(ip)
         await poller.poll_ap_now(ip)
 
-    # Broadcast updated scheduler status so predictions reflect the new device
+    # Broadcast updated queue status after adding the device.
     scheduler = get_scheduler()
     if scheduler:
         await scheduler._broadcast_status()
@@ -1556,7 +1582,7 @@ async def add_device(
             poller.invalidate_client(ip)
             await poller.poll_ap_now(ip)
 
-    # Broadcast updated scheduler status so predictions reflect the new device
+    # Broadcast updated queue status after adding the device.
     scheduler = get_scheduler()
     if scheduler:
         await scheduler._broadcast_status()
@@ -1636,7 +1662,7 @@ async def delete_ap(ip: str, session: dict = Depends(require_role("admin", "oper
     db.delete_access_point(ip)
     db.log_audit(session["username"], "device.delete", "ap", ip, None, None)
 
-    # Broadcast updated scheduler status so predictions reflect the removal
+    # Broadcast updated queue status after removing the device.
     scheduler = get_scheduler()
     if scheduler:
         await scheduler._broadcast_status()
@@ -1688,7 +1714,7 @@ async def add_switch(
     if poller:
         await poller.poll_switch_now(ip)
 
-    # Broadcast updated scheduler status so predictions reflect the new device
+    # Broadcast updated queue status after adding the device.
     scheduler = get_scheduler()
     if scheduler:
         await scheduler._broadcast_status()
@@ -1746,7 +1772,7 @@ async def delete_switch(ip: str, session: dict = Depends(require_role("admin", "
     db.delete_switch(ip)
     db.log_audit(session["username"], "device.delete", "switch", ip, None, None)
 
-    # Broadcast updated scheduler status so predictions reflect the removal
+    # Broadcast updated queue status after removing the device.
     scheduler = get_scheduler()
     if scheduler:
         await scheduler._broadcast_status()
@@ -3687,62 +3713,7 @@ async def get_scheduler_status(session: dict = Depends(require_auth)):
     scheduler = get_scheduler()
     if not scheduler:
         return {"state": "disabled", "block_reason": "Scheduler not initialized"}
-    return scheduler.get_status()
-
-
-@app.get("/api/rollout/current", tags=["system"])
-async def get_current_rollout(session: dict = Depends(require_auth)):
-    """Get the current active/paused rollout with progress."""
-    rollout = db.get_active_rollout()
-    if not rollout:
-        return {"rollout": None}
-
-    progress = db.get_rollout_progress(rollout["id"])
-    failed_devices = []
-    if rollout["status"] == "paused":
-        failed_devices = db.get_rollout_devices_by_status(rollout["id"], "failed")
-    return {
-        "rollout": {
-            "id": rollout["id"],
-            "phase": rollout["phase"],
-            "status": rollout["status"],
-            "target_version": rollout.get("target_version"),
-            "firmware_file": rollout["firmware_file"],
-            "firmware_file_303l": rollout.get("firmware_file_303l"),
-            "progress": progress,
-            "pause_reason": rollout.get("pause_reason"),
-            "created_at": rollout.get("created_at"),
-            "updated_at": rollout.get("updated_at"),
-            "failed_devices": failed_devices,
-        }
-    }
-
-
-@app.post("/api/rollout/{rollout_id}/resume", tags=["system"])
-async def resume_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
-    """Resume a paused rollout."""
-    rollout = db.get_rollout(rollout_id)
-    if not rollout:
-        raise HTTPException(404, "Rollout not found")
-    if rollout["status"] != "paused":
-        raise HTTPException(400, "Rollout is not paused")
-
-    current_window = rollout_gate.firmware_window_key(db.get_all_settings())
-    if current_window and db.get_firmware_window_stop(current_window):
-        raise HTTPException(409, "This maintenance window is stopped. Resume in a later window after recording the failure resolution.")
-    unresolved = db.get_unresolved_firmware_window_stops()
-    if unresolved:
-        raise HTTPException(409, "Record the failed window resolution before resuming this rollout.")
-
-    db.resume_rollout(rollout_id)
-    db.log_schedule_event("rollout_resumed", f"Rollout {rollout_id} resumed by user")
-
-    # Broadcast updated status
-    scheduler = get_scheduler()
-    if scheduler:
-        await scheduler._broadcast_status()
-
-    return {"success": True}
+    return _queue_status_payload(scheduler.get_status())
 
 
 @app.get("/api/firmware-window-stops", tags=["system"])
@@ -3804,26 +3775,6 @@ async def cancel_rollout(rollout_id: int, session: dict = Depends(require_role("
 
     db.cancel_rollout(rollout_id)
     db.log_schedule_event("rollout_cancelled", f"Rollout {rollout_id} cancelled by user")
-
-    # Broadcast updated status
-    scheduler = get_scheduler()
-    if scheduler:
-        await scheduler._broadcast_status()
-
-    return {"success": True}
-
-
-@app.post("/api/rollout/{rollout_id}/reset", tags=["system"])
-async def reset_rollout(rollout_id: int, session: dict = Depends(require_role("admin", "operator"))):
-    """Reset a paused rollout - cancels it so a fresh rollout starts next window."""
-    rollout = db.get_rollout(rollout_id)
-    if not rollout:
-        raise HTTPException(404, "Rollout not found")
-    if rollout["status"] != "paused":
-        raise HTTPException(400, "Rollout is not paused")
-
-    db.cancel_rollout(rollout_id)
-    db.log_schedule_event("rollout_reset", f"Rollout {rollout_id} reset by user (will restart fresh)")
 
     # Broadcast updated status
     scheduler = get_scheduler()
@@ -4064,6 +4015,7 @@ class UpdateJob:
     device_roles: Dict[str, str] = field(default_factory=dict)  # IP -> "ap"/"cpe"
     device_parent: Dict[str, str] = field(default_factory=dict)  # CPE IP -> parent AP IP
     recovery_locators: Dict[str, dict] = field(default_factory=dict)
+    recovery_only_devices: set[str] = field(default_factory=set)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     status: str = "pending"
@@ -4118,7 +4070,10 @@ def _firmware_window_key_start_date(window_key, expected_schedule: str) -> date 
 
 
 def _stop_firmware_window(job: "UpdateJob", ip: str, gate: str, reason: str):
-    stop = db.stop_firmware_window(job.window_key, job.job_id, ip, gate, reason) if job.window_key else None
+    expected_serial = job.recovery_locators.get(ip, {}).get("serial")
+    stop = db.stop_firmware_window(
+        job.window_key, job.job_id, ip, gate, reason, expected_serial=expected_serial,
+    ) if job.window_key else None
     _request_job_cancel(job, _firmware_stop_message(stop or {
         "window_key": json.dumps(job.window_key) if job.window_key else "unknown",
         "device_ip": ip, "gate": gate, "reason": reason,
@@ -5151,6 +5106,29 @@ def _missing_firmware_message(missing: list[tuple[Optional[str], str]]) -> str:
     )
 
 
+def _retry_resolved_failure_first(entries: list[dict], window_key: tuple | None) -> list[dict]:
+    """Put the last resolved queue failure first in a later matching window."""
+    if not entries or not window_key or len(window_key) != 2:
+        return entries
+    current_day = date.fromisoformat(window_key[1])
+    with db.get_db() as conn:
+        failures = conn.execute(
+            "SELECT window_key, device_ip FROM firmware_window_stops "
+            "WHERE resolved_at IS NOT NULL ORDER BY resolved_at DESC, stopped_at DESC"
+        ).fetchall()
+    for failure in failures:
+        try:
+            prior_key = json.loads(failure["window_key"])
+            prior_day = date.fromisoformat(prior_key[1]) if isinstance(prior_key, list) and len(prior_key) == 2 else None
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if prior_day is None or prior_key[0] != window_key[0] or prior_day >= current_day:
+            continue
+        index = next((i for i, entry in enumerate(entries) if entry["ip"].strip() == failure["device_ip"]), None)
+        return [entries[index], *entries[:index], *entries[index + 1:]] if index is not None else entries
+    return entries
+
+
 def _compare_versions(a: str, b: str) -> int:
     """Compare two version strings. Returns <0 if a<b, 0 if equal, >0 if a>b."""
     return policy_compare_versions(a, b)
@@ -5222,38 +5200,39 @@ async def _start_scheduled_update(
     device_roles = {}
     device_parent = {}
     device_firmware_map = {}
+    recovery_only_ips: set[str] = set()
 
     # Devices whose firmware family has no matching file selected. Collected
     # across APs/CPEs/switches so the operator gets one complete reason; any
     # entry refuses the whole batch (we can't guarantee cross-family compat).
     missing_firmware: list[tuple[Optional[str], str]] = []
 
-    if device_entries is not None:
-        role_order = {"cpe": 0, "ap": 1, "switch": 2}
-        if any(
-            not isinstance(entry, dict)
-            or not isinstance(entry.get("role"), str)
-            or entry.get("role") not in role_order
-            or not isinstance(entry.get("ip"), str)
-            or not entry["ip"].strip()
-            for entry in device_entries
-        ):
-            raise RuntimeError("device_entries must contain CPE, AP, or switch IP entries")
-        entry_ips = [entry["ip"].strip() for entry in device_entries]
-        ranks = [role_order[entry["role"]] for entry in device_entries]
-        if len(entry_ips) != len(set(entry_ips)) or ranks != sorted(ranks):
-            raise RuntimeError("device_entries must be unique and ordered CPEs, APs, then switches")
-        requested_ap_ips = [entry["ip"].strip() for entry in device_entries if entry["role"] == "ap"]
-    else:
-        requested_ap_ips = ap_ips
+    role_order = {"cpe": 0, "ap": 1, "switch": 2}
+    if any(
+        not isinstance(entry, dict)
+        or not isinstance(entry.get("role"), str)
+        or entry.get("role") not in role_order
+        or not isinstance(entry.get("ip"), str)
+        or not entry["ip"].strip()
+        for entry in (device_entries or [])
+    ) or device_entries is None:
+        raise RuntimeError("device_entries must contain CPE, AP, or switch IP entries")
+    entry_ips = [entry["ip"].strip() for entry in device_entries]
+    ranks = [role_order[entry["role"]] for entry in device_entries]
+    if len(entry_ips) != len(set(entry_ips)) or ranks != sorted(ranks):
+        raise RuntimeError("device_entries must be unique and ordered CPEs, APs, then switches")
+    device_entries = _retry_resolved_failure_first(device_entries, window_key)
+    recovery_requested = {
+        entry["ip"].strip() for entry in device_entries
+        if entry.get("verify_recovery_if_current") is True
+    }
+    requested_ap_ips = [entry["ip"].strip() for entry in device_entries if entry["role"] == "ap"]
 
     valid_aps = []
     for ip in requested_ap_ips:
         ap = db.get_access_point(ip)
         if not ap:
-            if device_entries is not None:
-                raise RuntimeError(f"AP {ip} is unavailable")
-            continue
+            raise RuntimeError(f"AP {ip} is unavailable")
 
         ap_fw = _select_firmware_for_model(ap.get("model"), firmware_files)
         if ap_fw is None:
@@ -5265,44 +5244,15 @@ async def _start_scheduled_update(
                 credentials[ip] = (ap["username"], ap["password"])
                 device_roles[ip] = "ap"
                 device_firmware_map[ip] = ap_fw
+            elif ip in recovery_requested:
+                valid_aps.append(ip)
+                recovery_only_ips.add(ip)
+                credentials[ip] = (ap["username"], ap["password"])
+                device_roles[ip] = "ap"
+                device_firmware_map[ip] = ap_fw
             else:
                 logger.info(f"Skipping AP {ip}: already at target version {ap_target}")
 
-        # Always process CPEs regardless of AP status
-        cpes = [] if device_entries is not None else db.get_cpes_for_ap(ip)
-        cpe_ips = []
-        for cpe in cpes:
-            cpe_ip = cpe.get("ip")
-            if not cpe_ip or cpe.get("auth_status") != "ok":
-                continue
-            cpe_model = cpe.get("model")
-            cpe_fw = _select_firmware_for_model(cpe_model, firmware_files)
-            if cpe_fw is None:
-                if _get_firmware_type_for_model(cpe_model):
-                    missing_firmware.append((cpe_model, cpe_ip))
-                else:
-                    logger.info(f"Skipping CPE {cpe_ip}: unsupported model {cpe_model or 'unknown'}")
-                continue
-
-            # Skip CPEs already satisfied by bank_mode/target policy
-            target_version = _extract_version_from_filename(Path(cpe_fw).name)
-            if target_version and not _device_needs_update_for_bank_mode(
-                cpe,
-                target_version,
-                bank_mode=bank_mode,
-                allow_downgrade=allow_downgrade,
-            ):
-                logger.info(
-                    f"Skipping CPE {cpe_ip}: bank_mode={bank_mode}, target={target_version} already satisfied"
-                )
-                continue
-
-            cpe_ips.append(cpe_ip)
-            device_roles[cpe_ip] = "cpe"
-            device_parent[cpe_ip] = ip
-            credentials[cpe_ip] = (ap["username"], ap["password"])
-            device_firmware_map[cpe_ip] = cpe_fw
-        ap_cpe_map[ip] = cpe_ips
 
     if device_entries is not None:
         for entry in device_entries:
@@ -5326,25 +5276,22 @@ async def _start_scheduled_update(
                 credentials[cpe_ip] = (parent["username"], parent["password"])
                 device_firmware_map[cpe_ip] = cpe_fw
                 ap_cpe_map.setdefault(parent_ip, []).append(cpe_ip)
+            elif cpe_ip in recovery_requested:
+                recovery_only_ips.add(cpe_ip)
+                device_roles[cpe_ip] = "cpe"
+                device_parent[cpe_ip] = parent_ip
+                credentials[cpe_ip] = (parent["username"], parent["password"])
+                device_firmware_map[cpe_ip] = cpe_fw
+                ap_cpe_map.setdefault(parent_ip, []).append(cpe_ip)
 
-    # Enroll the requested switches (or all enabled switches for legacy callers)
-    if device_entries is not None:
-        switches = []
-        for entry in device_entries:
-            if entry["role"] != "switch":
-                continue
-            sw = db.get_switch(entry["ip"].strip())
-            if not sw or not sw.get("enabled", 1):
-                raise RuntimeError(f"Switch {entry['ip'].strip()} is unavailable")
-            switches.append(sw)
-    elif switch_ips is None:
-        switches = db.get_switches(enabled_only=True)
-    else:
-        switches = []
-        for ip in switch_ips:
-            sw = db.get_switch(ip)
-            if sw and sw.get("enabled", 1):
-                switches.append(sw)
+    switches = []
+    for entry in device_entries:
+        if entry["role"] != "switch":
+            continue
+        sw = db.get_switch(entry["ip"].strip())
+        if not sw or not sw.get("enabled", 1):
+            raise RuntimeError(f"Switch {entry['ip'].strip()} is unavailable")
+        switches.append(sw)
     valid_switches = []
     for sw in switches:
         sw_ip = sw["ip"]
@@ -5364,10 +5311,12 @@ async def _start_scheduled_update(
             bank_mode=bank_mode,
             allow_downgrade=allow_downgrade,
         ):
-            logger.info(
-                f"Skipping switch {sw_ip}: bank_mode={bank_mode}, target={target_version} already satisfied"
-            )
-            continue
+            if sw_ip not in recovery_requested:
+                logger.info(
+                    f"Skipping switch {sw_ip}: bank_mode={bank_mode}, target={target_version} already satisfied"
+                )
+                continue
+            recovery_only_ips.add(sw_ip)
 
         valid_switches.append(sw_ip)
         credentials[sw_ip] = (sw["username"], sw["password"])
@@ -5394,10 +5343,7 @@ async def _start_scheduled_update(
         ap_cpe_map=ap_cpe_map,
         device_roles=device_roles,
         device_parent=device_parent,
-        device_order=(
-            [entry["ip"].strip() for entry in device_entries if entry["ip"].strip() in device_roles]
-            if device_entries is not None else []
-        ),
+        device_order=[entry["ip"].strip() for entry in device_entries if entry["ip"].strip() in device_roles],
         started_at=datetime.now(),
         status="running",
         is_scheduled=True,
@@ -5408,6 +5354,7 @@ async def _start_scheduled_update(
         pre_update_reboot=pre_update_reboot,
         enforce_window_cutoff=enforce_window_cutoff,
         window_key=window_key,
+        recovery_only_devices=recovery_only_ips,
     )
 
     for ip in valid_aps:
@@ -5423,7 +5370,6 @@ async def _start_scheduled_update(
             + [ip for ip, role in job.device_roles.items() if role == "ap"]
             + [ip for ip, role in job.device_roles.items() if role == "switch"]
         )
-
     admitted, reason = _scheduled_action_decision(job)
     if not admitted:
         raise RuntimeError(reason)
@@ -6012,6 +5958,110 @@ async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
     return _scheduled_action_decision(job)
 
 
+async def _verify_recovered_device(job: "UpdateJob", ip: str) -> None:
+    """Verify a previously failed, already-current device without writing to it."""
+    device_status = job.devices[ip]
+    started = datetime.now()
+    target = _extract_version_from_filename(Path(job.device_firmware_map[ip]).name)
+    client = None
+    try:
+        admitted, reason = _scheduled_action_decision(job)
+        if not admitted:
+            device_status.status = "pending"
+            device_status.progress_message = reason
+            return
+        device_status.status = "verifying"
+        device_status.current_stage = "recovery"
+        device_status.current_stage_started = started.isoformat()
+        await broadcast({
+            "type": "device_update", "job_id": job.job_id, "ip": ip,
+            "status": "verifying", "message": "Checking firmware recovery...",
+            "role": device_status.role, "parent_ap": device_status.parent_ap,
+        })
+        vendor_id = job.device_vendor_map.get(ip, "tachyon")
+        driver_cls = get_driver(vendor_id)
+        username, password = job.credentials[ip]
+        locator = job.recovery_locators.get(ip, {}).get("ip", ip)
+        client = driver_cls(locator, username, password)
+        if await client.connect() is not True:
+            raise RuntimeError("Device is not reachable after its previous reboot")
+        info = await client.get_device_info()
+        serial = getattr(info, "serial", None)
+        expected_serial = job.recovery_locators.get(ip, {}).get("serial")
+        if not expected_serial:
+            prior_stop = db.get_latest_resolved_firmware_window_stop(ip, job.window_key)
+            expected_serial = prior_stop.get("expected_serial") if prior_stop else None
+        if not expected_serial or serial != expected_serial:
+            raise RuntimeError("Expected serial did not match during recovery verification")
+        model = getattr(info, "model", None)
+        version = _normalize_version(getattr(info, "current_version", None))
+        if device_status.model and (not model or model.lower() != device_status.model.lower()):
+            raise RuntimeError("Device model changed during recovery verification")
+        if not target or version != _normalize_version(target):
+            raise RuntimeError("Target firmware version was not confirmed during recovery verification")
+        smoke = await client.run_smoke_tests(
+            role=device_status.role,
+            pre_update_cpe_count=len(job.ap_cpe_map.get(ip, [])) if device_status.role == "ap" else 0,
+        )
+        required = {"device_responsive", "config_intact"}
+        if device_status.role == "ap":
+            required.update({"cpe_connectivity", "cpe_signal_levels"})
+        checks = {
+            item.get("check"): item for item in (smoke.checks or [])
+            if isinstance(item, dict) and item.get("check")
+        }
+        missing = required - checks.keys()
+        failed = {name for name in required if name in checks and checks[name].get("passed") is not True}
+        if not smoke.passed or smoke.warnings or missing or failed:
+            details = []
+            if missing:
+                details.append(f"Missing checks: {', '.join(sorted(missing))}")
+            if failed:
+                details.append(f"Failed checks: {', '.join(sorted(failed))}")
+            if smoke.warnings:
+                details.extend(smoke.warnings[:3])
+            raise RuntimeError("Smoke test failed: " + ("; ".join(details) or "Required check failed"))
+
+        device_status.old_version = version
+        device_status.new_version = version
+        device_status.smoke_checks = smoke.checks
+        device_status.status = "success"
+        device_status.progress_message = f"Recovery verified on {version}"
+        db.save_device_update_history(
+            job_id=job.job_id, ip=ip, role=device_status.role, pass_number=1,
+            status="success", old_version=version, new_version=version,
+            model=model, error=None, failed_stage=None, stages=[{"stage": "recovery", "success": True}],
+            duration_seconds=(datetime.now() - started).total_seconds(),
+            started_at=started.isoformat(), completed_at=datetime.now().isoformat(),
+        )
+    except Exception as exc:
+        reason = f"Recovery verification failed: {exc}"
+        device_status.status = "failed"
+        device_status.error = reason
+        device_status.progress_message = reason
+        device_status.smoke_warnings = [reason]
+        _stop_firmware_window(job, ip, "recovery", reason)
+        try:
+            db.save_device_update_history(
+                job_id=job.job_id, ip=ip, role=device_status.role, pass_number=1,
+                status="failed", old_version=None, new_version=None,
+                model=device_status.model, error=reason, failed_stage="recovery",
+                stages=[{"stage": "recovery", "success": False}],
+                duration_seconds=(datetime.now() - started).total_seconds(),
+                started_at=started.isoformat(), completed_at=datetime.now().isoformat(),
+            )
+        except Exception as history_error:
+            logger.warning("Failed to save recovery history for %s: %s", ip, history_error)
+    finally:
+        _persist_device_result(job, ip)
+        await broadcast({
+            "type": "device_update", "job_id": job.job_id, "ip": ip,
+            "status": device_status.status, "message": device_status.progress_message,
+            "error": device_status.error, "role": device_status.role,
+            "parent_ap": device_status.parent_ap,
+        })
+
+
 async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1):
     """Update a single device within a job."""
     device_status = job.devices[ip]
@@ -6073,6 +6123,10 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 return
         except Exception as e:
             logger.warning(f"Maintenance window check failed: {e}")
+
+    if ip in job.recovery_only_devices:
+        await _verify_recovered_device(job, ip)
+        return
 
 
     device_start_time = datetime.now()
@@ -6885,32 +6939,6 @@ async def run_update_job(job: UpdateJob, concurrency: int):
     except Exception as e:
         logger.error(f"Failed to persist job history for {job.job_id}: {e}")
 
-    # Send Slack notification (non-blocking)
-    rollout_info = None
-    next_job_info = None
-    if job.is_scheduled:
-        scheduler = get_scheduler()
-        if scheduler:
-            status = scheduler.get_status()
-            rollout_info = status.get("rollout")
-            if rollout_info:
-                predictions = rollout_info.get("predictions")
-                if predictions:
-                    remaining = predictions.get("remaining_phases", [])
-                    next_phase = None
-                    estimated_devices = 0
-                    for p in remaining:
-                        if p.get("estimated_devices", 0) > 0:
-                            next_phase = p.get("phase")
-                            estimated_devices = p.get("estimated_devices")
-                            break
-                    next_job_info = {
-                        "next_window": status.get("next_window", ""),
-                        "next_phase": next_phase,
-                        "estimated_devices": estimated_devices,
-                        "estimated_completion": predictions.get("estimated_completion_date"),
-                    }
-
     # Notify scheduler if this was a scheduled job
     if job.is_scheduled:
         scheduler = get_scheduler()
@@ -6944,8 +6972,6 @@ async def run_update_job(job: UpdateJob, concurrency: int):
             devices=devices_dict,
             firmware_name=firmware_name,
             is_scheduled=job.is_scheduled,
-            rollout_info=rollout_info,
-            next_job_info=next_job_info,
         )
     except Exception as e:
         logger.error(f"Slack notification failed for job {job.job_id}: {e}")
@@ -6961,8 +6987,6 @@ async def run_update_job(job: UpdateJob, concurrency: int):
             devices=devices_dict,
             firmware_name=firmware_name,
             is_scheduled=job.is_scheduled,
-            rollout_info=rollout_info,
-            next_job_info=next_job_info,
         )
     except Exception as e:
         logger.error(f"SNMP notification failed for job {job.job_id}: {e}")

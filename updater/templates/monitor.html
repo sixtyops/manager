@@ -2130,94 +2130,18 @@
             margin-left: auto;
         }
 
-        .status-bar-phases {
+        .status-bar-queue {
             display: flex;
             align-items: center;
-            gap: 4px;
-            flex-wrap: nowrap;
-            white-space: nowrap;
+            gap: var(--space-5);
+            flex-wrap: wrap;
+            min-width: 0;
         }
 
-        .status-bar-phases .bar-phase-dot {
-            padding: 4px 10px;
-            border-radius: var(--radius-md);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            font-size: var(--text-sm);
-            font-weight: 600;
-            background: var(--border-light);
+        .status-bar-queue-item {
             color: var(--text-muted);
+            font-size: var(--text-sm);
             white-space: nowrap;
-            gap: 1px;
-        }
-
-        .status-bar-phases .bar-phase-dot.clickable {
-            cursor: pointer;
-            box-shadow: inset 0 0 0 1px var(--info-border);
-        }
-
-        .status-bar-phases .bar-phase-dot.clickable:hover {
-            background: var(--info-bg);
-            color: var(--info-text);
-        }
-
-        /* The "next phase, ready to start" pill — louder than .clickable
-           so it actually reads as a CTA on a mostly-muted phase bar. */
-        .status-bar-phases .bar-phase-dot.next-up {
-            background: var(--info-bg);
-            color: var(--info-text);
-            box-shadow: inset 0 0 0 1.5px var(--info);
-            animation: pulse 2s infinite;
-        }
-
-        .status-bar-phases .bar-phase-dot.next-up:hover {
-            background: var(--info-border);
-        }
-
-        .status-bar-phases .bar-phase-detail {
-            font-size: var(--text-2xs);
-            font-weight: 400;
-            opacity: 0.8;
-        }
-
-        .status-bar-phases .bar-phase-dot.active {
-            background: var(--info);
-            color: white;
-            animation: pulse 1.5s infinite;
-        }
-
-        .status-bar-phases .bar-phase-dot.completed {
-            background: var(--success);
-            color: white;
-        }
-
-        .status-bar-phases .bar-phase-dot.paused {
-            background: var(--warning);
-            color: white;
-        }
-
-        .status-bar-phases .bar-phase-dot.locked {
-            background: var(--warning);
-            color: white;
-        }
-
-        .status-bar-phases .bar-phase-dot.locked .bar-phase-lock-info {
-            font-size: var(--text-2xs);
-            font-weight: 400;
-            opacity: 0.9;
-            display: block;
-        }
-
-        .status-bar-phases .bar-phase-line {
-            width: 12px;
-            height: 2px;
-            background: var(--toggle-off);
-        }
-
-        .status-bar-phases .bar-phase-line.completed {
-            background: var(--success);
         }
 
         .status-bar-actions {
@@ -2566,9 +2490,6 @@
             .status-bar-rollout {
                 margin-left: 0;
                 flex-basis: 100%;
-            }
-            .status-bar-phases {
-                flex-wrap: nowrap;
             }
             .table-toolbar {
                 flex-wrap: wrap;
@@ -2961,13 +2882,12 @@
                     <span class="status-bar-count" id="barBehindCount"></span>
                 </div>
                 <div class="status-bar-section status-bar-rollout u-ml-auto" id="barRolloutSection">
-                    <div class="status-bar-phases" id="barPhaseIndicator"></div>
-                    <span class="status-bar-muted" id="barRolloutProgress"></span>
-                    <span class="status-bar-muted u-status-note" id="barRolloutPrediction"></span>
-                    <div id="barRolloutFailedDevices" style="display:none;flex-wrap:wrap;gap:4px;"></div>
-                    <div class="status-bar-actions" id="barRolloutActions">
-                        <button class="btn btn-sm btn-warning hidden" id="barResumeBtn" onclick="resumeRollout();event.stopPropagation();" data-min-role="operator">Resume</button>
-                        <button class="btn btn-sm btn-danger hidden" id="barCancelBtn" onclick="cancelRollout();event.stopPropagation();" data-min-role="operator">Cancel</button>
+                    <div class="status-bar-queue" id="barQueueStatus" role="status" aria-live="polite">
+                        <span class="status-bar-count" id="barQueueRemaining"></span>
+                        <span class="status-bar-queue-item" id="barQueueCurrent"></span>
+                        <span class="status-bar-queue-item" id="barQueueCutoff"></span>
+                        <span class="status-bar-queue-item" id="barQueueNextWindow"></span>
+                        <span class="status-bar-reason" id="barQueueReason"></span>
                     </div>
                 </div>
                 <span class="drawer-unsaved-dot" id="drawerUnsavedDot" title="Unsaved changes"></span>
@@ -4305,7 +4225,6 @@
         let lastNextWindowIso = null;  // Next maintenance window start (ISO datetime)
         let lastBehindCount = 0;       // Devices needing update
         let lastFleetTotal = 0;        // Total devices
-        let lastPreRolloutPredictions = null; // Pre-rollout estimate
         let lastAutoState = '';        // Last auto-update state (idle, waiting, running, etc.)
 
         // Expand/collapse + sort + selection state
@@ -4463,9 +4382,6 @@
                     scheduleUIUpdate();
                 } else if (message.type === 'scheduler_status') {
                     updateSchedulerUI(message);
-                } else if (message.type === 'rollout_status') {
-                    updateRolloutUI(message);
-                    if (historyLoaded) loadHistory();
                 } else if (message.type === 'update_started') {
                     localStorage.setItem('systemUpdateInProgress', String(Date.now()));
                     showSystemUpdateOverlay('System update starting...');
@@ -8644,9 +8560,6 @@
 
         // ── Status Bar ──
 
-        const PHASES = ['pct10', 'pct50', 'pct100'];
-        const PHASE_LABELS = { pct10: '10%', pct50: '50%', pct100: '100%' };
-
         function updateSchedulerUI(status) {
             lastSchedulerStatus = status;
             const state = status.state || 'disabled';
@@ -8752,7 +8665,6 @@
 
             // Store next window for use in device count text
             lastNextWindow = status.next_window || '';
-            lastPreRolloutPredictions = status.predictions || null;
             lastNextWindowIso = status.next_window_iso || null;
             updateBarDeviceCount();
 
@@ -8769,260 +8681,45 @@
                 if (headerTemp) headerTemp.textContent = ` \u00B7 ${tempDisplay}${unit}`;
             }
 
-            // Update rollout UI if there's an active rollout, otherwise show idle phases
-            // Hide rollout progress when all devices are current
+            // Show queue state while work remains or is blocked.
             const rolloutSection = document.getElementById('barRolloutSection');
             if (state === 'blocked_all_current' || effectiveAllCurrent) {
-                currentRolloutId = null;
                 setHidden(rolloutSection, true);
+                renderQueueStatus(null);
             } else if (status.rollout) {
                 setHidden(rolloutSection, false);
-                updateRolloutUI(status);
+                renderQueueStatus(status.rollout);
             } else {
                 setHidden(rolloutSection, false);
-                currentRolloutId = null;
-                renderIdlePhases();
+                renderQueueStatus({
+                    remaining_devices: lastBehindCount,
+                    next_window: status.next_window_iso || status.next_window,
+                    pause_reason: status.block_reason || status.safety_block_reason,
+                });
             }
         }
 
-        function _phaseDetail(pred, phaseIdx) {
-            if (!pred) return '';
-            // Build a map of phase -> { count, date_idx }
-            const allPhases = [];
-            const cp = pred.current_phase;
-            if (cp) allPhases.push({ phase: PHASES[0], count: cp.device_count, minutes: cp.estimated_duration_minutes });
-            for (const rp of (pred.remaining_phases || [])) {
-                allPhases.push({ phase: rp.phase, count: rp.estimated_devices, minutes: rp.estimated_duration_minutes });
-            }
-            const info = allPhases.find(p => p.phase === PHASES[phaseIdx]);
-            if (!info || !info.count) return '';
-            // Calculate which scheduled day this phase lands on
-            const dateParts = [];
-            if (info.count > 0) dateParts.push(info.count + (info.count === 1 ? ' device' : ' devices'));
-            // Estimate date: count maintenance windows needed up to this phase
-            const windowIdx = allPhases.filter((p, idx) => {
-                const pi = PHASES.indexOf(p.phase);
-                return pi <= phaseIdx && p.count > 0;
-            }).length;
-            if (pred.estimated_completion_date && windowIdx > 0) {
-                // Walk schedule days to find this phase's window
-                const scheduleDays = (lastNextWindow || '').match(/on\s+(.+)/);
-                if (scheduleDays) {
-                    const dayMap = { mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6, sun: 0 };
-                    const activeDays = scheduleDays[1].split(',').map(d => dayMap[d.trim().toLowerCase()]).filter(d => d !== undefined);
-                    if (activeDays.length) {
-                        const today = new Date();
-                        // If today's maintenance window already passed, start from tomorrow
-                        const windowEnd = parseInt((lastNextWindow || '').match(/-(\d+):00/)?.[1] || '0');
-                        const startOff = (new Date()).getHours() >= windowEnd ? 1 : 0;
-                        today.setHours(0, 0, 0, 0);
-                        let counted = 0;
-                        for (let off = startOff; off < 90 && counted < windowIdx; off++) {
-                            const check = new Date(today);
-                            check.setDate(check.getDate() + off);
-                            if (activeDays.includes(check.getDay())) {
-                                counted++;
-                                if (counted === windowIdx) {
-                                    dateParts.push(check.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            return dateParts.length ? dateParts.join(' · ') : '';
-        }
+        function renderQueueStatus(queue) {
+            const remainingEl = document.getElementById('barQueueRemaining');
+            const currentEl = document.getElementById('barQueueCurrent');
+            const cutoffEl = document.getElementById('barQueueCutoff');
+            const nextEl = document.getElementById('barQueueNextWindow');
+            const reasonEl = document.getElementById('barQueueReason');
+            if (!remainingEl) return;
 
-        function _formatLockLabel(hold) {
-            if (!hold || !hold.clears_at) return '';
-            const clearsAt = new Date(hold.clears_at);
-            if (isNaN(clearsAt.getTime())) return '';
-            const now = new Date();
-            if (clearsAt <= now) return 'Advancing soon\u2026';
-            const hoursLeft = (clearsAt - now) / 3600000;
-            if (hoursLeft < 24) {
-                return `Holding ${Math.ceil(hoursLeft)}h more`;
-            }
-            return 'Advances ' + clearsAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
-                   ', ' + clearsAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-        }
-
-        // Soonest clears-at among the held families in the scheduler's firmware_hold.
-        function _firmwareHoldClearsAt(status) {
-            const fh = status && status.firmware_hold;
-            if (!fh || !fh.families) return null;
-            let soonest = null;
-            for (const fam of Object.values(fh.families)) {
-                if (fam.held && fam.clears_at && (!soonest || fam.clears_at < soonest)) {
-                    soonest = fam.clears_at;
-                }
-            }
-            return soonest;
-        }
-
-        function renderIdlePhases() {
-            const indicator = document.getElementById('barPhaseIndicator');
-            const pred = lastPreRolloutPredictions;
-            let html = '';
-            for (let i = 0; i < PHASES.length; i++) {
-                const detail = _phaseDetail(pred, i);
-                const detailHtml = detail ? `<span class="bar-phase-detail">${detail}</span>` : '';
-                html += `<div class="bar-phase-dot">${PHASE_LABELS[PHASES[i]]}${detailHtml}</div>`;
-                if (i < PHASES.length - 1) html += `<div class="bar-phase-line"></div>`;
-            }
-            indicator.innerHTML = html;
-            document.getElementById('barRolloutProgress').textContent = '';
-            const failedEl = document.getElementById('barRolloutFailedDevices');
-            if (failedEl) { failedEl.innerHTML = ''; failedEl.style.display = 'none'; }
-            const predEl = document.getElementById('barRolloutPrediction');
-            if (predEl) predEl.textContent = '';
-            setHidden('barResumeBtn', true);
-            setHidden('barCancelBtn', true);
-        }
-
-        function updateRolloutUI(data) {
-            const section = document.getElementById('barRolloutSection');
-            if (!section) return;
-
-            if (!data || !data.rollout) {
-                renderIdlePhases();
-                return;
-            }
-
-            const rollout = data.rollout;
-
-            // If rollout is completed but there are pending devices, show idle phases
-            // (a new rollout will be needed for the pending devices)
-            if (rollout.status === 'completed' && lastBehindCount > 0) {
-                currentRolloutId = null;
-                renderIdlePhases();
-                return;
-            }
-
-            // If rollout is still active but all devices are already current
-            // (e.g. target firmware changed or devices updated outside rollout),
-            // treat as idle — the rollout is stale.
-            if (rollout.status !== 'completed' && lastBehindCount <= 0 && lastFleetTotal > 0) {
-                currentRolloutId = null;
-                renderIdlePhases();
-                return;
-            }
-
-            currentRolloutId = rollout.id;
-
-            const phaseIdx = PHASES.indexOf(rollout.phase);
-            const indicator = document.getElementById('barPhaseIndicator');
-            const pred = rollout.predictions;
-            // The Firmware Hold holds the first fleet wave (pct10) of new firmware
-            // until it clears (release-date soak, or earlier once a device is
-            // confirmed working). The lock sits on the current wave's dot.
-            const isFirmwareHold = lastSchedulerStatus && lastSchedulerStatus.state === 'blocked_firmware_hold';
-            const lockLabel = isFirmwareHold
-                ? _formatLockLabel({ clears_at: _firmwareHoldClearsAt(lastSchedulerStatus) })
-                : '';
-            let phaseHtml = '';
-            for (let i = 0; i < PHASES.length; i++) {
-                const phase = PHASES[i];
-                let dotClass = 'bar-phase-dot';
-                let lineClass = 'bar-phase-line';
-
-                if (rollout.status === 'completed' || i < phaseIdx) {
-                    dotClass += ' completed';
-                    lineClass += ' completed';
-                } else if (i === phaseIdx) {
-                    if (isFirmwareHold) {
-                        dotClass += ' locked';
-                    } else {
-                        dotClass += rollout.status === 'paused' ? ' paused' : ' active';
-                    }
-                }
-
-                const detail = _phaseDetail(pred, i);
-                const detailHtml = detail ? `<span class="bar-phase-detail">${detail}</span>` : '';
-                const lockHtml = (i === phaseIdx && isFirmwareHold && lockLabel)
-                    ? `<span class="bar-phase-lock-info">${lockLabel}</span>` : '';
-                phaseHtml += `<div class="${dotClass}">${PHASE_LABELS[phase]}${detailHtml}${lockHtml}</div>`;
-                if (i < PHASES.length - 1) phaseHtml += `<div class="${lineClass}"></div>`;
-            }
-            indicator.innerHTML = phaseHtml;
-
-            const p = rollout.progress || {};
-            const updated = p.updated || 0;
-            const total = p.total || 0;
-            const failed = p.failed || 0;
-            let progressText = `${updated}/${total}`;
-            // Only show failure count when paused (not while actively running)
-            if (failed > 0 && rollout.status === 'paused') {
-                progressText += ` (${failed} failed)`;
-            }
-            document.getElementById('barRolloutProgress').textContent = progressText;
-
-            // Failed device detail
-            const failedDevicesEl = document.getElementById('barRolloutFailedDevices');
-            if (failedDevicesEl) {
-                if (failed > 0 && rollout.status === 'paused' && rollout.failed_devices && rollout.failed_devices.length) {
-                    failedDevicesEl.innerHTML = rollout.failed_devices.map(d =>
-                        `<span style="font-size:0.7rem;padding:2px 6px;background:#fef2f2;border:1px solid #fecaca;border-radius:4px;color:#991b1b;">${escapeHtml(d.ip)} (${escapeHtml(d.device_type || 'device')})</span>`
-                    ).join('');
-                    failedDevicesEl.style.display = 'flex';
-                } else {
-                    failedDevicesEl.innerHTML = '';
-                    failedDevicesEl.style.display = 'none';
-                }
-            }
-
-            // Predictions
-            const predEl = document.getElementById('barRolloutPrediction');
-            if (pred && predEl) {
-                const parts = [];
-                const cp = pred.current_phase;
-                if (cp && cp.device_count > 0) {
-                    let stepText = `~${cp.device_count} devices this step`;
-                    if (cp.devices_that_fit_in_window < cp.device_count) {
-                        stepText += ` (${cp.devices_that_fit_in_window} fit in window)`;
-                    }
-                    const dur = cp.estimated_duration_minutes;
-                    if (dur > 0) stepText += ` · ~${dur < 1 ? '<1' : Math.round(dur)} min`;
-                    parts.push(stepText);
-                }
-                // Only show est. done if rollout is not complete
-                const isComplete = rollout.status === 'completed' || (p.total > 0 && p.updated >= p.total);
-                if (pred.estimated_completion_date && !isComplete) {
-                    const d = new Date(pred.estimated_completion_date + 'T00:00:00');
-                    const opts = { month: 'short', day: 'numeric' };
-                    parts.push(`est. done ${d.toLocaleDateString('en-US', opts)}`);
-                }
-                predEl.textContent = parts.length ? parts.join(' · ') : '';
-            } else if (predEl) {
-                predEl.textContent = '';
-            }
-
-            const resumeBtn = document.getElementById('barResumeBtn');
-            const cancelBtn = document.getElementById('barCancelBtn');
-            if (rollout.status === 'paused') {
-                setHidden(resumeBtn, false);
-                setHidden(cancelBtn, false);
-            } else if (rollout.status === 'active') {
-                setHidden(resumeBtn, true);
-                setHidden(cancelBtn, false);
-            } else {
-                setHidden(resumeBtn, true);
-                setHidden(cancelBtn, true);
-            }
-        }
-
-        let currentRolloutId = null;
-
-        async function resumeRollout() {
-            if (!currentRolloutId) return;
-            if (!confirm('Resume the firmware rollout? Devices will begin updating in the next maintenance window.')) return;
-            try { await fetch(`/api/rollout/${currentRolloutId}/resume`, { method: 'POST' }); } catch (e) {}
-        }
-
-        async function cancelRollout() {
-            if (!currentRolloutId) return;
-            if (!confirm('Cancel this firmware rollout? Remaining devices will NOT be updated.')) return;
-            try { await fetch(`/api/rollout/${currentRolloutId}/cancel`, { method: 'POST' }); } catch (e) {}
+            queue = queue || {};
+            const remaining = Number.isFinite(queue.remaining_devices) ? queue.remaining_devices : null;
+            remainingEl.textContent = remaining === null
+                ? ''
+                : `${remaining} ${remaining === 1 ? 'device' : 'devices'} remaining`;
+            const current = queue.current_device;
+            currentEl.textContent = current ? `Current: ${current.ip}` : '';
+            currentEl.title = current ? `${current.role || 'device'} · ${current.status || 'updating'}` : '';
+            const when = value => Number.isNaN(Date.parse(value)) ? value : formatWhen(value);
+            cutoffEl.textContent = queue.cutoff_utc ? `Cutoff: ${when(queue.cutoff_utc)}` : '';
+            nextEl.textContent = queue.next_window ? `Next window: ${when(queue.next_window)}` : '';
+            reasonEl.textContent = queue.pause_reason || '';
+            reasonEl.title = queue.pause_reason || '';
         }
 
         async function toggleAutoSchedule(event) {
@@ -10207,20 +9904,15 @@
                 return;
             }
 
+            if (lastSchedulerStatus && lastSchedulerStatus.rollout
+                    && Number.isFinite(lastSchedulerStatus.rollout.remaining_devices)) {
+                setHidden(section, true);
+                return;
+            }
+
             const nextWindowText = lastNextWindowIso
                 ? 'Next: ' + formatWhen(lastNextWindowIso)
                 : lastNextWindow;
-
-            // Hide "pending" text when a rollout is actively running - progress is shown in rollout UI
-            if (currentRolloutId && lastAutoState === 'running') {
-                if (nextWindowText) {
-                    setHidden(section, false);
-                    count.textContent = nextWindowText;
-                } else {
-                    setHidden(section, true);
-                }
-                return;
-            }
 
             if (lastBehindCount > 0) {
                 setHidden(section, false);
@@ -10233,8 +9925,6 @@
                 const badgeShowsNext = (lastAutoState === 'idle' || lastAutoState === 'waiting');
                 if (nextWindowText && !badgeShowsNext) text += ' · ' + nextWindowText;
                 count.textContent = text;
-                // Refresh idle phase indicators with prediction details
-                if (!currentRolloutId) renderIdlePhases();
             } else {
                 // Nothing behind — the "Up to date" badge in updateSchedulerUI
                 // is the single source of truth; suppress the duplicate pill.
@@ -10301,7 +9991,7 @@
         loadAutoSettings();
         loadFleetStatus();
         loadDrawerFirmware();   // prefetch firmware list so it's ready before the drawer opens
-        renderIdlePhases();
+        renderQueueStatus(null);
         loadLicenseState();
         initRoleVisibility();
         // Refresh fleet status periodically

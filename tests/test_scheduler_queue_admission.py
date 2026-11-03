@@ -138,3 +138,25 @@ async def test_failure_stop_blocks_other_families_and_survives_target_change(moc
 
     assert later.start_update_func.await_count == 0
     assert db.get_unresolved_firmware_window_stops()[0]["device_ip"] == "10.0.0.1"
+
+
+@pytest.mark.asyncio
+async def test_held_recovery_family_blocks_later_devices(mock_db, monkeypatch):
+    now, rollout = _queue_fixture(mock_db)
+    prior_stop = db.stop_firmware_window(
+        ("firmware", "2026-06-22"), "prior-job", "10.0.0.1", "update", "device failed",
+    )
+    db.resolve_firmware_window_stop(prior_stop["id"], "operator", "reflash approved")
+    scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock(return_value="must-not-start"))
+    monkeypatch.setattr(
+        scheduler, "_held_families",
+        lambda settings, rollout: ({"tna-30x"}, {
+            "tna-30x": {"clears_at": "2026-06-25T00:00:00+00:00"},
+        }),
+    )
+
+    await _admit(scheduler, db.get_all_settings(), rollout, now, scheduler.start_update_func)
+
+    assert scheduler.start_update_func.await_count == 0
+    assert scheduler._state == "blocked_firmware_hold"
+    assert "Firmware hold" in scheduler._block_reason
