@@ -67,6 +67,19 @@ def _resolved_failure_recovery_ip(window_key) -> Optional[str]:
     return None
 
 
+def _missing_serial_recovery_reason(ip: str, entry: dict, window_key) -> Optional[str]:
+    """Explain why a current target cannot use read-only recovery without a saved serial."""
+    if not entry.get("verify_recovery_if_current"):
+        return None
+    stop = db.get_latest_resolved_firmware_window_stop(ip, window_key)
+    if stop and not stop.get("expected_serial"):
+        return (
+            f"Cannot verify {ip}: the prior failure has no saved serial, "
+            "and the device already reports the target firmware"
+        )
+    return None
+
+
 def _parse_schedule_days(schedule_days) -> set[int]:
     """Convert schedule_days (csv string or list) to a set of weekday integers."""
     if not schedule_days:
@@ -637,6 +650,14 @@ class AutoUpdateScheduler:
                 if recovery_entry is None:
                     self._state = "blocked_safety"
                     self._block_reason = "Could not verify the previously failed device"
+                    await self._broadcast_status()
+                    return
+                recovery_block = _missing_serial_recovery_reason(
+                    recovery_ip, recovery_entry, window_key,
+                )
+                if recovery_block:
+                    self._state = "blocked_safety"
+                    self._block_reason = recovery_block
                     await self._broadcast_status()
                     return
                 if recovery_entry["family"] in held_families:

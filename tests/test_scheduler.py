@@ -9,7 +9,11 @@ import pytest
 
 from updater import app as app_module
 from updater import database as db
-from updater.scheduler import AutoUpdateScheduler, _cpe_auth_block_reason
+from updater.scheduler import (
+    AutoUpdateScheduler,
+    _cpe_auth_block_reason,
+    _missing_serial_recovery_reason,
+)
 
 
 def _seed_rollout_devices():
@@ -80,6 +84,39 @@ class TestDerivedPendingQueue:
         assert [item["ip"] for item in queue] == [failed_ip, "10.0.0.2"]
         assert queue[0]["verify_recovery_if_current"] is True
         assert queue[1]["verify_recovery_if_current"] is False
+
+    def test_resolved_failure_without_serial_blocks_read_only_recovery(self, mock_db):
+        ip = "10.0.0.1"
+        prior = db.stop_firmware_window(
+            ("firmware", "2026-10-27"), "old-job", ip, "snapshot",
+            "Configuration snapshot failed",
+        )
+        db.resolve_firmware_window_stop(prior["id"], "admin", "Reviewed failure")
+
+        reason = _missing_serial_recovery_reason(
+            ip, {"verify_recovery_if_current": True},
+            ("firmware", "2026-10-28"),
+        )
+
+        assert reason == (
+            "Cannot verify 10.0.0.1: the prior failure has no saved serial, "
+            "and the device already reports the target firmware"
+        )
+
+    def test_resolved_failure_without_serial_can_use_normal_update(self, mock_db):
+        ip = "10.0.0.1"
+        prior = db.stop_firmware_window(
+            ("firmware", "2026-10-27"), "old-job", ip, "snapshot",
+            "Configuration snapshot failed",
+        )
+        db.resolve_firmware_window_stop(prior["id"], "admin", "Reviewed failure")
+
+        reason = _missing_serial_recovery_reason(
+            ip, {"verify_recovery_if_current": False},
+            ("firmware", "2026-10-28"),
+        )
+
+        assert reason is None
 
     def test_held_late_family_is_omitted_without_blocking_other_family(self, mock_db):
         db.upsert_access_point("10.0.0.1", "root", "pass", enabled=True, model="TNA-301", firmware_version="1.0.0")
