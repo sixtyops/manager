@@ -2,8 +2,11 @@
 
 **Key points:** The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
 may run this procedure. A worker may run it only when the lead assigns the
-worker a named run. Loop workers must not run `tests/integration` or touch live
-hardware, a dev host, or a production install outside that assigned run.
+worker a named run. The exception in [AGENTS.md](../AGENTS.md#must-not-do)
+allows that worker to run only the integration tests named in the run brief,
+against the dev host and dedicated lab devices. Workers must not run other
+integration tests or touch live hardware, a dev host, or a production install
+outside that assigned run.
 
 **Detail:** Commands and reference tables below do not grant access. Follow
 [Agent rules](../AGENTS.md#agent-rules). Use existing private credentials
@@ -45,11 +48,19 @@ several roles; its write tests then run one at a time.
 
 ### Lab firmware authority
 
-From 2026-11-01, the lead may change firmware versions on dedicated test lab
-devices when a test or validation needs it. Use only firmware images in the
-Manager store for that model. Change one device at a time. Hold the shared dev
-hardware lock with a detached process on the dev host. The lead's lock helper
-starts this holder over one SSH call and prints its PID:
+On 2026-11-03, the owner gave standing approval for firmware changes on the
+dedicated lab devices and the dev host environment. This approval includes the
+live firmware integration test (`tests/integration/test_firmware.py`) and the
+Dev host run procedure below: back up the dev host, deploy an exact `main` or
+pull request head, enable the lab inventory records, run the test, read back
+the state, and restore the backup. The lead and a worker the lead assigns to a
+named run may follow these steps without per-run owner approval. Use this
+section as the approval source in the run brief.
+
+Use only firmware images in the Manager store for that model. Change one
+device at a time. Hold the shared dev hardware lock with a detached process on
+the dev host. The lead's lock helper starts this holder over one SSH call and
+prints its PID:
 
 ```sh
 ssh <dev host alias> 'setsid nohup flock -w 300 /var/lock/sixtyops-dev-hardware.lock sleep <seconds> >/dev/null 2>&1 < /dev/null & echo $!'
@@ -62,9 +73,9 @@ connected CPE count, and config section names twice. Judge the write from
 these read-backs. On 2026-11-01, two lab bank writes returned success and the
 read-backs confirmed them, so the false failure in
 [#670](https://github.com/sixtyops/manager/issues/670) is intermittent. Record
-each change in the lead artifacts. This grant covers dedicated test lab
-devices only; it does not cover production devices or the dev host Manager
-release.
+each change in the lead artifacts. This approval covers dedicated test lab
+devices and the dev host environment. It does not cover production devices,
+stable releases, dev releases, or other hosts.
 
 ### Dev host run procedure
 
