@@ -13,14 +13,15 @@ predictions have been removed.
   write, and stop-on-first-failure are shipped.
 - Queue: cutoff, serial execution, and removal of wave behavior are shipped.
 - Proof: C2 passed on 2026-11-03 in dev host run 26. The live single-bank
-  firmware test upgraded and restored the lab AP. C3 qualification record, dev
-  release, and the go-live decision remain open.
+  firmware test upgraded and restored the lab AP. C3 qualification is proposed
+  for removal pending the owner's decision. C4 dev release and C5 opening
+  scheduled rollouts remain open; the owner signs the tag and opens rollouts.
 
 Updated 2026-11-03. Track status in [issue #604](https://github.com/sixtyops/manager/issues/604).
 
 Automated firmware updates for Tachyon wireless networks — handles scheduling, gradual rollouts, and safety checks so you don't have to update APs manually.
 
-A firmware cycle means logging into each AP and every attached CPE, uploading the image, selecting the right bank, and waiting for the reboot. One device at a time. In the middle of the night. With hundreds of devices across dozens of sites, it's a lot of work — and it tends to get skipped. SixtyOps handles it automatically: add your APs once with credentials, set a maintenance window, and the system updates your fleet over 4 consecutive nights with safety checks at each step. Setup takes 15 minutes.
+A firmware cycle means logging into each AP and every attached CPE, uploading the image, selecting the right bank, and waiting for the reboot. One device at a time. In the middle of the night. With hundreds of devices across dozens of sites, it's a lot of work — and it tends to get skipped. SixtyOps handles it automatically: add your APs once with credentials and set a maintenance window; the first windows for new firmware last 30 then 120 minutes by default, followed by normal windows until the queue is empty, and the first failure stops the queue. Setup takes 15 minutes.
 
 ![Dashboard — device table with signal health and update status](docs/screenshots/dashboard.png)
 

@@ -20,4 +20,7 @@ After an AP update recovers, Manager reboots each reachable CPE from the saved p
 
 `scheduled_rollout_safety_ready` defaults to `false`, including on existing installs. Scheduled admission requires this flag even when `schedule_enabled=true`. The flag records the operator decision. It does not check issue status or prove bench results. Set it to `false` to stop new scheduled admission. The schedule toggle remains separate.
 
-The live single-bank firmware test passed in dev host run 26 on 2026-11-03. Epic [#604](https://github.com/sixtyops/manager/issues/604) tracks the remaining qualification, release, and go-live steps.
+The live single-bank firmware test passed in dev host run 26 on 2026-11-03.
+Epic [#604](https://github.com/sixtyops/manager/issues/604) proposes removing
+C3 qualification pending the owner's decision. C4 dev release and C5 opening
+scheduled rollouts remain open; the owner signs the tag and opens rollouts.
